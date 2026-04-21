@@ -37,18 +37,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-# ``libdatachannel`` is a WebRTC DataChannel transport — an
-# optimisation, not a correctness gate. When the library is
-# unavailable (e.g. on a stock `pip install social-home`), the
-# federation service falls back to the HTTPS webhook transport.
-# The tests' :mod:`conftest` injects a fake module into
-# ``sys.modules`` so production code can import unconditionally;
-# this guard only matters for runtimes without either the real
-# library or the fake.
-try:
-    import libdatachannel
-except ImportError:  # pragma: no cover — optional
-    libdatachannel = None
+import libdatachannel
 import orjson
 from aiohttp import ClientTimeout
 

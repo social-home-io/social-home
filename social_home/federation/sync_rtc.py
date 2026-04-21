@@ -31,12 +31,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-# Optional WebRTC dep — see :mod:`social_home.federation.transport`
-# for the full rationale. Absent library ⇒ fallback to webhook.
-try:
-    import libdatachannel
-except ImportError:  # pragma: no cover — optional
-    libdatachannel = None
+import libdatachannel
 
 log = logging.getLogger(__name__)
 
