@@ -20,13 +20,13 @@ describe('auth store', () => {
 
   it('isAuthed is true when both token and user are set', () => {
     setToken('tok')
-    currentUser.value = { user_id: 'u1', username: 'a', display_name: 'A', is_admin: false, picture_url: null, bio: null, is_new_member: false }
+    currentUser.value = { user_id: 'u1', username: 'a', display_name: 'A', is_admin: false, picture_url: null, picture_hash: null, bio: null, is_new_member: false }
     expect(isAuthed.value).toBe(true)
   })
 
   it('logout clears everything', () => {
     setToken('tok')
-    currentUser.value = { user_id: 'u1', username: 'a', display_name: 'A', is_admin: false, picture_url: null, bio: null, is_new_member: false }
+    currentUser.value = { user_id: 'u1', username: 'a', display_name: 'A', is_admin: false, picture_url: null, picture_hash: null, bio: null, is_new_member: false }
     logout()
     expect(token.value).toBe(null)
     expect(currentUser.value).toBe(null)

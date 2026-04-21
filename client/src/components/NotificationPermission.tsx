@@ -18,7 +18,9 @@ async function registerPushSubscription(): Promise<void> {
     await navigator.serviceWorker.ready
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,
-      applicationServerKey: await getVapidKey(),
+      // Cast to BufferSource — lib.dom's type requires an ArrayBuffer,
+      // while our Uint8Array<ArrayBufferLike> is narrower in TS 5.7+.
+      applicationServerKey: (await getVapidKey()) as BufferSource | undefined,
     })
     await api.post('/api/push/subscribe', subscription.toJSON())
   } catch {

@@ -9,6 +9,7 @@ const mockPost: FeedPost = {
   type: 'text',
   content: 'Hello world!',
   media_url: null,
+  file_meta: null,
   reactions: { '👍': ['u1', 'u2'] },
   comment_count: 3,
   pinned: false,

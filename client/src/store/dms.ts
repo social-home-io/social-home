@@ -70,17 +70,17 @@ function addTyping(convo: string, userId: string, ttlSeconds = 6): void {
 
 export function wireDmWs(): void {
   ws.on('dm.message', (e) => {
-    const m = e.data as DmMessageLite
+    const m = e.data as unknown as DmMessageLite
     if (!m?.conversation_id || !m?.message_id) return
     append(m.conversation_id, m)
   })
   ws.on('dm.message_deleted', (e) => {
-    const d = e.data as { conversation_id: string, message_id: string }
+    const d = e.data as unknown as { conversation_id: string, message_id: string }
     if (!d?.conversation_id || !d?.message_id) return
     removeMessage(d.conversation_id, d.message_id)
   })
   ws.on('dm.message_reaction', (e) => {
-    const r = e.data as DmReactionPatch
+    const r = e.data as unknown as DmReactionPatch
     const convoMessages = messagesByConversation.value[r.conversation_id]
     if (!convoMessages) return
     messagesByConversation.value = {
@@ -89,7 +89,7 @@ export function wireDmWs(): void {
     }
   })
   ws.on('conversation.user_typing', (e) => {
-    const t = e.data as { conversation_id: string, user_id: string, ttl?: number }
+    const t = e.data as unknown as { conversation_id: string, user_id: string, ttl?: number }
     if (!t?.conversation_id || !t?.user_id) return
     addTyping(t.conversation_id, t.user_id, t.ttl ?? 6)
   })

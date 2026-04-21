@@ -1,6 +1,9 @@
 import type { JSX } from 'preact'
 
-interface ButtonProps extends JSX.HTMLAttributes<HTMLButtonElement> {
+// Preact's generic ``HTMLAttributes<T>`` omits tag-specific attrs
+// (``type``, ``disabled`` for <button>). Use the specialised
+// ``ButtonHTMLAttributes`` so consumers can forward those props.
+interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'danger'
   loading?: boolean
 }

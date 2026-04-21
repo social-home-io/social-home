@@ -79,10 +79,10 @@ export function wireShoppingWs() {
   if (_wired) return
   _wired = true
   ws.on('shopping_list.item_added', (e) => {
-    _upsert(e.data as ShoppingItem)
+    _upsert(e.data as unknown as ShoppingItem)
   })
   ws.on('shopping_list.item_updated', (e) => {
-    const patch = e.data as Partial<ShoppingItem> & { id: string }
+    const patch = e.data as unknown as Partial<ShoppingItem> & { id: string }
     items.value = items.value.map((i) =>
       i.id === patch.id ? { ...i, ...patch } : i,
     )

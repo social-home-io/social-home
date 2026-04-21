@@ -48,7 +48,7 @@ function drop(callId: string): void {
 
 export function wireCallsWs(): void {
   ws.on('call.ringing', (e) => {
-    const d = e.data as {
+    const d = e.data as unknown as {
       call_id: string
       from_user: string
       call_type?: 'audio' | 'video'
@@ -74,24 +74,24 @@ export function wireCallsWs(): void {
     })
   })
   ws.on('call.answered', (e) => {
-    const d = e.data as { call_id: string }
+    const d = e.data as unknown as { call_id: string }
     if (!d?.call_id) return
     const existing = active.value.find((c) => c.call_id === d.call_id)
     if (existing) upsert({ ...existing, status: 'in_progress' })
     if (incoming.value?.call_id === d.call_id) incoming.value = null
   })
   ws.on('call.declined', (e) => {
-    const d = e.data as { call_id: string }
+    const d = e.data as unknown as { call_id: string }
     if (!d?.call_id) return
     drop(d.call_id)
   })
   ws.on('call.ended', (e) => {
-    const d = e.data as { call_id: string }
+    const d = e.data as unknown as { call_id: string }
     if (!d?.call_id) return
     drop(d.call_id)
   })
   ws.on('call.ice_candidate', (e) => {
-    const d = e.data as IceCandidate
+    const d = e.data as unknown as IceCandidate
     if (!d?.call_id) return
     pendingIce.value = [...pendingIce.value, d]
   })

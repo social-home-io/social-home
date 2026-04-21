@@ -17,7 +17,7 @@ export const presence = signal<Record<string, PresenceEntry>>({})
 
 export function wirePresenceWs(): void {
   ws.on('presence.updated', (e) => {
-    const data = e.data as PresenceEntry
+    const data = e.data as unknown as PresenceEntry
     if (!data?.username) return
     presence.value = { ...presence.value, [data.username]: data }
   })

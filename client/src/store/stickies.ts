@@ -27,13 +27,13 @@ export const stickies = signal<StickyRow[]>([])
 
 export function wireStickiesWs(): void {
   ws.on('sticky.created', (e) => {
-    const s = e.data as StickyRow
+    const s = e.data as unknown as StickyRow
     if (!stickies.value.some((x) => x.id === s.id)) {
       stickies.value = [...stickies.value, s]
     }
   })
   ws.on('sticky.updated', (e) => {
-    const u = e.data as Partial<StickyRow> & { id: string }
+    const u = e.data as unknown as Partial<StickyRow> & { id: string }
     stickies.value = stickies.value.map((x) =>
       x.id === u.id ? { ...x, ...u } : x,
     )

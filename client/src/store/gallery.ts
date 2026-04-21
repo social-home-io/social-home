@@ -35,7 +35,7 @@ export const itemsByAlbum = signal<Record<string, GalleryItem[]>>({})
 /** Bind gallery.* WS events to the local store. Idempotent. */
 export function wireGalleryWs(): void {
   ws.on('gallery.album_created', (e) => {
-    const data = e.data as GalleryAlbum
+    const data = e.data as unknown as GalleryAlbum
     if (!albums.value.some((a) => a.id === data.id)) {
       albums.value = [data, ...albums.value]
     }
@@ -48,7 +48,7 @@ export function wireGalleryWs(): void {
     itemsByAlbum.value = next
   })
   ws.on('gallery.item_uploaded', (e) => {
-    const data = e.data as GalleryItem
+    const data = e.data as unknown as GalleryItem
     const list = itemsByAlbum.value[data.album_id] ?? []
     if (!list.some((it) => it.id === data.id)) {
       itemsByAlbum.value = {
@@ -64,7 +64,7 @@ export function wireGalleryWs(): void {
     )
   })
   ws.on('gallery.item_deleted', (e) => {
-    const { id, album_id } = e.data as { id: string; album_id: string }
+    const { id, album_id } = e.data as unknown as { id: string; album_id: string }
     const list = itemsByAlbum.value[album_id] ?? []
     itemsByAlbum.value = {
       ...itemsByAlbum.value,

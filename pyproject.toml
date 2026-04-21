@@ -27,6 +27,10 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.8",
     "pre-commit>=3.8",
+    # Pulled in so ``tests/global_server/*`` can import the GFS admin
+    # modules without a separate ``pip install .[global-server]`` step.
+    "bcrypt>=4",
+    "qrcode[pil]>=7",
 ]
 # Post-quantum signatures (hybrid Ed25519 + ML-DSA-65, FIPS 204).
 # Install with: pip install 'social-home[pq]'

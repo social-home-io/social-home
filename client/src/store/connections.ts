@@ -34,7 +34,7 @@ function upsert(patch: Partial<Connection> & { instance_id: string }): void {
 
 export function wireConnectionsWs(): void {
   ws.on('connection.reachable', (e) => {
-    const d = e.data as { instance_id: string, last_seen_at?: string }
+    const d = e.data as unknown as { instance_id: string, last_seen_at?: string }
     if (!d?.instance_id) return
     upsert({
       instance_id:  d.instance_id,
@@ -43,17 +43,17 @@ export function wireConnectionsWs(): void {
     })
   })
   ws.on('connection.unreachable', (e) => {
-    const d = e.data as { instance_id: string }
+    const d = e.data as unknown as { instance_id: string }
     if (!d?.instance_id) return
     upsert({ instance_id: d.instance_id, reachable: false })
   })
   ws.on('connection.added', (e) => {
-    const d = e.data as Connection
+    const d = e.data as unknown as Connection
     if (!d?.instance_id) return
     upsert(d)
   })
   ws.on('connection.removed', (e) => {
-    const d = e.data as { instance_id: string }
+    const d = e.data as unknown as { instance_id: string }
     if (!d?.instance_id) return
     connections.value = connections.value.filter((c) => c.instance_id !== d.instance_id)
   })

@@ -79,7 +79,7 @@ export default function PagesPage() {
     })
 
     const offLock = ws.on('page.editing', (evt) => {
-      const data = evt.data as EditLock & { page_id: string }
+      const data = evt.data as unknown as EditLock & { page_id: string }
       if (viewing.value && data.page_id === viewing.value.id) {
         editLock.value = {
           locked_by: data.locked_by,

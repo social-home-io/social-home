@@ -11,6 +11,7 @@ const user: User = {
   picture_url: null,
   bio: 'Builder of things',
   is_new_member: false,
+  picture_hash: null,
 }
 
 describe('ProfileCard', () => {

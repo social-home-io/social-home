@@ -1,3 +1,4 @@
+import type { JSX } from 'preact'
 import { Router } from 'preact-iso'
 import { useComputed, signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
@@ -179,9 +180,14 @@ export function App() {
           <TopBar />
           <main class="sh-main" id="main" role="main" tabIndex={-1}>
             <Router>
-              {Object.entries(routes).map(([path, Component]) => (
-                <Component path={path} key={path} />
-              ))}
+              {Object.entries(routes).map(([path, Component]) => {
+                // preact-iso's ``lazy()`` returns an AsyncComponent with
+                // a ``.preload`` property; TypeScript's JSX checker
+                // doesn't recognise it as a valid element constructor.
+                // Cast through ``any`` only at the JSX site.
+                const C = Component as unknown as (props: { path: string }) => JSX.Element
+                return <C path={path} key={path} />
+              })}
             </Router>
           </main>
         </div>

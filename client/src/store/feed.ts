@@ -18,13 +18,13 @@ export async function loadFeed(before?: string) {
 /** Wire post/comment WS events into the feed store. Idempotent. */
 export function wireFeedWs(): void {
   ws.on('post.created', (e) => {
-    const post = e.data as FeedPost
+    const post = e.data as unknown as FeedPost
     if (!posts.value.some((p) => p.id === post.id)) {
       posts.value = [post, ...posts.value]
     }
   })
   ws.on('post.edited', (e) => {
-    const post = e.data as FeedPost
+    const post = e.data as unknown as FeedPost
     posts.value = posts.value.map((p) => (p.id === post.id ? post : p))
   })
   ws.on('post.deleted', (e) => {
@@ -32,7 +32,7 @@ export function wireFeedWs(): void {
     posts.value = posts.value.filter((p) => p.id !== id)
   })
   ws.on('comment.added', (e) => {
-    const { post_id } = e.data as { post_id: string }
+    const { post_id } = e.data as unknown as { post_id: string }
     posts.value = posts.value.map((p) =>
       p.id === post_id ? { ...p, comment_count: p.comment_count + 1 } : p,
     )

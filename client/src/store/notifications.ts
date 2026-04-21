@@ -21,7 +21,7 @@ export const unreadCount = signal<number>(0)
 
 export function wireNotificationsWs(): void {
   ws.on('notification.new', (e) => {
-    const n = e.data as NotificationLite
+    const n = e.data as unknown as NotificationLite
     recent.value = [n, ...recent.value].slice(0, 50)
     unreadCount.value = unreadCount.value + 1
   })
