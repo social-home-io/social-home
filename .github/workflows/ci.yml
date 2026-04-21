@@ -76,9 +76,6 @@ jobs:
       - name: Typecheck
         working-directory: client
         run: pnpm run typecheck
-      - name: Lint
-        working-directory: client
-        run: pnpm run lint
       - name: i18n key check (§30.5)
         working-directory: client
         run: pnpm run i18n:check

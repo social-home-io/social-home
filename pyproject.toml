@@ -21,6 +21,7 @@ dependencies = [
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
+    "pytest-aiohttp>=1",    # provides ``aiohttp_server`` / ``aiohttp_client`` fixtures
     "pytest-cov>=4",
     "aiohttp[speedups]",
     "freezegun",
