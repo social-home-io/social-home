@@ -20,7 +20,7 @@ dependencies = [
     # open a direct peer connection. Also mandatory for GFS relay
     # (§24). The PyPI distribution and import name are both
     # ``aiolibdatachannel`` — async-native bindings over libdatachannel.
-    "aiolibdatachannel>=2026.4.21.2",
+    "aiolibdatachannel>=2026.4.22.2",
 ]
 
 [project.optional-dependencies]
