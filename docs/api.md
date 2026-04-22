@@ -286,7 +286,7 @@ Same CRUD shape:
 
 ## HFS — Child protection
 
-`/api/cp/*` — see `social_home/routes/child_protection_routes.py`.
+`/api/cp/*` — see `socialhome/routes/child_protection_routes.py`.
 Guardian-scoped operations: manage guardians, list minor's spaces and
 conversations, set age gates, read guardian audit logs. All require
 the minor or their guardian.

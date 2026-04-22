@@ -1,11 +1,11 @@
-"""Tests for social_home.domain.conversation — Conversation, ConversationMessage, etc."""
+"""Tests for socialhome.domain.conversation — Conversation, ConversationMessage, etc."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 
-from social_home.domain.conversation import (
+from socialhome.domain.conversation import (
     Conversation,
     ConversationMember,
     ConversationMessage,
