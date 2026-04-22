@@ -683,6 +683,11 @@ CREATE TABLE IF NOT EXISTS space_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_space_posts_created
     ON space_posts(space_id, created_at DESC);
+-- Needed for the ON DELETE SET NULL cascade from space_bots to find
+-- affected posts without a full scan. Feed reads don't filter by
+-- bot_id, so the index exists for the delete path + future analytics.
+CREATE INDEX IF NOT EXISTS idx_space_posts_bot
+    ON space_posts(bot_id) WHERE bot_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS space_post_comments (
     id          TEXT PRIMARY KEY,
