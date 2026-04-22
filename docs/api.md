@@ -1,0 +1,418 @@
+# HTTP API Reference
+
+Social Home exposes HTTP APIs on two distinct surfaces:
+
+- **HFS** (per-household server) — serves the web UI, mobile apps,
+  and any third-party integrations the household admin enables.
+  Everything under `/api/*` plus `/webhook/{id}` (federation inbound).
+- **GFS** (global federation server) — serves the public
+  space-directory, RTC signalling relay, and operator admin portal.
+  Everything under `/gfs/*`, `/cluster/*`, and `/admin*`.
+
+This file lists every live endpoint. For the *why* behind the
+protocol events these routes trigger, see
+[protocol/](./protocol/README.md).
+
+## Authentication
+
+| Model | Where | How |
+|---|---|---|
+| **Bearer token** | HFS `/api/*` | `Authorization: Bearer <token>` or, for WebSocket only, `?token=<token>`. Tokens are minted via `/api/auth/token` (standalone) or via the HA adapter. |
+| **Signed envelope** | HFS `/webhook/{id}`, GFS `/gfs/*` | Ed25519 signature inside the posted envelope. No separate auth header — the signature *is* the auth. |
+| **Cookie session** | GFS `/admin*` | `admin_auth` middleware. Logged in via `POST /admin/login` with a bcrypt-verified password. |
+| **None** | Health, VAPID key, public SSR pages, directory listings | Explicitly public. |
+
+API tokens appear in access logs (because of the WebSocket `?token=`
+fallback) and browser history. **Operators must redact tokens from
+log aggregation.** Code must never log the full query string of
+`/api/ws`.
+
+## Conventions
+
+- Content type is `application/json` unless otherwise stated.
+  Multipart is used for avatar / cover / media uploads.
+- Responses follow `{"ok": true, …}` on success and
+  `{"ok": false, "error": {"code": "...", "message": "..."}}` on
+  domain errors. HTTP status codes are standard: 200 / 201 / 204 for
+  success, 400 for validation, 401 for missing auth, 403 for
+  authorisation failures, 404 for missing resources, 409 for
+  conflicts, 429 for rate limits.
+- Pagination uses `?limit=N&cursor=…`. Cursors are opaque; don't
+  parse them.
+- Timestamps are ISO-8601 UTC, serialised via orjson.
+
+## HFS — Authentication & self
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/auth/token` | Issue a bearer token (standalone mode). |
+| GET | `/api/me` | Current user profile. |
+| PATCH | `/api/me` | Update display name, timezone, language, etc. |
+| GET | `/api/me/picture` | Download current user's avatar. |
+| POST | `/api/me/picture` | Upload avatar (multipart). |
+| DELETE | `/api/me/picture` | Remove avatar. |
+| POST | `/api/me/picture/refresh-from-ha` | HA-mode only: re-fetch from HA user profile. |
+| GET | `/api/me/export` | Initiate a data-export job. |
+| GET | `/api/me/corner` | "My Corner" aggregated feed. |
+| GET / POST / DELETE | `/api/me/tokens[/{id}]` | Manage personal API tokens. |
+
+Admins also have:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / DELETE | `/api/admin/tokens[/{id}]` | List / revoke any user's tokens. |
+| GET | `/api/admin/ha-users` | HA-mode: list HA users for provisioning. |
+| POST | `/api/admin/ha-users/{username}/provision` | Create a Social Home user from an HA user. |
+
+## HFS — Users
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/users` | List all users on this HFS. |
+| GET | `/api/users/{user_id}` | Fetch a user profile. |
+| PATCH | `/api/users/{user_id}` | Admin-only update (or self). |
+| GET | `/api/users/{user_id}/picture` | Fetch another user's avatar. |
+| GET | `/api/users/{user_id}/export` | Admin-only export of another user's data. |
+
+## HFS — Household feed
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/feed` | Summary with latest posts + highlights. |
+| GET | `/api/feed/posts` | Paginated post list. |
+| POST | `/api/feed/posts` | Create a household post. |
+| GET / PATCH / DELETE | `/api/feed/posts/{id}` | Read / edit / delete one post. |
+| GET / POST / DELETE | `/api/feed/posts/{id}/reactions[/{emoji}]` | List reactions; add / remove own. |
+| GET / POST | `/api/feed/posts/{id}/comments` | List / add comments. |
+| PATCH / DELETE | `/api/feed/posts/{id}/comments/{cid}` | Edit / delete own comment. |
+| POST | `/api/feed/posts/{id}/save` | Bookmark. |
+| GET | `/api/feed/saved` | List bookmarks. |
+
+## HFS — Spaces
+
+See [protocol/spaces.md](./protocol/spaces.md) for the federation
+events these routes fire.
+
+**Space CRUD**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/spaces` | List spaces the caller belongs to. |
+| POST | `/api/spaces` | Create a new space. |
+| GET / PATCH / DELETE | `/api/spaces/{id}` | Read / update / delete. |
+| POST | `/api/spaces/join` | Join a space via an invite token. |
+| PATCH | `/api/spaces/{id}/ownership` | Transfer ownership. |
+| GET | `/api/admin/spaces` | Admin-only: list all spaces on this HFS. |
+| GET | `/api/spaces/{id}/feed` | Space feed summary. |
+| POST | `/api/spaces/{id}/sync` | Trigger a re-sync with the space hosts. |
+
+**Members**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/api/spaces/{id}/members` | List / invite. |
+| GET / PATCH / DELETE | `/api/spaces/{id}/members/me` | Self member profile. |
+| POST / DELETE | `/api/spaces/{id}/members/me/picture` | Space-specific avatar. |
+| GET / PATCH / DELETE | `/api/spaces/{id}/members/{user_id}` | Admin-only ops. |
+| GET | `/api/spaces/{id}/members/{user_id}/picture` | Fetch a member's space avatar. |
+
+**Invites / joins / moderation**
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/spaces/{id}/invite-tokens` | Mint an invite token. |
+| GET | `/api/spaces/{id}/join-requests` | Pending requests. |
+| POST | `/api/spaces/{id}/join-requests/{req_id}/{approve\|reject}` | Decide. |
+| POST | `/api/spaces/{id}/remote-invites` | Invite a user on another HFS. |
+| GET | `/api/remote_invites` | Remote invites pending for this household. |
+| POST | `/api/remote_invites/{token}/{accept\|decline}` | Respond. |
+| POST | `/api/spaces/{id}/ban` | Ban a user from a space. |
+| GET / DELETE | `/api/spaces/{id}/bans[/{user_id}]` | Ban list management. |
+| GET | `/api/spaces/{id}/moderation` | Moderation queue. |
+| POST | `/api/spaces/{id}/moderation/{item_id}/{approve\|reject}` | Decide. |
+
+**Appearance**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST / DELETE | `/api/spaces/{id}/cover` | Space cover image. |
+| GET / PATCH | `/api/spaces/{id}/theme` | Space-level theme. |
+
+**Space-scoped content** — posts, comments, reactions, pages,
+tasks, calendar, stickies, gallery, polls — follow identical
+patterns (`GET/POST/PATCH/DELETE`). See the per-feature endpoint
+sections below.
+
+## HFS — Content types
+
+### Posts, comments, reactions
+
+Same route shapes as the household feed, prefixed by `/api/spaces/{id}/`:
+
+```
+/api/spaces/{id}/posts
+/api/spaces/{id}/posts/{pid}
+/api/spaces/{id}/posts/{pid}/reactions[/{emoji}]
+/api/spaces/{id}/posts/{pid}/comments[/{cid}]
+```
+
+### Pages
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/api/pages` | Household-level pages. |
+| GET / PATCH / DELETE | `/api/pages/{id}` | CRUD. |
+| POST | `/api/pages/{id}/lock` | Acquire 5-minute edit lock. |
+| POST | `/api/pages/{id}/lock/refresh` | Extend lock. |
+| GET | `/api/pages/{id}/versions` | Version history. |
+| POST | `/api/pages/{id}/revert` | Revert to earlier version. |
+| POST | `/api/pages/{id}/{delete-request\|delete-approve\|delete-cancel}` | Two-admin delete. |
+| GET / POST / PATCH / DELETE | `/api/spaces/{id}/pages[/{pid}]` | Space-scoped pages. |
+| POST | `/api/spaces/{id}/pages/{pid}/resolve-conflict` | Force-pick in a conflict. |
+
+### Tasks
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/api/tasks/lists` | List / create task lists. |
+| GET / PATCH / DELETE | `/api/tasks/lists/{id}` | CRUD. |
+| POST | `/api/tasks/lists/{id}/reorder` | Reorder tasks in a list. |
+| GET / POST | `/api/tasks/lists/{id}/tasks` | List / create tasks. |
+| GET / PATCH / DELETE | `/api/tasks/{id}` | CRUD for a single task. |
+| GET / POST / PATCH / DELETE | `/api/tasks/{id}/comments[/{cid}]` | Task comments. |
+| GET / POST / DELETE | `/api/tasks/{id}/attachments[/{aid}]` | Task attachments. |
+| …same under `/api/spaces/{id}/tasks/...` | | Space-scoped variants. |
+
+### Calendar
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/api/calendars` | List / create calendars. |
+| GET / PATCH / DELETE | `/api/calendars/{id}` | CRUD. |
+| GET / POST | `/api/calendars/{id}/events` | List / create events. |
+| GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. |
+| GET / POST | `/api/calendars/events/{id}/rsvps` | RSVPs. |
+| POST | `/api/calendars/events/{id}/rsvp` | Set own RSVP. |
+| POST | `/api/calendars/{id}/import_ics` | Upload iCal. |
+| POST | `/api/calendars/{id}/{import_image\|import_prompt}` | AI-assisted import. |
+| GET | `/api/calendar/{id}/export.ics` | iCal export. |
+| …same under `/api/spaces/{id}/calendar/...` | | Space-scoped variants. |
+
+### Stickies, shopping, bazaar, gallery
+
+Same CRUD shape:
+
+```
+/api/stickies[/{id}]
+/api/shopping[/{id}]          POST /complete, /uncomplete, /clear-completed
+/api/bazaar[/{id}]            /{id}/bids[/{bid_id}]  POST /accept, /reject
+/api/gallery/albums[/{id}]    /{id}/items[/{iid}]
+```
+
+## HFS — Conversations (DMs)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/conversations` | List. |
+| POST | `/api/conversations/dm` | Get-or-create 1:1 DM. |
+| POST | `/api/conversations/group` | Create group conversation. |
+| GET / POST | `/api/conversations/{id}/messages` | List / send. |
+| PATCH / DELETE | `/api/conversations/{id}/messages/{mid}` | Edit / delete own. |
+| POST | `/api/conversations/{id}/{read\|unread}` | Unread state. |
+| GET | `/api/conversations/{id}/calls` | Call history in this conversation. |
+
+## HFS — Presence, notifications, search
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST / DELETE | `/api/presence` | Own presence. |
+| POST | `/api/presence/location` | Location update (rate-limited 10/min). |
+| GET | `/api/spaces/{id}/presence` | Presence visible in this space. |
+| GET | `/api/notifications` | Paginated list. |
+| GET | `/api/notifications/unread-count` | Count. |
+| POST | `/api/notifications/{id}/read` | Mark read. |
+| POST | `/api/notifications/read-all` | Mark all read. |
+| GET | `/api/search` | Full-text search (posts, comments, spaces, users). |
+
+## HFS — Pairing
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/pairing/initiate` | Generate a QR payload. |
+| POST | `/api/pairing/accept` | Scanner posts its side of the DH. |
+| POST | `/api/pairing/confirm` | Confirm SAS-verified pair. |
+| POST | `/api/pairing/introduce` | Introduce self to an intermediary. |
+| POST | `/api/pairing/auto-pair-via` | Ask a mutual peer to relay. |
+| GET / POST | `/api/pairing/auto-pair-requests[/{id}/{approve\|decline}]` | Auto-pair queue. |
+| GET | `/api/pairing/connections` | Paired peers. |
+| GET | `/api/connections` | Alias of the above. |
+| GET / DELETE | `/api/pairing/connections/{instance_id}` | Read / unpair. |
+| GET / POST | `/api/pairing/relay-requests[/{id}/{approve\|decline}]` | Relay-request queue. |
+
+## HFS — Calls & WebRTC
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/webrtc/ice_servers` | STUN/TURN config (alias: `/api/calls/ice-servers`). |
+| GET / POST | `/api/calls` | List / initiate. |
+| GET | `/api/calls/active` | Current active call. |
+| POST | `/api/calls/{id}/{answer\|join\|decline\|hangup}` | Lifecycle. |
+| POST | `/api/calls/{id}/ice` | Trickle ICE candidate. |
+| POST | `/api/calls/{id}/quality` | Report RTT / jitter / loss. |
+
+## HFS — Push
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/push/vapid_public_key` | Public VAPID key (unauth). |
+| POST / PUT / DELETE | `/api/push/subscribe[/{sub_id}]` | Register / update / remove. |
+| GET | `/api/push/subscriptions` | List own subscriptions. |
+
+## HFS — GFS connections & public spaces
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/api/gfs/connections` | List / connect. |
+| GET / DELETE | `/api/gfs/connections/{id}` | Inspect / disconnect. |
+| POST | `/api/gfs/connections/{id}/appeal` | Appeal a ban. |
+| GET | `/api/gfs/publications` | Spaces published to GFS. |
+| POST / DELETE | `/api/spaces/{id}/publish/{gfs_id}` | Publish / unpublish. |
+| GET | `/api/public_spaces` | Aggregated directory. |
+| POST | `/api/public_spaces/refresh` | Force-poll GFS. |
+| POST | `/api/public_spaces/{space_id}/join-request` | Ask to join. |
+| POST | `/api/public_spaces/{space_id}/hide` | Hide locally. |
+| POST / DELETE | `/api/public_spaces/blocked_instances/{id}` | Block a GFS. |
+| GET | `/api/peer_spaces` | Spaces advertised by directly-paired peers. |
+
+## HFS — Child protection
+
+`/api/cp/*` — see `social_home/routes/child_protection_routes.py`.
+Guardian-scoped operations: manage guardians, list minor's spaces and
+conversations, set age gates, read guardian audit logs. All require
+the minor or their guardian.
+
+## HFS — Reports
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET / POST | `/api/reports` | Own reports. |
+| GET | `/api/admin/reports` | Admin queue. |
+| PATCH | `/api/admin/reports/{id}/resolve` | Resolve a report. |
+
+## HFS — Storage, backup, misc
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/storage/usage` | Own usage. |
+| GET / PATCH | `/api/admin/storage/quota` | Admin quota config. |
+| POST | `/api/backup/pre_backup` | HA snapshot hook. |
+| POST | `/api/backup/post_backup` | HA snapshot hook. |
+| GET / POST | `/api/backup/{export\|import}` | Full archive round-trip. |
+| GET / PATCH | `/api/theme` | Household theme. |
+| GET | `/api/household/features` | Feature toggles. |
+| POST | `/api/media/upload` | Upload a blob. |
+| GET | `/api/media/{filename}` | Download a blob. |
+| GET | `/healthz` | Liveness (public). |
+
+## HFS — WebSockets
+
+| Path | Purpose |
+|---|---|
+| `GET /api/ws` | Realtime event stream — posts, comments, presence, typing, calls, notifications. Auth via `Authorization: Bearer` or `?token=`. Frames: `"ping"` → `"pong"`; JSON `{"type":"typing","conversation_id":"..."}`. |
+| `GET /api/stt/stream` | Streaming speech-to-text (binary audio frames → `{"type":"final","text":"..."}`). |
+
+## HFS — Federation webhook
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/webhook/{webhook_id}` | Inbound federation envelope. Runs the §24.11 validation pipeline before dispatch. See [protocol/README.md](./protocol/README.md). |
+
+## GFS — Public relay
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/gfs/register` | Register instance. |
+| POST | `/gfs/publish` | Publish a space. |
+| POST | `/gfs/subscribe` | Subscribe to directory updates. |
+| POST | `/gfs/report` | File a fraud / abuse report. |
+| POST | `/gfs/appeal` | Appeal a ban. |
+| GET | `/gfs/spaces` | Public directory listing. |
+| GET | `/healthz` | Liveness. |
+
+## GFS — RTC signalling
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/gfs/rtc/offer` | Start a signalling session. |
+| POST | `/gfs/rtc/answer` | Respond. |
+| POST | `/gfs/rtc/ice` | Trickle ICE candidate. |
+| POST | `/gfs/rtc/ping` | Keep-alive. |
+| GET | `/gfs/rtc/session/{session_id}` | Session state. |
+
+## GFS — Cluster
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/cluster/sync` | Cluster-node state sync. |
+| GET | `/cluster/health` | Node health. |
+
+## GFS — Admin portal
+
+**Portal**
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/admin` | SPA entrypoint. |
+| GET | `/admin/static/{path}` | SPA assets. |
+| POST | `/admin/login` | Bcrypt-verified login. |
+| POST | `/admin/logout` | End session. |
+
+**Admin API** (all require an active admin cookie session)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/admin/api/overview` | Dashboard stats. |
+| GET | `/admin/api/clients` | Registered instances. |
+| POST | `/admin/api/clients/{instance_id}/{accept\|reject\|ban}` | Moderate instances. |
+| GET | `/admin/api/spaces` | Published spaces. |
+| POST | `/admin/api/spaces/{space_id}/{accept\|reject\|ban}` | Moderate spaces. |
+| GET / PATCH | `/admin/api/policy` | Operator policy. |
+| GET / PATCH | `/admin/api/branding` | Branding text. |
+| POST / DELETE | `/admin/api/branding/header-image` | Header image. |
+| GET | `/admin/api/reports` | Report queue. |
+| PATCH | `/admin/api/reports/{id}/review` | Decide. |
+| GET | `/admin/api/appeals` | Appeal queue. |
+| PATCH | `/admin/api/appeals/{id}/decide` | Decide. |
+| GET | `/admin/api/audit` | Audit log. |
+| GET | `/admin/api/cluster` | Cluster status. |
+| GET | `/admin/api/cluster/peers[/{node_id}]` | Peer list / detail. |
+| POST | `/admin/api/cluster/peers/{node_id}/ping` | Healthcheck a peer. |
+
+## GFS — Public SSR pages
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/` | Operator landing page. |
+| GET | `/spaces/{slug}` | Public space detail. |
+| GET | `/join/{gfs_token}` | Landing page for an invitation link. |
+
+These pages are server-rendered HTML and require no auth.
+
+## Rate limits
+
+| Endpoint | Limit |
+|---|---|
+| `POST /api/presence/location` | 10 / min / user |
+| `POST /api/calls` | 10 / min / user |
+| `POST /api/calls/{id}/decline` | 10 / min / user |
+| `POST /api/calls/{id}/hangup` | 30 / min / user |
+| Federation inbound (per signing instance) | Rolling window; see §24.11. |
+
+Rate-limit responses return HTTP 429 with a `Retry-After` header.
+
+## Version & compatibility
+
+API responses include `X-Social-Home-Version` when running in
+standalone mode (derived from `pyproject.toml`). Breaking changes
+bump the major version. Endpoints added in minor versions are
+announced in `CHANGELOG.md`.

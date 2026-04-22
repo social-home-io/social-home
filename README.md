@@ -87,9 +87,9 @@ These are enforced by the linter, the mypy config, and review:
   messages, and user-generated content (§25.3).
 - **Sensitive fields** (`SENSITIVE_FIELDS` in `security.py`) never
   appear in API responses.
-- **Cryptography** — see [`documentation/crypto.md`](documentation/crypto.md)
-  for primitives, key storage, wire formats, and the post-quantum
-  migration path.
+- **Cryptography** — see [`docs/crypto.md`](docs/crypto.md) for
+  primitives, key storage, wire formats, and the post-quantum
+  migration path. Full documentation index: [`docs/`](docs/).
 
 ## Spec sections
 

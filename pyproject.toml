@@ -42,7 +42,7 @@ dev = [
 # Post-quantum signatures (hybrid Ed25519 + ML-DSA-65, FIPS 204).
 # Install with: pip install 'social-home[pq]'
 # Requires the host to have liboqs C library available; see
-# documentation/crypto.md for the migration rationale.
+# docs/crypto.md for the migration rationale.
 pq = [
     "oqs @ git+https://github.com/open-quantum-safe/liboqs-python@0.10.0",
 ]

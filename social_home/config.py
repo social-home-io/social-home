@@ -109,7 +109,7 @@ class Config:
     #: Federation signature suite. ``"ed25519"`` (default) keeps the
     #: classical wire format; ``"ed25519+mldsa65"`` enables hybrid
     #: post-quantum signatures and requires the ``pq`` optional extra
-    #: (``liboqs-python``) at runtime. See ``documentation/crypto.md``.
+    #: (``liboqs-python``) at runtime. See ``docs/crypto.md``.
     federation_sig_suite: str = "ed25519"
 
     # Per-platform TOML sections — opaque to the core. Each adapter reads
