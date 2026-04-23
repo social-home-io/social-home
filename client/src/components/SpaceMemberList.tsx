@@ -44,8 +44,11 @@ const canManage = signal(false)
 
 interface Props {
   spaceId: string
-  /** Viewer's role in this space — drives whether admin actions render. */
-  viewerRole?: 'owner' | 'admin' | 'member'
+  /** Viewer's role in this space — drives whether admin actions render.
+   *  ``'subscriber'`` appears when the caller is a read-only subscriber
+   *  (see :class:`SpaceService.subscribe_to_space`); no admin actions
+   *  render for that role. */
+  viewerRole?: 'owner' | 'admin' | 'member' | 'subscriber'
 }
 
 export function SpaceMemberList({ spaceId, viewerRole }: Props) {

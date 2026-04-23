@@ -916,34 +916,175 @@ async def test_space_comment_image_no_media(stack):
         )
 
 
-# ── Follow-spaces ──────────────────────────────────────────────────────────
+# ── Subscriptions (read-only membership) ──────────────────────────────────
 
 
-async def test_follow_without_attached_repo_raises(stack):
-    """Calling ``follow_space`` without an attached repo raises —
-    defensive: the API surfaces a clear error rather than a silent no-op.
-    """
-    u = await stack.provision_user("fan")
-    with pytest.raises(RuntimeError, match="follow repo not attached"):
-        await stack.space_svc.follow_space(u.user_id, "sp")
+async def test_subscribe_public_space_adds_subscriber_member(stack):
+    """Subscribing to a public space inserts a ``role='subscriber'`` row in
+    ``space_members`` — subscribers are read-only members under the hood."""
+    owner = await stack.provision_user("owner1")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner1", name="P", space_type=SpaceType.GLOBAL
+    )
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+
+    assert await stack.space_svc.is_subscribed(fan.user_id, space.id) is True
+    member = await stack.space_repo.get_member(space.id, fan.user_id)
+    assert member is not None
+    assert member.role == "subscriber"
+    # The space owner is still an owner, not demoted.
+    owner_mem = await stack.space_repo.get_member(space.id, owner.user_id)
+    assert owner_mem.role == "owner"
 
 
-async def test_list_follows_without_repo_returns_empty(stack):
-    """Read path degrades to empty list when no repo — lets callers
-    still render a UI in minimal deployments."""
-    u = await stack.provision_user("fan")
-    assert await stack.space_svc.list_follows(u.user_id) == []
-    assert await stack.space_svc.is_following(u.user_id, "sp") is False
+async def test_subscribe_private_space_rejected(stack):
+    """Private / household spaces cannot be followed — joining requires
+    an invite."""
+    await stack.provision_user("owner2")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner2", name="Priv", space_type=SpaceType.PRIVATE
+    )
+    with pytest.raises(SpacePermissionError, match="public / global"):
+        await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
 
 
-async def test_follow_round_trip_with_attached_repo(stack):
-    from socialhome.repositories.follow_repo import SqliteFollowRepo
+async def test_subscribe_is_idempotent(stack):
+    """Double-subscribe does not error and does not create duplicate rows."""
+    await stack.provision_user("owner3")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner3", name="P", space_type=SpaceType.GLOBAL
+    )
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+    follows = await stack.space_svc.list_subscriptions(fan.user_id)
+    assert len(follows) == 1
 
-    stack.space_svc.attach_follow_repo(SqliteFollowRepo(stack.db))
-    u = await stack.provision_user("fan")
-    await stack.space_svc.follow_space(u.user_id, "sp-a")
-    assert await stack.space_svc.is_following(u.user_id, "sp-a") is True
-    follows = await stack.space_svc.list_follows(u.user_id)
-    assert [r["space_id"] for r in follows] == ["sp-a"]
-    await stack.space_svc.unfollow_space(u.user_id, "sp-a")
-    assert await stack.space_svc.is_following(u.user_id, "sp-a") is False
+
+async def test_subscribe_does_not_demote_existing_member(stack):
+    """An existing real member who calls follow stays at their current
+    role — never gets demoted to subscriber."""
+    await stack.provision_user("owner4")
+    real = await stack.provision_user("real")
+    space = await stack.space_svc.create_space(
+        owner_username="owner4", name="P", space_type=SpaceType.GLOBAL
+    )
+    await stack.space_svc.add_member(
+        space.id, actor_username="owner4", user_id=real.user_id
+    )
+    await stack.space_svc.subscribe_to_space(real.user_id, space.id)
+    member = await stack.space_repo.get_member(space.id, real.user_id)
+    assert member.role == "member"
+    # Not listed as a subscriber.
+    assert await stack.space_svc.list_subscriptions(real.user_id) == []
+
+
+async def test_unsubscribe_removes_subscriber_only(stack):
+    """Unsubscribe removes a ``role='subscriber'`` row; a real member is
+    untouched (so unsubscribe can't be used to silently leave a space)."""
+    await stack.provision_user("owner5")
+    fan = await stack.provision_user("fan")
+    real = await stack.provision_user("real")
+    space = await stack.space_svc.create_space(
+        owner_username="owner5", name="P", space_type=SpaceType.GLOBAL
+    )
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+    await stack.space_svc.add_member(
+        space.id, actor_username="owner5", user_id=real.user_id
+    )
+
+    await stack.space_svc.unsubscribe_from_space(fan.user_id, space.id)
+    assert await stack.space_repo.get_member(space.id, fan.user_id) is None
+
+    await stack.space_svc.unsubscribe_from_space(real.user_id, space.id)
+    still = await stack.space_repo.get_member(space.id, real.user_id)
+    assert still is not None
+    assert still.role == "member"
+
+
+async def test_list_subscriptions_only_returns_subscribers(stack):
+    """``list_subscriptions`` filters out spaces where the user is a real
+    member — only ``role='subscriber'`` rows are listed."""
+    await stack.provision_user("owner6")
+    u = await stack.provision_user("multi")
+    pub = await stack.space_svc.create_space(
+        owner_username="owner6", name="Pub", space_type=SpaceType.GLOBAL
+    )
+    mem_space = await stack.space_svc.create_space(
+        owner_username="owner6", name="Mem", space_type=SpaceType.GLOBAL
+    )
+    await stack.space_svc.subscribe_to_space(u.user_id, pub.id)
+    await stack.space_svc.add_member(
+        mem_space.id, actor_username="owner6", user_id=u.user_id
+    )
+    follows = await stack.space_svc.list_subscriptions(u.user_id)
+    assert [r["space_id"] for r in follows] == [pub.id]
+
+
+async def test_subscriber_cannot_create_post(stack):
+    """§ read-only membership: subscribers are rejected on post create."""
+    await stack.provision_user("owner7")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner7", name="P", space_type=SpaceType.GLOBAL
+    )
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+    with pytest.raises(SpacePermissionError, match="subscribers can only read"):
+        await stack.space_svc.create_post(
+            space.id,
+            author_user_id=fan.user_id,
+            type=PostType.TEXT,
+            content="should be blocked",
+        )
+
+
+async def test_subscriber_cannot_comment(stack):
+    await stack.provision_user("owner8")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner8", name="P", space_type=SpaceType.GLOBAL
+    )
+    post = await stack.space_svc.create_post(
+        space.id,
+        author_user_id=(await stack.user_svc.get("owner8")).user_id,
+        type=PostType.TEXT,
+        content="hi",
+    )
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+    with pytest.raises(SpacePermissionError, match="subscribers can only read"):
+        await stack.space_svc.add_comment(
+            post.id, author_user_id=fan.user_id, content="reply"
+        )
+
+
+async def test_subscriber_cannot_react(stack):
+    await stack.provision_user("owner9")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner9", name="P", space_type=SpaceType.GLOBAL
+    )
+    post = await stack.space_svc.create_post(
+        space.id,
+        author_user_id=(await stack.user_svc.get("owner9")).user_id,
+        type=PostType.TEXT,
+        content="hi",
+    )
+    await stack.space_svc.subscribe_to_space(fan.user_id, space.id)
+    with pytest.raises(SpacePermissionError, match="subscribers can only read"):
+        await stack.space_svc.add_reaction(post.id, user_id=fan.user_id, emoji="👍")
+
+
+async def test_subscribe_banned_user_rejected(stack):
+    await stack.provision_user("owner10")
+    fan = await stack.provision_user("fan")
+    space = await stack.space_svc.create_space(
+        owner_username="owner10", name="P", space_type=SpaceType.GLOBAL
+    )
+    # Seed a ban row directly.
+    await stack.space_repo.ban_member(
+        space.id, fan.user_id, banned_by="owner10-uid", reason="test"
+    )
+    with pytest.raises(SpacePermissionError):
+        await stack.space_svc.subscribe_to_space(fan.user_id, space.id)

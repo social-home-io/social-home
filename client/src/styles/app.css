@@ -6008,6 +6008,125 @@ hr {
 .sh-browser-card__actions {
   margin-top: auto;
   display: flex; gap: var(--sh-space-xs);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Subscribe button — used on SpaceCard when the space is public/global
+   and the user isn't a full member. Distinct from the primary Join /
+   Open actions: muted idle state, toggles into "on" appearance when
+   the user is already subscribed. Aria-pressed reflects state for AT. */
+.sh-subscribe-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--sh-radius-pill);
+  border: 1px solid var(--sh-border);
+  background: transparent;
+  color: var(--sh-fg);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.sh-subscribe-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  border-color: var(--sh-primary);
+  color: var(--sh-primary);
+}
+.sh-subscribe-btn:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+}
+.sh-subscribe-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.sh-subscribe-btn--on {
+  background: color-mix(in srgb, var(--sh-primary) 14%, transparent);
+  border-color: var(--sh-primary);
+  color: var(--sh-primary);
+}
+.sh-subscribe-btn--on:hover:not(:disabled) {
+  /* Hover over an "on" button hints at unsubscription. */
+  background: color-mix(in srgb, var(--sh-danger) 10%, transparent);
+  border-color: var(--sh-danger);
+  color: var(--sh-danger);
+}
+
+/* "🔔 Subscribed" pill on the card header — a visual badge so the
+   subscribed state is obvious even before a user notices the button
+   flipping from Subscribe → Unsubscribe. */
+.sh-subscribed-pill {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--sh-radius-pill);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 500;
+  background: color-mix(in srgb, var(--sh-primary) 12%, transparent);
+  color: var(--sh-primary);
+  white-space: nowrap;
+}
+
+/* SpaceListPage — "Your spaces" / "Subscribed" sections. Only
+   rendered when both groups are non-empty; with just one group the
+   list renders flat as before to keep the familiar layout. */
+.sh-spaces-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  margin-top: var(--sh-space-md);
+}
+.sh-spaces-section__title {
+  font-size: var(--sh-font-size-sm);
+  font-weight: 600;
+  color: var(--sh-muted-fg, var(--sh-fg));
+  margin: 0 0 var(--sh-space-xs) 0;
+  display: flex; align-items: baseline; gap: var(--sh-space-xs);
+}
+.sh-spaces-section__hint {
+  font-weight: 400;
+  font-size: var(--sh-font-size-xs);
+}
+
+/* SpaceListPage card accommodates the optional unsubscribe button on
+   the right — body grows, button hugs the edge. */
+.sh-space-card__body {
+  flex: 1;
+  min-width: 0;
+}
+.sh-space-card__chips {
+  display: flex; flex-wrap: wrap; gap: var(--sh-space-xs);
+  margin-top: 4px;
+}
+
+/* Subscriber read-only banner on SpaceFeedPage. Replaces the post
+   composer when the viewer's role is 'subscriber'. Three zones:
+   icon, message, action. Keep it spare so it fits the page rhythm. */
+.sh-subscriber-banner {
+  display: flex; align-items: flex-start; gap: var(--sh-space-sm);
+  padding: var(--sh-space-md);
+  border-radius: var(--sh-radius-md);
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 30%, transparent);
+  margin-bottom: var(--sh-space-md);
+}
+.sh-subscriber-banner__icon {
+  font-size: 1.4em;
+  line-height: 1;
+  padding-top: 2px;
+}
+.sh-subscriber-banner__body {
+  flex: 1;
+  min-width: 0;
+}
+.sh-subscriber-banner__body strong {
+  display: block;
+  margin-bottom: 2px;
+}
+.sh-subscriber-banner__body p {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
 }
 
 /* Scope chips — which kind of space is this? */

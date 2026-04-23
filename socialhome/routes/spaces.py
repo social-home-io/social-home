@@ -1179,41 +1179,47 @@ class SpacePostCommentDetailView(BaseView):
         return web.Response(status=204)
 
 
-class SpaceFollowView(BaseView):
-    """``POST /api/spaces/{id}/follow`` — follow a public space
-    (idempotent — double-follow is a no-op).
+class SpaceSubscribeView(BaseView):
+    """``POST /api/spaces/{id}/subscribe`` — subscribe to a public or
+    global space as a read-only member (idempotent — double-subscribe
+    is a no-op).
 
-    ``DELETE /api/spaces/{id}/follow`` — unfollow. Both return
-    ``{"following": bool}``.
+    ``DELETE /api/spaces/{id}/subscribe`` — unsubscribe. No-op for
+    users who aren't subscribers (so this can't silently leave a real
+    member's space). Both return ``{"subscribed": bool}``.
+
+    Note on naming: "subscribe" is used here rather than "follow"
+    because the product already uses "follow" for a different concept
+    (the dashboard pin list, see ``corner_service``).
     """
 
     async def post(self) -> web.Response:
         ctx = self.user
         space_id = self.match("id")
         svc = self.svc(space_service_key)
-        await svc.follow_space(ctx.user_id, space_id)
-        return web.json_response({"following": True})
+        await svc.subscribe_to_space(ctx.user_id, space_id)
+        return web.json_response({"subscribed": True})
 
     async def delete(self) -> web.Response:
         ctx = self.user
         space_id = self.match("id")
         svc = self.svc(space_service_key)
-        await svc.unfollow_space(ctx.user_id, space_id)
-        return web.json_response({"following": False})
+        await svc.unsubscribe_from_space(ctx.user_id, space_id)
+        return web.json_response({"subscribed": False})
 
 
-class MyFollowsView(BaseView):
-    """``GET /api/me/follows`` — the caller's followed-spaces list.
+class MySubscriptionsView(BaseView):
+    """``GET /api/me/subscriptions`` — the caller's read-only-member
+    subscriptions.
 
-    Returns ``{"follows": [{space_id, followed_at}, ...]}`` ordered
-    newest first. Followed spaces aren't necessarily mirrored on this
-    HFS — the client hydrates metadata (name / cover) from its own
-    public-space cache.
+    Returns ``{"subscriptions": [{space_id, subscribed_at}, ...]}``
+    ordered newest first. The client hydrates metadata (name / cover)
+    from its own public-space cache.
     """
 
     async def get(self) -> web.Response:
         ctx = self.user
         svc = self.svc(space_service_key)
         return web.json_response(
-            {"follows": await svc.list_follows(ctx.user_id)},
+            {"subscriptions": await svc.list_subscriptions(ctx.user_id)},
         )

@@ -456,7 +456,7 @@ CREATE TABLE IF NOT EXISTS space_members (
     space_id              TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
     user_id               TEXT NOT NULL,
     role                  TEXT NOT NULL DEFAULT 'member'
-                          CHECK(role IN ('owner','admin','member')),
+                          CHECK(role IN ('owner','admin','member','subscriber')),
     joined_at             TEXT NOT NULL DEFAULT (datetime('now')),
     history_visible_from  TEXT,
     location_share_enabled INTEGER NOT NULL DEFAULT 0,
@@ -1411,14 +1411,6 @@ CREATE TABLE IF NOT EXISTS dm_relay_seen (
     seen_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dm_relay_seen_at ON dm_relay_seen(seen_at);
-
--- Public-space follow list (user-side bookmarks)
-CREATE TABLE IF NOT EXISTS following_spaces (
-    user_id     TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    space_id    TEXT NOT NULL,
-    followed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (user_id, space_id)
-);
 
 -- §11.10 instance peer-graph cache for network discovery. The PK is
 -- compound because a target instance may be discovered via multiple

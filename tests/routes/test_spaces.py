@@ -822,76 +822,105 @@ async def test_space_cover_non_admin_forbidden(client):
     assert r2.status == 403
 
 
-# ── Follow spaces ─────────────────────────────────────────────────────────
+# ── Subscriptions (read-only membership) ─────────────────────────────────
 
 
-async def test_follow_and_unfollow_space(client):
+async def _create_subscribable_space(client, name: str = "Global") -> str:
+    """Create a space subscribers are allowed to join — ``global`` has no
+    lat/lon requirement so it's the cleanest fixture for these tests."""
     r = await client.post(
         "/api/spaces",
-        json={"name": "Public"},
+        json={"name": name, "space_type": "global"},
         headers=_auth(client._admin_token),
     )
-    sid = (await r.json())["id"]
+    assert r.status == 201, await r.text()
+    return (await r.json())["id"]
+
+
+async def test_subscribe_and_unsubscribe_space(client):
+    sid = await _create_subscribable_space(client)
 
     r = await client.post(
-        f"/api/spaces/{sid}/follow",
+        f"/api/spaces/{sid}/subscribe",
         headers=_auth(client._bob_token),
     )
     assert r.status == 200
-    assert (await r.json())["following"] is True
+    assert (await r.json())["subscribed"] is True
 
-    r = await client.get("/api/me/follows", headers=_auth(client._bob_token))
+    r = await client.get("/api/me/subscriptions", headers=_auth(client._bob_token))
     assert r.status == 200
     body = await r.json()
-    assert [row["space_id"] for row in body["follows"]] == [sid]
+    assert [row["space_id"] for row in body["subscriptions"]] == [sid]
 
     r = await client.delete(
-        f"/api/spaces/{sid}/follow",
+        f"/api/spaces/{sid}/subscribe",
         headers=_auth(client._bob_token),
     )
     assert r.status == 200
-    assert (await r.json())["following"] is False
+    assert (await r.json())["subscribed"] is False
 
-    r = await client.get("/api/me/follows", headers=_auth(client._bob_token))
-    assert (await r.json())["follows"] == []
+    r = await client.get("/api/me/subscriptions", headers=_auth(client._bob_token))
+    assert (await r.json())["subscriptions"] == []
 
 
-async def test_follow_is_idempotent(client):
-    r = await client.post(
-        "/api/spaces",
-        json={"name": "Public"},
-        headers=_auth(client._admin_token),
-    )
-    sid = (await r.json())["id"]
+async def test_subscribe_is_idempotent(client):
+    sid = await _create_subscribable_space(client)
     for _ in range(3):
         r = await client.post(
-            f"/api/spaces/{sid}/follow",
+            f"/api/spaces/{sid}/subscribe",
             headers=_auth(client._bob_token),
         )
         assert r.status == 200
-    follows = await (
-        await client.get("/api/me/follows", headers=_auth(client._bob_token))
+    subs = await (
+        await client.get("/api/me/subscriptions", headers=_auth(client._bob_token))
     ).json()
-    assert len(follows["follows"]) == 1
+    assert len(subs["subscriptions"]) == 1
 
 
-async def test_follows_scoped_per_user(client):
+async def test_subscriptions_scoped_per_user(client):
+    sid = await _create_subscribable_space(client)
+    await client.post(
+        f"/api/spaces/{sid}/subscribe",
+        headers=_auth(client._bob_token),
+    )
+    # admin owns the space but isn't a subscriber of it.
+    r = await client.get("/api/me/subscriptions", headers=_auth(client._admin_token))
+    assert (await r.json())["subscriptions"] == []
+
+
+async def test_subscribe_private_space_rejected(client):
+    """Private spaces cannot be subscribed to — 403."""
     r = await client.post(
         "/api/spaces",
-        json={"name": "Public"},
+        json={"name": "Priv", "space_type": "private"},
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/follow",
+    r = await client.post(
+        f"/api/spaces/{sid}/subscribe",
         headers=_auth(client._bob_token),
     )
-    r = await client.get("/api/me/follows", headers=_auth(client._admin_token))
-    assert (await r.json())["follows"] == []
+    assert r.status == 403
 
 
-async def test_follow_requires_auth(client):
-    r = await client.post("/api/spaces/any/follow")
+async def test_subscriber_cannot_post_in_space(client):
+    """Subscriber hitting the post-create route gets 403 — integration
+    proof that the service-level read-only gate surfaces correctly."""
+    sid = await _create_subscribable_space(client)
+    await client.post(
+        f"/api/spaces/{sid}/subscribe",
+        headers=_auth(client._bob_token),
+    )
+    r = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "should block"},
+        headers=_auth(client._bob_token),
+    )
+    assert r.status == 403
+
+
+async def test_subscribe_requires_auth(client):
+    r = await client.post("/api/spaces/any/subscribe")
     assert r.status == 401
-    r2 = await client.get("/api/me/follows")
+    r2 = await client.get("/api/me/subscriptions")
     assert r2.status == 401

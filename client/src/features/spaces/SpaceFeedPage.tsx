@@ -8,6 +8,7 @@ import { loadHouseholdUsers } from '@/store/householdUsers'
 import { loadSpaceMembers } from '@/store/spaceMembers'
 import type { Comment, FeedPost, CalendarEvent } from '@/types'
 import { Spinner } from '@/components/Spinner'
+import { showToast } from '@/components/Toast'
 import { JoinRequestList } from '@/components/JoinRequestList'
 import { ModerationQueue } from '@/components/ModerationQueue'
 import { SpaceLocationCard } from '@/components/SpaceLocationCard'
@@ -20,7 +21,6 @@ import { CommentThread } from '@/components/CommentThread'
 import { SpaceHero } from '@/components/SpaceHero'
 import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openEventDialog } from '@/components/CalendarEventDialog'
-import { showToast } from '@/components/Toast'
 
 type SpaceTab = 'feed' | 'members' | 'pages' | 'calendar' | 'gallery' | 'map' | 'moderation'
 
@@ -46,7 +46,9 @@ const activeTab = signal<SpaceTab>('feed')
 const spacePages = signal<SpacePage[]>([])
 const spaceCalEvents = signal<CalendarEvent[]>([])
 const spaceCalendarId = signal<string>('')
-const viewerRole = signal<'owner' | 'admin' | 'member' | undefined>(undefined)
+const viewerRole = signal<
+  'owner' | 'admin' | 'member' | 'subscriber' | undefined
+>(undefined)
 const expandedComments = signal<Record<string, Comment[]>>({})
 const spaceDetail = signal<SpaceDetail | null>(null)
 
@@ -84,8 +86,11 @@ export default function SpaceFeedPage() {
       api.get(`/api/spaces/${spaceId}/members`)
         .then((members: { user_id: string; role: string }[]) => {
           const mine = members.find(m => m.user_id === me)
-          if (mine && (mine.role === 'owner' || mine.role === 'admin'
-                       || mine.role === 'member')) {
+          if (
+            mine
+            && (mine.role === 'owner' || mine.role === 'admin'
+                || mine.role === 'member' || mine.role === 'subscriber')
+          ) {
             viewerRole.value = mine.role
           }
         })
@@ -272,7 +277,37 @@ export default function SpaceFeedPage() {
 
       {activeTab.value === 'feed' && (
         <div class="sh-space-feed-content">
-          <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId} />
+          {viewerRole.value === 'subscriber' ? (
+            <div class="sh-subscriber-banner" role="status">
+              <span class="sh-subscriber-banner__icon" aria-hidden="true">🔔</span>
+              <div class="sh-subscriber-banner__body">
+                <strong>You're subscribed to this space.</strong>
+                <p class="sh-muted">
+                  You see new posts here but can't post, comment, or react.
+                  Ask an admin to upgrade you to a full member if you want to join in.
+                </p>
+              </div>
+              <button
+                type="button"
+                class="sh-subscribe-btn sh-subscribe-btn--on"
+                aria-label="Unsubscribe from this space"
+                title="Stop receiving updates from this space."
+                onClick={async () => {
+                  try {
+                    await api.delete(`/api/spaces/${spaceId}/subscribe`)
+                    showToast('Unsubscribed', 'info')
+                    window.location.href = '/spaces'
+                  } catch (exc) {
+                    showToast((exc as Error).message, 'error')
+                  }
+                }}
+              >
+                🔕 Unsubscribe
+              </button>
+            </div>
+          ) : (
+            <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId} />
+          )}
           {posts.value.length === 0 && (
             <p class="sh-muted">No posts in this space yet.</p>
           )}

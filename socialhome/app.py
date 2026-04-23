@@ -86,7 +86,6 @@ from .repositories.cp_repo import SqliteCpRepo
 from .repositories.gfs_connection_repo import SqliteGfsConnectionRepo
 from .repositories.dm_contact_repo import SqliteDmContactRepo
 from .repositories.dm_routing_repo import SqliteDmRoutingRepo
-from .repositories.follow_repo import SqliteFollowRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.household_features_repo import SqliteHouseholdFeaturesRepo
 from .repositories.poll_repo import SqlitePollRepo
@@ -783,7 +782,6 @@ def create_app(config: Config | None = None) -> web.Application:
     )
     space_service.attach_profile_picture_repo(profile_picture_repo)
     space_service.attach_cover_repo(space_cover_repo)
-    space_service.attach_follow_repo(SqliteFollowRepo(db))
     # i18n catalog — loaded once at process start, used by NotificationService.
     i18n_dir = Path(__file__).parent / "i18n" / "messages"
     i18n = Catalog.from_directory(i18n_dir)
@@ -1163,7 +1161,6 @@ def create_app(config: Config | None = None) -> web.Application:
         real_space_service.attach_child_protection(child_protection_service)
         real_space_service.attach_profile_picture_repo(profile_picture_repo)
         real_space_service.attach_cover_repo(space_cover_repo)
-        real_space_service.attach_follow_repo(SqliteFollowRepo(db))
         real_space_service.attach_gfs_connection_service(gfs_connection_service)
         real_space_service.attach_federation(
             federation_service=federation_service,

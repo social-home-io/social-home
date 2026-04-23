@@ -60,4 +60,69 @@ describe('SpaceCard', () => {
     )
     expect(getByText('13+')).toBeTruthy()
   })
+
+  // ── Subscribe / unsubscribe ─────────────────────────────────────────
+
+  it('renders a Subscribe button for public / global non-members', () => {
+    const { getByText } = render(
+      <SpaceCard entry={baseEntry} onAction={() => {}} />,
+    )
+    expect(getByText(/Subscribe/)).toBeTruthy()
+  })
+
+  it('does not render a Subscribe button for household-scope entries', () => {
+    const { queryByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, scope: 'household' }}
+        onAction={() => {}}
+      />,
+    )
+    expect(queryByText(/Subscribe/)).toBeNull()
+  })
+
+  it('flips to Unsubscribe when already subscribed', () => {
+    const { getByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, already_subscribed: true }}
+        onAction={() => {}}
+      />,
+    )
+    expect(getByText(/Unsubscribe/)).toBeTruthy()
+    // Subscribed pill also appears in the header.
+    expect(getByText(/🔔 Subscribed/)).toBeTruthy()
+  })
+
+  it('does not offer Subscribe once the user is a full member', () => {
+    const { queryByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, scope: 'public', already_member: true }}
+        onAction={() => {}}
+      />,
+    )
+    expect(queryByText(/Subscribe/)).toBeNull()
+  })
+
+  it('calls onAction with kind=subscribe on click', () => {
+    let captured: { kind: string } | null = null
+    const { getByText } = render(
+      <SpaceCard
+        entry={baseEntry}
+        onAction={(_e, a) => { captured = a }}
+      />,
+    )
+    ;(getByText(/Subscribe/) as HTMLButtonElement).click()
+    expect(captured).toEqual({ kind: 'subscribe' })
+  })
+
+  it('disables Subscribe while the parent reports it busy', () => {
+    const { getByLabelText } = render(
+      <SpaceCard
+        entry={baseEntry}
+        onAction={() => {}}
+        subscribeBusy={true}
+      />,
+    )
+    const btn = getByLabelText(/Subscribe to Chess Club/) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
 })

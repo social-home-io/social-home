@@ -212,6 +212,10 @@ export interface DirectoryEntry {
   /** Outgoing request pending (your request-to-join hasn't been decided
    *  yet). Surfaces as a disabled "Request pending" button. */
   request_pending?: boolean
+  /** Caller has a read-only subscription (``role='subscriber'`` row in
+   *  ``space_members``). Distinct from ``already_member``: a subscriber
+   *  gets the content stream but can't post, comment, or react. */
+  already_subscribed?: boolean
 }
 
 export interface RemoteInvite {

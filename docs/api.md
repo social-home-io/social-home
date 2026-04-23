@@ -89,7 +89,7 @@ Admins also have:
 | GET | `/api/feed/saved` | List bookmarks. |
 | GET | `/api/me/feed/read` | Caller's scroll-restoration watermark. Returns `{last_read_post_id, last_read_at}`. |
 | POST | `/api/me/feed/read` | Mark a post read. Body: `{"post_id": "..."}` (or `null` to clear). 404 on unknown post id. |
-| GET | `/api/me/follows` | Caller's followed public spaces — `{follows: [{space_id, followed_at}, ...]}`, newest first. |
+| GET | `/api/me/subscriptions` | Caller's subscribed spaces — `{subscriptions: [{space_id, subscribed_at}, ...]}`, newest first. A subscription = a read-only member row (`role='subscriber'` in `space_members`); the caller receives the same content-delivery stream as real members but is blocked on post / comment / reaction writes. Distinct from the dashboard "Spaces you follow" widget, which pins spaces the user is already a full member of — see `corner_service` + `preferences_json['followed_space_ids']`. |
 
 ## HFS — Spaces
 
@@ -108,7 +108,7 @@ events these routes fire.
 | GET | `/api/admin/spaces` | Admin-only: list all spaces on this HFS. |
 | GET | `/api/spaces/{id}/feed` | Space feed summary. |
 | POST | `/api/spaces/{id}/sync` | Trigger a re-sync with the space hosts. |
-| POST / DELETE | `/api/spaces/{id}/follow` | Follow / unfollow a public space (idempotent). Returns `{following}`. |
+| POST / DELETE | `/api/spaces/{id}/subscribe` | Subscribe / unsubscribe to a public or global space. Idempotent. Subscribe adds the caller as `role='subscriber'` in `space_members` (read-only member — receives content, cannot post / comment / react). Private / household spaces return 403. Unsubscribe is a no-op for users who aren't subscribers (won't demote real members). Returns `{subscribed}`. |
 
 **Members**
 

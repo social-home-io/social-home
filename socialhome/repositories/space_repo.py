@@ -54,6 +54,7 @@ class AbstractSpaceRepo(Protocol):
     ) -> None: ...
     async def list_by_type(self, space_type: SpaceType) -> list[Space]: ...
     async def list_for_user(self, user_id: str) -> list[Space]: ...
+    async def list_subscriptions_for_user(self, user_id: str) -> list[dict]: ...
     async def list_all(self) -> list[Space]: ...
     async def mark_dissolved(self, space_id: str) -> None: ...
     async def increment_config_sequence(self, space_id: str) -> int: ...
@@ -374,6 +375,35 @@ class SqliteSpaceRepo:
             (user_id,),
         )
         return [s for s in (_row_to_space(d) for d in rows_to_dicts(rows)) if s]
+
+    async def list_subscriptions_for_user(self, user_id: str) -> list[dict]:
+        """Return ``[{space_id, subscribed_at}]`` for every space where
+        *user_id* is a member with ``role='subscriber'``. Newest-joined
+        first. Dissolved spaces excluded.
+
+        Subscriptions are read-only memberships for public / global
+        spaces — see :class:`SpaceService.subscribe_to_space` for the
+        write path. Distinct from the
+        ``preferences_json['followed_space_ids']`` dashboard pin list
+        used by :mod:`corner_service`, which is a per-user UI pin
+        over spaces the user is *already* a full member of.
+        """
+        rows = await self._db.fetchall(
+            """
+            SELECT m.space_id AS space_id, m.joined_at AS subscribed_at
+              FROM space_members m
+              JOIN spaces s ON s.id = m.space_id
+             WHERE m.user_id = ?
+               AND m.role = 'subscriber'
+               AND s.dissolved = 0
+             ORDER BY m.joined_at DESC
+            """,
+            (user_id,),
+        )
+        return [
+            {"space_id": r["space_id"], "subscribed_at": r["subscribed_at"]}
+            for r in rows
+        ]
 
     async def list_all(self) -> list[Space]:
         """Return every active space hosted on this instance (admin).

@@ -104,7 +104,6 @@ class SpaceService:
         "_federation_repo",
         "_federation",
         "_remote_members",
-        "_follows",
     )
 
     def __init__(
@@ -128,7 +127,6 @@ class SpaceService:
         self._federation_repo = None
         self._federation = None
         self._remote_members = None
-        self._follows = None
 
     def attach_child_protection(self, child_protection_service) -> None:
         """Wire §CP.F1 enforcement into add_member."""
@@ -141,14 +139,6 @@ class SpaceService:
     def attach_cover_repo(self, repo) -> None:
         """Wire the space-cover blob store (§23 customization)."""
         self._covers = repo
-
-    def attach_follow_repo(self, repo) -> None:
-        """Wire :class:`AbstractFollowRepo` so ``follow_space`` /
-        ``unfollow_space`` / ``list_follows`` are available. Optional —
-        when unset the endpoints return 503 so the UI can degrade
-        gracefully in minimal deployments.
-        """
-        self._follows = repo
 
     def attach_gfs_connection_service(self, gfs_service) -> None:
         """Wire outbound GFS publish so ``space_type=global`` spaces
@@ -1332,6 +1322,10 @@ class SpaceService:
         member = await self._spaces.get_member(space_id, author_user_id)
         if member is None:
             raise SpacePermissionError("not a member of this space")
+        if member.role == "subscriber":
+            raise SpacePermissionError(
+                "subscribers can only read — joining as a member is required to post",
+            )
         if not space.features.allows(type):
             raise SpacePermissionError(f"space does not allow {type!r} posts")
 
@@ -1551,6 +1545,10 @@ class SpaceService:
         emoji = unicodedata.normalize("NFC", emoji.strip())
         if not emoji:
             raise ValueError("emoji must not be empty")
+        got = await self._posts.get(post_id)
+        if got is not None:
+            space_id, _post = got
+            await self._reject_subscriber(space_id, user_id)
         return await self._posts.add_reaction(post_id, emoji, user_id)
 
     async def remove_reaction(
@@ -1561,6 +1559,10 @@ class SpaceService:
         emoji: str,
     ) -> Post:
         emoji = unicodedata.normalize("NFC", emoji.strip())
+        got = await self._posts.get(post_id)
+        if got is not None:
+            space_id, _post = got
+            await self._reject_subscriber(space_id, user_id)
         return await self._posts.remove_reaction(post_id, emoji, user_id)
 
     async def add_comment(
@@ -1583,6 +1585,10 @@ class SpaceService:
         member = await self._spaces.get_member(space_id, author_user_id)
         if member is None:
             raise SpacePermissionError("not a member of this space")
+        if member.role == "subscriber":
+            raise SpacePermissionError(
+                "subscribers can only read — joining as a member is required to comment",
+            )
         ctype = _coerce_comment_type(comment_type)
         if ctype is CommentType.TEXT:
             _validate_text_length(content, limit=MAX_COMMENT_LENGTH)
@@ -1715,33 +1721,96 @@ class SpaceService:
         await self._require_space(space_id)
         await self._spaces.set_space_alias(space_id, username, alias)
 
-    # ── Follows (public-space bookmarks) ───────────────────────────────
+    # ── Subscriptions (read-only membership) ───────────────────────────
     #
-    # Follows are user-local pointers to public spaces. Unlike membership,
-    # following is a one-sided bookmark — the space's host HFS doesn't
-    # need to be notified. ``space_id`` is accepted even when the space
-    # isn't locally mirrored (e.g. discovered via GFS but never joined);
-    # the caller passes the id it received from the discovery payload.
+    # Subscribe = add self to the space as a :class:`SpaceMember` with
+    # ``role='subscriber'``. Same content delivery as real members: the
+    # normal sync + fan-out stream applies. Write paths (post / comment
+    # / reaction) gate on role and reject subscribers — they're strictly
+    # read-only.
+    #
+    # Note the name: we use *subscribe* rather than *follow* because the
+    # frontend already uses "followed spaces" for a different concept
+    # (a dashboard pin list over spaces the user is a full member of —
+    # see ``users.preferences_json['followed_space_ids']`` and
+    # ``corner_service``). The two features are distinct on purpose.
+    #
+    # Constraints:
+    # * Only ``PUBLIC`` and ``GLOBAL`` spaces are subscribable. Private /
+    #   household spaces require an invite.
+    # * If the caller is already a member (any non-subscriber role),
+    #   subscribe is a no-op — we do not demote real members.
+    # * Subscribe respects bans + the §CP.F1 age gate, same as
+    #   ``add_member``.
 
-    async def follow_space(self, user_id: str, space_id: str) -> None:
-        if self._follows is None:
-            raise RuntimeError("follow repo not attached")
-        await self._follows.follow(user_id, space_id)
+    async def subscribe_to_space(self, user_id: str, space_id: str) -> None:
+        space = await self._require_space(space_id)
+        if space.space_type not in (SpaceType.PUBLIC, SpaceType.GLOBAL):
+            raise SpacePermissionError(
+                "only public / global spaces can be subscribed to",
+            )
+        if await self._spaces.is_banned(space_id, user_id):
+            raise SpacePermissionError(
+                f"user {user_id!r} is banned from this space",
+                banned=True,
+            )
+        existing = await self._spaces.get_member(space_id, user_id)
+        if existing is not None:
+            # Already a member (any role) — no-op. Never demote.
+            return
+        if self._child_protection is not None:
+            await self._child_protection.check_space_age_gate(space_id, user_id)
+        member = SpaceMember(
+            space_id=space_id,
+            user_id=user_id,
+            role="subscriber",
+            joined_at=datetime.now(timezone.utc).isoformat(),
+        )
+        await self._spaces.save_member(member)
+        await self._bus.publish(
+            SpaceMemberJoined(
+                space_id=space_id,
+                user_id=user_id,
+                role="subscriber",
+            )
+        )
+        if self._child_protection is not None:
+            await self._child_protection.record_membership_change(
+                user_id=user_id,
+                space_id=space_id,
+                action="joined",
+                actor_id=user_id,
+            )
 
-    async def unfollow_space(self, user_id: str, space_id: str) -> None:
-        if self._follows is None:
-            raise RuntimeError("follow repo not attached")
-        await self._follows.unfollow(user_id, space_id)
+    async def unsubscribe_from_space(self, user_id: str, space_id: str) -> None:
+        """Remove a self-subscription. No-op if the user isn't a
+        subscriber — real members must use ``remove_member`` /
+        ``leave_space`` (we refuse to silently demote them by
+        "unsubscribing")."""
+        existing = await self._spaces.get_member(space_id, user_id)
+        if existing is None or existing.role != "subscriber":
+            return
+        await self._spaces.delete_member(space_id, user_id)
+        await self._bus.publish(
+            SpaceMemberLeft(
+                space_id=space_id,
+                user_id=user_id,
+            )
+        )
+        if self._child_protection is not None:
+            await self._child_protection.record_membership_change(
+                user_id=user_id,
+                space_id=space_id,
+                action="removed",
+                actor_id=user_id,
+            )
 
-    async def list_follows(self, user_id: str) -> list[dict]:
-        if self._follows is None:
-            return []
-        return await self._follows.list_follows(user_id)
+    async def list_subscriptions(self, user_id: str) -> list[dict]:
+        return await self._spaces.list_subscriptions_for_user(user_id)
 
-    async def is_following(self, user_id: str, space_id: str) -> bool:
-        if self._follows is None:
-            return False
-        return await self._follows.is_following(user_id, space_id)
+    async def is_subscribed(self, user_id: str, space_id: str) -> bool:
+        member = await self._spaces.get_member(space_id, user_id)
+        return member is not None and member.role == "subscriber"
 
     # ── Internal helpers ───────────────────────────────────────────────
 
@@ -1760,6 +1829,24 @@ class SpaceService:
         if member is None:
             raise SpacePermissionError("not a member of this space")
         return member
+
+    async def _reject_subscriber(
+        self,
+        space_id: str,
+        user_id: str,
+    ) -> None:
+        """Raise :class:`SpacePermissionError` if ``user_id`` is a
+        subscriber of ``space_id``. Used on write paths (create post,
+        comment, react) to enforce subscriber = read-only.
+        Non-subscribers — real members and non-members — pass through
+        untouched; any further auth check (if one exists on the path)
+        runs normally.
+        """
+        member = await self._spaces.get_member(space_id, user_id)
+        if member is not None and member.role == "subscriber":
+            raise SpacePermissionError(
+                "subscribers can only read — joining as a member is required to post",
+            )
 
     async def _require_admin_or_owner(
         self,
