@@ -3668,6 +3668,174 @@ hr {
   text-decoration: none;
 }
 
+/* Header actions row — sits alongside the settings button, right-aligned. */
+.sh-space-feed-header__actions {
+  position: absolute;
+  top: var(--sh-space-sm);
+  right: var(--sh-space-sm);
+  display: flex;
+  gap: var(--sh-space-xs);
+  align-items: center;
+}
+.sh-space-feed-header__actions .sh-space-settings-btn {
+  position: static;
+}
+
+/* Quick-links strip shown under the hero. */
+.sh-space-links-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+  margin: var(--sh-space-sm) 0;
+}
+.sh-space-links-strip__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: var(--sh-surface-2);
+  color: var(--sh-text);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-full);
+  font-size: var(--sh-font-size-sm);
+  text-decoration: none;
+  transition: background var(--sh-transition-fast);
+}
+.sh-space-links-strip__link::before {
+  content: '↗';
+  font-size: 0.9em;
+  opacity: 0.65;
+}
+.sh-space-links-strip__link:hover {
+  background: var(--sh-surface-3);
+  text-decoration: none;
+}
+
+/* Per-space notification preferences menu (bell icon + dropdown). */
+.sh-notif-prefs-menu {
+  position: relative;
+}
+.sh-notif-prefs-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border: none;
+  border-radius: var(--sh-radius-full);
+  font-size: var(--sh-font-size-md);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: background var(--sh-transition-fast);
+}
+.sh-notif-prefs-menu__trigger:hover,
+.sh-notif-prefs-menu__trigger[aria-expanded='true'] {
+  background: rgba(0, 0, 0, 0.75);
+}
+.sh-notif-prefs-menu__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--sh-surface-1);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  box-shadow: var(--sh-shadow-md);
+  z-index: 10;
+}
+.sh-notif-prefs-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--sh-radius-sm);
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.sh-notif-prefs-menu__item:hover:not(:disabled) {
+  background: var(--sh-surface-2);
+}
+.sh-notif-prefs-menu__item--active {
+  font-weight: 600;
+}
+.sh-notif-prefs-menu__item > span:last-child:not(:only-child) {
+  margin-left: auto;
+  color: var(--sh-accent);
+}
+
+/* Admin Quick-links editor in SpaceSettingsPage. */
+.sh-space-links-tab h2 {
+  margin: 0 0 var(--sh-space-xs) 0;
+}
+.sh-space-links-editor {
+  list-style: none;
+  padding: 0;
+  margin: var(--sh-space-md) 0;
+  display: grid;
+  gap: var(--sh-space-xs);
+}
+.sh-space-links-editor__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(200px, 2fr) auto;
+  gap: var(--sh-space-xs);
+  align-items: center;
+  padding: 8px;
+  background: var(--sh-surface-1);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+}
+.sh-space-links-editor__row input {
+  padding: 6px 10px;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm);
+  background: var(--sh-surface-0);
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-sm);
+}
+.sh-space-links-editor__actions {
+  display: flex;
+  gap: 4px;
+}
+.sh-space-links-editor .sh-icon-btn--danger {
+  color: var(--sh-error);
+}
+.sh-space-links-editor .sh-icon-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sh-error) 15%, transparent);
+  color: var(--sh-error);
+}
+.sh-space-links-editor__create {
+  display: grid;
+  gap: var(--sh-space-xs);
+  margin-top: var(--sh-space-md);
+  padding: var(--sh-space-sm);
+  background: var(--sh-surface-1);
+  border: 1px dashed var(--sh-border);
+  border-radius: var(--sh-radius-md);
+}
+.sh-space-links-editor__create h3 {
+  margin: 0;
+  font-size: var(--sh-font-size-sm);
+  font-weight: 600;
+  color: var(--sh-muted);
+}
+.sh-space-links-editor__create input {
+  padding: 8px 10px;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm);
+  background: var(--sh-surface-0);
+  color: var(--sh-text);
+}
+
 .sh-space-hero {
   display: flex;
   flex-direction: column;

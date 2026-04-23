@@ -21,6 +21,8 @@ import { CommentThread } from '@/components/CommentThread'
 import { SpaceHero } from '@/components/SpaceHero'
 import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openEventDialog } from '@/components/CalendarEventDialog'
+import { SpaceLinksStrip } from './SpaceLinksStrip'
+import { SpaceNotifPrefsMenu } from './SpaceNotifPrefsMenu'
 
 type SpaceTab = 'feed' | 'members' | 'pages' | 'calendar' | 'gallery' | 'map' | 'moderation'
 
@@ -238,20 +240,28 @@ export default function SpaceFeedPage() {
   return (
     <div class="sh-space-feed sh-space-scope">
       {s ? (
-        <div class="sh-space-feed-header">
-          <SpaceHero
-            name={s.name}
-            emoji={s.emoji}
-            coverUrl={s.cover_url}
-            about={s.about_markdown} />
-          {canAdmin && (
-            <a href={`/spaces/${spaceId}/settings`}
-               class="sh-space-settings-btn"
-               aria-label="Space settings">
-              ⚙ Settings
-            </a>
-          )}
-        </div>
+        <>
+          <div class="sh-space-feed-header">
+            <SpaceHero
+              name={s.name}
+              emoji={s.emoji}
+              coverUrl={s.cover_url}
+              about={s.about_markdown} />
+            <div class="sh-space-feed-header__actions">
+              {viewerRole.value !== null && (
+                <SpaceNotifPrefsMenu spaceId={spaceId} />
+              )}
+              {canAdmin && (
+                <a href={`/spaces/${spaceId}/settings`}
+                   class="sh-space-settings-btn"
+                   aria-label="Space settings">
+                  ⚙ Settings
+                </a>
+              )}
+            </div>
+          </div>
+          <SpaceLinksStrip spaceId={spaceId} />
+        </>
       ) : (
         <h1>Space</h1>
       )}

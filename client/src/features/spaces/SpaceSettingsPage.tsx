@@ -23,8 +23,9 @@ import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import type { Space } from '@/types'
 import { SpaceBotsTab } from './SpaceBotsTab'
+import { SpaceLinksTab } from './SpaceLinksTab'
 
-type SettingsTab = 'general' | 'about' | 'theme' | 'bots'
+type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots'
 
 interface SpaceDetail extends Space {
   about_markdown: string | null
@@ -101,7 +102,7 @@ export default function SpaceSettingsPage() {
   // Tabs the active user can see. Non-admins get only the Bots tab
   // (where they manage their own personal automations).
   const visibleTabs: SettingsTab[] = canAdmin
-    ? ['general', 'about', 'theme', 'bots']
+    ? ['general', 'about', 'theme', 'links', 'bots']
     : ['bots']
   if (!visibleTabs.includes(activeTab.value)) {
     activeTab.value = visibleTabs[0]
@@ -112,6 +113,7 @@ export default function SpaceSettingsPage() {
       case 'general': return 'General'
       case 'about':   return 'About'
       case 'theme':   return 'Theme'
+      case 'links':   return 'Quick links'
       case 'bots':    return 'Bots & automations'
     }
   }
@@ -145,6 +147,9 @@ export default function SpaceSettingsPage() {
       )}
       {activeTab.value === 'theme' && (
         <SpaceThemeStudio spaceId={space.id} />
+      )}
+      {activeTab.value === 'links' && (
+        <SpaceLinksTab spaceId={space.id} />
       )}
       {activeTab.value === 'bots' && (
         <SpaceBotsTab
