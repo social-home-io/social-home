@@ -75,6 +75,7 @@ from .conversations import (
 from .federation import FederationWebhookView
 from .feed import (
     FeedCollectionView,
+    FeedReadWatermarkView,
     PostCollectionView,
     PostCommentDetailView,
     PostCommentView,
@@ -301,6 +302,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     )
     app.router.add_view("/api/feed/posts/{id}/save", PostSaveView)
     app.router.add_view("/api/feed/saved", SavedPostsView)
+    app.router.add_view("/api/me/feed/read", FeedReadWatermarkView)
 
     # ── Spaces ──────────────────────────────────────────────────────────
     app.router.add_view("/api/admin/spaces", AdminSpaceCollectionView)

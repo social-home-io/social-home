@@ -314,3 +314,39 @@ async def test_feed_inactive_author_rejected(stack):
         await stack.feed_svc.create_post(
             author_user_id=u.user_id, type="text", content="x"
         )
+
+
+# ── Read watermark (§23.17.1) ──────────────────────────────────────────────
+
+
+async def test_mark_read_round_trip(stack):
+    u = await stack.provision_user("alice")
+    p = await stack.feed_svc.create_post(
+        author_user_id=u.user_id, type=PostType.TEXT, content="x"
+    )
+    await stack.feed_svc.mark_read(u.user_id, post_id=p.id)
+    got = await stack.feed_svc.get_read_watermark(u.user_id)
+    assert got["last_read_post_id"] == p.id
+
+
+async def test_mark_read_rejects_unknown_post(stack):
+    u = await stack.provision_user("alice")
+    with pytest.raises(KeyError):
+        await stack.feed_svc.mark_read(u.user_id, post_id="no-such-post")
+
+
+async def test_mark_read_accepts_none(stack):
+    """Passing ``post_id=None`` clears the watermark."""
+    u = await stack.provision_user("alice")
+    p = await stack.feed_svc.create_post(
+        author_user_id=u.user_id, type=PostType.TEXT, content="x"
+    )
+    await stack.feed_svc.mark_read(u.user_id, post_id=p.id)
+    await stack.feed_svc.mark_read(u.user_id, post_id=None)
+    got = await stack.feed_svc.get_read_watermark(u.user_id)
+    assert got["last_read_post_id"] is None
+
+
+async def test_get_read_watermark_absent(stack):
+    u = await stack.provision_user("alice")
+    assert await stack.feed_svc.get_read_watermark(u.user_id) is None

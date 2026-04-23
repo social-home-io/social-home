@@ -241,3 +241,44 @@ class SavedPostsView(BaseView):
         repo = self.svc(post_repo_key)
         posts = await repo.list_bookmarks(ctx.user_id)
         return web.json_response([_serialise(p) for p in posts])
+
+
+class FeedReadWatermarkView(BaseView):
+    """GET/POST ``/api/me/feed/read`` — caller's feed read-position
+    watermark (§23.17.1 scroll restoration).
+
+    ``POST`` body: ``{"post_id": "..."}`` (or ``"post_id": null`` to
+    clear). Returns ``{"last_read_post_id", "last_read_at"}``. Unknown
+    post ids yield 404.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(feed_service_key)
+        data = await svc.get_read_watermark(ctx.user_id)
+        return web.json_response(
+            data or {"last_read_post_id": None, "last_read_at": None},
+        )
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        body = await self.body()
+        if "post_id" not in body:
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "Body must include 'post_id' (may be null).",
+            )
+        post_id = body.get("post_id")
+        if post_id is not None and not isinstance(post_id, str):
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "'post_id' must be a string or null.",
+            )
+        svc = self.svc(feed_service_key)
+        await svc.mark_read(ctx.user_id, post_id=post_id)
+        data = await svc.get_read_watermark(ctx.user_id)
+        return web.json_response(
+            data or {"last_read_post_id": None, "last_read_at": None},
+        )

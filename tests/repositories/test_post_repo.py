@@ -73,3 +73,38 @@ async def test_get_missing_post_raises(env):
     """Getting a nonexistent post raises KeyError."""
     with pytest.raises(KeyError):
         await env.feed_svc.get_post("nonexistent")
+
+
+# ── Read watermark ─────────────────────────────────────────────────────────
+
+
+async def test_read_watermark_absent_by_default(env):
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    row = await env.post_repo.get_read_watermark("uid-does-not-exist")
+    assert row is None
+
+
+async def test_set_and_get_read_watermark(env):
+    u = await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.post_repo.set_read_watermark(u.user_id, "post-1")
+    got = await env.post_repo.get_read_watermark(u.user_id)
+    assert got is not None
+    assert got["last_read_post_id"] == "post-1"
+    assert got["last_read_at"]
+
+
+async def test_set_read_watermark_upserts(env):
+    u = await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.post_repo.set_read_watermark(u.user_id, "post-a")
+    await env.post_repo.set_read_watermark(u.user_id, "post-b")
+    got = await env.post_repo.get_read_watermark(u.user_id)
+    assert got["last_read_post_id"] == "post-b"
+
+
+async def test_set_read_watermark_accepts_none(env):
+    u = await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.post_repo.set_read_watermark(u.user_id, "post-a")
+    await env.post_repo.set_read_watermark(u.user_id, None)
+    got = await env.post_repo.get_read_watermark(u.user_id)
+    assert got is not None
+    assert got["last_read_post_id"] is None

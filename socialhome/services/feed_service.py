@@ -304,6 +304,24 @@ class FeedService:
     async def list_bookmarks(self, user_id: str) -> list[Post]:
         return await self._posts.list_bookmarks(user_id)
 
+    # ── Read watermark (§23.17.1) ──────────────────────────────────────
+
+    async def mark_read(self, user_id: str, *, post_id: str | None) -> None:
+        """Record the user's most-recent-read post id for scroll
+        restoration. ``post_id=None`` clears the marker. When a
+        non-null ``post_id`` is given it must refer to an existing,
+        non-deleted post; otherwise :class:`KeyError` is raised.
+        """
+        if post_id is not None:
+            await self._require_post(post_id)
+        await self._posts.set_read_watermark(user_id, post_id)
+
+    async def get_read_watermark(self, user_id: str) -> dict | None:
+        """Return ``{last_read_post_id, last_read_at}`` for the user or
+        ``None`` if they've never marked anything read.
+        """
+        return await self._posts.get_read_watermark(user_id)
+
     # ── Internal helpers ───────────────────────────────────────────────
 
     async def _require_post(self, post_id: str) -> Post:

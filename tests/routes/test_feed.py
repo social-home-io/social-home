@@ -307,3 +307,66 @@ async def test_save_unknown_post_404(client):
         headers=_auth(client._admin_token),
     )
     assert r.status == 404
+
+
+# ── Read watermark (§23.17.1) ──────────────────────────────────────────────
+
+
+async def test_feed_read_watermark_requires_auth(client):
+    r = await client.get("/api/me/feed/read")
+    assert r.status == 401
+    r2 = await client.post("/api/me/feed/read", json={"post_id": None})
+    assert r2.status == 401
+
+
+async def test_feed_read_watermark_round_trip(client):
+    r = await client.post(
+        "/api/feed/posts",
+        json={"type": "text", "content": "hello"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 201
+    pid = (await r.json())["id"]
+
+    r = await client.get("/api/me/feed/read", headers=_auth(client._admin_token))
+    assert r.status == 200
+    assert (await r.json())["last_read_post_id"] is None
+
+    r = await client.post(
+        "/api/me/feed/read",
+        json={"post_id": pid},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 200
+    assert (await r.json())["last_read_post_id"] == pid
+
+    r = await client.get("/api/me/feed/read", headers=_auth(client._admin_token))
+    assert (await r.json())["last_read_post_id"] == pid
+
+
+async def test_feed_read_watermark_rejects_unknown_post(client):
+    r = await client.post(
+        "/api/me/feed/read",
+        json={"post_id": "no-such-post"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 404
+
+
+async def test_feed_read_watermark_requires_body_field(client):
+    r = await client.post(
+        "/api/me/feed/read",
+        json={"other": "thing"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 422
+
+
+async def test_feed_read_watermark_accepts_null_to_clear(client):
+    r = await client.post(
+        "/api/me/feed/read",
+        json={"post_id": None},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 200
+    assert (await r.json())["last_read_post_id"] is None

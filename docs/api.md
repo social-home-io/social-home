@@ -87,6 +87,8 @@ Admins also have:
 | PATCH / DELETE | `/api/feed/posts/{id}/comments/{cid}` | Edit / delete own comment. |
 | POST | `/api/feed/posts/{id}/save` | Bookmark. |
 | GET | `/api/feed/saved` | List bookmarks. |
+| GET | `/api/me/feed/read` | Caller's scroll-restoration watermark. Returns `{last_read_post_id, last_read_at}`. |
+| POST | `/api/me/feed/read` | Mark a post read. Body: `{"post_id": "..."}` (or `null` to clear). 404 on unknown post id. |
 
 ## HFS — Spaces
 

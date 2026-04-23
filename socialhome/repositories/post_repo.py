@@ -109,6 +109,12 @@ class AbstractPostRepo(Protocol):
     async def unsave_bookmark(self, user_id: str, post_id: str) -> None: ...
     async def list_bookmarks(self, user_id: str) -> list[Post]: ...
 
+    # Feed read watermark -------------------------------------------------
+    async def set_read_watermark(
+        self, user_id: str, last_read_post_id: str | None
+    ) -> None: ...
+    async def get_read_watermark(self, user_id: str) -> dict | None: ...
+
 
 # ─── Concrete SQLite implementation ───────────────────────────────────────
 
@@ -417,6 +423,40 @@ class SqlitePostRepo:
             (user_id,),
         )
         return [p for p in (_row_to_post(d) for d in rows_to_dicts(rows)) if p]
+
+    # ── Feed read watermark ────────────────────────────────────────────
+    #
+    # Per-user scroll-restoration pointer (§23.17.1). A single row per
+    # user; upsert every time the client reports a new top-most read
+    # post id. ``last_read_post_id`` may be ``NULL`` to record "user
+    # has scrolled but not yet read any specific post".
+
+    async def set_read_watermark(
+        self, user_id: str, last_read_post_id: str | None
+    ) -> None:
+        await self._db.enqueue(
+            """
+            INSERT INTO feed_read_positions(user_id, last_read_post_id, last_read_at)
+            VALUES(?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_read_post_id=excluded.last_read_post_id,
+                last_read_at=datetime('now')
+            """,
+            (user_id, last_read_post_id),
+        )
+
+    async def get_read_watermark(self, user_id: str) -> dict | None:
+        row = await self._db.fetchone(
+            "SELECT last_read_post_id, last_read_at FROM feed_read_positions"
+            " WHERE user_id=?",
+            (user_id,),
+        )
+        if row is None:
+            return None
+        return {
+            "last_read_post_id": row["last_read_post_id"],
+            "last_read_at": row["last_read_at"],
+        }
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
