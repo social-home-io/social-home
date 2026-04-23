@@ -125,9 +125,9 @@ async def test_envelope_has_no_extra_plaintext_fields(env):
     )
     envelope = capture.bodies[0]
     extras = set(envelope.keys()) - _ALLOWED_PLAINTEXT_FIELDS
-    assert (
-        extras == set()
-    ), f"Envelope leaks unexpected plaintext fields: {sorted(extras)}"
+    assert extras == set(), (
+        f"Envelope leaks unexpected plaintext fields: {sorted(extras)}"
+    )
 
 
 async def test_payload_content_is_not_in_envelope(env):

@@ -92,9 +92,9 @@ async def test_export_excludes_secret_tables(env):
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
         names = tar.getnames()
     for forbidden in NEVER_EXPORT:
-        assert (
-            f"tables/{forbidden}.json" not in names
-        ), f"forbidden table {forbidden} should NOT be in backup"
+        assert f"tables/{forbidden}.json" not in names, (
+            f"forbidden table {forbidden} should NOT be in backup"
+        )
 
 
 async def test_export_includes_media_files(env):
