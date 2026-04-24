@@ -4195,6 +4195,165 @@ hr {
   border-color: color-mix(in srgb, var(--sh-success) 40%, transparent);
 }
 
+/* ───── Pairing role picker (Show / Scan) ──────────────────────── */
+.sh-pairing-role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sh-space-sm);
+  width: 100%;
+  margin-top: var(--sh-space-sm);
+}
+@media (max-width: 480px) {
+  .sh-pairing-role-grid { grid-template-columns: 1fr; }
+}
+.sh-pairing-role-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-xxs);
+  padding: var(--sh-space-md);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  background: var(--sh-bg);
+  cursor: pointer;
+  transition: border-color 120ms, transform 120ms, background 120ms;
+  text-align: center;
+}
+.sh-pairing-role-card:hover,
+.sh-pairing-role-card:focus-visible {
+  border-color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 5%, var(--sh-bg));
+  transform: translateY(-1px);
+}
+.sh-pairing-role-icon { font-size: 2rem; line-height: 1; }
+.sh-pairing-role-title { font-weight: 600; }
+.sh-pairing-role-hint {
+  color: var(--sh-muted);
+  font-size: var(--sh-font-size-xs);
+  line-height: 1.35;
+}
+
+/* ───── QR scanner (camera / upload / paste) ───────────────────── */
+.sh-pairing-scan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  align-items: center;
+  width: 100%;
+}
+.sh-scan-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  align-items: center;
+  width: 100%;
+}
+.sh-scan-camera {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  aspect-ratio: 1;
+  background: #000;
+  border-radius: var(--sh-radius-lg);
+  overflow: hidden;
+}
+.sh-scan-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.sh-scan-frame {
+  position: absolute;
+  inset: 12%;
+  border: 3px solid var(--sh-primary);
+  border-radius: var(--sh-radius-md);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+.sh-scan-starting {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sh-space-xs);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+}
+.sh-scan-fallbacks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-sm);
+  justify-content: center;
+}
+.sh-scan-upload-label { cursor: pointer; }
+.sh-scan-error,
+.sh-scan-no-camera {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-md);
+  background: var(--sh-warning-soft, color-mix(in srgb, var(--sh-warning) 10%, transparent));
+  border-radius: var(--sh-radius-md);
+  text-align: center;
+  width: 100%;
+  max-width: 340px;
+}
+.sh-scan-error-icon { font-size: 2rem; }
+.sh-scan-error-inline {
+  color: var(--sh-warning);
+  font-size: var(--sh-font-size-sm);
+  text-align: center;
+}
+.sh-scan-paste {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  width: 100%;
+}
+.sh-textarea {
+  width: 100%;
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  font-family: var(--sh-font-mono, monospace);
+  font-size: var(--sh-font-size-xs);
+  resize: vertical;
+}
+
+/* ───── SAS display (scanner side) ─────────────────────────────── */
+.sh-pairing-accepting,
+.sh-pairing-sas {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  text-align: center;
+  padding: var(--sh-space-md) 0;
+}
+.sh-sas-display {
+  display: flex;
+  gap: var(--sh-space-xs);
+  justify-content: center;
+  font-variant-numeric: tabular-nums;
+}
+.sh-sas-display-digit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: var(--sh-space-sm) var(--sh-space-xs);
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--sh-primary);
+  background: var(--sh-primary-soft);
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 30%, transparent);
+  border-radius: var(--sh-radius-md);
+  font-family: var(--sh-font-mono, monospace);
+}
+
 /* ───── Incoming auto-pair inbox ────────────────────────────────── */
 .sh-auto-pair-inbox {
   padding: var(--sh-space-md);
