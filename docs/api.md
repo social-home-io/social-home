@@ -435,7 +435,7 @@ Bearer auth (the integration holds the auto-provisioned token).
 |---|---|---|
 | POST | `/federation/inbox/{inbox_id}` | Inbound federation envelope. Runs the §24.11 validation pipeline before dispatch. See [protocol/README.md](./protocol/README.md). |
 
-## GFS — Public relay
+## GFS — Public relay (HTTPS REST, SH → GFS)
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -447,15 +447,26 @@ Bearer auth (the integration holds the auto-provisioned token).
 | GET | `/gfs/spaces` | Public directory listing. |
 | GET | `/healthz` | Liveness. |
 
-## GFS — RTC signalling
+## GFS — Push WebSocket (GFS → SH)
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/gfs/rtc/offer` | Start a signalling session. |
-| POST | `/gfs/rtc/answer` | Respond. |
+| GET (Upgrade) | `/gfs/ws` | Persistent push channel. SH opens this once paired; the GFS pushes `{type:"relay", space_id, event_type, payload, from_instance}` frames as space events fan out. First client frame must be a signed hello `{type:"hello", instance_id, ts, sig}` within 5 s — see spec §24.12. WebSocket close codes: 4400 protocol violation, 4401 auth failure, 4408 hello timeout, 4409 replaced. Heartbeat is the WS-protocol-level ping (30 s). |
+
+## GFS — SH↔SH RTC signalling rendezvous (§4.2.3)
+
+These endpoints are an in-memory bulletin board where two paired Social
+Home instances drop SDP offer / answer / ICE candidates so they can
+bring up a direct WebRTC DataChannel between themselves for §4.2.3
+sync. The GFS holds no PeerConnection.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/gfs/rtc/offer` | Store an SDP offer; return a session id. |
+| POST | `/gfs/rtc/answer` | Attach an SDP answer to a session. |
 | POST | `/gfs/rtc/ice` | Trickle ICE candidate. |
-| POST | `/gfs/rtc/ping` | Keep-alive. |
-| GET | `/gfs/rtc/session/{session_id}` | Session state. |
+| POST | `/gfs/rtc/ping` | HTTPS-fallback keepalive (sets `rtc_connections.transport`). |
+| GET | `/gfs/rtc/session/{session_id}` | Read session state (poll). |
 
 ## GFS — Cluster
 

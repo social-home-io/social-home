@@ -21,6 +21,29 @@ metadata, not content.
 Join-request events belong to the [invites](./invites.md) flow but
 ride on the same `_VIA` relay pattern.
 
+## Transport (SH ↔ GFS)
+
+The Social Home ↔ GFS link is split by direction:
+
+- **SH → GFS** is plain HTTPS REST under `/gfs/*` (`register`,
+  `publish`, `subscribe`, `report`, `appeal`, `spaces`). Synchronous
+  request / response with explicit status codes; no shared session
+  state.
+- **GFS → SH** is a persistent WebSocket the SH opens to
+  `wss://<gfs>/gfs/ws`. The first frame is a signed hello
+  `{type:"hello", instance_id, ts, sig}`; once accepted the GFS pushes
+  `{type:"relay", space_id, event_type, payload, from_instance}`
+  frames as fan-out happens. When no WebSocket is open the GFS falls
+  back to an HTTPS POST callback to the instance's registered
+  `inbox_url`.
+
+WebRTC is **not** used for the SH↔GFS leg — the GFS is publicly
+reachable, so NAT traversal buys nothing while DTLS plus per-connection
+PeerConnection state would be much more resource-hungry than a plain
+WebSocket. WebRTC stays for §4.2.3 SH↔SH direct sync and §26 calls
+(both genuinely peer-to-peer). See spec §24.12 for the full transport
+specification.
+
 ## Flow — publish + browse + join
 
 ```mermaid

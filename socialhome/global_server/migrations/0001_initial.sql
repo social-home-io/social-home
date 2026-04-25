@@ -62,9 +62,13 @@ CREATE INDEX IF NOT EXISTS idx_instance_spaces   ON space_subscribers(instance_i
 
 -- ── Transport modes per client instance ───────────────────────────────────
 
+-- Tracks the active SH↔GFS transport per client instance. The GFS leg is
+-- a publicly reachable server, so it uses a persistent `wss://` WebSocket
+-- (spec §24.12); `https` is the fallback for environments where the
+-- WebSocket cannot stay open.
 CREATE TABLE IF NOT EXISTS rtc_connections (
     instance_id   TEXT PRIMARY KEY REFERENCES client_instances(instance_id) ON DELETE CASCADE,
-    transport     TEXT NOT NULL CHECK(transport IN ('webrtc','https')),
+    transport     TEXT NOT NULL CHECK(transport IN ('websocket','https')),
     connected_at  TEXT NOT NULL DEFAULT (datetime('now')),
     last_ping_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

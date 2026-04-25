@@ -78,6 +78,7 @@ stt_service_key: AppKey = AppKey("stt_service")
 
 gfs_connection_service_key: AppKey = AppKey("gfs_connection_service")
 gfs_connection_repo_key: AppKey = AppKey("gfs_connection_repo")
+gfs_ws_supervisor_key: AppKey = AppKey("gfs_ws_supervisor")
 
 # ── Services ─────────────────────────────────────────────────────────────
 user_service_key: AppKey = AppKey("user_service")

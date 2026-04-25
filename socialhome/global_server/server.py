@@ -36,7 +36,6 @@ from cryptography.hazmat.primitives import serialization as _ser
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from ..db import AsyncDatabase
-from ..federation.transport import FederationTransport, HttpsInboxTransport
 from . import app_keys as K
 from .admin import AdminAuth, build_admin_middleware, hash_password
 from .admin_service import GfsAdminService
@@ -56,6 +55,7 @@ from .repositories import (
 )
 from .routes import register_routes
 from .rtc_transport import GfsRtcSession
+from .ws_registry import GfsWebSocketRegistry
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +133,11 @@ class GfsApp:
         repos: SimpleNamespace,
     ) -> SimpleNamespace:
         """Instantiate federation / admin / cluster services + auth + tokens."""
-        federation = GfsFederationService(repos.federation)
+        ws_registry = GfsWebSocketRegistry()
+        federation = GfsFederationService(
+            repos.federation,
+            ws_registry=ws_registry,
+        )
         admin = GfsAdminService(
             fed_repo=repos.federation,
             admin_repo=repos.admin,
@@ -173,6 +177,7 @@ class GfsApp:
             admin=admin,
             tokens=PairingTokenService(repos.admin),
             rtc=GfsRtcSession(),
+            ws_registry=ws_registry,
         )
 
     def _build_app(self) -> web.Application:
@@ -196,6 +201,7 @@ class GfsApp:
         a[K.gfs_admin_auth_key] = self.services.admin_auth
         a[K.gfs_admin_service_key] = self.services.admin
         a[K.gfs_rtc_key] = self.services.rtc
+        a[K.gfs_ws_registry_key] = self.services.ws_registry
         # Non-typed helpers the admin module reads directly.
         a["admin_auth"] = self.services.admin_auth
         a["gfs_token_service"] = self.services.tokens
@@ -233,30 +239,13 @@ class GfsApp:
                     self.config.admin_password_hash,
                 )
 
-        async def _signaling_send(*_args, **_kwargs):
-            # Placeholder — signalling routes handle this directly today.
-            return None
-
-        async def _http_factory():
-            return http_session
-
-        transport = FederationTransport(
-            own_instance_id=self.config.instance_id,
-            https_inbox=HttpsInboxTransport(client_factory=_http_factory),
-            signaling_send=_signaling_send,
-            ice_servers=[],
-        )
-        self.services.federation._transport = transport
-
         await self.repos.admin.purge_expired_sessions(int(time.time()))
         await self.services.cluster.start()
 
     async def _on_cleanup(self, app: web.Application) -> None:
         log.info("GFS: shutting down")
         await self.services.cluster.stop()
-        fed_svc = self.services.federation
-        if fed_svc._transport is not None:
-            await fed_svc._transport.close_all()
+        await self.services.ws_registry.close_all()
         session = app.get(K.gfs_http_session_key)
         if session is not None:
             await session.close()

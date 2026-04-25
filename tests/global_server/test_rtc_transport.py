@@ -183,10 +183,11 @@ async def test_rtc_offer_creates_session(rtc_client):
     session = rtc.get_session(data["session_id"])
     assert session is not None
     assert session.offer_sdp.startswith("v=0")
-    # Transport column flipped to 'webrtc'.
+    # /gfs/rtc/* is the SH↔SH §4.2.3 signalling rendezvous; it does not
+    # touch the SH↔GFS rtc_connections row (that one only flips when the
+    # SH opens or closes its /gfs/ws WebSocket — see test_gfs_ws.py).
     row = await rtc_client._app[gfs_fed_repo_key].get_rtc_connection("peer.home")
-    assert row is not None
-    assert row.transport == "webrtc"
+    assert row is None
 
 
 async def test_rtc_offer_rejects_unknown_instance(rtc_client):

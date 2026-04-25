@@ -3,24 +3,26 @@
 Business logic only — all SQL lives in :mod:`.repositories`. Crypto
 helpers are reused from :mod:`socialhome.crypto` (no duplication).
 
-Fan-out delivery uses the same WebRTC-primary + HTTPS-fallback pattern
-as the main federation transport: if a DataChannel is open to a
-subscriber, the event is sent over it; otherwise it falls back to an
-HTTPS POST to the subscriber's inbox URL.
+Fan-out delivery is **WebSocket-primary, HTTPS-fallback** (spec §24.12):
+if a paired SH instance has an open ``/gfs/ws`` WebSocket, the event is
+pushed over that connection; otherwise it falls back to an HTTPS POST
+to the subscriber's inbox URL.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING
 
 import aiohttp
 
 from ..crypto import b64url_decode, verify_ed25519
-from ..domain.federation import InstanceSource, PairingStatus, RemoteInstance
-from ..federation.transport import FederationTransport
-from .domain import ClientInstance, GlobalSpace, GfsSubscriber
+from .domain import ClientInstance, GfsSubscriber, GlobalSpace
 from .repositories import AbstractGfsFederationRepo
+
+if TYPE_CHECKING:
+    from .ws_registry import GfsWebSocketRegistry
 
 log = logging.getLogger(__name__)
 
@@ -31,20 +33,20 @@ class GfsFederationService:
     Responsible for:
     * Registering/updating client household instances.
     * Verifying Ed25519 signatures on inbound publish requests.
-    * Fanning out events to all subscribers via HTTP POST.
+    * Fanning out events to all subscribers (WS push, HTTPS fallback).
     * Managing space subscription lists.
     * Listing all known global spaces.
     """
 
-    __slots__ = ("_repo", "_transport")
+    __slots__ = ("_repo", "_ws_registry")
 
     def __init__(
         self,
         repo: AbstractGfsFederationRepo,
-        transport: FederationTransport | None = None,
+        ws_registry: "GfsWebSocketRegistry | None" = None,
     ) -> None:
         self._repo = repo
-        self._transport = transport
+        self._ws_registry = ws_registry
 
     async def register_instance(
         self,
@@ -181,49 +183,27 @@ class GfsFederationService:
     ) -> list[str]:
         """Deliver *event_body* to each subscriber.
 
-        Tries the WebRTC DataChannel first (if a transport is attached
-        and the channel to that subscriber is open); falls back to an
-        HTTPS POST to the subscriber's inbox URL.
+        Tries the SH↔GFS WebSocket first (push frame ``{type:"relay", ...}``).
+        If no socket is registered for the subscriber or the send fails,
+        falls back to an HTTPS POST to the subscriber's inbox URL.
         """
         own_session = session is None
         active: aiohttp.ClientSession = (
             session if session is not None else aiohttp.ClientSession()
         )
+        push_frame = {"type": "relay", **event_body}
         try:
             delivered: list[str] = []
             for sub in subscribers:
-                # Try DataChannel first.
-                if self._transport is not None and self._transport.is_ready(
-                    sub.instance_id
+                # WebSocket push first.
+                if self._ws_registry is not None and await self._ws_registry.send(
+                    sub.instance_id,
+                    push_frame,
                 ):
-                    try:
-                        # Build a minimal RemoteInstance for the transport.
-                        inst = RemoteInstance(
-                            id=sub.instance_id,
-                            display_name=sub.instance_id[:8],
-                            remote_identity_pk="",
-                            key_self_to_remote="",
-                            key_remote_to_self="",
-                            remote_inbox_url=sub.inbox_url,
-                            local_inbox_id="",
-                            status=PairingStatus.CONFIRMED,
-                            source=InstanceSource.MANUAL,
-                        )
-                        result = await self._transport.send(
-                            instance=inst,
-                            envelope_dict=event_body,
-                        )
-                        if result.ok:
-                            delivered.append(sub.instance_id)
-                            continue
-                    except Exception as exc:
-                        log.debug(
-                            "GFS RTC fan-out failed for %s, falling back to HTTPS inbox: %s",
-                            sub.instance_id,
-                            exc,
-                        )
+                    delivered.append(sub.instance_id)
+                    continue
 
-                # HTTPS fallback.
+                # HTTPS-inbox fallback.
                 try:
                     async with active.post(
                         sub.inbox_url,

@@ -17,6 +17,7 @@ from .repositories import (
     AbstractGfsFederationRepo,
 )
 from .rtc_transport import GfsRtcSession
+from .ws_registry import GfsWebSocketRegistry
 
 gfs_db_key: AppKey[AsyncDatabase] = AppKey("gfs_db")
 gfs_config_key: AppKey[GfsConfig] = AppKey("gfs_config")
@@ -28,4 +29,5 @@ gfs_admin_service_key: AppKey[GfsAdminService] = AppKey("gfs_admin_service")
 gfs_cluster_key: AppKey[ClusterService] = AppKey("gfs_cluster")
 gfs_cluster_repo_key: AppKey[AbstractClusterRepo] = AppKey("gfs_cluster_repo")
 gfs_rtc_key: AppKey[GfsRtcSession] = AppKey("gfs_rtc")
+gfs_ws_registry_key: AppKey[GfsWebSocketRegistry] = AppKey("gfs_ws_registry")
 gfs_http_session_key: AppKey[aiohttp.ClientSession] = AppKey("gfs_http_session")

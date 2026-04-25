@@ -2,10 +2,14 @@
 
 Each module groups views by URL concern:
 
-* :mod:`.relay`   — ``/gfs/*`` relay endpoints (register / publish /
-  subscribe / report / appeal / spaces / healthz).
+* :mod:`.relay`   — ``/gfs/*`` HTTPS relay endpoints (register, plus
+  HTTPS-fallback variants of publish / subscribe / report / appeal +
+  spaces / healthz).
+* :mod:`.ws`      — ``/gfs/ws`` SH↔GFS WebSocket transport (spec §24.12,
+  primary path).
 * :mod:`.cluster` — ``/cluster/*`` + admin cluster tab.
-* :mod:`.rtc`     — ``/gfs/rtc/*`` WebRTC signalling.
+* :mod:`.rtc`     — ``/gfs/rtc/*`` SH↔SH WebRTC signalling rendezvous
+  for §4.2.3 direct sync (the GFS holds no PeerConnection here).
 * :mod:`.admin`   — ``/admin/api/*`` admin portal JSON routes + static
   index + ``/admin/login`` / ``/admin/logout``.
 
@@ -58,6 +62,7 @@ from .rtc import (
     RtcPingView,
     RtcSessionView,
 )
+from .ws import GfsWebSocketView
 
 
 def register_routes(
@@ -69,8 +74,15 @@ def register_routes(
     (absolute) for the public ``/media/`` file mount so deployment layout
     stays in the caller's hands.
     """
-    # Relay + public GFS wire endpoints.
+    # Pairing handshake (spec §24.12 — the only HTTPS hop in the
+    # primary flow; everything afterwards rides the WebSocket below).
     app.router.add_view("/gfs/register", RegisterView)
+
+    # Persistent SH↔GFS WebSocket — primary transport (spec §24.12).
+    app.router.add_view("/gfs/ws", GfsWebSocketView)
+
+    # HTTPS-fallback wire endpoints — used when the WebSocket cannot
+    # stay open. The protocol is otherwise identical to the WS frames.
     app.router.add_view("/gfs/publish", PublishView)
     app.router.add_view("/gfs/subscribe", SubscribeView)
     app.router.add_view("/gfs/report", ReportView)
@@ -88,7 +100,10 @@ def register_routes(
     app.router.add_view("/cluster/sync", ClusterSyncView)
     app.router.add_view("/cluster/health", ClusterHealthView)
 
-    # WebRTC DataChannel signalling (spec §24.12).
+    # SH↔SH WebRTC signalling rendezvous for §4.2.3 direct DataChannel
+    # sync. The GFS is a public bulletin board for SDP offers / answers /
+    # ICE candidates so two NATted households can find each other; the
+    # GFS itself holds no PeerConnection.
     app.router.add_view("/gfs/rtc/offer", RtcOfferView)
     app.router.add_view("/gfs/rtc/answer", RtcAnswerView)
     app.router.add_view("/gfs/rtc/ice", RtcIceView)

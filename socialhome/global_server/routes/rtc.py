@@ -1,7 +1,13 @@
-"""WebRTC DataChannel signalling routes (``/gfs/rtc/*``, spec §24.12).
+"""SH↔SH WebRTC signalling rendezvous routes (``/gfs/rtc/*``, spec §4.2.3).
 
-The GFS acts as the signalling rendezvous between two paired household
-instances so they can bring up a DataChannel without a public IP.
+The GFS is a public meeting point where two household instances can drop
+their SDP offer / answer / ICE candidates so they can bring up a direct
+WebRTC DataChannel between themselves for §4.2.3 sync. The GFS holds no
+PeerConnection — it just stores and forwards the signalling artefacts.
+
+This is **not** the SH↔GFS transport. That is a `wss://` WebSocket on
+``/gfs/ws`` (spec §24.12); see :mod:`.ws` and :mod:`..ws_registry`.
+
 Every POST carries an Ed25519 signature over the canonical body minus
 the ``signature`` field, same scheme as ``/gfs/report``.
 """
@@ -53,8 +59,6 @@ class RtcOfferView(GfsBaseView):
         sdp = str(body.get("sdp") or "")
         rtc = self.svc(K.gfs_rtc_key)
         session_id = await rtc.offer(instance_id, sdp)
-        fed_repo = self.svc(K.gfs_fed_repo_key)
-        await fed_repo.upsert_rtc_connection(instance_id, transport="webrtc")
         return web.json_response({"session_id": session_id})
 
 
@@ -120,15 +124,20 @@ class RtcSessionView(GfsBaseView):
 
 
 class RtcPingView(GfsBaseView):
-    """``POST /gfs/rtc/ping`` — keepalive; bumps ``last_ping_at``."""
+    """``POST /gfs/rtc/ping`` — HTTPS-fallback keepalive; bumps ``last_ping_at``.
+
+    Instances with an open ``/gfs/ws`` WebSocket do not need to call this —
+    the WS heartbeat keeps ``last_ping_at`` fresh. This endpoint exists for
+    instances on the HTTPS-inbox fallback path (spec §24.12).
+    """
 
     async def post(self) -> web.Response:
         result = await _rtc_authenticate(self)
         if isinstance(result, web.Response):
             return result
         body, instance_id = result
-        transport = str(body.get("transport") or "webrtc")
-        if transport not in ("webrtc", "https"):
+        transport = str(body.get("transport") or "https")
+        if transport not in ("websocket", "https"):
             return web.json_response(
                 {"error": "invalid_transport"},
                 status=422,

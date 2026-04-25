@@ -58,6 +58,7 @@ from .infrastructure.calendar_reminder_scheduler import (
 from .infrastructure.task_deadline_scheduler import TaskDeadlineScheduler
 from .infrastructure.task_recurrence_scheduler import TaskRecurrenceScheduler
 from .infrastructure.post_draft_scheduler import PostDraftCleanupScheduler
+from .infrastructure.gfs_ws_supervisor import GfsWebSocketSupervisor
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
 from .platform import build_platform_adapter
@@ -1026,6 +1027,7 @@ def create_app(config: Config | None = None) -> web.Application:
     federation_service: FederationService | None = None
     outbox_processor: OutboxProcessor | None = None
     stale_call_scheduler: StaleCallCleanupScheduler | None = None
+    gfs_ws_supervisor: GfsWebSocketSupervisor | None = None
     replay_cache_scheduler: ReplayCachePruneScheduler | None = None
     page_lock_scheduler: PageLockExpiryScheduler | None = None
     space_retention_scheduler: SpaceRetentionScheduler | None = None
@@ -1283,6 +1285,30 @@ def create_app(config: Config | None = None) -> web.Application:
         stale_call_scheduler = StaleCallCleanupScheduler(call_signaling)
         await stale_call_scheduler.start()
 
+        # GFS WebSocket supervisor (§24.12) — opens a persistent
+        # ``wss://`` connection to every paired GFS so relay events
+        # arrive without an HTTPS callback. SH→GFS REST stays unchanged.
+        # Inbound relay frames are logged here today; integration into the
+        # federation inbound pipeline is a follow-up.
+        async def _on_gfs_relay(frame: dict) -> None:
+            log.info(
+                "gfs.relay.received: space=%s event=%s from=%s",
+                frame.get("space_id"),
+                frame.get("event_type"),
+                frame.get("from_instance"),
+            )
+
+        nonlocal gfs_ws_supervisor
+        gfs_ws_supervisor = GfsWebSocketSupervisor(
+            repo=repos.gfs_connection,
+            instance_id=real_instance_id,
+            signing_key=identity_seed,
+            session_factory=lambda: http_session,
+            on_relay=_on_gfs_relay,
+        )
+        await gfs_ws_supervisor.start()
+        app[K.gfs_ws_supervisor_key] = gfs_ws_supervisor
+
         # 6. OutboxProcessor — drains federation_outbox in the background.
         async def _deliver(entry):
             """Re-deliver an outbox entry via FederationService.
@@ -1366,6 +1392,8 @@ def create_app(config: Config | None = None) -> web.Application:
             await outbox_processor.stop()
         if stale_call_scheduler is not None:
             await stale_call_scheduler.stop()
+        if gfs_ws_supervisor is not None:
+            await gfs_ws_supervisor.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
         if page_lock_scheduler is not None:
