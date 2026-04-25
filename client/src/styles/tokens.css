@@ -1,16 +1,24 @@
 /**
  * Design Tokens (§23.111) — CSS custom properties.
  *
- * Modern 2026 palette: indigo-500 primary, emerald success, amber
- * warning, red danger. Dark mode uses warm slate tones (Tailwind
+ * 2026 palette: hearth-terracotta primary (matches the marketing
+ * site at social-home.io), emerald success, amber warning, red
+ * danger. Dark mode uses warm slate tones (Tailwind
  * slate-950/800/100) rather than saturated navy. Shadows are
  * two-layer so hover lifts read cleanly on every surface.
+ *
+ * Brand alignment note (2026.4): primary swung from indigo →
+ * hearth-terracotta to share its accent with the marketing site.
+ * Indigo is the generic SaaS accent; hearth (#D2542A) is
+ * distinctive and household-warm — it does the same job in the
+ * UI (CTA fills, focus rings, sent-DM gradient) without
+ * looking like every other Notion-flavoured app.
  */
 :root {
   /* ── Brand colors ─────────────────────────────────────────────── */
-  --sh-primary:         #6366F1;     /* indigo-500 */
-  --sh-primary-hover:   #4F46E5;     /* indigo-600 */
-  --sh-primary-soft:    #EEF2FF;     /* indigo-50  — tinted surfaces */
+  --sh-primary:         #D2542A;     /* hearth — terracotta */
+  --sh-primary-hover:   #A33F1A;     /* hearth-deep */
+  --sh-primary-soft:    #FAEEE6;     /* hearth-tint — for tinted surfaces */
   --sh-danger:          #EF4444;     /* red-500 */
   --sh-danger-hover:    #DC2626;     /* red-600 */
   --sh-success:         #10B981;     /* emerald-500 */
@@ -101,9 +109,9 @@
 
 /* Dark mode (§23.35) — warm slate, modern tone. */
 .sh-theme-dark {
-  --sh-primary:        #818CF8;  /* indigo-400 — more readable on dark */
-  --sh-primary-hover:  #6366F1;  /* indigo-500 */
-  --sh-primary-soft:   #1E1B4B;  /* indigo-950 — tinted dark surface */
+  --sh-primary:        #E96A3F;  /* hearth lifted for dark surfaces */
+  --sh-primary-hover:  #C04E22;  /* hearth-deep dark variant */
+  --sh-primary-soft:   #3A211A;  /* hearth tinted onto a dark surface */
   --sh-success:        #34D399;  /* emerald-400 */
   --sh-warning:        #FBBF24;  /* amber-400 */
   --sh-danger:         #F87171;  /* red-400 */
@@ -129,7 +137,7 @@
   --sh-shadow:    var(--sh-shadow-sm);
 }
 .sh-theme-dark :focus-visible {
-  outline-color: #A5B4FC;    /* indigo-300 — higher luminance on slate */
+  outline-color: #F1D9CA;    /* hearth-tint — high luminance on slate */
 }
 
 /* Responsive breakpoints (§23.113) */

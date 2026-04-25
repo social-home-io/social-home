@@ -1535,7 +1535,7 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 .sh-receipt--sent      { color: var(--sh-text-muted); }
 .sh-receipt--delivered { color: var(--sh-text-muted); }
 .sh-receipt--read      { color: var(--sh-primary); font-weight: 700; }
-.sh-message--mine .sh-receipt--read      { color: #A5B4FC; }
+.sh-message--mine .sh-receipt--read      { color: #F1D9CA; }   /* hearth-tint on hearth gradient */
 .sh-message--mine .sh-receipt--delivered { color: rgba(255,255,255,0.7); }
 .sh-message--mine .sh-receipt--sent      { color: rgba(255,255,255,0.5); }
 
