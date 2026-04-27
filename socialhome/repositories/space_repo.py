@@ -75,6 +75,12 @@ class AbstractSpaceRepo(Protocol):
     async def list_members(self, space_id: str) -> list[SpaceMember]: ...
     async def delete_member(self, space_id: str, user_id: str) -> None: ...
     async def set_role(self, space_id: str, user_id: str, role: str) -> None: ...
+    async def set_member_location_sharing(
+        self,
+        space_id: str,
+        user_id: str,
+        enabled: bool,
+    ) -> bool: ...
     async def set_member_profile(
         self,
         space_id: str,
@@ -605,6 +611,32 @@ class SqliteSpaceRepo:
             "UPDATE space_members SET role=? WHERE space_id=? AND user_id=?",
             (role, space_id, user_id),
         )
+
+    async def set_member_location_sharing(
+        self,
+        space_id: str,
+        user_id: str,
+        enabled: bool,
+    ) -> bool:
+        """Flip a member's ``location_share_enabled`` in this space.
+
+        Returns ``True`` if the row existed and was updated; ``False``
+        if no matching member row exists. Used by §23.8.8's
+        member-self-service ``PATCH /spaces/{id}/members/me/location-sharing``
+        endpoint and by the space admin UI.
+        """
+        existing = await self._db.fetchone(
+            "SELECT 1 FROM space_members WHERE space_id=? AND user_id=?",
+            (space_id, user_id),
+        )
+        if existing is None:
+            return False
+        await self._db.enqueue(
+            "UPDATE space_members SET location_share_enabled=?"
+            " WHERE space_id=? AND user_id=?",
+            (1 if enabled else 0, space_id, user_id),
+        )
+        return True
 
     async def list_local_member_user_ids(self, space_id: str) -> list[str]:
         """Return ``user_id`` values for space members whose home instance is ours.

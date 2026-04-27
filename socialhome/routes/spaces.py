@@ -308,6 +308,51 @@ class SpaceMemberMeProfileView(BaseView):
         return web.json_response({"ok": True})
 
 
+class SpaceMemberLocationSharingView(BaseView):
+    """``PATCH /api/spaces/{id}/members/me/location-sharing`` (§23.8.8).
+
+    Member-self-service: flip the caller's
+    ``space_members.location_share_enabled`` for this space without
+    needing admin rights. Body: ``{"enabled": bool}``. Returns ``200``
+    with ``{"location_share_enabled": bool}`` so the client store can
+    update without an extra GET.
+
+    The space admin can still see this member's GPS only when the
+    space has ``feature_location = 1`` AND this flag is ``true``;
+    flipping it OFF here stops the next presence broadcast from
+    reaching this space. No data already in flight is "recalled" —
+    the next ``PresenceUpdated`` is the one that's gated.
+    """
+
+    async def patch(self) -> web.Response:
+        ctx = self.user
+        if ctx is None or ctx.user_id is None:
+            return error_response(
+                401, "UNAUTHENTICATED", "Authentication required.",
+            )
+        space_id = self.match("id")
+        body = await self.body()
+        if "enabled" not in body or not isinstance(body["enabled"], bool):
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "`enabled` must be a boolean.",
+            )
+        repo = self.svc(space_repo_key)
+        ok = await repo.set_member_location_sharing(
+            space_id, ctx.user_id, body["enabled"],
+        )
+        if not ok:
+            return error_response(
+                404,
+                "NOT_FOUND",
+                "You are not a member of this space.",
+            )
+        return web.json_response(
+            {"location_share_enabled": body["enabled"]},
+        )
+
+
 class SpaceMemberMePictureView(BaseView):
     """``POST`` / ``DELETE /api/spaces/{id}/members/me/picture``."""
 
