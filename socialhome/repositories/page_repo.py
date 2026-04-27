@@ -59,6 +59,13 @@ class AbstractPageRepo(Protocol):
         *,
         space_id: str | None = None,
     ) -> builtins.list[Page]: ...
+    async def list_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> builtins.list[Page]: ...
     async def delete(self, page_id: str) -> None: ...
 
     async def acquire_lock(
@@ -232,6 +239,27 @@ class SqlitePageRepo:
                 "SELECT * FROM space_pages WHERE space_id=? ORDER BY updated_at DESC",
                 (space_id,),
             )
+        return [p for p in (_row_to_page(d) for d in rows_to_dicts(rows)) if p]
+
+    async def list_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> builtins.list[Page]:
+        """Pages updated after ``since`` (ISO-8601), oldest-first.
+
+        Used by ``SpaceSyncResumeProvider`` to replay missed page edits
+        on long-offline catch-up. ``updated_at`` (not ``created_at``) is
+        the cursor so renamed/edited pages get re-emitted too.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM space_pages "
+            "WHERE space_id=? AND updated_at > ? "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (space_id, since, int(limit)),
+        )
         return [p for p in (_row_to_page(d) for d in rows_to_dicts(rows)) if p]
 
     async def delete(self, page_id: str) -> None:

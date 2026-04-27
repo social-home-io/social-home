@@ -82,6 +82,13 @@ class AbstractSpacePostRepo(Protocol):
     async def add_comment(self, comment: Comment) -> Comment: ...
     async def get_comment(self, comment_id: str) -> Comment | None: ...
     async def list_comments(self, post_id: str) -> list[Comment]: ...
+    async def list_comments_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[tuple[str, Comment]]: ...
     async def soft_delete_comment(self, comment_id: str) -> None: ...
     async def edit_comment(
         self,
@@ -344,6 +351,36 @@ class SqliteSpacePostRepo:
             (post_id,),
         )
         return [c for c in (_row_to_space_comment(d) for d in rows_to_dicts(rows)) if c]
+
+    async def list_comments_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[tuple[str, Comment]]:
+        """Comments on posts in *space_id* with ``created_at > since``.
+
+        Returns ``(post_id, Comment)`` pairs so the resume replay can
+        emit the ``post_id`` field every ``SPACE_COMMENT_*`` event
+        carries. Joins ``space_post_comments`` with ``space_posts`` to
+        scope by space (the comment row itself only knows its parent
+        post). Soft-deleted comments are omitted from the burst.
+        """
+        rows = await self._db.fetchall(
+            "SELECT c.* FROM space_post_comments c "
+            "JOIN space_posts p ON p.id = c.post_id "
+            "WHERE p.space_id=? AND c.deleted=0 AND c.created_at > ? "
+            "ORDER BY c.created_at ASC LIMIT ?",
+            (space_id, since, int(limit)),
+        )
+        out: list[tuple[str, Comment]] = []
+        for d in rows_to_dicts(rows):
+            comment = _row_to_space_comment(d)
+            if comment is None:
+                continue
+            out.append((d["post_id"], comment))
+        return out
 
     async def soft_delete_comment(self, comment_id: str) -> None:
         await self._db.enqueue(

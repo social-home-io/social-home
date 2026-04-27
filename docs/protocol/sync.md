@@ -77,11 +77,21 @@ sequenceDiagram
 ```
 
 Implemented by `socialhome/federation/sync/space/resume.py`
-(`SpaceSyncResumeProvider`). The current cut covers posts; tasks,
-comments, pages, stickies, calendar events, and gallery items will
-extend the same provider as follow-up PRs without changing the wire
-format. Capped at `MAX_POSTS_PER_RESUME = 500` events per request —
-receivers paginate by re-issuing with the new high-water mark.
+(`SpaceSyncResumeProvider`). Today's cut replays:
+
+- `SPACE_POST_CREATED` — posts (`space_post_repo.list_since`)
+- `SPACE_COMMENT_CREATED` — comments on those posts
+  (`space_post_repo.list_comments_since`, JOIN through `space_posts`)
+- `SPACE_TASK_CREATED` — tasks (`space_task_repo.list_since`)
+- `SPACE_PAGE_CREATED` — pages (`page_repo.list_since`)
+- `SPACE_STICKY_CREATED` — stickies (`sticky_repo.list_since`)
+- `SPACE_CALENDAR_EVENT_CREATED` — calendar events
+  (`space_calendar_repo.list_events_since`, RRULEs included)
+
+Each resource is capped at `MAX_PER_RESOURCE = 500` events per request
+— receivers paginate by re-issuing with the new high-water mark.
+Gallery items are intentionally excluded until `SPACE_GALLERY_*`
+federation events land.
 
 ## Backpressure
 

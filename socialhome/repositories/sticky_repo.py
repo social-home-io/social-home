@@ -8,6 +8,7 @@ single repo with a ``space_id: str | None`` parameter handles both.
 
 from __future__ import annotations
 
+import builtins
 import uuid
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -37,7 +38,14 @@ class AbstractStickyRepo(Protocol):
         space_id: str | None = None,
     ) -> Sticky: ...
     async def get(self, sticky_id: str) -> Sticky | None: ...
-    async def list(self, *, space_id: str | None = None) -> list[Sticky]: ...
+    async def list(self, *, space_id: str | None = None) -> builtins.list[Sticky]: ...
+    async def list_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> builtins.list[Sticky]: ...
     async def update_content(self, sticky_id: str, content: str) -> None: ...
     async def update_position(
         self,
@@ -114,7 +122,7 @@ class SqliteStickyRepo:
         self,
         *,
         space_id: str | None = None,
-    ) -> list[Sticky]:
+    ) -> builtins.list[Sticky]:
         if space_id is None:
             rows = await self._db.fetchall(
                 "SELECT * FROM stickies WHERE space_id IS NULL ORDER BY created_at",
@@ -124,6 +132,26 @@ class SqliteStickyRepo:
                 "SELECT * FROM stickies WHERE space_id=? ORDER BY created_at",
                 (space_id,),
             )
+        return [s for s in (_row_to_sticky(d) for d in rows_to_dicts(rows)) if s]
+
+    async def list_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> builtins.list[Sticky]:
+        """Stickies in *space_id* with ``updated_at > since``, oldest-first.
+
+        Household-scoped (NULL space_id) stickies are never returned —
+        they don't federate so a peer has no use for them.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM stickies "
+            "WHERE space_id=? AND updated_at > ? "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (space_id, since, int(limit)),
+        )
         return [s for s in (_row_to_sticky(d) for d in rows_to_dicts(rows)) if s]
 
     async def update_content(self, sticky_id: str, content: str) -> None:

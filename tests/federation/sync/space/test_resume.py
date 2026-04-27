@@ -7,10 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from socialhome.domain.calendar import CalendarEvent
 from socialhome.domain.federation import FederationEventType
-from socialhome.domain.post import Post, PostType
+from socialhome.domain.page import Page
+from socialhome.domain.post import Comment, CommentType, Post, PostType
+from socialhome.domain.sticky import Sticky
+from socialhome.domain.task import Task, TaskStatus
 from socialhome.federation.sync.space.resume import (
-    MAX_POSTS_PER_RESUME,
+    MAX_PER_RESOURCE,
     SpaceSyncResumeProvider,
 )
 
@@ -39,8 +43,15 @@ class _FakeSpaceRepo:
 
 
 class _FakePostRepo:
-    def __init__(self, posts: list[Post]) -> None:
-        self._posts = posts
+    """Posts + comments live on the same repo to mirror prod."""
+
+    def __init__(
+        self,
+        posts: list[Post] | None = None,
+        comments: list[tuple[str, Comment]] | None = None,
+    ) -> None:
+        self._posts = posts or []
+        self._comments = comments or []
         self.last_since: str | None = None
         self.last_limit: int | None = None
 
@@ -55,6 +66,46 @@ class _FakePostRepo:
         self.last_limit = limit
         return [p for p in self._posts if p.created_at.isoformat() > since][:limit]
 
+    async def list_comments_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[tuple[str, Comment]]:
+        return [
+            (post_id, c)
+            for post_id, c in self._comments
+            if c.created_at.isoformat() > since
+        ][:limit]
+
+
+class _FakeListSinceRepo:
+    """Generic stub for repos whose since-method is just ``list_since``."""
+
+    def __init__(self, rows: list, *, method: str = "list_since") -> None:
+        self._rows = rows
+        self._method = method
+
+    def __getattr__(self, name):  # type: ignore[no-redef]
+        if name in ("list_since", "list_events_since"):
+
+            async def _impl(space_id, since, *, limit=500):
+                return [r for r in self._rows if _ts_attr(r) > since][:limit]
+
+            return _impl
+        raise AttributeError(name)
+
+
+def _ts_attr(row) -> str:
+    """Best-effort timestamp accessor for the fake list_since stub."""
+    for attr in ("updated_at", "created_at", "start"):
+        v = getattr(row, attr, None)
+        if v is None:
+            continue
+        return v.isoformat() if isinstance(v, datetime) else str(v)
+    return ""
+
 
 def _post(i: int, at: datetime) -> Post:
     return Post(
@@ -63,6 +114,67 @@ def _post(i: int, at: datetime) -> Post:
         type=PostType.TEXT,
         created_at=at,
         content=f"hello {i}",
+    )
+
+
+def _comment(i: int, post_id: str, at: datetime) -> Comment:
+    return Comment(
+        id=f"c-{i}",
+        post_id=post_id,
+        author="alice",
+        type=CommentType.TEXT,
+        created_at=at,
+        content=f"reply {i}",
+    )
+
+
+def _task(i: int, at: datetime) -> Task:
+    return Task(
+        id=f"t-{i}",
+        list_id="list-1",
+        title=f"task {i}",
+        status=TaskStatus.TODO,
+        position=i,
+        created_by="alice",
+        created_at=at,
+        updated_at=at,
+    )
+
+
+def _page(i: int, iso: str) -> Page:
+    return Page(
+        id=f"pg-{i}",
+        title=f"page {i}",
+        content="...",
+        created_by="alice",
+        created_at=iso,
+        updated_at=iso,
+        space_id="sp-1",
+    )
+
+
+def _sticky(i: int, iso: str) -> Sticky:
+    return Sticky(
+        id=f"st-{i}",
+        author="alice",
+        content=f"note {i}",
+        color="yellow",
+        position_x=0.0,
+        position_y=0.0,
+        created_at=iso,
+        updated_at=iso,
+        space_id="sp-1",
+    )
+
+
+def _cal_event(i: int, at: datetime) -> CalendarEvent:
+    return CalendarEvent(
+        id=f"ev-{i}",
+        calendar_id="cal-1",
+        summary=f"event {i}",
+        start=at,
+        end=at + timedelta(hours=1),
+        created_by="alice",
     )
 
 
@@ -77,15 +189,32 @@ def _event(from_instance: str, payload: dict, *, space_id: str = "sp-1"):
 
 @pytest.fixture
 def provider_factory():
-    """Build a ``SpaceSyncResumeProvider`` with the given posts + members."""
+    """Build a ``SpaceSyncResumeProvider`` with the given content + members."""
 
-    def _factory(*, posts, members):
+    def _factory(
+        *,
+        posts=None,
+        comments=None,
+        tasks=None,
+        pages=None,
+        stickies=None,
+        cal_events=None,
+        members,
+    ):
         fed = _FakeFederation()
-        post_repo = _FakePostRepo(posts)
+        post_repo = _FakePostRepo(posts=posts, comments=comments)
         provider = SpaceSyncResumeProvider(
             federation_service=fed,
             space_repo=_FakeSpaceRepo(members),
             space_post_repo=post_repo,
+            space_task_repo=(_FakeListSinceRepo(tasks) if tasks is not None else None),
+            page_repo=(_FakeListSinceRepo(pages) if pages is not None else None),
+            sticky_repo=(
+                _FakeListSinceRepo(stickies) if stickies is not None else None
+            ),
+            space_calendar_repo=(
+                _FakeListSinceRepo(cal_events) if cal_events is not None else None
+            ),
         )
         return provider, fed, post_repo
 
@@ -166,7 +295,7 @@ async def test_handle_request_missing_fields(provider_factory):
 
 
 async def test_handle_request_uses_max_posts_cap(provider_factory):
-    """Repo query is bounded by MAX_POSTS_PER_RESUME."""
+    """Repo query is bounded by MAX_PER_RESOURCE."""
     provider, _, post_repo = provider_factory(
         posts=[],
         members=["peer-a"],
@@ -177,7 +306,7 @@ async def test_handle_request_uses_max_posts_cap(provider_factory):
             {"space_id": "sp-1", "since": "2026-04-01T00:00:00+00:00"},
         ),
     )
-    assert post_repo.last_limit == MAX_POSTS_PER_RESUME
+    assert post_repo.last_limit == MAX_PER_RESOURCE
 
 
 async def test_handle_request_payload_matches_inbound_shape(provider_factory):
@@ -225,3 +354,124 @@ async def test_send_request_validates_inputs(provider_factory):
     await provider.send_request(space_id="sp-1", instance_id="", since="x")
     await provider.send_request(space_id="sp-1", instance_id="peer-b", since="")
     assert fed.sent == []
+
+
+# ── Multi-resource replays ──────────────────────────────────────────
+
+
+async def test_handle_request_replays_comments(provider_factory):
+    """Comments newer than ``since`` go out as SPACE_COMMENT_CREATED."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    comments = [
+        ("p-1", _comment(0, "p-1", base + timedelta(minutes=1))),
+        ("p-2", _comment(1, "p-2", base + timedelta(minutes=2))),
+    ]
+    provider, fed, _ = provider_factory(comments=comments, members=["peer-a"])
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": base.isoformat()}),
+    )
+    assert sent == 2
+    types = {s["type"] for s in fed.sent}
+    assert types == {FederationEventType.SPACE_COMMENT_CREATED}
+    payload0 = fed.sent[0]["payload"]
+    assert payload0["post_id"] == "p-1"
+    assert payload0["comment_id"] == "c-0"
+
+
+async def test_handle_request_replays_tasks(provider_factory):
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    tasks = [_task(i, base + timedelta(minutes=i + 1)) for i in range(2)]
+    provider, fed, _ = provider_factory(tasks=tasks, members=["peer-a"])
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": base.isoformat()}),
+    )
+    assert sent == 2
+    assert all(s["type"] == FederationEventType.SPACE_TASK_CREATED for s in fed.sent)
+    payload = fed.sent[0]["payload"]
+    # Match the keys SPACE_TASK_* inbound reads.
+    assert {"id", "list_id", "title", "status", "created_by"} <= set(payload)
+
+
+async def test_handle_request_replays_pages(provider_factory):
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    iso = (base + timedelta(minutes=1)).isoformat()
+    pages = [_page(0, iso), _page(1, iso)]
+    provider, fed, _ = provider_factory(pages=pages, members=["peer-a"])
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": base.isoformat()}),
+    )
+    assert sent == 2
+    assert all(s["type"] == FederationEventType.SPACE_PAGE_CREATED for s in fed.sent)
+
+
+async def test_handle_request_replays_stickies(provider_factory):
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    iso = (base + timedelta(minutes=1)).isoformat()
+    stickies = [_sticky(0, iso), _sticky(1, iso)]
+    provider, fed, _ = provider_factory(stickies=stickies, members=["peer-a"])
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": base.isoformat()}),
+    )
+    assert sent == 2
+    assert all(s["type"] == FederationEventType.SPACE_STICKY_CREATED for s in fed.sent)
+
+
+async def test_handle_request_replays_calendar_events(provider_factory):
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    events = [
+        _cal_event(0, base + timedelta(minutes=1)),
+        _cal_event(1, base + timedelta(minutes=2)),
+    ]
+    provider, fed, _ = provider_factory(cal_events=events, members=["peer-a"])
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": base.isoformat()}),
+    )
+    assert sent == 2
+    assert all(
+        s["type"] == FederationEventType.SPACE_CALENDAR_EVENT_CREATED for s in fed.sent
+    )
+    payload = fed.sent[0]["payload"]
+    assert {"id", "calendar_id", "summary", "start", "end"} <= set(payload)
+
+
+async def test_handle_request_aggregates_across_resources(provider_factory):
+    """The total return value sums every resource type."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    cutoff = base.isoformat()
+    iso = (base + timedelta(minutes=1)).isoformat()
+    provider, fed, _ = provider_factory(
+        posts=[_post(0, base + timedelta(minutes=1))],
+        comments=[("p-X", _comment(0, "p-X", base + timedelta(minutes=1)))],
+        tasks=[_task(0, base + timedelta(minutes=1))],
+        pages=[_page(0, iso)],
+        stickies=[_sticky(0, iso)],
+        cal_events=[_cal_event(0, base + timedelta(minutes=1))],
+        members=["peer-a"],
+    )
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": cutoff}),
+    )
+    assert sent == 6
+    assert {s["type"] for s in fed.sent} == {
+        FederationEventType.SPACE_POST_CREATED,
+        FederationEventType.SPACE_COMMENT_CREATED,
+        FederationEventType.SPACE_TASK_CREATED,
+        FederationEventType.SPACE_PAGE_CREATED,
+        FederationEventType.SPACE_STICKY_CREATED,
+        FederationEventType.SPACE_CALENDAR_EVENT_CREATED,
+    }
+
+
+async def test_handle_request_skips_resources_when_repo_missing(provider_factory):
+    """Optional repos default to ``None`` — provider just skips them."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    # Only the post repo is provided; the others stay None on the provider.
+    provider, fed, _ = provider_factory(
+        posts=[_post(0, base + timedelta(minutes=1))],
+        members=["peer-a"],
+    )
+    sent = await provider.handle_request(
+        _event("peer-a", {"space_id": "sp-1", "since": base.isoformat()}),
+    )
+    assert sent == 1
+    assert fed.sent[0]["type"] == FederationEventType.SPACE_POST_CREATED

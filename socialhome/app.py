@@ -639,13 +639,17 @@ def _wire_federation_stack(
     )
 
     # Spec §4.4 / §11452 — long-offline catch-up. Reconnecting peer asks
-    # for events newer than ``since``; we replay individual
-    # SPACE_POST_CREATED events. Other resource types follow the same
-    # pattern in subsequent PRs.
+    # for events newer than ``since``; we replay individual ``SPACE_*_CREATED``
+    # events for posts, comments, tasks, pages, stickies, and calendar
+    # events. Gallery items will join when ``SPACE_GALLERY_*`` lands.
     space_sync_resume_provider = SpaceSyncResumeProvider(
         federation_service=federation_service,
         space_repo=space_repo,
         space_post_repo=space_post_repo,
+        space_task_repo=space_task_repo,
+        page_repo=page_repo,
+        sticky_repo=sticky_repo,
+        space_calendar_repo=space_calendar_repo,
     )
 
     async def _space_sync_resume(event) -> None:

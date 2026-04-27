@@ -283,6 +283,13 @@ class AbstractSpaceCalendarRepo(Protocol):
         start: datetime,
         end: datetime,
     ) -> list[CalendarEvent]: ...
+    async def list_events_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[CalendarEvent]: ...
     async def delete_event(self, event_id: str) -> None: ...
 
     async def upsert_rsvp(self, rsvp: CalendarRSVP) -> None: ...
@@ -371,6 +378,29 @@ class SqliteSpaceCalendarRepo:
         )
         events = [_row_to_space_event(d) for d in rows_to_dicts(rows)]
         return _expand_window(events, start=start, end=end)
+
+    async def list_events_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[CalendarEvent]:
+        """Calendar events with ``updated_at > since``, oldest-first.
+
+        Used by ``SpaceSyncResumeProvider`` to replay missed
+        ``SPACE_CALENDAR_EVENT_*`` events on long-offline catch-up.
+        Recurring events are emitted once with their RRULE — the
+        receiver's existing inbound handler stores them as a single row
+        and the per-occurrence expansion runs on read.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM space_calendar_events "
+            "WHERE space_id=? AND updated_at > ? "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (space_id, since, int(limit)),
+        )
+        return [_row_to_space_event(d) for d in rows_to_dicts(rows)]
 
     async def delete_event(self, event_id: str) -> None:
         await self._db.enqueue(
