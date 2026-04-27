@@ -52,8 +52,6 @@ async function togglePublish(spaceId: string, gfsId: string) {
   }
 }
 
-type LocationMode = 'off' | 'zone_only' | 'gps'
-
 export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () => void }) {
   const name = signal(space.name)
   const description = signal(space.description || '')
@@ -61,10 +59,6 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   const joinMode = signal(space.join_mode)
   const locationEnabled = signal(
     Boolean((space.features as { location?: boolean } | undefined)?.location),
-  )
-  const locationMode = signal<LocationMode>(
-    ((space.features as { location_mode?: LocationMode } | undefined)
-      ?.location_mode) ?? 'off',
   )
 
   useEffect(() => {
@@ -81,7 +75,6 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
         features: {
           ...(space.features as object),
           location: locationEnabled.value,
-          location_mode: locationEnabled.value ? locationMode.value : 'off',
         },
       })
       showToast('Space updated', 'success')
@@ -124,32 +117,20 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
               checked={locationEnabled.value}
               onChange={(e) => {
                 locationEnabled.value = (e.target as HTMLInputElement).checked
-                if (locationEnabled.value && locationMode.value === 'off') {
-                  locationMode.value = 'zone_only'
-                }
               }}
             />
             Show a map tab to members of this space
           </label>
           {locationEnabled.value && (
-            <label>
-              Privacy mode
-              <select
-                value={locationMode.value}
-                onChange={(e) => {
-                  const v = (e.target as HTMLSelectElement).value
-                  locationMode.value = (v === 'gps' || v === 'zone_only' ? v : 'off') as LocationMode
-                }}
-              >
-                <option value="zone_only">Zone only — show names, no coordinates</option>
-                <option value="gps">Live GPS — show members on a map</option>
-              </select>
-            </label>
+            <p class="sh-muted">
+              <a href={`/spaces/${space.id}/zones`}>Manage zones →</a>
+            </p>
           )}
           <p class="sh-muted">
-            Each member must also opt in individually from their own
-            privacy settings. GPS coordinates are always rounded to
-            ~10 metres (§25 GPS truncation) regardless of mode.
+            Members who opt in share GPS with this space; the household's
+            Home Assistant zones are never sent. To label pins on the
+            space map, define per-space zones above. Coordinates are
+            always rounded to ~10 metres (§25 GPS truncation).
           </p>
         </fieldset>
         <div class="sh-form-actions">
