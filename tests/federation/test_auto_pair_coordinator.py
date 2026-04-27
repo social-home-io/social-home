@@ -63,6 +63,9 @@ class _InMemoryFederationRepo:
             out = [i for i in out if i.status.value == status]
         return out
 
+    async def list_instances_in_space(self, space_id):
+        return []
+
 
 def _make_peer_remote_instance(pk_hex: str, status=PairingStatus.CONFIRMED):
     return RemoteInstance(
