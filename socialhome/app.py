@@ -864,7 +864,7 @@ def create_app(config: Config | None = None) -> web.Application:
         space_repo=space_repo,
         space_post_repo=space_post_repo,
     )
-    task_service = TaskService(task_repo, bus)
+    task_service = TaskService(task_repo, bus, user_repo=user_repo)
     space_task_service = SpaceTaskService(space_task_repo, bus)
     calendar_service = CalendarService(calendar_repo, bus)
     space_cal_service = SpaceCalendarService(space_cal_repo, bus)

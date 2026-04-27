@@ -37,17 +37,25 @@ from ..domain.task import (
     TaskStatus,
 )
 from ..repositories.task_repo import AbstractTaskRepo, AbstractSpaceTaskRepo
+from ..repositories.user_repo import AbstractUserRepo
 
 
 class TaskService:
     """Household task list operations."""
 
-    __slots__ = ("_repo", "_bus", "_household")
+    __slots__ = ("_repo", "_bus", "_household", "_users")
 
-    def __init__(self, task_repo: AbstractTaskRepo, bus=None) -> None:
+    def __init__(
+        self,
+        task_repo: AbstractTaskRepo,
+        bus=None,
+        *,
+        user_repo: AbstractUserRepo | None = None,
+    ) -> None:
         self._repo = task_repo
         self._bus = bus
         self._household = None
+        self._users = user_repo
 
     def attach_household_features(self, svc) -> None:
         """Wire :class:`HouseholdFeaturesService` so ``create_list`` /
@@ -230,11 +238,12 @@ class TaskService:
     ) -> Task:
         task = await self.get_task(task_id)
 
-        if task.created_by != actor_user_id:
-            # allow if caller is an admin — service doesn't have user repo,
-            # so we just allow any authenticated user to update tasks for now.
-            # Stricter permission checks can be added once admin flag flows through.
-            pass
+        if task.created_by != actor_user_id and self._users is not None:
+            actor = await self._users.get_by_user_id(actor_user_id)
+            if actor is None or not actor.is_admin:
+                raise PermissionError(
+                    "only the task creator or an admin can update this task"
+                )
 
         kwargs: dict = {"updated_at": datetime.now(timezone.utc)}
         if position is not None:
