@@ -53,19 +53,45 @@ sequenceDiagram
     P->>R: SPACE_SYNC_COMPLETE
 ```
 
-## Flow — resume after disconnect
+## Flow — long-offline catch-up
+
+When a peer reconnects after the 7-day outbox-retention window has
+expired (spec §4.4.1), the requester asks each provider for events
+newer than the last `created_at` it persisted locally. The provider
+replies with a **burst of individual federation events** —
+`SPACE_POST_CREATED`, `SPACE_TASK_CREATED`, etc. — that the receiver's
+existing inbound handlers apply by primary key (re-deliveries are
+idempotent).
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant R as Requester
     participant P as Provider
-    Note over R,P: earlier sync interrupted at seq=42
-    R->>P: SPACE_SYNC_RESUME<br/>(last_seq=42)
-    P->>R: SPACE_SYNC_CHUNK (seq=43)
-    R->>P: SPACE_SYNC_CHUNK_ACK (seq=43)
-    Note over R,P: continues from seq 43
+    Note over R,P: R has been offline >7 days
+    R->>P: SPACE_SYNC_RESUME<br/>(space_id, since)
+    P->>R: SPACE_POST_CREATED (oldest missed)
+    P->>R: SPACE_POST_CREATED ...
+    P->>R: SPACE_POST_CREATED (newest missed)
+    Note over R,P: receiver dedups by post id
 ```
+
+Implemented by `socialhome/federation/sync/space/resume.py`
+(`SpaceSyncResumeProvider`). Today's cut replays:
+
+- `SPACE_POST_CREATED` — posts (`space_post_repo.list_since`)
+- `SPACE_COMMENT_CREATED` — comments on those posts
+  (`space_post_repo.list_comments_since`, JOIN through `space_posts`)
+- `SPACE_TASK_CREATED` — tasks (`space_task_repo.list_since`)
+- `SPACE_PAGE_CREATED` — pages (`page_repo.list_since`)
+- `SPACE_STICKY_CREATED` — stickies (`sticky_repo.list_since`)
+- `SPACE_CALENDAR_EVENT_CREATED` — calendar events
+  (`space_calendar_repo.list_events_since`, RRULEs included)
+
+Each resource is capped at `MAX_PER_RESOURCE = 500` events per request
+— receivers paginate by re-issuing with the new high-water mark.
+Gallery items are intentionally excluded until `SPACE_GALLERY_*`
+federation events land.
 
 ## Backpressure
 

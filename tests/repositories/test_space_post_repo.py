@@ -104,6 +104,50 @@ async def test_list_feed_excludes_deleted(env):
     assert not any(p.id == "sp-del-1" for p in results)
 
 
+async def test_list_since_returns_strictly_newer_posts(env):
+    """``list_since`` is exclusive on ``since`` and ASC-ordered by created_at."""
+    older = Post(
+        id="sp-old",
+        author="uid-alice",
+        type=PostType.TEXT,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        content="old",
+    )
+    newer = Post(
+        id="sp-new",
+        author="uid-alice",
+        type=PostType.TEXT,
+        created_at=datetime(2026, 4, 1, 12, tzinfo=timezone.utc),
+        content="new",
+    )
+    await env.repo.save(env.space_id, older)
+    await env.repo.save(env.space_id, newer)
+    cutoff = datetime(2026, 4, 1, tzinfo=timezone.utc).isoformat()
+    results = await env.repo.list_since(env.space_id, cutoff)
+    assert [p.id for p in results] == ["sp-new"]
+
+
+async def test_list_since_excludes_deleted(env):
+    """Soft-deleted posts are not replayed on resume."""
+    post = _post("sp-deleted")
+    await env.repo.save(env.space_id, post)
+    await env.repo.soft_delete("sp-deleted")
+    results = await env.repo.list_since(env.space_id, "2020-01-01T00:00:00+00:00")
+    assert not any(p.id == "sp-deleted" for p in results)
+
+
+async def test_list_since_respects_limit(env):
+    """``limit`` caps the burst size to bound a single resume."""
+    for i in range(5):
+        await env.repo.save(env.space_id, _post(f"sp-l-{i}"))
+    results = await env.repo.list_since(
+        env.space_id,
+        "2020-01-01T00:00:00+00:00",
+        limit=2,
+    )
+    assert len(results) == 2
+
+
 async def test_soft_delete_sets_moderated_flag(env):
     """soft_delete with moderated_by sets the moderated flag on the post."""
     post = _post("sp-mod-1")
@@ -193,3 +237,67 @@ async def test_soft_delete_comment(env):
     await env.repo.soft_delete_comment("dcmt-1")
     fetched = await env.repo.get_comment("dcmt-1")
     assert fetched.deleted is True
+
+
+async def test_list_comments_since_joins_through_post(env):
+    """``list_comments_since`` filters by parent post's space_id (JOIN)."""
+    # Post in our space.
+    in_space = Post(
+        id="sp-cs-1",
+        author="uid-alice",
+        type=PostType.TEXT,
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        content="x",
+    )
+    await env.repo.save(env.space_id, in_space)
+    # Comment on the in-space post (created today).
+    c = Comment(
+        id="cmt-now",
+        post_id="sp-cs-1",
+        author="uid-alice",
+        type=CommentType.TEXT,
+        created_at=datetime.now(timezone.utc),
+        content="recent",
+    )
+    await env.repo.add_comment(c)
+    # An older comment on the same post.
+    old = Comment(
+        id="cmt-old",
+        post_id="sp-cs-1",
+        author="uid-alice",
+        type=CommentType.TEXT,
+        created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        content="old",
+    )
+    await env.repo.add_comment(old)
+
+    cutoff = datetime(2025, 6, 1, tzinfo=timezone.utc).isoformat()
+    rows = await env.repo.list_comments_since(env.space_id, cutoff)
+    ids = [c.id for _, c in rows]
+    # Only the recent comment's date passes ``cutoff``.
+    assert "cmt-now" in ids
+    assert "cmt-old" not in ids
+    # Tuple shape: (post_id, Comment).
+    post_ids = {pid for pid, _ in rows}
+    assert post_ids == {"sp-cs-1"}
+
+
+async def test_list_comments_since_excludes_soft_deleted(env):
+    """Soft-deleted comments are not replayed on resume."""
+    post = _post("sp-cs-2")
+    await env.repo.save(env.space_id, post)
+    c = Comment(
+        id="cmt-del",
+        post_id="sp-cs-2",
+        author="uid-alice",
+        type=CommentType.TEXT,
+        created_at=datetime.now(timezone.utc),
+        content="bye",
+    )
+    await env.repo.add_comment(c)
+    await env.repo.soft_delete_comment("cmt-del")
+    rows = await env.repo.list_comments_since(
+        env.space_id,
+        "2020-01-01T00:00:00+00:00",
+    )
+    assert "cmt-del" not in [c.id for _, c in rows]

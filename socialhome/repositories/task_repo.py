@@ -427,6 +427,13 @@ class AbstractSpaceTaskRepo(Protocol):
         offset: int = 0,
     ) -> list[Task]: ...
     async def list_by_space(self, space_id: str) -> list[Task]: ...
+    async def list_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[Task]: ...
     async def delete(self, task_id: str) -> None: ...
 
 
@@ -554,6 +561,22 @@ class SqliteSpaceTaskRepo:
         rows = await self._db.fetchall(
             "SELECT * FROM space_tasks WHERE space_id=? ORDER BY position, created_at",
             (space_id,),
+        )
+        return [_row_to_task(d) for d in rows_to_dicts(rows)]
+
+    async def list_since(
+        self,
+        space_id: str,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[Task]:
+        """Tasks with ``updated_at > since``, oldest-first (resume catch-up)."""
+        rows = await self._db.fetchall(
+            "SELECT * FROM space_tasks "
+            "WHERE space_id=? AND updated_at > ? "
+            "ORDER BY updated_at ASC LIMIT ?",
+            (space_id, since, int(limit)),
         )
         return [_row_to_task(d) for d in rows_to_dicts(rows)]
 
