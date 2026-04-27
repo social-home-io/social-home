@@ -90,6 +90,7 @@ from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
 from .repositories.household_features_repo import SqliteHouseholdFeaturesRepo
+from .repositories.pairing_relay_repo import SqlitePairingRelayRepo
 from .repositories.poll_repo import SqlitePollRepo
 from .repositories.space_poll_repo import SqliteSpacePollRepo
 from .repositories.profile_picture_repo import SqliteProfilePictureRepo
@@ -306,6 +307,7 @@ def _build_repos(db: AsyncDatabase):
         space_cover=SqliteSpaceCoverRepo(db),
         space_bot=SqliteSpaceBotRepo(db),
         alias=SqliteAliasRepo(db),
+        pairing_relay=SqlitePairingRelayRepo(db),
     )
 
 
@@ -343,6 +345,7 @@ def _wire_federation_stack(
     dm_routing_repo,
     presence_service,
     report_service,
+    pairing_relay_repo,
 ):
     """Build :class:`FederationService` + attach the whole federation stack.
 
@@ -693,6 +696,7 @@ def _wire_federation_stack(
     pairing_relay_queue = PairingRelayQueue(
         bus=bus,
         federation=federation_service,
+        repo=pairing_relay_repo,
         own_instance_id=identity.instance_id,
     )
     pairing_relay_queue.wire()
@@ -1282,6 +1286,7 @@ def create_app(config: Config | None = None) -> web.Application:
             dm_routing_repo=repos.dm_routing,
             presence_service=presence_service,
             report_service=report_service,
+            pairing_relay_repo=repos.pairing_relay,
         )
         federation_service = fed.federation_service
         sync_manager = fed.sync_manager

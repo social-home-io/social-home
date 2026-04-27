@@ -221,6 +221,22 @@ CREATE TABLE IF NOT EXISTS pending_pairings (
     expires_at          TEXT NOT NULL
 );
 
+-- §11.9 — admin-pending PAIRING_INTRO_RELAY requests. Persisted so a
+-- restart doesn't lose admin queue state.
+CREATE TABLE IF NOT EXISTS pairing_relay (
+    id                  TEXT PRIMARY KEY,
+    from_instance       TEXT NOT NULL,
+    target_instance_id  TEXT NOT NULL,
+    message             TEXT NOT NULL,
+    received_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    status              TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending','approved','declined'))
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_relay_received_at
+    ON pairing_relay(received_at);
+CREATE INDEX IF NOT EXISTS idx_pairing_relay_status
+    ON pairing_relay(status);
+
 CREATE TABLE IF NOT EXISTS federation_outbox (
     id              TEXT PRIMARY KEY,              -- msg_id
     instance_id     TEXT NOT NULL,
