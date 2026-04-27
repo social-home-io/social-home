@@ -289,6 +289,32 @@ async def test_update_task_unknown_actor_rejected(env):
         await env.task_svc.update_task(t.id, actor_user_id="ghost", title="Edit")
 
 
+async def test_archive_task_round_trip(env):
+    """archive_task sets archived_at; unarchive_task clears it."""
+    tl = await env.task_svc.create_list(name="L", created_by="u1")
+    t = await env.task_svc.create_task(list_id=tl.id, title="T", created_by="u1")
+    archived = await env.task_svc.archive_task(t.id, actor_user_id="u1")
+    assert archived.archived_at is not None
+    fetched = await env.task_svc.get_task(t.id)
+    assert fetched.archived_at is not None
+
+    unarchived = await env.task_svc.unarchive_task(t.id, actor_user_id="u1")
+    assert unarchived.archived_at is None
+    fetched_again = await env.task_svc.get_task(t.id)
+    assert fetched_again.archived_at is None
+
+
+async def test_archive_task_rejected_for_non_creator_non_admin(env):
+    """Non-creator non-admin actors cannot archive someone else's task."""
+    await env.user_repo.save(
+        User(user_id="u2", username="u2", display_name="U2", is_admin=False)
+    )
+    tl = await env.task_svc.create_list(name="L", created_by="u1")
+    t = await env.task_svc.create_task(list_id=tl.id, title="T", created_by="u1")
+    with pytest.raises(PermissionError):
+        await env.task_svc.archive_task(t.id, actor_user_id="u2")
+
+
 # ─── Recurrence (§15) ──────────────────────────────────────────────────────
 
 

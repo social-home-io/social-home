@@ -950,11 +950,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     rrule                TEXT,
     last_spawned_at      TEXT,
     recurrence_parent_id TEXT,
+    archived_at          TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_tasks_list   ON tasks(list_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_list        ON tasks(list_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_status      ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_archived_at ON tasks(archived_at);
 
 CREATE TABLE IF NOT EXISTS space_task_lists (
     id          TEXT PRIMARY KEY,
@@ -979,10 +981,12 @@ CREATE TABLE IF NOT EXISTS space_tasks (
     rrule                TEXT,
     last_spawned_at      TEXT,
     recurrence_parent_id TEXT,
+    archived_at          TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX IF NOT EXISTS idx_space_tasks_list ON space_tasks(list_id);
+CREATE INDEX IF NOT EXISTS idx_space_tasks_list        ON space_tasks(list_id);
+CREATE INDEX IF NOT EXISTS idx_space_tasks_archived_at ON space_tasks(archived_at);
 
 CREATE TABLE IF NOT EXISTS task_deadline_notifications (
     task_id    TEXT NOT NULL,
