@@ -253,20 +253,20 @@ class SqliteSpaceRepo:
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
                 dissolved, about_markdown, cover_hash
             ) VALUES(
-                ?,?,?,?,
-                ?,?,?,
-                ?,?,?,?,
-                ?,?,
-                ?,?,?,
-                ?,?,
-                ?,?,?,
-                ?,?,?,
-                ?,?,
-                ?,?,?,
-                ?,?,?,
-                ?,?,
-                ?,?,?,?,?,
-                ?, ?, ?
+                -- 39 placeholders, one per column listed above.
+                ?, ?, ?, ?,                   -- id, name, description, emoji
+                ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
+                ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
+                ?, ?,                         -- retention_days, retention_exempt_json
+                ?, ?, ?,                      -- feature_calendar, feature_todo, feature_location
+                ?, ?,                         -- feature_stickies, feature_pages
+                ?, ?, ?,                      -- posts_access, pages_access, stickies_access
+                ?, ?,                         -- calendar_access, tasks_access
+                ?, ?, ?,                      -- allow_post_text, allow_post_image, allow_post_video
+                ?, ?, ?,                      -- allow_post_transcript, allow_post_poll, allow_post_schedule
+                ?, ?,                         -- allow_post_file, allow_post_bazaar
+                ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
+                ?, ?, ?                       -- dissolved, about_markdown, cover_hash
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
