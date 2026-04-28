@@ -11,7 +11,6 @@ from socialhome.db.database import AsyncDatabase
 from socialhome.domain.events import (
     CalendarEventCreated,
     CalendarEventDeleted,
-    CalendarEventUpdated,
 )
 from socialhome.domain.post import PostType
 from socialhome.infrastructure.event_bus import EventBus
