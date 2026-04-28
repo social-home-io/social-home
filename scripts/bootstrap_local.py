@@ -12,9 +12,10 @@ care about.
   bearer-auth'd requests authenticate.
 
 The standalone adapter doesn't auto-provision a first user on boot, so
-this script fills the gap for local testing only. Run with::
+this script fills the gap for local testing only. Run from the repo
+root::
 
-    python -m socialhome.scripts.bootstrap_local
+    python scripts/bootstrap_local.py
 
 then start the server::
 
@@ -27,11 +28,16 @@ import asyncio
 import hashlib
 import os
 import secrets
+import sys
 from pathlib import Path
 
-from ..config import Config
-from ..db.database import AsyncDatabase
-from ..platform.standalone.adapter import StandaloneAdapter
+# Make the ``socialhome`` package importable when this file is run from
+# the repo root as a plain script (not via ``python -m``).
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from socialhome.config import Config  # noqa: E402
+from socialhome.db.database import AsyncDatabase  # noqa: E402
+from socialhome.platform.standalone.adapter import StandaloneAdapter  # noqa: E402
 
 
 USERNAME = "admin"
