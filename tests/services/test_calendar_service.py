@@ -119,6 +119,7 @@ async def test_space_calendar_with_rsvps(env):
         user_id="u1",
         status=RSVPStatus.GOING,
         updated_at=now.isoformat(),
+        occurrence_at=now.isoformat(),
     )
     await env.space_cal_repo.upsert_rsvp(rsvp_going)
     rsvps = await env.space_cal_repo.list_rsvps(event.id)
@@ -130,12 +131,15 @@ async def test_space_calendar_with_rsvps(env):
         user_id="u1",
         status=RSVPStatus.DECLINED,
         updated_at=now.isoformat(),
+        occurrence_at=now.isoformat(),
     )
     await env.space_cal_repo.upsert_rsvp(rsvp_declined)
     rsvps2 = await env.space_cal_repo.list_rsvps(event.id)
     assert rsvps2[0].status == RSVPStatus.DECLINED
 
-    await env.space_cal_repo.remove_rsvp(event.id, "u1")
+    await env.space_cal_repo.remove_rsvp(
+        event.id, "u1", occurrence_at=now.isoformat(),
+    )
     rsvps3 = await env.space_cal_repo.list_rsvps(event.id)
     assert len(rsvps3) == 0
 
@@ -181,6 +185,185 @@ async def test_delete_nonexistent_calendar(env):
     """Deleting a nonexistent calendar raises KeyError."""
     with pytest.raises(KeyError):
         await env.cal_svc.delete_calendar("nonexistent")
+
+
+# ── SpaceCalendarService — per-occurrence + federation (Phase A) ────────────
+
+
+@pytest.fixture
+async def space_cal_env(env):
+    """env + a SpaceCalendarService with a seeded space."""
+    from socialhome.services.calendar_service import SpaceCalendarService
+
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("alice", "uid-alice", "Alice"),
+    )
+    kp = generate_identity_keypair()
+    await env.db.enqueue(
+        """INSERT INTO spaces(
+            id, name, owner_instance_id, owner_username, identity_public_key,
+            config_sequence, space_type, join_mode
+        ) VALUES(?,?,?,?,?,0,'private','invite_only')""",
+        ("sp-cal", "TestSpace", env.iid, "alice", kp.public_key.hex()),
+    )
+    env.space_cal_svc = SpaceCalendarService(env.space_cal_repo)
+    yield env
+
+
+async def test_rsvp_non_recurring_defaults_occurrence_to_event_start(space_cal_env):
+    """RSVP without occurrence_at on a non-recurring event → uses event.start."""
+    env = space_cal_env
+    now = datetime(2026, 6, 1, 18, 0, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Birthday",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=2)).isoformat(),
+        created_by="uid-alice",
+    )
+    await env.space_cal_svc.rsvp(
+        event_id=event.id,
+        user_id="uid-alice",
+        status=RSVPStatus.GOING,
+    )
+    rsvps = await env.space_cal_svc.list_rsvps(event.id)
+    assert len(rsvps) == 1
+    # occurrence_at should equal the event's start
+    assert rsvps[0].occurrence_at == now.isoformat()
+
+
+async def test_rsvp_recurring_requires_occurrence_at(space_cal_env):
+    """RSVP without occurrence_at on a recurring event → ValueError."""
+    env = space_cal_env
+    seed = datetime(2026, 6, 8, 9, 0, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Weekly standup",
+        start=seed.isoformat(),
+        end=(seed + timedelta(minutes=30)).isoformat(),
+        created_by="uid-alice",
+        rrule="FREQ=WEEKLY;COUNT=4",
+    )
+    with pytest.raises(ValueError, match="occurrence_at"):
+        await env.space_cal_svc.rsvp(
+            event_id=event.id,
+            user_id="uid-alice",
+            status=RSVPStatus.GOING,
+        )
+
+
+async def test_rsvp_recurring_rejects_invalid_occurrence(space_cal_env):
+    """RSVP with occurrence_at that doesn't match the rrule → ValueError."""
+    env = space_cal_env
+    seed = datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Weekly standup",
+        start=seed.isoformat(),
+        end=(seed + timedelta(minutes=30)).isoformat(),
+        created_by="uid-alice",
+        rrule="FREQ=WEEKLY;COUNT=4",
+    )
+    bad_occ = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)  # Tuesday, not Monday
+    with pytest.raises(ValueError, match="not a valid occurrence"):
+        await env.space_cal_svc.rsvp(
+            event_id=event.id,
+            user_id="uid-alice",
+            status=RSVPStatus.GOING,
+            occurrence_at=bad_occ,
+        )
+
+
+async def test_rsvp_recurring_separate_occurrences(space_cal_env):
+    """RSVPs on two different occurrences yield two distinct rows."""
+    env = space_cal_env
+    seed = datetime(2026, 7, 6, 9, 0, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Weekly standup",
+        start=seed.isoformat(),
+        end=(seed + timedelta(minutes=30)).isoformat(),
+        created_by="uid-alice",
+        rrule="FREQ=WEEKLY;COUNT=4",
+    )
+    occ1 = seed
+    occ2 = seed + timedelta(weeks=1)
+    await env.space_cal_svc.rsvp(
+        event_id=event.id,
+        user_id="uid-alice",
+        status=RSVPStatus.GOING,
+        occurrence_at=occ1,
+    )
+    await env.space_cal_svc.rsvp(
+        event_id=event.id,
+        user_id="uid-alice",
+        status=RSVPStatus.DECLINED,
+        occurrence_at=occ2,
+    )
+    by_occ1 = await env.space_cal_svc.list_rsvps(event.id, occurrence_at=occ1)
+    by_occ2 = await env.space_cal_svc.list_rsvps(event.id, occurrence_at=occ2)
+    assert len(by_occ1) == 1 and by_occ1[0].status == RSVPStatus.GOING
+    assert len(by_occ2) == 1 and by_occ2[0].status == RSVPStatus.DECLINED
+
+
+async def test_rsvp_status_must_be_user_settable(space_cal_env):
+    """User-driven RSVP can't set host-controlled statuses (requested/waitlist)."""
+    env = space_cal_env
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Birthday",
+        start=now.isoformat(),
+        end=now.isoformat(),
+        created_by="uid-alice",
+    )
+    with pytest.raises(ValueError, match="must be one of"):
+        await env.space_cal_svc.rsvp(
+            event_id=event.id,
+            user_id="uid-alice",
+            status=RSVPStatus.WAITLIST,
+        )
+
+
+async def test_rsvp_publishes_federation_event(space_cal_env):
+    """rsvp() calls broadcast_to_space_members on the federation service."""
+    env = space_cal_env
+
+    class _FakeFed:
+        def __init__(self):
+            self.calls: list[tuple] = []
+
+        async def broadcast_to_space_members(self, space_id, event_type, payload):
+            self.calls.append((space_id, event_type, payload))
+
+    fed = _FakeFed()
+    env.space_cal_svc.attach_federation(fed)
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Anniversary",
+        start=now.isoformat(),
+        end=now.isoformat(),
+        created_by="uid-alice",
+    )
+    await env.space_cal_svc.rsvp(
+        event_id=event.id,
+        user_id="uid-alice",
+        status=RSVPStatus.GOING,
+    )
+    # remove_rsvp also fires
+    await env.space_cal_svc.remove_rsvp(
+        event_id=event.id,
+        user_id="uid-alice",
+    )
+    assert len(fed.calls) == 2
+    assert fed.calls[0][0] == "sp-cal"
+    assert fed.calls[0][1].value == "space_rsvp_updated"
+    assert fed.calls[0][2]["status"] == RSVPStatus.GOING
+    assert fed.calls[0][2]["occurrence_at"] == now.isoformat()
+    assert fed.calls[1][1].value == "space_rsvp_deleted"
+    assert "status" not in fed.calls[1][2]
 
 
 async def test_create_event_empty_summary(env):

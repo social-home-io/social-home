@@ -21,8 +21,10 @@ from ..domain.events import (
     CalendarEventDeleted,
     CalendarEventUpdated,
 )
+from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..repositories.calendar_repo import AbstractCalendarRepo, AbstractSpaceCalendarRepo
+from ..utils.rrule import expand_rrule
 
 
 class CalendarService:
@@ -215,7 +217,7 @@ class CalendarService:
 class SpaceCalendarService:
     """Space calendar event operations."""
 
-    __slots__ = ("_repo", "_bus")
+    __slots__ = ("_repo", "_bus", "_federation")
 
     def __init__(
         self,
@@ -224,6 +226,17 @@ class SpaceCalendarService:
     ) -> None:
         self._repo = space_calendar_repo
         self._bus = bus
+        self._federation = None
+
+    def attach_federation(self, federation_service) -> None:
+        """Wire outbound federation for RSVPs.
+
+        ``federation_service`` is the :class:`FederationService`. RSVP
+        propagation rides
+        :meth:`FederationService.broadcast_to_space_members` so we
+        automatically reach every peer co-hosting the space.
+        """
+        self._federation = federation_service
 
     async def list_events_in_range(
         self,
@@ -351,23 +364,181 @@ class SpaceCalendarService:
         event_id: str,
         user_id: str,
         status: str,
+        occurrence_at: datetime | str | None = None,
     ) -> None:
-        if status not in RSVPStatus.ALL:
-            raise ValueError(f"invalid RSVP status: {status!r}")
+        """Set ``user_id``'s RSVP for an occurrence of ``event_id``.
+
+        For non-recurring events, ``occurrence_at`` may be omitted —
+        defaults to ``event.start``. For recurring events
+        (``rrule != None``) it must be provided and must reach a real
+        occurrence under the event's rrule (validated via
+        :func:`expand_rrule`).
+        """
+        if status not in RSVPStatus.USER_SETTABLE:
+            raise ValueError(
+                f"RSVP status must be one of {sorted(RSVPStatus.USER_SETTABLE)}, "
+                f"got {status!r}"
+            )
+        result = await self._repo.get_event(event_id)
+        if result is None:
+            raise KeyError(f"event {event_id!r} not found")
+        space_id, event = result
+        occ_dt = self._resolve_occurrence(event, occurrence_at)
+        occ_iso = occ_dt.isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         await self._repo.upsert_rsvp(
             CalendarRSVP(
                 event_id=event_id,
                 user_id=user_id,
                 status=status,
-                updated_at=datetime.now(timezone.utc).isoformat(),
+                updated_at=now_iso,
+                occurrence_at=occ_iso,
             )
         )
+        await self._publish_federation_rsvp(
+            space_id=space_id,
+            event_id=event_id,
+            user_id=user_id,
+            occurrence_at=occ_iso,
+            status=status,
+            updated_at=now_iso,
+        )
 
-    async def remove_rsvp(self, *, event_id: str, user_id: str) -> None:
-        await self._repo.remove_rsvp(event_id, user_id)
+    async def remove_rsvp(
+        self,
+        *,
+        event_id: str,
+        user_id: str,
+        occurrence_at: datetime | str | None = None,
+    ) -> None:
+        """Clear ``user_id``'s RSVP for an occurrence of ``event_id``."""
+        result = await self._repo.get_event(event_id)
+        if result is None:
+            return
+        space_id, event = result
+        occ_dt = self._resolve_occurrence(event, occurrence_at)
+        occ_iso = occ_dt.isoformat()
+        await self._repo.remove_rsvp(
+            event_id, user_id, occurrence_at=occ_iso,
+        )
+        await self._publish_federation_rsvp(
+            space_id=space_id,
+            event_id=event_id,
+            user_id=user_id,
+            occurrence_at=occ_iso,
+            status=None,  # signals delete
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
 
-    async def list_rsvps(self, event_id: str):
-        return await self._repo.list_rsvps(event_id)
+    async def list_rsvps(
+        self,
+        event_id: str,
+        *,
+        occurrence_at: datetime | str | None = None,
+    ) -> list[CalendarRSVP]:
+        """List RSVPs for ``event_id``.
+
+        If ``occurrence_at`` is provided, returns only the RSVPs for
+        that single occurrence. Otherwise returns the rows across all
+        occurrences (callers wanting per-occurrence aggregates should
+        group on ``rsvp.occurrence_at``).
+        """
+        if occurrence_at is None:
+            return await self._repo.list_rsvps(event_id)
+        occ_iso = (
+            occurrence_at.isoformat()
+            if isinstance(occurrence_at, datetime)
+            else str(occurrence_at)
+        )
+        return await self._repo.list_rsvps(event_id, occurrence_at=occ_iso)
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_occurrence(
+        event: CalendarEvent,
+        occurrence_at: datetime | str | None,
+    ) -> datetime:
+        """Validate / default ``occurrence_at`` against ``event``.
+
+        * Non-recurring + omitted → ``event.start``.
+        * Non-recurring + given matching ``event.start`` → accepted.
+        * Recurring + omitted → :class:`ValueError`.
+        * Recurring + given → must match one of the rrule's expanded
+          occurrences within a 1-year window from the seed; otherwise
+          :class:`ValueError`.
+        """
+        is_recurring = bool(event.rrule)
+        if occurrence_at is None:
+            if is_recurring:
+                raise ValueError(
+                    "recurring events require occurrence_at on RSVP",
+                )
+            return event.start
+        occ_dt = (
+            occurrence_at
+            if isinstance(occurrence_at, datetime)
+            else datetime.fromisoformat(str(occurrence_at).replace("Z", "+00:00"))
+        )
+        if not is_recurring:
+            if occ_dt != event.start:
+                raise ValueError(
+                    "non-recurring events: occurrence_at must equal event.start",
+                )
+            return occ_dt
+        # Recurring — check the rrule actually emits this occurrence.
+        from datetime import timedelta as _td
+
+        window_end = max(occ_dt + _td(seconds=1), event.start + _td(days=365 * 5))
+        starts = {
+            s for s, _ in expand_rrule(
+                event.start,
+                event.end,
+                event.rrule,
+                window_start=event.start,
+                window_end=window_end,
+            )
+        }
+        if occ_dt not in starts:
+            raise ValueError(
+                f"occurrence_at {occ_dt.isoformat()} is not a valid occurrence "
+                f"of event {event.id}",
+            )
+        return occ_dt
+
+    async def _publish_federation_rsvp(
+        self,
+        *,
+        space_id: str,
+        event_id: str,
+        user_id: str,
+        occurrence_at: str,
+        status: str | None,
+        updated_at: str,
+    ) -> None:
+        """Broadcast a SPACE_RSVP_UPDATED (or _DELETED) to every peer
+        household co-hosting this space. No-op when federation isn't
+        wired (unit tests / standalone mode)."""
+        if self._federation is None:
+            return
+        evt_type = (
+            FederationEventType.SPACE_RSVP_UPDATED
+            if status is not None
+            else FederationEventType.SPACE_RSVP_DELETED
+        )
+        payload: dict = {
+            "event_id": event_id,
+            "user_id": user_id,
+            "occurrence_at": occurrence_at,
+            "updated_at": updated_at,
+        }
+        if status is not None:
+            payload["status"] = status
+        await self._federation.broadcast_to_space_members(
+            space_id,
+            evt_type,
+            payload,
+        )
 
 
 def _parse_iso(value: str) -> datetime:

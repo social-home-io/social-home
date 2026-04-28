@@ -1087,11 +1087,35 @@ CREATE INDEX IF NOT EXISTS idx_space_calendar_events_space
     ON space_calendar_events(space_id, start_dt);
 
 CREATE TABLE IF NOT EXISTS space_calendar_rsvps (
-    event_id    TEXT NOT NULL REFERENCES space_calendar_events(id) ON DELETE CASCADE,
-    user_id     TEXT NOT NULL,
-    status      TEXT NOT NULL CHECK(status IN ('going','maybe','declined')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (event_id, user_id)
+    event_id      TEXT NOT NULL REFERENCES space_calendar_events(id) ON DELETE CASCADE,
+    user_id       TEXT NOT NULL,
+    -- Per-occurrence RSVP key. For non-recurring events this equals
+    -- ``event.start``. For recurring events (rrule != NULL) this is
+    -- the specific occurrence's start datetime, so each instance gets
+    -- its own RSVP row.
+    occurrence_at TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK(
+        status IN ('going','maybe','declined','requested','waitlist')
+    ),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (event_id, user_id, occurrence_at)
+);
+CREATE INDEX IF NOT EXISTS idx_space_calendar_rsvps_event_occ
+    ON space_calendar_rsvps(event_id, occurrence_at);
+
+-- Out-of-order federation RSVP buffer. When a SPACE_RSVP_UPDATED arrives
+-- before its event has propagated, the FK to space_calendar_events
+-- would fail; we hold the RSVP here and flush on event arrival.
+CREATE TABLE IF NOT EXISTS pending_federated_rsvps (
+    event_id      TEXT NOT NULL,
+    user_id       TEXT NOT NULL,
+    occurrence_at TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK(
+        status IN ('going','maybe','declined','requested','waitlist','removed')
+    ),
+    updated_at    TEXT NOT NULL,
+    received_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (event_id, user_id, occurrence_at)
 );
 
 

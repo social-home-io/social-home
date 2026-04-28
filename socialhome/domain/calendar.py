@@ -72,18 +72,38 @@ class CalendarEventUpdate:
 
 
 class RSVPStatus:
-    """Canonical RSVP status strings (see migration 0024_add_calendar_rsvp)."""
+    """Canonical RSVP status strings.
+
+    ``GOING`` / ``MAYBE`` / ``DECLINED`` are the self-reported responses
+    from the original three-state model. ``REQUESTED`` and ``WAITLIST``
+    are added for capacity-limited events: when an event has
+    ``capacity is not None`` the host approves requests, and overflow
+    RSVPs land on the waitlist with auto-promotion when seats free up.
+    """
 
     GOING = "going"
     MAYBE = "maybe"
     DECLINED = "declined"
+    REQUESTED = "requested"
+    WAITLIST = "waitlist"
 
-    ALL = frozenset({GOING, MAYBE, DECLINED})
+    ALL = frozenset({GOING, MAYBE, DECLINED, REQUESTED, WAITLIST})
+
+    #: Statuses a member can choose directly (the rest are host-driven
+    #: transitions on capped events).
+    USER_SETTABLE = frozenset({GOING, MAYBE, DECLINED})
 
 
 @dataclass(slots=True, frozen=True)
 class CalendarRSVP:
+    """A single RSVP row for a (event, user, occurrence) triple.
+
+    For non-recurring events ``occurrence_at`` equals ``event.start``;
+    for recurring events it's the specific instance's start datetime.
+    """
+
     event_id: str
     user_id: str
     status: str  # one of RSVPStatus.ALL
     updated_at: str  # ISO-8601
+    occurrence_at: str = ""  # ISO-8601; empty only on legacy in-memory test fakes

@@ -227,8 +227,9 @@ Same route shapes as the household feed, prefixed by `/api/spaces/{id}/`:
 | GET / PATCH / DELETE | `/api/calendars/{id}` | CRUD. |
 | GET / POST | `/api/calendars/{id}/events` | List / create events. |
 | GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. |
-| GET / POST | `/api/calendars/events/{id}/rsvps` | RSVPs. |
-| POST | `/api/calendars/events/{id}/rsvp` | Set own RSVP. |
+| GET | `/api/calendars/events/{id}/rsvps` | List RSVPs. `?occurrence_at=<iso>` (URL-encoded) scopes to one occurrence of a recurring event. |
+| POST | `/api/calendars/events/{id}/rsvp` | Set own RSVP. Body: `{"status": "going\|maybe\|declined", "occurrence_at": "<iso>"}`. `occurrence_at` required for recurring events; defaults to `event.start` for non-recurring. |
+| DELETE | `/api/calendars/events/{id}/rsvp` | Clear own RSVP. `?occurrence_at=<iso>` (URL-encoded) required for recurring. |
 | POST | `/api/calendars/{id}/import_ics` | Upload iCal. |
 | POST | `/api/calendars/{id}/{import_image\|import_prompt}` | AI-assisted import. |
 | GET | `/api/calendar/{id}/export.ics` | iCal export. |

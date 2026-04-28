@@ -1341,6 +1341,10 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         federation_service = fed.federation_service
         sync_manager = fed.sync_manager
+        # Wire RSVP propagation onto the calendar service. Done after
+        # federation_service is built so the service can broadcast on
+        # rsvp() / remove_rsvp() (§Phase A).
+        space_cal_service.attach_federation(federation_service)
         # Spec §24.10.7 — provider asks the paired GFS for a least-loaded
         # signaling node before generating SPACE_SYNC_OFFER, releases on
         # DIRECT_READY / DIRECT_FAILED.
