@@ -137,7 +137,12 @@ class _FakeHaAdapter:
         return await self.users.list_users()
 
     async def set_local_password(
-        self, username, password, *, display_name=None, is_admin=False,
+        self,
+        username,
+        password,
+        *,
+        display_name=None,
+        is_admin=False,
     ):
         self.passwords[username] = password
 

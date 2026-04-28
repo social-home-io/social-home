@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterable
-
 import pytest
 
 from socialhome.platform.adapter import Capability
-from socialhome.platform.haos.adapter import HaIngressAuthProvider, HaosAdapter
+from socialhome.platform.haos.adapter import HaosAdapter
 
 
 # ─── Fake HaClient (mirrors the one in tests/platform/ha/test_adapter.py) ──
