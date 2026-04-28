@@ -168,6 +168,7 @@ from .federation.sync import (
     StickiesExporter,
     TasksArchivedExporter,
     TasksExporter,
+    ZonesExporter,
 )
 from .federation.sync.dm_history import (
     DmHistoryProvider,
@@ -507,6 +508,7 @@ def _wire_federation_stack(
         "calendar": CalendarExporter(space_calendar_repo),
         "gallery": GalleryExporter(gallery_repo),
         "polls": PollsExporter(space_poll_repo, space_post_repo),
+        "space_zones": ZonesExporter(space_zone_repo),
     }
     chunk_builder = ChunkBuilder(
         encoder=federation_service._encoder,
@@ -529,6 +531,7 @@ def _wire_federation_stack(
         sticky_repo=sticky_repo,
         space_calendar_repo=space_calendar_repo,
         gallery_repo=gallery_repo,
+        zone_repo=space_zone_repo,
     )
     federation_service.attach_space_sync(
         service=space_sync_service,
