@@ -131,7 +131,13 @@ class StandaloneAdapter:
         Returns the raw token string the client must present as
         ``Authorization: Bearer <token>`` on subsequent requests, or
         ``None`` if the credentials are invalid. Tokens are stored
-        only as SHA-256 hashes in ``platform_tokens``.
+        only as SHA-256 hashes — once in ``platform_tokens`` (the
+        platform-layer session log) and once in ``api_tokens`` keyed on
+        the matching ``users`` row so the application's
+        :class:`BearerTokenStrategy` can resolve them. Without the
+        ``api_tokens`` mirror, ``GET /api/me`` would 401 immediately
+        after a successful login — the standalone session token would
+        never reach the auth middleware.
         """
         row = await self._db.fetchone(
             "SELECT password_hash FROM platform_users WHERE username=?",
@@ -145,13 +151,28 @@ class StandaloneAdapter:
 
         raw = secrets.token_urlsafe(32)
         token_id = secrets.token_urlsafe(16)
+        token_hash = _sha256(raw)
         await self._db.enqueue(
             "INSERT INTO platform_tokens(token_id, username, token_hash) VALUES(?,?,?)",
-            (token_id, username, _sha256(raw)),
+            (token_id, username, token_hash),
         )
-        # ``label`` is accepted for forward-compatibility but ignored
-        # until the platform_tokens table gains a label column.
-        _ = label
+        # Mirror into ``api_tokens`` so the application-layer bearer
+        # strategy (which joins users → api_tokens) accepts this token.
+        # Skips silently when the matching ``users`` row is absent —
+        # that's a deployment misconfiguration rather than a runtime
+        # error and the platform_tokens row is still useful for audit.
+        user_row = await self._db.fetchone(
+            "SELECT user_id FROM users WHERE username=?",
+            (username,),
+        )
+        if user_row is not None and user_row["user_id"]:
+            await self._db.enqueue(
+                """
+                INSERT INTO api_tokens(token_id, user_id, label, token_hash)
+                VALUES(?, ?, ?, ?)
+                """,
+                (token_id, user_row["user_id"], label, token_hash),
+            )
         return raw
 
     @staticmethod
@@ -309,10 +330,103 @@ class StandaloneAdapter:
 
     # ── Lifecycle hooks ────────────────────────────────────────────────────
 
-    async def on_startup(self, app: "web.Application") -> None:  # noqa: RUF029
-        """Pick up the shared aiohttp session for ``send_push``."""
+    async def on_startup(self, app: "web.Application") -> None:
+        """Standalone-mode startup wiring.
+
+        Two responsibilities:
+
+        * Pick up the shared aiohttp session for :meth:`send_push`.
+        * **First-boot admin provisioning.** When ``platform_users`` is
+          empty (a fresh data dir, no pairing has happened yet), seed
+          a single ``admin`` user so the SPA login form actually has
+          something to authenticate against. The username, password
+          source (``$SH_ADMIN_PASSWORD`` or generated), and the printed-
+          once password are documented in :meth:`_bootstrap_admin`.
+        """
         if self._session is None:
             self._session = app[K.http_session_key]
+        await self._bootstrap_admin()
+
+    async def _bootstrap_admin(self) -> None:
+        """Seed the first admin user when ``platform_users`` is empty.
+
+        Idempotent: any pre-existing row short-circuits the bootstrap.
+        Honors two environment overrides:
+
+        * ``SH_ADMIN_USERNAME`` — defaults to ``"admin"``.
+        * ``SH_ADMIN_PASSWORD`` — when unset, a random urlsafe password
+          is generated and printed (once) to the log so the operator
+          can capture it. Never persisted in plaintext anywhere.
+
+        The freshly-created user is wired across both the platform side
+        (``platform_users`` for password verification) and the domain
+        side (``users`` for the bearer-auth join) with matching
+        ``username``. Without the ``users`` row, downstream
+        ``user_repo.get_user_by_token_hash`` would never find the
+        principal once a token gets minted.
+        """
+        existing = await self._db.fetchone(
+            "SELECT 1 FROM platform_users LIMIT 1",
+        )
+        if existing is not None:
+            return
+
+        username = os.environ.get("SH_ADMIN_USERNAME", "admin").strip() or "admin"
+        env_pw = os.environ.get("SH_ADMIN_PASSWORD")
+        password = env_pw if env_pw else secrets.token_urlsafe(16)
+        display_name = "Admin"
+
+        # Defensive: tests / external migrations may have already seeded a
+        # ``users`` row for this username before the standalone adapter
+        # boots (the conftest in tests/routes does this). Skip the bootstrap
+        # entirely so we don't fight a UNIQUE conflict on ``users.username``.
+        existing_user = await self._db.fetchone(
+            "SELECT 1 FROM users WHERE username=?",
+            (username,),
+        )
+        if existing_user is not None:
+            return
+
+        pw_hash = self.hash_password(password)
+        await self._db.enqueue(
+            """
+            INSERT INTO platform_users(username, display_name, is_admin, password_hash)
+            VALUES(?, ?, 1, ?)
+            ON CONFLICT(username) DO NOTHING
+            """,
+            (username, display_name, pw_hash),
+        )
+
+        # Mirror into ``users`` so bearer auth can resolve the principal.
+        # We mint a stable user_id so re-running the bootstrap with a
+        # cleared platform_users table doesn't leave dangling rows.
+        user_id = f"uid-{username}"
+        await self._db.enqueue(
+            """
+            INSERT INTO users(username, user_id, display_name, is_admin)
+            VALUES(?, ?, ?, 1)
+            ON CONFLICT(username) DO UPDATE SET is_admin=1
+            """,
+            (username, user_id, display_name),
+        )
+
+        # Log once. With ``SH_ADMIN_PASSWORD`` set we avoid printing the
+        # secret (the operator already knows it); with a generated one
+        # we MUST print or the user can never log in.
+        if env_pw:
+            log.warning(
+                "standalone: bootstrapped admin user %r (password from "
+                "SH_ADMIN_PASSWORD)",
+                username,
+            )
+        else:
+            log.warning(
+                "standalone: bootstrapped admin user %r with generated "
+                "password %r — change it via the SPA / API; rerun with "
+                "SH_ADMIN_PASSWORD to set a known value before first boot",
+                username,
+                password,
+            )
 
     async def on_cleanup(self, app: "web.Application") -> None:  # noqa: RUF029
         """No-op — the shared session is owned by :mod:`socialhome.app`."""
