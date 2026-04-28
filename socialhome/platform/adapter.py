@@ -135,7 +135,8 @@ class AuthProvider(Protocol):
     """
 
     async def authenticate(
-        self, request: "web.Request",
+        self,
+        request: "web.Request",
     ) -> ExternalUser | None: ...
 
 
@@ -201,7 +202,9 @@ class STTProvider(Protocol):
     """
 
     async def transcribe(
-        self, audio: bytes, language: str = "en",
+        self,
+        audio: bytes,
+        language: str = "en",
     ) -> str: ...
 
     async def stream_transcribe(
@@ -240,6 +243,15 @@ class ExternalEventSink(Protocol):
     """
 
     async def fire(self, event_type: str, data: dict) -> bool: ...
+
+
+class NoopEventSink:
+    """Default :class:`ExternalEventSink` for adapters without an
+    upstream event bus. Returns ``False`` for every call so callers
+    learn the event was not published, but raises nothing."""
+
+    async def fire(self, event_type: str, data: dict) -> bool:  # noqa: ARG002
+        return False
 
 
 # ── ABC ──────────────────────────────────────────────────────────────────────
@@ -338,7 +350,8 @@ class PlatformAdapter(abc.ABC):
     # ── Pass-through delegations ─────────────────────────────────────
 
     async def authenticate(
-        self, request: "web.Request",
+        self,
+        request: "web.Request",
     ) -> ExternalUser | None:
         """Delegate to :attr:`auth`. Kept on the adapter so existing
         call sites don't need to migrate to ``adapter.auth.authenticate``
@@ -363,7 +376,9 @@ class PlatformAdapter(abc.ABC):
         await self.push.send(user, title, message, data)
 
     async def transcribe_audio(
-        self, audio_bytes: bytes, language: str = "en",
+        self,
+        audio_bytes: bytes,
+        language: str = "en",
     ) -> str:
         if self.stt is None:
             raise NotImplementedError(
@@ -401,7 +416,8 @@ class PlatformAdapter(abc.ABC):
                 f"{type(self).__name__} does not support AI data generation",
             )
         return await self.ai.generate_data(
-            task_name=task_name, instructions=instructions,
+            task_name=task_name,
+            instructions=instructions,
         )
 
     async def fire_event(self, event_type: str, data: dict) -> bool:

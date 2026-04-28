@@ -4,8 +4,15 @@ Authenticates requests using SHA-256-hashed bearer tokens stored in
 ``platform_tokens``. Users, tokens, and instance configuration are managed
 entirely within the local SQLite database — no external calls are made.
 
-Audio transcription and AI data generation raise
-:class:`NotImplementedError` in v1.
+Audio transcription and AI data generation are not supported (the
+adapter exposes ``stt = None`` / ``ai = None`` and the base
+:class:`PlatformAdapter` raises :class:`NotImplementedError`).
+
+This module composes mode-specific Provider classes
+(:class:`StandaloneAuthProvider`, :class:`StandaloneUserDirectory`,
+:class:`StandalonePushProvider`) into a :class:`StandaloneAdapter`
+that satisfies the :class:`PlatformAdapter` ABC. See
+``socialhome/platform/adapter.py`` for the design pattern overview.
 """
 
 from __future__ import annotations
@@ -17,12 +24,19 @@ import os
 import secrets
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, AsyncIterable, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 import aiohttp
 
 from ... import app_keys as K
-from ..adapter import ExternalUser, InstanceConfig, _extract_bearer
+from ..adapter import (
+    Capability,
+    ExternalUser,
+    InstanceConfig,
+    NoopEventSink,
+    PlatformAdapter,
+    _extract_bearer,
+)
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -38,46 +52,28 @@ def _sha256(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-class StandaloneAdapter:
-    """Platform adapter backed entirely by the local SQLite database.
+# ── Providers ────────────────────────────────────────────────────────────────
 
-    :param db: Open :class:`~socialhome.db.AsyncDatabase` instance.
-    :param config: Runtime :class:`~socialhome.config.Config`.
-    :param options: Raw ``[standalone]`` TOML section. Reserved for
-        future per-adapter settings; unused in v1.
-    """
 
-    __slots__ = ("_db", "_config", "_options", "_session")
+class StandaloneAuthProvider:
+    """Resolve a request via ``Authorization: Bearer`` against
+    ``platform_tokens`` joined to ``platform_users``."""
 
-    def __init__(
-        self,
-        db: "AsyncDatabase",
-        config: "Config",
-        options: Mapping[str, Any] | None = None,
-        *,
-        session: aiohttp.ClientSession | None = None,
-    ) -> None:
+    __slots__ = ("_db",)
+
+    def __init__(self, db: "AsyncDatabase") -> None:
         self._db = db
-        self._config = config
-        self._options: Mapping[str, Any] = options or MappingProxyType({})
-        self._session: aiohttp.ClientSession | None = session
 
-    # ── Authentication ────────────────────────────────────────────────────
-
-    async def authenticate(self, request: "web.Request") -> ExternalUser | None:
-        """Extract a bearer token from the request and delegate to :meth:`authenticate_bearer`."""
+    async def authenticate(
+        self,
+        request: "web.Request",
+    ) -> ExternalUser | None:
         token = _extract_bearer(request)
         if not token:
             return None
-        return await self.authenticate_bearer(token)
+        return await self._authenticate_bearer(token)
 
-    async def authenticate_bearer(self, token: str) -> ExternalUser | None:
-        """Validate ``token`` by SHA-256 hashing and looking it up in ``platform_tokens``.
-
-        Joins ``platform_tokens`` with ``platform_users`` so a single query
-        returns the full user record. Tokens past their ``expires_at`` (when
-        set) are rejected.
-        """
+    async def _authenticate_bearer(self, token: str) -> ExternalUser | None:
         token_hash = _sha256(token)
         row = await self._db.fetchone(
             """
@@ -96,8 +92,6 @@ class StandaloneAdapter:
         )
         if row is None:
             return None
-
-        # Check expiry (stored as ISO-8601 UTC text, nullable).
         if row["expires_at"] is not None:
             try:
                 expires = datetime.fromisoformat(row["expires_at"])
@@ -106,9 +100,7 @@ class StandaloneAdapter:
                 if datetime.now(timezone.utc) > expires:
                     return None
             except ValueError:
-                # Unparseable expiry — treat as expired.
                 return None
-
         return ExternalUser(
             username=row["username"],
             display_name=row["display_name"],
@@ -116,6 +108,196 @@ class StandaloneAdapter:
             is_admin=bool(row["is_admin"]),
             email=row["email"],
         )
+
+
+class StandaloneUserDirectory:
+    """List / get / enable / disable principals stored in ``platform_users``."""
+
+    __slots__ = ("_db",)
+
+    def __init__(self, db: "AsyncDatabase") -> None:
+        self._db = db
+
+    async def list_users(self) -> list[ExternalUser]:
+        rows = await self._db.fetchall("SELECT * FROM platform_users")
+        return [_row_to_user(r) for r in rows]
+
+    async def get(self, username: str) -> ExternalUser | None:
+        row = await self._db.fetchone(
+            "SELECT * FROM platform_users WHERE username = ?",
+            (username,),
+        )
+        return _row_to_user(row) if row else None
+
+    async def is_enabled(self, username: str) -> bool:
+        row = await self._db.fetchone(
+            "SELECT 1 FROM platform_users WHERE username=?",
+            (username,),
+        )
+        return row is not None
+
+    async def enable(
+        self,
+        username: str,
+        *,
+        password: str | None = None,
+    ) -> ExternalUser:
+        """Create (or re-activate) ``username``. Standalone requires a
+        password — caller validates against the capability set."""
+        if not password:
+            raise ValueError(
+                "standalone mode requires a password when enabling a user",
+            )
+        pw_hash = StandaloneAdapter.hash_password(password)
+        await self._db.enqueue(
+            """
+            INSERT INTO platform_users(
+                username, display_name, is_admin, password_hash
+            ) VALUES(?, ?, 0, ?)
+            ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash
+            """,
+            (username, username, pw_hash),
+        )
+        existing = await self.get(username)
+        assert existing is not None
+        return existing
+
+    async def disable(self, username: str) -> None:
+        await self._db.enqueue(
+            "DELETE FROM platform_users WHERE username=?",
+            (username,),
+        )
+
+
+class StandalonePushProvider:
+    """POST a payload to ``platform_users.notify_endpoint``. Best-effort."""
+
+    __slots__ = ("_db", "_session")
+
+    def __init__(
+        self,
+        db: "AsyncDatabase",
+        session: aiohttp.ClientSession | None,
+    ) -> None:
+        self._db = db
+        self._session = session
+
+    def attach_session(self, session: aiohttp.ClientSession) -> None:
+        self._session = session
+
+    async def send(
+        self,
+        user: ExternalUser,
+        title: str,
+        message: str,
+        data: dict | None = None,
+    ) -> None:
+        row = await self._db.fetchone(
+            "SELECT notify_endpoint FROM platform_users WHERE username = ?",
+            (user.username,),
+        )
+        if row is None or not row["notify_endpoint"]:
+            return
+        endpoint: str = row["notify_endpoint"]
+        payload: dict = {"title": title, "message": message}
+        if data:
+            payload["data"] = data
+        session = self._session
+        if session is None:
+            log.debug(
+                "standalone: send_push to %r skipped — no shared HTTP session wired",
+                user.username,
+            )
+            return
+        try:
+            async with session.post(endpoint, json=payload) as resp:
+                if resp.status not in (200, 201, 204):
+                    log.debug(
+                        "standalone: send_push to %r returned %d",
+                        user.username,
+                        resp.status,
+                    )
+        except aiohttp.ClientError as exc:
+            log.debug(
+                "standalone: send_push to %r failed: %s",
+                user.username,
+                exc,
+            )
+
+
+def _row_to_user(row: Mapping[str, Any]) -> ExternalUser:
+    """Convert a ``platform_users`` row to an :class:`ExternalUser`."""
+    return ExternalUser(
+        username=row["username"],
+        display_name=row["display_name"],
+        picture_url=row["picture_url"],
+        is_admin=bool(row["is_admin"]),
+        email=row["email"],
+    )
+
+
+# ── Adapter ──────────────────────────────────────────────────────────────────
+
+
+class StandaloneAdapter(PlatformAdapter):
+    """Platform adapter backed entirely by the local SQLite database.
+
+    :param db: Open :class:`~socialhome.db.AsyncDatabase` instance.
+    :param config: Runtime :class:`~socialhome.config.Config`.
+    :param options: Raw ``[standalone]`` TOML section.
+    """
+
+    __slots__ = (
+        "_db",
+        "_config",
+        "_options",
+        "_session",
+        "auth",
+        "users",
+        "push",
+        "stt",
+        "ai",
+        "events",
+    )
+
+    def __init__(
+        self,
+        db: "AsyncDatabase",
+        config: "Config",
+        options: Mapping[str, Any] | None = None,
+        *,
+        session: aiohttp.ClientSession | None = None,
+    ) -> None:
+        self._db = db
+        self._config = config
+        self._options: Mapping[str, Any] = options or MappingProxyType({})
+        self._session: aiohttp.ClientSession | None = session
+
+        # Compose providers — each owns one slice of behaviour.
+        self.auth = StandaloneAuthProvider(db)
+        self.users = StandaloneUserDirectory(db)
+        self.push = StandalonePushProvider(db, session)
+        self.stt = None  # standalone has no STT backend in v1
+        self.ai = None  # standalone has no AI backend in v1
+        self.events = NoopEventSink()
+
+    @property
+    def capabilities(self) -> frozenset[Capability]:
+        # Standalone supports password auth + push (when notify_endpoint
+        # is configured per-user). No ingress, no STT, no AI, no
+        # HA-person directory.
+        return frozenset({Capability.PASSWORD_AUTH, Capability.PUSH})
+
+    # ── Authentication ────────────────────────────────────────────────────
+
+    async def authenticate_bearer(self, token: str) -> ExternalUser | None:
+        """Validate ``token`` by SHA-256 hashing it against ``platform_tokens``.
+
+        Public method retained on the adapter so existing test fixtures and
+        tools that drive the bearer flow without going through an HTTP
+        request can still call it. Internally delegates to the
+        :class:`StandaloneAuthProvider`."""
+        return await self.auth._authenticate_bearer(token)
 
     # ── Password-based token issuance (§auth/token) ───────────────────────
 
@@ -217,21 +399,8 @@ class StandaloneAdapter:
             return False
 
     # ── User listing ──────────────────────────────────────────────────────
-
-    async def list_external_users(self) -> list[ExternalUser]:
-        """Return all rows from ``platform_users``."""
-        rows = await self._db.fetchall("SELECT * FROM platform_users")
-        return [self._row_to_user(r) for r in rows]
-
-    async def get_external_user(self, username: str) -> ExternalUser | None:
-        """Return the user with ``username`` from ``platform_users``, or ``None``."""
-        row = await self._db.fetchone(
-            "SELECT * FROM platform_users WHERE username = ?",
-            (username,),
-        )
-        if row is None:
-            return None
-        return self._row_to_user(row)
+    # ``list_external_users`` / ``get_external_user`` come from the
+    # :class:`PlatformAdapter` ABC and delegate to ``self.users``.
 
     # ── Instance config ───────────────────────────────────────────────────
 
@@ -281,52 +450,8 @@ class StandaloneAdapter:
         return f"{base}/federation/inbox"
 
     # ── Push notifications ────────────────────────────────────────────────
-
-    async def send_push(
-        self,
-        user: ExternalUser,
-        title: str,
-        message: str,
-        data: dict | None = None,
-    ) -> None:
-        """POST push payload to ``platform_users.notify_endpoint``. No-op if absent.
-
-        Best-effort — all errors are swallowed and logged at DEBUG level.
-        """
-        row = await self._db.fetchone(
-            "SELECT notify_endpoint FROM platform_users WHERE username = ?",
-            (user.username,),
-        )
-        if row is None or not row["notify_endpoint"]:
-            return
-
-        endpoint: str = row["notify_endpoint"]
-        payload: dict = {"title": title, "message": message}
-        if data:
-            payload["data"] = data
-
-        session = self._session
-        if session is None:
-            log.debug(
-                "standalone: send_push to %r skipped — no shared HTTP session wired",
-                user.username,
-            )
-            return
-
-        try:
-            async with session.post(endpoint, json=payload) as resp:
-                if resp.status not in (200, 201, 204):
-                    log.debug(
-                        "standalone: send_push to %r returned %d",
-                        user.username,
-                        resp.status,
-                    )
-        except aiohttp.ClientError as exc:
-            log.debug(
-                "standalone: send_push to %r failed: %s",
-                user.username,
-                exc,
-            )
+    # ``send_push`` comes from the :class:`PlatformAdapter` ABC and
+    # delegates to ``self.push`` (StandalonePushProvider).
 
     # ── Lifecycle hooks ────────────────────────────────────────────────────
 
@@ -335,7 +460,8 @@ class StandaloneAdapter:
 
         Two responsibilities:
 
-        * Pick up the shared aiohttp session for :meth:`send_push`.
+        * Pick up the shared aiohttp session and forward it to
+          :class:`StandalonePushProvider` for outbound push.
         * **First-boot admin provisioning.** When ``platform_users`` is
           empty (a fresh data dir, no pairing has happened yet), seed
           a single ``admin`` user so the SPA login form actually has
@@ -345,6 +471,8 @@ class StandaloneAdapter:
         """
         if self._session is None:
             self._session = app[K.http_session_key]
+        if self.push is not None and isinstance(self.push, StandalonePushProvider):
+            self.push.attach_session(self._session)
         await self._bootstrap_admin()
 
     async def _bootstrap_admin(self) -> None:
@@ -439,52 +567,11 @@ class StandaloneAdapter:
         """Standalone provides no extra routes."""
         return []
 
-    @property
-    def supports_bearer_token_auth(self) -> bool:
-        """Standalone supports bearer-token authentication."""
-        return True
-
-    async def fire_event(self, event_type: str, data: dict) -> bool:
-        """No-op — standalone has no external event bus."""
-        return False
-
-    # ── Not implemented in v1 ─────────────────────────────────────────────
-
-    @property
-    def supports_stt(self) -> bool:
-        """Standalone has no first-party STT backend in v1."""
-        return False
-
-    async def transcribe_audio(
-        self,
-        audio_bytes: bytes,
-        language: str = "en",
-    ) -> str:
-        raise NotImplementedError(
-            "StandaloneAdapter does not support audio transcription in v1"
-        )
-
-    async def stream_transcribe_audio(
-        self,
-        audio_stream: AsyncIterable[bytes],
-        *,
-        language: str = "en",
-        sample_rate: int = 16000,
-        channels: int = 1,
-    ) -> str:
-        raise NotImplementedError(
-            "StandaloneAdapter does not support audio transcription in v1"
-        )
-
-    async def generate_ai_data(
-        self,
-        *,
-        task_name: str,
-        instructions: str,
-    ) -> str:
-        raise NotImplementedError(
-            "StandaloneAdapter does not support AI data generation in v1"
-        )
+    # ``supports_bearer_token_auth``, ``supports_stt``,
+    # ``transcribe_audio`` / ``stream_transcribe_audio`` /
+    # ``generate_ai_data``, ``fire_event`` all come from the
+    # :class:`PlatformAdapter` ABC and route through ``capabilities`` /
+    # ``self.stt`` / ``self.ai`` / ``self.events``.
 
     # ── Location override ─────────────────────────────────────────────────
 
@@ -515,15 +602,9 @@ class StandaloneAdapter:
             currency="USD",
         )
 
-    # ── Internals ─────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _row_to_user(row) -> ExternalUser:
-        """Convert a ``platform_users`` row to an :class:`ExternalUser`."""
-        return ExternalUser(
-            username=row["username"],
-            display_name=row["display_name"],
-            picture_url=row["picture_url"],
-            is_admin=bool(row["is_admin"]),
-            email=row["email"],
-        )
+    # ``_row_to_user`` was a private staticmethod used by the old
+    # in-class user listing methods; that logic now lives in the
+    # module-level ``_row_to_user`` helper consumed by
+    # :class:`StandaloneUserDirectory`. Kept as a class attribute alias
+    # for any external caller that imported it via the class.
+    _row_to_user = staticmethod(_row_to_user)
