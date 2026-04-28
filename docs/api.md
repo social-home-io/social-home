@@ -235,6 +235,10 @@ Same route shapes as the household feed, prefixed by `/api/spaces/{id}/`:
 | GET | `/api/calendars/events/{id}/reminders` | List own reminders (Phase D). Optional `?occurrence_at=<iso>` filter. |
 | POST | `/api/calendars/events/{id}/reminders` | Add a reminder for the calling user. Body: `{"minutes_before": <int>, "occurrence_at"?: "<iso>"}`. |
 | DELETE | `/api/calendars/events/{id}/reminders` | Remove a reminder. Required `?minutes_before=<int>` and optional `?occurrence_at=<iso>`. |
+| GET | `/api/calendars/events/{id}/export.ics` | iCal export of one event (Phase F). Member-only. Includes the caller's reminders as VALARM blocks. |
+| GET | `/api/spaces/{id}/calendar/export.ics` | Subscribable iCal feed for the next 90 days. Auth via `?token=<feed-token>` (no Bearer required — public path). Honours `If-None-Match` for conditional GET. |
+| POST | `/api/spaces/{id}/calendar/feed-token` | Mint / regenerate a per-(user, space) feed token. Returns `{token, url}`. |
+| DELETE | `/api/spaces/{id}/calendar/feed-token` | Revoke the current feed token. Future fetches return 401. |
 | POST | `/api/calendars/{id}/import_ics` | Upload iCal. |
 | POST | `/api/calendars/{id}/{import_image\|import_prompt}` | AI-assisted import. |
 | GET | `/api/calendar/{id}/export.ics` | iCal export. |

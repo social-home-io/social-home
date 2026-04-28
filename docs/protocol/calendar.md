@@ -74,6 +74,29 @@ existing endpoint.
 index (`idx_space_posts_linked_event`); no FK because an `ON DELETE SET
 NULL` cascade would race the bridge's own soft-delete handler.
 
+## iCal export (Phase F)
+
+Members can subscribe to a space calendar in their native calendar
+app via `GET /api/spaces/{id}/calendar/export.ics?token=<feed-token>`.
+The token is per-(user, space), revocable, and the only credential
+the URL carries — the auth middleware is configured with a public
+path pattern matching `/api/spaces/[^/]+/calendar/export.ics$` so
+desktop calendar clients can refresh without OAuth.
+
+The serializer (`socialhome/serialization/ics.py`) emits RFC 5545
+VCALENDAR with VEVENT (UID = event_id, DTSTART/DTEND, SUMMARY,
+DESCRIPTION, RRULE pass-through) and VALARM blocks populated from
+the caller's `space_calendar_rsvp_reminders` rows. ATTENDEE lines are
+deliberately omitted — leaking handles to third-party calendar apps
+crosses a privacy line. RSVPs stay in-app.
+
+Per-event download — `GET /api/calendars/events/{id}/export.ics` —
+is member-only via the standard auth flow (no token in URL).
+
+Conditional GET via strong ETag (`sha256` of body, truncated). Apple
+Calendar / Google Calendar honour the `Cache-Control: max-age=900`
+header and skip refetches within the window.
+
 ## iCal interop
 
 `POST /api/calendars/{id}/import_ics` parses an iCal file and creates

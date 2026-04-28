@@ -357,6 +357,20 @@ class AbstractSpaceCalendarRepo(Protocol):
         sent_at: str,
     ) -> None: ...
 
+    # ── Phase F: iCal feed tokens ─────────────────────────────────────
+    async def upsert_feed_token(
+        self, *, user_id: str, space_id: str, token: str,
+    ) -> None: ...
+    async def get_feed_token(
+        self, *, user_id: str, space_id: str,
+    ) -> str | None: ...
+    async def get_user_for_feed_token(
+        self, token: str,
+    ) -> tuple[str, str] | None: ...
+    async def revoke_feed_token(
+        self, *, user_id: str, space_id: str,
+    ) -> None: ...
+
 
 class SqliteSpaceCalendarRepo:
     """SQLite-backed :class:`AbstractSpaceCalendarRepo`."""
@@ -749,6 +763,61 @@ class SqliteSpaceCalendarRepo:
              WHERE event_id=? AND user_id=? AND occurrence_at=? AND minutes_before=?
             """,
             (sent_at, event_id, user_id, occurrence_at, int(minutes_before)),
+        )
+
+    # ── Phase F: iCal feed tokens ─────────────────────────────────────
+
+    async def upsert_feed_token(
+        self, *, user_id: str, space_id: str, token: str,
+    ) -> None:
+        """Persist a feed token. Idempotent: a regenerate replaces the
+        previous (user, space) row, also clearing any prior revoke."""
+        await self._db.enqueue(
+            """
+            INSERT INTO space_calendar_feed_tokens(user_id, space_id, token)
+            VALUES(?, ?, ?)
+            ON CONFLICT(user_id, space_id) DO UPDATE SET
+                token=excluded.token,
+                created_at=datetime('now'),
+                revoked_at=NULL
+            """,
+            (user_id, space_id, token),
+        )
+
+    async def get_feed_token(
+        self, *, user_id: str, space_id: str,
+    ) -> str | None:
+        row = await self._db.fetchone(
+            "SELECT token FROM space_calendar_feed_tokens "
+            "WHERE user_id=? AND space_id=? AND revoked_at IS NULL",
+            (user_id, space_id),
+        )
+        d = row_to_dict(row)
+        return d["token"] if d else None
+
+    async def get_user_for_feed_token(
+        self, token: str,
+    ) -> tuple[str, str] | None:
+        """Resolve a feed token to ``(user_id, space_id)``, or None if
+        the token is unknown or revoked."""
+        row = await self._db.fetchone(
+            "SELECT user_id, space_id FROM space_calendar_feed_tokens "
+            "WHERE token=? AND revoked_at IS NULL",
+            (token,),
+        )
+        d = row_to_dict(row)
+        if d is None:
+            return None
+        return d["user_id"], d["space_id"]
+
+    async def revoke_feed_token(
+        self, *, user_id: str, space_id: str,
+    ) -> None:
+        await self._db.enqueue(
+            "UPDATE space_calendar_feed_tokens "
+            "SET revoked_at=datetime('now') "
+            "WHERE user_id=? AND space_id=? AND revoked_at IS NULL",
+            (user_id, space_id),
         )
 
 

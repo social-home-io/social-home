@@ -568,6 +568,136 @@ async def test_deny_clears_request(client):
     assert counts["requested"] == 0
 
 
+# ─── Phase F: iCal export ───────────────────────────────────────────────────
+
+
+async def test_event_ics_endpoint_returns_vcalendar(client):
+    await _seed_space(client)
+    now = datetime.now(timezone.utc)
+    r = await client.post(
+        "/api/spaces/sp-cal/calendar/events",
+        json={
+            "summary": "Birthday",
+            "start": now.isoformat(),
+            "end": (now + timedelta(hours=2)).isoformat(),
+        },
+        headers=_auth(client._tok),
+    )
+    eid = (await r.json())["id"]
+    r2 = await client.get(
+        f"/api/calendars/events/{eid}/export.ics",
+        headers=_auth(client._tok),
+    )
+    assert r2.status == 200
+    assert r2.headers["Content-Type"].startswith("text/calendar")
+    body = await r2.text()
+    assert "BEGIN:VCALENDAR" in body
+    assert f"UID:{eid}" in body
+    assert "SUMMARY:Birthday" in body
+
+
+async def test_event_ics_non_member_403(client):
+    await _seed_space(client)
+    now = datetime.now(timezone.utc)
+    r = await client.post(
+        "/api/spaces/sp-cal/calendar/events",
+        json={
+            "summary": "Members only",
+            "start": now.isoformat(),
+            "end": (now + timedelta(hours=1)).isoformat(),
+        },
+        headers=_auth(client._tok),
+    )
+    eid = (await r.json())["id"]
+    outsider = await _seed_outsider(client)
+    r2 = await client.get(
+        f"/api/calendars/events/{eid}/export.ics",
+        headers=outsider,
+    )
+    assert r2.status == 403
+
+
+async def test_feed_token_lifecycle(client):
+    """POST mints a token; the feed URL works; DELETE revokes it."""
+    await _seed_space(client)
+    # Mint a token
+    r = await client.post(
+        "/api/spaces/sp-cal/calendar/feed-token",
+        json={},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await r.json()
+    token = body["token"]
+    assert token
+    # Create an event so the feed has content.
+    now = datetime.now(timezone.utc)
+    await client.post(
+        "/api/spaces/sp-cal/calendar/events",
+        json={
+            "summary": "Feed test",
+            "start": (now + timedelta(days=1)).isoformat(),
+            "end": (now + timedelta(days=1, hours=1)).isoformat(),
+        },
+        headers=_auth(client._tok),
+    )
+    # Subscribable feed works without auth, just the token.
+    r2 = await client.get(f"/api/spaces/sp-cal/calendar/export.ics?token={token}")
+    assert r2.status == 200
+    feed_body = await r2.text()
+    assert "BEGIN:VCALENDAR" in feed_body
+    assert "SUMMARY:Feed test" in feed_body
+    # Conditional GET — same ETag → 304.
+    etag = r2.headers["ETag"]
+    r3 = await client.get(
+        f"/api/spaces/sp-cal/calendar/export.ics?token={token}",
+        headers={"If-None-Match": etag},
+    )
+    assert r3.status == 304
+    # Revoke
+    r4 = await client.delete(
+        "/api/spaces/sp-cal/calendar/feed-token",
+        headers=_auth(client._tok),
+    )
+    assert r4.status == 200
+    # Token now rejected.
+    r5 = await client.get(f"/api/spaces/sp-cal/calendar/export.ics?token={token}")
+    assert r5.status == 401
+
+
+async def test_feed_token_required(client):
+    """No token → 401."""
+    await _seed_space(client)
+    r = await client.get("/api/spaces/sp-cal/calendar/export.ics")
+    assert r.status == 401
+
+
+async def test_feed_token_for_wrong_space_rejected(client):
+    """A token bound to space A can't be used to fetch space B's feed."""
+    await _seed_space(client)
+    # Create a second space + add the test user as a member.
+    await client._db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username, "
+        "identity_public_key, space_type) "
+        "VALUES('sp-other', 'Other', 'iid', 'admin', ?, 'household')",
+        ("aa" * 32,),
+    )
+    await client._db.enqueue(
+        "INSERT INTO space_members(space_id, user_id, role) "
+        "VALUES('sp-other', ?, 'admin')",
+        (client._uid,),
+    )
+    r = await client.post(
+        "/api/spaces/sp-cal/calendar/feed-token",
+        json={},
+        headers=_auth(client._tok),
+    )
+    token = (await r.json())["token"]
+    # Try to use sp-cal's token on sp-other.
+    r2 = await client.get(f"/api/spaces/sp-other/calendar/export.ics?token={token}")
+    assert r2.status == 401
+
+
 async def test_approve_non_creator_non_admin_403(client):
     """Random members can't approve other members' requests."""
     await _seed_space(client)

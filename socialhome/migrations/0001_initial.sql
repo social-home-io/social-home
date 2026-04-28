@@ -1141,6 +1141,22 @@ CREATE TABLE IF NOT EXISTS space_calendar_rsvp_reminders (
 CREATE INDEX IF NOT EXISTS idx_rsvp_reminders_pending
     ON space_calendar_rsvp_reminders(fire_at) WHERE sent_at IS NULL;
 
+-- Phase F: per-(user, space) iCal feed token. Used by external calendar
+-- apps (Apple Calendar, Google Calendar, etc.) that GET the .ics feed
+-- on a stable URL without OAuth. The token is unique and revocable;
+-- separate from the user's API token so revoking it doesn't affect
+-- other API access.
+CREATE TABLE IF NOT EXISTS space_calendar_feed_tokens (
+    user_id    TEXT NOT NULL,
+    space_id   TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    token      TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revoked_at TEXT,
+    PRIMARY KEY (user_id, space_id)
+);
+CREATE INDEX IF NOT EXISTS idx_feed_tokens_token
+    ON space_calendar_feed_tokens(token) WHERE revoked_at IS NULL;
+
 -- Out-of-order federation RSVP buffer. When a SPACE_RSVP_UPDATED arrives
 -- before its event has propagated, the FK to space_calendar_events
 -- would fail; we hold the RSVP here and flush on event arrival.
