@@ -17,12 +17,7 @@ that satisfies the :class:`PlatformAdapter` ABC. See
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
-import os
-import secrets
-from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -37,6 +32,11 @@ from ..adapter import (
     PlatformAdapter,
     _extract_bearer,
 )
+from ..local_credentials import (
+    LocalCredentialStore,
+    hash_password as _hash_password,
+    verify_password as _verify_password_fn,
+)
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -47,22 +47,18 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _sha256(token: str) -> str:
-    """Return the hex SHA-256 digest of the raw token string."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
 # ── Providers ────────────────────────────────────────────────────────────────
 
 
 class StandaloneAuthProvider:
     """Resolve a request via ``Authorization: Bearer`` against
-    ``platform_tokens`` joined to ``platform_users``."""
+    ``platform_tokens`` joined to ``platform_users``. Thin wrapper —
+    the actual lookup lives in :class:`LocalCredentialStore`."""
 
-    __slots__ = ("_db",)
+    __slots__ = ("_credentials",)
 
-    def __init__(self, db: "AsyncDatabase") -> None:
-        self._db = db
+    def __init__(self, credentials: LocalCredentialStore) -> None:
+        self._credentials = credentials
 
     async def authenticate(
         self,
@@ -71,43 +67,11 @@ class StandaloneAuthProvider:
         token = _extract_bearer(request)
         if not token:
             return None
-        return await self._authenticate_bearer(token)
+        return await self._credentials.authenticate_bearer(token)
 
+    # Back-compat alias used by adapter.authenticate_bearer.
     async def _authenticate_bearer(self, token: str) -> ExternalUser | None:
-        token_hash = _sha256(token)
-        row = await self._db.fetchone(
-            """
-            SELECT
-                u.username,
-                u.display_name,
-                u.picture_url,
-                u.is_admin,
-                u.email,
-                t.expires_at
-            FROM platform_tokens t
-            JOIN platform_users u ON u.username = t.username
-            WHERE t.token_hash = ?
-            """,
-            (token_hash,),
-        )
-        if row is None:
-            return None
-        if row["expires_at"] is not None:
-            try:
-                expires = datetime.fromisoformat(row["expires_at"])
-                if expires.tzinfo is None:
-                    expires = expires.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) > expires:
-                    return None
-            except ValueError:
-                return None
-        return ExternalUser(
-            username=row["username"],
-            display_name=row["display_name"],
-            picture_url=row["picture_url"],
-            is_admin=bool(row["is_admin"]),
-            email=row["email"],
-        )
+        return await self._credentials.authenticate_bearer(token)
 
 
 class StandaloneUserDirectory:
@@ -148,7 +112,7 @@ class StandaloneUserDirectory:
             raise ValueError(
                 "standalone mode requires a password when enabling a user",
             )
-        pw_hash = StandaloneAdapter.hash_password(password)
+        pw_hash = _hash_password(password)
         await self._db.enqueue(
             """
             INSERT INTO platform_users(
@@ -252,6 +216,7 @@ class StandaloneAdapter(PlatformAdapter):
         "_config",
         "_options",
         "_session",
+        "_credentials",
         "auth",
         "users",
         "push",
@@ -272,9 +237,10 @@ class StandaloneAdapter(PlatformAdapter):
         self._config = config
         self._options: Mapping[str, Any] = options or MappingProxyType({})
         self._session: aiohttp.ClientSession | None = session
+        self._credentials = LocalCredentialStore(db)
 
         # Compose providers — each owns one slice of behaviour.
-        self.auth = StandaloneAuthProvider(db)
+        self.auth = StandaloneAuthProvider(self._credentials)
         self.users = StandaloneUserDirectory(db)
         self.push = StandalonePushProvider(db, session)
         self.stt = None  # standalone has no STT backend in v1
@@ -300,6 +266,8 @@ class StandaloneAdapter(PlatformAdapter):
         return await self.auth._authenticate_bearer(token)
 
     # ── Password-based token issuance (§auth/token) ───────────────────────
+    # Thin delegators to LocalCredentialStore. Kept as adapter methods so
+    # tests / callers don't need to reach through .auth or ._credentials.
 
     async def issue_bearer_token(
         self,
@@ -308,95 +276,17 @@ class StandaloneAdapter(PlatformAdapter):
         *,
         label: str = "web",
     ) -> str | None:
-        """Verify credentials and mint a fresh bearer token (§POST /api/auth/token).
-
-        Returns the raw token string the client must present as
-        ``Authorization: Bearer <token>`` on subsequent requests, or
-        ``None`` if the credentials are invalid. Tokens are stored
-        only as SHA-256 hashes — once in ``platform_tokens`` (the
-        platform-layer session log) and once in ``api_tokens`` keyed on
-        the matching ``users`` row so the application's
-        :class:`BearerTokenStrategy` can resolve them. Without the
-        ``api_tokens`` mirror, ``GET /api/me`` would 401 immediately
-        after a successful login — the standalone session token would
-        never reach the auth middleware.
-        """
-        row = await self._db.fetchone(
-            "SELECT password_hash FROM platform_users WHERE username=?",
-            (username,),
+        return await self._credentials.issue_bearer_token(
+            username, password, label=label,
         )
-        if row is None or not row["password_hash"]:
-            return None
-        stored: str = row["password_hash"]
-        if not self._verify_password(password, stored):
-            return None
-
-        raw = secrets.token_urlsafe(32)
-        token_id = secrets.token_urlsafe(16)
-        token_hash = _sha256(raw)
-        await self._db.enqueue(
-            "INSERT INTO platform_tokens(token_id, username, token_hash) VALUES(?,?,?)",
-            (token_id, username, token_hash),
-        )
-        # Mirror into ``api_tokens`` so the application-layer bearer
-        # strategy (which joins users → api_tokens) accepts this token.
-        # Skips silently when the matching ``users`` row is absent —
-        # that's a deployment misconfiguration rather than a runtime
-        # error and the platform_tokens row is still useful for audit.
-        user_row = await self._db.fetchone(
-            "SELECT user_id FROM users WHERE username=?",
-            (username,),
-        )
-        if user_row is not None and user_row["user_id"]:
-            await self._db.enqueue(
-                """
-                INSERT INTO api_tokens(token_id, user_id, label, token_hash)
-                VALUES(?, ?, ?, ?)
-                """,
-                (token_id, user_row["user_id"], label, token_hash),
-            )
-        return raw
 
     @staticmethod
     def hash_password(password: str, *, salt: bytes | None = None) -> str:
-        """Return a scrypt hash in ``scrypt$<N>$<r>$<p>$<salt_hex>$<hash_hex>`` form.
-
-        Stdlib-only — ``hashlib.scrypt`` is available on every Python 3.14
-        build we target. Parameters are chosen to be secure for a household
-        server (N=2^15, r=8, p=1 — ~100ms on commodity hardware).
-        """
-        # N*r*128 stays ≤16 MB so we sit comfortably under OpenSSL's
-        # default EVP memory limit (~32 MB). ~50 ms on commodity hardware.
-        n = 2**14
-        r = 8
-        p = 1
-        if salt is None:
-            salt = os.urandom(16)
-        dk = hashlib.scrypt(
-            password.encode("utf-8"), salt=salt, n=n, r=r, p=p, dklen=32
-        )
-        return f"scrypt${n}${r}${p}${salt.hex()}${dk.hex()}"
+        return _hash_password(password, salt=salt)
 
     @staticmethod
     def _verify_password(password: str, stored: str) -> bool:
-        if not stored.startswith("scrypt$"):
-            return False
-        try:
-            _, n_s, r_s, p_s, salt_hex, hash_hex = stored.split("$", 5)
-            n, r, p = int(n_s), int(r_s), int(p_s)
-            salt = bytes.fromhex(salt_hex)
-            expected = bytes.fromhex(hash_hex)
-            dk = hashlib.scrypt(
-                password.encode("utf-8"),
-                salt=salt,
-                n=n,
-                r=r,
-                p=p,
-                dklen=len(expected),
-            )
-            return hmac.compare_digest(dk, expected)
-        except ValueError, KeyError:
-            return False
+        return _verify_password_fn(password, stored)
 
     # ── User listing ──────────────────────────────────────────────────────
     # ``list_external_users`` / ``get_external_user`` come from the

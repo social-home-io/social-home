@@ -26,6 +26,10 @@ from ..adapter import (
     InstanceConfig,
     PlatformAdapter,
 )
+from ..local_credentials import (
+    LocalCredentialStore,
+    hash_password as _hash_password,
+)
 from .client import HaClient, build_ha_client
 from .providers import (
     HaAIProvider,
@@ -61,6 +65,7 @@ class HaAdapter(PlatformAdapter):
         "_ha_client",
         "_ha_bridge",
         "_db",
+        "_credentials",
         "auth", "users", "push", "stt", "ai", "events",
     )
 
@@ -80,6 +85,7 @@ class HaAdapter(PlatformAdapter):
         self._ha_client: HaClient | None = ha_client
         self._ha_bridge: HaBridgeService | None = None
         self._db: Any | None = None
+        self._credentials: LocalCredentialStore | None = None
 
         self.auth = HaAuthProvider(self)
         self.users = HaUserDirectory(self)
@@ -94,10 +100,55 @@ class HaAdapter(PlatformAdapter):
             Capability.PUSH,
             Capability.AI,
             Capability.HA_PERSON_DIRECTORY,
+            # Local password auth — the wizard sets a password for the
+            # picked HA owner so the user can log in via /api/auth/token
+            # in addition to X-Ingress-User and HA bearer tokens.
+            Capability.PASSWORD_AUTH,
         }
         if self._options.get("stt_entity_id"):
             caps.add(Capability.STT)
         return frozenset(caps)
+
+    # ── Local credential surface (mirrors StandaloneAdapter) ─────────────
+
+    async def issue_bearer_token(
+        self,
+        username: str,
+        password: str,
+        *,
+        label: str = "web",
+    ) -> str | None:
+        """Verify a local password and mint a bearer token.
+
+        Available in ha mode for the owner picked during the setup
+        wizard. ``None`` until ``on_startup`` wires the credential store."""
+        if self._credentials is None:
+            return None
+        return await self._credentials.issue_bearer_token(
+            username, password, label=label,
+        )
+
+    async def set_local_password(
+        self,
+        username: str,
+        password: str,
+        *,
+        display_name: str | None = None,
+        is_admin: bool = True,
+    ) -> None:
+        """Attach a local password to ``username``. Used by the ha
+        setup wizard. No-op until ``on_startup``."""
+        if self._credentials is None:
+            raise RuntimeError(
+                "HaAdapter.set_local_password called before on_startup",
+            )
+        await self._credentials.set_password(
+            username, password, display_name=display_name, is_admin=is_admin,
+        )
+
+    @staticmethod
+    def hash_password(password: str, *, salt: bytes | None = None) -> str:
+        return _hash_password(password, salt=salt)
 
     @property
     def _client(self) -> HaClient:
@@ -161,6 +212,7 @@ class HaAdapter(PlatformAdapter):
         that lives in :class:`~socialhome.platform.haos.HaosAdapter`."""
         session = app[K.http_session_key]
         self._db = app[K.db_key]
+        self._credentials = LocalCredentialStore(self._db)
         if self._ha_client is None:
             self._ha_client = build_ha_client(
                 session,

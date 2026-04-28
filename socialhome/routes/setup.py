@@ -123,11 +123,14 @@ class HaPersonsSetupView(BaseView):
 
 
 class HaOwnerSetupView(BaseView):
-    """``POST /api/setup/ha/owner`` — operator picks the HA owner.
+    """``POST /api/setup/ha/owner`` — operator picks an HA person and
+    sets a local password for them.
 
-    No password collected: ha mode authenticates via X-Ingress-User
-    (when behind a proxy) or HA long-lived access tokens. Local
-    password auth in ha mode is a separate follow-up.
+    The picked HA person becomes the SH admin. The password is stored in
+    ``platform_users`` so the operator can also log in via
+    ``POST /api/auth/token`` (in addition to X-Ingress-User and HA
+    long-lived access tokens). Returns ``{token}`` (status 201) so the
+    SPA drops straight into the app.
     """
 
     async def post(self) -> web.Response:
@@ -142,11 +145,12 @@ class HaOwnerSetupView(BaseView):
             )
         body = await self.body()
         username = str(body.get("username") or "").strip()
-        if not username:
+        password = str(body.get("password") or "")
+        if not username or not password:
             return error_response(
                 422,
                 "UNPROCESSABLE",
-                "username is required.",
+                "username and password are required.",
             )
         adapter = self.svc(platform_adapter_key)
         external = await adapter.users.get(username)
@@ -157,8 +161,15 @@ class HaOwnerSetupView(BaseView):
                 f"No Home Assistant person found with username {username!r}.",
             )
         await _mirror_admin_user(self.svc(db_key), external)
+        await adapter.set_local_password(
+            username,
+            password,
+            display_name=external.display_name,
+            is_admin=True,
+        )
         await self.svc(setup_service_key).mark_complete()
-        return web.Response(status=204)
+        token = await adapter.issue_bearer_token(username, password)
+        return web.json_response({"token": token}, status=201)
 
 
 class HaosCompleteSetupView(BaseView):

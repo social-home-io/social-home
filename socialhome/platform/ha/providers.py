@@ -64,6 +64,16 @@ class HaAuthProvider:
         return None
 
     async def _authenticate_bearer(self, token: str) -> ExternalUser | None:
+        # Try the local credential store first — if the operator picked
+        # an HA owner during the setup wizard and minted a session via
+        # /api/auth/token, the token lives in platform_tokens. Fall back
+        # to validating against HA's own auth API for long-lived access
+        # tokens issued in HA.
+        credentials = self._adapter._credentials
+        if credentials is not None:
+            local = await credentials.authenticate_bearer(token)
+            if local is not None:
+                return local
         data = await self._adapter._client.verify_token(token)
         if data is None:
             return None
