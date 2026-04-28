@@ -94,7 +94,6 @@ export function SpaceZonesAdmin({ spaceId }: { spaceId: string }) {
 
   useEffect(() => {
     void reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spaceId])
 
   const reload = async () => {

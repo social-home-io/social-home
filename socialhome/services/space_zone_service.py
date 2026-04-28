@@ -186,23 +186,15 @@ class SpaceZoneService:
         if existing is None or existing.space_id != space_id:
             raise SpaceZoneNotFoundError(zone_id)
 
-        new_name = (
-            existing.name if name is None else _validate_name(name)
-        )
+        new_name = existing.name if name is None else _validate_name(name)
         new_radius = (
-            existing.radius_m
-            if radius_m is None
-            else _validate_radius(radius_m)
+            existing.radius_m if radius_m is None else _validate_radius(radius_m)
         )
         new_color = (
-            existing.color
-            if color is _UNSET
-            else _validate_color(color)  # type: ignore[arg-type]
+            existing.color if color is _UNSET else _validate_color(color)  # type: ignore[arg-type]
         )
         new_lat = (
-            existing.latitude
-            if latitude is None
-            else truncate_coord(float(latitude))
+            existing.latitude if latitude is None else truncate_coord(float(latitude))
         )
         new_lon = (
             existing.longitude
