@@ -92,10 +92,17 @@ class _FakeSpaceCalendarRepo:
         self.rsvps.pop((event_id, user_id, occurrence_at), None)
 
     async def buffer_pending_rsvp(
-        self, *, event_id, user_id, occurrence_at, status, updated_at,
+        self,
+        *,
+        event_id,
+        user_id,
+        occurrence_at,
+        status,
+        updated_at,
     ):
         self.buffer[(event_id, user_id, occurrence_at)] = {
-            "status": status, "updated_at": updated_at,
+            "status": status,
+            "updated_at": updated_at,
         }
 
     async def flush_pending_rsvps(self, event_id):

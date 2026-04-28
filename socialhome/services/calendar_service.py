@@ -281,12 +281,15 @@ class SpaceCalendarService:
             # Drop every per-occurrence row for this user — fetch their
             # rows for the event and delete each.
             user_rows = [
-                r for r in await self._repo.list_rsvps(base_id)
+                r
+                for r in await self._repo.list_rsvps(base_id)
                 if r.user_id == event.user_id
             ]
             for r in user_rows:
                 await self._repo.remove_rsvp(
-                    base_id, event.user_id, occurrence_at=r.occurrence_at,
+                    base_id,
+                    event.user_id,
+                    occurrence_at=r.occurrence_at,
                 )
 
     async def list_events_in_range(
@@ -386,7 +389,8 @@ class SpaceCalendarService:
                 {
                     r.user_id
                     for r in rsvps
-                    if r.status in (
+                    if r.status
+                    in (
                         RSVPStatus.GOING,
                         RSVPStatus.WAITLIST,
                         RSVPStatus.REQUESTED,
@@ -447,7 +451,8 @@ class SpaceCalendarService:
         if capacity is not None and capacity < 0:
             raise ValueError("capacity must be >= 0")
         new_capacity = (
-            None if clear_capacity
+            None
+            if clear_capacity
             else (capacity if capacity is not None else existing.capacity)
         )
         updated = replace(
@@ -600,7 +605,9 @@ class SpaceCalendarService:
         occ_dt = self._resolve_occurrence(event, occurrence_at)
         occ_iso = occ_dt.isoformat()
         await self._repo.remove_rsvp(
-            event_id, user_id, occurrence_at=occ_iso,
+            event_id,
+            user_id,
+            occurrence_at=occ_iso,
         )
         await self._publish_federation_rsvp(
             space_id=space_id,
@@ -712,7 +719,9 @@ class SpaceCalendarService:
             occ_dt = self._resolve_occurrence(event, occurrence_at)
             occ_iso = occ_dt.isoformat()
         return await self._repo.list_reminders(
-            event_id=event_id, user_id=user_id, occurrence_at=occ_iso,
+            event_id=event_id,
+            user_id=user_id,
+            occurrence_at=occ_iso,
         )
 
     # ── Capacity / request-to-join (Phase C) ─────────────────────────────
@@ -820,7 +829,8 @@ class SpaceCalendarService:
         occ_iso: str,
     ) -> str | None:
         for r in await self._repo.list_rsvps(
-            event_id, occurrence_at=occ_iso,
+            event_id,
+            occurrence_at=occ_iso,
         ):
             if r.user_id == user_id:
                 return r.status
@@ -830,7 +840,8 @@ class SpaceCalendarService:
         return sum(
             1
             for r in await self._repo.list_rsvps(
-                event_id, occurrence_at=occ_iso,
+                event_id,
+                occurrence_at=occ_iso,
             )
             if r.status == RSVPStatus.GOING
         )
@@ -927,7 +938,8 @@ class SpaceCalendarService:
             event.start + timedelta(days=365 * 5),
         )
         starts = {
-            s for s, _ in expand_rrule(
+            s
+            for s, _ in expand_rrule(
                 event.start,
                 event.end,
                 event.rrule,

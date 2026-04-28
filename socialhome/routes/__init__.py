@@ -552,25 +552,31 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/calendars/events/{id}/rsvp", CalendarEventRsvpView)
     app.router.add_view("/api/calendars/events/{id}/rsvps", CalendarEventRsvpsView)
     app.router.add_view(
-        "/api/calendars/events/{id}/approve", CalendarEventApprovalView,
+        "/api/calendars/events/{id}/approve",
+        CalendarEventApprovalView,
     )
     app.router.add_view(
-        "/api/calendars/events/{id}/pending", CalendarEventPendingView,
+        "/api/calendars/events/{id}/pending",
+        CalendarEventPendingView,
     )
     app.router.add_view(
-        "/api/calendars/events/{id}/reminders", CalendarEventRemindersView,
+        "/api/calendars/events/{id}/reminders",
+        CalendarEventRemindersView,
     )
     # Phase F — iCal export. Path uses a sub-segment to avoid colliding
     # with `/api/calendars/events/{id}` (aiohttp's `{id}` would otherwise
     # eat ``eid.ics`` as the dynamic segment).
     app.router.add_view(
-        "/api/calendars/events/{id}/export.ics", CalendarEventIcsView,
+        "/api/calendars/events/{id}/export.ics",
+        CalendarEventIcsView,
     )
     app.router.add_view(
-        "/api/spaces/{id}/calendar/export.ics", SpaceCalendarFeedView,
+        "/api/spaces/{id}/calendar/export.ics",
+        SpaceCalendarFeedView,
     )
     app.router.add_view(
-        "/api/spaces/{id}/calendar/feed-token", SpaceCalendarFeedTokenView,
+        "/api/spaces/{id}/calendar/feed-token",
+        SpaceCalendarFeedTokenView,
     )
     app.router.add_view("/api/spaces/{id}/calendar/events", SpaceCalendarEventsView)
     app.router.add_view(

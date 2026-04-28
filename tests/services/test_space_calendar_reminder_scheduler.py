@@ -43,7 +43,8 @@ async def env(tmp_dir):
     repo = SqliteSpaceCalendarRepo(db)
     svc = SpaceCalendarService(repo, bus)
     sched = SpaceCalendarReminderScheduler(
-        calendar_repo=repo, bus=bus,
+        calendar_repo=repo,
+        bus=bus,
     )
 
     class E:
@@ -75,7 +76,8 @@ async def test_add_reminder_persists(env):
     )
     assert reminder.minutes_before == 60
     rems = await env.svc.list_reminders(
-        event_id=event.id, user_id="uid-alice",
+        event_id=event.id,
+        user_id="uid-alice",
     )
     assert len(rems) == 1
 
@@ -90,13 +92,18 @@ async def test_remove_reminder_clears(env):
         created_by="uid-alice",
     )
     await env.svc.add_reminder(
-        event_id=event.id, user_id="uid-alice", minutes_before=60,
+        event_id=event.id,
+        user_id="uid-alice",
+        minutes_before=60,
     )
     await env.svc.remove_reminder(
-        event_id=event.id, user_id="uid-alice", minutes_before=60,
+        event_id=event.id,
+        user_id="uid-alice",
+        minutes_before=60,
     )
     rems = await env.svc.list_reminders(
-        event_id=event.id, user_id="uid-alice",
+        event_id=event.id,
+        user_id="uid-alice",
     )
     assert rems == []
 
@@ -112,7 +119,9 @@ async def test_negative_minutes_rejected(env):
     )
     with pytest.raises(ValueError, match="minutes_before"):
         await env.svc.add_reminder(
-            event_id=event.id, user_id="uid-alice", minutes_before=-1,
+            event_id=event.id,
+            user_id="uid-alice",
+            minutes_before=-1,
         )
 
 
@@ -129,7 +138,9 @@ async def test_scheduler_fires_due_reminder(env):
     # Add a reminder for "10 min before" — fire_at = past-10 min, which
     # is well in the past so it's due immediately.
     await env.svc.add_reminder(
-        event_id=event.id, user_id="uid-alice", minutes_before=10,
+        event_id=event.id,
+        user_id="uid-alice",
+        minutes_before=10,
     )
     received: list[EventReminderDue] = []
 
@@ -155,7 +166,9 @@ async def test_scheduler_skips_already_sent(env):
         created_by="uid-alice",
     )
     await env.svc.add_reminder(
-        event_id=event.id, user_id="uid-alice", minutes_before=10,
+        event_id=event.id,
+        user_id="uid-alice",
+        minutes_before=10,
     )
     await env.sched.tick_once()
     received: list = []
@@ -177,7 +190,9 @@ async def test_scheduler_skips_future_reminder(env):
         created_by="uid-alice",
     )
     await env.svc.add_reminder(
-        event_id=event.id, user_id="uid-alice", minutes_before=30,
+        event_id=event.id,
+        user_id="uid-alice",
+        minutes_before=30,
     )
     fired = await env.sched.tick_once()
     assert fired == 0

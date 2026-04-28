@@ -410,7 +410,9 @@ class SpaceContentInboundHandlers:
                 log.debug("calendar_repo lacks buffer_pending_rsvp")
             return
         await self._calendar_repo.remove_rsvp(
-            event_id, user_id, occurrence_at=occurrence_at,
+            event_id,
+            user_id,
+            occurrence_at=occurrence_at,
         )
 
     # ─── Polls ──────────────────────────────────────────────────────────

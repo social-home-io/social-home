@@ -704,6 +704,7 @@ async def test_approve_non_creator_non_admin_403(client):
     bob = await _seed_outsider_member(client, role="member")
     # Add another non-admin member
     from socialhome.auth import sha256_token_hash
+
     await client._db.enqueue(
         "INSERT INTO users(username, user_id, display_name, is_admin) "
         "VALUES('carol', 'uid-carol', 'Carol', 0)",

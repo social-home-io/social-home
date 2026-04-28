@@ -606,12 +606,15 @@ class NotificationService:
             recipient = await self._users.get_by_user_id(uid)
             if recipient is None:
                 continue
-            localized = self._t(
-                "notification.calendar.cancelled",
-                locale=self._locale(recipient),
-                fallback="Event cancelled: {summary}",
-                summary=event.summary or "(removed)",
-            ) or title
+            localized = (
+                self._t(
+                    "notification.calendar.cancelled",
+                    locale=self._locale(recipient),
+                    fallback="Event cancelled: {summary}",
+                    summary=event.summary or "(removed)",
+                )
+                or title
+            )
             await self._save_notif(
                 new_notification(
                     user_id=uid,
@@ -647,7 +650,8 @@ class NotificationService:
         cohort = {
             r.user_id
             for r in rsvps
-            if r.status in (
+            if r.status
+            in (
                 "going",
                 "waitlist",
                 "requested",

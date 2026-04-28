@@ -44,7 +44,8 @@ class AbstractSpacePostRepo(Protocol):
     async def save(self, space_id: str, post: Post) -> Post: ...
     async def get(self, post_id: str) -> tuple[str, Post] | None: ...
     async def get_by_linked_event_id(
-        self, event_id: str,
+        self,
+        event_id: str,
     ) -> tuple[str, Post] | None: ...
     async def list_feed(
         self,
@@ -162,7 +163,8 @@ class SqliteSpacePostRepo:
         return d["space_id"], _row_to_space_post(d)
 
     async def get_by_linked_event_id(
-        self, event_id: str,
+        self,
+        event_id: str,
     ) -> tuple[str, Post] | None:
         """Return the auto-created event post for ``event_id``, if any.
 

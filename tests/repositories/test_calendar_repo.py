@@ -394,7 +394,9 @@ async def test_space_cal_rsvp_remove(env):
     )
     await env.space_cal_repo.upsert_rsvp(rsvp)
     await env.space_cal_repo.remove_rsvp(
-        "sp-ev-rm", "uid-alice", occurrence_at=now.isoformat(),
+        "sp-ev-rm",
+        "uid-alice",
+        occurrence_at=now.isoformat(),
     )
     rsvps = await env.space_cal_repo.list_rsvps("sp-ev-rm")
     assert rsvps == []
@@ -419,29 +421,35 @@ async def test_rsvp_per_occurrence_distinct_rows(env):
     await env.space_cal_repo.save_event(sid, evt)
     occ1 = seed.isoformat()
     occ2 = (datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc)).isoformat()
-    await env.space_cal_repo.upsert_rsvp(CalendarRSVP(
-        event_id="sp-ev-occ",
-        user_id="uid-alice",
-        status=RSVPStatus.GOING,
-        updated_at="2026-05-01T00:00:00",
-        occurrence_at=occ1,
-    ))
-    await env.space_cal_repo.upsert_rsvp(CalendarRSVP(
-        event_id="sp-ev-occ",
-        user_id="uid-alice",
-        status=RSVPStatus.DECLINED,
-        updated_at="2026-05-08T00:00:00",
-        occurrence_at=occ2,
-    ))
+    await env.space_cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="sp-ev-occ",
+            user_id="uid-alice",
+            status=RSVPStatus.GOING,
+            updated_at="2026-05-01T00:00:00",
+            occurrence_at=occ1,
+        )
+    )
+    await env.space_cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="sp-ev-occ",
+            user_id="uid-alice",
+            status=RSVPStatus.DECLINED,
+            updated_at="2026-05-08T00:00:00",
+            occurrence_at=occ2,
+        )
+    )
     all_rsvps = await env.space_cal_repo.list_rsvps("sp-ev-occ")
     assert len(all_rsvps) == 2
     week1_only = await env.space_cal_repo.list_rsvps(
-        "sp-ev-occ", occurrence_at=occ1,
+        "sp-ev-occ",
+        occurrence_at=occ1,
     )
     assert len(week1_only) == 1
     assert week1_only[0].status == RSVPStatus.GOING
     week2_only = await env.space_cal_repo.list_rsvps(
-        "sp-ev-occ", occurrence_at=occ2,
+        "sp-ev-occ",
+        occurrence_at=occ2,
     )
     assert len(week2_only) == 1
     assert week2_only[0].status == RSVPStatus.DECLINED
@@ -497,13 +505,15 @@ async def test_rsvp_buffer_removed_status_drops_live_row(env):
         created_by="uid-alice",
     )
     await env.space_cal_repo.save_event(sid, evt)
-    await env.space_cal_repo.upsert_rsvp(CalendarRSVP(
-        event_id="ev-rm",
-        user_id="uid-bob",
-        status=RSVPStatus.GOING,
-        updated_at="2026-05-30T00:00:00",
-        occurrence_at=occ_iso,
-    ))
+    await env.space_cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="ev-rm",
+            user_id="uid-bob",
+            status=RSVPStatus.GOING,
+            updated_at="2026-05-30T00:00:00",
+            occurrence_at=occ_iso,
+        )
+    )
     # A buffered 'removed' arrives — flush should delete the live row.
     await env.space_cal_repo.buffer_pending_rsvp(
         event_id="ev-rm",
@@ -526,8 +536,14 @@ async def test_rsvp_buffer_gc_drops_old_rows(env):
             event_id, user_id, occurrence_at, status, updated_at, received_at
         ) VALUES(?,?,?,?,?,?)
         """,
-        ("ev-old", "uid-x", "2024-01-01T00:00:00", "going",
-         "2024-01-01T00:00:00", "2024-01-01T00:00:00"),
+        (
+            "ev-old",
+            "uid-x",
+            "2024-01-01T00:00:00",
+            "going",
+            "2024-01-01T00:00:00",
+            "2024-01-01T00:00:00",
+        ),
     )
     n = await env.space_cal_repo.gc_pending_rsvps(
         older_than_iso="2025-01-01T00:00:00",

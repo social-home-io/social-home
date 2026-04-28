@@ -74,7 +74,8 @@ class CalendarEventIcsView(BaseView):
             return error_response(403, "FORBIDDEN", "Not a space member.")
         # Pull this user's reminders so VALARMs land in the export.
         reminders = await space_cal_svc.list_reminders(
-            event_id=event_id, user_id=ctx.user_id,
+            event_id=event_id,
+            user_id=ctx.user_id,
         )
         payload = serialize_event(event, reminders=reminders)
         return _ics_response(payload, request=self.request)
@@ -108,7 +109,9 @@ class SpaceCalendarFeedView(BaseView):
             return error_response(401, "UNAUTHORIZED", "no longer a member")
         now = datetime.now(timezone.utc)
         events = await repo.list_events_in_range(
-            space_id, start=now, end=now + timedelta(days=90),
+            space_id,
+            start=now,
+            end=now + timedelta(days=90),
         )
         # Attach this user's reminders per event for VALARM blocks.
         rby: dict = {}
@@ -117,7 +120,8 @@ class SpaceCalendarFeedView(BaseView):
             if base_id in rby:
                 continue
             rby[base_id] = await repo.list_reminders(
-                event_id=base_id, user_id=token_user,
+                event_id=base_id,
+                user_id=token_user,
             )
         payload = serialize_feed(events, reminders_by_event=rby)
         return _ics_response(payload, request=self.request)
@@ -142,7 +146,9 @@ class SpaceCalendarFeedTokenView(BaseView):
         repo = space_cal_svc._repo
         token = secrets.token_urlsafe(32)
         await repo.upsert_feed_token(
-            user_id=ctx.user_id, space_id=space_id, token=token,
+            user_id=ctx.user_id,
+            space_id=space_id,
+            token=token,
         )
         url = f"/api/spaces/{space_id}/calendar/export.ics?token={token}"
         return web.json_response({"token": token, "url": url}, status=201)

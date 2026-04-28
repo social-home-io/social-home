@@ -49,66 +49,70 @@ from socialhome.services.user_service import UserService
 
 #: Public async methods that MUST refuse non-members (or non-owners).
 #: Add new mutating methods here when they ship.
-GATED_METHODS: frozenset[str] = frozenset({
-    "set_cover",
-    "clear_cover",
-    "dissolve_space",
-    "update_config",
-    "add_member",
-    "remove_member",
-    "set_role",
-    "update_member_profile",
-    "set_member_picture",
-    "clear_member_picture",
-    "transfer_ownership",
-    "ban",
-    "unban",
-    "create_invite_token",
-    "invite_remote_user",
-    "remove_remote_member",
-    "approve_join_request",
-    "deny_join_request",
-    "create_post",
-    "approve_moderation_item",
-    "reject_moderation_item",
-    "edit_post",
-    "delete_post",
-    "add_reaction",
-    "remove_reaction",
-    "add_comment",
-    "edit_comment",
-    "delete_comment",
-    "upsert_link",
-    "delete_link",
-})
+GATED_METHODS: frozenset[str] = frozenset(
+    {
+        "set_cover",
+        "clear_cover",
+        "dissolve_space",
+        "update_config",
+        "add_member",
+        "remove_member",
+        "set_role",
+        "update_member_profile",
+        "set_member_picture",
+        "clear_member_picture",
+        "transfer_ownership",
+        "ban",
+        "unban",
+        "create_invite_token",
+        "invite_remote_user",
+        "remove_remote_member",
+        "approve_join_request",
+        "deny_join_request",
+        "create_post",
+        "approve_moderation_item",
+        "reject_moderation_item",
+        "edit_post",
+        "delete_post",
+        "add_reaction",
+        "remove_reaction",
+        "add_comment",
+        "edit_comment",
+        "delete_comment",
+        "upsert_link",
+        "delete_link",
+    }
+)
 
 #: Public async methods that intentionally skip the member/admin gate.
 #: Each entry needs a justification — listed inline.
-UNGATED_METHODS: frozenset[str] = frozenset({
-    # Pure reads.
-    "list_feed",
-    "list_links",
-    "list_pending_moderation",
-    "list_subscriptions",
-    "is_subscribed",
-    # Self-service joins / leaves — gate is on the *invite* / *request*,
-    # not the join action itself.
-    "create_space",                   # creator becomes owner
-    "accept_invite_token",            # token validates the actor
-    "accept_remote_invite",           # cross-instance — own user
-    "decline_remote_invite",          # cross-instance — own user
-    "request_join",                   # any user may request; gate is on approval
-    "request_join_remote",            # cross-instance request
-    "subscribe_to_space",             # public-space follow-only
-    "unsubscribe_from_space",         # own subscription only
-    # Federation inbound hooks — validated by the §24.11 inbound pipeline.
-    "on_remote_join_request_approved",
-    # Personal sidebar state — keyed on the calling user_id, no
-    # space-permission shape.
-    "pin",
-    "unpin",
-    "set_alias",
-})
+UNGATED_METHODS: frozenset[str] = frozenset(
+    {
+        # Pure reads.
+        "list_feed",
+        "list_links",
+        "list_pending_moderation",
+        "list_subscriptions",
+        "is_subscribed",
+        # Self-service joins / leaves — gate is on the *invite* / *request*,
+        # not the join action itself.
+        "create_space",  # creator becomes owner
+        "accept_invite_token",  # token validates the actor
+        "accept_remote_invite",  # cross-instance — own user
+        "decline_remote_invite",  # cross-instance — own user
+        "request_join",  # any user may request; gate is on approval
+        "request_join_remote",  # cross-instance request
+        "subscribe_to_space",  # public-space follow-only
+        "unsubscribe_from_space",  # own subscription only
+        # Federation inbound hooks — validated by the §24.11 inbound pipeline.
+        "on_remote_join_request_approved",
+        # Personal sidebar state — keyed on the calling user_id, no
+        # space-permission shape.
+        "pin",
+        "unpin",
+        "set_alias",
+    }
+)
 
 
 # ─── Drift guard ──────────────────────────────────────────────────────────
@@ -139,9 +143,7 @@ def test_method_classification_covers_full_public_surface():
         "new SpaceService method(s) not classified in test_space_permission_matrix.py: "
         f"{sorted(missing)}"
     )
-    assert not overlap, (
-        f"method(s) listed as both gated and ungated: {sorted(overlap)}"
-    )
+    assert not overlap, f"method(s) listed as both gated and ungated: {sorted(overlap)}"
 
 
 # ─── Behavioural smoke ────────────────────────────────────────────────────
@@ -168,9 +170,7 @@ async def stack(tmp_dir):
         space_repo, space_post_repo, user_repo, bus, own_instance_id=iid
     )
 
-    anna = await user_svc.provision(
-        username="anna", display_name="Anna", is_admin=True
-    )
+    anna = await user_svc.provision(username="anna", display_name="Anna", is_admin=True)
     bob = await user_svc.provision(username="bob", display_name="Bob")
     space = await space_svc.create_space(owner_username="anna", name="S")
     public_space = await space_svc.create_space(
@@ -258,9 +258,7 @@ async def stack(tmp_dir):
         ),
         (
             "create_invite_token",
-            lambda s: s.space_svc.create_invite_token(
-                s.space.id, actor_username="bob"
-            ),
+            lambda s: s.space_svc.create_invite_token(s.space.id, actor_username="bob"),
         ),
     ],
 )

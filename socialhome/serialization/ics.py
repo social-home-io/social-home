@@ -61,10 +61,7 @@ def serialize_feed(
     matching VALARMs.
     """
     rby = reminders_by_event or {}
-    blocks = [
-        _event_block(ev, rby.get(ev.id, []), cancelled=False)
-        for ev in events
-    ]
+    blocks = [_event_block(ev, rby.get(ev.id, []), cancelled=False) for ev in events]
     return _wrap_calendar(blocks)
 
 

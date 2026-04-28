@@ -63,7 +63,7 @@ class SpaceCalendarReminderScheduler:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except asyncio.TimeoutError, asyncio.CancelledError:
                 self._task.cancel()
             self._task = None
 
@@ -75,7 +75,8 @@ class SpaceCalendarReminderScheduler:
         """
         now_iso = datetime.now(timezone.utc).isoformat()
         due = await self._repo.list_due_reminders(
-            now_iso=now_iso, limit=self._batch,
+            now_iso=now_iso,
+            limit=self._batch,
         )
         if not due:
             return 0
@@ -119,7 +120,8 @@ class SpaceCalendarReminderScheduler:
                 log.exception("calendar reminder scheduler tick failed")
             try:
                 await asyncio.wait_for(
-                    self._stop.wait(), timeout=self._interval,
+                    self._stop.wait(),
+                    timeout=self._interval,
                 )
             except asyncio.TimeoutError:
                 continue

@@ -498,7 +498,8 @@ async def _broadcast_rsvp_counts(
     space_cal_svc = view.svc(K.space_cal_service_key)
     space_repo = view.svc(K.space_repo_key)
     rsvps = await space_cal_svc.list_rsvps(
-        event_id, occurrence_at=occurrence_at,
+        event_id,
+        occurrence_at=occurrence_at,
     )
     counts: dict[str, int] = {
         "going": 0,
@@ -552,7 +553,8 @@ class CalendarEventApprovalView(BaseView):
         occurrence_at = body.get("occurrence_at")
         if not target_user or action not in ("approve", "deny"):
             return error_response(
-                422, "UNPROCESSABLE",
+                422,
+                "UNPROCESSABLE",
                 "user_id and action ('approve' | 'deny') required.",
             )
 
@@ -573,7 +575,8 @@ class CalendarEventApprovalView(BaseView):
         is_admin = member.role in ("owner", "admin")
         if not (is_creator or is_admin):
             return error_response(
-                403, "FORBIDDEN",
+                403,
+                "FORBIDDEN",
                 "Only the event creator or a space admin can approve.",
             )
 
@@ -630,11 +633,13 @@ class CalendarEventPendingView(BaseView):
         _sid, event = result
         if event.created_by != ctx.user_id and member.role not in ("owner", "admin"):
             return error_response(
-                403, "FORBIDDEN",
+                403,
+                "FORBIDDEN",
                 "Only the event creator or a space admin can list pending requests.",
             )
         pending = await space_cal_svc.list_pending(
-            event_id, occurrence_at=occurrence_at,
+            event_id,
+            occurrence_at=occurrence_at,
         )
         return web.json_response(
             {
@@ -704,9 +709,11 @@ class CalendarEventRemindersView(BaseView):
         body = await self.body()
         try:
             minutes_before = int(body.get("minutes_before", -1))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return error_response(
-                422, "UNPROCESSABLE", "minutes_before must be an integer.",
+                422,
+                "UNPROCESSABLE",
+                "minutes_before must be an integer.",
             )
         occurrence_at = body.get("occurrence_at")
         space_cal_svc = self.svc(K.space_cal_service_key)
@@ -738,9 +745,11 @@ class CalendarEventRemindersView(BaseView):
         _space_id, user_id = gate
         try:
             minutes_before = int(self.request.query.get("minutes_before", -1))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return error_response(
-                422, "UNPROCESSABLE", "minutes_before query string required.",
+                422,
+                "UNPROCESSABLE",
+                "minutes_before query string required.",
             )
         occurrence_at = self.request.query.get("occurrence_at")
         space_cal_svc = self.svc(K.space_cal_service_key)
@@ -768,7 +777,8 @@ class CalendarEventRsvpsView(BaseView):
         occurrence_at = self.request.query.get("occurrence_at")
         space_cal_svc = self.svc(K.space_cal_service_key)
         rsvps = await space_cal_svc.list_rsvps(
-            event_id, occurrence_at=occurrence_at,
+            event_id,
+            occurrence_at=occurrence_at,
         )
         return web.json_response(
             {

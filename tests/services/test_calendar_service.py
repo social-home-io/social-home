@@ -138,7 +138,9 @@ async def test_space_calendar_with_rsvps(env):
     assert rsvps2[0].status == RSVPStatus.DECLINED
 
     await env.space_cal_repo.remove_rsvp(
-        event.id, "u1", occurrence_at=now.isoformat(),
+        event.id,
+        "u1",
+        occurrence_at=now.isoformat(),
     )
     rsvps3 = await env.space_cal_repo.list_rsvps(event.id)
     assert len(rsvps3) == 0
@@ -406,10 +408,13 @@ async def test_approve_promotes_requested_to_going(space_cal_env):
         capacity=5,
     )
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     new_status = await env.space_cal_svc.approve_rsvp(
-        event_id=event.id, user_id="uid-bob",
+        event_id=event.id,
+        user_id="uid-bob",
     )
     assert new_status == RSVPStatus.GOING
     rsvps = await env.space_cal_svc.list_rsvps(event.id)
@@ -435,10 +440,13 @@ async def test_approve_lands_on_waitlist_when_full(space_cal_env):
     )
     # Capacity is 1, alice already takes the seat.
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     bob_status = await env.space_cal_svc.approve_rsvp(
-        event_id=event.id, user_id="uid-bob",
+        event_id=event.id,
+        user_id="uid-bob",
     )
     assert bob_status == RSVPStatus.WAITLIST
 
@@ -461,12 +469,16 @@ async def test_decline_promotes_waitlist(space_cal_env):
     )
     # bob requests, gets waitlisted on approval.
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     await env.space_cal_svc.approve_rsvp(event_id=event.id, user_id="uid-bob")
     # alice declines (gives up her seat) — bob should auto-promote.
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-alice", status=RSVPStatus.DECLINED,
+        event_id=event.id,
+        user_id="uid-alice",
+        status=RSVPStatus.DECLINED,
     )
     rsvps = await env.space_cal_svc.list_rsvps(event.id)
     bob = [r for r in rsvps if r.user_id == "uid-bob"][0]
@@ -489,7 +501,9 @@ async def test_deny_removes_request(space_cal_env):
         capacity=10,
     )
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     await env.space_cal_svc.deny_rsvp(event_id=event.id, user_id="uid-bob")
     rsvps = await env.space_cal_svc.list_rsvps(event.id)
@@ -513,7 +527,9 @@ async def test_list_pending_only_returns_requested(space_cal_env):
         capacity=2,
     )
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     pending = await env.space_cal_svc.list_pending(event.id)
     assert len(pending) == 1
@@ -538,12 +554,16 @@ async def test_capacity_raise_promotes_waitlist(space_cal_env):
         capacity=1,
     )
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     await env.space_cal_svc.approve_rsvp(event_id=event.id, user_id="uid-bob")
     # bob is waitlisted (alice has the only seat).
     rsvps = await env.space_cal_svc.list_rsvps(event.id)
-    assert any(r.user_id == "uid-bob" and r.status == RSVPStatus.WAITLIST for r in rsvps)
+    assert any(
+        r.user_id == "uid-bob" and r.status == RSVPStatus.WAITLIST for r in rsvps
+    )
     # Raise capacity — bob should promote.
     await env.space_cal_svc.update_event(event.id, capacity=2)
     rsvps2 = await env.space_cal_svc.list_rsvps(event.id)
@@ -567,7 +587,9 @@ async def test_uncapped_event_keeps_old_behaviour(space_cal_env):
         created_by="uid-alice",
     )
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     rsvps = await env.space_cal_svc.list_rsvps(event.id)
     bob = [r for r in rsvps if r.user_id == "uid-bob"][0]
@@ -656,7 +678,9 @@ async def test_member_left_cleans_up_rsvps(space_cal_env):
         created_by="uid-alice",
     )
     await env.space_cal_svc.rsvp(
-        event_id=event.id, user_id="uid-bob", status=RSVPStatus.GOING,
+        event_id=event.id,
+        user_id="uid-bob",
+        status=RSVPStatus.GOING,
     )
     rsvps_before = await env.space_cal_svc.list_rsvps(event.id)
     assert any(r.user_id == "uid-bob" for r in rsvps_before)
