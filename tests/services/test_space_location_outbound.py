@@ -42,7 +42,9 @@ from socialhome.domain.space import (
 )
 from socialhome.federation.encoder import FederationEncoder
 from socialhome.infrastructure.event_bus import EventBus
+from socialhome.repositories.presence_repo import SqlitePresenceRepo
 from socialhome.repositories.space_repo import SqliteSpaceRepo
+from socialhome.repositories.space_zone_repo import SqliteSpaceZoneRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.space_location_outbound import SpaceLocationOutbound
 
@@ -128,8 +130,15 @@ async def env(tmp_dir):
         )
 
     space_repo = SqliteSpaceRepo(db)
+    zone_repo = SqliteSpaceZoneRepo(db)
+    presence_repo = SqlitePresenceRepo(db)
 
-    async def _make_space(space_id: str, *, feature_location: bool = True) -> Space:
+    async def _make_space(
+        space_id: str,
+        *,
+        feature_location: bool = True,
+        location_mode: str = "gps",
+    ) -> Space:
         space = Space(
             id=space_id,
             name=f"Space {space_id}",
@@ -137,7 +146,10 @@ async def env(tmp_dir):
             owner_username="alice",
             identity_public_key=kp.public_key.hex(),
             config_sequence=1,
-            features=SpaceFeatures(location=feature_location),
+            features=SpaceFeatures(
+                location=feature_location,
+                location_mode=location_mode,  # type: ignore[arg-type]
+            ),
             space_type=SpaceType.PRIVATE,
             join_mode=JoinMode.INVITE_ONLY,
         )
@@ -154,7 +166,9 @@ async def env(tmp_dir):
         ws=ws,
         federation_service=federation,  # type: ignore[arg-type]
         space_repo=space_repo,
+        space_zone_repo=zone_repo,
         user_repo=user_repo,
+        presence_repo=presence_repo,
     )
     outbound.wire()
 
@@ -169,6 +183,7 @@ async def env(tmp_dir):
     e.alice_uid = alice_uid
     e.bob_uid = bob_uid
     e.space_repo = space_repo
+    e.zone_repo = zone_repo
     e.make_space = _make_space
     yield e
     await db.shutdown()
@@ -213,6 +228,7 @@ async def test_publishes_gps_only_local_frame(env):
     assert sorted(user_ids) == sorted([env.alice_uid, env.bob_uid])
     assert frame["type"] == "space_location_updated"
     data = frame["data"]
+    assert data["mode"] == "gps"
     assert data["space_id"] == sp.id
     assert data["user_id"] == env.alice_uid
     assert data["lat"] == 47.3769
@@ -253,6 +269,7 @@ async def test_no_zone_name_in_federation_payload(env):
     assert call["event_type"] == FederationEventType.SPACE_LOCATION_UPDATED
     assert call["space_id"] == sp.id
     assert call["to_instance_id"] == "remote_instance_a"
+    assert call["payload"]["mode"] == "gps"
     assert call["payload"]["lat"] == 47.3769
     assert call["payload"]["lon"] == 8.5417
     assert call["payload"]["accuracy_m"] == 12.0
@@ -413,7 +430,9 @@ async def test_no_zone_name_in_decrypted_federation_envelope(env, tmp_dir):
         ws=ws,
         federation_service=real_fed,  # type: ignore[arg-type]
         space_repo=env.space_repo,
+        space_zone_repo=env.zone_repo,
         user_repo=SqliteUserRepo(env.db),
+        presence_repo=SqlitePresenceRepo(env.db),
     )
     outbound.wire()
 
@@ -443,6 +462,7 @@ async def test_no_zone_name_in_decrypted_federation_envelope(env, tmp_dir):
         session_key,
     )
     parsed = json.loads(plaintext)
+    assert parsed["mode"] == "gps"
     assert "zone_name" not in parsed
     assert "state" not in parsed
     assert parsed["lat"] == 47.3769
@@ -476,3 +496,305 @@ async def test_publishes_to_each_opted_in_space(env):
     )
     seen = sorted(call[1]["data"]["space_id"] for call in env.ws.calls)
     assert seen == ["sp_a", "sp_b"]
+
+
+# ─── zone_only mode (§23.8.6 + §23.8.7) ─────────────────────────────────
+
+
+async def _seed_zone(
+    env, space_id: str, *, name: str, lat: float, lon: float, radius_m: int = 200
+) -> str:
+    from socialhome.domain.space import SpaceZone
+
+    zid = f"z_{name.lower().replace(' ', '_')}"
+    zone = SpaceZone(
+        id=zid,
+        space_id=space_id,
+        name=name,
+        latitude=lat,
+        longitude=lon,
+        radius_m=radius_m,
+        color="#3b82f6",
+        created_by=env.alice_uid,
+        created_at="2026-04-28T00:00:00+00:00",
+        updated_at="2026-04-28T00:00:00+00:00",
+    )
+    await env.zone_repo.upsert(zone)
+    return zid
+
+
+async def test_zone_only_mode_publishes_zone_label_no_gps(env):
+    """`zone_only` mode: payload carries the matched zone label and
+    NO raw coordinates on either the local WS frame or the federation
+    envelope. Pins the privacy invariant of the new tier."""
+    sp = await env.make_space("sp_zone", location_mode="zone_only")
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-04-28T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    await env.space_repo.add_space_instance(sp.id, "remote_zone")
+    await _seed_zone(env, sp.id, name="Office", lat=47.3769, lon=8.5417)
+
+    await env.bus.publish(
+        PresenceUpdated(
+            username="alice",
+            state="zone",
+            zone_name="Office",  # HA zone — must NOT leak to space
+            latitude=47.3769,
+            longitude=8.5417,
+            gps_accuracy_m=10.0,
+            updated_at="2026-04-28T12:00:00+00:00",
+        ),
+    )
+
+    [(_user_ids, frame)] = env.ws.calls
+    data = frame["data"]
+    assert data["mode"] == "zone_only"
+    assert data["space_id"] == sp.id
+    assert data["user_id"] == env.alice_uid
+    assert data["zone_id"] == "z_office"
+    assert data["zone_name"] == "Office"
+    assert data["updated_at"] == "2026-04-28T12:00:00+00:00"
+    # No GPS on the wire.
+    assert "lat" not in data
+    assert "lon" not in data
+    assert "accuracy_m" not in data
+
+    # Federation envelope mirrors the WS shape — same payload.
+    [call] = env.federation.calls
+    assert call["payload"]["mode"] == "zone_only"
+    assert call["payload"]["zone_id"] == "z_office"
+    assert "lat" not in call["payload"]
+    assert "lon" not in call["payload"]
+
+
+async def test_zone_only_mode_skips_when_no_zone_matches(env):
+    """GPS outside every space zone → silent skip. No WS frame, no
+    federation call. The originating instance does not leak
+    presence-without-location.
+    """
+    sp = await env.make_space("sp_zone_silent", location_mode="zone_only")
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-04-28T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    await env.space_repo.add_space_instance(sp.id, "remote_silent")
+    # Zone is far away from the published coordinates.
+    await _seed_zone(env, sp.id, name="Faraway", lat=0.0, lon=0.0, radius_m=100)
+
+    await env.bus.publish(
+        PresenceUpdated(
+            username="alice",
+            state="zone",
+            latitude=47.3769,
+            longitude=8.5417,
+            gps_accuracy_m=10.0,
+        ),
+    )
+
+    assert env.ws.calls == []
+    assert env.federation.calls == []
+
+
+async def test_zone_only_mode_picks_closest_overlapping_zone(env):
+    """When GPS sits inside two overlapping zones, pick the closer
+    centre. Mirrors the deterministic client-side behaviour in
+    SpaceLocationCard.matchZoneName."""
+    sp = await env.make_space("sp_zone_overlap", location_mode="zone_only")
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-04-28T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    # Outer zone at (47.4, 8.5), 5 km radius
+    await _seed_zone(
+        env,
+        sp.id,
+        name="District",
+        lat=47.4,
+        lon=8.5,
+        radius_m=5000,
+    )
+    # Inner zone at (47.3769, 8.5417), 200 m radius — dead-on the GPS
+    await _seed_zone(
+        env,
+        sp.id,
+        name="Office",
+        lat=47.3769,
+        lon=8.5417,
+        radius_m=200,
+    )
+
+    await env.bus.publish(
+        PresenceUpdated(
+            username="alice",
+            state="zone",
+            latitude=47.3770,
+            longitude=8.5417,
+            gps_accuracy_m=10.0,
+        ),
+    )
+
+    [(_user_ids, frame)] = env.ws.calls
+    assert frame["data"]["zone_name"] == "Office"
+
+
+async def test_zone_only_decrypted_envelope_has_no_gps(env, tmp_dir):
+    """Decrypt-side invariant for zone_only mode: the encrypted
+    envelope plaintext carries the zone label only — no `lat`/`lon`
+    survive the haversine-and-strip path."""
+    kp = generate_identity_keypair()
+    encoder = FederationEncoder(kp.private_key)
+    session_key = os.urandom(32)
+    real_fed = _FakeFederation(encoder=encoder, session_key=session_key)
+
+    bus = EventBus()
+    ws = _FakeWS()
+    sp = await env.make_space(
+        "sp_zone_decrypt",
+        location_mode="zone_only",
+    )
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-04-28T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    await env.space_repo.add_space_instance(sp.id, "remote_zone_decrypt")
+    await _seed_zone(env, sp.id, name="Office", lat=47.3769, lon=8.5417)
+
+    from socialhome.repositories.user_repo import SqliteUserRepo
+
+    outbound = SpaceLocationOutbound(
+        bus=bus,
+        ws=ws,
+        federation_service=real_fed,  # type: ignore[arg-type]
+        space_repo=env.space_repo,
+        space_zone_repo=env.zone_repo,
+        user_repo=SqliteUserRepo(env.db),
+        presence_repo=SqlitePresenceRepo(env.db),
+    )
+    outbound.wire()
+
+    await bus.publish(
+        PresenceUpdated(
+            username="alice",
+            state="zone",
+            zone_name="Office",
+            latitude=47.3769,
+            longitude=8.5417,
+            gps_accuracy_m=10.0,
+            updated_at="2026-04-28T12:00:00+00:00",
+        ),
+    )
+
+    [call] = real_fed.calls
+    assert "lat" not in call["encrypted_payload"]
+    assert "lon" not in call["encrypted_payload"]
+    plaintext = encoder.decrypt_payload(
+        call["encrypted_payload"],
+        session_key,
+    )
+    parsed = json.loads(plaintext)
+    assert parsed["mode"] == "zone_only"
+    assert parsed["zone_id"] == "z_office"
+    assert parsed["zone_name"] == "Office"
+    assert "lat" not in parsed
+    assert "lon" not in parsed
+    assert "accuracy_m" not in parsed
+
+
+async def test_mode_changed_event_refires_presence_for_space_only(env):
+    """Publishing :class:`SpaceLocationModeChanged` triggers a fresh
+    fan-out for THIS space's opted-in members, so receivers see the
+    new tier within seconds rather than waiting for the next HA push."""
+    from socialhome.domain.events import SpaceLocationModeChanged
+    from socialhome.domain.presence import LocationUpdate
+    from socialhome.repositories.presence_repo import SqlitePresenceRepo
+    from socialhome.services.presence_service import PresenceService
+
+    sp = await env.make_space("sp_refire", location_mode="zone_only")
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-04-28T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    await env.space_repo.add_space_instance(sp.id, "remote_refire")
+    # Seed a zone matching the GPS we'll persist below.
+    await _seed_zone(env, sp.id, name="Office", lat=47.3769, lon=8.5417)
+
+    # Persist a presence row WITHOUT going through the bus (i.e.
+    # don't fire PresenceUpdated) — we want to verify the
+    # mode-change handler reads the row directly.
+    presence_repo = SqlitePresenceRepo(env.db)
+    presence_svc = PresenceService(presence_repo)  # no bus
+    await presence_svc.update_location(
+        LocationUpdate(
+            username="alice",
+            state="zone",
+            zone_name="Office",
+            latitude=47.3769,
+            longitude=8.5417,
+            gps_accuracy_m=10.0,
+        ),
+    )
+    # The env outbound is subscribed to the fixture's bus. Reset
+    # capture state so we only see what the mode-change publishes.
+    env.ws.calls.clear()
+    env.federation.calls.clear()
+
+    await env.bus.publish(
+        SpaceLocationModeChanged(space_id=sp.id, new_mode="zone_only"),
+    )
+
+    [(_user_ids, frame)] = env.ws.calls
+    assert frame["data"]["mode"] == "zone_only"
+    assert frame["data"]["zone_name"] == "Office"
+    [call] = env.federation.calls
+    assert call["payload"]["mode"] == "zone_only"
+
+
+async def test_mode_changed_skipped_when_feature_off(env):
+    """Mode-changed event on a space whose feature_location is OFF is
+    a no-op (defensive — feature_location must be ON for any space
+    presence to fire)."""
+    from socialhome.domain.events import SpaceLocationModeChanged
+
+    sp = await env.make_space("sp_off_refire", feature_location=False)
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-04-28T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+
+    await env.bus.publish(
+        SpaceLocationModeChanged(space_id=sp.id, new_mode="gps"),
+    )
+
+    assert env.ws.calls == []
+    assert env.federation.calls == []

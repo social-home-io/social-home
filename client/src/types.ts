@@ -115,6 +115,13 @@ export interface SpaceFeatures {
    *  names never reach a space-bound payload — the per-space zone
    *  catalogue (§23.8.7) is what labels GPS pins. */
   location: boolean
+  /** Privacy tier for the per-space map (§23.8.6). Only meaningful
+   *  when ``location`` is true. ``'gps'`` (default) broadcasts 4dp
+   *  GPS to the space; ``'zone_only'`` makes the originating
+   *  instance match GPS to a space-defined zone (§23.8.7) and
+   *  broadcast only the zone label — raw coordinates never leave
+   *  the originating household. */
+  location_mode?: 'gps' | 'zone_only'
   stickies: boolean
   pages: boolean
   posts_access: 'open' | 'moderated' | 'admin_only'

@@ -9,6 +9,8 @@ from aiohttp import web
 
 from aiohttp.multipart import BodyPartReader
 
+import math
+
 from ..app_keys import (
     alias_resolver_key,
     federation_repo_key,
@@ -20,8 +22,10 @@ from ..app_keys import (
     space_repo_key,
     space_service_key,
     space_sync_scheduler_key,
+    space_zone_repo_key,
     user_repo_key,
 )
+from ..domain.space import SpaceZone
 from ..domain.user import SYSTEM_AUTHOR
 from ..domain.federation import PairingStatus
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
@@ -30,6 +34,33 @@ from ..services.space_service import _UNSET_MEMBER_PROFILE
 from .base import BaseView
 
 _PROFILE_PICTURE_MAX_UPLOAD_BYTES = PROFILE_PICTURE_MAX_UPLOAD_BYTES
+
+# Earth's mean radius — used by the zone-match helper. Mirrors the
+# constant in :mod:`services.space_location_outbound`.
+_EARTH_RADIUS_M = 6_371_000.0
+
+
+def _match_zone(
+    zones: "list[SpaceZone]", latitude: float, longitude: float
+) -> "SpaceZone | None":
+    """Return the closest zone whose great-circle distance to
+    ``(latitude, longitude)`` is within its ``radius_m``. Used by
+    :class:`SpacePresenceView` to render zone-only-mode responses
+    server-side. Mirrors the algorithm in
+    ``services/space_location_outbound._match_zone`` and the
+    client-side ``matchZoneName`` helper.
+    """
+    best: "tuple[float, SpaceZone] | None" = None
+    p1 = math.radians(latitude)
+    for z in zones:
+        p2 = math.radians(z.latitude)
+        dp = p2 - p1
+        dl = math.radians(z.longitude - longitude)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        d = 2 * _EARTH_RADIUS_M * math.asin(math.sqrt(a))
+        if d <= z.radius_m and (best is None or d < best[0]):
+            best = (d, z)
+    return best[1] if best is not None else None
 
 
 class SpaceCollectionView(BaseView):
@@ -959,9 +990,46 @@ class SpacePresenceView(BaseView):
         opted_in = {m.user_id for m in members if m.location_share_enabled}
         presence_svc = self.svc(presence_service_key)
         entries = await presence_svc.list_presence_for_members(opted_in)
+        mode = space.features.location_mode
+
+        if mode == "zone_only":
+            # Match each opted-in member's GPS to a space zone server-side
+            # so the response carries zone labels only — never raw
+            # coordinates. Members outside every zone are dropped from
+            # the response (matches the outbound's silent-skip rule).
+            zone_repo = self.svc(space_zone_repo_key)
+            zones = await zone_repo.list_for_space(space_id)
+            response_entries = []
+            for p in entries:
+                if p.latitude is None or p.longitude is None:
+                    continue
+                matched = _match_zone(zones, p.latitude, p.longitude)
+                if matched is None:
+                    continue
+                response_entries.append(
+                    {
+                        "user_id": p.user_id,
+                        "username": p.username,
+                        "display_name": p.display_name,
+                        "state": p.state,
+                        "zone_id": matched.id,
+                        "zone_name": matched.name,
+                        "picture_url": p.picture_url,
+                    },
+                )
+            return web.json_response(
+                {
+                    "feature_enabled": True,
+                    "location_mode": "zone_only",
+                    "entries": response_entries,
+                },
+            )
+
+        # gps mode (default)
         return web.json_response(
             {
                 "feature_enabled": True,
+                "location_mode": "gps",
                 "entries": [
                     {
                         "user_id": p.user_id,

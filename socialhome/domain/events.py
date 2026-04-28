@@ -170,6 +170,21 @@ class SpaceConfigChanged(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SpaceLocationModeChanged(DomainEvent):
+    """Admin flipped a space's ``features.location_mode`` (§23.8.6).
+
+    Picked up by :class:`SpaceLocationOutbound` to refire the latest
+    presence for every opted-in member of *this one space* — so
+    receivers see the new mode (GPS pin → zone label, or vice versa)
+    within seconds, rather than waiting for the next HA push.
+    """
+
+    space_id: str
+    new_mode: str  # "gps" | "zone_only"
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class SpaceZoneUpserted(DomainEvent):
     """A per-space display zone was created or modified (§23.8.7).
 

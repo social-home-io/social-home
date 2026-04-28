@@ -401,10 +401,17 @@ CREATE TABLE IF NOT EXISTS spaces (
     feature_calendar       INTEGER NOT NULL DEFAULT 0,
     feature_todo           INTEGER NOT NULL DEFAULT 1,
     feature_location       INTEGER NOT NULL DEFAULT 0,
-    -- feature_location is the sole switch for the per-space map (§23.8.6).
-    -- Space-bound payloads always carry GPS only — there is no zone-only
-    -- tier. Per-space display zones live in `space_zones` (§23.8.7) and
-    -- are matched to GPS client-side. HA zones never reach a space.
+    location_mode          TEXT NOT NULL DEFAULT 'gps'
+                           CHECK(location_mode IN ('gps', 'zone_only')),
+    -- feature_location is the on/off switch for the per-space map (§23.8.6).
+    -- location_mode picks the privacy tier when the feature is on:
+    --   gps       — opted-in members broadcast 4dp GPS to the space.
+    --   zone_only — the originating instance matches the member's GPS to a
+    --               space-defined zone (§23.8.7) and broadcasts only the
+    --               matched zone label; raw coordinates never leave the
+    --               originating household. Outside-zone updates are skipped.
+    -- HA-defined zone names never reach a space-bound channel under either
+    -- mode — see §23.8.5/§23.8.6.
     feature_stickies       INTEGER NOT NULL DEFAULT 0,
     feature_pages          INTEGER NOT NULL DEFAULT 1,
     posts_access           TEXT NOT NULL DEFAULT 'open'

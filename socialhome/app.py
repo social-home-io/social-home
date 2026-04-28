@@ -355,6 +355,7 @@ def _wire_federation_stack(
     report_service,
     pairing_relay_repo,
     space_zone_repo,
+    presence_repo,
     ws_manager,
 ):
     """Build :class:`FederationService` + attach the whole federation stack.
@@ -577,7 +578,9 @@ def _wire_federation_stack(
         ws=ws_manager,
         federation_service=federation_service,
         space_repo=space_repo,
+        space_zone_repo=space_zone_repo,
         user_repo=user_repo,
+        presence_repo=presence_repo,
     )
     space_location_outbound.wire()
 
@@ -1333,6 +1336,7 @@ def create_app(config: Config | None = None) -> web.Application:
             report_service=report_service,
             pairing_relay_repo=repos.pairing_relay,
             space_zone_repo=repos.space_zone,
+            presence_repo=repos.presence,
             ws_manager=ws_manager,
         )
         federation_service = fed.federation_service

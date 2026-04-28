@@ -6943,3 +6943,33 @@ hr {
   .sh-zones-admin__map,
   .sh-zones-admin__canvas { height: 280px; }
 }
+
+/* Zone-only mode (§23.8.6) — when the space privacy tier is set to
+ * zone_only, SpaceLocationCard renders members as a flat list with
+ * their matched zone label instead of a Leaflet map. */
+.sh-zone-only-list {
+  list-style: none;
+  margin: 0 0 var(--sh-space-xs);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-zone-only-list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg);
+}
+
+/* Privacy-mode radios in SpaceSettings. */
+.sh-radio-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xs) 0;
+}

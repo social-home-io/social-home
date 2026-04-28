@@ -252,7 +252,7 @@ class SqliteSpaceRepo:
                 owner_instance_id, owner_username, identity_public_key,
                 config_sequence, space_type, join_mode, join_code,
                 retention_days, retention_exempt_json,
-                feature_calendar, feature_todo, feature_location,
+                feature_calendar, feature_todo, feature_location, location_mode,
                 feature_stickies, feature_pages,
                 posts_access, pages_access, stickies_access,
                 calendar_access, tasks_access,
@@ -262,12 +262,12 @@ class SqliteSpaceRepo:
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
                 dissolved, about_markdown, cover_hash
             ) VALUES(
-                -- 39 placeholders, one per column listed above.
+                -- 40 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
                 ?, ?,                         -- retention_days, retention_exempt_json
-                ?, ?, ?,                      -- feature_calendar, feature_todo, feature_location
+                ?, ?, ?, ?,                   -- feature_calendar, feature_todo, feature_location, location_mode
                 ?, ?,                         -- feature_stickies, feature_pages
                 ?, ?, ?,                      -- posts_access, pages_access, stickies_access
                 ?, ?,                         -- calendar_access, tasks_access
@@ -290,6 +290,7 @@ class SqliteSpaceRepo:
                 feature_calendar=excluded.feature_calendar,
                 feature_todo=excluded.feature_todo,
                 feature_location=excluded.feature_location,
+                location_mode=excluded.location_mode,
                 feature_stickies=excluded.feature_stickies,
                 feature_pages=excluded.feature_pages,
                 posts_access=excluded.posts_access,
@@ -331,6 +332,7 @@ class SqliteSpaceRepo:
                 cols["feature_calendar"],
                 cols["feature_todo"],
                 cols["feature_location"],
+                cols["location_mode"],
                 cols["feature_stickies"],
                 cols["feature_pages"],
                 cols["posts_access"],

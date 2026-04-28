@@ -110,7 +110,7 @@ async def test_gps_returned_when_enabled_and_opted_in(client):
     assert r.status == 200
     body = await r.json()
     assert body["feature_enabled"] is True
-    assert "location_mode" not in body
+    assert body["location_mode"] == "gps"
     assert len(body["entries"]) == 1
     e = body["entries"][0]
     assert e["latitude"] == 47.3769
@@ -174,3 +174,103 @@ async def test_only_space_members_surface(client):
     user_ids = {e["user_id"] for e in body["entries"]}
     assert client._uid in user_ids
     assert "outsider_uid" not in user_ids
+
+
+async def _set_location_mode(client, space_id, mode: str) -> None:
+    await client._db.enqueue(
+        "UPDATE spaces SET location_mode=? WHERE id=?",
+        (mode, space_id),
+    )
+
+
+async def _seed_zone(client, space_id, *, zid, name, lat, lon, radius_m=200):
+    await client._db.enqueue(
+        """INSERT INTO space_zones(
+            id, space_id, name, latitude, longitude, radius_m,
+            color, created_by, created_at, updated_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            zid,
+            space_id,
+            name,
+            lat,
+            lon,
+            radius_m,
+            "#3b82f6",
+            client._uid,
+            "2026-04-28T00:00:00+00:00",
+            "2026-04-28T00:00:00+00:00",
+        ),
+    )
+
+
+async def test_zone_only_mode_returns_zone_labels_no_gps(client):
+    """`/api/spaces/{id}/presence` in zone_only mode returns each
+    member's matched zone label and NO raw coordinates. Members
+    outside every zone are dropped from the response."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    await _set_location_mode(client, space_id, "zone_only")
+    await _set_member_opt_in(client, space_id, client._uid, enabled=True)
+    await _seed_zone(
+        client,
+        space_id,
+        zid="z_office",
+        name="Office",
+        lat=47.3769,
+        lon=8.5417,
+    )
+    await _seed_presence(
+        client,
+        username="admin",
+        user_id=client._uid,
+        lat=47.3769,
+        lon=8.5417,
+        accuracy=12.0,
+    )
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    assert r.status == 200
+    assert body["feature_enabled"] is True
+    assert body["location_mode"] == "zone_only"
+    [e] = body["entries"]
+    assert e["zone_id"] == "z_office"
+    assert e["zone_name"] == "Office"
+    assert "latitude" not in e
+    assert "longitude" not in e
+    assert "gps_accuracy_m" not in e
+
+
+async def test_zone_only_mode_skips_members_outside_every_zone(client):
+    """A zone_only space drops members whose GPS is outside every
+    space-defined zone — silent skip per §23.8.6."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    await _set_location_mode(client, space_id, "zone_only")
+    await _set_member_opt_in(client, space_id, client._uid, enabled=True)
+    await _seed_zone(
+        client,
+        space_id,
+        zid="z_far",
+        name="Faraway",
+        lat=0.0,
+        lon=0.0,
+        radius_m=100,
+    )
+    await _seed_presence(
+        client,
+        username="admin",
+        user_id=client._uid,
+        lat=47.3769,
+        lon=8.5417,
+    )
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    assert body["location_mode"] == "zone_only"
+    assert body["entries"] == []

@@ -34,14 +34,23 @@ interface SpacePresenceEntry {
   username: string
   display_name: string
   state: string
-  latitude: number | null
-  longitude: number | null
-  gps_accuracy_m: number | null
+  /** GPS-mode shape — present when ``location_mode === 'gps'``. */
+  latitude?: number | null
+  longitude?: number | null
+  gps_accuracy_m?: number | null
+  /** Zone-only-mode shape — present when ``location_mode === 'zone_only'``.
+   *  The originating instance has matched the member's GPS to a
+   *  space-defined zone and stripped the coordinates. */
+  zone_id?: string
+  zone_name?: string
   picture_url: string | null
 }
 
 interface SpacePresenceResponse {
   feature_enabled: boolean
+  /** Privacy tier of the response. ``undefined`` means the feature is
+   *  off; otherwise either ``"gps"`` (default) or ``"zone_only"``. */
+  location_mode?: 'gps' | 'zone_only'
   entries: SpacePresenceEntry[]
 }
 
@@ -202,20 +211,28 @@ export function SpaceLocationCard({
     )
   }
 
-  const markers: LocationMarker[] = data.entries
-    .filter((p) => p.latitude != null && p.longitude != null)
-    .map((p) => ({
-      id: p.user_id,
-      lat: p.latitude as number,
-      lon: p.longitude as number,
-      accuracy_m: p.gps_accuracy_m,
-      label: p.display_name,
-      sub_label: matchZoneName(zones, p.latitude as number, p.longitude as number) || p.state,
-      avatar_url: p.picture_url,
-      state: p.state,
-    }))
+  const isZoneOnly = data.location_mode === 'zone_only'
 
-  const sharing = markers.length
+  const markers: LocationMarker[] = isZoneOnly
+    ? []
+    : data.entries
+        .filter((p) => p.latitude != null && p.longitude != null)
+        .map((p) => ({
+          id: p.user_id,
+          lat: p.latitude as number,
+          lon: p.longitude as number,
+          accuracy_m: p.gps_accuracy_m ?? null,
+          label: p.display_name,
+          sub_label:
+            matchZoneName(zones, p.latitude as number, p.longitude as number)
+            || p.state,
+          avatar_url: p.picture_url,
+          state: p.state,
+        }))
+
+  const sharing = isZoneOnly
+    ? data.entries.filter((p) => p.zone_id != null).length
+    : markers.length
   const total = data.entries.length
 
   return (
@@ -235,18 +252,39 @@ export function SpaceLocationCard({
           </Button>
         </div>
       )}
-      <LocationMap
-        markers={markers}
-        zones={zones}
-        height={380}
-        emptyLabel={
-          total === 0
-            ? 'No one in this space is sharing GPS yet.'
-            : 'No one in this space is sharing GPS right now.'
-        }
-      />
+      {isZoneOnly ? (
+        <ul class="sh-zone-only-list" data-testid="zone-only-list">
+          {data.entries.length === 0 && (
+            <li class="sh-muted">
+              No one in this space is in any zone right now.
+            </li>
+          )}
+          {data.entries.map((p) => (
+            <li key={p.user_id} class="sh-zone-only-list__row">
+              <strong>{p.display_name}</strong>
+              <span class="sh-muted">→</span>
+              <span>{p.zone_name ?? 'unknown zone'}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <LocationMap
+          markers={markers}
+          zones={zones}
+          height={380}
+          emptyLabel={
+            total === 0
+              ? 'No one in this space is sharing GPS yet.'
+              : 'No one in this space is sharing GPS right now.'
+          }
+        />
+      )}
       <div class="sh-location-map-footer sh-muted">
-        <span>{sharing} of {total} sharing GPS</span>
+        <span>
+          {isZoneOnly
+            ? `${sharing} of ${total} in a zone`
+            : `${sharing} of ${total} sharing GPS`}
+        </span>
         <span>{zones.length} zone{zones.length === 1 ? '' : 's'} configured</span>
       </div>
       <Modal

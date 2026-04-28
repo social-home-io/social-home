@@ -60,6 +60,10 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   const locationEnabled = signal(
     Boolean((space.features as { location?: boolean } | undefined)?.location),
   )
+  const locationMode = signal<'gps' | 'zone_only'>(
+    ((space.features as { location_mode?: 'gps' | 'zone_only' } | undefined)
+      ?.location_mode) ?? 'gps',
+  )
 
   useEffect(() => {
     loadFederationData(space.id)
@@ -75,6 +79,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
         features: {
           ...(space.features as object),
           location: locationEnabled.value,
+          location_mode: locationMode.value,
         },
       })
       showToast('Space updated', 'success')
@@ -122,15 +127,47 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             Show a map tab to members of this space
           </label>
           {locationEnabled.value && (
-            <p class="sh-muted">
-              <a href={`/spaces/${space.id}/zones`}>Manage zones →</a>
-            </p>
+            <>
+              <fieldset class="sh-zone-form__palette" aria-label="Privacy mode">
+                <legend>Privacy mode</legend>
+                <label class="sh-radio-row">
+                  <input
+                    type="radio"
+                    name={`location-mode-${space.id}`}
+                    value="gps"
+                    checked={locationMode.value === 'gps'}
+                    onChange={() => { locationMode.value = 'gps' }}
+                  />
+                  <span>
+                    <strong>Live GPS</strong> — opted-in members broadcast their
+                    GPS to the space. Coordinates are 4-dp truncated.
+                  </span>
+                </label>
+                <label class="sh-radio-row">
+                  <input
+                    type="radio"
+                    name={`location-mode-${space.id}`}
+                    value="zone_only"
+                    checked={locationMode.value === 'zone_only'}
+                    onChange={() => { locationMode.value = 'zone_only' }}
+                  />
+                  <span>
+                    <strong>Zone only</strong> — your home server matches the
+                    member's GPS to a space-defined zone (below) and sends only
+                    the zone label. Raw coordinates never leave your home server.
+                    Members outside every zone are silently skipped.
+                  </span>
+                </label>
+              </fieldset>
+              <p class="sh-muted">
+                <a href={`/spaces/${space.id}/zones`}>Manage zones →</a>
+              </p>
+            </>
           )}
           <p class="sh-muted">
-            Members who opt in share GPS with this space; the household's
-            Home Assistant zones are never sent. To label pins on the
-            space map, define per-space zones above. Coordinates are
-            always rounded to ~10 metres (§25 GPS truncation).
+            HA-defined zone names are never sent to a space, regardless
+            of mode. Per-space zones (managed above) are the only labels
+            ever shared.
           </p>
         </fieldset>
         <div class="sh-form-actions">

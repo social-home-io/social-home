@@ -62,6 +62,16 @@ class SpaceFeatures:
     calendar: bool = False
     todo: bool = True
     location: bool = False
+    #: Privacy tier for the per-space map (§23.8.6). Only meaningful
+    #: when ``location`` is True.
+    #:
+    #: * ``"gps"`` — opted-in members broadcast 4dp GPS to the space.
+    #: * ``"zone_only"`` — the originating instance matches each
+    #:   member's GPS to a space-defined zone (§23.8.7) and broadcasts
+    #:   only the matched zone label. Raw coordinates never leave the
+    #:   originating household. Updates outside every zone are silently
+    #:   skipped.
+    location_mode: Literal["gps", "zone_only"] = "gps"
     stickies: bool = False
     pages: bool = True
 
@@ -125,10 +135,15 @@ class SpaceFeatures:
                 if row.get(col, 1)
             )
         )
+        raw_mode = row.get("location_mode", "gps")
+        location_mode: Literal["gps", "zone_only"] = (
+            "zone_only" if raw_mode == "zone_only" else "gps"
+        )
         return cls(
             calendar=bool(row.get("feature_calendar", 0)),
             todo=bool(row.get("feature_todo", 1)),
             location=bool(row.get("feature_location", 0)),
+            location_mode=location_mode,
             stickies=bool(row.get("feature_stickies", 0)),
             pages=bool(row.get("feature_pages", 1)),
             posts_access=SpaceFeatureAccess(row.get("posts_access", "open")),
@@ -144,6 +159,7 @@ class SpaceFeatures:
             "feature_calendar": int(self.calendar),
             "feature_todo": int(self.todo),
             "feature_location": int(self.location),
+            "location_mode": self.location_mode,
             "feature_stickies": int(self.stickies),
             "feature_pages": int(self.pages),
             "posts_access": self.posts_access.value,
@@ -167,6 +183,7 @@ class SpaceFeatures:
             "calendar": self.calendar,
             "todo": self.todo,
             "location": self.location,
+            "location_mode": self.location_mode,
             "stickies": self.stickies,
             "pages": self.pages,
             "posts_access": self.posts_access.value,
