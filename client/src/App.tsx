@@ -1,9 +1,11 @@
 import type { JSX } from 'preact'
 import { Router } from 'preact-iso'
 import { useComputed, signal } from '@preact/signals'
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { isAuthed, currentUser, setToken } from '@/store/auth'
+import { instanceConfig, loadInstanceConfig } from '@/store/instance'
+import { SetupPage } from '@/features/setup/SetupPage'
 import { routes } from './router'
 import { Button } from '@/components/Button'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -156,6 +158,25 @@ function TopBar() {
 
 export function App() {
   const authed = useComputed(() => isAuthed.value)
+  const cfg = useComputed(() => instanceConfig.value)
+
+  // Fetch instance config once on cold start. Public endpoint —
+  // works without a token. Drives the /setup vs /login choice.
+  useEffect(() => {
+    if (cfg.value === null) {
+      loadInstanceConfig().catch(() => {
+        // Silent — surfaces errors via the InstanceConfigError signal.
+        // The login form remains the safe fallback.
+      })
+    }
+  }, [])
+
+  // While the config is loading, render nothing (avoids a flash of
+  // login form before we know whether to redirect to /setup).
+  if (cfg.value === null) return null
+
+  if (cfg.value.setup_required) return <SetupPage />
+
   if (!authed.value) return <LoginPage />
 
   const user = currentUser.value

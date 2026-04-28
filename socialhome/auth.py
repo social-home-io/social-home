@@ -46,6 +46,11 @@ _DEFAULT_PUBLIC_PATHS: tuple[str, ...] = (
     "/api/pairing/peer-accept",  # §11 bootstrap — Ed25519 body sig
     "/api/pairing/peer-confirm",  # §11 bootstrap — Ed25519 body sig
     "/api/auth/token",  # standalone login — issues the token
+    # First-boot wizard — the SPA hits these before it has a token.
+    # The setup_service gate (`is_required`) inside each handler stops
+    # them being usable after first boot, so leaving them public is safe.
+    "/api/instance/config",
+    "/api/setup/",
     "/federation/inbox/",  # federation inbound — envelope-signed
     "/.well-known/",
     # Bot-bridge space posts authenticate via a per-bot Bearer token that

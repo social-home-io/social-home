@@ -196,6 +196,7 @@ from .services.search_service import SearchService
 from .services.shopping_service import ShoppingService
 from .services.space_crypto_service import SpaceContentEncryption
 from .services.storage_quota_service import StorageQuotaService
+from .services.setup_service import SetupService
 from .services.stt_service import SttService
 from .services.task_service import SpaceTaskService, TaskService
 from .services.theme_service import ThemeService
@@ -1116,6 +1117,11 @@ def create_app(config: Config | None = None) -> web.Application:
     # (standalone mode today).
     stt_service = SttService(platform_adapter)
 
+    # First-boot wizard — gates `/api/setup/*` and feeds
+    # `setup_required` into `/api/instance/config` so the SPA can
+    # redirect to `/setup` until the operator completes the flow.
+    setup_service = SetupService(db)
+
     # ── Auth middleware ───────────────────────────────────────────────────
     bearer_strategy = BearerTokenStrategy(user_repo)
     ha_strategy = HaIngressStrategy(user_repo)
@@ -1196,6 +1202,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.platform_adapter_key] = platform_adapter
     app[K.calendar_import_service_key] = calendar_import_service
     app[K.stt_service_key] = stt_service
+    app[K.setup_service_key] = setup_service
     app[K.user_service_key] = user_service
     app[K.feed_service_key] = feed_service
     app[K.space_service_key] = space_service

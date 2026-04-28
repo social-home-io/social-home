@@ -79,6 +79,7 @@ bot_bridge_service_key: AppKey = AppKey("bot_bridge_service")
 space_bot_service_key: AppKey = AppKey("space_bot_service")
 space_bot_repo_key: AppKey = AppKey("space_bot_repo")
 stt_service_key: AppKey = AppKey("stt_service")
+setup_service_key: AppKey = AppKey("setup_service")
 
 gfs_connection_service_key: AppKey = AppKey("gfs_connection_service")
 gfs_connection_repo_key: AppKey = AppKey("gfs_connection_repo")

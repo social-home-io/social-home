@@ -105,8 +105,6 @@ def _build_adapter(
     return HomeAssistantAdapter(
         ha_url="http://ha-test:8123",
         ha_token="test-token",
-        supervisor_url="http://supervisor",
-        supervisor_token="",
         data_dir="/tmp/irrelevant",
         options=options,
         ha_client=client,
@@ -169,6 +167,92 @@ async def test_authenticate_bearer_valid_returns_user():
 async def test_authenticate_bearer_invalid_returns_none():
     adapter = _build_adapter(client=_FakeHaClient(verify_token_response=None))
     assert await adapter.authenticate_bearer("bad") is None
+
+
+# ─── Local password auth (wizard-set owner password) ──────────────────────
+
+
+async def test_capabilities_include_password_auth():
+    """ha mode supports local password auth — the setup wizard sets a
+    password for the picked HA owner so they can log in via /api/auth/token."""
+    from socialhome.platform.adapter import Capability
+
+    adapter = _build_adapter(client=_FakeHaClient())
+    assert Capability.PASSWORD_AUTH in adapter.capabilities
+
+
+async def test_local_password_login_round_trip(tmp_path):
+    """Wire the credential store, set a password, and verify the bearer
+    token authenticates."""
+    db = AsyncDatabase(tmp_path / "t.db", batch_timeout_ms=10)
+    await db.startup()
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    await db.enqueue(
+        "INSERT INTO instance_identity(instance_id, identity_private_key,"
+        " identity_public_key, routing_secret) VALUES(?,?,?,?)",
+        (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
+    )
+
+    app = web.Application()
+    app[db_key] = db
+    app[event_bus_key] = EventBus()
+    async with aiohttp.ClientSession() as session:
+        app[http_session_key] = session
+        adapter = HomeAssistantAdapter(
+            ha_url="http://ha.local:8123",
+            ha_token="",
+            data_dir=str(tmp_path),
+            ha_client=_FakeHaClient(),
+        )
+        await adapter.on_startup(app)
+
+        await adapter.set_local_password(
+            "pascal",
+            "hunter2",
+            display_name="Pascal",
+            is_admin=True,
+        )
+        # Mirror the user row so the bearer flow can resolve a user_id.
+        await db.enqueue(
+            "INSERT INTO users(username, user_id, display_name, is_admin) "
+            "VALUES('pascal', 'uid-pascal', 'Pascal', 1)",
+        )
+        token = await adapter.issue_bearer_token("pascal", "hunter2")
+        assert token is not None
+        # The HaAuthProvider should resolve the token via the local
+        # credential store before ever calling HA's verify_token.
+        user = await adapter.authenticate_bearer(token)
+        assert user is not None and user.username == "pascal"
+        assert user.is_admin is True
+    await db.shutdown()
+
+
+async def test_local_password_wrong_returns_none(tmp_path):
+    db = AsyncDatabase(tmp_path / "t.db", batch_timeout_ms=10)
+    await db.startup()
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    await db.enqueue(
+        "INSERT INTO instance_identity(instance_id, identity_private_key,"
+        " identity_public_key, routing_secret) VALUES(?,?,?,?)",
+        (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
+    )
+    app = web.Application()
+    app[db_key] = db
+    app[event_bus_key] = EventBus()
+    async with aiohttp.ClientSession() as session:
+        app[http_session_key] = session
+        adapter = HomeAssistantAdapter(
+            ha_url="http://ha.local",
+            ha_token="",
+            data_dir=str(tmp_path),
+            ha_client=_FakeHaClient(),
+        )
+        await adapter.on_startup(app)
+        await adapter.set_local_password("alice", "right", is_admin=True)
+        assert await adapter.issue_bearer_token("alice", "wrong") is None
+    await db.shutdown()
 
 
 # ─── User listing ────────────────────────────────────────────────────────
@@ -396,16 +480,15 @@ async def test_adapter_raises_before_on_startup_when_client_not_injected():
     adapter = HomeAssistantAdapter(
         ha_url="http://ha",
         ha_token="t",
-        supervisor_url="http://supervisor",
-        supervisor_token="",
         data_dir="/tmp/unused",
     )
     with pytest.raises(RuntimeError, match="on_startup"):
         await adapter.list_external_users()
 
 
-async def test_on_startup_skips_bootstrap_without_supervisor_token(tmp_path):
-    """If SUPERVISOR_TOKEN is empty, on_startup does not provision users."""
+async def test_on_startup_does_not_provision_users(tmp_path):
+    """HaAdapter (Core mode) never bootstraps users on startup —
+    that's haos territory."""
     db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
     await db.startup()
     kp = generate_identity_keypair()
@@ -424,8 +507,6 @@ async def test_on_startup_skips_bootstrap_without_supervisor_token(tmp_path):
         adapter = HomeAssistantAdapter(
             ha_url="http://ha.local:8123",
             ha_token="",
-            supervisor_url="http://supervisor",
-            supervisor_token="",
             data_dir=str(tmp_path),
         )
         await adapter.on_startup(app)
@@ -469,8 +550,6 @@ async def test_get_federation_base_reads_instance_config(tmp_path):
         adapter = HomeAssistantAdapter(
             ha_url="http://ha.local:8123",
             ha_token="",
-            supervisor_url="http://supervisor",
-            supervisor_token="",
             data_dir=str(tmp_path),
         )
         await adapter.on_startup(app)
@@ -504,8 +583,6 @@ async def test_get_federation_base_strips_trailing_slash(tmp_path):
         adapter = HomeAssistantAdapter(
             ha_url="http://ha.local:8123",
             ha_token="",
-            supervisor_url="http://supervisor",
-            supervisor_token="",
             data_dir=str(tmp_path),
         )
         await adapter.on_startup(app)

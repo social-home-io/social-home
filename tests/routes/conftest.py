@@ -65,8 +65,13 @@ async def client(aiohttp_client, tmp_dir):
     )
     pk_bytes = bytes.fromhex(row["identity_public_key"])
     uid = derive_user_id(pk_bytes, "admin")
+    # ``INSERT OR REPLACE`` so the standalone adapter's first-boot admin
+    # bootstrap (which seeds users.admin with a placeholder user_id)
+    # doesn't collide with the test-derived ``uid``. The test still
+    # gets the canonical user_id it expects in the row.
     await db.enqueue(
-        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,1)",
+        "INSERT OR REPLACE INTO users(username, user_id, display_name, is_admin) "
+        "VALUES(?,?,?,1)",
         ("admin", uid, "Admin"),
     )
     raw = "test-tok"
