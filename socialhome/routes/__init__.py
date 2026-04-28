@@ -294,6 +294,13 @@ from .users import (
     UserPictureView,
 )
 from .aliases import AliasCollectionView, AliasItemView
+from .instance import InstanceConfigView
+from .setup import (
+    HaOwnerSetupView,
+    HaPersonsSetupView,
+    HaosCompleteSetupView,
+    StandaloneSetupView,
+)
 from .stt import SttStreamView
 from .ws import WebSocketView
 
@@ -327,6 +334,15 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/aliases/users", AliasCollectionView)
     app.router.add_view("/api/aliases/users/{user_id}", AliasItemView)
     app.router.add_view("/api/auth/token", AuthTokenView)
+
+    # ── Instance metadata + first-boot setup wizard ─────────────────────
+    # Public paths (see auth._DEFAULT_PUBLIC_PATHS) — the SPA needs them
+    # before it has a token.
+    app.router.add_view("/api/instance/config", InstanceConfigView)
+    app.router.add_view("/api/setup/standalone", StandaloneSetupView)
+    app.router.add_view("/api/setup/ha/persons", HaPersonsSetupView)
+    app.router.add_view("/api/setup/ha/owner", HaOwnerSetupView)
+    app.router.add_view("/api/setup/haos/complete", HaosCompleteSetupView)
 
     # ── Feed / posts ────────────────────────────────────────────────────
     app.router.add_view("/api/feed", FeedCollectionView)
