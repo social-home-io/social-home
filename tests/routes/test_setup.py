@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
-
-import pytest
-
 from socialhome.app import create_app
-from socialhome.app_keys import db_key as _db_key, setup_service_key
+from socialhome.app_keys import setup_service_key
+from socialhome.app_keys import db_key as _db_key
 from socialhome.config import Config
 
 

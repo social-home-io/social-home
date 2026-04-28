@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from socialhome.app_keys import config_key, db_key as _db_key
+from socialhome.app_keys import config_key
 
 
 def _auth(token: str) -> dict:
