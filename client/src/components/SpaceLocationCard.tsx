@@ -23,11 +23,34 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { Spinner } from './Spinner'
+import { Avatar } from './Avatar'
 import { Button } from './Button'
 import { LocationMap, type LocationMarker } from './LocationMap'
 import { Modal } from './Modal'
 import { showToast } from './Toast'
 import type { SpaceZone } from '@/types'
+
+const _ZONE_PALETTE = [
+  '#3b82f6', '#f97316', '#10b981', '#a855f7', '#ec4899',
+  '#facc15', '#14b8a6', '#ef4444', '#6366f1', '#84cc16',
+]
+function _zoneColor(zone: SpaceZone | undefined): string {
+  if (!zone) return _ZONE_PALETTE[0]
+  if (zone.color) return zone.color
+  let hash = 0
+  for (const ch of zone.id) hash = (hash * 31 + ch.charCodeAt(0)) | 0
+  return _ZONE_PALETTE[Math.abs(hash) % _ZONE_PALETTE.length]
+}
+
+function _stateDotClass(state: string | undefined): string {
+  switch (state) {
+    case 'home':     return 'sh-dot sh-dot--home'
+    case 'away':     return 'sh-dot sh-dot--away'
+    case 'not_home': return 'sh-dot sh-dot--not-home'
+    case 'zone':     return 'sh-dot sh-dot--home'
+    default:         return 'sh-dot sh-dot--unknown'
+  }
+}
 
 interface SpacePresenceEntry {
   user_id: string
@@ -171,10 +194,11 @@ export function SpaceLocationCard({
         { enabled },
       )
       setSharingMe(enabled)
+      const what = data?.location_mode === 'zone_only' ? 'zone' : 'location'
       showToast(
         enabled
-          ? 'Now sharing your location with this space'
-          : 'You stopped sharing your location with this space',
+          ? `Now sharing your ${what} with this space`
+          : `You stopped sharing your ${what} with this space`,
         'success',
       )
     } catch (e: any) {
@@ -239,11 +263,22 @@ export function SpaceLocationCard({
     <div class="sh-space-location">
       {currentUserId && (
         <div class={`sh-sharing-chip ${sharingMe ? 'sh-sharing-chip--on' : 'sh-sharing-chip--off'}`}>
-          <span>
-            {sharingMe
-              ? '📍 You are sharing your location with this space'
-              : '📵 Your location is private here'}
-          </span>
+          <div class="sh-sharing-chip__text">
+            <strong>
+              {sharingMe
+                ? (isZoneOnly
+                    ? '📍 You are sharing your zone with this space'
+                    : '📍 You are sharing your location with this space')
+                : '📵 Your location is private here'}
+            </strong>
+            {sharingMe && (
+              <span class="sh-muted">
+                {isZoneOnly
+                  ? 'Only the matched zone label is shared — never your exact GPS.'
+                  : 'Your 4-decimal GPS is shared with members who have the map open.'}
+              </span>
+            )}
+          </div>
           <Button
             variant={sharingMe ? 'danger' : 'primary'}
             onClick={() => setMyOptIn(!sharingMe)}
@@ -255,17 +290,37 @@ export function SpaceLocationCard({
       {isZoneOnly ? (
         <ul class="sh-zone-only-list" data-testid="zone-only-list">
           {data.entries.length === 0 && (
-            <li class="sh-muted">
+            <li class="sh-zone-only-list__empty sh-muted">
               No one in this space is in any zone right now.
             </li>
           )}
-          {data.entries.map((p) => (
-            <li key={p.user_id} class="sh-zone-only-list__row">
-              <strong>{p.display_name}</strong>
-              <span class="sh-muted">→</span>
-              <span>{p.zone_name ?? 'unknown zone'}</span>
-            </li>
-          ))}
+          {data.entries.map((p) => {
+            const zone = zones.find((z) => z.id === p.zone_id)
+            const colour = _zoneColor(zone)
+            return (
+              <li key={p.user_id} class="sh-zone-only-list__row">
+                <span class="sh-zone-only-list__avatar">
+                  <Avatar name={p.display_name} src={p.picture_url} size={32} />
+                  <span class={_stateDotClass(p.state)} />
+                </span>
+                <div class="sh-zone-only-list__meta">
+                  <strong>{p.display_name}</strong>
+                  <span class="sh-muted">{p.state}</span>
+                </div>
+                <span
+                  class="sh-zone-only-list__chip"
+                  style={`--zone-colour: ${colour}`}
+                  title={`Zone: ${p.zone_name ?? 'unknown'}`}
+                >
+                  <span
+                    class="sh-zone-only-list__swatch"
+                    aria-hidden="true"
+                  />
+                  {p.zone_name ?? 'unknown zone'}
+                </span>
+              </li>
+            )
+          })}
         </ul>
       ) : (
         <LocationMap
@@ -290,25 +345,45 @@ export function SpaceLocationCard({
       <Modal
         open={showOnboarding}
         onClose={() => dismissOnboarding(null)}
-        title="📍 Share your location with this space?"
+        title={isZoneOnly
+          ? '📍 Share your zone with this space?'
+          : '📍 Share your location with this space?'}
       >
         <div class="sh-modal-body">
-          <p>
-            This space shows members on a map. If you opt in, your GPS
-            coordinates will be visible to other members of this space —
-            but never to other spaces or other households outside this
-            space.
-          </p>
-          <ul>
-            <li>You can stop sharing at any time from the map tab.</li>
-            <li>Your home assistant zones never reach this space.</li>
-          </ul>
+          {isZoneOnly ? (
+            <>
+              <p>
+                This space tracks members by <strong>zone</strong>, not by
+                exact GPS. If you opt in, your home server will match your
+                location to one of this space's zones (e.g. "Office",
+                "Home") and share <strong>only the zone name</strong>.
+              </p>
+              <ul>
+                <li>Your GPS coordinates never leave your home server.</li>
+                <li>If you're not in any of this space's zones, nothing is shared.</li>
+                <li>You can stop sharing at any time from the map tab.</li>
+              </ul>
+            </>
+          ) : (
+            <>
+              <p>
+                This space shows members on a map. If you opt in, your
+                GPS coordinates (rounded to ~10 m) will be visible to
+                other members of this space — but never to other spaces
+                or other households outside this space.
+              </p>
+              <ul>
+                <li>You can stop sharing at any time from the map tab.</li>
+                <li>Your home assistant zones never reach this space.</li>
+              </ul>
+            </>
+          )}
           <div class="sh-modal-actions">
             <Button variant="secondary" onClick={() => dismissOnboarding(null)}>
               Not now
             </Button>
             <Button variant="primary" onClick={() => dismissOnboarding(true)}>
-              Share my location
+              {isZoneOnly ? 'Share my zone' : 'Share my location'}
             </Button>
           </div>
         </div>

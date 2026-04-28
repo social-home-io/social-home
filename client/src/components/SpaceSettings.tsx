@@ -70,6 +70,10 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   }, [space.id])
 
   const save = async () => {
+    const previousMode = (space.features as { location_mode?: string } | undefined)
+      ?.location_mode ?? 'gps'
+    const modeChanged = locationEnabled.value
+      && locationMode.value !== previousMode
     try {
       await api.patch(`/api/spaces/${space.id}`, {
         name: name.value,
@@ -82,7 +86,16 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
           location_mode: locationMode.value,
         },
       })
-      showToast('Space updated', 'success')
+      if (modeChanged) {
+        showToast(
+          locationMode.value === 'zone_only'
+            ? 'Zone-only mode on. Members will see only zone labels within seconds.'
+            : 'Live GPS mode on. Members will see GPS pins within seconds.',
+          'success',
+        )
+      } else {
+        showToast('Space updated', 'success')
+      }
       onUpdate()
     } catch (e: any) {
       showToast(e.message || 'Failed to update', 'error')
@@ -128,9 +141,9 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
           </label>
           {locationEnabled.value && (
             <>
-              <fieldset class="sh-zone-form__palette" aria-label="Privacy mode">
+              <fieldset class="sh-mode-fieldset" aria-label="Privacy mode">
                 <legend>Privacy mode</legend>
-                <label class="sh-radio-row">
+                <label class={`sh-mode-option ${locationMode.value === 'gps' ? 'sh-mode-option--selected' : ''}`}>
                   <input
                     type="radio"
                     name={`location-mode-${space.id}`}
@@ -138,12 +151,18 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
                     checked={locationMode.value === 'gps'}
                     onChange={() => { locationMode.value = 'gps' }}
                   />
-                  <span>
-                    <strong>Live GPS</strong> — opted-in members broadcast their
-                    GPS to the space. Coordinates are 4-dp truncated.
+                  <span class="sh-mode-option__body">
+                    <span class="sh-mode-option__title">
+                      🛰️ Live GPS
+                    </span>
+                    <span class="sh-muted">
+                      Opted-in members broadcast their GPS to the space.
+                      Coordinates are rounded to ~10 m before they leave
+                      your home server.
+                    </span>
                   </span>
                 </label>
-                <label class="sh-radio-row">
+                <label class={`sh-mode-option ${locationMode.value === 'zone_only' ? 'sh-mode-option--selected' : ''}`}>
                   <input
                     type="radio"
                     name={`location-mode-${space.id}`}
@@ -151,16 +170,24 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
                     checked={locationMode.value === 'zone_only'}
                     onChange={() => { locationMode.value = 'zone_only' }}
                   />
-                  <span>
-                    <strong>Zone only</strong> — your home server matches the
-                    member's GPS to a space-defined zone (below) and sends only
-                    the zone label. Raw coordinates never leave your home server.
-                    Members outside every zone are silently skipped.
+                  <span class="sh-mode-option__body">
+                    <span class="sh-mode-option__title">
+                      🔒 Zone only
+                      <span class="sh-mode-option__badge">stronger privacy</span>
+                    </span>
+                    <span class="sh-muted">
+                      Your home server matches each member's GPS to a
+                      space-defined zone and sends only the zone label.
+                      Raw coordinates never leave your household. Members
+                      outside every zone show nothing.
+                    </span>
                   </span>
                 </label>
               </fieldset>
               <p class="sh-muted">
                 <a href={`/spaces/${space.id}/zones`}>Manage zones →</a>
+                {locationMode.value === 'zone_only'
+                  && ' (required for zone-only mode)'}
               </p>
             </>
           )}

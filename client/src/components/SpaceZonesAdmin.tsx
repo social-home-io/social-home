@@ -474,10 +474,37 @@ function ZoneEditDialog({
           <span class="sh-muted">{_fmtRadius(draft.radius_m)}</span>
         </label>
 
-        <p class="sh-muted">
-          Click on the map to place the zone centre, or type the
-          coordinates directly below for keyboard-only access.
-        </p>
+        <div class="sh-zone-form__picker-row">
+          <p class="sh-muted">
+            Click on the map to place the zone centre, or type the
+            coordinates directly below for keyboard-only access.
+          </p>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (!navigator.geolocation) {
+                showToast('Geolocation not available in this browser', 'error')
+                return
+              }
+              navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                  onChange({
+                    ...draft,
+                    latitude: Math.round(pos.coords.latitude * 10_000) / 10_000,
+                    longitude: Math.round(pos.coords.longitude * 10_000) / 10_000,
+                  })
+                  showToast('Used your current location', 'info')
+                },
+                () => {
+                  showToast('Could not read your current location', 'error')
+                },
+                { enableHighAccuracy: true, timeout: 8000 },
+              )
+            }}
+          >
+            📍 Use my location
+          </Button>
+        </div>
         <div ref={pickerRef} class="sh-zone-form__map" data-testid="zone-picker-map" />
 
         <div class="sh-zone-form__coords">
