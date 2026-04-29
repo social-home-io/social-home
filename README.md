@@ -38,8 +38,15 @@ Run the test suite with `pytest` (backend) and `pnpm exec vitest run`
 
 ## Documentation
 
-- [`docs/`](docs/) — API reference, cryptography, and the federation
-  protocol page-by-page.
+- [`docs/principles.md`](docs/principles.md) — design principles.
+- [`docs/architecture.md`](docs/architecture.md) — HFS ↔ GFS topology,
+  identity, sync tiers, space crypto, resilience.
+- [`docs/database.md`](docs/database.md) — v1 schema reference,
+  grouped by domain.
+- [`docs/api.md`](docs/api.md) — HTTP + WebSocket API reference.
+- [`docs/crypto.md`](docs/crypto.md) — cryptographic design.
+- [`docs/protocol/`](docs/protocol/) — federation protocol,
+  feature-by-feature.
 - [`spec_work.md`](../../spec_work.md) — authoritative specification.
   When code and spec disagree, the spec wins.
 - [`CLAUDE.md`](CLAUDE.md), [`AGENTS.md`](AGENTS.md) — guidance for

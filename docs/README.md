@@ -4,6 +4,16 @@ Reference material for running and understanding Social Home.
 
 ## Contents
 
+- **[principles.md](./principles.md)** — Design principles distilled
+  from §2: households first, encryption-first, no third-party trust,
+  fail closed on crypto, GPS truncation, layered architecture.
+- **[architecture.md](./architecture.md)** — System shape: HFS ↔ GFS
+  topology, identity (§4.1), progressive sync (§4.2), space crypto
+  (§4.3), resilience (§4.4), and where each concern lives in the
+  source tree.
+- **[database.md](./database.md)** — Table-by-table reference for the
+  v1 SQLite schema, grouped by domain. Source of truth is
+  `socialhome/migrations/0001_initial.sql`.
 - **[api.md](./api.md)** — REST API reference for the Household Federation
   Server (HFS) and Global Federation Server (GFS), plus WebSocket channels
   and the inbound federation inbox.
@@ -34,7 +44,8 @@ Reference material for running and understanding Social Home.
 
 ## Where the spec lives
 
-The authoritative specification is `spec_work.md` in this repo. These
+The authoritative specification is `spec_work.md` in the
+meta-repository (`social-home-io/social-home`), at the repo root. These
 docs are derived from the current code plus the spec — when they
 disagree, the code wins and the docs should be fixed. Spec section
 references appear throughout as "§NN".

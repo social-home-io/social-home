@@ -60,6 +60,17 @@ Docs live in `docs/`. Ship the matching doc update in the same commit:
 - New WebSocket frame type → the WebSocket section in `docs/api.md`.
 - Crypto suite change (signature, KDF, envelope format) →
   `docs/crypto.md`.
+- Schema or migration change (new table, dropped column, renamed
+  index, new `0002_*.sql`) → `docs/database.md`, under the matching
+  domain heading.
+- Architecture-level change (new sync tier, resilience step,
+  identity-rotation tweak, GPS precision change, new
+  `PlatformAdapter` Provider, new platform mode) →
+  `docs/architecture.md`.
+- §2 design-principle change (relax encryption-first, allow
+  third-party trust, raise GPS precision, remove fail-closed) →
+  `docs/principles.md`, **and** flag it in the PR description for
+  explicit reviewer sign-off.
 - New top-level doc file under `docs/` → link from `docs/README.md`
   and from the repo-root `README.md`.
 
@@ -69,4 +80,5 @@ Docs live in `docs/`. Ship the matching doc update in the same commit:
 - Domain types: socialhome/domain/
 - Route handlers: socialhome/routes/ (or app.py for small handlers)
 - Migrations: socialhome/migrations/00NN_description.sql
-- Documentation: docs/ (protocol pages, API reference, crypto notes)
+- Documentation: docs/ (principles, architecture, database schema,
+  API reference, crypto notes, protocol pages)
