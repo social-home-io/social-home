@@ -1032,23 +1032,35 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   border-color: var(--sh-border-strong);
 }
 
-/* Feed-scoped: each post (and the composer) sits on a slightly more
- * saturated paper tone with a pinned-to-the-wall shadow, a tiny
- * rotation, and a washi-tape strip at the top. The strip lives on
- * the wrapping ``.sh-feed-item`` for posts and on ``.sh-composer``
- * directly so it can sit *above* the card edge (negative top). */
+/* Feed-scoped: each post (with its expanded comment thread) sits on
+ * a slightly more saturated paper tone with a pinned-to-the-wall
+ * shadow, a tiny rotation, and a washi-tape strip at the top. The
+ * whole ``.sh-feed-item`` rotates as one unit so an expanded comment
+ * thread reads as the bottom half of the same physical card. The
+ * composer keeps the paper tone but skips the tape — it's the always-
+ * visible input, not a wall artefact. */
 .sh-feed > .sh-composer {
-  position: relative;
   background: var(--sh-bg-tertiary);
   box-shadow: var(--sh-shadow-pinned);
-  transform: rotate(-0.6deg);
+  transition:
+    box-shadow var(--sh-transition-fast),
+    border-color var(--sh-transition-fast);
+}
+
+.sh-feed-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--sh-bg-tertiary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  box-shadow: var(--sh-shadow-pinned);
+  transform: rotate(var(--sh-feed-rot, 0deg));
   transition:
     box-shadow var(--sh-transition-fast),
     border-color var(--sh-transition-fast),
     transform var(--sh-transition-normal);
-  margin-top: 8px;  /* leave room for the tape */
 }
-.sh-feed > .sh-composer::before,
 .sh-feed-item::before {
   content: "";
   position: absolute;
@@ -1063,30 +1075,51 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   pointer-events: none;
   z-index: 1;
 }
-.sh-feed > .sh-composer:hover,
-.sh-feed > .sh-composer:focus-within {
-  transform: rotate(0deg) translateY(-1px);
-}
-
-.sh-feed-item {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sh-space-sm);
-}
-.sh-feed-item > .sh-post {
-  background: var(--sh-bg-tertiary);
-  box-shadow: var(--sh-shadow-pinned);
-  transform: rotate(var(--sh-feed-rot, 0deg));
-  transition:
-    box-shadow var(--sh-transition-fast),
-    border-color var(--sh-transition-fast),
-    transform var(--sh-transition-normal);
-}
-.sh-feed-item > .sh-post:hover {
+.sh-feed-item:hover {
   transform: rotate(0deg) translateY(-2px);
   z-index: 2;
 }
+/* The ``.sh-post`` inside a feed item now uses the wrapper's chrome
+ * (background, border, shadow, radius) — strip its own so post +
+ * comments share one physical card. */
+.sh-feed-item > .sh-post {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  /* When comments are expanded, the post becomes the top half of the
+   * card. The bottom edge is provided by the comment block; nothing
+   * to do here aside from keeping the shared padding consistent. */
+}
+.sh-feed-item > .sh-post:hover {
+  /* Hover lift moved to ``.sh-feed-item:hover`` so post + comments
+   * lift together. Override the legacy ``.sh-post:hover`` border
+   * tint that no longer applies. */
+  box-shadow: none;
+  border-color: transparent;
+}
+/* Comment thread inside a feed item — visually attached as the
+ * bottom segment of the post card. Lighter paper tone (the post
+ * already sits on ``--sh-bg-tertiary``; the comments drop one notch
+ * to ``--sh-bg-secondary`` so the eye reads "same card, different
+ * section"), separated by a single hairline rather than its own
+ * border + radius. */
+.sh-feed-item > .sh-comments {
+  background: var(--sh-bg-secondary);
+  border-top: 1px solid var(--sh-border);
+  border-bottom-left-radius: var(--sh-radius-lg);
+  border-bottom-right-radius: var(--sh-radius-lg);
+  margin-top: 0;
+  padding: var(--sh-space-md);
+}
+/* When the comments wrapper provides the recessed paper feel, the
+ * empty-state bubble has nothing to differentiate against — drop its
+ * own background so it doesn't read as a card-on-same-card. */
+.sh-feed-item > .sh-comments .sh-comment-empty {
+  background: transparent;
+  padding: var(--sh-space-sm) 0;
+}
+
 /* Stagger rotations so the feed reads as taped rather than tilted in
  * a single direction. Four-step cycle keeps the pattern from feeling
  * mechanical even in a long scroll. */
@@ -1116,8 +1149,7 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   transform: rotate(-6deg);
 }
 @media (prefers-reduced-motion: reduce) {
-  .sh-feed > .sh-composer,
-  .sh-feed-item > .sh-post {
+  .sh-feed-item {
     transform: none;
   }
 }
