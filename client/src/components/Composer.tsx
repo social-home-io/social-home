@@ -227,6 +227,19 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
           onDragLeave={onDragLeave}>
       <div class="sh-composer-header">
         <Avatar name={user?.display_name || '?'} src={user?.picture_url} size={32} />
+        <div class="sh-composer-type-picker">
+          {Object.entries(TYPE_ICONS).map(([type, icon]) => (
+            <button key={type} type="button"
+              class={`sh-type-btn ${postType.value === type ? 'sh-type-btn--active' : ''}`}
+              onClick={() => {
+                postType.value = type
+                if (!typeAcceptsMedia(type)) resetAttached()
+              }}
+              title={type}>
+              {icon}
+            </button>
+          ))}
+        </div>
       </div>
       {postType.value === 'text' && (
         <MarkdownToolbar
@@ -321,24 +334,13 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
         </div>
       )}
       <div class="sh-composer-footer">
-        <div class="sh-composer-type-picker">
-          {Object.entries(TYPE_ICONS).map(([type, icon]) => (
-            <button key={type} type="button"
-              class={`sh-type-btn ${postType.value === type ? 'sh-type-btn--active' : ''}`}
-              onClick={() => {
-                postType.value = type
-                if (!typeAcceptsMedia(type)) resetAttached()
-              }}
-              title={type}>
-              {icon}
-            </button>
-          ))}
-        </div>
-        <SttButton onText={(t) => {
-          const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
-          content.value = (content.value + sep + t).slice(0, MAX_LENGTH)
-        }} />
         {context && <span class="sh-context-badge">🌐 {context}</span>}
+        {postType.value === 'text' && (
+          <SttButton onText={(t) => {
+            const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
+            content.value = (content.value + sep + t).slice(0, MAX_LENGTH)
+          }} />
+        )}
         <Button type="submit" loading={submitting.value}
           disabled={(() => {
             if (overLimit) return true
