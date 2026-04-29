@@ -6,6 +6,7 @@ import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { Button } from '@/components/Button'
 import { FormError } from '@/components/FormError'
 import { showToast } from '@/components/Toast'
+import { Wordmark } from '@/components/Wordmark'
 import { t } from '@/i18n/i18n'
 
 interface HaPerson {
@@ -63,10 +64,7 @@ function SetupShell({ step, children }: SetupShellProps) {
   return (
     <div class="sh-setup" role="main">
       <div class="sh-setup-card">
-        <header class="sh-setup-brand">
-          <span class="sh-setup-brand-mark" aria-hidden="true">🏠</span>
-          <span class="sh-setup-brand-name">Social Home</span>
-        </header>
+        <Wordmark size={32} className="sh-setup-brand" />
         {step && (
           <ol class="sh-setup-steps" aria-label={`Step ${step.current} of ${step.total}`}>
             {Array.from({ length: step.total }, (_, i) => (
