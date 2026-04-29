@@ -335,10 +335,12 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       )}
       <div class="sh-composer-footer">
         {context && <span class="sh-context-badge">🌐 {context}</span>}
-        <SttButton onText={(t) => {
-          const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
-          content.value = (content.value + sep + t).slice(0, MAX_LENGTH)
-        }} />
+        {postType.value === 'text' && (
+          <SttButton onText={(t) => {
+            const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
+            content.value = (content.value + sep + t).slice(0, MAX_LENGTH)
+          }} />
+        )}
         <Button type="submit" loading={submitting.value}
           disabled={(() => {
             if (overLimit) return true
