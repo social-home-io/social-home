@@ -7,7 +7,7 @@
  */
 import { signal } from '@preact/signals'
 import { useRef, useState } from 'preact/hooks'
-import { api } from '@/api'
+import { api, withAuthToken } from '@/api'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
 import { LocationPicker, type LocationDraft } from './LocationPicker'
@@ -268,10 +268,10 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       {showMediaAttach && mediaUrl && (
         <div class="sh-composer-attachment">
           {postType.value === 'image' && (
-            <img class="sh-composer-preview" src={mediaUrl} alt={mediaName ?? ''} />
+            <img class="sh-composer-preview" src={withAuthToken(mediaUrl)} alt={mediaName ?? ''} />
           )}
           {postType.value === 'video' && (
-            <video class="sh-composer-preview" src={mediaUrl} controls muted />
+            <video class="sh-composer-preview" src={withAuthToken(mediaUrl)} controls muted />
           )}
           {postType.value === 'file' && (
             <span class="sh-composer-file-pill">📄 {mediaName}</span>

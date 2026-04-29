@@ -1,3 +1,5 @@
+import { withAuthToken } from '@/api'
+
 interface AvatarProps {
   src?: string | null
   name: string
@@ -11,7 +13,7 @@ export function Avatar({ src, name, size = 40, onClick }: AvatarProps) {
   if (src) {
     return (
       <img
-        src={src}
+        src={withAuthToken(src)}
         alt={name}
         class={`sh-avatar ${onClick ? 'sh-avatar--clickable' : ''}`}
         width={size}

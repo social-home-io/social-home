@@ -9,6 +9,7 @@
  */
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
+import { withAuthToken } from '@/api'
 
 export interface LightboxItem {
   id?:            string
@@ -116,7 +117,7 @@ export function ImageLightbox() {
       <div class="sh-lightbox-stage" onClick={(e) => e.stopPropagation()}>
         {item.item_type === 'video' ? (
           <video
-            src={item.url}
+            src={withAuthToken(item.url)}
             class="sh-lightbox-media"
             controls
             autoPlay
@@ -124,7 +125,7 @@ export function ImageLightbox() {
           />
         ) : (
           <img
-            src={item.url}
+            src={withAuthToken(item.url)}
             alt={item.caption || 'Media'}
             class="sh-lightbox-media"
           />
@@ -151,7 +152,7 @@ export function ImageLightbox() {
         </div>
         <a
           class="sh-lightbox-download"
-          href={item.url}
+          href={withAuthToken(item.url)}
           download
           onClick={(e) => e.stopPropagation()}
           aria-label="Download this item"
