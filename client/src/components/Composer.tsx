@@ -7,7 +7,8 @@
  */
 import { signal } from '@preact/signals'
 import { useRef, useState } from 'preact/hooks'
-import { api, withAuthToken } from '@/api'
+import { api } from '@/api'
+import { withAuthToken } from '@/utils/authedUrl'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
 import { LocationPicker, type LocationDraft } from './LocationPicker'

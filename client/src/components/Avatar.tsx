@@ -1,4 +1,4 @@
-import { withAuthToken } from '@/api'
+import { withAuthToken } from '@/utils/authedUrl'
 
 interface AvatarProps {
   src?: string | null

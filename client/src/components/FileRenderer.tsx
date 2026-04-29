@@ -4,7 +4,7 @@
  * Images are click-to-zoom via :mod:`Lightbox`.
  */
 import { useState } from 'preact/hooks'
-import { withAuthToken } from '@/api'
+import { withAuthToken } from '@/utils/authedUrl'
 import { Lightbox } from './Lightbox'
 
 interface FileAttachment {

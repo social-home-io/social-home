@@ -66,28 +66,3 @@ class ApiClient {
 }
 
 export const api = new ApiClient()
-
-/**
- * Append the bearer token as a ``?token=`` query parameter.
- *
- * The SPA authenticates via ``Authorization: Bearer …``, which the
- * ``fetch``-based ``api`` client carries automatically. Resources that
- * load via raw browser primitives — ``<img src>``, ``<video src>``,
- * ``<a href download>`` — can't carry a custom header, so they hit
- * authenticated endpoints unauthenticated and get a 401.
- *
- * The server's :class:`BearerTokenStrategy` accepts the token from
- * ``?token=`` as a fallback for exactly this reason (the same shape
- * the WebSocket uses). Operators must redact the query string from
- * access logs — see CLAUDE.md.
- *
- * No-op for absolute URLs (external resource, different origin).
- */
-export function withAuthToken(url: string): string {
-  if (!url || !token.value) return url
-  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
-    return url
-  }
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}token=${encodeURIComponent(token.value)}`
-}

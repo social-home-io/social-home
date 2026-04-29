@@ -9,7 +9,7 @@
  */
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
-import { withAuthToken } from '@/api'
+import { withAuthToken } from '@/utils/authedUrl'
 
 export interface LightboxItem {
   id?:            string
