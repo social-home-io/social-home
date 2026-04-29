@@ -191,13 +191,34 @@ matching doc file as part of the same change.
   document it under the WebSocket row.
 - **Changed the crypto suite** (signature algorithm, key derivation,
   envelope format)? Update `docs/crypto.md`.
+- **Added, dropped, or renamed a table / column / index, or shipped
+  a new `0002_*.sql` migration?** Update `docs/database.md` in the
+  same commit. Group the entry under the same domain heading the
+  doc already uses (Identity, Spaces, DMs, …) and keep the
+  one-paragraph "Purpose" shape.
+- **Made an architecture-level change** (new sync tier, new resilience
+  step, identity-rotation tweak, GPS-precision change, new Provider
+  Protocol on `PlatformAdapter`, new platform mode)? Update
+  `docs/architecture.md`. The page is the entry point for new
+  contributors; outdated wiring there sends them down the wrong
+  path.
+- **Touched a §2 invariant** (relaxing encryption-first, allowing
+  third-party trust, raising GPS precision, removing fail-closed
+  behaviour)? Update `docs/principles.md` AND surface the change in
+  the PR description so the reviewer flags it for explicit sign-off.
+- **Changed the test strategy** (new test directory, new pytest
+  marker, coverage-gate adjustment, change to the §27.9 protocol-
+  test set)? Update `docs/testing.md` so the markers + commands
+  there match `pyproject.toml`.
 - **Added a new top-level doc file under `docs/`?** Link it from
   `docs/README.md` and add a pointer in the repo-root `README.md`
   under "Documentation".
 
-Reviewer checklist: if a PR adds a federation event, a route, or a
-crypto change and the docs aren't touched, push back. The check is
-"did the author update the matching doc?" — not "are the docs
+Reviewer checklist: if a PR adds a federation event, a route, a
+crypto change, a schema change, an architectural shift, a
+principle change, or a test-strategy change and the docs aren't
+touched, push back. The check
+is "did the author update the matching doc?" — not "are the docs
 perfect?" Incremental accuracy beats big bang rewrites.
 
 ### What to Never Do
