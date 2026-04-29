@@ -6,6 +6,7 @@ import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { Button } from '@/components/Button'
 import { FormError } from '@/components/FormError'
 import { showToast } from '@/components/Toast'
+import { Wordmark } from '@/components/Wordmark'
 import { t } from '@/i18n/i18n'
 
 interface HaPerson {
@@ -32,9 +33,16 @@ async function fetchHaPersons(): Promise<HaPerson[]> {
 /**
  * SetupPage — first-boot wizard.
  *
- * Mode-aware: standalone shows a username+password form, ha shows a
- * person-pick + password form, haos auto-completes silently. The
- * caller (App.tsx) only renders this when
+ * Every mode starts with the same warm welcome card (👋 + "Welcome to
+ * your home" + a 3-bullet "what's about to happen") so the operator
+ * has a clear "this is the first-boot screen" moment regardless of
+ * deployment shape. Continue advances:
+ *
+ * * standalone → username + password form
+ * * ha → pick HA person + password form
+ * * haos → silent supervisor handshake + redirect (ingress signs in)
+ *
+ * The caller (App.tsx) only renders this when
  * `instanceConfig.value?.setup_required === true`.
  */
 export function SetupPage() {
@@ -47,9 +55,9 @@ export function SetupPage() {
       </SetupShell>
     )
   }
-  if (cfg.mode === 'haos') return <HaosAutoComplete />
-  if (cfg.mode === 'ha') return <HaOwnerForm />
-  return <StandaloneSetupForm />
+  if (cfg.mode === 'haos') return <HaosFlow />
+  if (cfg.mode === 'ha') return <HaFlow />
+  return <StandaloneFlow />
 }
 
 // ── Shared shell + bits ──────────────────────────────────────────────────────
@@ -63,10 +71,7 @@ function SetupShell({ step, children }: SetupShellProps) {
   return (
     <div class="sh-setup" role="main">
       <div class="sh-setup-card">
-        <header class="sh-setup-brand">
-          <span class="sh-setup-brand-mark" aria-hidden="true">🏠</span>
-          <span class="sh-setup-brand-name">Social Home</span>
-        </header>
+        <Wordmark size={32} className="sh-setup-brand" />
         {step && (
           <ol class="sh-setup-steps" aria-label={`Step ${step.current} of ${step.total}`}>
             {Array.from({ length: step.total }, (_, i) => (
@@ -120,7 +125,57 @@ function PasswordStrength({ value }: { value: string }) {
   )
 }
 
-// ── Standalone: username + password ─────────────────────────────────────────
+interface WelcomeCardProps {
+  /** Mode picks the i18n bullets / intro variant. */
+  mode: 'standalone' | 'ha' | 'haos'
+  /** Optional step indicator — standalone/ha use 1 of 2; haos has none. */
+  step?: { current: number; total: number }
+  /** "Continue" or "Let's go" — defaults to setup.welcome.continue. */
+  ctaLabelKey?: string
+  busy?: boolean
+  error?: string | null
+  onContinue: () => void
+}
+
+function WelcomeCard({
+  mode, step, ctaLabelKey = 'setup.welcome.continue',
+  busy = false, error = null, onContinue,
+}: WelcomeCardProps) {
+  return (
+    <SetupShell step={step}>
+      <div class="sh-setup-welcome" aria-hidden="true">
+        <span class="sh-setup-welcome-icon">👋</span>
+      </div>
+      <h1 class="sh-setup-title">{t('setup.welcome.title')}</h1>
+      <p class="sh-setup-intro">{t(`setup.${mode}.welcome_intro`)}</p>
+      <ul class="sh-setup-checklist">
+        <li>{t(`setup.${mode}.bullet_1`)}</li>
+        <li>{t(`setup.${mode}.bullet_2`)}</li>
+        <li>{t(`setup.${mode}.bullet_3`)}</li>
+      </ul>
+      <FormError id="setup-error" message={error} />
+      <Button onClick={onContinue} disabled={busy}>
+        {busy ? t('setup.submitting') : t(ctaLabelKey)}
+      </Button>
+    </SetupShell>
+  )
+}
+
+// ── Standalone: welcome → form ─────────────────────────────────────────────
+
+function StandaloneFlow() {
+  const [started, setStarted] = useState(false)
+  if (!started) {
+    return (
+      <WelcomeCard
+        mode="standalone"
+        step={{ current: 1, total: 2 }}
+        onContinue={() => setStarted(true)}
+      />
+    )
+  }
+  return <StandaloneSetupForm />
+}
 
 function StandaloneSetupForm() {
   const [username, setUsername] = useState('admin')
@@ -158,7 +213,7 @@ function StandaloneSetupForm() {
   }
 
   return (
-    <SetupShell>
+    <SetupShell step={{ current: 2, total: 2 }}>
       <h1 class="sh-setup-title">{t('setup.standalone.title')}</h1>
       <p class="sh-setup-intro">{t('setup.standalone.intro')}</p>
       <form onSubmit={submit} class="sh-setup-form">
@@ -205,7 +260,21 @@ function StandaloneSetupForm() {
   )
 }
 
-// ── ha: pick HA person + password ───────────────────────────────────────────
+// ── ha: welcome → pick HA person + password ────────────────────────────────
+
+function HaFlow() {
+  const [started, setStarted] = useState(false)
+  if (!started) {
+    return (
+      <WelcomeCard
+        mode="ha"
+        step={{ current: 1, total: 2 }}
+        onContinue={() => setStarted(true)}
+      />
+    )
+  }
+  return <HaOwnerForm />
+}
 
 function HaOwnerForm() {
   const [persons, setPersons] = useState<HaPerson[] | null>(haPersons.value)
@@ -279,13 +348,8 @@ function HaOwnerForm() {
     )
   }
 
-  // Two visual steps: pick person, then set password. We surface them as
-  // a progress indicator without splitting the form (a single submit keeps
-  // the flow snappy and avoids a backwards-arrow dance for the operator).
-  const step = picked ? 2 : 1
-
   return (
-    <SetupShell step={{ current: step, total: 2 }}>
+    <SetupShell step={{ current: 2, total: 2 }}>
       <h1 class="sh-setup-title">{t('setup.ha.title')}</h1>
       <p class="sh-setup-intro">{t('setup.ha.intro')}</p>
       <form onSubmit={submit} class="sh-setup-form">
@@ -349,35 +413,44 @@ function HaOwnerForm() {
   )
 }
 
-// ── haos: silent auto-complete via Supervisor ──────────────────────────────
+// ── haos: welcome → supervisor handshake → redirect ────────────────────────
 
-function HaosAutoComplete() {
+function HaosFlow() {
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    api.post('/api/setup/haos/complete').then(
-      async () => {
-        if (cancelled) return
-        await loadInstanceConfig()
-        // Ingress already provides the auth headers, so we don't need
-        // a token — bounce straight into the app.
-        window.location.href = '/'
-      },
-      (err) => {
-        if (cancelled) return
-        setError(err?.message || t('setup.error.generic'))
-      },
+
+  async function continueSetup() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.post('/api/setup/haos/complete')
+      await loadInstanceConfig()
+      // Ingress already provides the auth headers, so we don't need
+      // a token — bounce straight into the app.
+      window.location.href = '/'
+    } catch (err: any) {
+      setError(err?.message || t('setup.error.generic'))
+      setBusy(false)
+    }
+  }
+
+  if (busy && !error) {
+    return (
+      <SetupShell>
+        <h1 class="sh-setup-title">{t('setup.haos.completing_title')}</h1>
+        <SetupSpinner label={t('setup.haos.completing')} />
+      </SetupShell>
     )
-    return () => { cancelled = true }
-  }, [])
+  }
 
   return (
-    <SetupShell>
-      <h1 class="sh-setup-title">{t('setup.haos.title')}</h1>
-      {error
-        ? <FormError id="setup-error" message={error} />
-        : <SetupSpinner label={t('setup.haos.completing')} />}
-    </SetupShell>
+    <WelcomeCard
+      mode="haos"
+      busy={busy}
+      error={error}
+      ctaLabelKey="setup.haos.continue"
+      onContinue={continueSetup}
+    />
   )
 }
 
