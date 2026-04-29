@@ -2,8 +2,11 @@
  * CommentThread — threaded comment display (§23.46).
  *
  * Renders a nested comment tree with inline reply / edit / delete
- * affordances. Reply uses module-level signals (only one draft open at
- * a time). Edit uses local component state (multiple can coexist).
+ * affordances. The two distinct draft surfaces — the inline "Reply
+ * to {author}…" form and the always-visible "Add a comment…" input
+ * at the bottom — keep their own module-level signals so typing in
+ * one doesn't echo into the other when both are on screen at the
+ * same time. Edit uses local component state (multiple can coexist).
  */
 import { signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
@@ -24,7 +27,12 @@ interface CommentThreadProps {
 }
 
 const replyTo = signal<string | null>(null)
+// Inline "Reply to …" form — bound only to the open reply, of which
+// there is at most one at a time.
 const replyContent = signal('')
+// Bottom "Add a comment…" input — separate signal so it can stay
+// drafted while the user opens a reply form on a sibling comment.
+const newCommentContent = signal('')
 const submitting = signal(false)
 
 export function CommentThread(
@@ -35,12 +43,13 @@ export function CommentThread(
     comments.filter(c => c.parent_id === parentId)
 
   const handleSubmit = async (parentId: string | null) => {
-    if (!replyContent.value.trim() || submitting.value) return
+    const draft = parentId ? replyContent : newCommentContent
+    if (!draft.value.trim() || submitting.value) return
     submitting.value = true
     try {
-      await onReply(parentId, replyContent.value)
-      replyContent.value = ''
-      replyTo.value = null
+      await onReply(parentId, draft.value)
+      draft.value = ''
+      if (parentId) replyTo.value = null
     } finally {
       submitting.value = false
     }
@@ -53,12 +62,12 @@ export function CommentThread(
           No comments yet — be the first to reply.
         </div>
         <div class="sh-comment-new">
-          <input placeholder="Add a comment…" value={replyContent.value}
-            onInput={(e) => replyContent.value = (e.target as HTMLInputElement).value}
+          <input placeholder="Add a comment…" value={newCommentContent.value}
+            onInput={(e) => newCommentContent.value = (e.target as HTMLInputElement).value}
             onKeyDown={(e) => e.key === 'Enter' && handleSubmit(null)}
             aria-label="New comment" />
           <Button onClick={() => handleSubmit(null)} loading={submitting.value}
-                  disabled={!replyContent.value.trim()}>
+                  disabled={!newCommentContent.value.trim()}>
             Post
           </Button>
         </div>
@@ -102,12 +111,12 @@ export function CommentThread(
         </div>
       ))}
       <div class="sh-comment-new">
-        <input placeholder="Add a comment…" value={replyContent.value}
-          onInput={(e) => replyContent.value = (e.target as HTMLInputElement).value}
+        <input placeholder="Add a comment…" value={newCommentContent.value}
+          onInput={(e) => newCommentContent.value = (e.target as HTMLInputElement).value}
           onKeyDown={(e) => e.key === 'Enter' && handleSubmit(null)}
           aria-label="New comment" />
         <Button onClick={() => handleSubmit(null)} loading={submitting.value}
-                disabled={!replyContent.value.trim()}>
+                disabled={!newCommentContent.value.trim()}>
           Post
         </Button>
       </div>
