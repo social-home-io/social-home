@@ -71,6 +71,7 @@ _ALL_POST_TYPES: tuple[str, ...] = (
     "event",
     "file",
     "image",
+    "location",
     "poll",
     "schedule",
     "text",

@@ -282,7 +282,8 @@ CREATE TABLE IF NOT EXISTS household_features (
     allow_file        INTEGER NOT NULL DEFAULT 1,
     allow_poll        INTEGER NOT NULL DEFAULT 1,
     allow_schedule    INTEGER NOT NULL DEFAULT 1,
-    allow_bazaar      INTEGER NOT NULL DEFAULT 1
+    allow_bazaar      INTEGER NOT NULL DEFAULT 1,
+    allow_location    INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS presence (
@@ -334,7 +335,8 @@ CREATE TABLE IF NOT EXISTS feed_posts (
     author          TEXT NOT NULL,                 -- user_id
     type            TEXT NOT NULL
                     CHECK(type IN ('text','image','video','transcript',
-                                   'poll','schedule','file','bazaar')),
+                                   'poll','schedule','file','bazaar',
+                                   'location')),
     content         TEXT,
     media_url       TEXT,
     reactions       TEXT NOT NULL DEFAULT '{}',    -- JSON {emoji: [user_id...]}
@@ -345,6 +347,10 @@ CREATE TABLE IF NOT EXISTS feed_posts (
     no_link_preview INTEGER NOT NULL DEFAULT 0,
     moderated       INTEGER NOT NULL DEFAULT 0,
     file_meta_json  TEXT,                          -- JSON FileMeta when type=file
+    -- JSON {lat, lon, label?} when type='location'. Coordinates are
+    -- 4dp-truncated at the service layer (§GPS truncation), so the
+    -- column never holds higher precision than the federated form.
+    location_json   TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_feed_posts_created ON feed_posts(created_at DESC);
@@ -714,6 +720,10 @@ CREATE TABLE IF NOT EXISTS space_posts (
     no_link_preview INTEGER NOT NULL DEFAULT 0,
     moderated       INTEGER NOT NULL DEFAULT 0,
     file_meta_json  TEXT,
+    -- JSON {lat, lon, label?} when type='location'. Coordinates are
+    -- 4dp-truncated at the service layer; the federated payload
+    -- carries the same shape inside its encrypted blob.
+    location_json   TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_space_posts_created
