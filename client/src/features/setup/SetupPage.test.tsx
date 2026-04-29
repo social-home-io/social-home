@@ -1,10 +1,8 @@
 /**
- * Tests for the haos welcome flow — the operator should see a real
- * welcome card before the supervisor handshake fires, not a silent
- * spinner. The other two variants (standalone, ha) have happy-path
- * coverage on the backend; the SetupPage shell is just composition
- * around the same Wordmark/Button/FormError components covered
- * elsewhere.
+ * Tests for the first-boot setup wizard. The headline assertion across
+ * every mode: the operator sees a real welcome card BEFORE any
+ * mode-specific form / handshake — no silent spinners, no instant
+ * forms, just a "this is what's about to happen" preface.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent } from '@testing-library/preact'
@@ -13,27 +11,35 @@ beforeEach(() => {
   vi.resetModules()
 })
 
-const haosInstanceCfg = {
-  value: {
-    mode: 'haos' as const,
-    instance_name: 'Home',
-    capabilities: ['ingress', 'push', 'ai', 'ha_person_directory'],
-    setup_required: true,
-  },
+function buildCfg(mode: 'standalone' | 'ha' | 'haos') {
+  return {
+    value: {
+      mode,
+      instance_name: 'Home',
+      capabilities: ['ingress', 'push', 'ai', 'ha_person_directory'],
+      setup_required: true,
+    },
+  }
 }
 
+function commonMocks(cfg: ReturnType<typeof buildCfg>) {
+  vi.doMock('@/store/instance', () => ({
+    instanceConfig: cfg,
+    loadInstanceConfig: vi.fn(async () => cfg.value),
+  }))
+  vi.doMock('@/store/auth', () => ({ setToken: vi.fn() }))
+  vi.doMock('@/components/Toast', () => ({ showToast: vi.fn() }))
+}
+
+// ── haos ────────────────────────────────────────────────────────────────────
+
 describe('SetupPage haos welcome', () => {
-  it('renders the welcome screen and only POSTs after Continue', async () => {
+  it('renders the welcome card and only POSTs after Continue', async () => {
     const post = vi.fn(async () => ({ username: 'pascal' }))
     vi.doMock('@/api', () => ({
       api: { get: vi.fn(), post, delete: vi.fn() },
     }))
-    vi.doMock('@/store/instance', () => ({
-      instanceConfig: haosInstanceCfg,
-      loadInstanceConfig: vi.fn(async () => haosInstanceCfg.value),
-    }))
-    vi.doMock('@/store/auth', () => ({ setToken: vi.fn() }))
-    vi.doMock('@/components/Toast', () => ({ showToast: vi.fn() }))
+    commonMocks(buildCfg('haos'))
     const { SetupPage } = await import('./SetupPage')
     const { findByText, queryByText } = render(<SetupPage />)
 
@@ -41,8 +47,7 @@ describe('SetupPage haos welcome', () => {
     expect(post).not.toHaveBeenCalled()
     expect(queryByText(/Detecting your Home Assistant owner/)).toBeNull()
 
-    const cta = await findByText("Let’s go")
-    fireEvent.click(cta)
+    fireEvent.click(await findByText("Let’s go"))
     await new Promise((r) => setTimeout(r, 0))
     expect(post).toHaveBeenCalledWith('/api/setup/haos/complete')
   })
@@ -52,16 +57,58 @@ describe('SetupPage haos welcome', () => {
     vi.doMock('@/api', () => ({
       api: { get: vi.fn(), post, delete: vi.fn() },
     }))
-    vi.doMock('@/store/instance', () => ({
-      instanceConfig: haosInstanceCfg,
-      loadInstanceConfig: vi.fn(async () => haosInstanceCfg.value),
-    }))
-    vi.doMock('@/store/auth', () => ({ setToken: vi.fn() }))
-    vi.doMock('@/components/Toast', () => ({ showToast: vi.fn() }))
+    commonMocks(buildCfg('haos'))
     const { SetupPage } = await import('./SetupPage')
     const { findByText } = render(<SetupPage />)
     fireEvent.click(await findByText("Let’s go"))
     await new Promise((r) => setTimeout(r, 20))
     expect(await findByText('boom')).toBeTruthy()
+  })
+})
+
+// ── standalone ──────────────────────────────────────────────────────────────
+
+describe('SetupPage standalone welcome', () => {
+  it('shows welcome first, advances to the admin form on Continue', async () => {
+    vi.doMock('@/api', () => ({
+      api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
+    }))
+    commonMocks(buildCfg('standalone'))
+    const { SetupPage } = await import('./SetupPage')
+    const { findByText, queryByLabelText } = render(<SetupPage />)
+
+    expect(await findByText('Welcome to your home')).toBeTruthy()
+    // The username form is NOT visible yet.
+    expect(queryByLabelText('Username')).toBeNull()
+
+    fireEvent.click(await findByText("Let’s get started"))
+    // After the welcome, the username field appears.
+    expect(await findByText('Set up Social Home')).toBeTruthy()
+  })
+})
+
+// ── ha ──────────────────────────────────────────────────────────────────────
+
+describe('SetupPage ha welcome', () => {
+  it('shows welcome first, advances to the person picker on Continue', async () => {
+    const get = vi.fn(async () => ({
+      persons: [{ username: 'alice', display_name: 'Alice', picture_url: null }],
+    }))
+    vi.doMock('@/api', () => ({
+      api: { get, post: vi.fn(), delete: vi.fn() },
+    }))
+    commonMocks(buildCfg('ha'))
+    const { SetupPage } = await import('./SetupPage')
+    const { findByText, queryByText } = render(<SetupPage />)
+
+    expect(await findByText('Welcome to your home')).toBeTruthy()
+    // The HA persons endpoint is NOT hit during the welcome step.
+    expect(get).not.toHaveBeenCalled()
+    // The picker title isn't visible yet.
+    expect(queryByText('Pick your Home Assistant user')).toBeNull()
+
+    fireEvent.click(await findByText("Let’s get started"))
+    expect(await findByText('Pick your Home Assistant user')).toBeTruthy()
+    expect(get).toHaveBeenCalledWith('/api/setup/ha/persons')
   })
 })
