@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import {
   items,
@@ -28,6 +29,7 @@ function _relativeTime(iso: string | null | undefined): string {
 }
 
 export default function ShoppingPage() {
+  useTitle('Shopping')
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -148,7 +150,6 @@ export default function ShoppingPage() {
   return (
     <div class="sh-shopping">
       <div class="sh-page-header">
-        <h1>Shopping list</h1>
         <span class="sh-muted">
           {active.length} to buy · {completed.length} done
         </span>

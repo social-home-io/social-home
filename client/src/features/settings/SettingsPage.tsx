@@ -1,4 +1,5 @@
 import { useEffect } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { api } from '@/api'
@@ -29,6 +30,7 @@ const pushEnabled = signal(
 )
 
 export default function SettingsPage() {
+  useTitle('Settings')
   useEffect(() => {
     if (currentUser.value) {
       displayName.value = currentUser.value.display_name
@@ -45,7 +47,6 @@ export default function SettingsPage() {
 
   return (
     <div class="sh-settings">
-      <h1>Settings</h1>
       <nav class="sh-settings-tabs" role="tablist">
         {(['profile', 'privacy', 'notifications', 'appearance'] as SettingsTab[]).map(t => (
           <button

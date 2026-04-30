@@ -11,6 +11,7 @@
  * /stickies``); omit for the household board.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -36,6 +37,7 @@ function base(spaceId?: string): string {
 }
 
 export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
+  useTitle('Sticky notes')
   const boardRef = useRef<HTMLDivElement | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
 
@@ -152,7 +154,6 @@ export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
   return (
     <div class="sh-sticky-board">
       <div class="sh-page-header">
-        <h1>Sticky notes</h1>
         <Button onClick={addSticky}>+ Add sticky</Button>
       </div>
       {stickies.value.length === 0 ? (

@@ -9,6 +9,7 @@
  * Used both for household-level (no space_id) and per-space galleries.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -51,6 +52,7 @@ export interface GalleryPageProps {
 }
 
 export default function GalleryPage({ spaceId }: GalleryPageProps) {
+  useTitle('Gallery')
   useEffect(() => { void loadAlbums(spaceId) }, [spaceId])
 
   if (loading.value) return <Spinner />
@@ -72,7 +74,6 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
   return (
     <div class="sh-gallery">
       <header class="sh-page-header">
-        <h1>Gallery</h1>
         <Button onClick={() => (showCreate.value = true)}>+ New album</Button>
       </header>
 

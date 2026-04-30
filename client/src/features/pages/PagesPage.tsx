@@ -27,6 +27,7 @@
 import { useEffect, useRef } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { useTitle } from '@/store/pageTitle'
 import { ws } from '@/ws'
 import { Button } from '@/components/Button'
 import {
@@ -67,6 +68,7 @@ const saveStatus = signal<SaveStatus>('idle')
 const lastSavedAt = signal<string | null>(null)
 
 export default function PagesPage() {
+  useTitle('Pages')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const saveTimer = useRef<number | null>(null)
   const titleSaveTimer = useRef<number | null>(null)
@@ -504,7 +506,6 @@ export default function PagesPage() {
   return (
     <div class="sh-pages">
       <div class="sh-page-header">
-        <h1>Pages</h1>
         <Button onClick={() => showNew.value = true}>+ New page</Button>
       </div>
       {pages.value.length === 0 ? (

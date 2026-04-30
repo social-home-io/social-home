@@ -8,6 +8,7 @@
  * quick-switcher tray.
  */
 import { useEffect } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal, computed } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
@@ -21,6 +22,7 @@ const inProgress = computed(() => active.value.filter(c => c.status === 'in_prog
 const ringingOut = computed(() => active.value.filter(c => c.status === 'ringing'))
 
 export default function CallsPage() {
+  useTitle('Calls')
   const loc = useLocation()
 
   useEffect(() => { void loadActiveCalls() }, [])
@@ -33,7 +35,6 @@ export default function CallsPage() {
   return (
     <div class="sh-calls-page">
       <div class="sh-page-header">
-        <h1>Calls</h1>
       </div>
 
       {nothingActive && (

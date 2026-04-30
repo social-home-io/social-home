@@ -6,6 +6,7 @@
  * server does 1 SQL query per slice — ~10 ms total on a warm cache).
  */
 import type { ComponentChildren } from 'preact'
+import { useTitle } from '@/store/pageTitle'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { ws } from '@/ws'
@@ -152,6 +153,7 @@ function formatTaskDue(iso: string | null): string {
 }
 
 export default function DashboardPage() {
+  useTitle('My Corner')
   const [bundle, setBundle] = useState<CornerBundle | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -199,7 +201,6 @@ export default function DashboardPage() {
   if (loading && !bundle) {
     return (
       <div class="sh-dashboard">
-        <h1>My Corner</h1>
         <div class="sh-dashboard-grid">
           {Array.from({ length: 4 }, (_, i) => <CardSkeleton key={i} />)}
         </div>
@@ -210,7 +211,6 @@ export default function DashboardPage() {
   if (error && !bundle) {
     return (
       <div class="sh-dashboard">
-        <h1>My Corner</h1>
         <div class="sh-empty-state">
           <div style={{ fontSize: '2rem' }}>⚠️</div>
           <h3>Couldn't load your corner</h3>
@@ -227,7 +227,6 @@ export default function DashboardPage() {
 
   return (
     <div class="sh-dashboard">
-      <h1>My Corner</h1>
       <div class="sh-dashboard-grid">
         <StatWidget
           icon="🔔" label="Notifications"

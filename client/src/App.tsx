@@ -6,6 +6,7 @@ import { api } from '@/api'
 import { isAuthed, currentUser, loadCurrentUser, setToken, token } from '@/store/auth'
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { isGuardian, loadGuardian } from '@/store/guardian'
+import { pageTitle } from '@/store/pageTitle'
 import { toggles, loadToggles } from '@/components/HouseholdToggles'
 import { SetupPage } from '@/features/setup/SetupPage'
 import { routes } from './router'
@@ -128,6 +129,9 @@ function LoginPage() {
 function TopBar() {
   return (
     <header class="sh-topbar" role="banner">
+      {pageTitle.value && (
+        <h1 class="sh-topbar-title">{pageTitle.value}</h1>
+      )}
       <SearchBar />
       <NotificationBell />
     </header>

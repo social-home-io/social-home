@@ -1,4 +1,5 @@
 import { useEffect } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
@@ -49,6 +50,7 @@ function presenceLabel(state: string): string {
 }
 
 export default function PresencePage() {
+  useTitle('Presence')
   useEffect(() => {
     api.get('/api/presence').then(data => {
       presenceList.value = data
@@ -101,7 +103,6 @@ export default function PresencePage() {
 
   return (
     <div class="sh-presence">
-      <h1>Household Presence</h1>
 
       <div class="sh-presence-controls">
         <label class="sh-toggle-row">

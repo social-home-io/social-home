@@ -1,6 +1,7 @@
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { useTitle } from '@/store/pageTitle'
 import type { CalendarEvent } from '@/types'
 import { Spinner } from '@/components/Spinner'
 import { Button } from '@/components/Button'
@@ -89,6 +90,7 @@ function groupEventsByDay(evts: CalendarEvent[]): Record<string, CalendarEvent[]
 }
 
 export default function CalendarPage() {
+  useTitle('Calendar')
   useEffect(() => {
     api.get('/api/calendars').then(async (cals: { id: string }[]) => {
       if (cals.length > 0) {
@@ -172,7 +174,6 @@ export default function CalendarPage() {
   return (
     <div class="sh-calendar">
       <div class="sh-page-header">
-        <h1>Calendar</h1>
         {calendarId.value && (
           <Button onClick={() => openEventDialog(calendarId.value)}>+ New event</Button>
         )}
