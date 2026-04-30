@@ -14,6 +14,7 @@ import math
 from ..app_keys import (
     alias_resolver_key,
     federation_repo_key,
+    media_signer_key,
     notification_repo_key,
     presence_service_key,
     profile_picture_repo_key,
@@ -30,6 +31,7 @@ from ..domain.space import SpaceZone
 from ..domain.user import SYSTEM_AUTHOR
 from ..domain.federation import PairingStatus
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
+from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from ..services.space_service import _UNSET_MEMBER_PROFILE
 from .base import BaseView
@@ -131,25 +133,27 @@ class SpaceDetailView(BaseView):
             if space.cover_hash
             else None
         )
-        return web.json_response(
-            sanitise_for_api(
-                {
-                    "id": space.id,
-                    "name": space.name,
-                    "description": space.description,
-                    "emoji": space.emoji,
-                    "space_type": space.space_type.value,
-                    "join_mode": space.join_mode.value,
-                    "features": space.features.to_wire_dict(),
-                    "retention_days": space.retention_days,
-                    "retention_exempt_types": list(space.retention_exempt_types),
-                    "about_markdown": space.about_markdown,
-                    "cover_hash": space.cover_hash,
-                    "cover_url": cover_url,
-                    "bot_enabled": space.bot_enabled,
-                }
-            )
+        payload = sanitise_for_api(
+            {
+                "id": space.id,
+                "name": space.name,
+                "description": space.description,
+                "emoji": space.emoji,
+                "space_type": space.space_type.value,
+                "join_mode": space.join_mode.value,
+                "features": space.features.to_wire_dict(),
+                "retention_days": space.retention_days,
+                "retention_exempt_types": list(space.retention_exempt_types),
+                "about_markdown": space.about_markdown,
+                "cover_hash": space.cover_hash,
+                "cover_url": cover_url,
+                "bot_enabled": space.bot_enabled,
+            }
         )
+        signer = self.request.app.get(media_signer_key)
+        if signer is not None:
+            sign_media_urls_in(payload, signer)
+        return web.json_response(payload)
 
     async def patch(self) -> web.Response:
         ctx = self.user
@@ -216,6 +220,27 @@ def _member_to_dict(
     }
 
 
+def _member_to_dict_signed(
+    request: web.Request,
+    m,
+    space_id: str,
+    *,
+    display_name: str | None = None,
+    personal_alias: str | None = None,
+) -> dict:
+    """:func:`_member_to_dict` + sign ``picture_url`` for the SPA."""
+    payload = _member_to_dict(
+        m,
+        space_id,
+        display_name=display_name,
+        personal_alias=personal_alias,
+    )
+    signer = request.app.get(media_signer_key)
+    if signer is not None:
+        sign_media_urls_in(payload, signer)
+    return payload
+
+
 class SpaceMembersView(BaseView):
     """GET/POST /api/spaces/{id}/members — list or add members."""
 
@@ -242,7 +267,8 @@ class SpaceMembersView(BaseView):
         )
         return web.json_response(
             [
-                _member_to_dict(
+                _member_to_dict_signed(
+                    self.request,
                     m,
                     space_id,
                     display_name=display_names.get(m.user_id),
@@ -324,7 +350,7 @@ class SpaceMemberMeProfileView(BaseView):
             )
         except PermissionError as exc:
             return error_response(403, "FORBIDDEN", str(exc))
-        return web.json_response(_member_to_dict(member, space_id))
+        return web.json_response(_member_to_dict_signed(self.request, member, space_id))
 
     async def delete(self) -> web.Response:
         """Preserve the pre-existing ``DELETE /api/spaces/{id}/members/me``
@@ -417,7 +443,7 @@ class SpaceMemberMePictureView(BaseView):
             return error_response(403, "FORBIDDEN", str(exc))
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
-        return web.json_response(_member_to_dict(member, space_id))
+        return web.json_response(_member_to_dict_signed(self.request, member, space_id))
 
     async def delete(self) -> web.Response:
         ctx = self.user
@@ -472,7 +498,8 @@ class SpaceCoverView(BaseView):
     """
 
     async def get(self) -> web.Response:
-        self.user  # auth check
+        # Auth enforced upstream by :class:`SignedMediaStrategy` (signed
+        # URL) or :class:`BearerTokenStrategy` (fetch() callers).
         space_id = self.match("id")
         repo = self.svc(space_cover_repo_key)
         got = await repo.get(space_id)
@@ -509,12 +536,14 @@ class SpaceCoverView(BaseView):
             return error_response(403, "FORBIDDEN", str(exc))
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
-        return web.json_response(
-            {
-                "cover_hash": updated.cover_hash,
-                "cover_url": f"/api/spaces/{space_id}/cover?v={updated.cover_hash}",
-            }
-        )
+        payload = {
+            "cover_hash": updated.cover_hash,
+            "cover_url": f"/api/spaces/{space_id}/cover?v={updated.cover_hash}",
+        }
+        signer = self.request.app.get(media_signer_key)
+        if signer is not None:
+            sign_media_urls_in(payload, signer)
+        return web.json_response(payload)
 
     async def delete(self) -> web.Response:
         ctx = self.user
@@ -1061,7 +1090,7 @@ class SpacePostCollectionView(BaseView):
             author_user_id=ctx.user_id,
             type=body.get("type", "text"),
             content=body.get("content"),
-            media_url=body.get("media_url"),
+            media_url=strip_signature_query(body.get("media_url")),
             location=_extract_location(body),
         )
         if post is None:

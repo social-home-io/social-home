@@ -1,4 +1,7 @@
 interface AvatarProps {
+  /** Backend-signed URL — comes pre-tagged with ``?exp=&sig=`` so the
+   *  browser can load it via raw ``<img src>`` without needing an
+   *  ``Authorization`` header. */
   src?: string | null
   name: string
   size?: number

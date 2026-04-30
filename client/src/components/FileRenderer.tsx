@@ -2,6 +2,12 @@
  * FileRenderer — file & video post rendering (§23.51).
  * Renders file attachments, videos, and images within PostCard.
  * Images are click-to-zoom via :mod:`Lightbox`.
+ *
+ * URLs flowing in here are already short-lived signed (server-side
+ * ``MediaUrlSigner`` appends ``?exp=&sig=`` at serialization), so the
+ * browser can load them via raw ``<img src>`` / ``<video src>`` /
+ * ``<a download>`` without needing an ``Authorization`` header. See
+ * ``socialhome.media_signer`` and ``socialhome.auth.SignedMediaStrategy``.
  */
 import { useState } from 'preact/hooks'
 import { Lightbox } from './Lightbox'

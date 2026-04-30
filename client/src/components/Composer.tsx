@@ -96,11 +96,17 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
   const [locationOpen, setLocationOpen] = useState(false)
   const [pendingLocation, setPendingLocation] = useState<LocationDraft | null>(null)
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
+  // Short-lived signed URL for the local preview ``<img>`` / ``<video>``.
+  // Stored separately from ``mediaUrl`` (the canonical URL we send to
+  // the post-create endpoint) so we never echo signed query params back
+  // into a stored field.
+  const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null)
   const [mediaName, setMediaName] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
 
   const resetAttached = () => {
     setMediaUrl(null)
+    setMediaPreviewUrl(null)
     setMediaName(null)
   }
 
@@ -108,8 +114,9 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
     const inferred = inferTypeFromFile(file)
     postType.value = inferred
     try {
-      const url = await uploadWithProgress(file)
-      setMediaUrl(url)
+      const result = await uploadWithProgress(file)
+      setMediaUrl(result.url)
+      setMediaPreviewUrl(result.signed_url)
       setMediaName(file.name)
       showToast(`Attached: ${file.name}`, 'success')
     } catch (err: unknown) {
@@ -268,10 +275,10 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       {showMediaAttach && mediaUrl && (
         <div class="sh-composer-attachment">
           {postType.value === 'image' && (
-            <img class="sh-composer-preview" src={mediaUrl} alt={mediaName ?? ''} />
+            <img class="sh-composer-preview" src={mediaPreviewUrl ?? mediaUrl} alt={mediaName ?? ''} />
           )}
           {postType.value === 'video' && (
-            <video class="sh-composer-preview" src={mediaUrl} controls muted />
+            <video class="sh-composer-preview" src={mediaPreviewUrl ?? mediaUrl} controls muted />
           )}
           {postType.value === 'file' && (
             <span class="sh-composer-file-pill">📄 {mediaName}</span>
