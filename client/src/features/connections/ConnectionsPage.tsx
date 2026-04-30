@@ -21,6 +21,7 @@ import { AutoPairDialog, openAutoPair } from '@/components/AutoPairDialog'
 import { showToast } from '@/components/Toast'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
+import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
 
@@ -149,6 +150,7 @@ async function unpair(instanceId: string) {
 }
 
 export default function ConnectionsPage() {
+  useTitle(t('connections.title'))
   const [autoPairBusy, setAutoPairBusy] = useState(false)
 
   useEffect(() => {
@@ -174,9 +176,6 @@ export default function ConnectionsPage() {
 
   return (
     <div class="sh-connections">
-      <div class="sh-page-header">
-        <h1>{t('connections.title')}</h1>
-      </div>
 
       {/* ── Incoming auto-pair requests (admin-only inbox) ─────────── */}
       {isAdmin && autoPairRequests.value.length > 0 && (

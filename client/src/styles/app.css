@@ -97,7 +97,6 @@ a:focus:not(:focus-visible) { outline: none; }
   grid-area: topbar;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sh-space-md);
   padding: var(--sh-space-sm) var(--sh-space-lg);
   background: var(--sh-bg);
@@ -106,6 +105,36 @@ a:focus:not(:focus-visible) { outline: none; }
   top: 0;
   z-index: var(--sh-z-dropdown);
 }
+/* Page title sits on the left of the bar; ``flex-grow`` on the
+ * trailing search keeps it pushed against the title even when the
+ * title is short. */
+.sh-topbar-title {
+  margin: 0;
+  font: 600 var(--sh-font-size-lg) / 1.2 var(--sh-font-family-display);
+  color: var(--sh-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Bound the width so a long title (a space name) doesn't squeeze
+   * the search box into uselessness; the ellipsis kicks in past
+   * 40ch. */
+  max-width: 40ch;
+}
+@media (max-width: 768px) {
+  /* On phones the search dropdown takes the full row when focused;
+   * a separate title row would hurt density, so we tuck it inside
+   * a smaller wrapper that still lives on the left edge. */
+  .sh-topbar-title { font-size: var(--sh-font-size-base); max-width: 12ch; }
+}
+/* SearchBar inside the TopBar should grow to fill the gap between
+ * the title and the notification bell — capped so it doesn't sprawl
+ * on ultrawide screens. NotificationBell stays fixed-width on the
+ * right via ``margin-left: auto`` if the title pushes things tight. */
+.sh-topbar > .sh-search {
+  flex: 1;
+  max-width: 480px;
+}
+.sh-topbar > .sh-notif-bell { margin-left: auto; }
 
 .sh-sidenav {
   grid-area: nav;
@@ -1002,6 +1031,118 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 .sh-skeleton-card { padding: var(--sh-space-md); }
 
 /* ───── 7. Feature surfaces ──────────────────────────────────────────── */
+
+/* Household presence strip — pinned-to-the-wall row of household
+ * members rendered above the composer on the feed. Each pin reads as
+ * a small polaroid: warm paper bg, slight rotation, washi-tape
+ * accent at the top, avatar + display name + a one-line status
+ * (``Home`` / ``Away`` / ``Not home`` / zone name). Click → route
+ * to the full presence page.
+ *
+ * The whole strip scrolls horizontally on overflow so a 6-member
+ * household stays glance-able on phones; on desktop the inner row
+ * just stretches.
+ */
+.sh-presence-strip {
+  margin: 0 0 var(--sh-space-md);
+  padding: 4px 4px 8px;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: thin;
+}
+.sh-presence-strip-inner {
+  display: flex;
+  gap: var(--sh-space-md);
+  padding: 12px 4px 6px;
+  width: max-content;
+}
+.sh-presence-pin {
+  position: relative;
+  width: 116px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 8px 10px;
+  background: var(--sh-bg-tertiary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  box-shadow: var(--sh-shadow-pinned);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  /* Rotation cycles through ``PIN_ROTATIONS`` (set inline via the
+   * ``--sh-pin-rot`` custom property). Hover untilts the active pin
+   * and lifts it slightly so the user feels the click affordance. */
+  transform: rotate(var(--sh-pin-rot, 0deg));
+  transition:
+    transform var(--sh-transition-normal),
+    box-shadow var(--sh-transition-fast);
+}
+.sh-presence-pin:hover,
+.sh-presence-pin:focus-visible {
+  transform: rotate(0deg) translateY(-2px);
+  z-index: 2;
+}
+.sh-presence-pin:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 3px;
+}
+/* Washi-tape strip on top of each pin. Color is keyed off the
+ * presence state so a quick glance reads the room before you parse
+ * the label below. */
+.sh-presence-pin-tape {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  width: 56px;
+  height: 14px;
+  border-radius: 2px;
+  transform: translateX(-50%) rotate(-3deg);
+  background: color-mix(in srgb, var(--sh-warning) 55%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  pointer-events: none;
+}
+.sh-presence-pin--home .sh-presence-pin-tape,
+.sh-presence-pin--zone .sh-presence-pin-tape {
+  background: color-mix(in srgb, var(--sh-success) 55%, transparent);
+}
+.sh-presence-pin--away .sh-presence-pin-tape {
+  background: color-mix(in srgb, var(--sh-text-muted) 35%, transparent);
+}
+.sh-presence-pin-name {
+  font-weight: 600;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  margin-top: 4px;
+}
+.sh-presence-pin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.sh-presence-pin-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--sh-radius-full);
+  background: var(--sh-text-muted);
+  flex-shrink: 0;
+}
+.sh-presence-pin-dot--home,
+.sh-presence-pin-dot--zone { background: var(--sh-success); }
+.sh-presence-pin-dot--away { background: var(--sh-warning); }
+.sh-presence-pin-dot--not_home { background: var(--sh-danger); }
 
 /* Feed + posts + comments
  *

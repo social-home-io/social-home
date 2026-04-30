@@ -13,6 +13,7 @@ import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
+import { useTitle } from '@/store/pageTitle'
 import { lists, tasks } from '@/store/tasks'
 import type { TaskItem, TaskListEntry } from '@/types'
 
@@ -166,6 +167,8 @@ export default function TaskPage() {
     .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
 
   const activeListEntry = lists.value.find(l => l.id === activeList.value)
+  // Reactive page title — flips when the user picks a different list.
+  useTitle(activeListEntry?.name || 'Tasks')
 
   return (
     <div class="sh-tasks">
@@ -194,7 +197,6 @@ export default function TaskPage() {
 
       <div class="sh-tasks-content">
         <div class="sh-page-header">
-          <h1>{activeListEntry?.name || 'Tasks'}</h1>
           {activeListEntry && (
             <span class="sh-muted">
               {visibleTasks.filter(t => t.status !== 'done').length} open ·{' '}

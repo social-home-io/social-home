@@ -12,6 +12,7 @@
  * the pairing flow.
  */
 import { useEffect, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -107,6 +108,7 @@ function filterBy(entries: DirectoryEntry[], term: string): DirectoryEntry[] {
 }
 
 export default function SpaceBrowserPage() {
+  useTitle('Browse spaces')
   const [activeModal, setActiveModal] = useState<DirectoryEntry | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [subscribeBusyIds, setSubscribeBusyIds] = useState<Set<string>>(
@@ -260,7 +262,6 @@ export default function SpaceBrowserPage() {
   return (
     <div class="sh-space-browser">
       <div class="sh-page-header">
-        <h1>Browse spaces</h1>
         {canRefresh && (
           <Button
             variant="secondary" loading={refreshing}

@@ -8,9 +8,11 @@ import { posts, feedLoading, feedHasMore, loadFeed } from '@/store/feed'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { loadHouseholdUsers } from '@/store/householdUsers'
+import { useTitle } from '@/store/pageTitle'
 import { PostCard } from '@/components/PostCard'
 import { Composer } from '@/components/Composer'
 import { CommentThread } from '@/components/CommentThread'
+import { HouseholdPresenceStrip } from '@/components/HouseholdPresenceStrip'
 import { Spinner } from '@/components/Spinner'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
@@ -19,6 +21,7 @@ import type { Comment, FeedPost } from '@/types'
 const expandedComments = signal<Record<string, Comment[]>>({})
 
 export default function FeedPage() {
+  useTitle('Household')
   useEffect(() => {
     void loadHouseholdUsers()
     loadFeed()
@@ -156,7 +159,7 @@ export default function FeedPage() {
 
   return (
     <div class="sh-feed">
-      <h1>Household Feed</h1>
+      <HouseholdPresenceStrip />
       <Composer onSubmit={handleSubmit} context="Household" />
       {posts.value.map(post => (
         <div key={post.id} class="sh-feed-item">

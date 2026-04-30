@@ -2,6 +2,7 @@
  * NotificationsPage — notification centre (§23.3).
  */
 import { useEffect } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -13,6 +14,7 @@ const notifications = signal<Notification[]>([])
 const loading = signal(true)
 
 export default function NotificationsPage() {
+  useTitle('Notifications')
   useEffect(() => {
     api.get('/api/notifications?limit=50').then(data => {
       notifications.value = data
@@ -47,7 +49,6 @@ export default function NotificationsPage() {
   return (
     <div class="sh-notifications-page">
       <div class="sh-page-header">
-        <h1>Notifications</h1>
         <Button variant="secondary" onClick={markAllRead}>Mark all read</Button>
       </div>
       {notifications.value.length === 0 && <p class="sh-muted">No notifications yet.</p>}

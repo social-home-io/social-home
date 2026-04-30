@@ -12,6 +12,7 @@
  * the `tabs` array.
  */
 import { useEffect, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { currentUser } from '@/store/auth'
@@ -56,11 +57,11 @@ const loading       = signal(true)
 const tab           = signal<TabId>('members')
 
 export default function AdminPage() {
+  useTitle('Admin')
   const user = currentUser.value
   if (!user?.is_admin) {
     return (
       <div class="sh-admin">
-        <h1>Admin Panel</h1>
         <p>You must be an admin to view this page.</p>
       </div>
     )
@@ -72,7 +73,6 @@ export default function AdminPage() {
 
   return (
     <div class="sh-admin">
-      <h1>Admin Panel</h1>
 
       <nav class="sh-admin-tabs" role="tablist">
         {([

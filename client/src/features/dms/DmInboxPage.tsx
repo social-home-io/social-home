@@ -1,4 +1,5 @@
 import { useEffect } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import type { Conversation } from '@/types'
@@ -11,6 +12,7 @@ const conversations = signal<Conversation[]>([])
 const loading = signal(true)
 
 export default function DmInboxPage() {
+  useTitle('Messages')
   useEffect(() => {
     api.get('/api/conversations').then(data => {
       conversations.value = data
@@ -23,7 +25,6 @@ export default function DmInboxPage() {
   return (
     <div class="sh-dms">
       <div class="sh-page-header">
-        <h1>Messages</h1>
         <Button onClick={() => openNewDm()}>+ New message</Button>
       </div>
       {conversations.value.length === 0 && (

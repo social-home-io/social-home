@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import type { Space } from '@/types'
@@ -88,6 +89,7 @@ function SpaceRow({
 }
 
 export default function SpaceListPage() {
+  useTitle('Spaces')
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set<string>())
 
   useEffect(() => {
@@ -119,7 +121,6 @@ export default function SpaceListPage() {
   return (
     <div class="sh-spaces">
       <div class="sh-page-header">
-        <h1>Spaces</h1>
         <div class="sh-page-header__actions">
           <Button
             variant="secondary"

@@ -11,6 +11,7 @@
  * frame so the grid updates live — no manual refresh needed.
  */
 import { useEffect } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
@@ -61,6 +62,7 @@ async function reloadSaved() {
 }
 
 export default function BazaarPage() {
+  useTitle('Bazaar')
   const me = currentUser.value?.user_id
 
   useEffect(() => {
@@ -98,7 +100,6 @@ export default function BazaarPage() {
   return (
     <div class="sh-bazaar">
       <div class="sh-page-header">
-        <h1>Bazaar</h1>
         <Button onClick={openBazaarCreate}>+ New listing</Button>
       </div>
 
