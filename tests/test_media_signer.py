@@ -213,8 +213,7 @@ def test_sign_media_urls_in_image_urls_preserves_external(
 
 def test_strip_signature_query_removes_query() -> None:
     assert (
-        strip_signature_query("/api/media/x.webp?exp=1&sig=abc")
-        == "/api/media/x.webp"
+        strip_signature_query("/api/media/x.webp?exp=1&sig=abc") == "/api/media/x.webp"
     )
 
 

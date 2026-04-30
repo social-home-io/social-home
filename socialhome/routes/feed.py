@@ -59,8 +59,6 @@ def _serialise_signed(request: web.Request, obj):
     return payload
 
 
-
-
 def _coerce_datetimes(d: dict) -> dict:
     """Convert datetime values to ISO strings and frozensets to sorted lists."""
     out: dict = {}
@@ -219,7 +217,8 @@ class PostCommentView(BaseView):
             parent_id=body.get("parent_id"),
         )
         return web.json_response(
-            _serialise_signed(self.request, comment), status=201,
+            _serialise_signed(self.request, comment),
+            status=201,
         )
 
     async def get(self) -> web.Response:

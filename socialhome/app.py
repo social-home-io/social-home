@@ -28,7 +28,13 @@ import aiolibdatachannel as rtc
 from aiohttp import web
 
 from . import app_keys as K
-from .auth import BearerTokenStrategy, ChainedStrategy, HaIngressStrategy, SignedMediaStrategy, require_auth
+from .auth import (
+    BearerTokenStrategy,
+    ChainedStrategy,
+    HaIngressStrategy,
+    SignedMediaStrategy,
+    require_auth,
+)
 from .config import Config
 from .db import AsyncDatabase
 from .domain.federation import FederationEventType
@@ -1132,7 +1138,9 @@ def create_app(config: Config | None = None) -> web.Application:
     ha_strategy = HaIngressStrategy(user_repo)
     signed_media_strategy = SignedMediaStrategy()
     chained_strategy = ChainedStrategy(
-        signed_media_strategy, ha_strategy, bearer_strategy,
+        signed_media_strategy,
+        ha_strategy,
+        bearer_strategy,
     )
     auth_middleware = require_auth(chained_strategy)
 

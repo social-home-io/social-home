@@ -68,7 +68,9 @@ class MediaUrlSigner:
             raise ValueError("HMAC key must be at least 16 bytes")
         self._key = key
 
-    def sign(self, path: str, *, ttl: int = DEFAULT_TTL_SECONDS, now: int | None = None) -> str:
+    def sign(
+        self, path: str, *, ttl: int = DEFAULT_TTL_SECONDS, now: int | None = None
+    ) -> str:
         """Return ``path`` with ``?exp=<ts>&sig=<b64>`` appended.
 
         Existing query params are preserved. ``path`` may already carry
@@ -94,7 +96,10 @@ class MediaUrlSigner:
             return False
         try:
             exp_int = int(exp)
-        except (TypeError, ValueError):
+        except ValueError:
+            # ``exp`` already passed the ``not exp`` truthiness check, so
+            # it can't be ``None`` here — only the malformed-int branch
+            # remains, which raises ``ValueError`` (never ``TypeError``).
             return False
         if now is None:
             now = int(time.time())

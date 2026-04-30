@@ -151,7 +151,8 @@ class BazaarCollectionView(BaseView):
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
         return web.json_response(
-            _listing_dict_signed(self.request, listing), status=201,
+            _listing_dict_signed(self.request, listing),
+            status=201,
         )
 
 

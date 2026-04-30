@@ -87,9 +87,7 @@ class ConversationMessageView(BaseView):
                     "media_url": m.media_url,
                     "reply_to_id": m.reply_to_id,
                     "deleted": m.deleted,
-                    "created_at": m.created_at.isoformat()
-                    if m.created_at
-                    else None,
+                    "created_at": m.created_at.isoformat() if m.created_at else None,
                     "edited_at": m.edited_at.isoformat() if m.edited_at else None,
                 }
             )
