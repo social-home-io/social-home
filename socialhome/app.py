@@ -1315,9 +1315,13 @@ def create_app(config: Config | None = None) -> web.Application:
         # identity seed so it never reuses the federation Ed25519 key
         # material directly. Stashed here (rather than at app-build time)
         # because the seed only becomes available after this bootstrap.
-        app[K.media_signer_key] = MediaUrlSigner(
-            key=derive_signing_key(identity_seed),
-        )
+        media_signer = MediaUrlSigner(key=derive_signing_key(identity_seed))
+        app[K.media_signer_key] = media_signer
+        # WebSocket frames for ``post.created`` / ``comment.added`` etc.
+        # need the same signed URL shape as the REST responses, so the
+        # SPA can render `<img src={post.media_url}>` straight from the
+        # frame without a follow-up REST hydrate.
+        realtime_service.attach_media_signer(media_signer)
 
         # Report service auto-forwards fraud reports to every paired GFS.
         # Identity seed is the Ed25519 signing key used on /gfs/report.
