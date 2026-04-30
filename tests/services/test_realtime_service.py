@@ -134,6 +134,28 @@ async def test_post_created_fans_to_household(env):
     assert "post.created" in sock.sent[0]
 
 
+async def test_ws_post_created_carries_signed_media_url(env):
+    """Browser-loaded ``<img src={post.media_url}>`` needs the URL to
+    arrive **already signed** in the WS frame — otherwise it 401s when
+    the SPA renders a freshly-broadcast post without a REST hydrate."""
+    from dataclasses import replace
+
+    from socialhome.media_signer import MediaUrlSigner
+
+    svc, bus, ws = env
+    svc.attach_media_signer(MediaUrlSigner(key=b"\xab" * 32))
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        PostCreated(post=replace(_post(), media_url="/api/media/abc.webp")),
+    )
+    assert sock.sent
+    frame = sock.sent[0]
+    assert "post.created" in frame
+    assert "/api/media/abc.webp?exp=" in frame
+    assert "sig=" in frame
+
+
 async def test_post_edited_fans_to_household(env):
     svc, bus, ws = env
     sock = _FakeWS()

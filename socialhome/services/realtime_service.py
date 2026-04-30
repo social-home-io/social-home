@@ -96,6 +96,7 @@ from ..domain.events import (
 )
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.ws_manager import WebSocketManager
+from ..media_signer import MediaUrlSigner, sign_media_urls_in
 from .space_bot_service import (
     SpaceBotCreated,
     SpaceBotDeleted,
@@ -121,7 +122,7 @@ class RealtimeService:
         Used to enumerate space members for SpacePostCreated events.
     """
 
-    __slots__ = ("_bus", "_ws", "_user_repo", "_space_repo")
+    __slots__ = ("_bus", "_ws", "_user_repo", "_space_repo", "_media_signer")
 
     def __init__(
         self,
@@ -130,11 +131,24 @@ class RealtimeService:
         *,
         user_repo,
         space_repo,
+        media_signer: MediaUrlSigner | None = None,
     ) -> None:
         self._bus = bus
         self._ws = ws
         self._user_repo = user_repo
         self._space_repo = space_repo
+        # Lets WS broadcast frames carry the same signed ``media_url`` /
+        # ``picture_url`` / ``cover_url`` shape the REST API returns, so
+        # browsers can drop the fields straight into ``<img src>``
+        # without a follow-up REST hydrate. Optional only because
+        # ``__init__`` runs before the signer is constructed in
+        # ``_on_startup``; ``attach_media_signer`` wires it in once
+        # available.
+        self._media_signer = media_signer
+
+    def attach_media_signer(self, signer: MediaUrlSigner) -> None:
+        """Late binding — signer is built after RealtimeService.__init__."""
+        self._media_signer = signer
 
     # ─── Wiring ───────────────────────────────────────────────────────────
 
@@ -1049,6 +1063,8 @@ class RealtimeService:
     # ─── Fan-out helpers ──────────────────────────────────────────────────
 
     async def _broadcast_household(self, payload: dict) -> int:
+        if self._media_signer is not None:
+            sign_media_urls_in(payload, self._media_signer, extra_fields=("url",))
         users = await self._user_repo.list_active()
         return await self._ws.broadcast_to_users(
             [u.user_id for u in users],
@@ -1056,6 +1072,8 @@ class RealtimeService:
         )
 
     async def _broadcast_space(self, space_id: str, payload: dict) -> int:
+        if self._media_signer is not None:
+            sign_media_urls_in(payload, self._media_signer, extra_fields=("url",))
         ids = await self._space_repo.list_local_member_user_ids(space_id)
         return await self._ws.broadcast_to_users(ids, payload)
 
