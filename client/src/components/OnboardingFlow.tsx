@@ -10,6 +10,7 @@
 import { signal } from '@preact/signals'
 import { type ComponentChildren } from 'preact'
 import { api } from '@/api'
+import { currentUser } from '@/store/auth'
 import { Button } from './Button'
 
 const step = signal(0)
@@ -122,10 +123,23 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   const current = STEPS[step.value]
   const isLast = step.value === STEPS.length - 1
 
+  // Both "Let's go" and "Skip tour" mark the wizard done. ``App.tsx``
+  // gates the wizard on ``currentUser.is_new_member``, so we mirror the
+  // server-side flag flip onto the local ``currentUser`` signal —
+  // otherwise the App's next render re-flips ``showOnboarding`` to
+  // ``true`` and the dialog reappears, making both buttons look like
+  // they "do nothing".
+  const finish = () => {
+    api.post('/api/me/onboarding-complete').catch(() => {})
+    if (currentUser.value) {
+      currentUser.value = { ...currentUser.value, is_new_member: false }
+    }
+    onComplete()
+  }
+
   const next = () => {
     if (isLast) {
-      api.post('/api/me/onboarding-complete').catch(() => {})
-      onComplete()
+      finish()
     } else {
       step.value++
     }
@@ -136,8 +150,7 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   }
 
   const skip = () => {
-    api.post('/api/me/onboarding-complete').catch(() => {})
-    onComplete()
+    finish()
   }
 
   return (
