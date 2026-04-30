@@ -12,7 +12,13 @@ import { signal, type Signal } from '@preact/signals'
 import { useState } from 'preact/hooks'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
-import { ReactionPicker } from './ReactionPicker'
+import {
+  EmojiAutocomplete,
+  checkForEmojiTrigger,
+  closeEmojiAutocomplete,
+  handleEmojiAutocompleteKey,
+} from './EmojiAutocomplete'
+import { EmojiPickButton } from './EmojiPickButton'
 import { currentUser } from '@/store/auth'
 import { resolveAvatar, resolveDisplayName } from '@/utils/avatar'
 import type { Comment } from '@/types'
@@ -35,37 +41,33 @@ const replyContent = signal('')
 // drafted while the user opens a reply form on a sibling comment.
 const newCommentContent = signal('')
 const submitting = signal(false)
-// At most one emoji-insert popover open at a time across all
-// comment inputs in the page. ``'new'`` targets ``newCommentContent``;
-// any other value targets ``replyContent`` (since only one reply form
-// is open at a time, the comment id doubles as the unique key).
-const emojiPickerFor = signal<string | null>(null)
 
-function EmojiInsertButton(
-  { target, openKey }: { target: Signal<string>; openKey: string },
-) {
-  const isOpen = emojiPickerFor.value === openKey
-  return (
-    <div class="sh-comment-emoji-wrap">
-      <button
-        type="button"
-        class="sh-comment-emoji-btn"
-        aria-label="Insert emoji"
-        aria-haspopup="dialog"
-        aria-expanded={isOpen}
-        onClick={() => {
-          emojiPickerFor.value = isOpen ? null : openKey
-        }}>
-        😀
-      </button>
-      {isOpen && (
-        <ReactionPicker
-          onSelect={(emoji) => { target.value = target.value + emoji }}
-          onClose={() => { emojiPickerFor.value = null }}
-        />
-      )}
-    </div>
-  )
+/** Splice an emoji into a Signal-bound text input at ``[start, end]``.
+ *  Used by the ``:foo`` autocomplete to replace the typed token with
+ *  the picked glyph. */
+function spliceIntoSignal(
+  target: Signal<string>,
+  emoji: string,
+  range: [number, number],
+): void {
+  const [start, end] = range
+  const before = target.value.slice(0, start)
+  const after = target.value.slice(end)
+  target.value = before + emoji + after
+}
+
+/** Generic ``onInput`` handler that syncs the input value into a
+ *  signal AND fires the ``:foo`` autocomplete check. The autocomplete
+ *  needs a splice callback so a single ``<EmojiAutocomplete>`` mount
+ *  can route picks back to whichever input started the trigger. */
+function bindEmojiAwareInput(target: Signal<string>) {
+  const splice = (emoji: string, range: [number, number]) =>
+    spliceIntoSignal(target, emoji, range)
+  return (e: Event) => {
+    const t = e.target as HTMLInputElement
+    target.value = t.value
+    checkForEmojiTrigger(t.value, t.selectionStart ?? 0, t, splice)
+  }
 }
 
 export function CommentThread(
@@ -96,15 +98,23 @@ export function CommentThread(
         </div>
         <div class="sh-comment-new">
           <input placeholder="Add a comment…" value={newCommentContent.value}
-            onInput={(e) => newCommentContent.value = (e.target as HTMLInputElement).value}
-            onKeyDown={(e) => e.key === 'Enter' && handleSubmit(null)}
+            onInput={bindEmojiAwareInput(newCommentContent)}
+            onKeyDown={(e) => {
+              if (handleEmojiAutocompleteKey(e)) {
+                e.preventDefault()
+                return
+              }
+              if (e.key === 'Enter') handleSubmit(null)
+            }}
+            onBlur={() => closeEmojiAutocomplete()}
             aria-label="New comment" />
-          <EmojiInsertButton target={newCommentContent} openKey="new" />
+          <EmojiPickButton target={newCommentContent} openKey="comment-new" />
           <Button onClick={() => handleSubmit(null)} loading={submitting.value}
                   disabled={!newCommentContent.value.trim()}>
             Post
           </Button>
         </div>
+        <EmojiAutocomplete />
       </div>
     )
   }
@@ -129,9 +139,16 @@ export function CommentThread(
             <div class="sh-comment-reply-form">
               <input placeholder={`Reply to ${c.author}…`}
                 value={replyContent.value} autoFocus
-                onInput={(e) => replyContent.value = (e.target as HTMLInputElement).value}
-                onKeyDown={(e) => e.key === 'Enter' && handleSubmit(c.id)} />
-              <EmojiInsertButton target={replyContent} openKey={c.id} />
+                onInput={bindEmojiAwareInput(replyContent)}
+                onKeyDown={(e) => {
+                  if (handleEmojiAutocompleteKey(e)) {
+                    e.preventDefault()
+                    return
+                  }
+                  if (e.key === 'Enter') handleSubmit(c.id)
+                }}
+                onBlur={() => closeEmojiAutocomplete()} />
+              <EmojiPickButton target={replyContent} openKey={`reply-${c.id}`} />
               <Button variant="secondary"
                       onClick={() => { replyTo.value = null; replyContent.value = '' }}>
                 Cancel
@@ -147,15 +164,26 @@ export function CommentThread(
       ))}
       <div class="sh-comment-new">
         <input placeholder="Add a comment…" value={newCommentContent.value}
-          onInput={(e) => newCommentContent.value = (e.target as HTMLInputElement).value}
-          onKeyDown={(e) => e.key === 'Enter' && handleSubmit(null)}
+          onInput={bindEmojiAwareInput(newCommentContent)}
+          onKeyDown={(e) => {
+            if (handleEmojiAutocompleteKey(e)) {
+              e.preventDefault()
+              return
+            }
+            if (e.key === 'Enter') handleSubmit(null)
+          }}
+          onBlur={() => closeEmojiAutocomplete()}
           aria-label="New comment" />
-        <EmojiInsertButton target={newCommentContent} openKey="new" />
+        <EmojiPickButton target={newCommentContent} openKey="comment-new" />
         <Button onClick={() => handleSubmit(null)} loading={submitting.value}
                 disabled={!newCommentContent.value.trim()}>
           Post
         </Button>
       </div>
+      {/* Mounted once for the whole thread; module-level state keeps it
+          singleton across all three input surfaces. Each input
+          registers its own splice target via :func:`checkForEmojiTrigger`. */}
+      <EmojiAutocomplete />
     </div>
   )
 }

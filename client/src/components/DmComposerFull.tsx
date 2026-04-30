@@ -4,6 +4,13 @@
  */
 import { signal } from '@preact/signals'
 import { Button } from './Button'
+import {
+  EmojiAutocomplete,
+  checkForEmojiTrigger,
+  closeEmojiAutocomplete,
+  handleEmojiAutocompleteKey,
+} from './EmojiAutocomplete'
+import { EmojiPickButton } from './EmojiPickButton'
 import { SttButton } from './SttButton'
 import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
 import { sendTyping } from './TypingIndicator'
@@ -53,9 +60,17 @@ export function DmComposerFull({ conversationId, onSend }: {
     input.click()
   }
 
+  const splice = (emoji: string, range: [number, number]) => {
+    const [start, end] = range
+    content.value =
+      content.value.slice(0, start) + emoji + content.value.slice(end)
+  }
+
   const handleInput = (e: Event) => {
-    content.value = (e.target as HTMLInputElement).value
+    const t = e.target as HTMLInputElement
+    content.value = t.value
     sendTyping(conversationId)
+    checkForEmojiTrigger(t.value, t.selectionStart ?? 0, t, splice)
   }
 
   return (
@@ -82,7 +97,18 @@ export function DmComposerFull({ conversationId, onSend }: {
       <div class="sh-dm-input-row">
         <input value={content.value} onInput={handleInput}
           placeholder="Type a message..." autocomplete="off"
-          onKeyDown={(e) => e.key === 'Enter' && handleSend()} />
+          onKeyDown={(e) => {
+            if (handleEmojiAutocompleteKey(e)) {
+              e.preventDefault()
+              return
+            }
+            if (e.key === 'Enter') handleSend()
+          }}
+          onBlur={() => closeEmojiAutocomplete()} />
+        <EmojiPickButton
+          openKey="dm-composer"
+          onInsert={(emoji) => { content.value = content.value + emoji }}
+        />
         <SttButton onText={(t) => {
           const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
           content.value = content.value + sep + t
@@ -90,6 +116,7 @@ export function DmComposerFull({ conversationId, onSend }: {
         <Button onClick={handleSend} loading={sending.value}
           disabled={!content.value.trim() && !mediaUrl.value}>Send</Button>
       </div>
+      <EmojiAutocomplete />
     </div>
   )
 }
