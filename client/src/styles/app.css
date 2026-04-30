@@ -6611,6 +6611,75 @@ hr {
 }
 .sh-mention-option:hover { background: var(--sh-bg-secondary); }
 
+/* Slack-style ``:shortcode`` autocomplete shown as the user types. */
+.sh-emoji-autocomplete {
+  position: absolute;
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  box-shadow: var(--sh-shadow-lg);
+  padding: var(--sh-space-xs);
+  min-width: 200px;
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: var(--sh-z-dropdown);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sh-emoji-autocomplete-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: 4px 8px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: var(--sh-radius-sm);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.sh-emoji-autocomplete-row:hover,
+.sh-emoji-autocomplete-row--active {
+  background: var(--sh-bg-secondary);
+}
+.sh-emoji-autocomplete-glyph {
+  font-size: 1.2rem;
+  width: 1.5rem;
+  display: inline-flex;
+  justify-content: center;
+}
+.sh-emoji-autocomplete-label {
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text-muted);
+}
+
+/* Shared 😀 emoji-picker trigger button for any text input
+ * (composer, comments, DM, bazaar). Replaces the per-component inline
+ * versions; opens :class:`ReactionPicker` as a popover. */
+.sh-emoji-pick-wrap { position: relative; display: inline-flex; }
+.sh-emoji-pick-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 1.1rem;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--sh-radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--sh-transition-fast);
+}
+.sh-emoji-pick-btn:hover { background: var(--sh-bg-secondary); }
+.sh-emoji-pick-wrap .sh-reaction-picker {
+  bottom: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  top: auto;
+}
+
 /* Reaction picker */
 .sh-reaction-picker {
   position: absolute;

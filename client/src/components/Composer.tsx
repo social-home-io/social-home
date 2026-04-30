@@ -10,6 +10,13 @@ import { useRef, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
+import {
+  EmojiAutocomplete,
+  checkForEmojiTrigger,
+  closeEmojiAutocomplete,
+  handleEmojiAutocompleteKey,
+} from './EmojiAutocomplete'
+import { EmojiPickButton } from './EmojiPickButton'
 import { LocationPicker, type LocationDraft } from './LocationPicker'
 import { MarkdownToolbar } from './MarkdownToolbar'
 import { PollBuilder, type PollDraft } from './PollUI'
@@ -150,6 +157,30 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
     if (e.currentTarget === e.target) setDragActive(false)
   }
 
+  /** Replace ``content[start:end]`` with ``emoji`` and restore the
+   *  caret immediately after the inserted glyph. Used by both the
+   *  ``:foo`` autocomplete (range = the typed token) and the picker
+   *  button (range = caret position). */
+  const spliceEmoji = (emoji: string, range: [number, number]) => {
+    const [start, end] = range
+    const before = content.value.slice(0, start)
+    const after = content.value.slice(end)
+    content.value = (before + emoji + after).slice(0, MAX_LENGTH)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (ta) {
+        const pos = (before + emoji).length
+        ta.focus()
+        ta.setSelectionRange(pos, pos)
+      }
+    })
+  }
+  const insertEmojiAtCursor = (emoji: string) => {
+    const ta = textareaRef.current
+    const pos = ta ? ta.selectionStart : content.value.length
+    spliceEmoji(emoji, [pos, pos])
+  }
+
   const handleSubmit = async (e: Event) => {
     e.preventDefault()
     if (submitting.value || overLimit) return
@@ -261,7 +292,17 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
             class="sh-composer-input"
             placeholder={placeholder || "What's on your mind?"}
             value={content.value}
-            onInput={(e) => content.value = (e.target as HTMLTextAreaElement).value}
+            onInput={(e) => {
+              const t = e.target as HTMLTextAreaElement
+              content.value = t.value
+              checkForEmojiTrigger(t.value, t.selectionStart ?? 0, t, spliceEmoji)
+            }}
+            onKeyDown={(e) => {
+              if (handleEmojiAutocompleteKey(e)) {
+                e.preventDefault()
+              }
+            }}
+            onBlur={() => closeEmojiAutocomplete()}
             rows={3}
             maxLength={MAX_LENGTH}
           />
@@ -342,6 +383,12 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       )}
       <div class="sh-composer-footer">
         {context && <span class="sh-context-badge">🌐 {context}</span>}
+        {!typeHidesTextarea(postType.value) && (
+          <EmojiPickButton
+            openKey="composer"
+            onInsert={insertEmojiAtCursor}
+          />
+        )}
         {postType.value === 'text' && (
           <SttButton onText={(t) => {
             const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
@@ -390,6 +437,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
         }}
         onClose={() => setLocationOpen(false)}
       />
+      <EmojiAutocomplete />
     </form>
   )
 }
