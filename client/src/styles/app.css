@@ -3486,7 +3486,8 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   color: inherit;
   white-space: pre-wrap;
 }
-.sh-sticky-delete {
+.sh-sticky-delete,
+.sh-sticky-edit-btn {
   position: absolute;
   top: var(--sh-space-xs);
   right: var(--sh-space-xs);
@@ -3495,13 +3496,95 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   cursor: pointer;
   color: var(--sh-text-muted);
   opacity: 0;
-  transition: opacity var(--sh-transition-fast);
+  transition: opacity var(--sh-transition-fast),
+              background var(--sh-transition-fast);
   width: 24px;
   height: 24px;
   border-radius: var(--sh-radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--sh-font-size-sm);
 }
-.sh-sticky:hover .sh-sticky-delete { opacity: 1; }
-.sh-sticky-delete:hover { background: rgba(0,0,0,0.1); }
+.sh-sticky:hover .sh-sticky-delete,
+.sh-sticky:focus-within .sh-sticky-delete,
+.sh-sticky:hover .sh-sticky-edit-btn,
+.sh-sticky:focus-within .sh-sticky-edit-btn { opacity: 1; }
+.sh-sticky-delete:hover,
+.sh-sticky-edit-btn:hover { background: rgba(0,0,0,0.1); }
+
+/* ───── Sticky create / edit dialog ────────────────────────────────────
+ *
+ * The textarea live-tints to the selected colour so the dialog reads
+ * as a preview of the saved sticky. Swatches sit beneath in a
+ * 6-tile grid; the active one gets a terracotta ring + a subtle lift.
+ * Delete sits flush-left in the action row so destructive intent is
+ * deliberate (you don't click it when you mean to save). */
+.sh-sticky-dialog .sh-sticky-dialog-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 120px;
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  font-family: inherit;
+  font-size: var(--sh-font-size-base);
+  line-height: 1.45;
+  color: #2a1d10;     /* dark ink reads on every swatch hue */
+  box-shadow: var(--sh-shadow-xs);
+  transition: background var(--sh-transition-fast);
+}
+.sh-sticky-dialog .sh-sticky-dialog-textarea:focus {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+}
+.sh-sticky-dialog .sh-sticky-dialog-counter {
+  display: block;
+  text-align: right;
+  font-size: var(--sh-font-size-xs);
+  margin-top: 2px;
+}
+
+.sh-sticky-dialog-colors {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.sh-sticky-dialog-colors legend {
+  font-size: var(--sh-font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: var(--sh-space-xs);
+}
+.sh-sticky-dialog-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-sm);
+}
+.sh-sticky-dialog-swatch {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  cursor: pointer;
+  padding: 0;
+  box-shadow: var(--sh-shadow-xs);
+  transition: transform var(--sh-transition-fast),
+              box-shadow var(--sh-transition-fast);
+}
+.sh-sticky-dialog-swatch:hover { transform: translateY(-2px); }
+.sh-sticky-dialog-swatch--active {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+  transform: translateY(-2px);
+  box-shadow: var(--sh-shadow-pinned);
+}
+
+.sh-sticky-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+}
 
 /* Gallery */
 .sh-gallery { display: flex; flex-direction: column; gap: var(--sh-space-md); }
