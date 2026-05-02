@@ -542,7 +542,8 @@ class GalleryService:
     )
 
     async def ensure_system_album(
-        self, space_id: str | None,
+        self,
+        space_id: str | None,
     ) -> GalleryAlbum:
         """Idempotent get-or-create. Race-safe via the partial unique index."""
         existing = await self._repo.get_system_album(space_id)
@@ -570,7 +571,9 @@ class GalleryService:
         return winner if winner is not None else album
 
     async def mirror_post(
-        self, post: Post, space_id: str | None,
+        self,
+        post: Post,
+        space_id: str | None,
     ) -> None:
         """Mirror a post's media into the system album for the scope.
 

@@ -68,7 +68,8 @@ class SystemAlbumBridge:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning(
                 "system-album: mirror PostCreated failed for %s: %s",
-                event.post.id, exc,
+                event.post.id,
+                exc,
             )
 
     async def _on_post_edited(self, event: PostEdited) -> None:
@@ -77,7 +78,8 @@ class SystemAlbumBridge:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning(
                 "system-album: mirror PostEdited failed for %s: %s",
-                event.post.id, exc,
+                event.post.id,
+                exc,
             )
 
     async def _on_post_deleted(self, event: PostDeleted) -> None:
@@ -90,7 +92,8 @@ class SystemAlbumBridge:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning(
                 "system-album: unmirror PostDeleted failed for %s: %s",
-                event.post_id, exc,
+                event.post_id,
+                exc,
             )
 
     # ─── Space feed ───────────────────────────────────────────────────────
@@ -101,7 +104,8 @@ class SystemAlbumBridge:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning(
                 "system-album: mirror SpacePostCreated failed for %s: %s",
-                event.post.id, exc,
+                event.post.id,
+                exc,
             )
 
     async def _on_space_post_moderated(self, event: SpacePostModerated) -> None:
@@ -116,5 +120,6 @@ class SystemAlbumBridge:
         except Exception as exc:  # pragma: no cover - defensive
             log.warning(
                 "system-album: unmirror SpacePostModerated failed for %s: %s",
-                event.post.id, exc,
+                event.post.id,
+                exc,
             )

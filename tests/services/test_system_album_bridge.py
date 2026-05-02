@@ -203,9 +203,13 @@ async def test_post_deleted_clears_mirror(env):
 async def test_space_post_moderated_clears_mirror(env):
     p = _post(image_urls=("/api/media/space.webp",))
     await env["bus"].publish(SpacePostCreated(post=p, space_id="sp-1"))
-    await env["bus"].publish(SpacePostModerated(
-        space_id="sp-1", post=p, moderated_by="mod-id",
-    ))
+    await env["bus"].publish(
+        SpacePostModerated(
+            space_id="sp-1",
+            post=p,
+            moderated_by="mod-id",
+        )
+    )
     items = await env["repo"].list_items_by_source_post(p.id)
     assert items == []
 

@@ -40,12 +40,14 @@ class AbstractGalleryRepo(Protocol):
     ) -> list[GalleryItem]: ...
     async def get_item(self, item_id: str) -> GalleryItem | None: ...
     async def list_items_by_source_post(
-        self, post_id: str,
+        self,
+        post_id: str,
     ) -> list[GalleryItem]: ...
     async def create_item(self, item: GalleryItem) -> GalleryItem: ...
     async def delete_item(self, item_id: str) -> None: ...
     async def delete_items_by_source_post(
-        self, post_id: str,
+        self,
+        post_id: str,
     ) -> tuple[str | None, int]: ...
     async def increment_item_count(self, album_id: str, delta: int) -> None: ...
     async def recount_items(self, album_id: str) -> int: ...
@@ -110,7 +112,8 @@ class SqliteGalleryRepo:
         return [self._row_to_album(r) for r in rows_to_dicts(rows)]
 
     async def get_system_album(
-        self, space_id: str | None,
+        self,
+        space_id: str | None,
     ) -> GalleryAlbum | None:
         """Return the per-scope system album (or ``None`` before lazy create).
 
@@ -272,7 +275,8 @@ class SqliteGalleryRepo:
         return [self._row_to_item(r) for r in rows_to_dicts(rows)]
 
     async def list_items_by_source_post(
-        self, post_id: str,
+        self,
+        post_id: str,
     ) -> list[GalleryItem]:
         """Items mirrored from a specific feed post (system-album only).
 
@@ -323,7 +327,8 @@ class SqliteGalleryRepo:
         )
 
     async def delete_items_by_source_post(
-        self, post_id: str,
+        self,
+        post_id: str,
     ) -> tuple[str | None, int]:
         """Bulk-delete every mirrored item for ``post_id``.
 
