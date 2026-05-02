@@ -20,6 +20,7 @@ import { OnboardingFlow } from '@/components/OnboardingFlow'
 import { SpaceCreateDialog } from '@/components/SpaceCreateDialog'
 import { NewDmDialog } from '@/components/NewDmDialog'
 import { CommentOverlay } from '@/components/CommentOverlay'
+import { StickyDialog } from '@/components/StickyDialog'
 import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
@@ -226,6 +227,7 @@ export function App() {
           <SpaceCreateDialog />
           <NewDmDialog />
           <CommentOverlay />
+          <StickyDialog />
           <SpaceInviteDialog />
           <RejectReasonDialog />
           <ReportDialog />

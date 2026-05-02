@@ -16,10 +16,13 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
+import {
+  STICKY_COLORS,
+  openCreateStickyDialog,
+  openEditStickyDialog,
+} from '@/components/StickyDialog'
 import { showToast } from '@/components/Toast'
 import { stickies, type StickyRow } from '@/store/stickies'
-
-const COLORS = ['#FFF9B1', '#FFB3B3', '#B3FFB3', '#B3D4FF', '#E8B3FF', '#FFD4B3']
 
 const BOARD_W = 1000   // normalised coordinate space (width units)
 const BOARD_H = 700    // normalised coordinate space (height units)
@@ -52,49 +55,27 @@ export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
     })
   }, [spaceId])
 
-  const addSticky = async () => {
-    const content = prompt('Sticky note:')
-    if (!content?.trim()) return
-    const color = COLORS[stickies.value.length % COLORS.length]
-    // Random initial position in the middle third of the board so new
-    // stickies don't stack on top of each other.
+  const addSticky = () => {
+    // Auto-pick a colour that cycles through the palette so a flood
+    // of new notes doesn't all land in default yellow. The dialog
+    // exposes a swatch picker — this is just the initial value.
+    const color = STICKY_COLORS[stickies.value.length % STICKY_COLORS.length]
+    // Random mid-board position so new stickies spread out instead of
+    // stacking. The dialog itself doesn't expose position controls;
+    // users drag to reposition after save.
     const position_x = 120 + Math.random() * (BOARD_W - 320)
     const position_y = 80 + Math.random() * (BOARD_H - 280)
-    try {
-      const row = await api.post(base(spaceId), {
-        content, color, position_x, position_y,
-      }) as StickyRow
-      if (!stickies.value.some(s => s.id === row.id)) {
-        stickies.value = [...stickies.value, row]
-      }
-    } catch (err: unknown) {
-      showToast(`Add failed: ${(err as Error)?.message ?? err}`, 'error')
-    }
+    openCreateStickyDialog(
+      spaceId ?? null,
+      { x: position_x, y: position_y },
+      color,
+    )
   }
 
-  const updateContent = async (id: string) => {
+  const editSticky = (id: string) => {
     const sticky = stickies.value.find(s => s.id === id)
     if (!sticky) return
-    const content = prompt('Edit note:', sticky.content)
-    if (content === null) return
-    try {
-      const updated = await api.patch(
-        `${base(spaceId)}/${id}`, { content },
-      ) as StickyRow
-      stickies.value = stickies.value.map(s => s.id === id ? updated : s)
-    } catch (err: unknown) {
-      showToast(`Update failed: ${(err as Error)?.message ?? err}`, 'error')
-    }
-  }
-
-  const deleteSticky = async (id: string) => {
-    if (!confirm('Delete this sticky?')) return
-    try {
-      await api.delete(`${base(spaceId)}/${id}`)
-      stickies.value = stickies.value.filter(s => s.id !== id)
-    } catch (err: unknown) {
-      showToast(`Delete failed: ${(err as Error)?.message ?? err}`, 'error')
-    }
+    openEditStickyDialog(sticky, spaceId ?? null)
   }
 
   /** Pointer-drag — live-update local position on move, PATCH on up. */
@@ -188,17 +169,18 @@ export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
               <button
                 type="button" class="sh-sticky-content"
                 aria-label={`Edit sticky: ${s.content}`}
-                onClick={() => void updateContent(s.id)}
+                onClick={() => editSticky(s.id)}
                 onPointerDown={(e) => e.stopPropagation()}
               >
                 {s.content}
               </button>
               <button
-                type="button" class="sh-sticky-delete"
-                aria-label="Delete sticky note"
-                onClick={() => void deleteSticky(s.id)}
+                type="button" class="sh-sticky-edit-btn"
+                aria-label="Edit sticky note"
+                title="Edit"
+                onClick={() => editSticky(s.id)}
                 onPointerDown={(e) => e.stopPropagation()}
-              >✕</button>
+              >✎</button>
             </div>
           ))}
         </div>
