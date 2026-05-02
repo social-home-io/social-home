@@ -20,12 +20,17 @@ import { openLightbox, type LightboxItem } from '@/components/ImageLightbox'
 interface Album {
   id: string
   space_id: string | null
-  owner_user_id: string
+  /** ``null`` for the auto-managed system album, which has no
+   *  human owner. */
+  owner_user_id: string | null
   name: string
   description?: string | null
   cover_url?: string | null
   item_count: number
   retention_exempt: boolean
+  /** Auto-managed "Posts" album. Cannot be deleted or uploaded to;
+   *  contents track every photo or video shared via a feed post. */
+  is_system?: boolean
 }
 
 interface Item {
@@ -126,11 +131,21 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
                 </div>
               )}
               <div class="sh-album-info">
-                <strong>{a.name}</strong>
+                <strong>
+                  {a.name}
+                  {a.is_system && (
+                    <span class="sh-album-system-badge"
+                          title="Auto-managed: contains every photo and video shared via the feed">
+                      <span aria-hidden="true">🔒</span> Auto
+                    </span>
+                  )}
+                </strong>
                 <span class="sh-muted">
                   {a.item_count} {a.item_count === 1 ? 'item' : 'items'}
                 </span>
-                {a.retention_exempt && <span class="sh-badge">Kept</span>}
+                {a.retention_exempt && !a.is_system && (
+                  <span class="sh-badge">Kept</span>
+                )}
               </div>
             </button>
           ))}
@@ -203,37 +218,63 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
     height:        i.height,
   }))
 
+  // Drag-drop is a noop on the system album — the album rejects
+  // direct uploads server-side too, but handling the UI ourselves
+  // avoids a needless 403 round-trip.
+  const dragHandlers = album.is_system ? {} : {
+    onDragOver: (e: DragEvent) => { e.preventDefault(); setDragOver(true) },
+    onDragLeave: () => setDragOver(false),
+    onDrop: (e: DragEvent) => {
+      e.preventDefault()
+      setDragOver(false)
+      void handleFiles(e.dataTransfer?.files ?? null)
+    },
+  }
+
   return (
     <div
       class={`sh-album-detail ${dragOver ? 'sh-album-detail--drag' : ''}`}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={(e) => {
-        e.preventDefault()
-        setDragOver(false)
-        void handleFiles(e.dataTransfer?.files ?? null)
-      }}
+      {...dragHandlers}
     >
       <header class="sh-page-header">
         <Button variant="secondary" onClick={onBack}>← Albums</Button>
-        <h1 style={{ margin: 0 }}>{album.name}</h1>
-        <div class="sh-row">
-          <Button onClick={() => inputRef.current?.click()}>+ Upload</Button>
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/jpeg,image/png,image/webp,image/gif,image/heic,video/mp4,video/webm,video/quicktime"
-            multiple
-            onChange={(e) => {
-              void handleFiles((e.target as HTMLInputElement).files)
-              ;(e.target as HTMLInputElement).value = ''
-            }}
-            hidden
-          />
-        </div>
+        <h1 style={{ margin: 0 }}>
+          {album.name}
+          {album.is_system && (
+            <span class="sh-album-system-badge"
+                  style={{ marginLeft: 'var(--sh-space-xs)' }}>
+              <span aria-hidden="true">🔒</span> Auto
+            </span>
+          )}
+        </h1>
+        {!album.is_system && (
+          <div class="sh-row">
+            <Button onClick={() => inputRef.current?.click()}>+ Upload</Button>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,image/heic,video/mp4,video/webm,video/quicktime"
+              multiple
+              onChange={(e) => {
+                void handleFiles((e.target as HTMLInputElement).files)
+                ;(e.target as HTMLInputElement).value = ''
+              }}
+              hidden
+            />
+          </div>
+        )}
       </header>
 
       {album.description && <p class="sh-muted">{album.description}</p>}
+
+      {album.is_system && (
+        <div class="sh-album-system-hint">
+          <span aria-hidden="true">📸</span>{' '}
+          Photos and videos shared to the feed appear here automatically.
+          Post a photo to add one — items are removed when their source
+          post is deleted.
+        </div>
+      )}
 
       {uploadPct !== null && (
         <div class="sh-upload-progress" role="progressbar"
@@ -244,7 +285,7 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
         </div>
       )}
 
-      {dragOver && (
+      {dragOver && !album.is_system && (
         <div class="sh-drop-overlay" aria-hidden="true">
           Drop to upload
         </div>
@@ -253,8 +294,17 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
       {items.value.length === 0 ? (
         <div class="sh-empty-state">
           <div style={{ fontSize: '2.5rem' }}>🖼️</div>
-          <h3>This album is empty</h3>
-          <p>Drop photos or videos here, or click <strong>+ Upload</strong>.</p>
+          {album.is_system ? (
+            <>
+              <h3>No posts with photos or videos yet</h3>
+              <p>Share a photo or video in the feed to see it here.</p>
+            </>
+          ) : (
+            <>
+              <h3>This album is empty</h3>
+              <p>Drop photos or videos here, or click <strong>+ Upload</strong>.</p>
+            </>
+          )}
         </div>
       ) : (
         <div class="sh-image-grid">

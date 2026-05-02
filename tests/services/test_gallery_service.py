@@ -239,3 +239,70 @@ async def test_set_retention_exempt_non_owner_403(env):
             True,
             actor_user_id="b-id",
         )
+
+
+# ─── System album guards ─────────────────────────────────────────────────
+#
+# The auto-managed "Posts" album cannot be renamed, deleted, uploaded
+# to, or have its items individually removed. Five entry points reject
+# system-album mutations *before* the regular owner/admin check.
+
+
+async def test_ensure_system_album_idempotent(env):
+    a1 = await env.ensure_system_album(space_id=None)
+    a2 = await env.ensure_system_album(space_id=None)
+    assert a1.id == a2.id
+    assert a1.is_system is True
+    assert a1.owner_user_id is None
+
+
+async def test_system_album_household_and_space_isolated(env):
+    household = await env.ensure_system_album(space_id=None)
+    space = await env.ensure_system_album(space_id="sp-1")
+    assert household.id != space.id
+    assert household.space_id is None
+    assert space.space_id == "sp-1"
+
+
+async def test_system_album_delete_blocked(env):
+    a = await env.ensure_system_album(space_id=None)
+    with pytest.raises(GalleryPermissionError):
+        await env.delete_album(a.id, actor_user_id="a-id")
+
+
+async def test_system_album_update_blocked(env):
+    a = await env.ensure_system_album(space_id=None)
+    with pytest.raises(GalleryPermissionError):
+        await env.update_album(a.id, actor_user_id="a-id", name="renamed")
+
+
+async def test_system_album_upload_blocked(env):
+    a = await env.ensure_system_album(space_id=None)
+    with pytest.raises(GalleryPermissionError):
+        await env.upload_item(
+            a.id,
+            data=b"x" * 100,
+            content_type="image/jpeg",
+            caption=None,
+            uploader_user_id="a-id",
+        )
+
+
+async def test_system_album_set_retention_exempt_blocked(env):
+    a = await env.ensure_system_album(space_id=None)
+    with pytest.raises(GalleryPermissionError):
+        await env.set_retention_exempt(a.id, False, actor_user_id="a-id")
+
+
+async def test_list_albums_pins_system_album_first(env):
+    # Create a regular album first, then the system album. The list
+    # must return the system album at the top regardless of created_at.
+    await env.create_album(
+        space_id="sp-1",
+        owner_user_id="a-id",
+        name="Trip",
+    )
+    sys = await env.ensure_system_album(space_id="sp-1")
+    rows = await env.list_albums(space_id="sp-1", actor_user_id="a-id")
+    assert rows[0].id == sys.id
+    assert rows[0].is_system is True

@@ -263,6 +263,16 @@ Same CRUD shape:
 /api/gallery/albums[/{id}]    /{id}/items[/{iid}]
 ```
 
+Each `/api/gallery/albums` row carries an `is_system: bool` flag. The
+auto-managed "Posts" album (one per household, one per space; pinned
+to the top of the list) returns `is_system: true` and `owner_user_id:
+null`. `DELETE /api/gallery/albums/{id}`, `PATCH …`, `POST
+…/items`, `DELETE …/items/{iid}`, and the retention-exempt route
+return **HTTP 403** with code `system album cannot be …` for any
+system album — items appear and disappear strictly with their source
+feed post. Each item also carries `source_post_id: string | null`;
+non-null means the item was mirrored from a feed post.
+
 ### Bazaar offers & saved listings (§23.23)
 
 Offers write to a dedicated `bazaar_offers` table — distinct from

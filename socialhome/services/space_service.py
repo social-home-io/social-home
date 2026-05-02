@@ -35,6 +35,8 @@ from ..domain.events import (
     CommentAdded,
     CommentDeleted,
     CommentUpdated,
+    PostDeleted,
+    PostEdited,
     RemoteJoinRequestApproved,
     SpaceConfigChanged,
     SpaceLocationModeChanged,
@@ -1554,6 +1556,9 @@ class SpaceService:
         await self._posts.edit(post_id, new_content)
         refreshed = await self._posts.get(post_id)
         assert refreshed is not None  # just edited — must exist
+        # Bus fan-out so subscribers (system-album bridge, search index,
+        # …) can react. Mirrors ``feed_service.edit_post``.
+        await self._bus.publish(PostEdited(post=refreshed[1]))
         return refreshed[1]
 
     async def delete_post(
@@ -1586,6 +1591,11 @@ class SpaceService:
                     moderated_by=actor_user_id,
                 )
             )
+        # Generic post-deleted event — fires on both author + moderation
+        # paths so cross-cutting subscribers (system-album bridge, search
+        # index, federation outbound for SPACE_POST_DELETED) have a single
+        # hook regardless of who deleted the row.
+        await self._bus.publish(PostDeleted(post_id=post_id))
 
     async def add_reaction(
         self,

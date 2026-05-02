@@ -39,6 +39,7 @@ from ..domain.media_constraints import (
     CAPTION_MAX,
     VIDEO_MAX_DIMENSION,
 )
+from ..domain.post import Post, PostType
 from ..infrastructure.event_bus import EventBus
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
@@ -197,6 +198,10 @@ class GalleryService:
         album = await self._repo.get_album(album_id)
         if album is None:
             raise GalleryNotFoundError(f"album {album_id!r} not found")
+        if album.is_system:
+            raise GalleryPermissionError(
+                "system album cannot be renamed or edited",
+            )
         await self._require_album_owner_or_admin(album, actor_user_id)
 
         patch: dict = {}
@@ -223,6 +228,10 @@ class GalleryService:
         album = await self._repo.get_album(album_id)
         if album is None:
             return
+        if album.is_system:
+            raise GalleryPermissionError(
+                "system album cannot be deleted",
+            )
         await self._require_album_owner_or_admin(album, actor_user_id)
         await self._repo.delete_album(album_id)
         await self._bus.publish(
@@ -243,6 +252,10 @@ class GalleryService:
         album = await self._repo.get_album(album_id)
         if album is None:
             raise GalleryNotFoundError(f"album {album_id!r} not found")
+        if album.is_system:
+            raise GalleryPermissionError(
+                "system album retention is managed automatically",
+            )
         await self._require_album_owner_or_admin(album, actor_user_id)
         await self._repo.set_retention_exempt(
             album_id,
@@ -287,6 +300,11 @@ class GalleryService:
         album = await self._repo.get_album(album_id)
         if album is None:
             raise GalleryNotFoundError(f"album {album_id!r} not found")
+        if album.is_system:
+            raise GalleryPermissionError(
+                "system album cannot be uploaded to directly — "
+                "share a photo or video via a feed post instead",
+            )
         if album.space_id is not None:
             await self._require_member(album.space_id, uploader_user_id)
         if caption and len(caption) > CAPTION_MAX:
@@ -338,6 +356,11 @@ class GalleryService:
         if item is None:
             return
         album = await self._repo.get_album(item.album_id)
+        if album is not None and album.is_system:
+            raise GalleryPermissionError(
+                "system album items are managed automatically — "
+                "delete the source post to remove this item",
+            )
         if album is not None and album.space_id is not None:
             is_uploader = item.uploaded_by == actor_user_id
             is_admin = await self._is_space_admin(album.space_id, actor_user_id)
@@ -504,6 +527,132 @@ class GalleryService:
         raise GalleryPermissionError(
             "Only the album owner or a space admin can perform this action"
         )
+
+    # ─── System album (auto-mirror of feed media) ─────────────────────────
+    #
+    # The "Posts" album is created lazily on the first post that ships
+    # media in a given scope and is kept in sync with the source posts
+    # via :class:`SystemAlbumBridge`. The methods below are the
+    # bridge's only entry points — direct user-facing routes are gated
+    # in :meth:`upload_item` / :meth:`delete_item` etc.
+
+    SYSTEM_ALBUM_NAME: str = "Posts"
+    SYSTEM_ALBUM_DESCRIPTION: str = (
+        "Photos and videos shared to the feed appear here automatically."
+    )
+
+    async def ensure_system_album(
+        self,
+        space_id: str | None,
+    ) -> GalleryAlbum:
+        """Idempotent get-or-create. Race-safe via the partial unique index."""
+        existing = await self._repo.get_system_album(space_id)
+        if existing is not None:
+            return existing
+        now = datetime.now(timezone.utc).isoformat()
+        album = GalleryAlbum(
+            id=uuid.uuid4().hex,
+            space_id=space_id,
+            owner_user_id=None,
+            name=self.SYSTEM_ALBUM_NAME,
+            description=self.SYSTEM_ALBUM_DESCRIPTION,
+            cover_item_id=None,
+            item_count=0,
+            cover_url=None,
+            retention_exempt=True,
+            is_system=True,
+            created_at=now,
+            updated_at=now,
+        )
+        # ON CONFLICT DO NOTHING in the repo means a race-loser's INSERT
+        # is silently dropped; we re-SELECT to find the winner's row.
+        await self._repo.create_album(album)
+        winner = await self._repo.get_system_album(space_id)
+        return winner if winner is not None else album
+
+    async def mirror_post(
+        self,
+        post: Post,
+        space_id: str | None,
+    ) -> None:
+        """Mirror a post's media into the system album for the scope.
+
+        Called by :class:`SystemAlbumBridge` on PostCreated / PostEdited
+        / SpacePostCreated. Idempotent: an edit that doesn't change the
+        media URLs is a no-op (skips churning rows + events).
+        """
+        # Only image / video posts contribute media. Text, file, and
+        # poll posts skip this path entirely.
+        urls: list[tuple[str, str]] = []  # [(url, item_type), ...]
+        if post.type is PostType.IMAGE:
+            urls = [(u, "photo") for u in post.image_urls if u]
+        elif post.type is PostType.VIDEO and post.media_url:
+            urls = [(post.media_url, "video")]
+        if not urls:
+            # Either text-only post or a previously-image post that
+            # had its media stripped on edit. Drop any orphans.
+            await self.unmirror_post(post.id)
+            return
+
+        # Diff against existing rows so a text-only edit on an image
+        # post doesn't churn the system album.
+        existing = await self._repo.list_items_by_source_post(post.id)
+        existing_urls = {(it.url, it.item_type) for it in existing}
+        if existing_urls == set(urls):
+            return  # no change — skip the delete-then-insert
+
+        album = await self.ensure_system_album(space_id)
+        # Delete-then-insert. Both writes are queued on the same
+        # AsyncDatabase; the queue serialises them so a partial state
+        # is never observable to readers (the SQLite WAL bundles the
+        # batch into one transaction).
+        if existing_urls:
+            await self._repo.delete_items_by_source_post(post.id)
+        now = datetime.now(timezone.utc).isoformat()
+        for url, item_type in urls:
+            item = GalleryItem(
+                id=uuid.uuid4().hex,
+                album_id=album.id,
+                uploaded_by=post.author,
+                item_type=item_type,
+                url=url,
+                # The post's media is its own thumbnail — the upload
+                # pipeline already resized images and extracted video
+                # frames, and the gallery row stores filename only.
+                # Re-using the same filename means no extra disk write.
+                thumbnail_url=url,
+                width=0,
+                height=0,
+                source_post_id=post.id,
+                created_at=now,
+            )
+            await self._repo.create_item(item)
+            await self._bus.publish(
+                GalleryItemUploaded(
+                    item_id=item.id,
+                    album_id=album.id,
+                    item_type=item.item_type,
+                    uploader=post.author,
+                )
+            )
+        await self._repo.recount_items(album.id)
+
+    async def unmirror_post(self, post_id: str) -> None:
+        """Remove every system-album item mirrored from ``post_id``.
+
+        Called by :class:`SystemAlbumBridge` on PostDeleted /
+        SpacePostModerated. The lookup is via the
+        ``idx_gallery_items_source_post`` index — O(1) regardless of
+        scope, so the bridge doesn't need to know whether the post
+        lived in the household feed or a space.
+        """
+        album_id, count = await self._repo.delete_items_by_source_post(post_id)
+        if album_id is None or count == 0:
+            return
+        await self._repo.increment_item_count(album_id, -count)
+        # No per-item GalleryItemDeleted events: the post-delete event
+        # already drove this; emitting a flood of item-delete frames
+        # here would only duplicate the WS notification.
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────
