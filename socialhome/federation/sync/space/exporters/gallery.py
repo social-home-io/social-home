@@ -25,11 +25,20 @@ class GalleryExporter:
     async def list_records(self, space_id: str) -> list[dict[str, Any]]:
         albums = await self._repo.list_albums(space_id, limit=1000)
         out: list[dict[str, Any]] = []
-        # Emit albums first so they land before their items.
+        # Emit albums first so they land before their items. The system
+        # album rides along so the receiver creates it pre-populated;
+        # without the album, mirrored items from forthcoming posts
+        # would have nowhere to live until the first local feed event.
         for a in albums:
             out.append({"kind": "album", **asdict(a)})
         for a in albums:
             items = await self._repo.list_items(a.id, limit=1000)
             for it in items:
+                # Skip items mirrored from posts: the source post
+                # federates via SPACE_POST_CREATED, the receiver's
+                # SystemAlbumBridge re-creates the mirror locally on
+                # arrival, and shipping them here would duplicate.
+                if it.source_post_id is not None:
+                    continue
                 out.append({"kind": "item", **asdict(it)})
         return out

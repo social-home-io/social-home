@@ -311,14 +311,21 @@ class SpaceSyncReceiver:
         album = GalleryAlbum(
             id=str(record["id"]),
             space_id=record.get("space_id"),
-            owner_user_id=str(
-                record.get("owner_user_id") or record.get("owner_id") or ""
+            owner_user_id=(
+                # System albums have no human owner; carry NULL.
+                None
+                if record.get("is_system")
+                else (
+                    str(record.get("owner_user_id") or record.get("owner_id") or "")
+                    or None
+                )
             ),
             name=str(record.get("name") or ""),
             description=record.get("description"),
             cover_item_id=record.get("cover_item_id"),
             item_count=int(record.get("item_count") or 0),
             retention_exempt=bool(record.get("retention_exempt", False)),
+            is_system=bool(record.get("is_system", False)),
             created_at=record.get("created_at"),
         )
         try:

@@ -179,8 +179,8 @@ anything below contradicts the file, the file wins.
 
 | Table | Purpose |
 |---|---|
-| `gallery_albums` | Album shells. `space_id IS NULL` for household-level albums. `retention_exempt` opts the album out of space retention sweeps. |
-| `gallery_items` | Album items — type (`photo` / `video`), filename + thumbnail filename, dimensions, duration, caption, taken_at, sort order. |
+| `gallery_albums` | Album shells. `space_id IS NULL` for household-level albums. `retention_exempt` opts the album out of space retention sweeps. `is_system` marks the auto-managed "Posts" album that mirrors every photo and video shared via the feed (one per scope, enforced by a partial unique index on `COALESCE(space_id, '__household__')`); `owner_user_id` is `NULL` for that row. |
+| `gallery_items` | Album items — type (`photo` / `video`), filename + thumbnail filename, dimensions, duration, caption, taken_at, sort order. `source_post_id` is set when the row was mirrored from a feed post (drives O(1) cleanup on post-delete via `idx_gallery_items_source_post`); `NULL` for direct user uploads. |
 
 ## Child protection
 

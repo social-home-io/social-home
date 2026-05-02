@@ -65,6 +65,12 @@ class GalleryFederationOutbound:
         item = await self._gallery_repo.get_item(event.item_id)
         if item is None:
             return  # raced with delete
+        # System-album mirrors don't federate as gallery events: the
+        # source post propagates via SPACE_POST_CREATED, the receiver
+        # rebuilds its own mirror locally. Federating here would
+        # double-add on the peer.
+        if item.source_post_id is not None:
+            return
         # §S-9: thumbnail-only projection for the wire — the full file
         # is fetched on demand by the receiver, never preloaded.
         payload = item.to_thumbnail_dict()

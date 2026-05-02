@@ -1709,7 +1709,13 @@ CREATE TABLE IF NOT EXISTS gallery_albums (
     space_id        TEXT REFERENCES spaces(id) ON DELETE CASCADE,
                     -- NULL = household-level album
     retention_exempt INTEGER NOT NULL DEFAULT 0,
-    owner_user_id   TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    -- ``is_system = 1`` marks the auto-mirrored "Posts" album; cannot
+    -- be deleted, renamed, or directly uploaded to. Exactly one per
+    -- (space_id, is_system=1) bucket — see partial unique index below.
+    is_system       INTEGER NOT NULL DEFAULT 0,
+    -- NULLable so the system album, which has no human owner, can sit
+    -- in this table. User-created albums always set this.
+    owner_user_id   TEXT REFERENCES users(user_id) ON DELETE CASCADE,
     name            TEXT NOT NULL,
     description     TEXT,
     cover_item_id   TEXT,
@@ -1731,12 +1737,28 @@ CREATE TABLE IF NOT EXISTS gallery_items (
     caption             TEXT,
     taken_at            TEXT,
     sort_order          INTEGER NOT NULL DEFAULT 0,
+    -- Set when this item was mirrored from a feed post (system album);
+    -- NULL for items uploaded directly to a user-created album. Drives
+    -- O(1) cleanup when the source post is deleted.
+    source_post_id      TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_gallery_albums_space   ON gallery_albums(space_id, created_at DESC);
+-- At most one system album per scope. ``COALESCE`` is required
+-- because SQLite treats NULL as distinct in unique indexes, which
+-- would otherwise allow multiple household-level (space_id IS NULL)
+-- system albums under a connect-storm race. The sentinel string is
+-- not a valid space id, so household + per-space scopes coexist
+-- cleanly under this constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gallery_albums_system_unique
+    ON gallery_albums(COALESCE(space_id, '__household__'))
+    WHERE is_system = 1;
 CREATE INDEX IF NOT EXISTS idx_gallery_items_album    ON gallery_items(album_id, sort_order, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gallery_items_uploader ON gallery_items(uploaded_by);
+-- Cleanup path on post-delete: bulk DELETE WHERE source_post_id=?
+CREATE INDEX IF NOT EXISTS idx_gallery_items_source_post
+    ON gallery_items(source_post_id) WHERE source_post_id IS NOT NULL;
 
 -- ── Full-text search (FTS5) ────────────────────────────────────────────────
 -- One unified contentless index keeps the search code simple. The ``scope``

@@ -3589,6 +3589,40 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 }
 .sh-album-info strong { font-size: var(--sh-font-size-base); }
 
+/* System "Posts" album — terracotta-tinted "Auto" pill in the album
+ * card title and the detail header. Mirrors the OnlinePill aesthetic
+ * for a consistent "this is a special chip" language. */
+.sh-album-system-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: var(--sh-space-xs);
+  padding: 1px 6px;
+  border-radius: var(--sh-radius-md);
+  background: color-mix(in srgb, var(--sh-primary) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 35%, transparent);
+  color: var(--sh-primary);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  vertical-align: middle;
+}
+/* Friendly explainer banner shown at the top of the system album's
+ * detail view, in place of the upload affordance the user-curated
+ * albums get. Cream paper, dashed border so it feels informational
+ * rather than chrome. */
+.sh-album-system-hint {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  margin-bottom: var(--sh-space-md);
+  border: 1px dashed var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg-tertiary);
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-sm);
+}
+
 .sh-image-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));

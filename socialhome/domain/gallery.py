@@ -21,13 +21,20 @@ class GalleryAlbum:
 
     id: str
     space_id: str | None  # None = household-level
-    owner_user_id: str
+    # NULL for the auto-mirrored ``is_system`` "Posts" album, which has
+    # no human owner; otherwise the creator's user_id.
+    owner_user_id: str | None
     name: str
     description: str | None = None
     cover_item_id: str | None = None
     item_count: int = 0
     cover_url: str | None = None  # convenience — not persisted
     retention_exempt: bool = False
+    # ``True`` for the auto-mirrored "Posts" album that surfaces every
+    # photo/video shared via a feed post. The album cannot be deleted,
+    # renamed, or directly uploaded to — items appear and disappear
+    # strictly with their source post.
+    is_system: bool = False
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -48,6 +55,11 @@ class GalleryItem:
     caption: str | None = None
     taken_at: str | None = None  # ISO 8601 day-precision (YYYY-MM-DD)
     sort_order: int = 0
+    # Set when the item was mirrored from a feed post (system album);
+    # ``None`` for direct user uploads. Drives bulk cleanup on
+    # post-delete and lets the UI deep-link a thumbnail back to its
+    # source post.
+    source_post_id: str | None = None
     created_at: str | None = None
 
     def to_thumbnail_dict(self) -> dict:

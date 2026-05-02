@@ -189,6 +189,7 @@ from .federation.sync.dm_history import (
 )
 from .federation.sync.space.resume import SpaceSyncResumeProvider
 from .services.gallery_service import GalleryService
+from .services.system_album_bridge import SystemAlbumBridge
 from .services.pairing_relay_queue import PairingRelayQueue
 from .services.alias_service import AliasResolver, AliasService
 from .services.household_features_service import HouseholdFeaturesService
@@ -1004,6 +1005,14 @@ def create_app(config: Config | None = None) -> web.Application:
         bus,
         config,
     )
+
+    # ── System "Posts" album bridge (§Gallery) ──────────────────────────
+    # Subscribes to feed-post lifecycle events and mirrors photo/video
+    # media into the auto-managed "Posts" album per scope. Lazy
+    # creation: the album row only appears once a member shares
+    # something with media.
+    system_album_bridge = SystemAlbumBridge(gallery_service, bus)
+    system_album_bridge.wire()
 
     # ── Child protection service ────────────────────────────────────────
     child_protection_service = ChildProtectionService(repos.cp, user_repo, bus)

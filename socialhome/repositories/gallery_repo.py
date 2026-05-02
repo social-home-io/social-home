@@ -20,6 +20,7 @@ class AbstractGalleryRepo(Protocol):
         before: str | None = None,
     ) -> list[GalleryAlbum]: ...
     async def get_album(self, album_id: str) -> GalleryAlbum | None: ...
+    async def get_system_album(self, space_id: str | None) -> GalleryAlbum | None: ...
     async def create_album(self, album: GalleryAlbum) -> GalleryAlbum: ...
     async def update_album(self, album_id: str, patch: dict) -> None: ...
     async def delete_album(self, album_id: str) -> None: ...
@@ -38,9 +39,16 @@ class AbstractGalleryRepo(Protocol):
         limit: int = 500,
     ) -> list[GalleryItem]: ...
     async def get_item(self, item_id: str) -> GalleryItem | None: ...
+    async def list_items_by_source_post(
+        self, post_id: str,
+    ) -> list[GalleryItem]: ...
     async def create_item(self, item: GalleryItem) -> GalleryItem: ...
     async def delete_item(self, item_id: str) -> None: ...
+    async def delete_items_by_source_post(
+        self, post_id: str,
+    ) -> tuple[str | None, int]: ...
     async def increment_item_count(self, album_id: str, delta: int) -> None: ...
+    async def recount_items(self, album_id: str) -> int: ...
     async def get_first_item_thumbnail(self, album_id: str) -> str | None: ...
     async def set_retention_exempt(
         self,
@@ -65,12 +73,13 @@ class SqliteGalleryRepo:
         return GalleryAlbum(
             id=r["id"],
             space_id=r.get("space_id"),
-            owner_user_id=r["owner_user_id"],
+            owner_user_id=r.get("owner_user_id"),
             name=r["name"],
             description=r.get("description"),
             cover_item_id=r.get("cover_item_id"),
             item_count=int(r.get("item_count") or 0),
             retention_exempt=bool(r.get("retention_exempt")),
+            is_system=bool(r.get("is_system")),
             cover_url=None,  # filled in by service
             created_at=r.get("created_at"),
             updated_at=r.get("updated_at"),
@@ -85,19 +94,36 @@ class SqliteGalleryRepo:
     ) -> list[GalleryAlbum]:
         limit = max(1, min(limit, 200))
         # ``space_id IS ?`` matches both NULL (household) and a specific id.
+        # System album pinned first via ``is_system DESC``.
         if before:
             rows = await self._db.fetchall(
                 "SELECT * FROM gallery_albums WHERE space_id IS ? AND created_at < ? "
-                "ORDER BY created_at DESC LIMIT ?",
+                "ORDER BY is_system DESC, created_at DESC LIMIT ?",
                 (space_id, before, limit),
             )
         else:
             rows = await self._db.fetchall(
                 "SELECT * FROM gallery_albums WHERE space_id IS ? "
-                "ORDER BY created_at DESC LIMIT ?",
+                "ORDER BY is_system DESC, created_at DESC LIMIT ?",
                 (space_id, limit),
             )
         return [self._row_to_album(r) for r in rows_to_dicts(rows)]
+
+    async def get_system_album(
+        self, space_id: str | None,
+    ) -> GalleryAlbum | None:
+        """Return the per-scope system album (or ``None`` before lazy create).
+
+        ``space_id IS ?`` matches NULL (household) just like
+        :meth:`list_albums`. The partial unique index on
+        ``(space_id, is_system) WHERE is_system=1`` guarantees at most
+        one row per scope.
+        """
+        row = await self._db.fetchone(
+            "SELECT * FROM gallery_albums WHERE space_id IS ? AND is_system=1",
+            (space_id,),
+        )
+        return self._row_to_album(dict(row)) if row else None
 
     async def get_album(self, album_id: str) -> GalleryAlbum | None:
         row = await self._db.fetchone(
@@ -108,17 +134,24 @@ class SqliteGalleryRepo:
 
     async def create_album(self, album: GalleryAlbum) -> GalleryAlbum:
         now = album.created_at or datetime.now(timezone.utc).isoformat()
+        # ``ON CONFLICT DO NOTHING`` is the race guard for the system
+        # album path: the partial unique index on (space_id, is_system)
+        # prevents two concurrent ``ensure_system_album`` callers from
+        # both inserting. User-created albums never collide here (they
+        # have ``is_system=0``, which the partial index ignores).
         await self._db.enqueue(
             """
             INSERT INTO gallery_albums(
-                id, space_id, retention_exempt, owner_user_id,
+                id, space_id, retention_exempt, is_system, owner_user_id,
                 name, description, cover_item_id, item_count, created_at, updated_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
             """,
             (
                 album.id,
                 album.space_id,
                 int(album.retention_exempt),
+                int(album.is_system),
                 album.owner_user_id,
                 album.name,
                 album.description,
@@ -180,6 +213,7 @@ class SqliteGalleryRepo:
             caption=r.get("caption"),
             taken_at=r.get("taken_at"),
             sort_order=int(r.get("sort_order") or 0),
+            source_post_id=r.get("source_post_id"),
             created_at=r.get("created_at"),
         )
 
@@ -237,6 +271,21 @@ class SqliteGalleryRepo:
         )
         return [self._row_to_item(r) for r in rows_to_dicts(rows)]
 
+    async def list_items_by_source_post(
+        self, post_id: str,
+    ) -> list[GalleryItem]:
+        """Items mirrored from a specific feed post (system-album only).
+
+        Used by :class:`GalleryService.mirror_post` to diff existing
+        rows against the post's current media — lets a text-only edit
+        on an image post short-circuit without churning rows.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM gallery_items WHERE source_post_id=?",
+            (post_id,),
+        )
+        return [self._row_to_item(r) for r in rows_to_dicts(rows)]
+
     async def create_item(self, item: GalleryItem) -> GalleryItem:
         # Strip the "/api/media/" prefix so the column stores the bare filename.
         await self._db.enqueue(
@@ -244,8 +293,9 @@ class SqliteGalleryRepo:
             INSERT INTO gallery_items(
                 id, album_id, uploaded_by, item_type,
                 filename, thumbnail_filename, width, height,
-                duration_s, caption, taken_at, sort_order, created_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                duration_s, caption, taken_at, sort_order,
+                source_post_id, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item.id,
@@ -260,6 +310,7 @@ class SqliteGalleryRepo:
                 item.caption,
                 item.taken_at,
                 item.sort_order,
+                item.source_post_id,
                 item.created_at or datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -271,11 +322,52 @@ class SqliteGalleryRepo:
             (item_id,),
         )
 
+    async def delete_items_by_source_post(
+        self, post_id: str,
+    ) -> tuple[str | None, int]:
+        """Bulk-delete every mirrored item for ``post_id``.
+
+        Returns ``(album_id, count)`` so the service can decrement
+        ``item_count`` on the affected album. ``album_id`` is ``None``
+        when no items existed (no-op).
+        """
+        rows = await self._db.fetchall(
+            "SELECT id, album_id FROM gallery_items WHERE source_post_id=?",
+            (post_id,),
+        )
+        items = list(rows_to_dicts(rows))
+        if not items:
+            return (None, 0)
+        album_id = items[0]["album_id"]
+        await self._db.enqueue(
+            "DELETE FROM gallery_items WHERE source_post_id=?",
+            (post_id,),
+        )
+        return (album_id, len(items))
+
     async def increment_item_count(self, album_id: str, delta: int) -> None:
         await self._db.enqueue(
             "UPDATE gallery_albums SET item_count=MAX(0, item_count + ?) WHERE id=?",
             (delta, album_id),
         )
+
+    async def recount_items(self, album_id: str) -> int:
+        """Recompute ``item_count`` from ``COUNT(*)`` and persist it.
+
+        Used by ``mirror_post`` after delete-then-insert to keep the
+        cached count in sync without making the caller juggle deltas.
+        Returns the new count.
+        """
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS n FROM gallery_items WHERE album_id=?",
+            (album_id,),
+        )
+        n = int(row["n"]) if row else 0
+        await self._db.enqueue(
+            "UPDATE gallery_albums SET item_count=? WHERE id=?",
+            (n, album_id),
+        )
+        return n
 
     async def get_first_item_thumbnail(self, album_id: str) -> str | None:
         row = await self._db.fetchone(
