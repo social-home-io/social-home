@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { routes } from './router'
 
 describe('router', () => {
-  it('defines 29 routes', () => {
+  it('defines 30 routes', () => {
     // Routes added across recent passes:
     //   /dms/:id/calls   — per-conversation call history
     //   /calls/:callId   — in-call page
@@ -13,7 +13,8 @@ describe('router', () => {
     //   /spaces/browse   — unified space browser (§D3)
     //   /spaces/:id/zones — per-space zones admin (§23.8.7)
     //   /setup           — first-boot wizard (platform/v2)
-    expect(Object.keys(routes).length).toBe(29)
+    //   /friends         — connected-people dashboard under Browse
+    expect(Object.keys(routes).length).toBe(30)
   })
 
   it('has feed route at /', () => {

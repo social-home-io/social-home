@@ -1,0 +1,263 @@
+/**
+ * FriendsPage — connected-people dashboard under Browse.
+ *
+ * Reframes the federation pairing data as a social-shape view of "us
+ * + every household we've paired with":
+ *
+ *   • Hero: "X people across Y households · paired since {oldest}".
+ *   • Map: a constellation of household pins, one per paired
+ *     instance with coords. The local household lands as a
+ *     terracotta "home" pin; reachable peers are zone-coloured;
+ *     unreachable peers fade. Hidden when no household has coords.
+ *   • Cards: our household first, then one card per paired household,
+ *     each carrying the member chips so a viewer can scan who's in
+ *     each home.
+ *
+ * Endpoint: ``GET /api/friends`` returns the whole tree in one shot
+ * (no follow-up fetches per household).
+ */
+import { useEffect, useState } from 'preact/hooks'
+import { useTitle } from '@/store/pageTitle'
+import { Avatar } from '@/components/Avatar'
+import { Spinner } from '@/components/Spinner'
+import { LocationMap, type LocationMarker } from '@/components/LocationMap'
+import { OnlinePill } from '@/components/OnlinePill'
+import { api } from '@/api'
+
+interface LocalMember {
+  user_id: string
+  username: string
+  display_name: string
+  picture_url: string | null
+  is_online?: boolean
+  is_idle?: boolean
+  last_seen_at?: string | null
+}
+
+interface RemoteMember {
+  user_id: string
+  instance_id: string
+  remote_username: string
+  display_name: string
+  picture_url: string | null
+}
+
+interface LocalInstance {
+  instance_id: string | null
+  display_name: string
+  home_lat: number | null
+  home_lon: number | null
+  members: LocalMember[]
+  member_count: number
+}
+
+interface Household {
+  instance_id: string
+  display_name: string
+  home_lat: number | null
+  home_lon: number | null
+  paired_at: string | null
+  reachable: boolean
+  members: RemoteMember[]
+  member_count: number
+}
+
+interface FriendsPayload {
+  instance: LocalInstance
+  households: Household[]
+  totals: { households: number; people: number }
+}
+
+/** "5 min ago" / "3 d ago" — enough precision for a paired-since hint. */
+function humanizeAgo(iso: string | null | undefined): string | null {
+  if (!iso) return null
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return null
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (sec < 60)         return 'just now'
+  if (sec < 3600)       return `${Math.floor(sec / 60)} min ago`
+  if (sec < 86400)      return `${Math.floor(sec / 3600)} h ago`
+  if (sec < 86400 * 30) return `${Math.floor(sec / 86400)} d ago`
+  return new Date(t).toLocaleDateString()
+}
+
+/** Earliest paired_at across all households — used in the hero
+ *  sub-line to give a sense of how long the network has existed. */
+function earliestPairedAt(households: Household[]): string | null {
+  let earliest: number | null = null
+  for (const h of households) {
+    if (!h.paired_at) continue
+    const t = Date.parse(h.paired_at)
+    if (Number.isNaN(t)) continue
+    if (earliest === null || t < earliest) earliest = t
+  }
+  return earliest === null ? null : new Date(earliest).toISOString()
+}
+
+export default function FriendsPage() {
+  useTitle('Friends')
+  const [data, setData] = useState<FriendsPayload | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    api.get('/api/friends').then((rows) => {
+      if (cancelled) return
+      setData(rows as FriendsPayload)
+      setLoading(false)
+    }).catch(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  if (loading || !data) return <Spinner />
+
+  const { instance, households, totals } = data
+  const oldest = earliestPairedAt(households)
+  const reachableCount = households.filter(h => h.reachable).length
+
+  // Build the map pins: us + every paired household with coords. The
+  // map is hidden entirely when no household has a pin so we don't
+  // render a "lost in the ocean" empty world map.
+  const markers: LocationMarker[] = []
+  if (instance.home_lat !== null && instance.home_lon !== null) {
+    markers.push({
+      id: instance.instance_id ?? 'local',
+      lat: instance.home_lat,
+      lon: instance.home_lon,
+      label: instance.display_name,
+      sub_label: `${instance.member_count} member${
+        instance.member_count === 1 ? '' : 's'} · your household`,
+      state: 'home',
+    })
+  }
+  for (const h of households) {
+    if (h.home_lat === null || h.home_lon === null) continue
+    const ago = humanizeAgo(h.paired_at)
+    markers.push({
+      id: h.instance_id,
+      lat: h.home_lat,
+      lon: h.home_lon,
+      label: h.display_name,
+      sub_label: `${h.member_count} member${
+        h.member_count === 1 ? '' : 's'}${ago ? ` · paired ${ago}` : ''}`,
+      state: h.reachable ? 'zone' : 'away',
+    })
+  }
+
+  return (
+    <div class="sh-friends">
+      <header class="sh-friends-hero">
+        <div class="sh-friends-hero-headline">
+          <strong>{totals.people}</strong>{' '}
+          {totals.people === 1 ? 'person' : 'people'} across{' '}
+          <strong>{totals.households}</strong>{' '}
+          {totals.households === 1 ? 'household' : 'households'}
+        </div>
+        <div class="sh-friends-hero-sub sh-muted">
+          {households.length === 0
+            ? 'Just your household for now — pair another to grow your network.'
+            : (
+              <>
+                {oldest && <>Connected since {humanizeAgo(oldest)} · </>}
+                {reachableCount} of {households.length} reachable now
+              </>
+            )}
+        </div>
+      </header>
+
+      {markers.length > 0 && (
+        <div class="sh-friends-map">
+          <LocationMap markers={markers} height={320} />
+        </div>
+      )}
+
+      <section
+        class="sh-friends-household sh-friends-household--mine"
+        data-instance-id={instance.instance_id ?? ''}
+      >
+        <header class="sh-friends-household-head">
+          <span class="sh-friends-house-icon" aria-hidden="true">🏠</span>
+          <strong>{instance.display_name}</strong>
+          <span class="sh-friends-tag sh-muted">your household</span>
+        </header>
+        <div class="sh-friends-members">
+          {instance.members.map(m => (
+            <a
+              key={m.user_id}
+              href="/presence"
+              class="sh-friends-member-chip"
+              title={`${m.display_name} — see presence`}
+            >
+              <Avatar
+                name={m.display_name}
+                src={m.picture_url}
+                size={28}
+                online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
+              />
+              <span class="sh-friends-member-name">{m.display_name}</span>
+              <OnlinePill user_id={m.user_id} compact showZone={false} />
+            </a>
+          ))}
+        </div>
+      </section>
+
+      {households.length === 0 ? (
+        <div class="sh-empty-state">
+          <div style={{ fontSize: '2rem' }}>🤝</div>
+          <h3>No connected households yet</h3>
+          <p>Pair with another household to see them here.</p>
+          <p class="sh-muted">
+            Ask an admin — they can pair from{' '}
+            <a href="/connections" class="sh-link">Connections</a>.
+          </p>
+        </div>
+      ) : (
+        households.map(h => {
+          const pairedAgo = humanizeAgo(h.paired_at)
+          return (
+            <section
+              key={h.instance_id}
+              class="sh-friends-household"
+              data-instance-id={h.instance_id}
+            >
+              <header class="sh-friends-household-head">
+                <span
+                  class={`sh-friends-status-dot sh-friends-status-dot--${
+                    h.reachable ? 'reachable' : 'unreachable'}`}
+                  aria-hidden="true"
+                  title={h.reachable ? 'Reachable' : 'Unreachable'}
+                />
+                <strong>{h.display_name}</strong>
+                {pairedAgo && (
+                  <span class="sh-friends-tag sh-muted">
+                    paired {pairedAgo}
+                  </span>
+                )}
+              </header>
+              {h.members.length === 0 ? (
+                <p class="sh-muted sh-friends-empty-members">
+                  We haven't synced their members yet.
+                </p>
+              ) : (
+                <div class="sh-friends-members">
+                  {h.members.map(m => (
+                    <span key={m.user_id} class="sh-friends-member-chip">
+                      <Avatar
+                        name={m.display_name}
+                        src={m.picture_url}
+                        size={28}
+                      />
+                      <span class="sh-friends-member-name">
+                        {m.display_name}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </section>
+          )
+        })
+      )}
+    </div>
+  )
+}

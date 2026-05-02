@@ -360,10 +360,11 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 | POST | `/api/pairing/introduce` | Introduce self to an intermediary. |
 | POST | `/api/pairing/auto-pair-via` | Ask a mutual peer to relay. |
 | GET / POST | `/api/pairing/auto-pair-requests[/{id}/{approve\|decline}]` | Auto-pair queue. |
-| GET | `/api/pairing/connections` | Paired peers. |
+| GET | `/api/pairing/connections` | Paired peers (admin/ops view). Now also carries `home_lat` / `home_lon` per row (4dp-truncated, `null` when unset) so the SPA can render a household map without a follow-up fetch. |
 | GET | `/api/connections` | Alias of the above. |
 | GET / DELETE | `/api/pairing/connections/{instance_id}` | Read / unpair. |
 | GET / POST | `/api/pairing/relay-requests[/{id}/{approve\|decline}]` | Relay-request queue. |
+| GET | `/api/friends` | Connected-people dashboard payload (non-admin). Returns `{instance, households[], totals}` — the local household block + every confirmed remote household with its member list (joining `remote_instances` × `remote_users`) plus household coordinates. Whitelisted fields only — `routing_secret` / `key_self_to_remote` / `remote_inbox_url` / identity public keys never appear. |
 
 ## HFS — Calls & WebRTC
 

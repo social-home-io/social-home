@@ -90,9 +90,10 @@ const BROWSE_GROUP: SideNavGroup = {
   key: 'browse',
   label: 'Browse',
   items: [
-    { key: 'spaces', label: 'Spaces', href: '/spaces',    icon: 'spaces' },
-    { key: 'bazaar', label: 'Bazaar', href: '/bazaar',    icon: 'bazaar' },
-    { key: 'corner', label: 'Corner', href: '/dashboard', icon: 'corner' },
+    { key: 'spaces',  label: 'Spaces',  href: '/spaces',    icon: 'spaces' },
+    { key: 'friends', label: 'Friends', href: '/friends',   icon: 'connections' },
+    { key: 'bazaar',  label: 'Bazaar',  href: '/bazaar',    icon: 'bazaar' },
+    { key: 'corner',  label: 'Corner',  href: '/dashboard', icon: 'corner' },
   ],
 }
 

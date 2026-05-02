@@ -1,0 +1,195 @@
+"""Route tests for /api/friends — the connected-people dashboard.
+
+Coverage:
+* Empty: caller with no paired peers gets the local block + an empty
+  households list.
+* Populated: a confirmed remote instance with members shows up; a
+  pending one does not.
+* Privacy: sensitive fields (routing keys, inbox URLs, identity PKs)
+  never appear in the JSON response.
+* Null coords: a remote_instance with NULL home_lat/home_lon doesn't
+  crash and exposes ``None`` in the payload.
+"""
+
+from __future__ import annotations
+
+from socialhome.app_keys import db_key, federation_repo_key
+from socialhome.domain.federation import (
+    InstanceSource,
+    PairingStatus,
+    RemoteInstance,
+)
+
+from .conftest import _auth
+
+
+def _peer(
+    iid: str,
+    *,
+    status: PairingStatus = PairingStatus.CONFIRMED,
+    home_lat: float | None = None,
+    home_lon: float | None = None,
+) -> RemoteInstance:
+    return RemoteInstance(
+        id=iid,
+        display_name=f"{iid.title()} Household",
+        remote_identity_pk="aa" * 32,
+        key_self_to_remote="enc",
+        key_remote_to_self="enc",
+        remote_inbox_url=f"https://{iid}.example/wh",
+        local_inbox_id=f"wh-{iid}",
+        status=status,
+        source=InstanceSource.MANUAL,
+        home_lat=home_lat,
+        home_lon=home_lon,
+    )
+
+
+async def _seed_remote_user(
+    db,
+    *,
+    user_id: str,
+    instance_id: str,
+    name: str,
+) -> None:
+    await db.enqueue(
+        "INSERT INTO remote_users(user_id, instance_id, remote_username, "
+        " display_name) VALUES(?,?,?,?)",
+        (user_id, instance_id, name.lower(), name),
+    )
+
+
+# ─── Smoke ───────────────────────────────────────────────────────────────
+
+
+async def test_friends_returns_local_block_when_no_pairs(client):
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    assert r.status == 200
+    body = await r.json()
+    assert "instance" in body
+    assert body["households"] == []
+    # Local block carries our admin user.
+    member_ids = {m["user_id"] for m in body["instance"]["members"]}
+    assert client._uid in member_ids
+    # Totals: 1 household (us), N people (≥1).
+    assert body["totals"]["households"] == 1
+    assert body["totals"]["people"] >= 1
+
+
+# ─── Population ──────────────────────────────────────────────────────────
+
+
+async def test_friends_lists_confirmed_remote_household(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-a", home_lat=52.3676, home_lon=4.9041))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-1",
+        instance_id="peer-a",
+        name="Bob",
+    )
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-2",
+        instance_id="peer-a",
+        name="Carol",
+    )
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    assert len(body["households"]) == 1
+    h = body["households"][0]
+    assert h["instance_id"] == "peer-a"
+    assert h["display_name"] == "Peer-A Household"
+    assert h["home_lat"] == 52.3676
+    assert h["home_lon"] == 4.9041
+    assert h["member_count"] == 2
+    assert {m["user_id"] for m in h["members"]} == {"ru-1", "ru-2"}
+
+
+async def test_friends_omits_pending_pair(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(
+        _peer("peer-pending", status=PairingStatus.PENDING_RECEIVED),
+    )
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    assert body["households"] == []
+
+
+async def test_friends_handles_null_coordinates(client):
+    fed_repo = client.app[federation_repo_key]
+    # No coords — the column is nullable; the route must tolerate it.
+    await fed_repo.save_instance(_peer("peer-blind"))
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    h = body["households"][0]
+    assert h["home_lat"] is None
+    assert h["home_lon"] is None
+
+
+async def test_friends_payload_omits_sensitive_fields(client):
+    """Privacy guard — routing keys, inbox URLs, and identity PKs must
+    never appear in the JSON. Verifies the whitelist-only serialiser
+    in :func:`_instance_safe_dict`."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-secret"))
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    raw = await r.text()
+    for forbidden in (
+        "routing_secret",
+        "remote_inbox_url",
+        "key_self_to_remote",
+        "key_remote_to_self",
+        "local_inbox_id",
+        "remote_identity_pk",
+        "remote_pq_identity_pk",
+    ):
+        assert forbidden not in raw, f"{forbidden!r} leaked in /api/friends response"
+
+
+async def test_friends_totals_include_local_and_remote(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-x"))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-x1",
+        instance_id="peer-x",
+        name="Dani",
+    )
+    await fed_repo.save_instance(_peer("peer-y"))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-y1",
+        instance_id="peer-y",
+        name="Erin",
+    )
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-y2",
+        instance_id="peer-y",
+        name="Frida",
+    )
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    assert body["totals"]["households"] == 3  # us + peer-x + peer-y
+    assert body["totals"]["people"] >= 1 + 1 + 2  # admin + Dani + Erin/Frida
+
+
+async def test_friends_local_instance_carries_identity_metadata(client):
+    """The local block must carry instance_id + display_name read from
+    the ``instance_identity`` row populated at boot (not None / empty
+    placeholders)."""
+    db = client.app[db_key]
+    # Patch the row so we can assert it round-trips.
+    await db.enqueue(
+        "UPDATE instance_identity SET display_name=?, home_lat=?, home_lon=?"
+        " WHERE id='self'",
+        ("Vizeli Home", 52.0907, 5.1214),
+    )
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    inst = body["instance"]
+    assert inst["display_name"] == "Vizeli Home"
+    assert inst["home_lat"] == 52.0907
+    assert inst["home_lon"] == 5.1214
+    assert inst["instance_id"]  # non-empty string
