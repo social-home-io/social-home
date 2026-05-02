@@ -22,9 +22,37 @@ class ConversationCollectionView(BaseView):
     async def get(self) -> web.Response:
         ctx = self.user
         svc = self.svc(dm_service_key)
+        repo = self.svc(conversation_repo_key)
+        user_repo = self.svc(user_repo_key)
         convos = await svc.list_conversations(ctx.username)
-        return web.json_response(
-            [
+
+        # Fold a small member preview into each row so the inbox can
+        # render avatar stacks + a peer-name fallback ("Anna, Bob")
+        # without N+1 follow-up fetches. Self is filtered out so the
+        # preview reads as "the others".
+        rows: list[dict] = []
+        for c in convos:
+            members = await repo.list_members(c.id)
+            preview: list[dict] = []
+            for m in members:
+                if m.username == ctx.username:
+                    continue
+                u = await user_repo.get(m.username)
+                if u is None:
+                    continue
+                preview.append(
+                    {
+                        "user_id": u.user_id,
+                        "username": u.username,
+                        "display_name": u.display_name,
+                        "picture_url": (
+                            f"/api/users/{u.user_id}/picture?v={u.picture_hash}"
+                            if u.picture_hash
+                            else None
+                        ),
+                    }
+                )
+            rows.append(
                 {
                     "id": c.id,
                     "type": c.type.value,
@@ -32,10 +60,11 @@ class ConversationCollectionView(BaseView):
                     "last_message_at": c.last_message_at.isoformat()
                     if c.last_message_at
                     else None,
+                    "members": preview,
+                    "member_count": len(members),
                 }
-                for c in convos
-            ]
-        )
+            )
+        return web.json_response(rows)
 
 
 class ConversationDmView(BaseView):

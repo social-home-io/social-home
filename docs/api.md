@@ -319,9 +319,9 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/conversations` | List. |
-| POST | `/api/conversations/dm` | Get-or-create 1:1 DM. |
-| POST | `/api/conversations/group` | Create group conversation. |
+| GET | `/api/conversations` | List the caller's conversations. Each row carries `members[]` (other participants only — caller is filtered out) and `member_count` so the inbox renders avatar stacks + peer-name fallbacks (`Anna · Bob`) without N+1 follow-up fetches. |
+| POST | `/api/conversations/dm` | Get-or-create 1:1 DM. Body `{username}`. |
+| POST | `/api/conversations/group` | Create group conversation (≥3 participants total — creator + ≥2 others). Body `{members: [username, ...], name?: string}`. |
 | GET / POST | `/api/conversations/{id}/messages` | List / send. |
 | PATCH / DELETE | `/api/conversations/{id}/messages/{mid}` | Edit / delete own. |
 | POST | `/api/conversations/{id}/{read\|unread}` | Unread state. `read` bulk-upserts `conversation_delivery_state` rows to `read` for every non-own message and returns `{ok, marked}`. |

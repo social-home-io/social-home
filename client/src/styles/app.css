@@ -2644,6 +2644,154 @@ a.sh-friends-member-chip:hover {
 }
 .sh-dm-info .sh-badge { align-self: flex-start; }
 
+/* Avatar stack — overlapping circles, oldest-on-top so the
+ * left-most avatar reads first like a name list. The "+N" overflow
+ * pill picks up the same circle frame so the stack feels uniform. */
+.sh-dm-avatars {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.sh-dm-avatars > .sh-avatar,
+.sh-dm-avatars > img.sh-avatar {
+  border: 2px solid var(--sh-bg);
+  margin-left: -8px;
+}
+.sh-dm-avatars > .sh-avatar:first-child,
+.sh-dm-avatars > img.sh-avatar:first-child {
+  margin-left: 0;
+}
+.sh-dm-avatar-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--sh-radius-full);
+  background: var(--sh-bg-tertiary);
+  border: 2px solid var(--sh-bg);
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  margin-left: -8px;
+}
+
+/* ───── New-DM dialog ──────────────────────────────────────────────────
+ *
+ * Multi-pick UX: search at the top, removable chips for the picked
+ * users, and an optional group-name input that surfaces when the
+ * conversation will be a group (≥2 picks). Cream surfaces match the
+ * household OS pattern; the picked rows tint with the terracotta
+ * highlight to confirm the choice. */
+.sh-newdm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-xs) 0;
+  border-bottom: 1px dashed var(--sh-border);
+  margin-bottom: var(--sh-space-sm);
+}
+.sh-newdm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 2px;
+  border-radius: var(--sh-radius-full);
+  background: color-mix(in srgb, var(--sh-primary) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 30%, transparent);
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-sm);
+  cursor: pointer;
+}
+.sh-newdm-chip:hover {
+  background: color-mix(in srgb, var(--sh-primary) 20%, transparent);
+}
+.sh-newdm-chip-name {
+  white-space: nowrap;
+}
+.sh-newdm-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--sh-bg);
+  color: var(--sh-text-muted);
+  font-size: 0.95em;
+  margin-left: 2px;
+}
+
+.sh-newdm-name input,
+.sh-newdm-search input {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.sh-newdm-userlist {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg);
+  display: flex;
+  flex-direction: column;
+}
+.sh-newdm-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--sh-border);
+  cursor: pointer;
+  text-align: left;
+  color: var(--sh-text);
+  transition: background var(--sh-transition-fast);
+}
+.sh-newdm-row:last-child { border-bottom: none; }
+.sh-newdm-row:hover { background: var(--sh-bg-secondary); }
+.sh-newdm-row--checked {
+  background: color-mix(in srgb, var(--sh-primary) 10%, transparent);
+}
+.sh-newdm-row--checked:hover {
+  background: color-mix(in srgb, var(--sh-primary) 18%, transparent);
+}
+.sh-newdm-row-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.sh-newdm-row-meta strong {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sh-newdm-row-meta .sh-muted {
+  font-size: var(--sh-font-size-xs);
+}
+.sh-newdm-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sh-border);
+  color: var(--sh-primary);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.sh-newdm-row--checked .sh-newdm-check {
+  background: var(--sh-primary);
+  border-color: var(--sh-primary);
+  color: var(--sh-bg);
+}
+
 .sh-thread {
   display: flex;
   flex-direction: column;
