@@ -52,6 +52,11 @@ def _instance_dict(inst) -> dict:
         "reachable": reachable,
         "paired_at": getattr(inst, "paired_at", None),
         "source": (inst.source.value if hasattr(inst.source, "value") else inst.source),
+        # Household coordinates are 4dp-truncated at the schema level
+        # (§25). Safe to expose: they're per-household, not per-user, and
+        # already shipped to/from peers via the pairing exchange.
+        "home_lat": getattr(inst, "home_lat", None),
+        "home_lon": getattr(inst, "home_lon", None),
     }
 
 

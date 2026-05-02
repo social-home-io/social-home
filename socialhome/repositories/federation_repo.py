@@ -48,6 +48,9 @@ class AbstractFederationRepo(Protocol):
     async def mark_unreachable(self, instance_id: str) -> None: ...
     async def update_inbox(self, instance_id: str, new_url: str) -> None: ...
 
+    # Local instance identity (display_name + household coords) ----------
+    async def get_local_identity(self) -> dict | None: ...
+
     # Replay cache --------------------------------------------------------
     async def load_replay_cache(
         self, within_hours: int = 1
@@ -230,6 +233,27 @@ class SqliteFederationRepo:
             "UPDATE remote_instances SET remote_inbox_url=? WHERE id=?",
             (new_url, instance_id),
         )
+
+    async def get_local_identity(self) -> dict | None:
+        """Return the local instance's display_name + household coords.
+
+        Used by routes that need a friendly name + map pin for "us" —
+        the keys + secrets in this row stay private. Returns ``None``
+        before bootstrap creates the row (only possible during a very
+        early test fixture).
+        """
+        row = await self._db.fetchone(
+            "SELECT instance_id, display_name, home_lat, home_lon "
+            "FROM instance_identity WHERE id='self'",
+        )
+        if row is None:
+            return None
+        return {
+            "instance_id": row["instance_id"],
+            "display_name": row["display_name"],
+            "home_lat": row["home_lat"],
+            "home_lon": row["home_lon"],
+        }
 
     # ── Replay cache ───────────────────────────────────────────────────
 

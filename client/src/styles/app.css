@@ -1500,6 +1500,132 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
  * effect is feed-scoped (``.sh-feed-item``) — PostCard usage outside
  * the household feed (search results, space feeds) keeps the flat
  * ``.sh-post`` chrome below. */
+/* ───── Friends dashboard ─────────────────────────────────────────────
+ *
+ * Connected-people view under Browse. Hero card with the headline
+ * count, an optional map, then one card per household. Each card
+ * uses the same cream-paper + dashed-border language as the rest of
+ * the household OS, with member chips inline so the page reads at a
+ * glance — no expandable sections. */
+.sh-friends {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+  padding-top: 12px;
+}
+.sh-friends-hero {
+  background: var(--sh-bg-tertiary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  padding: var(--sh-space-md) var(--sh-space-lg);
+  box-shadow: var(--sh-shadow-pinned);
+  position: relative;
+}
+.sh-friends-hero::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 24px;
+  width: 64px;
+  height: 16px;
+  background: color-mix(in srgb, var(--sh-primary) 35%, transparent);
+  border-radius: 2px;
+  transform: rotate(-2deg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.sh-friends-hero-headline {
+  font-size: var(--sh-font-size-lg);
+  color: var(--sh-text);
+}
+.sh-friends-hero-headline strong {
+  color: var(--sh-primary);
+  font-size: 1.4em;
+  font-weight: 700;
+}
+.sh-friends-hero-sub {
+  margin-top: 4px;
+  font-size: var(--sh-font-size-sm);
+}
+
+.sh-friends-map {
+  border-radius: var(--sh-radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--sh-border);
+  box-shadow: var(--sh-shadow-pinned);
+}
+
+.sh-friends-household {
+  background: var(--sh-bg);
+  border: 1px dashed var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  padding: var(--sh-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+}
+.sh-friends-household--mine {
+  background: var(--sh-bg-tertiary);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--sh-primary) 30%, var(--sh-border));
+  box-shadow: var(--sh-shadow-pinned);
+}
+.sh-friends-household-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  font-size: var(--sh-font-size-base);
+}
+.sh-friends-household-head strong {
+  color: var(--sh-text);
+}
+.sh-friends-house-icon {
+  font-size: 1.2em;
+}
+.sh-friends-tag {
+  font-size: var(--sh-font-size-xs);
+  font-style: italic;
+}
+.sh-friends-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--sh-bg);
+}
+.sh-friends-status-dot--reachable   { background: #22c55e; }
+.sh-friends-status-dot--unreachable { background: #fbbf24; }
+
+.sh-friends-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+}
+.sh-friends-member-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 2px 2px;
+  border-radius: var(--sh-radius-full);
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-border);
+  text-decoration: none;
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-sm);
+  transition: transform var(--sh-transition-fast),
+              box-shadow var(--sh-transition-fast);
+}
+a.sh-friends-member-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--sh-shadow-xs);
+}
+.sh-friends-member-name {
+  white-space: nowrap;
+}
+.sh-friends-empty-members {
+  font-size: var(--sh-font-size-sm);
+  font-style: italic;
+}
+
 .sh-feed {
   display: flex;
   flex-direction: column;
