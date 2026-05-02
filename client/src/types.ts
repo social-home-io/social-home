@@ -164,6 +164,13 @@ export interface SpaceZone {
   updated_at: string
 }
 
+export interface ConversationMemberPreview {
+  user_id: string
+  username: string
+  display_name: string
+  picture_url: string | null
+}
+
 export interface Conversation {
   id: string
   type: 'dm' | 'group_dm'
@@ -172,6 +179,11 @@ export interface Conversation {
   /** When true, HA automations may post system messages into this DM via
    *  the bot-bridge (authenticated with the user's own API token). */
   bot_enabled?: boolean
+  /** Other members (not including the caller) — populated by
+   *  ``GET /api/conversations`` so the inbox can render avatar stacks
+   *  + a peer-name fallback when ``name`` is null. */
+  members?: ConversationMemberPreview[]
+  member_count?: number
 }
 
 export interface Message {

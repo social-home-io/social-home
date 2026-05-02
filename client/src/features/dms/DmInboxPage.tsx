@@ -41,18 +41,56 @@ export default function DmInboxPage() {
           <p class="sh-muted">Start a conversation with someone in your household.</p>
         </div>
       )}
-      {conversations.value.map(c => (
-        <a key={c.id} href={`/dms/${c.id}`} class="sh-dm-row">
-          <Avatar name={c.name || 'DM'} size={40} />
-          <div class="sh-dm-info">
-            <strong>{c.name || 'Direct message'}</strong>
-            <span class="sh-badge">{c.type === 'group_dm' ? 'Group' : 'DM'}</span>
-          </div>
-          {c.last_message_at && (
-            <time class="sh-muted">{new Date(c.last_message_at).toLocaleString()}</time>
-          )}
-        </a>
-      ))}
+      {conversations.value.map(c => {
+        const peers = c.members ?? []
+        // Display-name fallback: explicit name > peer display names
+        // (joined by "·") > "Direct message". The peer-name path is
+        // what most groups end up with — even unnamed ones read as
+        // "Anna · Bob · Carol" instead of an opaque "Direct message".
+        const fallbackName = peers.length > 0
+          ? peers.map(p => p.display_name).join(' · ')
+          : 'Direct message'
+        const displayName = c.name || fallbackName
+        // Stack up to 3 avatars, then a "+N" overflow chip. Falls
+        // back to a single avatar from the conversation name when
+        // members are missing (legacy rows from before this field).
+        const visiblePeers = peers.slice(0, 3)
+        const overflow = peers.length - visiblePeers.length
+        return (
+          <a key={c.id} href={`/dms/${c.id}`} class="sh-dm-row">
+            <div class="sh-dm-avatars">
+              {peers.length === 0 ? (
+                <Avatar name={displayName} size={40} />
+              ) : (
+                <>
+                  {visiblePeers.map(p => (
+                    <Avatar
+                      key={p.user_id}
+                      name={p.display_name}
+                      src={p.picture_url}
+                      size={32}
+                    />
+                  ))}
+                  {overflow > 0 && (
+                    <span class="sh-dm-avatar-more">+{overflow}</span>
+                  )}
+                </>
+              )}
+            </div>
+            <div class="sh-dm-info">
+              <strong>{displayName}</strong>
+              <span class="sh-badge">
+                {c.type === 'group_dm'
+                  ? `Group · ${c.member_count ?? peers.length + 1}`
+                  : 'DM'}
+              </span>
+            </div>
+            {c.last_message_at && (
+              <time class="sh-muted">{new Date(c.last_message_at).toLocaleString()}</time>
+            )}
+          </a>
+        )
+      })}
     </div>
   )
 }

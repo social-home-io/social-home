@@ -65,6 +65,58 @@ async def client(tmp_dir):
         yield tc
 
 
+async def test_list_conversations_includes_member_preview(client):
+    """``GET /api/conversations`` ships a per-row members preview +
+    member_count so the inbox can render avatar stacks + a peer-name
+    fallback without N+1 follow-up fetches."""
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"username": "bob"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 201
+    resp = await client.get(
+        "/api/conversations",
+        headers=_auth(client._admin_token),
+    )
+    rows = await resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert "members" in row
+    assert "member_count" in row
+    assert row["member_count"] == 2
+    # The preview filters out *me* (the caller); only the peer should
+    # appear so the inbox can render "Bob" without manual filtering.
+    assert {m["username"] for m in row["members"]} == {"bob"}
+    assert row["members"][0]["display_name"] == "Bob"
+
+
+async def test_list_conversations_group_dm_carries_all_peers(client):
+    """Group DMs surface every other member in the preview so the
+    inbox can render an avatar stack and a peer-name fallback like
+    'Bob · Carol'."""
+    # Need a third user; seed one directly via the app's DB handle.
+    db = client.app[_db_key]
+    await db.enqueue(
+        "INSERT OR IGNORE INTO users(username, user_id, display_name)"
+        " VALUES('carol', 'c-id', 'Carol')",
+    )
+    r = await client.post(
+        "/api/conversations/group",
+        json={"members": ["bob", "carol"], "name": "Lunch crew"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 201
+    resp = await client.get(
+        "/api/conversations",
+        headers=_auth(client._admin_token),
+    )
+    rows = await resp.json()
+    row = next(r for r in rows if r["type"] == "group_dm")
+    assert row["member_count"] == 3
+    assert {m["username"] for m in row["members"]} == {"bob", "carol"}
+
+
 async def test_list_dm_members_carries_online_status(client):
     """GET /api/conversations/{id}/members returns rows with the
     session-presence triple — needed for the WhatsApp-style status line
