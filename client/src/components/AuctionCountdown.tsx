@@ -2,11 +2,15 @@
  * AuctionCountdown — live countdown for bazaar auctions (§23.15).
  */
 import { useEffect } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 
 export function AuctionCountdown({ endTime }: { endTime: string }) {
-  const remaining = signal('')
-  const expired = signal(false)
+  // ``useSignal`` keeps the same instance across renders so the
+  // ``setInterval`` tick keeps writing into the live signal the JSX
+  // is subscribed to. Plain ``signal()`` inside the body would orphan
+  // the timer's reference each render.
+  const remaining = useSignal('')
+  const expired = useSignal(false)
 
   useEffect(() => {
     const tick = () => {

@@ -2,11 +2,13 @@
  * VideoPlayer — custom video player (§23.108).
  */
 import { useRef } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 
 export function VideoPlayer({ src, poster }: { src: string; poster?: string }) {
   const videoRef = useRef<HTMLVideoElement>(null)
-  const playing = signal(false)
+  // ``useSignal`` so the play / pause writes land in the same instance
+  // the JSX's ``playing.value`` reads from on every render.
+  const playing = useSignal(false)
 
   const togglePlay = () => {
     const v = videoRef.current
