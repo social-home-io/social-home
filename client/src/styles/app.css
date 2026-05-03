@@ -3874,6 +3874,54 @@ a.sh-friends-member-chip:hover {
   gap: var(--sh-space-sm);
 }
 
+/* CallTypePickerDialog — two cream-paper tiles, terracotta on hover. */
+.sh-call-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sh-space-md);
+}
+.sh-call-picker-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-lg) var(--sh-space-md);
+  background: var(--sh-bg-secondary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  cursor: pointer;
+  text-align: center;
+  font: inherit;
+  color: inherit;
+  transition: transform 80ms ease, border-color 80ms ease, box-shadow 80ms ease;
+}
+.sh-call-picker-tile:hover:not(:disabled),
+.sh-call-picker-tile:focus-visible {
+  border-color: var(--sh-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sh-primary) 20%, transparent);
+  transform: translateY(-1px);
+}
+.sh-call-picker-tile:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.sh-call-picker-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+.sh-call-picker-label {
+  font-weight: 600;
+  color: var(--sh-primary);
+}
+.sh-call-picker-meta {
+  font-size: 0.85rem;
+  color: var(--sh-text-secondary, currentColor);
+  opacity: 0.8;
+}
+@media (max-width: 480px) {
+  .sh-call-picker { grid-template-columns: 1fr; }
+}
+
 /* Gallery */
 .sh-gallery { display: flex; flex-direction: column; gap: var(--sh-space-md); }
 .sh-album-detail { display: flex; flex-direction: column; gap: var(--sh-space-md); position: relative; }

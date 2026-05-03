@@ -9,6 +9,7 @@ import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
+import { openCallTypePicker } from '@/components/CallTypePickerDialog'
 import { currentUser } from '@/store/auth'
 
 const messages = signal<Message[]>([])
@@ -119,18 +120,22 @@ function formatDuration(sec: number): string {
   return m > 0 ? `${m}m ${s}s` : `${s}s`
 }
 
-/** Thread-header call buttons (§26.2). */
-function CallButtons({ convId, onStart }: { convId: string, onStart: (t: 'audio' | 'video') => void }) {
+/** Thread-header call button (§26.2).
+ *
+ * One phone icon — tapping it opens :class:`CallTypePickerDialog` so the
+ * user picks audio vs. video on a focused dialog rather than having to
+ * choose between two cramped header icons. The chosen type is fixed at
+ * offer time on the backend; mid-call enable/disable of video is handled
+ * by :func:`InCallPage.toggleCamera`.
+ */
+function CallButton({ convId }: { convId: string }) {
   // Only meaningful when the DM has ≥ 1 peer.
   if (memberCount.value < 2) return null
   return (
     <div class="sh-thread-call-buttons">
-      <button type="button" class="sh-icon-btn" title="Audio call"
-              onClick={() => onStart('audio')}
-              aria-label={`Start audio call in conversation ${convId}`}>📞</button>
-      <button type="button" class="sh-icon-btn" title="Video call"
-              onClick={() => onStart('video')}
-              aria-label={`Start video call in conversation ${convId}`}>📹</button>
+      <button type="button" class="sh-icon-btn" title="Start call"
+              onClick={() => openCallTypePicker(convId)}
+              aria-label={`Start call in conversation ${convId}`}>📞</button>
     </div>
   )
 }
@@ -335,7 +340,7 @@ export default function DmThreadPage() {
           )}
           {status && <span class="sh-thread-header-status-line">{status}</span>}
         </div>
-        <CallButtons convId={convId} onStart={startCall} />
+        <CallButton convId={convId} />
         <a class="sh-link" href={`/dms/${convId}/calls`}>History</a>
       </div>
       {gaps.value.length > 0 && (
