@@ -259,15 +259,11 @@ export function CommentOverlay() {
 
         <div class="sh-comment-overlay-body">
           {loading && <Spinner />}
-          {!loading && comments.length === 0 && (
-            <div class="sh-comment-overlay-empty">
-              <p class="sh-muted">Be the first to comment.</p>
-            </div>
-          )}
-          {!loading && comments.length > 0 && (
+          {!loading && (
             <CommentThread
               comments={comments}
               spaceId={spaceId}
+              postId={post.id}
               onReply={handleReply}
               onEdit={handleEdit}
               onDelete={handleDelete}

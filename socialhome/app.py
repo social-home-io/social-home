@@ -1144,6 +1144,7 @@ def create_app(config: Config | None = None) -> web.Application:
         conversation_repo=conversation_repo,
         user_repo=user_repo,
         ws_manager=ws_manager,
+        space_repo=space_repo,
     )
 
     # ── Platform adapter (HA vs standalone) ──────────────────────────────

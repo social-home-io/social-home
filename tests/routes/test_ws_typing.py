@@ -92,3 +92,61 @@ async def test_ws_json_array_ignored(client):
         assert msg.data == "pong"
     finally:
         await ws.close()
+
+
+# ─── Comment-thread typing scope ────────────────────────────────────────
+
+
+async def test_ws_typing_comment_household_scope(client):
+    """``{type: 'typing', post_id}`` routes to ``user_typing_on_comment``."""
+    from socialhome.app_keys import typing_service_key
+
+    typing = client.server.app[typing_service_key]
+    ws = await _ws_connect(client)
+    try:
+        await ws.send_str(json.dumps({"type": "typing", "post_id": "post-1"}))
+        for _ in range(20):
+            if typing.is_typing_on_comment("post-1", client._uid):
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        await ws.close()
+    assert typing.is_typing_on_comment("post-1", client._uid) is True
+
+
+async def test_ws_typing_comment_space_scope(client):
+    """``post_id`` + ``space_id`` is forwarded; the in-memory state
+    records the typer regardless of fan-out targets."""
+    from socialhome.app_keys import typing_service_key
+
+    typing = client.server.app[typing_service_key]
+    ws = await _ws_connect(client)
+    try:
+        await ws.send_str(
+            json.dumps(
+                {
+                    "type": "typing",
+                    "post_id": "post-2",
+                    "space_id": "space-x",
+                }
+            ),
+        )
+        for _ in range(20):
+            if typing.is_typing_on_comment("post-2", client._uid):
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        await ws.close()
+    assert typing.is_typing_on_comment("post-2", client._uid) is True
+
+
+async def test_ws_typing_neither_id_silent(client):
+    """``{type: 'typing'}`` without post_id or conversation_id is a no-op."""
+    ws = await _ws_connect(client)
+    try:
+        await ws.send_str(json.dumps({"type": "typing"}))
+        await ws.send_str("ping")
+        msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+        assert msg.data == "pong"
+    finally:
+        await ws.close()

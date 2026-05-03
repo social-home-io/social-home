@@ -96,17 +96,29 @@ class WebSocketView(BaseView):
             return
         cmd = payload.get("type")
         if cmd == "typing":
-            cid = payload.get("conversation_id")
-            if not cid:
-                return
             typing_svc = self.request.app.get(K.typing_service_key)
             if typing_svc is None:
                 return
+            # Two scopes share the same inbound frame:
+            #   • DM:            {type: 'typing', conversation_id}
+            #   • Comment thread:{type: 'typing', post_id, space_id?}
+            # Branch on which id the client supplied — never both.
+            post_id = payload.get("post_id")
+            cid = payload.get("conversation_id")
             try:
-                await typing_svc.user_started_typing(
-                    conversation_id=str(cid),
-                    sender_user_id=ctx.user_id,
-                    sender_username=ctx.username,
-                )
+                if post_id:
+                    space_id = payload.get("space_id")
+                    await typing_svc.user_typing_on_comment(
+                        post_id=str(post_id),
+                        space_id=str(space_id) if space_id else None,
+                        sender_user_id=ctx.user_id,
+                        sender_username=ctx.username,
+                    )
+                elif cid:
+                    await typing_svc.user_started_typing(
+                        conversation_id=str(cid),
+                        sender_user_id=ctx.user_id,
+                        sender_username=ctx.username,
+                    )
             except Exception as exc:  # defensive
                 log.debug("typing dispatch failed: %s", exc)

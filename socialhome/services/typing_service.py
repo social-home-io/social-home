@@ -18,10 +18,14 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEventType
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
+
+if TYPE_CHECKING:
+    from ..repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
 
@@ -43,10 +47,12 @@ class TypingService:
     __slots__ = (
         "_convo_repo",
         "_user_repo",
+        "_space_repo",
         "_ws",
         "_federation",
         "_own_instance_id",
         "_active",
+        "_active_comments",
     )
 
     def __init__(
@@ -57,18 +63,34 @@ class TypingService:
         ws_manager,
         federation_service=None,
         own_instance_id: str = "",
+        space_repo: "AbstractSpaceRepo | None" = None,
     ) -> None:
         self._convo_repo = conversation_repo
         self._user_repo = user_repo
+        self._space_repo = space_repo
         self._ws = ws_manager
         self._federation = federation_service
         self._own_instance_id = own_instance_id
         # (conversation_id, user_id) → _TypingState
         self._active: dict[tuple[str, str], _TypingState] = {}
+        # (post_id, user_id) → _TypingState  for comment-thread typing
+        # (a separate keyspace from conversation typing so the two
+        # never alias on a stray collision between an id pair).
+        self._active_comments: dict[tuple[str, str], _TypingState] = {}
 
     def attach_federation(self, federation_service, own_instance_id: str) -> None:
         self._federation = federation_service
         self._own_instance_id = own_instance_id
+
+    def attach_space_repo(self, space_repo: "AbstractSpaceRepo") -> None:
+        """Wire :class:`AbstractSpaceRepo` post-construction.
+
+        Tests may build a bare service first and attach later. The
+        comment-typing fan-out needs the space-member list to scope
+        ``comment.user_typing`` to people who can actually see the
+        space post.
+        """
+        self._space_repo = space_repo
 
     # ─── Local entry point: from WS handler ───────────────────────────────
 
@@ -117,6 +139,97 @@ class TypingService:
             sender_username=sender_username,
         )
         return delivered
+
+    # ─── Comment-thread typing ────────────────────────────────────────────
+
+    async def user_typing_on_comment(
+        self,
+        *,
+        post_id: str,
+        space_id: str | None,
+        sender_user_id: str,
+        sender_username: str,
+        now: float | None = None,
+    ) -> int:
+        """Record + fan out a typing event on a comment thread.
+
+        Scope:
+
+        * ``space_id is None`` (household feed) → broadcast to every
+          local connected user. Household-feed posts are visible to
+          every household member, so a typing indicator reasonably
+          reaches anyone watching the comment thread.
+        * ``space_id is not None`` (space feed) → broadcast only to the
+          space's local members, so the indicator never leaks past the
+          space's audience.
+
+        Returns the count of WS deliveries. Inbound throttle: ignore
+        duplicate emits within 1 s. Cross-instance fan-out (federating
+        typing on remote-instance space comments) is a follow-up; this
+        first cut keeps it local-only since household + same-instance
+        space members are the common case.
+        """
+        now = now if now is not None else time.monotonic()
+        key = (post_id, sender_user_id)
+        existing = self._active_comments.get(key)
+        if existing is not None and (now - existing.last_seen_at) < 1.0:
+            return 0
+        self._active_comments[key] = _TypingState(last_seen_at=now)
+        self._gc_comments(now)
+
+        targets: list[str] = []
+        if space_id is None:
+            # Household scope — every local user is allowed to see.
+            try:
+                local_users = await self._user_repo.list_active()
+            except Exception:
+                local_users = []
+            for u in local_users:
+                if u.user_id and u.user_id != sender_user_id:
+                    targets.append(u.user_id)
+        elif self._space_repo is not None:
+            try:
+                members = await self._space_repo.list_members(space_id)
+            except Exception:
+                members = []
+            for m in members:
+                uid = getattr(m, "user_id", None)
+                if uid and uid != sender_user_id:
+                    targets.append(uid)
+        # space_id set but space_repo unwired → no fan-out (defensive;
+        # production wiring is in app.py and unconditional).
+
+        return await self._ws.broadcast_to_users(
+            targets,
+            {
+                "type": "comment.user_typing",
+                "post_id": post_id,
+                "space_id": space_id,
+                "sender_user_id": sender_user_id,
+                "sender_username": sender_username,
+            },
+        )
+
+    def is_typing_on_comment(
+        self,
+        post_id: str,
+        user_id: str,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        now = now if now is not None else time.monotonic()
+        state = self._active_comments.get((post_id, user_id))
+        if state is None:
+            return False
+        return (now - state.last_seen_at) <= TYPING_TTL_SECONDS
+
+    def _gc_comments(self, now: float) -> None:
+        cutoff = now - TYPING_TTL_SECONDS
+        stale = [k for k, v in self._active_comments.items() if v.last_seen_at < cutoff]
+        for k in stale:
+            self._active_comments.pop(k, None)
+
+    # ─── Internal: shared helpers ─────────────────────────────────────────
 
     async def _resolve_user_id(self, member) -> str | None:
         """Map a conversation member to a ``user_id``.
