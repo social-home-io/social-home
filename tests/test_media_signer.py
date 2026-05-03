@@ -9,7 +9,9 @@ from socialhome.media_signer import (
     MediaUrlSigner,
     derive_signing_key,
     sign_media_urls_in,
+    sign_media_urls_in_markdown,
     strip_signature_query,
+    strip_signed_media_in_markdown,
 )
 
 
@@ -258,3 +260,73 @@ def test_strip_signature_query_passes_through_canonical() -> None:
 def test_strip_signature_query_handles_none_and_non_str() -> None:
     assert strip_signature_query(None) is None
     assert strip_signature_query(123) == 123  # type: ignore[arg-type]
+
+
+# ── Markdown-body helpers (page rewrites) ─────────────────────────────────
+
+
+def test_sign_in_markdown_signs_only_api_media_urls(signer: MediaUrlSigner) -> None:
+    body = (
+        "# Trip log\n\n"
+        "![view](/api/media/sunrise.webp)\n"
+        "![remote](https://other.example/banner.png)\n"
+        "See also [[Recipe page]] and the [archive](/pages/archive).\n"
+    )
+    out = sign_media_urls_in_markdown(body, signer)
+    assert out is not None
+    # /api/media/ URL got signed.
+    assert "/api/media/sunrise.webp?exp=" in out
+    assert "&sig=" in out
+    # Non-media URLs are untouched.
+    assert "https://other.example/banner.png" in out
+    assert "[[Recipe page]]" in out
+    assert "/pages/archive" in out
+
+
+def test_sign_in_markdown_re_signs_already_signed_urls(signer: MediaUrlSigner) -> None:
+    """A body with stale ``?exp=…&sig=…`` is rewritten with a fresh sig."""
+    body = "![](/api/media/x.webp?exp=1&sig=stale)"
+    out = sign_media_urls_in_markdown(body, signer)
+    assert out is not None
+    # The stale signature is gone.
+    assert "sig=stale" not in out
+    # A fresh signature is present.
+    assert "exp=" in out
+    assert "&sig=" in out
+
+
+def test_sign_in_markdown_handles_none_and_empty(signer: MediaUrlSigner) -> None:
+    assert sign_media_urls_in_markdown(None, signer) is None
+    assert sign_media_urls_in_markdown("", signer) == ""
+
+
+def test_strip_signed_media_in_markdown_round_trip(signer: MediaUrlSigner) -> None:
+    body = "Hello ![](/api/media/x.webp)"
+    signed = sign_media_urls_in_markdown(body, signer)
+    assert signed is not None and "?exp=" in signed
+    stripped = strip_signed_media_in_markdown(signed)
+    assert stripped == body
+
+
+def test_strip_signed_media_in_markdown_leaves_non_media_alone() -> None:
+    body = "[link](https://example.com/x?y=1) and ![](/api/media/x.webp?exp=1&sig=2)"
+    out = strip_signed_media_in_markdown(body)
+    assert out == "[link](https://example.com/x?y=1) and ![](/api/media/x.webp)"
+
+
+def test_strip_signed_media_in_markdown_handles_none_and_empty() -> None:
+    assert strip_signed_media_in_markdown(None) is None
+    assert strip_signed_media_in_markdown("") == ""
+
+
+def test_sign_in_markdown_signature_verifies(signer: MediaUrlSigner) -> None:
+    """The fresh signature in a rewritten body actually validates."""
+    out = sign_media_urls_in_markdown("![](/api/media/abc.webp)", signer)
+    assert out is not None
+    # Pull exp + sig out of the rewritten URL.
+    assert "/api/media/abc.webp?exp=" in out
+    after_q = out.split("/api/media/abc.webp?", 1)[1]
+    # Strip trailing ')' from the markdown image syntax.
+    after_q = after_q.split(")", 1)[0]
+    parts = dict(p.split("=", 1) for p in after_q.split("&"))
+    assert signer.verify("/api/media/abc.webp", parts["exp"], parts["sig"])
