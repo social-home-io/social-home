@@ -24,6 +24,7 @@ import { HaUsersPanel } from './HaUsersPanel'
 import { instanceConfig } from '@/store/instance'
 import CpAdminPanel from '@/features/child-protection/CpAdminPanel'
 import type { User } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 type TabId =
   | 'members' | 'ha-users' | 'spaces' | 'moderation'
@@ -212,11 +213,10 @@ function MembersTab() {
     }
   }
   const exportUserData = async (u: User) => {
-    if (!confirm(
+    if (!await confirmDialog(
       `Export all data for @${u.username}? The browser will download a\n`
       + 'JSON file containing their posts, comments, DMs, tasks, calendar\n'
-      + 'events, and media references. Use responsibly (§GDPR).',
-    )) return
+      + 'events, and media references. Use responsibly (§GDPR).')) return
     try {
       const resp = await fetch(`/api/users/${u.user_id}/export`, {
         headers: {
@@ -320,7 +320,7 @@ async function loadSpaces() {
 }
 
 async function dissolveSpace(id: string) {
-  if (!confirm(`Dissolve space ${id}? This cannot be undone.`)) return
+  if (!await confirmDialog(`Dissolve space ${id}? This cannot be undone.`, { destructive: true })) return
   try {
     await api.delete(`/api/spaces/${id}`)
     await loadSpaces()
@@ -356,11 +356,10 @@ async function loadPublications() {
 }
 
 async function unpublishFromGfs(spaceId: string, gfsId: string) {
-  if (!confirm(
+  if (!await confirmDialog(
     'Unpublish this space from the GFS? It will disappear from the '
     + 'global directory. Existing members remain members — this only '
-    + 'affects discoverability.',
-  )) return
+    + 'affects discoverability.')) return
   try {
     await api.delete(`/api/spaces/${spaceId}/publish/${gfsId}`)
     showToast('Unpublished', 'success')
@@ -592,11 +591,10 @@ function SessionsTab() {
                 <Button
                   variant="danger"
                   onClick={async () => {
-                    if (!confirm(
+                    if (!await confirmDialog(
                       `Revoke "${t.label}" (${t.username || 'unknown user'})? `
                       + 'Any client signed in with this token will be '
-                      + 'logged out immediately.',
-                    )) return
+                      + 'logged out immediately.', { destructive: true })) return
                     try {
                       await api.delete(`/api/admin/tokens/${t.token_id}`)
                       tokens.value = tokens.value.filter(
@@ -766,12 +764,11 @@ function BackupTab() {
   }
 
   const onImport = async (file: File) => {
-    if (!confirm(
+    if (!await confirmDialog(
       `Restore from "${file.name}"?\n\n`
       + 'This will only succeed on an empty database. Existing data\n'
       + 'prevents the restore so you don\'t accidentally overwrite it.\n'
-      + 'Export first if you want to keep the current state.',
-    )) return
+      + 'Export first if you want to keep the current state.', { destructive: true })) return
     setImporting(true)
     try {
       const body = await file.arrayBuffer()

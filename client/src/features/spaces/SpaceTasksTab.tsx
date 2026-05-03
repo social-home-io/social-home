@@ -21,6 +21,7 @@ import { showToast } from '@/components/Toast'
 import { householdUsers } from '@/store/householdUsers'
 import { currentUser } from '@/store/auth'
 import type { TaskItem } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface SpaceTaskList { id: string; name: string; created_by: string }
 
@@ -142,7 +143,7 @@ export function SpaceTasksTab({ spaceId }: Props) {
   }
 
   const deleteTask = async (t: TaskItem) => {
-    if (!confirm(`Delete "${t.title}"?`)) return
+    if (!await confirmDialog(`Delete "${t.title}"?`, { destructive: true })) return
     try {
       await api.delete(`/api/spaces/${spaceId}/tasks/${t.id}`)
       tasks.value = tasks.value.filter(x => x.id !== t.id)

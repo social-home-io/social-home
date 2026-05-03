@@ -15,6 +15,7 @@ import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
+import { confirmDialog } from '@/components/confirm'
 
 const loading = signal(true)
 
@@ -121,7 +122,7 @@ export default function ShoppingPage() {
   }
 
   const handleClearCompleted = async () => {
-    if (!confirm('Clear all completed items? This cannot be undone.')) return
+    if (!await confirmDialog('Clear all completed items? This cannot be undone.', { destructive: true })) return
     try {
       await clearCompleted()
     } catch (err: unknown) {

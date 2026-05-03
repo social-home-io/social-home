@@ -25,6 +25,7 @@ import type { Space } from '@/types'
 import { SpaceBotsTab } from './SpaceBotsTab'
 import { SpaceLinksTab } from './SpaceLinksTab'
 import { SpaceNotifPrefsPanel } from './SpaceNotifPrefsPanel'
+import { confirmDialog } from '@/components/confirm'
 
 type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots' | 'notifications'
 
@@ -221,7 +222,7 @@ function AboutTab({
   }
 
   const clearCover = async () => {
-    if (!confirm('Remove the space cover image?')) return
+    if (!await confirmDialog('Remove the space cover image?', { destructive: true })) return
     try {
       await api.delete(`/api/spaces/${space.id}/cover`)
       setCoverUrl(null)

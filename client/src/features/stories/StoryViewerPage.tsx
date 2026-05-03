@@ -16,6 +16,7 @@ import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import type { Story, StoryFrame } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface StoryDetail {
   story: Story
@@ -142,7 +143,7 @@ export default function StoryViewerPage() {
   }
 
   const deleteFrame = async () => {
-    if (!confirm('Delete this frame?')) return
+    if (!await confirmDialog('Delete this frame?', { destructive: true })) return
     try {
       await api.delete(`/api/stories/frames/${frame.id}`)
       showToast('Frame removed', 'info')

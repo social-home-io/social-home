@@ -16,6 +16,7 @@ import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { toggles } from '@/components/HouseholdToggles'
 import type { FeedPost } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 export default function FeedPage() {
   // Use the actual household name set by the admin (HouseholdToggles)
@@ -63,7 +64,7 @@ export default function FeedPage() {
   }
 
   const handleDelete = async (postId: string) => {
-    if (!confirm('Delete this post?')) return
+    if (!await confirmDialog('Delete this post?', { destructive: true })) return
     await api.delete(`/api/feed/posts/${postId}`)
     showToast('Post deleted', 'info')
     // wireFeedWs() removes the row on `post.deleted`. No reload.

@@ -21,6 +21,7 @@ import { ws } from '@/ws'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import { showToast } from './Toast'
+import { confirmDialog } from '@/components/confirm'
 
 interface PollOption {
   id: string
@@ -106,7 +107,7 @@ export function PollUI({
   }
 
   const closePoll = async () => {
-    if (!confirm('Close this poll? No more votes will be accepted.')) return
+    if (!await confirmDialog('Close this poll? No more votes will be accepted.', { destructive: true })) return
     setBusy(true)
     try {
       const next = await api.post(

@@ -18,6 +18,7 @@ import { lists, tasks } from '@/store/tasks'
 import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { currentUser } from '@/store/auth'
 import type { TaskItem, TaskListEntry } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 const activeList = signal<string | null>(null)
 const loading = signal(true)
@@ -123,9 +124,8 @@ export default function TaskPage() {
   }
 
   const deleteList = async (list: TaskListEntry) => {
-    if (!confirm(
-      `Delete "${list.name}" and all its tasks? This can't be undone.`,
-    )) return
+    if (!await confirmDialog(
+      `Delete "${list.name}" and all its tasks? This can't be undone.`, { destructive: true })) return
     try {
       await api.delete(`/api/tasks/lists/${list.id}`)
       lists.value = lists.value.filter(l => l.id !== list.id)
@@ -171,7 +171,7 @@ export default function TaskPage() {
   }
 
   const deleteTask = async (task: TaskItem) => {
-    if (!confirm(`Delete "${task.title}"?`)) return
+    if (!await confirmDialog(`Delete "${task.title}"?`, { destructive: true })) return
     try {
       await api.delete(`/api/tasks/${task.id}`)
       tasks.value = tasks.value.filter(t => t.id !== task.id)

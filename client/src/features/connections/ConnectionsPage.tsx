@@ -24,6 +24,7 @@ import { currentUser } from '@/store/auth'
 import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
+import { confirmDialog } from '@/components/confirm'
 
 interface Connection {
   instance_id: string
@@ -110,7 +111,7 @@ async function approveAutoPair(r: AutoPairRequest) {
 }
 
 async function declineAutoPair(r: AutoPairRequest) {
-  if (!confirm(`Decline ${r.from_a_display}'s pairing request?`)) return
+  if (!await confirmDialog(`Decline ${r.from_a_display}'s pairing request?`, { destructive: true })) return
   try {
     await api.post(
       `/api/pairing/auto-pair-requests/${r.request_id}/decline`,
@@ -139,7 +140,7 @@ async function disconnectGfs(gfs: GfsConnection) {
 }
 
 async function unpair(instanceId: string) {
-  if (!confirm('Unpair this household? You will lose access to its spaces.')) return
+  if (!await confirmDialog('Unpair this household? You will lose access to its spaces.', { destructive: true })) return
   try {
     await api.delete(`/api/pairing/connections/${instanceId}`)
     showToast('Unpaired', 'info')

@@ -19,6 +19,7 @@ import {
   spaceMembers,
   invalidateSpaceMembers,
 } from '@/store/spaceMembers'
+import { confirmDialog } from '@/components/confirm'
 
 const open = signal(false)
 const activeSpaceId = signal<string | null>(null)
@@ -99,7 +100,7 @@ export function SpaceProfileDialog() {
 
   const clearPicture = async () => {
     if (!spaceId) return
-    if (!confirm('Reset your space avatar to your household picture?')) return
+    if (!await confirmDialog('Reset your space avatar to your household picture?', { destructive: true })) return
     setSaving(true)
     try {
       await api.delete(`/api/spaces/${spaceId}/members/me/picture`)

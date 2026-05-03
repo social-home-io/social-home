@@ -16,6 +16,7 @@ import { SaveListingButton } from './SaveListingButton'
 import { showToast } from './Toast'
 import { currentUser } from '@/store/auth'
 import type { BazaarBid, BazaarListing } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 const CURRENCY_FRACTION_DIGITS: Record<string, number> = {
   JPY: 0, KRW: 0, ISK: 0,
@@ -149,7 +150,7 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
   }
 
   const withdraw = async (bidId: string) => {
-    if (!confirm('Withdraw this bid?')) return
+    if (!await confirmDialog('Withdraw this bid?', { destructive: true })) return
     setBusy(true)
     try {
       await api.delete(`/api/bazaar/${postId}/bids/${bidId}`)
@@ -165,7 +166,7 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
   }
 
   const acceptOffer = async (bidId: string) => {
-    if (!confirm('Accept this offer? The listing will be marked sold.')) return
+    if (!await confirmDialog('Accept this offer? The listing will be marked sold.')) return
     setBusy(true)
     try {
       await api.post(`/api/bazaar/${postId}/bids/${bidId}/accept`)
@@ -200,7 +201,7 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
   }
 
   const cancelListing = async () => {
-    if (!confirm('Cancel this listing? Active bids will be voided.')) return
+    if (!await confirmDialog('Cancel this listing? Active bids will be voided.', { destructive: true })) return
     setBusy(true)
     try {
       await api.delete(`/api/bazaar/${postId}`)

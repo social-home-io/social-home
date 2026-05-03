@@ -19,6 +19,7 @@ import { Button } from '@/components/Button'
 import { BotAvatar } from '@/components/BotAvatar'
 import { showToast } from '@/components/Toast'
 import type { BotScope, SpaceBot, SpaceBotWithToken } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface SpaceBotsTabProps {
   spaceId: string
@@ -234,12 +235,11 @@ function BotRow({
   const [busy, setBusy] = useState(false)
 
   const rotate = async () => {
-    if (!confirm(
+    if (!await confirmDialog(
       `Rotate the token for "${bot.name}"?\n\n` +
       `This invalidates the current token immediately. Any Home Assistant ` +
       `automation using it will stop working until you paste the new token ` +
-      `into the integration.`,
-    )) return
+      `into the integration.`, { destructive: true })) return
     setBusy(true)
     try {
       const result = await api.post(
@@ -255,11 +255,10 @@ function BotRow({
   }
 
   const remove = async () => {
-    if (!confirm(
+    if (!await confirmDialog(
       `Delete bot "${bot.name}"?\n\n` +
       `Existing posts will remain (attributed to "Home Assistant") but no new ` +
-      `posts can be made with this bot's token. This cannot be undone.`,
-    )) return
+      `posts can be made with this bot's token. This cannot be undone.`, { destructive: true })) return
     setBusy(true)
     try {
       await api.delete(`/api/spaces/${spaceId}/bots/${bot.bot_id}`)

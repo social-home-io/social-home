@@ -10,6 +10,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
+import { confirmDialog } from '@/components/confirm'
 
 interface SpaceLink {
   id: string
@@ -86,7 +87,7 @@ export function SpaceLinksTab({ spaceId }: Props) {
   }
 
   const deleteLink = async (link: SpaceLink) => {
-    if (!confirm(`Remove "${link.label}"?`)) return
+    if (!await confirmDialog(`Remove "${link.label}"?`, { destructive: true })) return
     try {
       await api.delete(`/api/spaces/${spaceId}/links/${link.id}`)
       await reload()

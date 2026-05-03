@@ -23,6 +23,7 @@ import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { t } from '@/i18n/i18n'
+import { confirmDialog } from '@/components/confirm'
 
 export interface SubscribeFeedProps {
   spaceId: string
@@ -59,7 +60,7 @@ export function SubscribeFeed({ spaceId }: SubscribeFeedProps) {
 
   const mintOrRegen = async (regen: boolean) => {
     if (regen && tok) {
-      const ok = window.confirm(t('event.subscribe.confirm_regenerate'))
+      const ok = await confirmDialog(t('event.subscribe.confirm_regenerate'), { destructive: true })
       if (!ok) return
     }
     loading.value = { ...loading.value, [spaceId]: true }
@@ -85,7 +86,7 @@ export function SubscribeFeed({ spaceId }: SubscribeFeedProps) {
   }
 
   const revoke = async () => {
-    const ok = window.confirm(t('event.subscribe.confirm_revoke'))
+    const ok = await confirmDialog(t('event.subscribe.confirm_revoke'), { destructive: true })
     if (!ok) return
     loading.value = { ...loading.value, [spaceId]: true }
     try {

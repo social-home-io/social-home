@@ -16,6 +16,7 @@ import {
   setPreference,
   type LandingPath,
 } from '@/utils/preferences'
+import { confirmDialog } from '@/components/confirm'
 
 type SettingsTab = 'profile' | 'privacy' | 'notifications' | 'appearance'
 
@@ -122,7 +123,7 @@ function ProfileTab() {
   }
 
   const handleAvatarClear = async () => {
-    if (!confirm('Remove your profile picture?')) return
+    if (!await confirmDialog('Remove your profile picture?', { destructive: true })) return
     try {
       await api.delete('/api/me/picture')
       await refresh()
