@@ -12,7 +12,7 @@
  * * ``Enter``  — accept the call
  * * ``Esc``    — decline
  */
-import { useEffect } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -69,6 +69,10 @@ function startVibration(): () => void {
 
 export default function IncomingCallDialog() {
   const loc = useLocation()
+  // Both accept and decline fire one POST. The dialog stays mounted
+  // while the request flies; the spinner says "we heard your tap".
+  const [accepting, setAccepting] = useState(false)
+  const [declining, setDeclining] = useState(false)
 
   useEffect(() => {
     if (!incoming.value) return
@@ -103,6 +107,8 @@ export default function IncomingCallDialog() {
   const call = incoming.value
 
   const accept = async () => {
+    if (accepting || declining) return
+    setAccepting(true)
     try {
       await api.post(`/api/calls/${call.call_id}/answer`, {
         sdp_answer: 'v=0\r\n',
@@ -111,9 +117,12 @@ export default function IncomingCallDialog() {
       loc.route(`/calls/${call.call_id}`)
     } catch (err) {
       showToast(`Accept failed: ${(err as Error).message ?? err}`, 'error')
+      setAccepting(false)
     }
   }
   const decline = async () => {
+    if (accepting || declining) return
+    setDeclining(true)
     try {
       await api.post(`/api/calls/${call.call_id}/decline`, {})
     } catch { /* best-effort */ }
@@ -129,8 +138,10 @@ export default function IncomingCallDialog() {
         <strong class="sh-incoming-name">{call.from_user} is calling</strong>
         <span class="sh-incoming-type">{call.call_type === 'video' ? 'Video call' : 'Audio call'}</span>
         <div class="sh-incoming-actions">
-          <Button class="sh-accept" onClick={accept}>Accept</Button>
-          <Button class="sh-decline" onClick={decline}>Decline</Button>
+          <Button class="sh-accept" onClick={accept}
+                  loading={accepting} disabled={declining}>Accept</Button>
+          <Button class="sh-decline" onClick={decline}
+                  loading={declining} disabled={accepting}>Decline</Button>
         </div>
       </div>
     </div>

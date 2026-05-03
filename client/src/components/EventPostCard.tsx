@@ -20,7 +20,7 @@
  * approval, and reminder configuration live in the calendar event
  * detail (CalendarPage) rather than the feed card.
  */
-import { useEffect } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -238,13 +238,19 @@ function RsvpButton({
       ? t('event.rsvp.request_to_join_tooltip')
       : ''
 
+  // ``busy`` reflects the in-flight POST; surfaces as the spinner on
+  // the Button so a slow connection doesn't read as a no-op tap.
+  const [busy, setBusy] = useState(false)
+
   return (
     <Button
       variant={variant}
       disabled={disabled}
+      loading={busy}
       title={tooltip || undefined}
       onClick={async () => {
-        if (disabled) return
+        if (disabled || busy) return
+        setBusy(true)
         try {
           await api.post(`/api/calendars/events/${event.id}/rsvp`, {
             status,
@@ -266,6 +272,8 @@ function RsvpButton({
         } catch (e) {
           const msg = (e as Error)?.message ?? t('event.rsvp.failed')
           showToast(msg, 'error')
+        } finally {
+          setBusy(false)
         }
       }}
     >
