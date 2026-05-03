@@ -414,3 +414,140 @@ async def test_resolve_user_id_unknown_username_returns_none():
     )
     targets, _ = ws.calls[0]
     assert targets == []
+
+
+# ─── Comment-thread typing ────────────────────────────────────────────────
+
+
+class _FakeUser:
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+
+
+class _FakeUserRepoWithList:
+    """User repo fake that returns a list of local active users — used by
+    the household-scope branch of comment-typing fan-out."""
+
+    def __init__(self, users):
+        self._users = users
+
+    async def list_active(self):
+        return self._users
+
+
+class _FakeSpaceRepo:
+    def __init__(self, members):
+        self._m = members
+
+    async def list_members(self, space_id):
+        return self._m
+
+
+async def test_comment_typing_household_broadcasts_to_all_local_users():
+    """``space_id is None`` → fan to every local user except the sender."""
+    users = _FakeUserRepoWithList(
+        [_FakeUser("alice"), _FakeUser("bob"), _FakeUser("carol")],
+    )
+    ws = _FakeWS()
+    svc = TypingService(
+        conversation_repo=_FakeConvoRepo(),
+        user_repo=users,
+        ws_manager=ws,
+    )
+    delivered = await svc.user_typing_on_comment(
+        post_id="p1",
+        space_id=None,
+        sender_user_id="alice",
+        sender_username="alice",
+    )
+    assert delivered == 2
+    targets, payload = ws.calls[0]
+    assert sorted(targets) == ["bob", "carol"]
+    assert payload["type"] == "comment.user_typing"
+    assert payload["post_id"] == "p1"
+    assert payload["space_id"] is None
+    assert payload["sender_user_id"] == "alice"
+
+
+async def test_comment_typing_space_scopes_to_space_members():
+    """``space_id`` set → fan to space members only."""
+    users = _FakeUserRepoWithList([_FakeUser("alice"), _FakeUser("dave")])
+    space = _FakeSpaceRepo(
+        [_FakeMember("alice"), _FakeMember("bob"), _FakeMember("carol")],
+    )
+    ws = _FakeWS()
+    svc = TypingService(
+        conversation_repo=_FakeConvoRepo(),
+        user_repo=users,
+        ws_manager=ws,
+        space_repo=space,
+    )
+    await svc.user_typing_on_comment(
+        post_id="p1",
+        space_id="space-x",
+        sender_user_id="alice",
+        sender_username="alice",
+    )
+    targets, payload = ws.calls[0]
+    assert sorted(targets) == ["bob", "carol"]
+    # ``dave`` is a local user but not a space member — must not receive.
+    assert "dave" not in targets
+    assert payload["space_id"] == "space-x"
+
+
+async def test_comment_typing_throttle_drops_rapid_duplicates():
+    """Two emits within 1 s from the same user collapse to one fan-out."""
+    users = _FakeUserRepoWithList([_FakeUser("alice"), _FakeUser("bob")])
+    ws = _FakeWS()
+    svc = TypingService(
+        conversation_repo=_FakeConvoRepo(),
+        user_repo=users,
+        ws_manager=ws,
+    )
+    await svc.user_typing_on_comment(
+        post_id="p1",
+        space_id=None,
+        sender_user_id="alice",
+        sender_username="alice",
+        now=100.0,
+    )
+    delivered = await svc.user_typing_on_comment(
+        post_id="p1",
+        space_id=None,
+        sender_user_id="alice",
+        sender_username="alice",
+        now=100.5,
+    )
+    assert delivered == 0
+    assert len(ws.calls) == 1
+    # After 1 s the throttle clears.
+    await svc.user_typing_on_comment(
+        post_id="p1",
+        space_id=None,
+        sender_user_id="alice",
+        sender_username="alice",
+        now=101.6,
+    )
+    assert len(ws.calls) == 2
+
+
+async def test_is_typing_on_comment_expires_after_ttl():
+    users = _FakeUserRepoWithList([])
+    svc = TypingService(
+        conversation_repo=_FakeConvoRepo(),
+        user_repo=users,
+        ws_manager=_FakeWS(),
+    )
+    await svc.user_typing_on_comment(
+        post_id="p1",
+        space_id=None,
+        sender_user_id="alice",
+        sender_username="alice",
+        now=100.0,
+    )
+    assert svc.is_typing_on_comment("p1", "alice", now=100.5)
+    assert not svc.is_typing_on_comment(
+        "p1",
+        "alice",
+        now=100.0 + TYPING_TTL_SECONDS + 1,
+    )

@@ -2368,6 +2368,14 @@ a.sh-friends-member-chip:hover {
 }
 .sh-comment-overflow:hover { background: var(--sh-bg-secondary); color: var(--sh-text); }
 .sh-comment-overflow-wrap .sh-post-menu { right: 0; top: calc(100% + 4px); }
+/* The typing line lives between the comments list and the .sh-comment-new
+   input row — keep its left padding aligned with the comment bodies and
+   give it a slight italic feel so it reads as ambient state, not content. */
+.sh-comments > .sh-typing {
+  padding-left: var(--sh-space-md);
+  font-style: italic;
+  margin-top: var(--sh-space-xs);
+}
 .sh-comment-new, .sh-comment-reply-form {
   display: flex;
   gap: var(--sh-space-xs);

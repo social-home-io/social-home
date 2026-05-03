@@ -9,7 +9,7 @@
  * same time. Edit uses local component state (multiple can coexist).
  */
 import { signal, type Signal } from '@preact/signals'
-import { useState } from 'preact/hooks'
+import { useRef, useState } from 'preact/hooks'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
 import {
@@ -19,6 +19,7 @@ import {
   handleEmojiAutocompleteKey,
 } from './EmojiAutocomplete'
 import { EmojiPickButton } from './EmojiPickButton'
+import { TypingIndicator, sendTyping } from './TypingIndicator'
 import { currentUser } from '@/store/auth'
 import { resolveAvatar, resolveDisplayName } from '@/utils/avatar'
 import type { Comment } from '@/types'
@@ -26,8 +27,12 @@ import type { Comment } from '@/types'
 interface CommentThreadProps {
   comments: Comment[]
   /** When set, the thread lives inside a space — drives avatar + display-name
-   *  resolution through the per-space override cache. */
+   *  resolution through the per-space override cache AND scopes the
+   *  ``comment.user_typing`` fan-out to space members. */
   spaceId?: string | null
+  /** Post the thread belongs to. Required for typing indicators; left
+   *  optional only so existing test fixtures keep working. */
+  postId?: string
   onReply: (parentId: string | null, content: string) => Promise<void>
   onDelete?: (commentId: string) => Promise<void> | void
   onEdit?: (commentId: string, content: string) => Promise<void>
@@ -71,8 +76,20 @@ function bindEmojiAwareInput(target: Signal<string>) {
 }
 
 export function CommentThread(
-  { comments, spaceId, onReply, onDelete, onEdit }: CommentThreadProps,
+  { comments, spaceId, postId, onReply, onDelete, onEdit }: CommentThreadProps,
 ) {
+  // Same 2-second cooldown the DM thread uses (DmThreadPage). The
+  // server already throttles to 1 emit / sec internally; the client
+  // throttle just trims keystroke chatter on the WS pipe.
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fireTyping = () => {
+    if (!postId) return
+    if (typingTimer.current) return
+    sendTyping({ postId, spaceId: spaceId ?? null })
+    typingTimer.current = setTimeout(() => {
+      typingTimer.current = null
+    }, 2000)
+  }
   const topLevel = comments.filter(c => !c.parent_id)
   const replies = (parentId: string) =>
     comments.filter(c => c.parent_id === parentId)
@@ -96,9 +113,15 @@ export function CommentThread(
         <div class="sh-comment-empty sh-muted">
           No comments yet — be the first to reply.
         </div>
+        {postId && (
+          <TypingIndicator scope={`post:${postId}`} />
+        )}
         <div class="sh-comment-new">
           <input placeholder="Add a comment…" value={newCommentContent.value}
-            onInput={bindEmojiAwareInput(newCommentContent)}
+            onInput={(e) => {
+              bindEmojiAwareInput(newCommentContent)(e)
+              fireTyping()
+            }}
             onKeyDown={(e) => {
               if (handleEmojiAutocompleteKey(e)) {
                 e.preventDefault()
@@ -139,7 +162,10 @@ export function CommentThread(
             <div class="sh-comment-reply-form">
               <input placeholder={`Reply to ${c.author}…`}
                 value={replyContent.value} autoFocus
-                onInput={bindEmojiAwareInput(replyContent)}
+                onInput={(e) => {
+                  bindEmojiAwareInput(replyContent)(e)
+                  fireTyping()
+                }}
                 onKeyDown={(e) => {
                   if (handleEmojiAutocompleteKey(e)) {
                     e.preventDefault()
@@ -162,9 +188,15 @@ export function CommentThread(
           )}
         </div>
       ))}
+      {postId && (
+        <TypingIndicator scope={`post:${postId}`} />
+      )}
       <div class="sh-comment-new">
         <input placeholder="Add a comment…" value={newCommentContent.value}
-          onInput={bindEmojiAwareInput(newCommentContent)}
+          onInput={(e) => {
+            bindEmojiAwareInput(newCommentContent)(e)
+            fireTyping()
+          }}
           onKeyDown={(e) => {
             if (handleEmojiAutocompleteKey(e)) {
               e.preventDefault()
