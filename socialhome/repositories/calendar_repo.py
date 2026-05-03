@@ -181,8 +181,8 @@ class SqliteCalendarRepo:
             INSERT INTO calendar_events(
                 id, calendar_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, mirrored_from, rrule,
-                rsvp_enabled, created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,
+                rsvp_enabled, cover_url, created_by, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -195,6 +195,7 @@ class SqliteCalendarRepo:
                 mirrored_from=excluded.mirrored_from,
                 rrule=excluded.rrule,
                 rsvp_enabled=excluded.rsvp_enabled,
+                cover_url=excluded.cover_url,
                 updated_at=datetime('now')
             """,
             (
@@ -209,6 +210,7 @@ class SqliteCalendarRepo:
                 event.mirrored_from,
                 event.rrule,
                 int(event.rsvp_enabled),
+                event.cover_url,
                 event.created_by,
                 None,
                 None,
@@ -414,9 +416,9 @@ class SqliteSpaceCalendarRepo:
             """
             INSERT INTO space_calendar_events(
                 id, space_id, summary, description, start_dt, end_dt,
-                all_day, attendees_json, rrule, capacity,
+                all_day, attendees_json, rrule, capacity, cover_url,
                 created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -428,6 +430,7 @@ class SqliteSpaceCalendarRepo:
                 attendees_json=excluded.attendees_json,
                 rrule=excluded.rrule,
                 capacity=excluded.capacity,
+                cover_url=excluded.cover_url,
                 updated_at=datetime('now')
             """,
             (
@@ -441,6 +444,7 @@ class SqliteSpaceCalendarRepo:
                 dump_json(list(event.attendees)),
                 event.rrule,
                 event.capacity,
+                event.cover_url,
                 event.created_by,
                 None,
                 None,
@@ -892,6 +896,7 @@ def _row_to_event(row: dict | None) -> CalendarEvent | None:
         mirrored_from=row.get("mirrored_from"),
         rrule=row.get("rrule"),
         rsvp_enabled=bool_col(row.get("rsvp_enabled", 0)),
+        cover_url=row.get("cover_url"),
     )
 
 
@@ -911,4 +916,5 @@ def _row_to_space_event(row: dict) -> CalendarEvent:
         attendees=tuple(load_json(row.get("attendees_json"), [])),
         rrule=row.get("rrule"),
         capacity=int(cap) if cap is not None else None,
+        cover_url=row.get("cover_url"),
     )

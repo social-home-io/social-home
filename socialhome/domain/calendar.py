@@ -53,6 +53,11 @@ class CalendarEvent:
     #: calendar" — no RSVP buttons surfaced. Space events that set
     #: ``capacity`` always behave as if RSVP is enabled (§Phase C).
     rsvp_enabled: bool = False
+    #: Optional cover image (relative ``/api/media/{filename}`` URL).
+    #: Surfaces at the top of the EventPostCard on the feed and as a
+    #: thumbnail in the calendar list view. ``None`` means "no cover";
+    #: the post + list-row fall back to the icon placeholder.
+    cover_url: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -67,13 +72,25 @@ class CalendarEventCreate:
     attendees: tuple[str, ...] = field(default_factory=tuple)
     rrule: str | None = None
     rsvp_enabled: bool = False
+    cover_url: str | None = None
+
+
+# Sentinel for ``CalendarEventUpdate.cover_url`` to distinguish
+# "no change" (UNSET) from "remove the cover" (explicit ``None``).
+# Other fields use ``None`` as "no change" because they have no
+# meaningful empty value at the wire level — cover_url's
+# clear-vs-keep ambiguity needs the extra signal.
+_UNSET = object()
 
 
 @dataclass(slots=True, frozen=True)
 class CalendarEventUpdate:
     """Partial update payload for ``PATCH /api/calendars/events/{id}``.
 
-    ``None`` for a field means "no change".
+    ``None`` for a field means "no change", *except* for ``cover_url``
+    where the route uses the :data:`UNSET_COVER` sentinel for "no
+    change" so an explicit ``None`` on the wire can still clear the
+    cover.
     """
 
     summary: str | None = None
@@ -84,6 +101,14 @@ class CalendarEventUpdate:
     attendees: tuple[str, ...] | None = None
     rrule: str | None = None
     rsvp_enabled: bool | None = None
+    #: ``UNSET_COVER`` (default) = leave cover as-is. ``None`` =
+    #: clear it. ``str`` = set it to that URL.
+    cover_url: object = _UNSET
+
+
+#: Public alias of the cover-clearing sentinel — exported so route
+#: handlers can construct an update without touching the cover field.
+UNSET_COVER = _UNSET
 
 
 class RSVPStatus:

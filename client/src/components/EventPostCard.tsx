@@ -117,6 +117,14 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
 
   return (
     <div class="sh-event-card" data-event-id={event.id}>
+      {event.cover_url && (
+        <img
+          class="sh-event-card-cover"
+          src={event.cover_url}
+          alt=""
+          loading="lazy"
+        />
+      )}
       <div class="sh-event-card-when">
         <span class="sh-event-card-when-icon" aria-hidden="true">📅</span>
         <span class="sh-event-card-when-text">{startStr}</span>

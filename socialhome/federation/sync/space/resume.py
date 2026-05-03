@@ -484,6 +484,8 @@ def _calendar_to_payload(event: "CalendarEvent") -> dict:
         "all_day": event.all_day,
         "attendees": list(event.attendees),
         "created_by": event.created_by,
+        "rrule": event.rrule,
+        "cover_url": event.cover_url,
     }
 
 

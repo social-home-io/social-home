@@ -43,6 +43,13 @@ const allDay = signal(false)
 const description = signal('')
 const limitAttendance = signal(false)
 const capacity = signal('')
+/** Cover image (canonical ``/api/media/{filename}``). Submitted to
+ *  the server. ``''`` (empty) means no cover. */
+const coverUrl = signal('')
+/** Browser-renderable preview URL (signed). Used only for the dialog
+ *  preview ``<img>``; never sent on submit. */
+const coverPreview = signal('')
+const coverUploading = signal(false)
 /** Selected attendee user_ids for household events. Spaces invite all
  *  members implicitly via the ``capacity`` / RSVP flow, so this stays
  *  empty for the space-event variant of the dialog. */
@@ -102,6 +109,7 @@ interface EditableEvent {
   all_day: boolean
   attendees?: string[]
   rsvp_enabled?: boolean
+  cover_url?: string | null
 }
 
 /** Open the dialog in edit mode — pre-populate every field from
@@ -128,6 +136,11 @@ export function openEditEventDialog(
   allDay.value = ev.all_day
   attendees.value = new Set(ev.attendees ?? [])
   rsvpEnabled.value = !!ev.rsvp_enabled
+  coverUrl.value = ev.cover_url ?? ''
+  // Same value works for both submit + preview — the media endpoint
+  // signs at fetch time so the browser can load the canonical URL
+  // directly via ``<img src>``.
+  coverPreview.value = ev.cover_url ?? ''
   open.value = true
 }
 
@@ -146,6 +159,9 @@ function reset() {
   capacity.value = ''
   attendees.value = new Set()
   rsvpEnabled.value = false
+  coverUrl.value = ''
+  coverPreview.value = ''
+  coverUploading.value = false
 }
 
 export function CalendarEventDialog({ onCreated }: {
@@ -182,6 +198,14 @@ export function CalendarEventDialog({ onCreated }: {
         end,
         all_day: allDay.value,
         description: description.value || undefined,
+      }
+      // Cover field is tri-state on edit (omit = leave alone, null =
+      // clear, string = set). Create only sends a value when the
+      // user actually picked one — the server defaults to NULL.
+      if (editingEventId.value) {
+        body.cover_url = coverUrl.value || null
+      } else if (coverUrl.value) {
+        body.cover_url = coverUrl.value
       }
       if (limitAttendance.value && capacity.value) {
         body.capacity = parseInt(capacity.value, 10)
@@ -351,6 +375,8 @@ export function CalendarEventDialog({ onCreated }: {
           />
         </label>
 
+        <CoverPicker />
+
         {!isSpace && (() => {
           const me = currentUser.value?.user_id
           // The "For:" target is the calendar's owner — they're
@@ -457,5 +483,82 @@ export function CalendarEventDialog({ onCreated }: {
         </Button>
       </div>
     </Modal>
+  )
+}
+
+/** Cover image picker — file input + live preview + remove button.
+ *
+ * On file pick we POST to ``/api/media/upload`` (the same endpoint
+ * the post composer + gallery use), then store the canonical URL in
+ * ``coverUrl`` (sent to the server) and the signed URL in
+ * ``coverPreview`` (rendered inline). On "Remove cover" both
+ * signals clear; the next save sends ``cover_url: null`` which the
+ * route's tri-state cover handling translates to "drop the column". */
+function CoverPicker() {
+  const onPick = async (e: Event) => {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    coverUploading.value = true
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('sh_token') ?? ''}`,
+        },
+        body: fd,
+      })
+      if (!res.ok) throw new Error(`upload failed (${res.status})`)
+      const data = await res.json()
+      coverUrl.value = data.url
+      coverPreview.value = data.signed_url || data.url
+    } catch (err) {
+      showToast(`Cover upload failed: ${(err as Error).message}`, 'error')
+    } finally {
+      coverUploading.value = false
+      input.value = ''
+    }
+  }
+
+  const removeCover = () => {
+    coverUrl.value = ''
+    coverPreview.value = ''
+  }
+
+  return (
+    <div class="sh-event-cover-picker">
+      <span class="sh-form-label">Cover image (optional)</span>
+      {coverPreview.value ? (
+        <div class="sh-event-cover-picker-preview-wrap">
+          <img
+            class="sh-event-cover-preview"
+            src={coverPreview.value}
+            alt=""
+          />
+          <button
+            type="button"
+            class="sh-event-cover-remove"
+            aria-label="Remove cover"
+            onClick={removeCover}
+          >×</button>
+        </div>
+      ) : (
+        <label class="sh-event-cover-picker-empty">
+          <input
+            type="file"
+            accept="image/*"
+            onChange={onPick}
+            hidden
+          />
+          <span>
+            {coverUploading.value
+              ? 'Uploading…'
+              : '📷 Choose cover image'}
+          </span>
+        </label>
+      )}
+    </div>
   )
 }

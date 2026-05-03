@@ -239,6 +239,10 @@ export interface CalendarEvent {
    *  via the dialog's "Ask invitees to respond" checkbox. Space
    *  events with ``capacity`` set behave as if RSVP is enabled. */
   rsvp_enabled?: boolean
+  /** Optional cover image URL (relative ``/api/media/{filename}``).
+   *  Renders at the top of EventPostCard on the feed and as a
+   *  horizontal thumbnail in the calendar list view. */
+  cover_url?: string | null
 }
 
 /** Per-event reminder configured by a user (Phase D). */
