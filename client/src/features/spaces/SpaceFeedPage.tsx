@@ -287,7 +287,17 @@ export default function SpaceFeedPage() {
             <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId} />
           )}
           {posts.value.length === 0 && (
-            <p class="sh-muted">No posts in this space yet.</p>
+            <div class="sh-empty-state">
+              <div style={{ fontSize: '2rem' }} aria-hidden="true">💬</div>
+              <h3 style={{ margin: 0 }}>No posts in this space yet</h3>
+              <p>
+                Be the first to share something with the rest of the space.
+                Members from connected households see what you post here.
+              </p>
+              <p class="sh-muted">
+                Use the composer above ↑ to start the conversation.
+              </p>
+            </div>
           )}
           {posts.value.map(post => (
             <div key={post.id} class="sh-feed-item">

@@ -97,7 +97,17 @@ export default function FeedPage() {
       {/* Pagination spinner — full reload uses the FeedSkeleton above. */}
       {feedLoading.value && posts.value.length > 0 && <PostCardSkeleton />}
       {!feedLoading.value && posts.value.length === 0 && (
-        <p class="sh-muted">No posts yet. Share something with your household!</p>
+        <div class="sh-empty-state">
+          <div style={{ fontSize: '2rem' }} aria-hidden="true">📝</div>
+          <h3 style={{ margin: 0 }}>No posts yet</h3>
+          <p>
+            Share what's on your mind with your household — text, photo,
+            poll, location, anything that should land in the feed.
+          </p>
+          <p class="sh-muted">
+            Use the composer above ↑ to write your first post.
+          </p>
+        </div>
       )}
       {feedHasMore.value && !feedLoading.value && posts.value.length > 0 && (
         <Button variant="secondary" onClick={handleLoadMore}>Load more</Button>
