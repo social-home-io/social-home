@@ -101,7 +101,7 @@ def parse_stories_preferences(preferences_json: str | None) -> StoriesPreference
 def _coerce_int(value: Any, default: int, lo: int, hi: int) -> int:
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     if n < lo:
         return lo

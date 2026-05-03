@@ -298,8 +298,7 @@ class SqliteStoryRepo:
         frame_id: str,
     ) -> list[StoryFrameView]:
         rows = await self._db.fetchall(
-            "SELECT * FROM story_frame_views WHERE frame_id=? "
-            "ORDER BY viewed_at ASC",
+            "SELECT * FROM story_frame_views WHERE frame_id=? ORDER BY viewed_at ASC",
             (frame_id,),
         )
         return [
@@ -361,8 +360,7 @@ class SqliteStoryRepo:
         reactor_user_id: str,
     ) -> None:
         await self._db.enqueue(
-            "DELETE FROM story_frame_reactions "
-            "WHERE frame_id=? AND reactor_user_id=?",
+            "DELETE FROM story_frame_reactions WHERE frame_id=? AND reactor_user_id=?",
             (frame_id, reactor_user_id),
         )
 
@@ -497,7 +495,7 @@ def _row_to_frame(row: dict | None) -> StoryFrame | None:
         return None
     try:
         ftype = StoryFrameType(row["frame_type"])
-    except (KeyError, ValueError):
+    except KeyError, ValueError:
         return None
     return StoryFrame(
         id=row["id"],

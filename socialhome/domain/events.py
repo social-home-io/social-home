@@ -1264,9 +1264,9 @@ class StoryFrameAdded(DomainEvent):
     story_date: str
     sequence: int
     is_first_frame: bool
-    audience_kind: str                  # 'all_paired' | 'households' | 'users'
-    audience: tuple[str, ...]           # peer instance_ids or user_ids
-    frame_type: str                     # 'image' | 'video'
+    audience_kind: str  # 'all_paired' | 'households' | 'users'
+    audience: tuple[str, ...]  # peer instance_ids or user_ids
+    frame_type: str  # 'image' | 'video'
     media_url: str
     caption_text: str | None
     caption_emoji: str | None

@@ -206,9 +206,7 @@ class SpaceFeatures:
             "allow_post_bazaar": int("bazaar" in self.allowed_post_types),
             "allow_post_event": int("event" in self.allowed_post_types),
             "allow_post_location": int("location" in self.allowed_post_types),
-            "allow_post_story_share": int(
-                "story_share" in self.allowed_post_types
-            ),
+            "allow_post_story_share": int("story_share" in self.allowed_post_types),
         }
 
     def to_wire_dict(self) -> dict:

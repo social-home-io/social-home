@@ -347,7 +347,7 @@ class StoryService:
         *,
         story_id: str,
         actor_user_id: str,
-        scope: str,                           # 'household' | 'space'
+        scope: str,  # 'household' | 'space'
         space_id: str | None,
         note: str | None,
         feed_service: Any,

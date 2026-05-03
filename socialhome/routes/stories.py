@@ -309,9 +309,7 @@ class StoryDmReplyView(BaseView):
         conversation_id = body.get("conversation_id")
         content = body.get("content", "")
         if not isinstance(conversation_id, str) or not conversation_id:
-            return error_response(
-                400, "BAD_REQUEST", "conversation_id is required"
-            )
+            return error_response(400, "BAD_REQUEST", "conversation_id is required")
         if not isinstance(content, str):
             return error_response(400, "BAD_REQUEST", "content must be a string")
         svc = self.svc(story_service_key)
