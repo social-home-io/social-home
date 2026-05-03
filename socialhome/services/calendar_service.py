@@ -260,6 +260,10 @@ class CalendarService:
         if cover_url is _UNSET:
             new_cover = existing.cover_url
         else:
+            # mypy can't narrow ``object`` past the ``is _UNSET`` guard,
+            # but the route layer only ever passes ``str | None`` when
+            # the field is present in the body — assert + cast here.
+            assert cover_url is None or isinstance(cover_url, str)
             new_cover = _clean_cover_url(cover_url)
         updated = replace(
             existing,
@@ -528,6 +532,10 @@ class SpaceCalendarService:
         if cover_url is _UNSET:
             new_cover = existing.cover_url
         else:
+            # mypy can't narrow ``object`` past the ``is _UNSET`` guard,
+            # but the route layer only ever passes ``str | None`` when
+            # the field is present in the body — assert + cast here.
+            assert cover_url is None or isinstance(cover_url, str)
             new_cover = _clean_cover_url(cover_url)
         updated = replace(
             existing,
