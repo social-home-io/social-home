@@ -37,8 +37,17 @@ export default function DmInboxPage() {
       </div>
       {conversations.value.length === 0 && (
         <div class="sh-empty-state">
-          <p>No conversations yet.</p>
-          <p class="sh-muted">Start a conversation with someone in your household.</p>
+          <div style={{ fontSize: '2rem' }} aria-hidden="true">💬</div>
+          <h3 style={{ margin: 0 }}>No conversations yet</h3>
+          <p>
+            Direct messages are 1:1 or small-group chats with people in
+            your household or connected households.
+          </p>
+          <div style={{ marginTop: '0.75rem' }}>
+            <Button onClick={() => openNewDm()}>
+              + Start a conversation
+            </Button>
+          </div>
         </div>
       )}
       {conversations.value.map(c => {

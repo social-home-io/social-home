@@ -137,11 +137,31 @@ export default function SpaceListPage() {
       <RemoteInviteInboxBanner />
       {memberSpaces.length === 0 && subscribedSpaces.length === 0 && (
         <div class="sh-empty-state">
-          <p>No spaces yet.</p>
-          <p class="sh-muted">
-            Create a space to share with friends and family, or{' '}
-            <a href="/spaces/browse">browse public spaces</a> to subscribe.
+          <div style={{ fontSize: '2rem' }} aria-hidden="true">🏘️</div>
+          <h3 style={{ margin: 0 }}>No spaces yet</h3>
+          <p>
+            Spaces are shared corners — a school-run group, a holiday
+            crew, a neighbourhood watch — where members from one or
+            more households post together.
           </p>
+          <div
+            style={{
+              marginTop: '0.75rem',
+              display: 'flex',
+              gap: 'var(--sh-space-sm)',
+              justifyContent: 'center',
+            }}
+          >
+            <Button onClick={openSpaceCreate}>
+              + Create your first space
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => { window.location.href = '/spaces/browse' }}
+            >
+              🔭 Browse public spaces
+            </Button>
+          </div>
         </div>
       )}
 
