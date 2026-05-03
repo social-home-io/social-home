@@ -6,7 +6,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from socialhome.domain.story import StoryAudience, StoryFrameType
+from socialhome.domain.story import (
+    Story,
+    StoryAudience,
+    StoryFrame,
+    StoryFrameType,
+)
 from socialhome.repositories.story_repo import SqliteStoryRepo
 
 
@@ -142,3 +147,112 @@ async def test_visibility_filters_users_audience(db, repo):
     assert len(seen_by_u2) == 1
     assert len(seen_by_u3) == 0
     assert len(seen_by_u1) == 1
+
+
+async def test_count_unseen_frames_drops_to_zero_after_view(db, repo):
+    await _seed_user(db, "u1", "pascal")
+    await _seed_user(db, "u2", "maria")
+    story = await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    f1 = await repo.append_frame(
+        story_id=story.id, frame_type=StoryFrameType.IMAGE,
+        media_url="/api/media/a.webp",
+    )
+    f2 = await repo.append_frame(
+        story_id=story.id, frame_type=StoryFrameType.IMAGE,
+        media_url="/api/media/b.webp",
+    )
+    assert await repo.count_unseen_frames(story.id, "u2") == 2
+    await repo.mark_viewed(f1.id, "u2")
+    assert await repo.count_unseen_frames(story.id, "u2") == 1
+    await repo.mark_viewed(f2.id, "u2")
+    assert await repo.count_unseen_frames(story.id, "u2") == 0
+
+
+async def test_save_story_and_save_frame_upsert(db, repo):
+    """Federation upsert path: caller-supplied id is preserved."""
+    await _seed_user(db)
+    s = Story(
+        id="story-remote-1",
+        author_user_id="u1",
+        story_date="2026-05-03",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        created_at="2026-05-03T08:00:00+00:00",
+        expires_at=_expires(),
+    )
+    out = await repo.save_story(s)
+    assert out.id == "story-remote-1"
+    assert (await repo.get_story("story-remote-1")) is not None
+    f = StoryFrame(
+        id="frame-remote-1",
+        story_id="story-remote-1",
+        sequence=1,
+        frame_type=StoryFrameType.VIDEO,
+        media_url="/api/media/v.mp4",
+        duration_ms=4500,
+    )
+    await repo.save_frame(f)
+    fetched = await repo.get_frame("frame-remote-1")
+    assert fetched is not None
+    assert fetched.frame_type is StoryFrameType.VIDEO
+    assert fetched.duration_ms == 4500
+
+
+async def test_clear_reaction_and_delete_frame(db, repo):
+    await _seed_user(db, "u1", "pascal")
+    await _seed_user(db, "u2", "maria")
+    story = await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    frame = await repo.append_frame(
+        story_id=story.id, frame_type=StoryFrameType.IMAGE,
+        media_url="/api/media/a.webp",
+    )
+    await repo.set_reaction(frame.id, "u2", "🔥")
+    await repo.clear_reaction(frame.id, "u2")
+    assert await repo.list_reactions_for_frame(frame.id) == []
+    await repo.delete_frame(frame.id)
+    assert await repo.get_frame(frame.id) is None
+
+
+async def test_prune_over_max_drops_oldest(db, repo):
+    await _seed_user(db)
+    # Three stories on different days; max_count=1 keeps the newest.
+    for d in ("2026-05-01", "2026-05-02", "2026-05-03"):
+        await repo.find_or_create_today(
+            author_user_id="u1",
+            audience_kind=StoryAudience.ALL_PAIRED,
+            audience=(),
+            story_date=d,
+            expires_at=_expires(),
+        )
+    pruned = await repo.prune_over_max("u1", max_count=1)
+    assert pruned == 2
+    rest = await repo.list_authored("u1")
+    assert len(rest) == 1
+    assert rest[0].story_date == "2026-05-03"
+
+
+async def test_list_authors_with_stories(db, repo):
+    await _seed_user(db, "u1", "pascal")
+    await _seed_user(db, "u2", "maria")
+    for uid in ("u1", "u2", "u1"):  # u1 twice → still listed once
+        await repo.find_or_create_today(
+            author_user_id=uid,
+            audience_kind=StoryAudience.ALL_PAIRED,
+            audience=(),
+            story_date={"u1": "2026-05-03", "u2": "2026-05-04"}[uid],
+            expires_at=_expires(),
+        )
+    authors = sorted(await repo.list_authors_with_stories())
+    assert authors == ["u1", "u2"]
