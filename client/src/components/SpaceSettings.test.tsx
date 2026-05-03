@@ -100,4 +100,34 @@ describe('SpaceSettings', () => {
     const [, body] = apiMock.patch.mock.calls[0]
     expect(body.retention_days).toBe(0)
   })
+
+  it('preserves typed name across re-renders triggered by sibling state', async () => {
+    // Regression for the signal-in-render footgun: previously the
+    // form rebuilt fresh ``signal()`` instances on every render, so
+    // typing into ``name`` and then triggering a render via a sibling
+    // change (e.g. toggling location-sharing) silently dropped the
+    // typed value back to the prop default. ``useSignal`` keeps the
+    // instance stable; this test guards that invariant.
+    apiMock.patch.mockResolvedValueOnce({})
+    const space = makeSpace()
+    const { container, getByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    // Name input is the first ``<input>`` in the form (no ``type``
+    // attribute — defaults to ``text``).
+    const nameInput = container.querySelector(
+      '.sh-form input',
+    ) as HTMLInputElement
+    expect(nameInput).toBeTruthy()
+    fireEvent.input(nameInput, { target: { value: 'New name' } })
+    // Trigger a re-render by toggling the location checkbox.
+    const checkbox = container.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement
+    fireEvent.change(checkbox, { target: { checked: true } })
+    fireEvent.click(getByText('Save changes'))
+    await new Promise(r => setTimeout(r, 0))
+    const [, body] = apiMock.patch.mock.calls[0]
+    expect(body.name).toBe('New name')
+  })
 })

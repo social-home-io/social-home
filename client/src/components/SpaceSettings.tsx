@@ -3,7 +3,7 @@
  * Includes a Federation section for GFS publish/unpublish.
  */
 import { useEffect, useState } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -53,14 +53,19 @@ async function togglePublish(spaceId: string, gfsId: string) {
 }
 
 export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () => void }) {
-  const name = signal(space.name)
-  const description = signal(space.description || '')
-  const emoji = signal(space.emoji || '')
-  const joinMode = signal(space.join_mode)
-  const locationEnabled = signal(
+  // ``useSignal`` (not ``signal()``) so the underlying signal instance
+  // is stable across renders. Plain ``signal(initial)`` inside a
+  // component body recreates a fresh signal on every render, which
+  // silently drops typed values when sibling state changes trigger a
+  // re-render — caught the hard way during the retention-days work.
+  const name = useSignal(space.name)
+  const description = useSignal(space.description || '')
+  const emoji = useSignal(space.emoji || '')
+  const joinMode = useSignal(space.join_mode)
+  const locationEnabled = useSignal(
     Boolean((space.features as { location?: boolean } | undefined)?.location),
   )
-  const locationMode = signal<'gps' | 'zone_only'>(
+  const locationMode = useSignal<'gps' | 'zone_only'>(
     ((space.features as { location_mode?: 'gps' | 'zone_only' } | undefined)
       ?.location_mode) ?? 'gps',
   )
@@ -69,10 +74,6 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   // ship with. The text input is empty in that case; entering 0 or
   // clearing the field flips it back to "forever". The backend
   // service normalises any non-positive value to ``null``.
-  //
-  // ``useState`` (not ``signal()``) so typed values survive the
-  // re-render that other signals on this form trigger as the user
-  // edits unrelated fields.
   const [retentionDays, setRetentionDays] = useState<string>(
     space.retention_days != null ? String(space.retention_days) : '',
   )

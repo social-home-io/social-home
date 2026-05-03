@@ -3,13 +3,16 @@
  * Fetches og:title/image/description from the backend proxy.
  */
 import { useEffect } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 
 interface OGData { title: string; description?: string; image?: string; url: string }
 
 export function LinkPreview({ url }: { url: string }) {
-  const data = signal<OGData | null>(null)
-  const loading = signal(true)
+  // ``useSignal`` keeps the OG-fetch result stable across renders;
+  // plain ``signal()`` here would re-create both signals each tick
+  // and the effect's writes would land in detached instances.
+  const data = useSignal<OGData | null>(null)
+  const loading = useSignal(true)
 
   useEffect(() => {
     // v1: no backend OG proxy yet — just show the URL as a clickable card

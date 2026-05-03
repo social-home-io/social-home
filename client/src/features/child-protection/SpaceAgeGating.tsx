@@ -10,7 +10,7 @@
  * refreshes this one live.
  */
 import { useEffect } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { Button } from '@/components/Button'
@@ -32,9 +32,11 @@ interface Gate {
 }
 
 export function SpaceAgeGating({ spaceId }: { spaceId: string }) {
-  const gate = signal<Gate>({ min_age: 0, target_audience: 'all' })
-  const saving = signal(false)
-  const loaded = signal(false)
+  // ``useSignal`` so writes from ``load()`` and ``save()`` land in the
+  // same signal instance the JSX is subscribed to across re-renders.
+  const gate = useSignal<Gate>({ min_age: 0, target_audience: 'all' })
+  const saving = useSignal(false)
+  const loaded = useSignal(false)
 
   const load = async () => {
     try {
