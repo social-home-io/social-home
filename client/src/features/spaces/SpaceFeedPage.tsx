@@ -295,7 +295,7 @@ export default function SpaceFeedPage() {
                 onReact={(emoji) => handleReact(post.id, emoji)}
                 onComment={() => openCommentOverlay(post, spaceId)}
                 onDelete={() => handleDelete(post.id)}
-                showSpaceBadge={spaceId}
+                spaceId={spaceId}
                 surface="space"
               />
             </div>

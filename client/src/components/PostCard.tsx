@@ -41,7 +41,17 @@ interface PostCardProps {
   onComment?: () => void
   onDelete?: () => void
   onEdit?: () => void
-  showSpaceBadge?: string
+  /** Space the post belongs to. Threaded into sub-renderers
+   *  (avatar / display-name resolvers, PollUI, ScheduleUI). On
+   *  ``surface='space'`` callers should pass this so the inline
+   *  reactions/zones use the correct scope. */
+  spaceId?: string
+  /** Display label for a cross-space context (e.g. Corner aggregator).
+   *  When provided AND ``surface !== 'space'`` a small badge linking
+   *  to the space surfaces under the post chrome. Inside a space's
+   *  own feed the badge is redundant — callers there leave this
+   *  unset. */
+  spaceName?: string
   /** Render context. ``'household'`` (default) shows the author's
    *  zone alongside their online pill — HA zones are household-private.
    *  ``'space'`` suppresses zone names so they never leak across the
@@ -49,7 +59,7 @@ interface PostCardProps {
   surface?: 'household' | 'space'
 }
 
-export function PostCard({ post, onReact, onComment, onDelete, onEdit, showSpaceBadge, surface }: PostCardProps) {
+export function PostCard({ post, onReact, onComment, onDelete, onEdit, spaceId, spaceName, surface }: PostCardProps) {
   const timeAgo = formatRelative(post.created_at)
 
   if (post.pinned) {
@@ -58,7 +68,7 @@ export function PostCard({ post, onReact, onComment, onDelete, onEdit, showSpace
         <div class="sh-post-pin-badge">📌 Pinned</div>
         <PostContent post={post} timeAgo={timeAgo} onReact={onReact}
           onComment={onComment} onDelete={onDelete} onEdit={onEdit}
-          showSpaceBadge={showSpaceBadge} surface={surface} />
+          spaceId={spaceId} spaceName={spaceName} surface={surface} />
       </article>
     )
   }
@@ -67,12 +77,12 @@ export function PostCard({ post, onReact, onComment, onDelete, onEdit, showSpace
     <article class={`sh-post ${post.content === null ? 'sh-post--deleted' : ''}`}>
       <PostContent post={post} timeAgo={timeAgo} onReact={onReact}
         onComment={onComment} onDelete={onDelete} onEdit={onEdit}
-        showSpaceBadge={showSpaceBadge} surface={surface} />
+        spaceId={spaceId} spaceName={spaceName} surface={surface} />
     </article>
   )
 }
 
-function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, showSpaceBadge, surface }: PostCardProps & { timeAgo: string }) {
+function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spaceId, spaceName, surface }: PostCardProps & { timeAgo: string }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const closeMenu = () => setMenuOpen(false)
 
@@ -80,12 +90,17 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
   // Delete are owner-only and driven by the parent passing callbacks.
   const hasMenu = post.content !== null
 
-  const spaceId = showSpaceBadge ?? null
+  const scopedSpaceId = spaceId ?? null
   const bot = isBotPost(post) ? post.bot ?? null : null
-  const avatarUrl = bot ? null : resolveAvatar(spaceId, post.author, null)
+  const avatarUrl = bot ? null : resolveAvatar(scopedSpaceId, post.author, null)
   const authorName = bot
     ? bot.name
-    : resolveDisplayName(spaceId, post.author, post.author)
+    : resolveDisplayName(scopedSpaceId, post.author, post.author)
+  // Show the cross-space badge only when the caller explicitly opted
+  // in by providing a name AND we're not already inside that space.
+  const showCrossSpaceBadge = Boolean(
+    spaceName && spaceId && surface !== 'space',
+  )
   // Attribution subtext under the bot name:
   //   scope=space  → "via Home Assistant" (shared household voice)
   //   scope=member → "via {member.display_name}" (personal automation)
@@ -116,7 +131,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
           {!isBotPost(post) && (
             <OnlinePill
               user_id={post.author}
-              showZone={surface !== 'space' && !showSpaceBadge}
+              showZone={surface !== 'space' && !spaceId}
             />
           )}
           {botAttribution && (
@@ -125,7 +140,11 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
           <span class="sh-post-time">{timeAgo}</span>
           {post.edited_at && <span class="sh-post-edited">(edited)</span>}
         </div>
-        {showSpaceBadge && <a class="sh-post-space-badge" href={`/spaces/${showSpaceBadge}`}>{showSpaceBadge}</a>}
+        {showCrossSpaceBadge && (
+          <a class="sh-post-space-badge" href={`/spaces/${spaceId}`}>
+            {spaceName}
+          </a>
+        )}
         {hasMenu && (
           <div class="sh-post-overflow-wrap">
             <button
@@ -199,7 +218,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
                 postId={post.id}
                 authorUserId={post.author}
                 currentUserId={currentUser.value.user_id}
-                spaceId={showSpaceBadge ?? null}
+                spaceId={scopedSpaceId}
               />
             )}
             {post.type === 'poll' && currentUser.value && (
@@ -207,7 +226,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
                 postId={post.id}
                 authorUserId={post.author}
                 currentUserId={currentUser.value.user_id}
-                spaceId={showSpaceBadge ?? null}
+                spaceId={scopedSpaceId}
               />
             )}
             {post.type === 'bazaar' && (

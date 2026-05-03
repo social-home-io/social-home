@@ -87,6 +87,35 @@ describe('PostCard', () => {
     expect(fn).toHaveBeenCalledOnce()
   })
 
+  // ── Cross-space badge ──────────────────────────────────────────────────
+
+  it('does not render the space badge inside the space surface', () => {
+    const { container } = render(
+      <PostCard post={mockPost} spaceId="space-abc" surface="space" />,
+    )
+    expect(container.querySelector('.sh-post-space-badge')).toBeNull()
+  })
+
+  it('does not render the space badge when only an id is supplied', () => {
+    // No spaceName → no cross-space context → no badge.
+    const { container } = render(
+      <PostCard post={mockPost} spaceId="space-abc" />,
+    )
+    expect(container.querySelector('.sh-post-space-badge')).toBeNull()
+  })
+
+  it('renders the space badge with the name when name + id are supplied and surface is not space', () => {
+    const { container } = render(
+      <PostCard post={mockPost} spaceId="space-abc" spaceName="Trip group" />,
+    )
+    const badge = container.querySelector(
+      '.sh-post-space-badge',
+    ) as HTMLAnchorElement | null
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toBe('Trip group')
+    expect(badge!.getAttribute('href')).toBe('/spaces/space-abc')
+  })
+
   // ── Bot-bridge posts ────────────────────────────────────────────────────
 
   const mockBotPost: FeedPost = {

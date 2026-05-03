@@ -14,10 +14,15 @@ import { HouseholdPresenceStrip } from '@/components/HouseholdPresenceStrip'
 import { Spinner } from '@/components/Spinner'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
+import { toggles } from '@/components/HouseholdToggles'
 import type { FeedPost } from '@/types'
 
 export default function FeedPage() {
-  useTitle('Household')
+  // Use the actual household name set by the admin (HouseholdToggles)
+  // — falls back to "Home" while ``loadToggles`` is in flight, matching
+  // the same default the backend ships with on first boot.
+  const householdName = toggles.value?.household_name ?? 'Home'
+  useTitle(householdName)
   useEffect(() => {
     void loadHouseholdUsers()
     loadFeed()
