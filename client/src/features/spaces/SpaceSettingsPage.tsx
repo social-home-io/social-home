@@ -24,8 +24,9 @@ import { currentUser } from '@/store/auth'
 import type { Space } from '@/types'
 import { SpaceBotsTab } from './SpaceBotsTab'
 import { SpaceLinksTab } from './SpaceLinksTab'
+import { SpaceNotifPrefsPanel } from './SpaceNotifPrefsPanel'
 
-type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots'
+type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots' | 'notifications'
 
 interface SpaceDetail extends Space {
   about_markdown: string | null
@@ -100,21 +101,23 @@ export default function SpaceSettingsPage() {
   }
 
   // Tabs the active user can see. Non-admins get only the Bots tab
-  // (where they manage their own personal automations).
+  // (where they manage their own personal automations) and the
+  // Notifications tab (their own per-space alert level).
   const visibleTabs: SettingsTab[] = canAdmin
-    ? ['general', 'about', 'theme', 'links', 'bots']
-    : ['bots']
+    ? ['general', 'notifications', 'about', 'theme', 'links', 'bots']
+    : ['notifications', 'bots']
   if (!visibleTabs.includes(activeTab.value)) {
     activeTab.value = visibleTabs[0]
   }
 
   const tabLabel = (t: SettingsTab): string => {
     switch (t) {
-      case 'general': return 'General'
-      case 'about':   return 'About'
-      case 'theme':   return 'Theme'
-      case 'links':   return 'Quick links'
-      case 'bots':    return 'Bots & automations'
+      case 'general':       return 'General'
+      case 'notifications': return 'Notifications'
+      case 'about':         return 'About'
+      case 'theme':         return 'Theme'
+      case 'links':         return 'Quick links'
+      case 'bots':          return 'Bots & automations'
     }
   }
 
@@ -141,6 +144,9 @@ export default function SpaceSettingsPage() {
 
       {activeTab.value === 'general' && (
         <SpaceSettings space={space} onUpdate={() => void reload()} />
+      )}
+      {activeTab.value === 'notifications' && (
+        <SpaceNotifPrefsPanel spaceId={space.id} />
       )}
       {activeTab.value === 'about' && (
         <AboutTab space={space} onSaved={() => void reload()} />

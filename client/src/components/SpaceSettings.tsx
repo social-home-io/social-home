@@ -2,7 +2,7 @@
  * SpaceSettings — space admin settings panel (§23.91).
  * Includes a Federation section for GFS publish/unpublish.
  */
-import { useEffect } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from './Button'
@@ -64,6 +64,18 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
     ((space.features as { location_mode?: 'gps' | 'zone_only' } | undefined)
       ?.location_mode) ?? 'gps',
   )
+  // Retention is "delete posts older than N days". ``null`` means
+  // "keep forever" — that's the legacy default and what fresh spaces
+  // ship with. The text input is empty in that case; entering 0 or
+  // clearing the field flips it back to "forever". The backend
+  // service normalises any non-positive value to ``null``.
+  //
+  // ``useState`` (not ``signal()``) so typed values survive the
+  // re-render that other signals on this form trigger as the user
+  // edits unrelated fields.
+  const [retentionDays, setRetentionDays] = useState<string>(
+    space.retention_days != null ? String(space.retention_days) : '',
+  )
 
   useEffect(() => {
     loadFederationData(space.id)
@@ -74,12 +86,25 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
       ?.location_mode ?? 'gps'
     const modeChanged = locationEnabled.value
       && locationMode.value !== previousMode
+    // Empty / zero / negative → 0 sentinel which the backend normalises
+    // back to ``retention_days = null`` ("no limit"). A positive integer
+    // is sent verbatim.
+    const parsedRetention = parseInt(retentionDays, 10)
+    const retentionPayload: number | undefined =
+      retentionDays.trim() === ''
+        ? 0
+        : Number.isFinite(parsedRetention)
+          ? parsedRetention
+          : undefined
     try {
       await api.patch(`/api/spaces/${space.id}`, {
         name: name.value,
         description: description.value || undefined,
         emoji: emoji.value || undefined,
         join_mode: joinMode.value,
+        ...(retentionPayload !== undefined
+          ? { retention_days: retentionPayload }
+          : {}),
         features: {
           ...(space.features as object),
           location: locationEnabled.value,
@@ -127,6 +152,28 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             <option value="request">Request</option>
           </select>
         </label>
+        <fieldset class="sh-form-fieldset">
+          <legend>🗓 Retention</legend>
+          <label>
+            Auto-delete posts older than
+            <input
+              type="number"
+              min={0}
+              max={3650}
+              inputMode="numeric"
+              value={retentionDays}
+              placeholder="Forever"
+              onInput={(e) => {
+                setRetentionDays((e.target as HTMLInputElement).value)
+              }}
+            />
+            <span class="sh-muted"> days (leave empty or 0 to keep forever)</span>
+          </label>
+          <p class="sh-muted">
+            Applies to feed posts and comments in this space. Calendar
+            events and pages are exempt by default.
+          </p>
+        </fieldset>
         <fieldset class="sh-form-fieldset">
           <legend>📍 Location sharing</legend>
           <label class="sh-toggle-row">
