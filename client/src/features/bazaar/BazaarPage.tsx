@@ -16,7 +16,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { Button } from '@/components/Button'
-import { Spinner } from '@/components/Spinner'
+import { BazaarSkeleton } from '@/components/Skeleton'
 import { BazaarPostBody, formatBazaarAmount } from '@/components/BazaarPostBody'
 import { BazaarSellerDashboard } from '@/components/BazaarSellerDashboard'
 import {
@@ -90,7 +90,7 @@ export default function BazaarPage() {
     return () => offs.forEach(o => o())
   }, [])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <BazaarSkeleton />
 
   const visible = buildVisibleList(
     activeTab.value, statusFilter.value, search.value.trim().toLowerCase(),

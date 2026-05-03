@@ -3,7 +3,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { useTitle } from '@/store/pageTitle'
 import type { CalendarEvent } from '@/types'
-import { Spinner } from '@/components/Spinner'
+import { CalendarSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import {
   CalendarEventDialog,
@@ -263,7 +263,7 @@ export default function CalendarPage() {
     )
   }
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <CalendarSkeleton />
 
   const grouped = groupEventsByDay(events.value)
   const dayKeys = Object.keys(grouped).sort((a, b) => new Date(a).getTime() - new Date(b).getTime())

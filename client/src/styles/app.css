@@ -1471,6 +1471,49 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   pointer-events: none;
 }
 
+/* Calendar / spaces / bazaar / tasks skeleton helpers — keep the
+   layouts close to the rendered shape so the swap is in-place. */
+.sh-skeleton-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--sh-space-xs);
+  margin-top: var(--sh-space-md);
+}
+.sh-skeleton-calendar-day {
+  display: block;
+}
+.sh-spaces--skeleton .sh-space-card--skeleton {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-md);
+  padding: var(--sh-space-md);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg-secondary);
+  margin-bottom: var(--sh-space-sm);
+}
+.sh-bazaar--skeleton .sh-bazaar-card--skeleton {
+  display: flex;
+  gap: var(--sh-space-md);
+  padding: var(--sh-space-md);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg-secondary);
+  margin-bottom: var(--sh-space-md);
+}
+.sh-bazaar--skeleton .sh-bazaar-card__body {
+  flex: 1;
+  min-width: 0;
+}
+.sh-tasks--skeleton {
+  display: flex;
+  gap: var(--sh-space-md);
+}
+.sh-skeleton-task-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  margin-top: var(--sh-space-sm);
+}
+
 /* ───── 7. Feature surfaces ──────────────────────────────────────────── */
 
 /* Household presence strip — pinned-to-the-wall row of household

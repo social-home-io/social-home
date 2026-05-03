@@ -16,7 +16,7 @@ import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
-import { Spinner } from '@/components/Spinner'
+import { SpaceListSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openPairing } from '@/components/PairingFlow'
 import { currentUser } from '@/store/auth'
@@ -247,7 +247,7 @@ export default function SpaceBrowserPage() {
     }
   }
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <SpaceListSkeleton count={6} />
 
   const term = searchTerm.value
   const lists: Record<Tab, DirectoryEntry[]> = {

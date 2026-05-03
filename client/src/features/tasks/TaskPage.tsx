@@ -11,7 +11,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
-import { Spinner } from '@/components/Spinner'
+import { TasksSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
 import { lists, tasks } from '@/store/tasks'
@@ -181,7 +181,7 @@ export default function TaskPage() {
     }
   }
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <TasksSkeleton />
 
   const me = currentUser.value
   const userNameById = (uid: string): string => {
