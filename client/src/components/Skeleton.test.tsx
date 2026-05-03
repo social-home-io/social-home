@@ -7,6 +7,10 @@ import {
   FeedSkeleton,
   DmInboxSkeleton,
   StoriesRingSkeleton,
+  CalendarSkeleton,
+  SpaceListSkeleton,
+  BazaarSkeleton,
+  TasksSkeleton,
 } from './Skeleton'
 
 describe('Skeleton primitive', () => {
@@ -66,5 +70,39 @@ describe('Page-shaped skeletons', () => {
   it('StoriesRingSkeleton renders 5 ring placeholders', () => {
     const { container } = render(<StoriesRingSkeleton />)
     expect(container.querySelectorAll('.sh-story-ring').length).toBe(5)
+  })
+
+  it('CalendarSkeleton renders a 35-cell month grid', () => {
+    const { container } = render(<CalendarSkeleton />)
+    expect(
+      container.querySelectorAll('.sh-skeleton-calendar-day').length,
+    ).toBe(35)
+  })
+
+  it('SpaceListSkeleton defaults to 4 cards', () => {
+    const { container } = render(<SpaceListSkeleton />)
+    expect(
+      container.querySelectorAll('.sh-space-card--skeleton').length,
+    ).toBe(4)
+  })
+
+  it('SpaceListSkeleton honours the count prop', () => {
+    const { container } = render(<SpaceListSkeleton count={6} />)
+    expect(
+      container.querySelectorAll('.sh-space-card--skeleton').length,
+    ).toBe(6)
+  })
+
+  it('BazaarSkeleton renders 3 listing-card placeholders', () => {
+    const { container } = render(<BazaarSkeleton />)
+    expect(
+      container.querySelectorAll('.sh-bazaar-card--skeleton').length,
+    ).toBe(3)
+  })
+
+  it('TasksSkeleton renders sidebar + 5 task rows', () => {
+    const { container } = render(<TasksSkeleton />)
+    expect(container.querySelector('.sh-tasks-sidebar')).toBeTruthy()
+    expect(container.querySelectorAll('.sh-skeleton-task-row').length).toBe(5)
   })
 })

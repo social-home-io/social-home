@@ -4,7 +4,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { spaces, loadSpaces } from '@/store/spaces'
 import type { Space } from '@/types'
-import { Spinner } from '@/components/Spinner'
+import { SpaceListSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { openSpaceCreate } from '@/components/SpaceCreateDialog'
@@ -99,7 +99,7 @@ export default function SpaceListPage() {
     void loadAll()
   }, [])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <SpaceListSkeleton />
 
   const memberSpaces = spaces.value.filter((s) => !subscribedIds.value.has(s.id))
   const subscribedSpaces = spaces.value.filter((s) => subscribedIds.value.has(s.id))

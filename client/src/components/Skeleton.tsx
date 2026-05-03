@@ -141,3 +141,119 @@ export function StoriesRingSkeleton() {
     </div>
   )
 }
+
+
+/** Stand-in for ``CalendarPage``: header row + 5×7 day-grid placeholder
+ *  shaped to match the rendered calendar so the swap is in-place. */
+export function CalendarSkeleton() {
+  return (
+    <div class="sh-calendar sh-calendar--skeleton" aria-busy="true">
+      <div class="sh-page-header">
+        <Skeleton shape="line" width={140} height={22} />
+        <Skeleton shape="rect" width={120} height={32} />
+      </div>
+      <div class="sh-calendar-controls">
+        <Skeleton shape="rect" width={80} height={28} />
+        <Skeleton shape="line" width={160} height={18} />
+        <Skeleton shape="rect" width={80} height={28} />
+      </div>
+      <div class="sh-skeleton-calendar-grid" aria-hidden="true">
+        {Array.from({ length: 35 }).map((_, i) => (
+          <Skeleton
+            key={i}
+            shape="rect"
+            width="100%"
+            height={64}
+            class="sh-skeleton-calendar-day"
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+
+/** Stand-in for ``SpaceListPage`` and ``SpaceBrowserPage``: N space-card
+ *  shapes with emoji + name + description bars. */
+export function SpaceListSkeleton({ count = 4 }: { count?: number } = {}) {
+  return (
+    <div class="sh-spaces sh-spaces--skeleton" aria-busy="true">
+      <div class="sh-page-header">
+        <Skeleton shape="line" width={120} height={22} />
+      </div>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} class="sh-space-card sh-space-card--skeleton">
+          <Skeleton shape="circle" width={44} height={44} />
+          <div class="sh-space-card__body">
+            <Skeleton shape="line" width="50%" height={14} />
+            <Skeleton
+              shape="line"
+              width="80%"
+              height={11}
+              class="sh-skeleton-spaced"
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+/** Stand-in for ``BazaarPage``: 3 listing cards in a column. */
+export function BazaarSkeleton() {
+  return (
+    <div class="sh-bazaar sh-bazaar--skeleton" aria-busy="true">
+      <div class="sh-page-header">
+        <Skeleton shape="line" width={120} height={22} />
+        <Skeleton shape="rect" width={140} height={32} />
+      </div>
+      <div class="sh-bazaar-filters">
+        <Skeleton shape="rect" width={100} height={28} />
+        <Skeleton shape="rect" width={100} height={28} />
+        <Skeleton shape="rect" width={140} height={28} />
+      </div>
+      {[0, 1, 2].map(i => (
+        <div key={i} class="sh-bazaar-card sh-bazaar-card--skeleton">
+          <Skeleton shape="rect" width={120} height={120} />
+          <div class="sh-bazaar-card__body">
+            <Skeleton shape="line" width="60%" height={14} />
+            <Skeleton shape="line" width="35%" height={12} class="sh-skeleton-spaced" />
+            <Skeleton shape="line" width="85%" height={11} class="sh-skeleton-spaced" />
+            <Skeleton shape="line" width="70%" height={11} class="sh-skeleton-spaced" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+/** Stand-in for ``TaskPage``: sidebar list + main column with task rows. */
+export function TasksSkeleton() {
+  return (
+    <div class="sh-tasks sh-tasks--skeleton" aria-busy="true">
+      <aside class="sh-tasks-sidebar">
+        <Skeleton shape="line" width="60%" height={14} />
+        {[0, 1, 2].map(i => (
+          <Skeleton
+            key={i}
+            shape="line"
+            width="80%"
+            height={12}
+            class="sh-skeleton-spaced"
+          />
+        ))}
+      </aside>
+      <main class="sh-tasks-main">
+        <Skeleton shape="line" width="40%" height={20} />
+        {[0, 1, 2, 3, 4].map(i => (
+          <div key={i} class="sh-skeleton-task-row">
+            <Skeleton shape="rect" width={18} height={18} />
+            <Skeleton shape="line" width="65%" height={13} />
+          </div>
+        ))}
+      </main>
+    </div>
+  )
+}
