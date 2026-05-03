@@ -30,8 +30,37 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from ..media_signer import strip_signature_query
 from ..repositories.calendar_repo import AbstractCalendarRepo, AbstractSpaceCalendarRepo
 from ..utils.rrule import expand_rrule
+
+
+# Sentinel used by ``update_event(... cover_url=...)`` to distinguish
+# "no change" from "explicit clear". Other update fields use
+# ``None``/``"no change"`` because they have no meaningful empty
+# value at the wire level — cover_url's clear-vs-keep ambiguity
+# needs the extra signal.
+_UNSET: object = object()
+
+
+# Public alias for routes that need to express "leave the cover_url
+# field as-is" when invoking ``update_event``. Resolves to the same
+# sentinel object so identity comparison (``is _UNSET``) works.
+UNSET_COVER: object = _UNSET
+
+
+def _clean_cover_url(value: str | None) -> str | None:
+    """Normalise a cover URL coming from the client.
+
+    Empty strings collapse to ``None`` so the column stays NULL when
+    the user picked a file then "Removed" it before saving. Signed
+    URLs round-trip through ``strip_signature_query`` so the stored
+    value is the canonical ``/api/media/{filename}`` form — the
+    media-signer re-signs on every read.
+    """
+    if not value:
+        return None
+    return strip_signature_query(value)
 
 
 class CalendarService:
@@ -121,6 +150,7 @@ class CalendarService:
         attendees: list[str] | None = None,
         rrule: str | None = None,
         rsvp_enabled: bool = False,
+        cover_url: str | None = None,
     ) -> CalendarEvent:
         await self._require_calendar_enabled()
         summary = summary.strip()
@@ -155,6 +185,7 @@ class CalendarService:
             attendees=tuple(attendees or []),
             rrule=rrule,
             rsvp_enabled=rsvp_enabled,
+            cover_url=_clean_cover_url(cover_url),
         )
         saved = await self._repo.save_event(event)
         if self._bus is not None:
@@ -206,9 +237,15 @@ class CalendarService:
         attendees: list[str] | None = None,
         rrule: str | None = None,
         rsvp_enabled: bool | None = None,
+        cover_url: object = _UNSET,
     ) -> CalendarEvent:
         """Partial-update an existing event. Only fields the caller
         supplies are overwritten; the rest retain their current values.
+
+        ``cover_url`` is special: the default ``_UNSET`` sentinel means
+        "no change", explicit ``None`` clears the cover, and a string
+        sets it. The other fields use ``None``/``"no change"`` directly
+        because none of them have an ambiguous-clear shape.
         """
         existing = await self._repo.get_event(event_id)
         if existing is None:
@@ -220,6 +257,14 @@ class CalendarService:
         new_end = _parse_iso(end) if end else existing.end
         if new_end < new_start:
             raise ValueError("event end must not be before start")
+        if cover_url is _UNSET:
+            new_cover = existing.cover_url
+        else:
+            # mypy can't narrow ``object`` past the ``is _UNSET`` guard,
+            # but the route layer only ever passes ``str | None`` when
+            # the field is present in the body — assert + cast here.
+            assert cover_url is None or isinstance(cover_url, str)
+            new_cover = _clean_cover_url(cover_url)
         updated = replace(
             existing,
             summary=new_summary,
@@ -234,6 +279,7 @@ class CalendarService:
             rsvp_enabled=(
                 rsvp_enabled if rsvp_enabled is not None else existing.rsvp_enabled
             ),
+            cover_url=new_cover,
         )
         await self._repo.save_event(updated)
         if self._bus is not None:
@@ -344,6 +390,7 @@ class SpaceCalendarService:
         attendees: tuple[str, ...] = (),
         rrule: str | None = None,
         capacity: int | None = None,
+        cover_url: str | None = None,
     ) -> CalendarEvent:
         """Create a space-scoped calendar event.
 
@@ -376,6 +423,7 @@ class SpaceCalendarService:
             created_by=created_by,
             rrule=rrule,
             capacity=capacity,
+            cover_url=_clean_cover_url(cover_url),
         )
         saved = await self._repo.save_event(space_id, event)
         if self._bus is not None:
@@ -453,8 +501,14 @@ class SpaceCalendarService:
         rrule: str | None = None,
         capacity: int | None = None,
         clear_capacity: bool = False,
+        cover_url: object = _UNSET,
     ) -> CalendarEvent:
-        """Partial-update a space event. Emits CalendarEventUpdated."""
+        """Partial-update a space event. Emits CalendarEventUpdated.
+
+        ``cover_url`` follows the same sentinel discipline as the
+        personal calendar's ``update_event``: ``_UNSET`` = no change,
+        explicit ``None`` clears the cover, a string sets it.
+        """
         result = await self._repo.get_event(event_id)
         if result is None:
             raise KeyError(f"space calendar event {event_id!r} not found")
@@ -475,6 +529,14 @@ class SpaceCalendarService:
             if clear_capacity
             else (capacity if capacity is not None else existing.capacity)
         )
+        if cover_url is _UNSET:
+            new_cover = existing.cover_url
+        else:
+            # mypy can't narrow ``object`` past the ``is _UNSET`` guard,
+            # but the route layer only ever passes ``str | None`` when
+            # the field is present in the body — assert + cast here.
+            assert cover_url is None or isinstance(cover_url, str)
+            new_cover = _clean_cover_url(cover_url)
         updated = replace(
             existing,
             summary=new_summary,
@@ -487,6 +549,7 @@ class SpaceCalendarService:
             attendees=tuple(attendees) if attendees is not None else existing.attendees,
             rrule=rrule if rrule is not None else existing.rrule,
             capacity=new_capacity,
+            cover_url=new_cover,
         )
         await self._repo.save_event(space_id, updated)
         # Compute *material* field changes — Phase D: only these

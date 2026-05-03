@@ -379,6 +379,14 @@ export default function CalendarPage() {
                  style={{ '--cal-hue': calendarHue(e.calendar_id) } as Record<string, string>}
                  onClick={() => { selectedEvent.value = selectedEvent.value?.id === e.id ? null : e }}>
               <div class="sh-event-header">
+                {e.cover_url && (
+                  <img
+                    class="sh-event-cover-thumb"
+                    src={e.cover_url}
+                    alt=""
+                    loading="lazy"
+                  />
+                )}
                 <strong>{e.summary}</strong>
                 {ownerByline && (
                   <span class="sh-event-owner" aria-label={`On ${ownerByline}'s calendar`}>

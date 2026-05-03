@@ -1114,6 +1114,10 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     -- on your calendar — no buttons to confirm". The household-event
     -- dialog flips this when the host explicitly wants confirmations.
     rsvp_enabled    INTEGER NOT NULL DEFAULT 0,
+    -- Optional cover image for the event card (relative ``/api/media/{filename}``
+    -- URL). Renders at the top of EventPostCard on the feed and as a
+    -- thumbnail in the calendar list view. NULL = no cover.
+    cover_url       TEXT,
     created_by      TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1138,6 +1142,9 @@ CREATE TABLE IF NOT EXISTS space_calendar_events (
     capacity               INTEGER,
     notify_before_minutes  INTEGER,
     notified_at            TEXT,
+    -- Same as ``calendar_events.cover_url`` — optional image for the
+    -- event card on the space feed.
+    cover_url              TEXT,
     created_at             TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
 );

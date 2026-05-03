@@ -13,6 +13,7 @@ from ..services.calendar_import_service import (
     AICalendarImportError,
     AICalendarImportUnavailable,
 )
+from ..services.calendar_service import UNSET_COVER
 from .base import BaseView
 
 
@@ -40,6 +41,7 @@ def _event_dict(event) -> dict:
         "rrule": event.rrule,
         "capacity": getattr(event, "capacity", None),
         "rsvp_enabled": getattr(event, "rsvp_enabled", False),
+        "cover_url": getattr(event, "cover_url", None),
     }
 
 
@@ -109,6 +111,7 @@ class CalendarEventsView(BaseView):
             attendees=body.get("attendees"),
             rrule=body.get("rrule"),
             rsvp_enabled=bool(body.get("rsvp_enabled", False)),
+            cover_url=body.get("cover_url"),
         )
         return web.json_response(_event_dict(event), status=201)
 
@@ -129,6 +132,11 @@ class CalendarEventDeleteView(BaseView):
         event_id = self.match("id")
         body = await self.body()
         svc = self.svc(calendar_service_key)
+        # ``cover_url`` is tri-state: omitted = leave alone; explicit
+        # ``null`` = clear; string = set. Pass the sentinel through
+        # when the field isn't in the body so ``update_event`` keeps
+        # the existing value.
+        cover = body["cover_url"] if "cover_url" in body else UNSET_COVER
         event = await svc.update_event(
             event_id,
             summary=body.get("summary"),
@@ -139,6 +147,7 @@ class CalendarEventDeleteView(BaseView):
             attendees=body.get("attendees"),
             rrule=body.get("rrule"),
             rsvp_enabled=body.get("rsvp_enabled"),
+            cover_url=cover,
         )
         return web.json_response(_event_dict(event))
 
@@ -352,6 +361,7 @@ class SpaceCalendarEventsView(BaseView):
                 attendees=tuple(body.get("attendees") or ()),
                 rrule=body.get("rrule"),
                 capacity=body.get("capacity"),
+                cover_url=body.get("cover_url"),
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
@@ -377,6 +387,7 @@ class SpaceCalendarEventDetailView(BaseView):
         space_cal_svc = self.svc(K.space_cal_service_key)
         body = await self.body()
         try:
+            cover = body["cover_url"] if "cover_url" in body else UNSET_COVER
             event = await space_cal_svc.update_event(
                 event_id,
                 summary=body.get("summary") or body.get("title"),
@@ -392,6 +403,7 @@ class SpaceCalendarEventDetailView(BaseView):
                 rrule=body.get("rrule"),
                 capacity=body.get("capacity"),
                 clear_capacity=bool(body.get("clear_capacity", False)),
+                cover_url=cover,
             )
         except KeyError:
             return error_response(404, "NOT_FOUND", "Event not found.")

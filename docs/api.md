@@ -233,8 +233,8 @@ inside the encrypted payload and render the same map card.
 |---|---|---|
 | GET / POST | `/api/calendars` | List / create calendars. |
 | GET / PATCH / DELETE | `/api/calendars/{id}` | CRUD. |
-| GET / POST | `/api/calendars/{id}/events` | List / create events. |
-| GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. |
+| GET / POST | `/api/calendars/{id}/events` | List / create events. Body fields: `summary`, `start`, `end`, `all_day`, `description`, `attendees`, `rrule`, `rsvp_enabled`, `cover_url` (optional `/api/media/{filename}` reference — surfaces on `EventPostCard` and the calendar list thumbnail). |
+| GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. PATCH treats `cover_url` as tri-state: omitted = leave unchanged, explicit `null` = clear, string = set. |
 | GET | `/api/calendars/events/{id}/rsvps` | List RSVPs. `?occurrence_at=<iso>` (URL-encoded) scopes to one occurrence of a recurring event. |
 | POST | `/api/calendars/events/{id}/rsvp` | Set own RSVP. Body: `{"status": "going\|maybe\|declined", "occurrence_at": "<iso>"}`. `occurrence_at` required for recurring events; defaults to `event.start` for non-recurring. |
 | DELETE | `/api/calendars/events/{id}/rsvp` | Clear own RSVP. `?occurrence_at=<iso>` (URL-encoded) required for recurring. |

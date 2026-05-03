@@ -10331,7 +10331,91 @@ hr {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-sm);
+  overflow: hidden;
 }
+
+/* Cover image — full-width photo at the top of an event card.
+ * Bleeds to the card's edges (negates the parent's padding so the
+ * rounded top corners stay clean) and locks to a 16:9 strip so
+ * portrait or square uploads don't make the card wobble. */
+.sh-event-card-cover {
+  display: block;
+  width: calc(100% + 2 * var(--sh-space-md));
+  margin: calc(-1 * var(--sh-space-md))
+          calc(-1 * var(--sh-space-md))
+          0;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-top-left-radius: calc(var(--sh-radius-md) - 1px);
+  border-top-right-radius: calc(var(--sh-radius-md) - 1px);
+  background: var(--sh-bg-tertiary);
+}
+
+/* Calendar list thumbnail — horizontal strip (not square) so the
+ * cover's framing reads at the row scale without distorting it. */
+.sh-event-cover-thumb {
+  width: 64px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: var(--sh-radius-sm);
+  flex-shrink: 0;
+}
+
+/* Dialog cover-picker — empty state is a dashed cream tile that's
+ * obviously a "tap me to add an image" affordance; once a file is
+ * picked we render the preview in a 16:9 strip with a small ×
+ * remove button overlaid in the corner. */
+.sh-event-cover-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-event-cover-picker-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 16 / 9;
+  border: 1px dashed var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg-tertiary);
+  color: var(--sh-text-muted);
+  cursor: pointer;
+  transition: background var(--sh-transition-fast);
+  font-size: var(--sh-font-size-sm);
+}
+.sh-event-cover-picker-empty:hover {
+  background: color-mix(in srgb, var(--sh-primary) 8%, var(--sh-bg-tertiary));
+  color: var(--sh-text);
+}
+.sh-event-cover-picker-preview-wrap {
+  position: relative;
+}
+.sh-event-cover-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: var(--sh-radius-md);
+  border: 1px solid var(--sh-border);
+}
+.sh-event-cover-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--sh-radius-full);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sh-event-cover-remove:hover { background: rgba(0, 0, 0, 0.8); }
 .sh-event-card--orphan {
   font-style: italic;
   color: var(--sh-text-muted);

@@ -41,6 +41,59 @@ async def test_create_event(client):
     assert r2.status == 201
 
 
+async def test_event_cover_round_trips_create_edit_clear(client):
+    """``cover_url`` is a tri-state field: ``null``/missing means "no
+    cover", a string sets it, and an explicit ``null`` on PATCH
+    clears it. The route + service preserve this discipline so
+    editing a non-cover field doesn't accidentally drop the cover."""
+    r = await client.post(
+        "/api/calendars", json={"name": "C"}, headers=_auth(client._tok)
+    )
+    cid = (await r.json())["id"]
+    now = datetime.now(timezone.utc)
+
+    # 1. Create with a cover.
+    r = await client.post(
+        f"/api/calendars/{cid}/events",
+        json={
+            "summary": "Picnic",
+            "start": now.isoformat(),
+            "end": (now + timedelta(hours=2)).isoformat(),
+            "cover_url": "/api/media/picnic.webp",
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body["cover_url"] == "/api/media/picnic.webp"
+    eid = body["id"]
+
+    # 2. Edit the summary only — cover stays.
+    r2 = await client.patch(
+        f"/api/calendars/events/{eid}",
+        json={"summary": "Big Picnic"},
+        headers=_auth(client._tok),
+    )
+    assert r2.status == 200
+    assert (await r2.json())["cover_url"] == "/api/media/picnic.webp"
+
+    # 3. Replace the cover.
+    r3 = await client.patch(
+        f"/api/calendars/events/{eid}",
+        json={"cover_url": "/api/media/picnic-2.webp"},
+        headers=_auth(client._tok),
+    )
+    assert (await r3.json())["cover_url"] == "/api/media/picnic-2.webp"
+
+    # 4. Clear the cover with explicit null.
+    r4 = await client.patch(
+        f"/api/calendars/events/{eid}",
+        json={"cover_url": None},
+        headers=_auth(client._tok),
+    )
+    assert (await r4.json())["cover_url"] is None
+
+
 # ─── Space-scoped calendar + RSVP (§23.7) ─────────────────────────────────
 
 
