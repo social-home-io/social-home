@@ -8,6 +8,7 @@ from ..app_keys import (
     conversation_repo_key,
     dm_service_key,
     media_signer_key,
+    notification_service_key,
     online_status_service_key,
     user_repo_key,
 )
@@ -208,6 +209,16 @@ class ConversationReadView(BaseView):
         svc = self.svc(dm_service_key)
         conv_id = self.match("id")
         marked = await svc.mark_read(conv_id, username=ctx.username)
+        # Clear bell badges for this conversation in lockstep with the
+        # read-receipt update — opening a thread is the natural "I've
+        # seen these" signal, no separate UI gesture needed.
+        notif_svc = self.request.app.get(notification_service_key)
+        if notif_svc is not None and ctx is not None:
+            try:
+                await notif_svc.mark_read_for_dm(ctx.user_id, conv_id)
+            except Exception:
+                # Best-effort — never block the read receipt on this.
+                pass
         return web.json_response({"ok": True, "marked": int(marked or 0)})
 
 

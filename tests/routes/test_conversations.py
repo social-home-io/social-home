@@ -217,6 +217,41 @@ async def test_mark_read(client):
     assert resp.status == 200
 
 
+async def test_mark_read_clears_dm_notifications(client):
+    """Opening a thread (POST /read) clears the bell badge for that
+    conversation — the recipient's ``dm_message`` notification rows
+    flip to read so the unread count drops in lockstep."""
+    # Anna sends a DM to Bob.
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"username": "bob"},
+        headers=_auth(client._admin_token),
+    )
+    conv_id = (await r.json())["id"]
+    await client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "hi bob"},
+        headers=_auth(client._admin_token),
+    )
+    # Bob has an unread `dm_message` notification.
+    bell = await client.get(
+        "/api/notifications/unread-count",
+        headers=_auth(client._bob_token),
+    )
+    assert (await bell.json())["unread"] >= 1
+    # Bob opens the thread.
+    await client.post(
+        f"/api/conversations/{conv_id}/read",
+        headers=_auth(client._bob_token),
+    )
+    # Bell drops to 0 — the route auto-cleared the dm_message row.
+    bell2 = await client.get(
+        "/api/notifications/unread-count",
+        headers=_auth(client._bob_token),
+    )
+    assert (await bell2.json())["unread"] == 0
+
+
 async def test_unread_count(client):
     """GET /api/conversations/{id}/unread returns the unread message count."""
     r = await client.post(

@@ -342,7 +342,7 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 | GET / POST | `/api/spaces/{id}/zones` | List or create a per-space display zone (§23.8.7). `GET` open to space members; `POST` admin/owner only. Body: `{name, latitude, longitude, radius_m, color?}`. |
 | PATCH / DELETE | `/api/spaces/{id}/zones/{zone_id}` | Update or delete a per-space zone. Admin/owner only. Partial update; `color: null` clears, omitting fields leaves them. |
 | PATCH | `/api/spaces/{id}/members/me/location-sharing` | Member-self-service opt in or out of GPS sharing for this space (§23.8.8). Body: `{enabled: bool}`. Returns `{location_share_enabled: bool}`. |
-| GET | `/api/notifications` | Paginated list. |
+| GET | `/api/notifications` | Paginated list. Each row carries an optional `link_url` deep-link target — the bell renders unread items as anchors. New `dm_message` rows (one per inbound DM) link to `/dms/{conversation_id}` and auto-clear when the recipient opens that thread (`POST /api/conversations/{id}/read` clears them in lockstep with the read-receipt update). |
 | GET | `/api/notifications/unread-count` | Count. |
 | POST | `/api/notifications/{id}/read` | Mark read. |
 | POST | `/api/notifications/read-all` | Mark all read. |

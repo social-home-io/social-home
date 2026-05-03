@@ -1228,6 +1228,7 @@ class RealtimeService:
                 "notification_id": event.notification_id,
                 "notif_type": event.type,
                 "title": event.title,
+                "link_url": event.link_url,
             },
         )
 
