@@ -45,7 +45,7 @@ export interface LocationData {
 export interface FeedPost {
   id: string
   author: string
-  type: 'text' | 'image' | 'video' | 'transcript' | 'poll' | 'schedule' | 'file' | 'bazaar' | 'event' | 'location'
+  type: 'text' | 'image' | 'video' | 'transcript' | 'poll' | 'schedule' | 'file' | 'bazaar' | 'event' | 'location' | 'story_share'
   content: string | null
   /** Single-URL slot for ``video`` and ``file`` posts. ``image`` posts
    *  leave this ``null`` and use :attr:`image_urls` instead. */
@@ -71,6 +71,52 @@ export interface FeedPost {
    *  the comment thread is the event's discussion. NULL on non-event
    *  posts and on posts whose calendar event was deleted. */
   linked_event_id?: string | null
+  /** When ``type === 'story_share'`` this points at the shared
+   *  ``stories.id``. Becomes ``null`` when the linked story is purged
+   *  by retention — the share-card renders an "ended" placeholder. */
+  linked_story_id?: string | null
+}
+
+// ─── Stories (§Stories) ─────────────────────────────────────────────
+
+/** Audience kind for a story (matches backend ``StoryAudience`` enum). */
+export type StoryAudienceKind = 'all_paired' | 'households' | 'users'
+
+/** Single image/video frame inside a :class:`Story`. */
+export interface StoryFrame {
+  id: string
+  story_id: string
+  sequence: number
+  frame_type: 'image' | 'video'
+  /** Canonical ``/api/media/{filename}`` path. The browser is expected
+   *  to fetch via this URL; the server signs at read time. */
+  media_url: string
+  caption_text: string | null
+  caption_emoji: string | null
+  /** Video frames only. Milliseconds. */
+  duration_ms: number | null
+  created_at: string
+}
+
+/** Per-author per-day story aggregate. */
+export interface Story {
+  id: string
+  author_user_id: string
+  /** ``YYYY-MM-DD`` UTC. */
+  story_date: string
+  audience_kind: StoryAudienceKind
+  /** List of ``instance_id``s (for ``households``) or ``user_id``s
+   *  (for ``users``). Empty for ``all_paired``. */
+  audience: string[]
+  created_at: string
+  expires_at: string
+}
+
+/** Inbox item: story + frames + how many frames the viewer has not seen. */
+export interface StoryInboxItem {
+  story: Story
+  frames: StoryFrame[]
+  unseen_count: number
 }
 
 export type BotScope = 'space' | 'member'

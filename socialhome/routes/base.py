@@ -51,6 +51,7 @@ from ..services.space_zone_service import (
     SpaceZoneNotFoundError,
 )
 from ..services.storage_quota_service import StorageQuotaExceeded
+from ..services.story_service import StoryFrameLimitError, StoryNotFoundError
 
 log = logging.getLogger(__name__)
 
@@ -134,8 +135,11 @@ class BaseView(web.View):
             ListingNotFoundError,
             GalleryNotFoundError,
             SpaceZoneNotFoundError,
+            StoryNotFoundError,
         ) as exc:
             return error_response(404, "NOT_FOUND", str(exc))
+        except StoryFrameLimitError as exc:
+            return error_response(429, "STORY_FRAME_LIMIT", str(exc))
         except SpaceZoneLimitError as exc:
             return error_response(409, "ZONE_LIMIT", str(exc))
         except SpaceZoneNameConflictError as exc:

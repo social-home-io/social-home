@@ -107,6 +107,7 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
   - [Direct messages](./dm.md) — 1:1 and group conversations.
   - [Presence](./presence.md) — online/away/home + truncated location.
   - [Calls](./calls.md) — WebRTC voice/video signalling.
+  - [Stories](./stories.md) — per-author per-day frame bag with author-controlled retention and audience.
 - **Relay**
   - [Push & RTC relay](./push-relay.md) — GFS-mediated push fan-out and RTC signalling bootstrap.
 

@@ -121,6 +121,24 @@ anything below contradicts the file, the file wins.
 | `dm_relay_seen` | Dedup table for `DM_RELAY` envelopes (§12.5.3). Pruned by the DM GC scheduler. |
 | `conversation_delivery_state` | Per-`(message, user)` delivery + read state. |
 | `dm_contact_requests` | Pending DM contact requests (§23.47). |
+| `conversation_messages.reply_to_story_frame_id` | Story-frame reply target (§Stories). No FK so the message survives retention deletion of the source frame. |
+| `conversation_messages.reply_to_story_frame_snapshot` | JSON snapshot frozen at reply-time: `{thumb_url, author_user_id, story_date, caption_text?, caption_emoji?}`. Keeps the reply readable after the source frame is purged. |
+
+## Stories
+
+Personal "stories" pillar — a per-author per-day frame bag that
+federates to peers based on the author's audience kind. Retention is
+author-controlled via `users.preferences_json["stories"]` and the
+in-process `StoryRetentionScheduler`.
+
+| Table | Purpose |
+|---|---|
+| `stories` | One row per author per day (`UNIQUE(author_user_id, story_date)`). Carries `audience_kind`, an `audience_json` allow-list, and an `expires_at` cutoff set to `created_at + retention_days`. |
+| `story_frames` | Image / short-video frames keyed by `(story_id, sequence)`. `frame_type` ∈ `image \| video`; `media_url` is the canonical `/api/media/{filename}` path. |
+| `story_frame_views` | Per-`(frame, viewer)` view record. Drives the "viewed by N" UX surfaced on the author's viewer. |
+| `story_frame_reactions` | Per-`(frame, reactor)` quick-reaction. Single row per viewer per frame; UPSERT to change. |
+| `feed_posts.linked_story_id` | When `type = 'story_share'`, points at `stories.id`. ON DELETE SET NULL — the share-card flips to a "Story has ended" placeholder when retention purges the source. |
+| `space_posts.linked_story_id` | Same pointer for `space_posts`; FK-free since the linked story may live on a remote instance. |
 
 ## Notifications and push
 

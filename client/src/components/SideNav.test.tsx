@@ -12,9 +12,10 @@ import { SideNav } from './SideNav'
 
 const ALL_FEATURES_ON = {
   feat_feed: true, feat_pages: true, feat_tasks: true,
-  feat_stickies: true, feat_calendar: true,
+  feat_stickies: true, feat_calendar: true, feat_stories: true,
   allow_text: true, allow_image: true, allow_video: true,
   allow_file: true, allow_poll: true, allow_schedule: true,
+  allow_story_share: true,
   household_name: 'Hearth',
 }
 

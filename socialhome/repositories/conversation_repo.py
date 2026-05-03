@@ -361,13 +361,17 @@ class SqliteConversationRepo:
             """
             INSERT INTO conversation_messages(
                 id, conversation_id, sender_user_id, content, type, media_url,
-                reply_to_id, deleted, edited_at, created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
+                reply_to_id, reply_to_story_frame_id,
+                reply_to_story_frame_snapshot,
+                deleted, edited_at, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content,
                 media_url=excluded.media_url,
                 type=excluded.type,
                 reply_to_id=excluded.reply_to_id,
+                reply_to_story_frame_id=excluded.reply_to_story_frame_id,
+                reply_to_story_frame_snapshot=excluded.reply_to_story_frame_snapshot,
                 deleted=excluded.deleted,
                 edited_at=excluded.edited_at
             """,
@@ -379,6 +383,8 @@ class SqliteConversationRepo:
                 message.type,
                 message.media_url,
                 message.reply_to_id,
+                message.reply_to_story_frame_id,
+                message.reply_to_story_frame_snapshot,
                 int(message.deleted),
                 _iso(message.edited_at),
                 _iso(message.created_at),
@@ -726,6 +732,8 @@ def _row_to_message(row: dict | None) -> ConversationMessage | None:
         type=row.get("type", "text"),
         media_url=row.get("media_url"),
         reply_to_id=row.get("reply_to_id"),
+        reply_to_story_frame_id=row.get("reply_to_story_frame_id"),
+        reply_to_story_frame_snapshot=row.get("reply_to_story_frame_snapshot"),
         deleted=bool_col(row.get("deleted", 0)),
         edited_at=_parse(row.get("edited_at")),
     )

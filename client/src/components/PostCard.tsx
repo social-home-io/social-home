@@ -10,6 +10,7 @@ import { openLightbox } from './ImageLightbox'
 import { BazaarPostBody } from './BazaarPostBody'
 import { BotAvatar } from './BotAvatar'
 import { EventPostCard } from './EventPostCard'
+import { StoryShareCard } from './StoryShareCard'
 import { FileRenderer, VideoRenderer, ImageRenderer } from './FileRenderer'
 import { LocationPostCard } from './LocationPostCard'
 import { renderMarkdown } from './markdown'
@@ -215,6 +216,12 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
             {post.type === 'event' && (
               <EventPostCard eventId={post.linked_event_id ?? null} />
             )}
+            {post.type === 'story_share' && (
+              <StoryShareCard
+                storyId={post.linked_story_id ?? null}
+                note={post.content}
+              />
+            )}
             {post.type === 'location' && post.location && (
               <LocationPostCard location={post.location} />
             )}
@@ -222,6 +229,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, show
               post.type !== 'image' && post.type !== 'schedule' &&
               post.type !== 'poll' && post.type !== 'bazaar' &&
               post.type !== 'event' && post.type !== 'location' &&
+              post.type !== 'story_share' &&
               post.media_url && (
                 <ImageRenderer src={post.media_url} alt={post.content ?? undefined} />
               )}

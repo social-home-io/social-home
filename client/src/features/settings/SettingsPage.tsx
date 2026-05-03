@@ -284,7 +284,100 @@ function PrivacyTab() {
         <input type="checkbox" checked={onlineStatusVisible.value} onChange={toggleOnlineStatus} />
         Show online status to other household members
       </label>
+      <StoriesPreferencesPanel />
     </section>
+  )
+}
+
+interface StoriesPrefs {
+  retention_days?: number
+  max_count?: number
+  default_audience?: { kind: 'all_paired' | 'households' | 'users' }
+}
+
+function StoriesPreferencesPanel() {
+  // Read straight from the cached preferences each render — the
+  // `setPreference` helper updates the cache in place, so the form
+  // re-renders with the latest values when the user saves.
+  const prefs = (() => {
+    try {
+      const raw = (currentUser.value as unknown as { preferences_json?: string } | null)
+        ?.preferences_json
+      if (!raw) return {} as StoriesPrefs
+      const parsed = JSON.parse(raw) as { stories?: StoriesPrefs }
+      return parsed.stories ?? {}
+    } catch { return {} as StoriesPrefs }
+  })()
+  const retentionDays = signal<number>(prefs.retention_days ?? 30)
+  const maxCount = signal<number>(prefs.max_count ?? 100)
+  const audienceKind = signal<'all_paired' | 'households' | 'users'>(
+    prefs.default_audience?.kind ?? 'all_paired',
+  )
+
+  const save = async () => {
+    try {
+      await setPreference('stories', {
+        retention_days: retentionDays.value,
+        max_count: maxCount.value,
+        default_audience: { kind: audienceKind.value },
+      })
+      showToast('Stories settings saved', 'success')
+    } catch {
+      showToast('Failed to save stories settings', 'error')
+    }
+  }
+
+  return (
+    <div id="stories" class="sh-settings-stories-panel">
+      <h3>Stories</h3>
+      <p class="sh-muted">
+        Control how long your stories stay listed and who sees them by default.
+      </p>
+      <label class="sh-form-row">
+        Retention (days)
+        <input
+          type="number"
+          min={1}
+          max={90}
+          value={retentionDays.value}
+          onInput={e => {
+            const n = Number((e.target as HTMLInputElement).value)
+            retentionDays.value = Number.isFinite(n) ? n : 30
+          }}
+        />
+      </label>
+      <label class="sh-form-row">
+        Max stories to keep
+        <input
+          type="number"
+          min={10}
+          max={500}
+          value={maxCount.value}
+          onInput={e => {
+            const n = Number((e.target as HTMLInputElement).value)
+            maxCount.value = Number.isFinite(n) ? n : 100
+          }}
+        />
+      </label>
+      <label class="sh-form-row">
+        Default audience
+        <select
+          value={audienceKind.value}
+          onChange={e => {
+            const v = (e.target as HTMLSelectElement).value as
+              'all_paired' | 'households' | 'users'
+            audienceKind.value = v
+          }}
+        >
+          <option value="all_paired">All connected households</option>
+          <option value="households">Pick households per story</option>
+          <option value="users">Pick people per story (advanced)</option>
+        </select>
+      </label>
+      <div class="sh-form-actions">
+        <Button onClick={save}>Save</Button>
+      </div>
+    </div>
   )
 }
 

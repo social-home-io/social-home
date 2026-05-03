@@ -70,6 +70,7 @@ from .infrastructure.dm_gc_scheduler import DmGcScheduler
 from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionScheduler
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
+from .infrastructure.story_retention_scheduler import StoryRetentionScheduler
 from .platform import build_platform_adapter
 from .platform.adapter import Capability
 from .rate_limiter import RateLimiter, build_rate_limit_middleware
@@ -107,6 +108,7 @@ from .repositories.profile_picture_repo import SqliteProfilePictureRepo
 from .repositories.space_bot_repo import SqliteSpaceBotRepo
 from .repositories.space_cover_repo import SqliteSpaceCoverRepo
 from .repositories.space_zone_repo import SqliteSpaceZoneRepo
+from .repositories.story_repo import SqliteStoryRepo
 from .repositories.presence_repo import SqlitePresenceRepo
 from .repositories.peer_space_directory_repo import SqlitePeerSpaceDirectoryRepo
 from .repositories.public_space_repo import SqlitePublicSpaceRepo
@@ -127,6 +129,7 @@ from .services import (
 )
 from .services.backup_service import BackupService
 from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
+from .services.story_service import StoryService
 from .services.bot_bridge_service import BotBridgeService
 from .services.space_bot_service import SpaceBotService
 from .services.calendar_import_service import CalendarImportService
@@ -306,6 +309,7 @@ def _build_repos(db: AsyncDatabase):
         federation=SqliteFederationRepo(db),
         page=SqlitePageRepo(db),
         sticky=SqliteStickyRepo(db),
+        story=SqliteStoryRepo(db),
         bazaar=SqliteBazaarRepo(db),
         push_sub=SqlitePushSubscriptionRepo(db),
         gallery=SqliteGalleryRepo(db),
@@ -870,6 +874,7 @@ def create_app(config: Config | None = None) -> web.Application:
     federation_repo = repos.federation
     page_repo = repos.page
     sticky_repo = repos.sticky
+    story_repo = repos.story
     dm_contact_repo = repos.dm_contact
     bazaar_repo = repos.bazaar
     push_sub_repo = repos.push_sub
@@ -1117,6 +1122,10 @@ def create_app(config: Config | None = None) -> web.Application:
     bazaar_service.attach_spaces(space_service)
     bazaar_expiry_scheduler = BazaarExpiryScheduler(bazaar_service)
 
+    # ── Stories (§Stories) ────────────────────────────────────────────
+    story_service = StoryService(story_repo, user_repo, bus)
+    story_retention_scheduler = StoryRetentionScheduler(story_service)
+
     # ── My Corner aggregator (§23) ─────────────────────────────────────
     corner_service = CornerService(
         notification_repo=notification_repo,
@@ -1312,6 +1321,9 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.sticky_repo_key] = sticky_repo
     app[K.bazaar_repo_key] = bazaar_repo
     app[K.shopping_repo_key] = shopping_repo
+    app[K.story_repo_key] = story_repo
+    app[K.story_service_key] = story_service
+    app[K.story_retention_scheduler_key] = story_retention_scheduler
 
     # ── Mount routes ─────────────────────────────────────────────────────
     setup_routes(app)
@@ -1582,6 +1594,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # Bazaar auction expiry — closes due auctions on a 60-s cadence.
         await bazaar_expiry_scheduler.start()
 
+        # Stories retention — drops expired + over-max stories per author.
+        await story_retention_scheduler.start()
+
         # Page-lock + retention + draft cleanup schedulers.
         nonlocal page_lock_scheduler, space_retention_scheduler
         nonlocal post_draft_scheduler, calendar_reminder_scheduler
@@ -1675,6 +1690,7 @@ def create_app(config: Config | None = None) -> web.Application:
         if sync_sched is not None:
             await sync_sched.stop()
         await bazaar_expiry_scheduler.stop()
+        await story_retention_scheduler.stop()
         # Close all RTC DataChannels so the peers see a clean EOF.
         fed_svc = app.get(K.federation_service_key)
         if fed_svc is not None and getattr(fed_svc, "_transport", None) is not None:

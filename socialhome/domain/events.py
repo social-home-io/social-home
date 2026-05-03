@@ -1245,6 +1245,82 @@ class CpSpaceAgeGateChanged(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+# ─── Stories (§Stories) ──────────────────────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class StoryFrameAdded(DomainEvent):
+    """A frame was created or appended on the author's instance.
+
+    Carries enough for federation outbound to fan out the encrypted
+    payload (audience, frame body) and for :class:`RealtimeService` to
+    push a ``story.frame_added`` WS event to local viewers in the
+    audience.
+    """
+
+    story_id: str
+    frame_id: str
+    author_user_id: str
+    story_date: str
+    sequence: int
+    is_first_frame: bool
+    audience_kind: str  # 'all_paired' | 'households' | 'users'
+    audience: tuple[str, ...]  # peer instance_ids or user_ids
+    frame_type: str  # 'image' | 'video'
+    media_url: str
+    caption_text: str | None
+    caption_emoji: str | None
+    duration_ms: int | None
+    expires_at: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class StoryFrameRemoved(DomainEvent):
+    story_id: str
+    frame_id: str
+    author_user_id: str
+    audience_kind: str
+    audience: tuple[str, ...]
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class StoryRemoved(DomainEvent):
+    story_id: str
+    author_user_id: str
+    audience_kind: str
+    audience: tuple[str, ...]
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class StoryFrameViewed(DomainEvent):
+    """A viewer marked a frame as seen — federates back to the author."""
+
+    story_id: str
+    frame_id: str
+    viewer_user_id: str
+    author_user_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class StoryFrameReactionChanged(DomainEvent):
+    """Reaction set, changed, or cleared.
+
+    ``emoji is None`` ⇒ cleared. Federates back to the author so they
+    see the reaction-counter update.
+    """
+
+    story_id: str
+    frame_id: str
+    reactor_user_id: str
+    author_user_id: str
+    emoji: str | None
+    occurred_at: datetime = field(default_factory=_now)
+
+
 # ─── Household feature toggles (§18 / §23.13) ────────────────────────────
 
 

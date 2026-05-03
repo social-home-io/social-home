@@ -263,6 +263,34 @@ Same CRUD shape:
 /api/gallery/albums[/{id}]    /{id}/items[/{iid}]
 ```
 
+### Stories (§Stories)
+
+Personal "stories" pillar — per-author per-day frame bag, federated to
+peers based on the author's audience kind. Retention is per-user
+(`preferences_json.stories.retention_days` and `.max_count`); the
+in-process retention scheduler prunes expired and over-quota rows.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST   | `/api/stories/frames` | Create or append today's frame. Body: `{frame_type, media_url, caption_text?, caption_emoji?, duration_ms?, audience_kind?, audience?[]}`. Returns `{story, frame}`. |
+| GET    | `/api/stories` | List stories visible to the caller (mine + peers'). Returns `[{story, frames, unseen_count}]`. |
+| GET    | `/api/stories/{id}` | Story detail with frames. Authors get per-frame `views` and `reactions` keyed by frame id inline. |
+| DELETE | `/api/stories/{id}` | Author removes the whole story. Cascades to frames / views / reactions. |
+| DELETE | `/api/stories/frames/{id}` | Author removes one frame. |
+| POST   | `/api/stories/frames/{id}/view` | Mark frame seen. Authors' own views are silently ignored. |
+| PUT    | `/api/stories/frames/{id}/reaction` | Body: `{emoji}`. Upsert — one reaction per viewer per frame. |
+| DELETE | `/api/stories/frames/{id}/reaction` | Clear the caller's reaction on this frame. |
+| POST   | `/api/stories/{id}/share` | Author shares the story into a feed. Body: `{scope: 'household' \| 'space', space_id?, note?}`. Creates a `story_share` post; returns 201 `{post_id, story_id}` or 202 `{queued: true}` for moderated spaces. |
+| POST   | `/api/stories/frames/{id}/dm-reply` | Send a DM that quotes a frame. Body: `{conversation_id, content}`. The frame snapshot is frozen on the message so the reply survives retention. |
+
+Audience kinds:
+
+* `all_paired` — default; every confirmed peer instance.
+* `households` — author-picked subset of peer instances.
+* `users` — author-picked subset of individual user ids; the
+  receiving instance enforces the per-user allow-list before
+  surfacing to local viewers.
+
 Each `/api/gallery/albums` row carries an `is_system: bool` flag. The
 auto-managed "Posts" album (one per household, one per space; pinned
 to the top of the list) returns `is_system: true` and `owner_user_id:

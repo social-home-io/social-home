@@ -254,6 +254,16 @@ from .stickies import (
     StickyCollectionView,
     StickyDetailView,
 )
+from .stories import (
+    StoriesCollectionView,
+    StoryDetailView,
+    StoryDmReplyView,
+    StoryFrameDetailView,
+    StoryFrameReactionView,
+    StoryFrameViewView,
+    StoryFramesCollectionView,
+    StoryShareView,
+)
 from .ha_users import HaUserProvisionView, HaUsersCollectionView
 from .reports import (
     AdminReportCollectionView,
@@ -652,6 +662,25 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/spaces/{id}/stickies/{sid}",
         SpaceStickyDetailView,
+    )
+
+    # ── Stories ────────────────────────────────────────────────────────
+    app.router.add_view("/api/stories", StoriesCollectionView)
+    app.router.add_view("/api/stories/frames", StoryFramesCollectionView)
+    app.router.add_view("/api/stories/{id}", StoryDetailView)
+    app.router.add_view("/api/stories/frames/{id}", StoryFrameDetailView)
+    app.router.add_view(
+        "/api/stories/frames/{id}/view",
+        StoryFrameViewView,
+    )
+    app.router.add_view(
+        "/api/stories/frames/{id}/reaction",
+        StoryFrameReactionView,
+    )
+    app.router.add_view("/api/stories/{id}/share", StoryShareView)
+    app.router.add_view(
+        "/api/stories/frames/{id}/dm-reply",
+        StoryDmReplyView,
     )
 
     # ── Bazaar ──────────────────────────────────────────────────────────
