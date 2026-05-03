@@ -157,7 +157,9 @@ async def test_react_then_clear(db, svc):
     cleared = []
     bus.subscribe(StoryFrameReactionChanged, lambda e: cleared.append(e))
     await service.react_to_frame(
-        frame_id=frame.id, reactor_user_id="u2", emoji="🔥",
+        frame_id=frame.id,
+        reactor_user_id="u2",
+        emoji="🔥",
     )
     await service.clear_reaction(frame_id=frame.id, reactor_user_id="u2")
     # Two events: set then clear (emoji=None on the second).
@@ -200,9 +202,7 @@ async def test_react_or_view_unknown_frame_raises(db, svc):
     with pytest.raises(StoryNotFoundError):
         await service.mark_frame_viewed(frame_id="nope", viewer_user_id="u1")
     with pytest.raises(StoryNotFoundError):
-        await service.react_to_frame(
-            frame_id="nope", reactor_user_id="u1", emoji="🔥"
-        )
+        await service.react_to_frame(frame_id="nope", reactor_user_id="u1", emoji="🔥")
     with pytest.raises(StoryNotFoundError):
         await service.clear_reaction(frame_id="nope", reactor_user_id="u1")
 

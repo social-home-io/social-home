@@ -253,9 +253,7 @@ async def test_dm_reply_round_trip(client):
         "INSERT OR IGNORE INTO users(username, user_id, display_name, state) "
         "VALUES('bob', 'uid-bob', 'Bob', 'active')",
     )
-    r = await client.post(
-        "/api/conversations/dm", json={"username": "bob"}, headers=h
-    )
+    r = await client.post("/api/conversations/dm", json={"username": "bob"}, headers=h)
     assert r.status == 201
     conv_id = (await r.json())["id"]
 

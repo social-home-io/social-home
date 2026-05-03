@@ -160,11 +160,13 @@ async def test_count_unseen_frames_drops_to_zero_after_view(db, repo):
         expires_at=_expires(),
     )
     f1 = await repo.append_frame(
-        story_id=story.id, frame_type=StoryFrameType.IMAGE,
+        story_id=story.id,
+        frame_type=StoryFrameType.IMAGE,
         media_url="/api/media/a.webp",
     )
     f2 = await repo.append_frame(
-        story_id=story.id, frame_type=StoryFrameType.IMAGE,
+        story_id=story.id,
+        frame_type=StoryFrameType.IMAGE,
         media_url="/api/media/b.webp",
     )
     assert await repo.count_unseen_frames(story.id, "u2") == 2
@@ -215,7 +217,8 @@ async def test_clear_reaction_and_delete_frame(db, repo):
         expires_at=_expires(),
     )
     frame = await repo.append_frame(
-        story_id=story.id, frame_type=StoryFrameType.IMAGE,
+        story_id=story.id,
+        frame_type=StoryFrameType.IMAGE,
         media_url="/api/media/a.webp",
     )
     await repo.set_reaction(frame.id, "u2", "🔥")

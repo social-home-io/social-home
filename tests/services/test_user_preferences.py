@@ -29,11 +29,9 @@ def test_clamps_out_of_range_values():
         '{"stories": {"retention_days": 99999, "max_count": 2}}'
     )
     assert p.retention_days == 90  # clamped to _RETENTION_MAX
-    assert p.max_count == 10       # clamped to _MAX_COUNT_MIN
+    assert p.max_count == 10  # clamped to _MAX_COUNT_MIN
 
-    p = parse_stories_preferences(
-        '{"stories": {"retention_days": "nope"}}'
-    )
+    p = parse_stories_preferences('{"stories": {"retention_days": "nope"}}')
     assert p.retention_days == DEFAULT_STORIES_RETENTION_DAYS
 
 
