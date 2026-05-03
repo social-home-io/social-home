@@ -17,7 +17,6 @@ where the per-user allow-list is enforced on read.
 from __future__ import annotations
 
 import builtins
-import json
 import uuid
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
