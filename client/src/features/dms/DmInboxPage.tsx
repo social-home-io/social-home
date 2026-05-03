@@ -4,7 +4,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import type { Conversation } from '@/types'
-import { Spinner } from '@/components/Spinner'
+import { DmInboxSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { openNewDm } from '@/components/NewDmDialog'
 import { Avatar } from '@/components/Avatar'
@@ -28,7 +28,7 @@ export default function DmInboxPage() {
     return () => { offMsg(); offConv() }
   }, [])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <DmInboxSkeleton />
 
   return (
     <div class="sh-dms">

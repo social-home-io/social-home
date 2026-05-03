@@ -15,7 +15,7 @@ import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
-import { Spinner } from '@/components/Spinner'
+import { StoriesRingSkeleton } from '@/components/Skeleton'
 import { Avatar } from '@/components/Avatar'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
@@ -63,7 +63,7 @@ export default function StoriesPage() {
       })
   }, [])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <StoriesRingSkeleton />
 
   const items = inbox.value
 

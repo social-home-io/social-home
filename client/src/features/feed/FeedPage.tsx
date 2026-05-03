@@ -11,7 +11,7 @@ import { PostCard } from '@/components/PostCard'
 import { Composer } from '@/components/Composer'
 import { openCommentOverlay } from '@/components/CommentOverlay'
 import { HouseholdPresenceStrip } from '@/components/HouseholdPresenceStrip'
-import { Spinner } from '@/components/Spinner'
+import { FeedSkeleton, PostCardSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { toggles } from '@/components/HouseholdToggles'
@@ -69,6 +69,16 @@ export default function FeedPage() {
     // wireFeedWs() removes the row on `post.deleted`. No reload.
   }
 
+  // Cold-start: no posts yet AND a fetch in flight → show the
+  // layout-stable skeleton instead of an isolated spinner so the eye
+  // can register the page chrome immediately. Subsequent fetches
+  // (paging) keep the spinner since the layout is already mounted.
+  const isInitialLoad = feedLoading.value && posts.value.length === 0
+
+  if (isInitialLoad) {
+    return <FeedSkeleton />
+  }
+
   return (
     <div class="sh-feed">
       <HouseholdPresenceStrip />
@@ -83,7 +93,8 @@ export default function FeedPage() {
           />
         </div>
       ))}
-      {feedLoading.value && <Spinner />}
+      {/* Pagination spinner — full reload uses the FeedSkeleton above. */}
+      {feedLoading.value && posts.value.length > 0 && <PostCardSkeleton />}
       {!feedLoading.value && posts.value.length === 0 && (
         <p class="sh-muted">No posts yet. Share something with your household!</p>
       )}
