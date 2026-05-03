@@ -38,6 +38,12 @@ class PostType(StrEnum):
     #: the pin freezes at the position the operator captured at post
     #: time. See :data:`Post.location`.
     LOCATION = "location"
+    #: Share-card pointing at an existing :class:`Story`. The post's
+    #: ``linked_story_id`` references ``stories.id``. See
+    #: :class:`StoryShareCard` on the frontend; the renderer
+    #: lazy-fetches the story detail and falls back to a "Story has
+    #: ended" placeholder when retention purged it.
+    STORY_SHARE = "story_share"
 
 
 class CommentType(StrEnum):
@@ -488,6 +494,14 @@ class Post:
     #: the event's discussion. Goes to NULL when the event is deleted
     #: (the historical post + thread stays readable).
     linked_event_id: str | None = None
+    #: When ``type is PostType.STORY_SHARE`` this points at the
+    #: ``stories.id`` whose first frame the share-card renders. ON
+    #: DELETE SET NULL on the household table so the share-card flips to
+    #: a "Story has ended" placeholder when retention deletes the story.
+    #: The space variant carries the id without an FK because a remote
+    #: instance's stories live off-host (the share-card lazy-fetches via
+    #: federation).
+    linked_story_id: str | None = None
 
     def with_reaction(self, emoji: str, user_id: str) -> "Post":
         current = self.reactions.get(emoji, frozenset())

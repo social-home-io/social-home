@@ -1336,6 +1336,7 @@ class SpaceService:
         image_urls: tuple[str, ...] | list[str] = (),
         file_meta: FileMeta | None = None,
         location: LocationData | None = None,
+        linked_story_id: str | None = None,
     ) -> Post | None:
         """Create a post in the space, subject to the feature's access level.
 
@@ -1389,6 +1390,7 @@ class SpaceService:
             image_urls=image_urls_tuple,
             file_meta=file_meta,
             location=location,
+            linked_story_id=linked_story_id,
         )
         if decision == "queue":
             now = datetime.now(timezone.utc)

@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS household_features (
     feat_tasks        INTEGER NOT NULL DEFAULT 1,
     feat_stickies     INTEGER NOT NULL DEFAULT 1,
     feat_calendar     INTEGER NOT NULL DEFAULT 1,
+    feat_stories      INTEGER NOT NULL DEFAULT 1,
     -- Bazaar is a per-space feature only (gated by ``space.features``).
     -- The household feed never carries bazaar posts, so no
     -- ``feat_bazaar`` / ``allow_bazaar`` here.
@@ -288,7 +289,8 @@ CREATE TABLE IF NOT EXISTS household_features (
     allow_file        INTEGER NOT NULL DEFAULT 1,
     allow_poll        INTEGER NOT NULL DEFAULT 1,
     allow_schedule    INTEGER NOT NULL DEFAULT 1,
-    allow_location    INTEGER NOT NULL DEFAULT 1
+    allow_location    INTEGER NOT NULL DEFAULT 1,
+    allow_story_share INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS presence (
@@ -341,7 +343,7 @@ CREATE TABLE IF NOT EXISTS feed_posts (
     type            TEXT NOT NULL
                     CHECK(type IN ('text','image','video','transcript',
                                    'poll','schedule','file','bazaar',
-                                   'location')),
+                                   'location','story_share')),
     content         TEXT,
     media_url       TEXT,
     reactions       TEXT NOT NULL DEFAULT '{}',    -- JSON {emoji: [user_id...]}
@@ -361,6 +363,10 @@ CREATE TABLE IF NOT EXISTS feed_posts (
     -- list exclusively — media_url stays NULL for them. Non-image
     -- posts must store NULL or '[]' here.
     image_urls_json TEXT,
+    -- ``type='story_share'``: the story the post points at. ON DELETE SET
+    -- NULL so when the story expires the share-card can render an
+    -- "ended" placeholder rather than disappearing.
+    linked_story_id TEXT REFERENCES stories(id) ON DELETE SET NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_feed_posts_created ON feed_posts(created_at DESC);
@@ -455,6 +461,10 @@ CREATE TABLE IF NOT EXISTS spaces (
     -- One-shot location-share posts (composer's 📍 picker).
     -- Coordinates are stored 4dp-truncated in the post's location_json.
     allow_post_location    INTEGER NOT NULL DEFAULT 1,
+    -- Story-share posts (§Stories) — share-card pointing at an
+    -- existing story so a moment can live in a feed beyond the
+    -- author's retention window.
+    allow_post_story_share INTEGER NOT NULL DEFAULT 1,
     -- Public / discover fields (populated only when join_mode IN ('public','open'))
     lat                    REAL,
     lon                    REAL,
@@ -740,6 +750,11 @@ CREATE TABLE IF NOT EXISTS space_posts (
     -- Same multi-image shape as feed_posts.image_urls_json — image
     -- posts in spaces use this list exclusively.
     image_urls_json TEXT,
+    -- ``type='story_share'`` (§Stories): the story this post points at.
+    -- No FK — stories live on the author's instance; remote shares
+    -- carry the id only so the renderer can fetch via federation. The
+    -- column is informational on receivers, queryable on the origin.
+    linked_story_id TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_space_posts_created
@@ -1004,6 +1019,15 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     type            TEXT NOT NULL DEFAULT 'text',
     media_url       TEXT,
     reply_to_id     TEXT REFERENCES conversation_messages(id) ON DELETE SET NULL,
+    -- Story-frame reply (§Stories): the frame the user is replying to. No
+    -- FK so the message survives retention deletion of the source frame
+    -- (the snapshot below carries enough to keep the reply readable).
+    reply_to_story_frame_id        TEXT,
+    -- JSON snapshot of the frame at reply-time:
+    -- ``{thumb_url, caption_text?, caption_emoji?, author_user_id,
+    --   story_date}``. Frozen so the reply stays meaningful after the
+    -- frame expires. NULL when the message isn't a story-frame reply.
+    reply_to_story_frame_snapshot  TEXT,
     deleted         INTEGER NOT NULL DEFAULT 0,
     edited_at       TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1017,6 +1041,64 @@ CREATE TABLE IF NOT EXISTS message_reactions (
     emoji       TEXT NOT NULL,
     reacted_at  TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (message_id, user_id, emoji)
+);
+
+-- ── Stories ────────────────────────────────────────────────────────────────
+-- Personal "stories" pillar (alongside DMs and calls): a per-author per-day
+-- bag of frames (image / short video) that federates to peers based on an
+-- author-controlled audience. Retention and max-count come from the author's
+-- ``users.preferences_json.stories`` block; the retention scheduler prunes.
+
+CREATE TABLE IF NOT EXISTS stories (
+    id              TEXT PRIMARY KEY,
+    author_user_id  TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    -- ``YYYY-MM-DD`` UTC. UNIQUE(author, day) enforces the "one story per
+    -- author per day, frames append" rule.
+    story_date      TEXT NOT NULL,
+    audience_kind   TEXT NOT NULL DEFAULT 'all_paired'
+                    CHECK(audience_kind IN ('all_paired','households','users')),
+    -- JSON list of instance_ids (for ``households``) or user_ids (for
+    -- ``users``). Empty list for ``all_paired``.
+    audience_json   TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Retention cutoff (created_at + author retention_days). The retention
+    -- scheduler deletes stories where ``expires_at < now()``.
+    expires_at      TEXT NOT NULL,
+    UNIQUE(author_user_id, story_date)
+);
+CREATE INDEX IF NOT EXISTS idx_stories_expires ON stories(expires_at);
+CREATE INDEX IF NOT EXISTS idx_stories_author  ON stories(author_user_id, story_date DESC);
+
+CREATE TABLE IF NOT EXISTS story_frames (
+    id              TEXT PRIMARY KEY,
+    story_id        TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    sequence        INTEGER NOT NULL,
+    frame_type      TEXT NOT NULL CHECK(frame_type IN ('image','video')),
+    -- Canonical ``/api/media/{filename}`` path. Server re-signs on read.
+    media_url       TEXT NOT NULL,
+    caption_text    TEXT,
+    caption_emoji   TEXT,
+    duration_ms     INTEGER,                                       -- video only
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_story_frames_story
+    ON story_frames(story_id, sequence);
+
+CREATE TABLE IF NOT EXISTS story_frame_views (
+    frame_id        TEXT NOT NULL REFERENCES story_frames(id) ON DELETE CASCADE,
+    viewer_user_id  TEXT NOT NULL,
+    viewed_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(frame_id, viewer_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS story_frame_reactions (
+    frame_id         TEXT NOT NULL REFERENCES story_frames(id) ON DELETE CASCADE,
+    reactor_user_id  TEXT NOT NULL,
+    -- Single emoji code-point (or grapheme cluster). One reaction per
+    -- viewer per frame; UPSERT to change.
+    emoji            TEXT NOT NULL,
+    reacted_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(frame_id, reactor_user_id)
 );
 
 -- ── Tasks ──────────────────────────────────────────────────────────────────

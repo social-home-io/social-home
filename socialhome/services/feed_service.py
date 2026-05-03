@@ -104,6 +104,7 @@ class FeedService:
         location: LocationData | None = None,
         pinned: bool = False,
         no_link_preview: bool = False,
+        linked_story_id: str | None = None,
     ) -> Post:
         """Persist a new post in the household feed.
 
@@ -163,6 +164,7 @@ class FeedService:
             location=location,
             pinned=bool(pinned),
             no_link_preview=bool(no_link_preview),
+            linked_story_id=linked_story_id,
         )
         await self._posts.save(post)
         await self._bus.publish(PostCreated(post=post))

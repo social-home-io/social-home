@@ -192,6 +192,19 @@ class FederationEventType(str, enum.Enum):
     CALL_ICE_CANDIDATE = "call_ice_candidate"
     CALL_QUALITY = "call_quality"
 
+    # ── Stories (§Stories) ──
+    # Personal "stories" pillar — per-author per-day frame bag, federated
+    # to peers per the author's audience kind. See ``story_service`` for
+    # outbound fan-out and ``federation/sync/story_inbound.py`` for the
+    # inbound handlers (registered via ``_event_registry``).
+    STORY_CREATED = "story_created"
+    STORY_FRAME_APPENDED = "story_frame_appended"
+    STORY_FRAME_DELETED = "story_frame_deleted"
+    STORY_DELETED = "story_deleted"
+    STORY_FRAME_VIEWED = "story_frame_viewed"
+    STORY_FRAME_REACTED = "story_frame_reacted"
+    STORY_FRAME_REACTION_REMOVED = "story_frame_reaction_removed"
+
     # ── Network discovery ──
     NETWORK_SYNC = "network_sync"
 

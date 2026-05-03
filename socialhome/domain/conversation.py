@@ -54,6 +54,12 @@ class ConversationMessage:
     type: str = "text"
     media_url: str | None = None
     reply_to_id: str | None = None
+    #: Story-frame reply (§Stories). Set when the user replied to a
+    #: story frame from the viewer; the snapshot below freezes a
+    #: thumbnail + caption so the reply stays meaningful after the
+    #: source frame is removed by the retention scheduler.
+    reply_to_story_frame_id: str | None = None
+    reply_to_story_frame_snapshot: str | None = None  # JSON
     deleted: bool = False
     edited_at: datetime | None = None
 

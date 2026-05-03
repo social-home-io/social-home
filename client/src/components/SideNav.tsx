@@ -47,6 +47,7 @@ interface SideNavState {
   feat_tasks: boolean
   feat_pages: boolean
   feat_stickies: boolean
+  feat_stories: boolean
 }
 
 const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian'> = {
@@ -55,6 +56,7 @@ const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian'> = {
   feat_tasks: true,
   feat_pages: true,
   feat_stickies: true,
+  feat_stories: true,
 }
 
 const HOME_GROUP: SideNavGroup = {
@@ -81,8 +83,10 @@ const TALK_GROUP: SideNavGroup = {
   key: 'talk',
   label: 'Talk',
   items: [
-    { key: 'messages', label: 'Messages', href: '/dms',   icon: 'messages' },
-    { key: 'calls',    label: 'Calls',    href: '/calls', icon: 'calls' },
+    { key: 'messages', label: 'Messages', href: '/dms',     icon: 'messages' },
+    { key: 'calls',    label: 'Calls',    href: '/calls',   icon: 'calls' },
+    { key: 'stories',  label: 'Stories',  href: '/stories', icon: 'stories',
+      gate: s => s.feat_stories },
   ],
 }
 
@@ -132,6 +136,7 @@ export function SideNav() {
             feat_tasks: t.feat_tasks,
             feat_pages: t.feat_pages,
             feat_stickies: t.feat_stickies,
+            feat_stories: t.feat_stories,
           }
         : ALL_ON),
     }

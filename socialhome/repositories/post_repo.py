@@ -135,8 +135,8 @@ class SqlitePostRepo:
                 id, author, type, content, media_url, reactions,
                 comment_count, pinned, deleted, edited_at, no_link_preview,
                 moderated, file_meta_json, location_json, image_urls_json,
-                created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
+                linked_story_id, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content,
                 media_url=excluded.media_url,
@@ -149,7 +149,8 @@ class SqlitePostRepo:
                 moderated=excluded.moderated,
                 file_meta_json=excluded.file_meta_json,
                 location_json=excluded.location_json,
-                image_urls_json=excluded.image_urls_json
+                image_urls_json=excluded.image_urls_json,
+                linked_story_id=excluded.linked_story_id
             """,
             (
                 post.id,
@@ -167,6 +168,7 @@ class SqlitePostRepo:
                 _encode_file_meta(post.file_meta),
                 _encode_location(post.location),
                 _encode_image_urls(post.image_urls),
+                post.linked_story_id,
                 _iso_or_none(post.created_at),
             ),
         )
@@ -578,6 +580,7 @@ def _row_to_post(row: dict | None) -> Post | None:
         moderated=bool_col(row.get("moderated", 0)),
         file_meta=_decode_file_meta(row.get("file_meta_json")),
         location=_decode_location(row.get("location_json")),
+        linked_story_id=row.get("linked_story_id"),
     )
 
 

@@ -22,6 +22,7 @@ import { MarkdownToolbar } from './MarkdownToolbar'
 import { PollBuilder, type PollDraft } from './PollUI'
 import { ScheduleBuilder, type ScheduleDraft } from './ScheduleBuilder'
 import { SttButton } from './SttButton'
+import { openStoryPicker } from './StoryPickerDialog'
 import { showToast } from './Toast'
 import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
 import { currentUser } from '@/store/auth'
@@ -342,6 +343,17 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
               {icon}
             </button>
           ))}
+          <button
+            type="button"
+            class="sh-type-btn"
+            onClick={() => openStoryPicker({
+              scope: spaceId ? 'space' : 'household',
+              spaceId: spaceId ?? null,
+            })}
+            title="Share a story"
+          >
+            ⭕
+          </button>
         </div>
       </div>
       {postType.value === 'text' && (
