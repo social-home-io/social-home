@@ -58,6 +58,13 @@ class AbstractNotificationRepo(Protocol):
     async def get(self, notification_id: str) -> Notification | None: ...
     async def mark_read(self, notification_id: str, user_id: str) -> None: ...
     async def mark_all_read(self, user_id: str) -> None: ...
+    async def mark_read_by_link(
+        self,
+        *,
+        user_id: str,
+        link_url: str,
+        type: str | None = None,
+    ) -> int: ...
     async def count_unread(self, user_id: str) -> int: ...
     async def delete_old(self, older_than_days: int = 90) -> int: ...
 
@@ -196,6 +203,58 @@ class SqliteNotificationRepo:
             """,
             (user_id,),
         )
+
+    async def mark_read_by_link(
+        self,
+        *,
+        user_id: str,
+        link_url: str,
+        type: str | None = None,
+    ) -> int:
+        """Bulk-mark every unread row for ``user_id`` whose ``link_url``
+        matches as read. Returns the count flipped.
+
+        Optional ``type`` narrows the match — used by the DM thread
+        auto-clear so opening a conversation only flips
+        ``dm_message`` rows for that conversation, not every
+        notification ever pointed there (e.g. an admin's
+        ``space_post_moderated`` notification).
+
+        Implemented as a count-then-update pair so the caller can
+        decide whether to fan a UI signal — SQLite's UPDATE doesn't
+        return a row count via aiosqlite at this revision.
+        """
+        if type is not None:
+            count = int(
+                await self._db.fetchval(
+                    "SELECT COUNT(*) FROM notifications "
+                    "WHERE user_id=? AND link_url=? AND type=? "
+                    "AND read_at IS NULL",
+                    (user_id, link_url, type),
+                )
+            )
+            await self._db.enqueue(
+                "UPDATE notifications "
+                "SET read_at = COALESCE(read_at, datetime('now')) "
+                "WHERE user_id=? AND link_url=? AND type=? "
+                "AND read_at IS NULL",
+                (user_id, link_url, type),
+            )
+        else:
+            count = int(
+                await self._db.fetchval(
+                    "SELECT COUNT(*) FROM notifications "
+                    "WHERE user_id=? AND link_url=? AND read_at IS NULL",
+                    (user_id, link_url),
+                )
+            )
+            await self._db.enqueue(
+                "UPDATE notifications "
+                "SET read_at = COALESCE(read_at, datetime('now')) "
+                "WHERE user_id=? AND link_url=? AND read_at IS NULL",
+                (user_id, link_url),
+            )
+        return count
 
     async def count_unread(self, user_id: str) -> int:
         return int(

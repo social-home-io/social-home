@@ -148,6 +148,7 @@ class NotificationService:
                 notification_id=saved.id,
                 type=saved.type,
                 title=saved.title,
+                link_url=saved.link_url,
             )
         )
         # Web Push (browsers that registered via pywebpush).
@@ -344,20 +345,48 @@ class NotificationService:
             )
 
     async def on_dm_message_created(self, event: DmMessageCreated) -> None:
-        """Push only — the in-app notification is conversation-list-based.
+        """Create an in-app notification row + push for each recipient.
 
-        §25.3: the payload carries no body. Recipients see only the
-        sender's display name; they have to open the app to read the
-        message.
+        §25.3: titles only — body never on the wire. ``_save_notif``
+        already drives the push fan-out (Web Push + platform adapter)
+        so we don't need to call ``_fan_push`` separately.
+
+        One row per message is the simple shape. The companion
+        :meth:`mark_read_for_dm` is invoked from the conversation
+        read route so opening the thread immediately clears all rows
+        for that conversation — no flood pile-up in the bell.
         """
         if not event.recipient_user_ids:
             return
         title = f"{event.sender_display_name} messaged you"
-        await self._fan_push(
-            event.recipient_user_ids,
-            title=title,
-            tag=f"dm:{event.conversation_id}",
-            click_url=f"/dms/{event.conversation_id}",
+        link = f"/dms/{event.conversation_id}"
+        for recipient_id in event.recipient_user_ids:
+            await self._save_notif(
+                new_notification(
+                    user_id=recipient_id,
+                    type="dm_message",
+                    title=title,
+                    link_url=link,
+                )
+            )
+
+    async def mark_read_for_dm(
+        self,
+        user_id: str,
+        conversation_id: str,
+    ) -> int:
+        """Mark every unread ``dm_message`` notification pointing at a
+        conversation as read for one user. Returns the number flipped.
+
+        Called from ``POST /api/conversations/{id}/read`` so the bell
+        clears in step with the thread's read-receipt state — opening
+        the thread is the natural "I've seen these" signal, no
+        separate UI gesture needed.
+        """
+        return await self._notifs.mark_read_by_link(
+            user_id=user_id,
+            link_url=f"/dms/{conversation_id}",
+            type="dm_message",
         )
 
     async def on_dm_contact_requested(self, event: DmContactRequested) -> None:

@@ -327,7 +327,16 @@ async def test_task_deadline_notifies_assignees(stack):
 
 
 class _CapturingPush:
-    """Fake PushService for assert-pushed tests."""
+    """Fake PushService for assert-pushed tests.
+
+    Captures both fan-out shapes:
+    * ``push_to_users(ids, payload)`` — used by ``_fan_push``.
+    * ``push_to_user(id, payload)``  — used by ``_save_notif`` for
+      the per-row Web Push fan-out.
+
+    The combined ``calls`` log preserves the order so a single test
+    can assert across both code paths.
+    """
 
     def __init__(self):
         self.calls: list[tuple[list[str], object]] = []
@@ -336,9 +345,15 @@ class _CapturingPush:
         self.calls.append((list(user_ids), payload))
         return len(user_ids)
 
+    async def push_to_user(self, user_id, payload):
+        self.calls.append(([user_id], payload))
+        return 1
 
-async def test_dm_message_triggers_push_without_body(stack):
-    """§25.3: DM push carries only the title — no message body leaks."""
+
+async def test_dm_message_creates_in_app_row_and_push(stack):
+    """A new DM creates an in-app notification row per recipient (so
+    the bell renders an unread badge) AND fires push (§25.3 — title
+    only, no body)."""
     from socialhome.domain.events import DmMessageCreated
 
     a = await stack.provision_user("anna")
@@ -355,12 +370,103 @@ async def test_dm_message_triggers_push_without_body(stack):
             recipient_user_ids=(b.user_id,),
         )
     )
+
+    # In-app row landed for the recipient.
+    rows = await stack.notif_repo.list(b.user_id)
+    assert len(rows) == 1
+    assert rows[0].type == "dm_message"
+    assert rows[0].link_url == "/dms/c-1"
+    assert "Anna" in rows[0].title
+
+    # Push went out too — title only, no body.
     assert fake.calls, "push fan-out was not triggered"
-    recipients, payload = fake.calls[0]
-    assert recipients == [b.user_id]
+    _, payload = fake.calls[0]
     assert "Anna" in payload.title
     # §25.3: the PushPayload struct has no body field at all.
     assert not hasattr(payload, "body")
+
+
+async def test_dm_message_creates_one_row_per_recipient(stack):
+    """Group DMs fan one notification row to each recipient (and push
+    too) so every member gets their own bell badge — bell counts
+    don't get coalesced server-side."""
+    from socialhome.domain.events import DmMessageCreated
+
+    sender = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    carol = await stack.provision_user("carol")
+    stack.notif_svc.attach_push_service(_CapturingPush())
+
+    await stack.bus.publish(
+        DmMessageCreated(
+            conversation_id="c-group",
+            message_id="m-1",
+            sender_user_id=sender.user_id,
+            sender_display_name="Anna",
+            recipient_user_ids=(bob.user_id, carol.user_id),
+        )
+    )
+    bob_rows = await stack.notif_repo.list(bob.user_id)
+    carol_rows = await stack.notif_repo.list(carol.user_id)
+    assert len(bob_rows) == 1
+    assert len(carol_rows) == 1
+    assert bob_rows[0].link_url == "/dms/c-group"
+
+
+async def test_mark_read_for_dm_clears_unread_rows(stack):
+    """``mark_read_for_dm`` flips every ``dm_message`` row pointing
+    at a conversation to read — opening the thread clears the bell
+    in step with the read-receipt update."""
+    from socialhome.domain.events import DmMessageCreated
+
+    sender = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    stack.notif_svc.attach_push_service(_CapturingPush())
+
+    # Two messages from Anna to Bob → two rows.
+    for mid in ("m-1", "m-2"):
+        await stack.bus.publish(
+            DmMessageCreated(
+                conversation_id="c-1",
+                message_id=mid,
+                sender_user_id=sender.user_id,
+                sender_display_name="Anna",
+                recipient_user_ids=(bob.user_id,),
+            )
+        )
+    assert await stack.notif_repo.count_unread(bob.user_id) == 2
+
+    # Open the thread → both rows clear.
+    n = await stack.notif_svc.mark_read_for_dm(bob.user_id, "c-1")
+    assert n == 2
+    assert await stack.notif_repo.count_unread(bob.user_id) == 0
+
+
+async def test_mark_read_for_dm_only_touches_matching_conversation(stack):
+    """A different conversation's notifications stay unread when
+    one specific thread is opened."""
+    from socialhome.domain.events import DmMessageCreated
+
+    sender = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    stack.notif_svc.attach_push_service(_CapturingPush())
+
+    for cid in ("c-1", "c-2"):
+        await stack.bus.publish(
+            DmMessageCreated(
+                conversation_id=cid,
+                message_id=f"m-{cid}",
+                sender_user_id=sender.user_id,
+                sender_display_name="Anna",
+                recipient_user_ids=(bob.user_id,),
+            )
+        )
+    assert await stack.notif_repo.count_unread(bob.user_id) == 2
+
+    cleared = await stack.notif_svc.mark_read_for_dm(bob.user_id, "c-1")
+    assert cleared == 1
+    # The c-2 row stays unread.
+    assert await stack.notif_repo.count_unread(bob.user_id) == 1
 
 
 async def test_dm_message_with_no_recipients_skips_push(stack):

@@ -13,6 +13,12 @@ export interface NotificationLite {
   notification_id: string
   notif_type:      string
   title:           string
+  /** Optional deep-link target carried by the ``notification.new``
+   *  WS frame so the bell can render unread items as anchors —
+   *  tapping a ``dm_message`` row jumps straight into the thread,
+   *  which auto-clears the row server-side via the read-receipt
+   *  hook. */
+  link_url?:       string | null
   occurred_at?:    string
 }
 

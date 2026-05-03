@@ -754,13 +754,15 @@ class NotificationCreated(DomainEvent):
     """A new notification row exists for ``user_id``.
 
     The frontend bell uses this to bump its unread badge without
-    re-polling.
+    re-polling. ``link_url`` rides along so the WS frame can render a
+    clickable item in the bell panel without a follow-up fetch.
     """
 
     user_id: str
     notification_id: str
     type: str
     title: str
+    link_url: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 
