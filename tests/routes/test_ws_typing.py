@@ -123,11 +123,13 @@ async def test_ws_typing_comment_space_scope(client):
     ws = await _ws_connect(client)
     try:
         await ws.send_str(
-            json.dumps({
-                "type": "typing",
-                "post_id": "post-2",
-                "space_id": "space-x",
-            }),
+            json.dumps(
+                {
+                    "type": "typing",
+                    "post_id": "post-2",
+                    "space_id": "space-x",
+                }
+            ),
         )
         for _ in range(20):
             if typing.is_typing_on_comment("post-2", client._uid):
