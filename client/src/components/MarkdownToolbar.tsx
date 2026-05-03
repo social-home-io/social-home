@@ -2,12 +2,17 @@
  * MarkdownToolbar — two-row formatting bar for the Pages editor (§23.72).
  *
  * Row 1: Headings + inline emphasis — H1 H2 H3 | B I S U
- * Row 2: Code + link + image + lists + quote — ` ``` 🔗 📷 ≡ 1. ☐ "
+ * Row 2: Code + link + (optional) image + lists + quote — ` ``` 🔗 [📷] ≡ 1. ☐ "
  *
  * Every button has an aria-label + title for screen readers and tooltip
  * hints. Keyboard shortcuts (Cmd/Ctrl+B/I/K, Cmd/Ctrl+Shift+8/9) work
  * anywhere in the textarea via the ``useMarkdownShortcuts`` hook a
  * consumer wires up once on mount.
+ *
+ * The 📷 image button only renders when ``onPickImage`` is wired — feed
+ * posts use a dedicated ``image`` post-type instead, and pages get
+ * gallery references via the gallery's "Copy reference" button. Surfaces
+ * that genuinely need a media-picker can opt in by passing the prop.
  *
  * The helpers emit the new body via ``onUpdate``; cursor position is
  * restored so selection feels natural after a bold/italic wrap.
@@ -17,8 +22,12 @@ import { useEffect } from 'preact/hooks'
 interface MarkdownToolbarProps {
   textareaRef: { current: HTMLTextAreaElement | null }
   onUpdate: (newText: string) => void
-  /** Called when the 📷 button is clicked. Consumer is responsible for
-   * uploading the picked file and calling ``apply`` with the URL. */
+  /** When provided, the 📷 button renders and invokes this callback.
+   * Consumer is responsible for uploading the picked file and calling
+   * ``apply`` with the URL. When omitted, the image button is hidden —
+   * surfaces that don't have a media-picker (feed text composer, the
+   * Pages editor) drop the button entirely rather than show a
+   * placeholder-only helper. */
   onPickImage?: () => void
 }
 
@@ -161,7 +170,9 @@ export function MarkdownToolbar(
         <Btn label="Inline code"  onClick={() => apply({ before: '`', placeholder: 'code' })}>{'<>'}</Btn>
         <Btn label="Code block"   onClick={() => apply({ before: '\n```\n', after: '\n```\n', placeholder: 'code' })}>{'{ }'}</Btn>
         <Btn label="Link"         shortcut={`${cmd}+K`} onClick={() => apply({ before: '[', after: '](url)', placeholder: 'link text' })}>🔗</Btn>
-        <Btn label="Image"        onClick={() => (onPickImage ? onPickImage() : apply({ before: '![', after: '](url)', placeholder: 'alt text' }))}>📷</Btn>
+        {onPickImage && (
+          <Btn label="Image" onClick={onPickImage}>📷</Btn>
+        )}
         <span class="sh-md-sep" aria-hidden="true" />
         <Btn label="Bullet list"  shortcut={`${cmd}+⇧+8`} onClick={() => apply({ before: '', linePrefix: '- ',  placeholder: 'item' })}>≡</Btn>
         <Btn label="Numbered list" shortcut={`${cmd}+⇧+9`} onClick={() => apply({ before: '', linePrefix: '1. ', placeholder: 'item' })}>1.</Btn>

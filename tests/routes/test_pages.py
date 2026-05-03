@@ -370,3 +370,98 @@ async def test_history_trimmed_to_5(client):
     versions = await r2.json()
     assert len(versions) == 5
     assert [v["content"] for v in versions] == ["v2", "v3", "v4", "v5", "v6"]
+
+
+# ── Media-URL re-signing round-trip ─────────────────────────────────────
+
+
+async def test_media_urls_in_body_get_signed_on_read(client):
+    """A page body with /api/media/ URLs returns signed URLs on GET."""
+    h = _auth(client._tok)
+    body = (
+        "Trip log:\n\n"
+        "![view](/api/media/sunrise.webp)\n"
+        "[link](https://example.com/page)\n"
+    )
+    r = await client.post(
+        "/api/pages",
+        json={"title": "Trip", "content": body},
+        headers=h,
+    )
+    pid = (await r.json())["id"]
+    r2 = await client.get(f"/api/pages/{pid}", headers=h)
+    detail = await r2.json()
+    # The /api/media URL is signed in the response body.
+    assert "/api/media/sunrise.webp?exp=" in detail["content"]
+    assert "&sig=" in detail["content"]
+    # External URL is left alone.
+    assert "https://example.com/page" in detail["content"]
+    assert (
+        "?exp="
+        not in detail["content"].split("https://example.com/page")[1].split(")")[0]
+    )
+
+
+async def test_post_strips_pre_signed_media_urls_before_save(client):
+    """A POSTed body with stale ``?exp=&sig=`` is normalised to canonical."""
+    h = _auth(client._tok)
+    stale_body = "![](/api/media/photo.webp?exp=1&sig=stale)"
+    r = await client.post(
+        "/api/pages",
+        json={"title": "Recipes", "content": stale_body},
+        headers=h,
+    )
+    pid = (await r.json())["id"]
+    # Re-fetch — server should sign with FRESH signature, not the stale one.
+    r2 = await client.get(f"/api/pages/{pid}", headers=h)
+    content = (await r2.json())["content"]
+    assert "sig=stale" not in content
+    assert "/api/media/photo.webp?exp=" in content
+
+
+async def test_patch_strips_signed_media_urls_before_save(client):
+    """A PATCH body with signed media URLs is canonicalised before persist."""
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/pages",
+        json={"title": "T", "content": "draft"},
+        headers=h,
+    )
+    pid = (await r.json())["id"]
+    # Edit with a "signed" body the editor might have echoed back.
+    await client.patch(
+        f"/api/pages/{pid}",
+        json={"content": "![](/api/media/x.webp?exp=999&sig=stale)"},
+        headers=h,
+    )
+    # The persisted form (visible via the version snapshot) should be
+    # canonical — strip signature on save and resign on read.
+    r2 = await client.get(f"/api/pages/{pid}", headers=h)
+    content = (await r2.json())["content"]
+    assert "sig=stale" not in content
+    assert "/api/media/x.webp?exp=" in content
+
+
+async def test_cover_image_url_signed_on_read(client):
+    """``cover_image_url`` is signed on read just like body URLs."""
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/pages",
+        json={
+            "title": "Cover",
+            "content": "x",
+        },
+        headers=h,
+    )
+    pid = (await r.json())["id"]
+    # Set a cover via PATCH with a stale signed form; expect canonical
+    # storage + signed-on-read.
+    await client.patch(
+        f"/api/pages/{pid}",
+        json={"cover_image_url": "/api/media/cover.webp?exp=1&sig=stale"},
+        headers=h,
+    )
+    r2 = await client.get(f"/api/pages/{pid}", headers=h)
+    detail = await r2.json()
+    assert detail["cover_image_url"].startswith("/api/media/cover.webp?exp=")
+    assert "sig=stale" not in detail["cover_image_url"]

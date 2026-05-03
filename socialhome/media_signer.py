@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import time
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDFExpand
@@ -183,3 +184,46 @@ def sign_media_urls_in(
         for item in payload:
             sign_media_urls_in(item, signer, extra_fields=extra_fields)
     return payload
+
+
+#: Matches a ``/api/media/{filename}`` reference inside markdown text.
+#: Filename allows alphanumerics, dot, dash, underscore — the upload
+#: pipeline produces names from a hex digest plus the original
+#: extension, so the conservative character set is sufficient. Any
+#: ``?exp=&sig=…`` (or other query) attached to the URL is captured
+#: too so the rewriter can replace it cleanly.
+_BODY_MEDIA_RE = re.compile(
+    r"/api/media/[A-Za-z0-9._-]+(?:\?[^)\s\"'<>]*)?",
+)
+
+
+def sign_media_urls_in_markdown(text: str | None, signer: MediaUrlSigner) -> str | None:
+    """Re-sign every ``/api/media/{filename}`` URL in a markdown body.
+
+    Page bodies are stored canonical (without ``?exp=…&sig=…``) and
+    signed on every read with a fresh 1h-TTL signature. Non-media URLs
+    (``http://``, relative anchors, wikilinks) are left alone.
+
+    ``None`` and empty strings round-trip unchanged.
+    """
+    if not text:
+        return text
+
+    def _replace(match: re.Match) -> str:
+        full = match.group(0)
+        canonical = full.split("?", 1)[0]
+        return signer.sign(canonical)
+
+    return _BODY_MEDIA_RE.sub(_replace, text)
+
+
+def strip_signed_media_in_markdown(text: str | None) -> str | None:
+    """Inverse of :func:`sign_media_urls_in_markdown`.
+
+    Drops ``?exp=&sig=…`` from any ``/api/media/…`` reference in a
+    markdown body before persisting, so storage stays canonical.
+    Non-media URLs are not touched.
+    """
+    if not text:
+        return text
+    return _BODY_MEDIA_RE.sub(lambda m: m.group(0).split("?", 1)[0], text)

@@ -1245,16 +1245,30 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   min-width: 0;
 }
 .sh-lightbox-meta .sh-muted { color: rgba(255,255,255,0.7); }
-.sh-lightbox-download {
+.sh-lightbox-actions {
+  display: flex;
+  gap: var(--sh-space-xs);
+  align-items: center;
+}
+.sh-lightbox-download,
+.sh-lightbox-copyref {
   color: #fff;
   text-decoration: none;
   font-weight: 600;
   padding: 4px 10px;
   border-radius: var(--sh-radius-full);
   background: rgba(255, 255, 255, 0.15);
+  border: none;
+  cursor: pointer;
+  font: inherit;
   transition: background var(--sh-transition-fast);
 }
-.sh-lightbox-download:hover { background: rgba(255, 255, 255, 0.25); color: #fff; text-decoration: none; }
+.sh-lightbox-download:hover,
+.sh-lightbox-copyref:hover {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+  text-decoration: none;
+}
 
 @media (max-width: 640px) {
   .sh-lightbox-nav { width: 44px; height: 44px; font-size: 1.75rem; }

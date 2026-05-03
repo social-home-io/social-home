@@ -3,12 +3,18 @@
  *
  * Supports photo + video, prev/next navigation through a passed-in
  * item list, keyboard shortcuts (← → Esc), a metadata overlay with
- * caption + date taken, and a download button. Opened via
- * ``openLightbox({items, index})``; consumers that only have a single
- * URL can still use the legacy ``openLightbox(url)`` call.
+ * caption + date taken, a download button, and a "Copy reference"
+ * button that puts a markdown image snippet on the clipboard so the
+ * user can paste a gallery image into a wiki-style page (§Pages).
+ *
+ * Opened via ``openLightbox({items, index})``; consumers that only
+ * have a single URL can still use the legacy ``openLightbox(url)``
+ * call.
  */
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
+
+import { showToast } from './Toast'
 
 export interface LightboxItem {
   id?:            string
@@ -39,6 +45,44 @@ export function openLightbox(
 }
 
 export function closeLightbox(): void { lightbox.value = null }
+
+
+/** Strip ``?exp=&sig=…`` (and any other query string) from a media URL.
+ *  The lightbox always shows server-signed URLs (they have a 1h TTL);
+ *  pasting that signed form into a saved page body would expire fast.
+ *  We copy the canonical path instead — the page route re-signs on
+ *  every read. */
+function canonicalMediaUrl(url: string): string {
+  const q = url.indexOf('?')
+  return q >= 0 ? url.slice(0, q) : url
+}
+
+
+/** Build a friendly alt-text from the item's caption or its URL slug. */
+function defaultAltText(item: LightboxItem): string {
+  const cap = item.caption?.trim()
+  if (cap) return cap
+  const path = canonicalMediaUrl(item.url)
+  const last = path.split('/').filter(Boolean).pop() ?? 'image'
+  // Drop the file extension for a more readable alt-text.
+  const dot = last.lastIndexOf('.')
+  return dot > 0 ? last.slice(0, dot) : last
+}
+
+
+/** Copy a markdown-image snippet pointing at the canonical
+ *  ``/api/media/{filename}`` URL so it pastes into a page editor and
+ *  renders correctly on every reader's reload. */
+export async function copyReferenceForItem(item: LightboxItem): Promise<void> {
+  const canonical = canonicalMediaUrl(item.url)
+  const snippet = `![${defaultAltText(item)}](${canonical})`
+  try {
+    await navigator.clipboard.writeText(snippet)
+    showToast('Reference copied — paste into a page', 'success')
+  } catch (err) {
+    showToast(`Copy failed: ${(err as Error)?.message ?? err}`, 'error')
+  }
+}
 
 export function ImageLightbox() {
   const state = lightbox.value
@@ -149,13 +193,21 @@ export function ImageLightbox() {
             </span>
           )}
         </div>
-        <a
-          class="sh-lightbox-download"
-          href={item.url}
-          download
-          onClick={(e) => e.stopPropagation()}
-          aria-label="Download this item"
-        >↓ Download</a>
+        <div class="sh-lightbox-actions" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            class="sh-lightbox-copyref"
+            onClick={() => void copyReferenceForItem(item)}
+            aria-label="Copy a markdown reference for use in a page"
+            title="Copy reference"
+          >📋 Copy reference</button>
+          <a
+            class="sh-lightbox-download"
+            href={item.url}
+            download
+            aria-label="Download this item"
+          >↓ Download</a>
+        </div>
       </div>
     </div>
   )

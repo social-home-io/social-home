@@ -10,6 +10,7 @@ from aiohttp import web
 
 from ..app_keys import (
     event_bus_key,
+    media_signer_key,
     page_conflict_service_key,
     page_repo_key,
     space_repo_key,
@@ -22,6 +23,12 @@ from ..domain.events import (
     PageEditLockReleased,
     PageUpdated,
 )
+from ..media_signer import (
+    MediaUrlSigner,
+    sign_media_urls_in_markdown,
+    strip_signature_query,
+    strip_signed_media_in_markdown,
+)
 from ..repositories.page_repo import (
     PageLockError,
     PageNotFoundError,
@@ -32,18 +39,43 @@ from ..security import error_response
 from .base import BaseView
 
 
-def _page_dict(page) -> dict:
+def _signed_page_dict(request: web.Request, page) -> dict:
+    """:func:`_page_dict` with the request's media-URL signer applied.
+
+    Convenience wrapper for the route handlers — keeps the signer
+    plumbing in one place.
+    """
+    signer = request.app.get(media_signer_key)
+    return _page_dict(page, signer=signer)
+
+
+def _page_dict(page, *, signer: MediaUrlSigner | None = None) -> dict:
+    """Serialise a page row.
+
+    When ``signer`` is provided every ``/api/media/{filename}`` URL in
+    the markdown ``content`` (and the scalar ``cover_image_url``) is
+    re-signed with a fresh 1h-TTL signature so the SPA can render
+    images without an ``Authorization`` header. Storage stays
+    canonical — the PATCH/POST handlers strip the signature on save.
+    """
+    content = page.content
+    cover = page.cover_image_url
+    if signer is not None:
+        if content:
+            content = sign_media_urls_in_markdown(content, signer)
+        if cover and cover.startswith("/api/"):
+            cover = signer.sign(cover)
     return {
         "id": page.id,
         "title": page.title,
-        "content": page.content,
+        "content": content,
         "created_by": page.created_by,
         "created_at": page.created_at,
         "updated_at": page.updated_at,
         "last_editor_user_id": page.last_editor_user_id,
         "last_edited_at": page.last_edited_at,
         "space_id": page.space_id,
-        "cover_image_url": page.cover_image_url,
+        "cover_image_url": cover,
         "locked_by": page.locked_by,
         "locked_at": page.locked_at,
         "lock_expires_at": page.lock_expires_at,
@@ -80,7 +112,7 @@ class PageCollectionView(BaseView):
         self.user  # auth gate
         repo = self.svc(page_repo_key)
         pages = await repo.list(space_id=None)
-        return web.json_response([_page_dict(p) for p in pages])
+        return web.json_response([_signed_page_dict(self.request, p) for p in pages])
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -89,7 +121,10 @@ class PageCollectionView(BaseView):
         bus = self.svc(event_bus_key)
         body = await self.body()
         title = body.get("title", "").strip()
-        content = body.get("content", "")
+        # Strip ``?exp=&sig=…`` from any /api/media/ URL the editor might
+        # have echoed back — bodies are persisted canonical so the server
+        # can re-sign them on each read with a fresh signature.
+        content = strip_signed_media_in_markdown(body.get("content", "")) or ""
         if not title:
             return error_response(422, "UNPROCESSABLE", "title is required.")
         p = new_page(
@@ -106,7 +141,7 @@ class PageCollectionView(BaseView):
                 content=p.content,
             )
         )
-        return web.json_response(_page_dict(p), status=201)
+        return web.json_response(_signed_page_dict(self.request, p), status=201)
 
 
 class PageDetailView(BaseView):
@@ -119,7 +154,7 @@ class PageDetailView(BaseView):
         p = await repo.get(page_id)
         if p is None:
             return error_response(404, "NOT_FOUND", "Page not found.")
-        return web.json_response(_page_dict(p))
+        return web.json_response(_signed_page_dict(self.request, p))
 
     async def patch(self) -> web.Response:
         ctx = self.user
@@ -148,7 +183,10 @@ class PageDetailView(BaseView):
                 )
             )
             return web.json_response(
-                {"error": "stale_update", "current": _page_dict(p)},
+                {
+                    "error": "stale_update",
+                    "current": _signed_page_dict(self.request, p),
+                },
                 status=409,
             )
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -163,9 +201,9 @@ class PageDetailView(BaseView):
                 return error_response(422, "UNPROCESSABLE", "title must not be empty.")
             kwargs["title"] = title
         if "content" in body:
-            kwargs["content"] = body["content"]
+            kwargs["content"] = strip_signed_media_in_markdown(body["content"])
         if "cover_image_url" in body:
-            kwargs["cover_image_url"] = body["cover_image_url"]
+            kwargs["cover_image_url"] = strip_signature_query(body["cover_image_url"])
         updated = replace(p, **kwargs)
         updated = await repo.save(updated)
         await _snapshot_version(repo, previous=p, editor_user_id=ctx.user_id)
@@ -177,7 +215,7 @@ class PageDetailView(BaseView):
                 content=updated.content,
             )
         )
-        return web.json_response(_page_dict(updated))
+        return web.json_response(_signed_page_dict(self.request, updated))
 
     async def delete(self) -> web.Response:
         self.user  # auth gate
@@ -346,7 +384,7 @@ class PageRevertView(BaseView):
                 content=reverted.content,
             )
         )
-        return web.json_response(_page_dict(reverted))
+        return web.json_response(_signed_page_dict(self.request, reverted))
 
 
 class PageDeleteRequestView(BaseView):
@@ -440,7 +478,7 @@ class SpacePageCollectionView(BaseView):
             return error_response(403, "FORBIDDEN", "Not a space member.")
         repo = self.svc(page_repo_key)
         pages = await repo.list(space_id=space_id)
-        return web.json_response([_page_dict(p) for p in pages])
+        return web.json_response([_signed_page_dict(self.request, p) for p in pages])
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -452,7 +490,7 @@ class SpacePageCollectionView(BaseView):
         bus = self.svc(event_bus_key)
         body = await self.body()
         title = body.get("title", "").strip()
-        content = body.get("content", "")
+        content = strip_signed_media_in_markdown(body.get("content", "")) or ""
         if not title:
             return error_response(422, "UNPROCESSABLE", "title is required.")
         p = new_page(
@@ -470,7 +508,7 @@ class SpacePageCollectionView(BaseView):
                 content=p.content,
             )
         )
-        return web.json_response(_page_dict(p), status=201)
+        return web.json_response(_signed_page_dict(self.request, p), status=201)
 
 
 class SpacePageDetailView(BaseView):
@@ -496,7 +534,7 @@ class SpacePageDetailView(BaseView):
         p = await self._load(space_id, self.match("pid"))
         if p is None:
             return error_response(404, "NOT_FOUND", "Page not found.")
-        return web.json_response(_page_dict(p))
+        return web.json_response(_signed_page_dict(self.request, p))
 
     async def patch(self) -> web.Response:
         ctx = self.user
@@ -521,7 +559,10 @@ class SpacePageDetailView(BaseView):
                 )
             )
             return web.json_response(
-                {"error": "stale_update", "current": _page_dict(p)},
+                {
+                    "error": "stale_update",
+                    "current": _signed_page_dict(self.request, p),
+                },
                 status=409,
             )
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -536,9 +577,9 @@ class SpacePageDetailView(BaseView):
                 return error_response(422, "UNPROCESSABLE", "title must not be empty.")
             kwargs["title"] = title
         if "content" in body:
-            kwargs["content"] = body["content"]
+            kwargs["content"] = strip_signed_media_in_markdown(body["content"])
         if "cover_image_url" in body:
-            kwargs["cover_image_url"] = body["cover_image_url"]
+            kwargs["cover_image_url"] = strip_signature_query(body["cover_image_url"])
         updated = replace(p, **kwargs)
         updated = await repo.save(updated)
         await _snapshot_version(repo, previous=p, editor_user_id=ctx.user_id)
@@ -550,7 +591,7 @@ class SpacePageDetailView(BaseView):
                 content=updated.content,
             )
         )
-        return web.json_response(_page_dict(updated))
+        return web.json_response(_signed_page_dict(self.request, updated))
 
     async def delete(self) -> web.Response:
         ctx = self.user

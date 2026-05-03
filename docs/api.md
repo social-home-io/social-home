@@ -214,6 +214,18 @@ inside the encrypted payload and render the same map card.
 | GET / POST / PATCH / DELETE | `/api/spaces/{id}/pages[/{pid}]` | Space-scoped pages. |
 | POST | `/api/spaces/{id}/pages/{pid}/resolve-conflict` | Force-pick in a conflict. |
 
+**Embedded media URLs.** Page `content` is a markdown body. Any
+`/api/media/{filename}` reference inside it (typically pasted from the
+gallery's "Copy reference" button) is **re-signed by the server on
+every read** with a fresh 1h-TTL signature, so the SPA's `<img src>`
+loads without an `Authorization` header. Storage stays canonical: the
+PATCH/POST handlers strip any `?exp=&sig=…` the editor might have
+echoed back before the body lands in the DB. Same treatment applies
+to the scalar `cover_image_url`. Clients should paste canonical
+`/api/media/{filename}` paths and let the server handle signing —
+saving a stale signed URL is safe (the strip is idempotent) but
+unnecessary.
+
 ### Tasks
 
 | Method | Path | Purpose |
