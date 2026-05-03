@@ -22,6 +22,7 @@ import {
   type CalendarViewMode,
 } from '@/utils/calendar'
 import { t } from '@/i18n/i18n'
+import { confirmDialog } from '@/components/confirm'
 
 interface CalendarSummary {
   id: string
@@ -228,7 +229,7 @@ export default function CalendarPage() {
   }
 
   const handleDelete = async (eventId: string) => {
-    if (!confirm('Delete this event?')) return
+    if (!await confirmDialog('Delete this event?', { destructive: true })) return
     try {
       await api.delete(`/api/calendars/events/${eventId}`)
       showToast('Event deleted', 'success')

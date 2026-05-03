@@ -15,6 +15,7 @@ import { currentUser } from '@/store/auth'
 import { Button } from './Button'
 import { showToast } from './Toast'
 import type { PageVersion } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface Props {
   pageId: string
@@ -75,7 +76,7 @@ export function PageHistoryDrawer(
 
   const restore = async () => {
     if (!selected || busy) return
-    if (!confirm(`Restore version ${selected.version}? The current body will be snapshotted first.`)) return
+    if (!await confirmDialog(`Restore version ${selected.version}? The current body will be snapshotted first.`, { destructive: true })) return
     setBusy(true)
     try {
       const resp = await api.post(

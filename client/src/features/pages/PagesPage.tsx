@@ -41,6 +41,7 @@ import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { extractHeadings } from '@/utils/markdown'
 import type { EditLock, Page } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface ConflictData {
   mine: string
@@ -277,7 +278,7 @@ export default function PagesPage() {
 
   const deletePage = async () => {
     if (!viewing.value) return
-    if (!confirm(`Delete "${viewing.value.title}"?`)) return
+    if (!await confirmDialog(`Delete "${viewing.value.title}"?`, { destructive: true })) return
     try {
       await api.delete(`/api/pages/${viewing.value.id}`)
       pages.value = pages.value.filter(p => p.id !== viewing.value!.id)

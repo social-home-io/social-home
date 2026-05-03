@@ -1,7 +1,7 @@
 /**
  * StickyDialog — focused create / edit dialog for sticky notes (§19).
  *
- * Replaces the inline ``prompt()`` / ``confirm()`` flow on
+ * Replaces the inline ``prompt()`` / ``await confirmDialog()`` flow on
  * ``StickyBoardPage``. Mirrors the pattern of
  * :class:`CalendarEventDialog`: a single global signal drives open
  * state; ``openCreateStickyDialog(spaceId?)`` and
@@ -15,7 +15,7 @@
  *     ``StickyBoardPage``. Click a swatch to pick; the active one
  *     gets a terracotta ring.
  *   • Delete button (edit mode only) — destructive secondary, with
- *     a one-step confirmation via ``confirm()``.
+ *     a one-step confirmation via ``await confirmDialog()``.
  *
  * Position is left to the board: new stickies pick a randomised
  * mid-board slot in :func:`StickyBoardPage`'s open call (so a flood
@@ -29,6 +29,7 @@ import { Modal } from './Modal'
 import { Button } from './Button'
 import { showToast } from './Toast'
 import { stickies, type StickyRow } from '@/store/stickies'
+import { confirmDialog } from '@/components/confirm'
 
 /** Sticky-note swatch palette — same six colours the board cycles
  *  through on quick-create, exposed here so users can override the
@@ -160,7 +161,7 @@ export function StickyDialog() {
   const handleDelete = async () => {
     const sid = editingId.value
     if (!sid) return
-    if (!confirm('Delete this sticky?')) return
+    if (!await confirmDialog('Delete this sticky?', { destructive: true })) return
     submitting.value = true
     try {
       await api.delete(`${endpointBase(scopeSpaceId.value)}/${sid}`)

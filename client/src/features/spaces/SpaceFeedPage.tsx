@@ -29,6 +29,7 @@ import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openSpaceEventDialog } from '@/components/CalendarEventDialog'
 import { SpaceLinksStrip } from './SpaceLinksStrip'
 import { SpaceNotifPrefsMenu } from './SpaceNotifPrefsMenu'
+import { confirmDialog } from '@/components/confirm'
 
 interface SpacePage { id: string; title: string; updated_at: string }
 
@@ -208,7 +209,7 @@ export default function SpaceFeedPage() {
   }
 
   const handleDelete = async (postId: string) => {
-    if (!confirm('Delete this post?')) return
+    if (!await confirmDialog('Delete this post?', { destructive: true })) return
     await api.delete(`/api/spaces/${spaceId}/posts/${postId}`)
     showToast('Post deleted', 'info')
     void loadSpaceFeed(spaceId)

@@ -22,6 +22,7 @@ import { EmojiPickButton } from './EmojiPickButton'
 import { currentUser } from '@/store/auth'
 import { resolveAvatar, resolveDisplayName } from '@/utils/avatar'
 import type { Comment } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface CommentThreadProps {
   comments: Comment[]
@@ -312,9 +313,9 @@ function CommentItem({ comment, spaceId, onDelete, onEdit, onReplyClick, indent 
                       role="menuitem"
                       class="sh-post-menu-danger"
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
+                      onClick={async () => {
                         closeMenu()
-                        if (confirm('Delete this comment?')) {
+                        if (await confirmDialog('Delete this comment?', { destructive: true })) {
                           void onDelete!(comment.id)
                         }
                       }}>

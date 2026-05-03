@@ -14,6 +14,7 @@ import { api } from '@/api'
 import { ws } from '@/ws'
 import { Button } from './Button'
 import { showToast } from './Toast'
+import { confirmDialog } from '@/components/confirm'
 
 interface Slot {
   id: string
@@ -125,9 +126,8 @@ export function ScheduleUI(
   }
 
   const finalize = async (slotId: string) => {
-    if (!confirm(
-      'Finalise this slot? All members will be notified and a calendar event will be created.',
-    )) return
+    if (!await confirmDialog(
+      'Finalise this slot? All members will be notified and a calendar event will be created.')) return
     setBusy(true)
     try {
       const next = await api.post(

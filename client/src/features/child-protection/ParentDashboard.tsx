@@ -16,6 +16,7 @@ import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import type { User } from '@/types'
 import { GuardianAuditLog } from './GuardianAuditLog'
+import { confirmDialog } from '@/components/confirm'
 
 interface BlockRow {
   blocked_user_id: string
@@ -139,7 +140,7 @@ async function unblock(minorUserId: string, blockedUserId: string) {
 }
 
 async function kickFromSpace(minorUserId: string, spaceId: string, spaceName: string) {
-  if (!confirm(`Kick this minor from "${spaceName}"? They can be re-added later.`)) {
+  if (!await confirmDialog(`Kick this minor from "${spaceName}"? They can be re-added later.`, { destructive: true })) {
     return
   }
   try {

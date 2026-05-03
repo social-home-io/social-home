@@ -19,6 +19,7 @@ import { Button } from './Button'
 import { showToast } from './Toast'
 import { formatBazaarAmount } from './BazaarPostBody'
 import type { BazaarListing, BazaarOffer } from '@/types'
+import { confirmDialog } from '@/components/confirm'
 
 interface Props {
   listing: BazaarListing
@@ -68,10 +69,9 @@ export function BazaarOffersPanel({
 
   const accept = async (offer: BazaarOffer) => {
     const amountStr = formatBazaarAmount(offer.amount, listing.currency)
-    if (!confirm(
+    if (!await confirmDialog(
       `Accept this ${amountStr} offer? The listing will be marked sold ` +
-      'and every other pending offer on this listing will be auto-rejected.',
-    )) return
+      'and every other pending offer on this listing will be auto-rejected.')) return
     setBusy(true)
     try {
       await api.post(
@@ -110,7 +110,7 @@ export function BazaarOffersPanel({
   }
 
   const withdraw = async (offer: BazaarOffer) => {
-    if (!confirm('Withdraw your offer?')) return
+    if (!await confirmDialog('Withdraw your offer?', { destructive: true })) return
     setBusy(true)
     try {
       await api.delete(
