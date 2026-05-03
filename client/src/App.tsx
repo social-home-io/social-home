@@ -22,6 +22,7 @@ import { NewDmDialog } from '@/components/NewDmDialog'
 import { CommentOverlay } from '@/components/CommentOverlay'
 import { StickyDialog } from '@/components/StickyDialog'
 import { StoryPickerDialog } from '@/components/StoryPickerDialog'
+import { CallTypePickerDialog } from '@/components/CallTypePickerDialog'
 import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
@@ -234,6 +235,7 @@ export function App() {
           <ReportDialog />
           <IncomingCallDialog />
           <StoryPickerDialog />
+          <CallTypePickerDialog />
         </div>
       </LocationProvider>
     </ErrorBoundary>

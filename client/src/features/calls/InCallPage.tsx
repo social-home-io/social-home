@@ -17,6 +17,10 @@ import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 
 interface IceServersResponse { ice_servers: RTCIceServer[] }
+interface ActiveCallSummary {
+  call_id: string
+  call_type: 'audio' | 'video'
+}
 
 const durationSeconds  = signal<number>(0)
 const micMuted         = signal<boolean>(false)
@@ -45,23 +49,52 @@ export default function InCallPage() {
     let stopped = false
     const started = Date.now()
 
+    // Reset the module-level signals so a previous call's state doesn't
+    // bleed into this mount (this page can be entered multiple times in
+    // a session).
+    micMuted.value = false
+    cameraOff.value = false
+    speakerMuted.value = false
+
     durationIntervalRef.current = setInterval(() => {
       durationSeconds.value = Math.floor((Date.now() - started) / 1000)
     }, 1000)
 
-    // 1. Pull ICE servers from the backend so STUN/TURN is configured.
-    api.get('/api/calls/ice-servers').then(async (r: IceServersResponse) => {
+    // 1. Discover the call's type so we can default the camera state
+    //    correctly. ``call_type`` is fixed at offer time on the backend
+    //    (spec §26.5); the user's mid-call camera button still flips the
+    //    local video track via :func:`toggleCamera`.
+    const callTypePromise = (
+      api.get('/api/calls/active') as Promise<ActiveCallSummary[]>
+    ).then(rows => {
+      const me = rows.find(r => r.call_id === callId)
+      return me?.call_type ?? 'video'
+    }).catch(() => 'video' as const)
+
+    // 2. Pull ICE servers from the backend so STUN/TURN is configured.
+    Promise.all([
+      api.get('/api/calls/ice-servers') as Promise<IceServersResponse>,
+      callTypePromise,
+    ]).then(async ([r, callType]) => {
       if (stopped) return
       const pc = new RTCPeerConnection({ iceServers: r.ice_servers ?? [] })
       pcRef.current = pc
 
-      // 2. Acquire local media; audio always, video only for video calls.
+      // 3. Acquire local media. We always request audio + video so the
+      //    user's mid-call "Enable video" button flips the existing
+      //    track instead of needing a fresh permission prompt + a re-
+      //    negotiation. Audio calls disable the video track at start
+      //    so nothing is transmitted until the user opts in.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: true,  // toggled off for audio-only calls via CSS.
+        video: true,
       })
       if (stopped) { stream.getTracks().forEach(t => t.stop()); return }
       localStreamRef.current = stream
+      if (callType === 'audio') {
+        stream.getVideoTracks().forEach(t => { t.enabled = false })
+        cameraOff.value = true
+      }
       stream.getTracks().forEach(t => pc.addTrack(t, stream))
       if (selfRef.current) selfRef.current.srcObject = stream
 
