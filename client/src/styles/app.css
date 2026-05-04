@@ -30,6 +30,24 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Reduced-motion blanket. Individual rules elsewhere in this file
+   still override specific animations to ``none`` (the spinner pulses
+   to a steady 0.7 opacity, the skeleton shimmer freezes), but this
+   global gate catches every ``animation`` / ``transition`` we ship —
+   including the chat-bubble entrance, story slide-up, sheet
+   presentation, fade-ins, message highlight flash, typing-dot pulse,
+   and event-row expand — without having to enumerate them by name.
+   Without this gate, future animations slip past the a11y filter the
+   moment they're added. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:        0.01ms !important;
+    animation-iteration-count: 1      !important;
+    transition-duration:       0.01ms !important;
+    scroll-behavior:           auto   !important;
+  }
+}
+
 html, body {
   margin: 0;
   padding: 0;
