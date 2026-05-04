@@ -26,7 +26,7 @@ In a second terminal, start the frontend dev server (Vite proxies
 `/api` and `/ws` to `localhost:8099`):
 
 ```sh
-cd client && pnpm run dev
+cd client && pnpm run dev --host
 ```
 
 Open the URL Vite prints (typically <http://localhost:5173>). Reset
