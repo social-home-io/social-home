@@ -150,6 +150,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
             <button
               class="sh-post-overflow"
               type="button"
+              aria-label="Post actions"
               aria-haspopup="menu"
               aria-expanded={menuOpen}
               onClick={() => setMenuOpen((v) => !v)}

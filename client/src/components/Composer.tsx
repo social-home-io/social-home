@@ -80,6 +80,20 @@ const TYPE_ICONS_SPACE: Record<string, string> = {
   ...TYPE_ICONS_HOUSEHOLD,
   bazaar: '🛍',
 }
+// Human-readable labels paired with each icon. The picker buttons
+// are emoji-only; without these labels, screen-reader users hear
+// nothing meaningful when they tab through the row, and ``title``
+// alone is unreliable on mobile.
+const TYPE_LABELS: Record<string, string> = {
+  text:     'Text post',
+  image:    'Image post',
+  video:    'Video post',
+  file:     'File attachment',
+  poll:     'Poll',
+  schedule: 'Schedule',
+  location: 'Location share',
+  bazaar:   'Bazaar listing',
+}
 
 const MEDIA_TYPES = new Set(['image', 'video', 'file'])
 // Types whose body lives in a dedicated builder modal (poll question,
@@ -372,17 +386,22 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       <div class="sh-composer-header">
         <Avatar name={user?.display_name || '?'} src={user?.picture_url} size={32} />
         <div class="sh-composer-type-picker">
-          {Object.entries(TYPE_ICONS).map(([type, icon]) => (
-            <button key={type} type="button"
-              class={`sh-type-btn ${postType.value === type ? 'sh-type-btn--active' : ''}`}
-              onClick={() => {
-                postType.value = type
-                if (!typeAcceptsMedia(type)) resetAttached()
-              }}
-              title={type}>
-              {icon}
-            </button>
-          ))}
+          {Object.entries(TYPE_ICONS).map(([type, icon]) => {
+            const label = TYPE_LABELS[type] ?? type
+            return (
+              <button key={type} type="button"
+                class={`sh-type-btn ${postType.value === type ? 'sh-type-btn--active' : ''}`}
+                onClick={() => {
+                  postType.value = type
+                  if (!typeAcceptsMedia(type)) resetAttached()
+                }}
+                aria-label={label}
+                aria-pressed={postType.value === type}
+                title={label}>
+                {icon}
+              </button>
+            )
+          })}
           <button
             type="button"
             class="sh-type-btn"
@@ -390,6 +409,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
               scope: spaceId ? 'space' : 'household',
               spaceId: spaceId ?? null,
             })}
+            aria-label="Share a story"
             title="Share a story"
           >
             ⭕
@@ -424,8 +444,13 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
             maxLength={MAX_LENGTH}
           />
           {showCount && (
-            <div class={`sh-char-count ${overLimit ? 'sh-char-count--over' : ''}`}>
+            <div
+              class={`sh-char-count ${overLimit ? 'sh-char-count--over' : ''}`}
+              role="status"
+              aria-live="polite"
+            >
               {charCount}/{MAX_LENGTH}
+              {overLimit && <span class="sh-char-count-over-label"> (over limit)</span>}
             </div>
           )}
         </>
