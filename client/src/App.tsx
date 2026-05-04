@@ -27,6 +27,7 @@ import { ConfirmDialogHost } from '@/components/confirm'
 import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
+import { OfflineIndicator } from '@/components/OfflineIndicator'
 import { SpaceInviteDialog } from '@/components/SpaceInviteDialog'
 import IncomingCallDialog from '@/features/calls/IncomingCallDialog'
 import { FormError } from '@/components/FormError'
@@ -207,6 +208,7 @@ export function App() {
     <ErrorBoundary>
       <LocationProvider>
         <a href="#main" class="sh-skip-link">Skip to main content</a>
+        <OfflineIndicator />
         <InstallPrompt />
         <div class="sh-layout">
           <SideNav />
