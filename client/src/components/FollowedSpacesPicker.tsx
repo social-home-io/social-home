@@ -13,6 +13,7 @@ import { Button } from './Button'
 import { Modal } from './Modal'
 import { showToast } from './Toast'
 import { getPreferences, setPreference } from '@/utils/preferences'
+import { t } from '@/i18n/i18n'
 
 interface SpaceRow {
   id: string
@@ -138,8 +139,8 @@ export function FollowedSpacesPicker({ open, onClose, onChanged }: Props) {
         )}
 
         <div class="sh-form-actions">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} loading={saving}>Save</Button>
+          <Button variant="secondary" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button onClick={save} loading={saving}>{t('common.save')}</Button>
         </div>
       </div>
     </Modal>

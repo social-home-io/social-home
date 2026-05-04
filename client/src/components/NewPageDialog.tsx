@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Modal } from './Modal'
 import { Button } from './Button'
+import { t } from '@/i18n/i18n'
 
 interface Props {
   open: boolean
@@ -54,7 +55,7 @@ export function NewPageDialog({ open, onCreate, onCancel }: Props) {
           />
         </label>
         <div class="sh-form-actions">
-          <Button variant="secondary" type="button" onClick={onCancel}>Cancel</Button>
+          <Button variant="secondary" type="button" onClick={onCancel}>{t('common.cancel')}</Button>
           <Button type="submit" loading={busy} disabled={!title.trim()}>
             Create
           </Button>

@@ -13,6 +13,7 @@ import { useEffect, useRef } from 'preact/hooks'
 import { api } from '@/api'
 import { Modal } from './Modal'
 import { Button } from './Button'
+import { t } from '@/i18n/i18n'
 import { showToast } from './Toast'
 import { uploadWithProgress, UploadProgressBar } from './UploadProgress'
 import type { BazaarMode, Space } from '@/types'
@@ -246,7 +247,7 @@ export function BazaarCreateDialog({ onCreated }: { onCreated?: () => void }) {
           <div class="sh-form-actions">
             <Button variant="secondary"
                     onClick={() => { open.value = false }}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button onClick={() => (step.value = 2)}
                     disabled={!title.value.trim() || !spaceId.value}>

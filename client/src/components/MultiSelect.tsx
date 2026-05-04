@@ -3,6 +3,7 @@
  */
 import { signal } from '@preact/signals'
 import { Button } from './Button'
+import { t } from '@/i18n/i18n'
 
 export const multiSelectMode = signal(false)
 export const selectedIds = signal<Set<string>>(new Set())
@@ -24,9 +25,9 @@ export function MultiSelectBar({ onAction }: { onAction: (ids: string[], action:
   return (
     <div class="sh-multi-bar" role="toolbar">
       <span>{ids.length} selected</span>
-      <Button variant="secondary" onClick={() => onAction(ids, 'delete')}>Delete</Button>
+      <Button variant="secondary" onClick={() => onAction(ids, 'delete')}>{t('common.delete')}</Button>
       <Button variant="secondary" onClick={() => onAction(ids, 'mark_read')}>Mark read</Button>
-      <Button variant="secondary" onClick={() => { selectedIds.value = new Set(); multiSelectMode.value = false }}>Cancel</Button>
+      <Button variant="secondary" onClick={() => { selectedIds.value = new Set(); multiSelectMode.value = false }}>{t('common.cancel')}</Button>
     </div>
   )
 }
