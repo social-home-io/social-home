@@ -303,12 +303,18 @@ function HaOwnerForm() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (persons !== null) return
+  const reload = () => {
+    haPersonsError.value = null
+    setLoading(true)
     fetchHaPersons().then(
       (p) => { setPersons(p); setLoading(false) },
       () => { setLoading(false) },
     )
+  }
+
+  useEffect(() => {
+    if (persons !== null) return
+    reload()
   }, [])
 
   async function submit(e: Event) {
@@ -356,14 +362,31 @@ function HaOwnerForm() {
       <SetupShell>
         <h1 class="sh-setup-title">{t('setup.ha.title')}</h1>
         <FormError id="setup-error" message={haPersonsError.value} />
+        <Button onClick={reload}>{t('common.try_again')}</Button>
       </SetupShell>
     )
   }
   if (!persons || persons.length === 0) {
     return (
       <SetupShell>
-        <h1 class="sh-setup-title">{t('setup.ha.title')}</h1>
-        <p class="sh-setup-intro">{t('setup.ha.no_persons')}</p>
+        <div class="sh-setup-welcome" aria-hidden="true">
+          <span class="sh-setup-welcome-icon">👥</span>
+        </div>
+        <h1 class="sh-setup-title">No people in Home Assistant yet</h1>
+        <p class="sh-setup-intro">
+          Social Home looks up household members from your Home
+          Assistant Person entities. Add at least one Person in HA,
+          then come back and retry.
+        </p>
+        <a
+          class="sh-link"
+          href="/profile/person"
+          target="_blank"
+          rel="noopener"
+        >Open HA Person settings →</a>
+        <div style={{ marginTop: 'var(--sh-space-md)' }}>
+          <Button onClick={reload}>{t('common.try_again')}</Button>
+        </div>
       </SetupShell>
     )
   }
