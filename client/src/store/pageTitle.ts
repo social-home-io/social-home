@@ -17,7 +17,20 @@ import { useEffect } from 'preact/hooks'
 
 export const pageTitle = signal<string>('')
 
-/** Set the TopBar title for the current page.
+/** Suffix appended to ``document.title`` so a glance at the browser
+ *  tab still says "Social Home" — the per-page label tells the user
+ *  *which* page they're on. */
+const DOC_TITLE_BRAND = 'Social Home'
+
+function setDocTitle(label: string): void {
+  if (typeof document === 'undefined') return
+  document.title = label ? `${label} · ${DOC_TITLE_BRAND}` : DOC_TITLE_BRAND
+}
+
+/** Set the TopBar title for the current page, and the browser tab
+ *  title to match. Without the document.title sync the tab always
+ *  read "Social Home" no matter which page was open — multiple tabs
+ *  were indistinguishable.
  *
  *  Calling without an argument (or with an empty string) clears the
  *  title — useful for pages that intentionally render their own
@@ -29,11 +42,13 @@ export const pageTitle = signal<string>('')
 export function useTitle(title: string): void {
   useEffect(() => {
     pageTitle.value = title
+    setDocTitle(title)
     return () => {
       // Reset to empty so the topbar doesn't show a stale title from
       // the page we just left during the brief gap before the new
       // page's ``useTitle`` runs.
       pageTitle.value = ''
+      setDocTitle('')
     }
   }, [title])
 }
