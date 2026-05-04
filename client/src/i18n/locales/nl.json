@@ -288,5 +288,7 @@
   "common.save": "Opslaan",
   "common.close": "Sluiten",
   "common.retry": "Opnieuw proberen",
-  "common.not_now": "Niet nu"
+  "common.not_now": "Niet nu",
+  "common.ok": "OK",
+  "common.try_again": "Opnieuw proberen"
 }

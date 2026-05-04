@@ -288,5 +288,7 @@
   "common.save": "Speichern",
   "common.close": "Schließen",
   "common.retry": "Erneut versuchen",
-  "common.not_now": "Nicht jetzt"
+  "common.not_now": "Nicht jetzt",
+  "common.ok": "OK",
+  "common.try_again": "Erneut versuchen"
 }
