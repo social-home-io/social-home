@@ -46,6 +46,9 @@ export default function SettingsPage() {
     }).catch(() => {})
   }, [])
 
+  const panelId = (t: SettingsTab) => `sh-settings-panel-${t}`
+  const tabId   = (t: SettingsTab) => `sh-settings-tab-${t}`
+
   return (
     <div class="sh-settings">
       <nav class="sh-settings-tabs" role="tablist">
@@ -54,7 +57,10 @@ export default function SettingsPage() {
             key={t}
             type="button"
             role="tab"
+            id={tabId(t)}
             aria-selected={activeTab.value === t}
+            aria-controls={panelId(t)}
+            tabIndex={activeTab.value === t ? 0 : -1}
             class={activeTab.value === t ? 'sh-tab sh-tab--active' : 'sh-tab'}
             onClick={() => { activeTab.value = t }}
           >
@@ -63,10 +69,18 @@ export default function SettingsPage() {
         ))}
       </nav>
 
-      {activeTab.value === 'profile' && <ProfileTab />}
-      {activeTab.value === 'privacy' && <PrivacyTab />}
-      {activeTab.value === 'notifications' && <NotificationsTab />}
-      {activeTab.value === 'appearance' && <AppearanceTab />}
+      <div role="tabpanel" id={panelId('profile')} aria-labelledby={tabId('profile')} hidden={activeTab.value !== 'profile'}>
+        {activeTab.value === 'profile' && <ProfileTab />}
+      </div>
+      <div role="tabpanel" id={panelId('privacy')} aria-labelledby={tabId('privacy')} hidden={activeTab.value !== 'privacy'}>
+        {activeTab.value === 'privacy' && <PrivacyTab />}
+      </div>
+      <div role="tabpanel" id={panelId('notifications')} aria-labelledby={tabId('notifications')} hidden={activeTab.value !== 'notifications'}>
+        {activeTab.value === 'notifications' && <NotificationsTab />}
+      </div>
+      <div role="tabpanel" id={panelId('appearance')} aria-labelledby={tabId('appearance')} hidden={activeTab.value !== 'appearance'}>
+        {activeTab.value === 'appearance' && <AppearanceTab />}
+      </div>
     </div>
   )
 }

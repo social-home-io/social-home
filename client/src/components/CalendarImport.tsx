@@ -118,12 +118,17 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
         <div class="modal" onClick={close}>
           <div class="modal-body" onClick={(e) => e.stopPropagation()}>
             <h3>Import from photo</h3>
-            <input
-              type="text"
-              placeholder="Optional note to the AI…"
-              value={caption.value}
-              onInput={(e) => { caption.value = (e.target as HTMLInputElement).value }}
-            />
+            <label>
+              <span class="sh-muted" style={{ fontSize: 'var(--sh-font-size-sm)' }}>
+                Note to the AI (optional)
+              </span>
+              <input
+                type="text"
+                placeholder="Optional note to the AI…"
+                value={caption.value}
+                onInput={(e) => { caption.value = (e.target as HTMLInputElement).value }}
+              />
+            </label>
             <Button onClick={handleImagePick} loading={busy.value}>Choose image</Button>
             <Button variant="secondary" onClick={close}>Cancel</Button>
           </div>
