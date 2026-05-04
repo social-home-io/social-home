@@ -8,6 +8,7 @@ import { DmInboxSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { openNewDm } from '@/components/NewDmDialog'
 import { Avatar } from '@/components/Avatar'
+import { PullToRefresh } from '@/components/PullToRefresh'
 
 const conversations = signal<Conversation[]>([])
 const loading = signal(true)
@@ -31,6 +32,7 @@ export default function DmInboxPage() {
   if (loading.value) return <DmInboxSkeleton />
 
   return (
+    <PullToRefresh onRefresh={reload}>
     <div class="sh-dms">
       <div class="sh-page-header">
         <Button onClick={() => openNewDm()}>+ New message</Button>
@@ -101,5 +103,6 @@ export default function DmInboxPage() {
         )
       })}
     </div>
+    </PullToRefresh>
   )
 }

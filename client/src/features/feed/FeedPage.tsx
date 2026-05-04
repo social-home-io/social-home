@@ -13,6 +13,7 @@ import { openCommentOverlay } from '@/components/CommentOverlay'
 import { HouseholdPresenceStrip } from '@/components/HouseholdPresenceStrip'
 import { FeedSkeleton, PostCardSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
+import { PullToRefresh } from '@/components/PullToRefresh'
 import { showToast } from '@/components/Toast'
 import { toggles } from '@/components/HouseholdToggles'
 import type { FeedPost } from '@/types'
@@ -81,6 +82,7 @@ export default function FeedPage() {
   }
 
   return (
+    <PullToRefresh onRefresh={() => loadFeed()}>
     <div class="sh-feed">
       <HouseholdPresenceStrip />
       <Composer onSubmit={handleSubmit} context="Household" />
@@ -113,5 +115,6 @@ export default function FeedPage() {
         <Button variant="secondary" onClick={handleLoadMore}>Load more</Button>
       )}
     </div>
+    </PullToRefresh>
   )
 }
