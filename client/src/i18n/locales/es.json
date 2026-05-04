@@ -313,5 +313,7 @@
   "common.save": "Guardar",
   "common.close": "Cerrar",
   "common.retry": "Reintentar",
-  "common.not_now": "Ahora no"
+  "common.not_now": "Ahora no",
+  "common.ok": "OK",
+  "common.try_again": "Volver a intentar"
 }

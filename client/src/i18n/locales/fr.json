@@ -288,5 +288,7 @@
   "common.save": "Enregistrer",
   "common.close": "Fermer",
   "common.retry": "Réessayer",
-  "common.not_now": "Pas maintenant"
+  "common.not_now": "Pas maintenant",
+  "common.ok": "OK",
+  "common.try_again": "Réessayer"
 }
