@@ -24,33 +24,33 @@ describe('Composer', () => {
   it('hides the bazaar option when not in a space', async () => {
     commonMocks()
     const { Composer } = await import('./Composer')
-    const { queryByTitle } = render(<Composer onSubmit={vi.fn()} />)
-    expect(queryByTitle('text')).toBeTruthy()
-    expect(queryByTitle('poll')).toBeTruthy()
-    expect(queryByTitle('bazaar')).toBeNull()
+    const { queryByLabelText } = render(<Composer onSubmit={vi.fn()} />)
+    expect(queryByLabelText('Text post')).toBeTruthy()
+    expect(queryByLabelText('Poll')).toBeTruthy()
+    expect(queryByLabelText('Bazaar listing')).toBeNull()
   })
 
   it('exposes the bazaar option inside a space', async () => {
     commonMocks()
     const { Composer } = await import('./Composer')
-    const { queryByTitle } = render(
+    const { queryByLabelText } = render(
       <Composer onSubmit={vi.fn()} spaceId="space-1" />,
     )
-    expect(queryByTitle('bazaar')).toBeTruthy()
+    expect(queryByLabelText('Bazaar listing')).toBeTruthy()
   })
 
   it('hides the textarea when poll/schedule is picked (builder modes)', async () => {
     commonMocks()
     const { Composer } = await import('./Composer')
-    const { queryByPlaceholderText, getByTitle } = render(
+    const { queryByPlaceholderText, getByLabelText } = render(
       <Composer onSubmit={vi.fn()} />,
     )
     expect(queryByPlaceholderText(/What's on your mind/)).toBeTruthy()
-    fireEvent.click(getByTitle('poll'))
+    fireEvent.click(getByLabelText('Poll'))
     expect(queryByPlaceholderText(/What's on your mind/)).toBeNull()
-    fireEvent.click(getByTitle('schedule'))
+    fireEvent.click(getByLabelText('Schedule'))
     expect(queryByPlaceholderText(/What's on your mind/)).toBeNull()
-    fireEvent.click(getByTitle('text'))
+    fireEvent.click(getByLabelText('Text post'))
     expect(queryByPlaceholderText(/What's on your mind/)).toBeTruthy()
   })
 })
