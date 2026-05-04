@@ -11,7 +11,7 @@
  * auto-clears the row server-side, so a tap reads as "follow the
  * link, the badge will clear itself".
  */
-import { useEffect } from 'preact/hooks'
+import { useEffect, useRef } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { recent, unreadCount } from '@/store/notifications'
@@ -47,12 +47,41 @@ export function stopNotificationPolling() {
 }
 
 export function NotificationBell() {
+  const wrapRef = useRef<HTMLDivElement | null>(null)
+
   // Hydrate the panel list once on mount so first-tap is instant.
   useEffect(() => {
     void api.get('/api/notifications?limit=20').then((d) => {
       fullList.value = d as Notification[]
     }).catch(() => { /* noop */ })
   }, [])
+
+  // Close the panel on outside click + Escape so the user doesn't
+  // have to bounce back to the bell button to dismiss it. Only armed
+  // while the panel is open.
+  useEffect(() => {
+    if (!panelOpen.value) return
+    const onPointer = (ev: MouseEvent | TouchEvent) => {
+      const root = wrapRef.current
+      if (!root) return
+      if (root.contains(ev.target as Node)) return
+      panelOpen.value = false
+    }
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault()
+        panelOpen.value = false
+      }
+    }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('touchstart', onPointer, { passive: true })
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('touchstart', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [panelOpen.value])
 
   const togglePanel = async () => {
     panelOpen.value = !panelOpen.value
@@ -108,7 +137,7 @@ export function NotificationBell() {
       }) as Notification)
 
   return (
-    <div class="sh-notif-bell">
+    <div class="sh-notif-bell" ref={wrapRef}>
       <button
         type="button"
         class="sh-notif-btn"
