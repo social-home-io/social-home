@@ -13,6 +13,7 @@ import {
   TasksSkeleton,
   CommentThreadSkeleton,
   NotificationListSkeleton,
+  DmThreadSkeleton,
 } from './Skeleton'
 
 describe('Skeleton primitive', () => {
@@ -134,5 +135,18 @@ describe('Page-shaped skeletons', () => {
     expect(
       container.querySelectorAll('.sh-notif-row--skeleton').length,
     ).toBe(3)
+  })
+
+  it('DmThreadSkeleton defaults to 4 message bubbles', () => {
+    const { container } = render(<DmThreadSkeleton />)
+    expect(
+      container.querySelectorAll('.sh-message--skeleton').length,
+    ).toBe(4)
+  })
+
+  it('DmThreadSkeleton alternates --mine on every other row', () => {
+    const { container } = render(<DmThreadSkeleton count={4} />)
+    const mine = container.querySelectorAll('.sh-message--mine.sh-message--skeleton')
+    expect(mine.length).toBe(2)
   })
 })
