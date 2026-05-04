@@ -23,8 +23,7 @@ async def _seed_platform_user(client, username: str, password: str):
     # The route uses adapter.users.get(username) which checks the
     # ``users`` table — seed there too.
     await client._db.enqueue(
-        "INSERT INTO users(user_id, username, display_name, is_admin) "
-        "VALUES(?,?,?,?)",
+        "INSERT INTO users(user_id, username, display_name, is_admin) VALUES(?,?,?,?)",
         (username, username, username.title(), 0),
     )
 
@@ -55,7 +54,8 @@ async def test_issue_unknown_user_404(client):
 
 async def test_issue_non_admin_403(client):
     await client._db.enqueue(
-        "UPDATE users SET is_admin=0 WHERE username='admin'", (),
+        "UPDATE users SET is_admin=0 WHERE username='admin'",
+        (),
     )
     r = await client.post(
         "/api/admin/users/alice/issue-password-reset",
@@ -136,6 +136,7 @@ async def test_redeem_short_password_422(client):
 
 async def test_redeem_missing_fields_422(client):
     r = await client.post(
-        "/api/auth/redeem-password-reset", json={},
+        "/api/auth/redeem-password-reset",
+        json={},
     )
     assert r.status == 422

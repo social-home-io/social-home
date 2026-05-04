@@ -47,7 +47,10 @@ class AbstractPasswordResetRepo(Protocol):
     ) -> tuple[str, str]: ...
 
     async def consume_token(
-        self, raw_token: str, *, now: datetime | None = None,
+        self,
+        raw_token: str,
+        *,
+        now: datetime | None = None,
     ) -> str | None: ...
 
     async def cleanup_expired(self, *, now: datetime | None = None) -> int: ...
@@ -88,7 +91,10 @@ class SqlitePasswordResetRepo:
         return raw, expires_at
 
     async def consume_token(
-        self, raw_token: str, *, now: datetime | None = None,
+        self,
+        raw_token: str,
+        *,
+        now: datetime | None = None,
     ) -> str | None:
         """Atomically mark a token used and return its ``username``.
 

@@ -22,7 +22,8 @@ async def db(tmp_path):
     await db.startup()
     await db.enqueue(
         "INSERT INTO platform_users(username, display_name, is_admin, "
-        "password_hash) VALUES('alice','Alice',0,'x')", (),
+        "password_hash) VALUES('alice','Alice',0,'x')",
+        (),
     )
     yield db
     await db.shutdown()
@@ -72,7 +73,10 @@ async def test_consume_expired_returns_none(db):
     repo = SqlitePasswordResetRepo(db)
     past = datetime.now(timezone.utc) - timedelta(hours=2)
     raw, _ = await repo.create_token(
-        "alice", "admin", ttl_seconds=3600, now=past,
+        "alice",
+        "admin",
+        ttl_seconds=3600,
+        now=past,
     )
     user = await repo.consume_token(raw)
     assert user is None

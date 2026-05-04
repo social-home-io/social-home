@@ -542,17 +542,22 @@ class IssuePasswordResetView(BaseView):
             return error_response(404, "NOT_FOUND", "User not found.")
         repo = self.svc(password_reset_repo_key)
         token, expires_at = await repo.create_token(
-            username, ctx.user_id,
+            username,
+            ctx.user_id,
         )
         log.info(
             "password reset issued for %s by admin %s (expires %s)",
-            username, ctx.user_id, expires_at,
+            username,
+            ctx.user_id,
+            expires_at,
         )
-        return web.json_response({
-            "token": token,
-            "expires_at": expires_at,
-            "username": username,
-        })
+        return web.json_response(
+            {
+                "token": token,
+                "expires_at": expires_at,
+                "username": username,
+            }
+        )
 
 
 class RedeemPasswordResetView(BaseView):
