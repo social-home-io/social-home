@@ -1401,7 +1401,7 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
     linear-gradient(
       90deg,
       transparent 0%,
-      color-mix(in srgb, #fff 35%, transparent) 50%,
+      var(--sh-skeleton-highlight) 50%,
       transparent 100%
     ),
     var(--sh-bg-tertiary, #e8e0d4);
