@@ -281,6 +281,18 @@ function MembersTab() {
                 >
                   Export data
                 </button>
+                {isStandalone && (
+                  <>
+                    {' '}
+                    <button
+                      type="button" class="sh-link"
+                      onClick={() => void issuePasswordReset(u)}
+                      title="Mint a one-time, 1h-TTL reset link to send to this user"
+                    >
+                      Issue reset
+                    </button>
+                  </>
+                )}
               </td>
             </tr>
           ))}
@@ -288,6 +300,31 @@ function MembersTab() {
       </table>
     </section>
   )
+}
+
+async function issuePasswordReset(u: User): Promise<void> {
+  try {
+    const resp = await api.post<{ token: string; expires_at: string }>(
+      `/api/admin/users/${u.username}/issue-password-reset`,
+    )
+    const url = `${window.location.origin}/reset-password?token=${encodeURIComponent(resp.token)}`
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast(
+        `Reset link copied — paste to @${u.username} (expires in 1h, single-use).`,
+        'success',
+      )
+    } catch {
+      // Clipboard blocked (e.g. non-secure context). Fall back to a
+      // prompt the admin can copy out of manually.
+      window.prompt(
+        `Send this link to @${u.username} — expires in 1 hour, single-use:`,
+        url,
+      )
+    }
+  } catch (e: unknown) {
+    showToast(`Issue reset failed: ${(e as Error)?.message ?? e}`, 'error')
+  }
 }
 
 // ─── Spaces tab ───────────────────────────────────────────────────────
