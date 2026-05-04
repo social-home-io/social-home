@@ -2271,6 +2271,34 @@ a.sh-friends-member-chip:hover {
 }
 .sh-post-overflow:hover { background: var(--sh-bg-secondary); color: var(--sh-text); }
 .sh-post-body, .sh-post-content { word-break: break-word; line-height: var(--sh-line-height-base); }
+/* Long-post truncation. ``--clamp`` sets a max-height + gradient mask
+ * so the bottom of the visible text fades into the card background.
+ * The "Show more" button below removes the clamp on click. */
+.sh-post-body--clamp {
+  position: relative;
+  max-height: 16rem;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
+          mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
+}
+.sh-post-body--clamp.sh-post-body--expanded {
+  max-height: none;
+  -webkit-mask-image: none;
+          mask-image: none;
+}
+.sh-post-body-more {
+  position: absolute;
+  bottom: var(--sh-space-xs);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-full);
+  padding: 2px var(--sh-space-sm);
+  font-size: var(--sh-font-size-xs);
+  cursor: pointer;
+}
+.sh-post-body-more:hover { background: var(--sh-bg-secondary); }
 .sh-post-body code, .sh-md-inline-code {
   font-family: var(--sh-font-family-mono);
   font-size: 0.9em;
