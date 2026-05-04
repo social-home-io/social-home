@@ -256,6 +256,43 @@ export function CommentThreadSkeleton({ count = 3 }: { count?: number } = {}) {
 }
 
 
+/** Stand-in for the DM thread bubble layout: alternating-side
+ *  message blocks, brief flash on cold-load before the WS hydrate
+ *  fills the list. */
+export function DmThreadSkeleton({ count = 4 }: { count?: number } = {}) {
+  return (
+    <div class="sh-thread sh-thread--skeleton" aria-busy="true">
+      <div class="sh-thread-header">
+        <Skeleton shape="line" width={140} height={14} />
+      </div>
+      <div class="sh-messages">
+        {Array.from({ length: count }).map((_, i) => {
+          const mine = i % 2 === 1
+          return (
+            <div
+              key={i}
+              class={`sh-message sh-message--skeleton${mine ? ' sh-message--mine' : ''}`}
+            >
+              <Skeleton
+                shape="line"
+                width={mine ? 220 : 160}
+                height={12}
+              />
+              <Skeleton
+                shape="line"
+                width={mine ? 140 : 90}
+                height={11}
+                class="sh-skeleton-spaced"
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+
 /** Stand-in for ``NotificationsPage``: a header + a stack of rows
  *  with leading status dot + title + timestamp line. */
 export function NotificationListSkeleton({ count = 5 }: { count?: number } = {}) {

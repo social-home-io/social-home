@@ -4,7 +4,7 @@ import { useRoute, useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import type { Message } from '@/types'
-import { Spinner } from '@/components/Spinner'
+import { DmThreadSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
@@ -319,7 +319,7 @@ export default function DmThreadPage() {
     location.route(`/calls/${r.call_id}`)
   }
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <DmThreadSkeleton />
   const myUserId = currentUser.value?.user_id
 
   const status = statusLine(threadMembers.value)

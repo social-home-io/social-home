@@ -3114,6 +3114,9 @@ a.sh-friends-member-chip:hover {
   box-shadow: var(--sh-shadow-xs);
   animation: sh-bubble-in 180ms var(--sh-ease-spring);
 }
+/* Skeleton variant: drop the bubble-in entrance so the placeholder
+   doesn't animate-in then animate-out when the real messages land. */
+.sh-message--skeleton { animation: none; }
 @keyframes sh-bubble-in {
   from { opacity: 0; transform: translateY(4px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
