@@ -353,6 +353,14 @@ a:focus:not(:focus-visible) { outline: none; }
   position: sticky;
   bottom: 0;
   background: var(--sh-bg);
+  text-decoration: none;
+  color: inherit;
+  transition: background var(--sh-transition-fast);
+}
+.sh-sidenav-identity:hover { background: var(--sh-bg-secondary); }
+.sh-sidenav-identity[aria-current="page"] {
+  background: var(--sh-bg-secondary);
+  color: var(--sh-primary);
 }
 .sh-sidenav-identity__name {
   font-size: var(--sh-font-size-sm);
