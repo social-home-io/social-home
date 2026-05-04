@@ -157,7 +157,7 @@ function PendingRowItem({
     <li class="sh-host-queue-row">
       <div class="sh-host-queue-who">
         {avatarUrl ? (
-          <img class="sh-avatar sh-avatar--sm" src={avatarUrl} alt="" />
+          <img class="sh-avatar sh-avatar--sm" src={avatarUrl} alt="" loading="lazy" />
         ) : (
           <span class="sh-avatar sh-avatar--sm sh-avatar--placeholder" aria-hidden="true">
             {name.charAt(0).toUpperCase()}

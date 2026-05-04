@@ -24,7 +24,14 @@ export function LinkPreview({ url }: { url: string }) {
 
   return (
     <a href={data.value.url} target="_blank" rel="noopener noreferrer" class="sh-link-preview">
-      {data.value.image && <img src={data.value.image} class="sh-link-preview-img" />}
+      {data.value.image && (
+        <img
+          src={data.value.image}
+          class="sh-link-preview-img"
+          loading="lazy"
+          alt=""
+        />
+      )}
       <div class="sh-link-preview-text">
         <strong>{data.value.title}</strong>
         {data.value.description && <p class="sh-muted">{data.value.description}</p>}
