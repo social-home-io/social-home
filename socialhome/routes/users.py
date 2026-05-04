@@ -27,6 +27,7 @@ from ..app_keys import (
     config_key,
     data_export_service_key,
     media_signer_key,
+    password_reset_repo_key,
     platform_adapter_key,
     profile_picture_repo_key,
     rate_limiter_key,
@@ -512,6 +513,112 @@ class UserExportView(BaseView):
                 "Content-Disposition": f'attachment; filename="socialhome-export-{target}.json"',
             },
         )
+
+
+class IssuePasswordResetView(BaseView):
+    """POST /api/admin/users/{username}/issue-password-reset — admin only.
+
+    Standalone mode has no SMTP, so a forgotten password is recovered
+    by an admin issuing a one-time, single-use, 1h-TTL token. The
+    admin then hands the resulting reset URL to the user out-of-band.
+    The raw token is returned exactly once in the response — only its
+    SHA-256 hash is stored.
+    """
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        if ctx is None or not ctx.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        adapter = self.svc(platform_adapter_key)
+        if not adapter.supports_bearer_token_auth:
+            return error_response(
+                404,
+                "NOT_FOUND",
+                "Password reset is not available on this platform.",
+            )
+        username = self.match("username")
+        existing = await adapter.users.get(username)
+        if existing is None:
+            return error_response(404, "NOT_FOUND", "User not found.")
+        repo = self.svc(password_reset_repo_key)
+        token, expires_at = await repo.create_token(
+            username, ctx.user_id,
+        )
+        log.info(
+            "password reset issued for %s by admin %s (expires %s)",
+            username, ctx.user_id, expires_at,
+        )
+        return web.json_response({
+            "token": token,
+            "expires_at": expires_at,
+            "username": username,
+        })
+
+
+class RedeemPasswordResetView(BaseView):
+    """POST /api/auth/redeem-password-reset — public, rate-limited.
+
+    Body: ``{token, new_password}``. On success the user's password
+    is rotated and the token is marked used (single-use). Errors:
+
+    * 422 if either field is missing / new_password too short
+    * 410 if the token is unknown / expired / already used
+    * 429 if too many attempts from this IP
+    """
+
+    async def post(self) -> web.Response:
+        adapter = self.svc(platform_adapter_key)
+        if not adapter.supports_bearer_token_auth:
+            return error_response(
+                404,
+                "NOT_FOUND",
+                "Password reset is not available on this platform.",
+            )
+
+        # Same IP-bucket throttle as /api/auth/token. The reset path
+        # is the obvious target for a brute-force attempt at guessing
+        # tokens, so we share the bucket budget with login attempts.
+        limiter = self.request.app.get(rate_limiter_key)
+        if limiter is not None:
+            client_ip = self.request.remote or "unknown"
+            bucket = f"password-reset:{client_ip}"
+            if not limiter.is_allowed(
+                bucket,
+                limit=AUTH_TOKEN_RATE_LIMIT,
+                window_s=AUTH_TOKEN_RATE_WINDOW_S,
+            ):
+                return error_response(
+                    429,
+                    "RATE_LIMITED",
+                    "Too many attempts — wait a few minutes.",
+                )
+
+        body = await self.body()
+        token = str(body.get("token") or "")
+        new_password = str(body.get("new_password") or "")
+        if not token or not new_password:
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "token and new_password are required.",
+            )
+        if len(new_password) < 8:
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "Password must be at least 8 characters.",
+            )
+        repo = self.svc(password_reset_repo_key)
+        username = await repo.consume_token(token)
+        if username is None:
+            return error_response(
+                410,
+                "INVALID_TOKEN",
+                "This reset link has expired or already been used.",
+            )
+        await adapter.change_password(username, new_password)
+        log.info("password reset redeemed for %s", username)
+        return web.Response(status=204)
 
 
 class AuthTokenView(BaseView):

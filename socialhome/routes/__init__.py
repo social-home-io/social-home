@@ -295,11 +295,13 @@ from .users import (
     AdminTokenDetailView,
     AdminUserCollectionView,
     AuthTokenView,
+    IssuePasswordResetView,
     MeExportView,
     MeOnboardingCompleteView,
     MePictureRefreshFromHaView,
     MePictureView,
     MeView,
+    RedeemPasswordResetView,
     TokenCollectionView,
     TokenDetailView,
     UserCollectionView,
@@ -344,6 +346,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/admin/tokens", AdminTokenCollectionView)
     app.router.add_view("/api/admin/tokens/{id}", AdminTokenDetailView)
     app.router.add_view("/api/admin/users", AdminUserCollectionView)
+    app.router.add_view(
+        "/api/admin/users/{username}/issue-password-reset",
+        IssuePasswordResetView,
+    )
     app.router.add_view("/api/me/export", MeExportView)
     app.router.add_view("/api/users", UserCollectionView)
     app.router.add_view("/api/users/{user_id}", UserDetailView)
@@ -353,6 +359,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/aliases/users", AliasCollectionView)
     app.router.add_view("/api/aliases/users/{user_id}", AliasItemView)
     app.router.add_view("/api/auth/token", AuthTokenView)
+    app.router.add_view(
+        "/api/auth/redeem-password-reset",
+        RedeemPasswordResetView,
+    )
 
     # ── Instance metadata + first-boot setup wizard ─────────────────────
     # Public paths (see auth._DEFAULT_PUBLIC_PATHS) — the SPA needs them

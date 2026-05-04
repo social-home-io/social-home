@@ -35,6 +35,7 @@ anything below contradicts the file, the file wins.
 | `api_tokens` | Per-user API tokens (HA mode and integrations). Stores `token_hash` only — the plaintext is shown to the user once. |
 | `platform_users` | Standalone-mode local accounts (`platform/standalone/`). Empty in HA mode. Stores password hash, email, notify endpoint. |
 | `platform_tokens` | Bearer tokens for `platform_users`. Hash-only storage. |
+| `password_reset_tokens` | Admin-issued, single-use, 1h-TTL tokens that let a user set a new password. Stores SHA-256 of the raw token; `used_at` flips on consume so a token can't be replayed. |
 
 ## Federation: peers, pairing, outbox, replay
 

@@ -1863,3 +1863,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
     body,
     tokenize       = "unicode61 remove_diacritics 2"
 );
+
+-- ── Password resets (admin-issued, single-use, 1h TTL) ────────────────────
+-- Standalone mode has no SMTP, so a forgotten password is recovered by a
+-- household admin issuing a one-time token (``POST /api/admin/users/{u}
+-- /issue-password-reset``) and handing the resulting reset URL to the user
+-- out-of-band. The user redeems it via ``POST /api/auth/redeem-password-
+-- reset`` to set a new password. Atomic consume: the redeem path stamps
+-- ``used_at`` in the same transaction that updates ``platform_users``.
+--
+-- Storage stores the SHA-256 of the raw token, never the raw value.
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token            TEXT PRIMARY KEY,             -- sha256(raw_token), hex
+    username         TEXT NOT NULL REFERENCES platform_users(username)
+                          ON DELETE CASCADE,
+    issued_by_admin  TEXT NOT NULL,
+    issued_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at       TEXT NOT NULL,                -- iso, ~1h after issued_at
+    used_at          TEXT                          -- NULL until consumed
+);
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_username
+    ON password_reset_tokens(username);

@@ -282,6 +282,13 @@ class StandaloneAdapter(PlatformAdapter):
             label=label,
         )
 
+    async def change_password(self, username: str, new_password: str) -> None:
+        """Rotate ``username``'s password. Used by the admin-issued
+        password-reset redeem path (``POST /api/auth/redeem-password-
+        reset``). Idempotent — re-running with the same password is a
+        no-op from the user's perspective."""
+        await self._credentials.set_password(username, new_password)
+
     @staticmethod
     def hash_password(password: str, *, salt: bytes | None = None) -> str:
         return _hash_password(password, salt=salt)
