@@ -38,6 +38,29 @@ describe('Modal', () => {
   // and re-focused the first focusable element (the close ×) on every
   // keystroke, kicking the user out of the input. The fix stashes
   // onClose in a ref and depends only on ``open``.
+  it('restores focus to the trigger element when closed', async () => {
+    function Host({ open }: { open: boolean }) {
+      return (
+        <>
+          <button data-testid="trigger">open</button>
+          <Modal open={open} title="T" onClose={() => {}}>
+            <button data-testid="inside">inside</button>
+          </Modal>
+        </>
+      )
+    }
+    const { getByTestId, rerender } = render(<Host open={false} />)
+    const trigger = getByTestId('trigger') as HTMLButtonElement
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+    rerender(<Host open={true} />)
+    // Modal moves focus to its first focusable child.
+    expect(document.activeElement).not.toBe(trigger)
+    rerender(<Host open={false} />)
+    // On close, focus returns to the element that had it before open.
+    expect(document.activeElement).toBe(trigger)
+  })
+
   it('does not steal focus from inputs when the parent re-renders', async () => {
     function Host() {
       const [n, setN] = useState('')

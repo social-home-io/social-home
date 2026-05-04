@@ -82,6 +82,18 @@ export default function IncomingCallDialog() {
       return () => { stopSnd(); stopVib() }
     })()
 
+    // Remember the element that had focus pre-ring so we can restore
+    // when the call resolves — keyboard / screen-reader users land
+    // back where they were.
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    const findActions = (): [HTMLButtonElement | null, HTMLButtonElement | null] => [
+      document.querySelector<HTMLButtonElement>('.sh-incoming-actions .sh-accept'),
+      document.querySelector<HTMLButtonElement>('.sh-incoming-actions .sh-decline'),
+    ]
+    // Focus Accept on mount so Enter activates the primary action
+    // without the user having to tab to it.
+    setTimeout(() => findActions()[0]?.focus(), 10)
+
     const timer = setTimeout(() => {
       if (incoming.value) {
         showToast(`You missed a call from ${incoming.value.from_user}`, 'info')
@@ -92,7 +104,18 @@ export default function IncomingCallDialog() {
     const onKey = (e: KeyboardEvent) => {
       if (!incoming.value) return
       if (e.key === 'Enter') accept()
-      if (e.key === 'Escape') decline()
+      else if (e.key === 'Escape') decline()
+      else if (e.key === 'Tab') {
+        // Trap focus between the two action buttons — Tab can't
+        // wander into the dimmed page behind a ringing call.
+        const [first, last] = findActions()
+        if (!first || !last) return
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault(); last.focus()
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault(); first.focus()
+        }
+      }
     }
     window.addEventListener('keydown', onKey)
 
@@ -100,6 +123,7 @@ export default function IncomingCallDialog() {
       clearTimeout(timer)
       window.removeEventListener('keydown', onKey)
       if (_ringStop) { _ringStop(); _ringStop = null }
+      previouslyFocused?.focus?.()
     }
   }, [incoming.value?.call_id])
 
@@ -130,7 +154,12 @@ export default function IncomingCallDialog() {
   }
 
   return (
-    <div class="sh-incoming-overlay" role="dialog" aria-label="Incoming call">
+    <div
+      class="sh-incoming-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Incoming call"
+    >
       <div class="sh-incoming-card">
         <div class="sh-incoming-avatar" aria-hidden="true">
           {call.call_type === 'video' ? '📹' : '📞'}
