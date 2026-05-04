@@ -28,6 +28,7 @@ import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
 import { OfflineIndicator } from '@/components/OfflineIndicator'
+import { BackToTop } from '@/components/BackToTop'
 import { SpaceInviteDialog } from '@/components/SpaceInviteDialog'
 import IncomingCallDialog from '@/features/calls/IncomingCallDialog'
 import { FormError } from '@/components/FormError'
@@ -228,6 +229,7 @@ export function App() {
             </main>
           </div>
           <QuickSwitcher />
+          <BackToTop />
           <ToastContainer />
           <SpaceCreateDialog />
           <NewDmDialog />
