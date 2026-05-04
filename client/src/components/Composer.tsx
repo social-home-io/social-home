@@ -6,10 +6,11 @@
  * attach it to the post create call.
  */
 import { signal } from '@preact/signals'
-import { useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
+import { DraftBanner, saveDraft, clearDraft } from './DraftPersistence'
 import {
   EmojiAutocomplete,
   checkForEmojiTrigger,
@@ -127,6 +128,30 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
   // signed preview URL we drop into the local thumbnail.
   const [images, setImages] = useState<ImageEntry[]>([])
   const [dragActive, setDragActive] = useState(false)
+
+  // Draft persistence: text content auto-saves to localStorage so a
+  // tab close / accidental nav doesn't lose what the user was typing.
+  // Keyed by ``context`` so the household feed and a per-space feed
+  // don't clobber each other's drafts. Attached media isn't part of
+  // the draft (uploads have already landed on the server, but their
+  // canonical URLs aren't worth re-attaching after a session reset).
+  const draftKey = `composer:${context}`
+  // Banner only shows once per mount: if the user dismisses it, we
+  // don't want it to come back on the next keystroke as the auto-save
+  // re-populates localStorage.
+  const [bannerHandled, setBannerHandled] = useState(false)
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (draftSaveTimer.current !== null) {
+      clearTimeout(draftSaveTimer.current)
+    }
+    draftSaveTimer.current = setTimeout(() => {
+      saveDraft(draftKey, content.value)
+    }, 800)
+    return () => {
+      if (draftSaveTimer.current !== null) clearTimeout(draftSaveTimer.current)
+    }
+  }, [content.value, draftKey])
 
   const resetAttached = () => {
     setMediaUrl(null)
@@ -316,6 +341,10 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       setPendingSchedule(null)
       setPendingPoll(null)
       setPendingLocation(null)
+      // Drop the saved draft now that the post is on the wire — the
+      // post itself is the canonical record from here on.
+      clearDraft(draftKey)
+      setBannerHandled(true)
     } finally {
       submitting.value = false
     }
@@ -329,6 +358,17 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
           onDrop={onDrop}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}>
+      {!bannerHandled && content.value === '' && (
+        <DraftBanner
+          context={draftKey}
+          onRestore={(restored) => {
+            content.value = restored
+            postType.value = 'text'
+            setBannerHandled(true)
+          }}
+          onDiscard={() => setBannerHandled(true)}
+        />
+      )}
       <div class="sh-composer-header">
         <Avatar name={user?.display_name || '?'} src={user?.picture_url} size={32} />
         <div class="sh-composer-type-picker">
