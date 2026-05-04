@@ -201,10 +201,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
         ) : (
           <>
             {post.content && (
-              <div
-                class="sh-post-body"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(post.content) }}
-              />
+              <PostBody content={post.content} />
             )}
             {post.type === 'file' && post.file_meta && <FileRenderer file={post.file_meta} />}
             {post.type === 'video' && post.media_url && (
@@ -349,6 +346,43 @@ function PostImageGrid({ urls, alt }: { urls: string[]; alt?: string }) {
     </div>
   )
 }
+
+/** Threshold above which the post body is collapsed behind a "Show
+ *  more" toggle. Roughly the height of a 12-line post — long enough
+ *  to be informative, short enough that a wall of text doesn't
+ *  dominate the feed. */
+const SHOW_MORE_THRESHOLD = 600
+
+function PostBody({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const isLong = content.length > SHOW_MORE_THRESHOLD
+  if (!isLong) {
+    return (
+      <div
+        class="sh-post-body"
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+      />
+    )
+  }
+  return (
+    <div class={`sh-post-body sh-post-body--clamp${expanded ? ' sh-post-body--expanded' : ''}`}>
+      <div
+        class="sh-post-body-inner"
+        dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
+      />
+      {!expanded && (
+        <button
+          type="button"
+          class="sh-post-body-more sh-link"
+          onClick={() => setExpanded(true)}
+        >
+          Show more
+        </button>
+      )}
+    </div>
+  )
+}
+
 
 function formatRelative(isoDate: string): string {
   const diff = Date.now() - new Date(isoDate).getTime()
