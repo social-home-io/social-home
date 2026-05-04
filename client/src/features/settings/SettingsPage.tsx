@@ -26,9 +26,30 @@ const bio = signal('')
 const landingPath = signal<LandingPath>('/')
 const avatarUrl = signal<string | null>(null)
 const onlineStatusVisible = signal(true)
+// Track whether the privacy fetch landed cleanly. Without this we
+// rendered the default-on toggle as if it were the server's value,
+// so a transient fetch failure silently flipped the user's privacy
+// without their consent.
+const privacyLoaded = signal(false)
+const privacyLoadError = signal<string | null>(null)
 const pushEnabled = signal(
   typeof Notification !== 'undefined' ? Notification.permission === 'granted' : false
 )
+
+async function loadPrivacy() {
+  privacyLoadError.value = null
+  try {
+    const data = await api.get('/api/me/privacy') as
+      { online_status_visible?: boolean }
+    if (typeof data.online_status_visible === 'boolean') {
+      onlineStatusVisible.value = data.online_status_visible
+    }
+    privacyLoaded.value = true
+  } catch (err: unknown) {
+    privacyLoadError.value = (err as Error).message ?? 'Could not load'
+    privacyLoaded.value = false
+  }
+}
 
 export default function SettingsPage() {
   useTitle('Settings')
@@ -39,11 +60,7 @@ export default function SettingsPage() {
       avatarUrl.value = currentUser.value.picture_url
     }
     landingPath.value = getLandingPath()
-    api.get('/api/me/privacy').then((data: { online_status_visible?: boolean }) => {
-      if (typeof data.online_status_visible === 'boolean') {
-        onlineStatusVisible.value = data.online_status_visible
-      }
-    }).catch(() => {})
+    void loadPrivacy()
   }, [])
 
   return (
@@ -278,11 +295,34 @@ function PrivacyTab() {
     }
   }
 
+  // If the load failed, surface that instead of letting the user
+  // think the rendered toggle reflects the server value. Toggling
+  // pre-load would push a default at the server they may not have
+  // chosen.
+  if (privacyLoadError.value) {
+    return (
+      <section class="sh-settings-section">
+        <h2>Privacy</h2>
+        <div class="sh-error" role="alert">
+          <p>Couldn't load your privacy settings.</p>
+          <Button variant="secondary" onClick={() => void loadPrivacy()}>
+            Retry
+          </Button>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section class="sh-settings-section">
       <h2>Privacy</h2>
       <label class="sh-toggle-row">
-        <input type="checkbox" checked={onlineStatusVisible.value} onChange={toggleOnlineStatus} />
+        <input
+          type="checkbox"
+          checked={onlineStatusVisible.value}
+          disabled={!privacyLoaded.value}
+          onChange={toggleOnlineStatus}
+        />
         Show online status to other household members
       </label>
       <StoriesPreferencesPanel />
