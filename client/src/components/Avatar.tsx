@@ -5,6 +5,8 @@
  *   • ``'idle'``   → amber
  *   • ``null`` / undefined → no dot (offline = absent signal, not grey clutter)
  */
+import { useEffect, useState } from 'preact/hooks'
+
 type OnlineStatus = 'online' | 'idle' | null
 
 interface AvatarProps {
@@ -19,9 +21,18 @@ interface AvatarProps {
 }
 
 export function Avatar({ src, name, size = 40, onClick, online }: AvatarProps) {
+  // Track image-load failures so an expired signature or 404'd URL
+  // doesn't leave a broken-image icon on the page. Falls back to the
+  // initials tile, same shape as the no-src branch.
+  const [errored, setErrored] = useState(false)
+  // Reset the error flag when the URL changes (avatar updated, signed
+  // URL refreshed) so the new src gets a fresh chance to load.
+  useEffect(() => { setErrored(false) }, [src])
+
   const initials = name.slice(0, 2).toUpperCase()
   const sizeStyle = { width: `${size}px`, height: `${size}px`, fontSize: `${size * 0.4}px` }
-  const inner = src ? (
+  const showImage = src && !errored
+  const inner = showImage ? (
     <img
       src={src}
       alt={name}
@@ -29,6 +40,7 @@ export function Avatar({ src, name, size = 40, onClick, online }: AvatarProps) {
       width={size}
       height={size}
       onClick={onClick}
+      onError={() => setErrored(true)}
     />
   ) : (
     <div

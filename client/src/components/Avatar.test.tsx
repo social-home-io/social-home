@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/preact'
+import { render, fireEvent } from '@testing-library/preact'
 import { Avatar } from './Avatar'
 
 describe('Avatar', () => {
@@ -39,5 +39,16 @@ describe('Avatar', () => {
     expect(dot).not.toBeNull()
     expect(getByRole('img').getAttribute('aria-label')).toContain('Anna')
     expect(getByRole('img').getAttribute('aria-label')).toContain('idle')
+  })
+
+  it('falls back to initials when the image fails to load', () => {
+    const { container } = render(<Avatar name="Carol Daniels" src="/expired.jpg" />)
+    const img = container.querySelector('img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    fireEvent.error(img)
+    // After the load error the <img> is gone and the initials tile
+    // takes over so the user doesn't see a broken-image icon.
+    expect(container.querySelector('img')).toBeNull()
+    expect(container.textContent).toContain('CA')
   })
 })
