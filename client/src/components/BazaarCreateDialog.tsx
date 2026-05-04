@@ -15,6 +15,7 @@ import { Modal } from './Modal'
 import { Button } from './Button'
 import { showToast } from './Toast'
 import { uploadWithProgress, UploadProgressBar } from './UploadProgress'
+import { describeUploadError } from '@/utils/uploadErrors'
 import type { BazaarMode, Space } from '@/types'
 
 const ZERO_DECIMAL_CURRENCIES: ReadonlySet<string> =
@@ -108,9 +109,7 @@ export function BazaarCreateDialog({ onCreated }: { onCreated?: () => void }) {
         { url: result.url, preview: result.signed_url },
       ].slice(0, MAX_IMAGES)
     } catch (err: unknown) {
-      showToast(
-        `Image upload failed: ${(err as Error).message ?? err}`, 'error',
-      )
+      showToast(describeUploadError(err, { file }), 'error')
     }
   }
 

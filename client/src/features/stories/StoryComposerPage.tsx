@@ -14,6 +14,7 @@ import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
+import { describeUploadError } from '@/utils/uploadErrors'
 import type { StoryAudienceKind } from '@/types'
 
 interface MediaUploadResponse {
@@ -89,7 +90,7 @@ export default function StoryComposerPage() {
       mediaPreview.value = data.signed_url
       mediaType.value = file.type.startsWith('video/') ? 'video' : 'image'
     } catch (err: unknown) {
-      showToast(`Upload failed: ${(err as Error)?.message ?? err}`, 'error')
+      showToast(describeUploadError(err, { file }), 'error')
     }
   }
 

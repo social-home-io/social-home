@@ -16,6 +16,7 @@ import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { openLightbox, type LightboxItem } from '@/components/ImageLightbox'
+import { describeUploadError } from '@/utils/uploadErrors'
 
 interface Album {
   id: string
@@ -194,7 +195,7 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
       try {
         await uploadOne(files[i])
       } catch (err: unknown) {
-        showToast(`Upload failed: ${(err as Error)?.message ?? err}`, 'error')
+        showToast(describeUploadError(err, { file: files[i] }), 'error')
         setUploadPct(null)
         continue
       }

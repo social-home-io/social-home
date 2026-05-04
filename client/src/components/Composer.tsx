@@ -26,6 +26,7 @@ import { SttButton } from './SttButton'
 import { openStoryPicker } from './StoryPickerDialog'
 import { showToast } from './Toast'
 import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
+import { describeUploadError } from '@/utils/uploadErrors'
 import { currentUser } from '@/store/auth'
 
 const MAX_LENGTH = 5000
@@ -183,9 +184,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       }
       showToast(`Attached: ${file.name}`, 'success')
     } catch (err: unknown) {
-      showToast(
-        `Upload failed: ${(err as Error).message ?? err}`, 'error',
-      )
+      showToast(describeUploadError(err, { file }), 'error')
     }
   }
 
