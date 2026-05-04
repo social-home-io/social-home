@@ -11379,6 +11379,160 @@ a.sh-btn--ghost:hover {
   padding: 4px;
 }
 
+/* Story archive — month-grid browser at /stories/archive. Reuses
+ * the same 5×7 layout as the calendar route: day cells with stories
+ * carry the most-recent first-frame thumbnail and a +N chip when
+ * the day has more than one story. */
+.sh-story-archive {
+  max-width: 920px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+.sh-story-archive-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-sm);
+}
+.sh-story-archive-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--sh-space-xs);
+}
+.sh-story-archive-dow {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  text-align: center;
+  padding: 2px 0;
+}
+.sh-story-archive-day {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  background: var(--sh-bg-secondary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm);
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--sh-text);
+  cursor: default;
+}
+.sh-story-archive-day--has {
+  cursor: pointer;
+  background: var(--sh-bg);
+}
+.sh-story-archive-day--has:hover {
+  border-color: var(--sh-primary);
+}
+.sh-story-archive-day--today {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: -2px;
+}
+.sh-story-archive-day--selected {
+  border-color: var(--sh-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sh-primary) 30%, transparent);
+}
+.sh-story-archive-day--pad {
+  background: transparent;
+  border: 1px dashed var(--sh-border);
+}
+.sh-story-archive-day-num {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  color: var(--sh-text);
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: var(--sh-radius-sm);
+  padding: 0 4px;
+  z-index: 1;
+}
+.sh-theme-dark .sh-story-archive-day-num {
+  background: rgba(0, 0, 0, 0.55);
+}
+.sh-story-archive-day-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.sh-story-archive-day-thumb--video {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  background: var(--sh-bg-tertiary);
+}
+.sh-story-archive-day-more {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  background: var(--sh-bg);
+  border-radius: var(--sh-radius-full);
+  padding: 0 6px;
+  z-index: 1;
+}
+.sh-story-archive-day-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-md);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg);
+}
+.sh-story-archive-day-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-story-archive-tile {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xs);
+  border-radius: var(--sh-radius-sm);
+  text-decoration: none;
+  color: inherit;
+  transition: background var(--sh-transition-fast);
+}
+.sh-story-archive-tile:hover {
+  background: var(--sh-bg-secondary);
+}
+.sh-story-archive-tile-thumb {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--sh-radius-sm);
+  object-fit: cover;
+  background: var(--sh-bg-secondary);
+}
+.sh-story-archive-tile-thumb--video {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+}
+.sh-story-archive-tile-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  flex: 1 1 auto;
+}
+
 /* Composer */
 .sh-story-composer {
   max-width: 600px;
