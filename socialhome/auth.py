@@ -48,6 +48,7 @@ _DEFAULT_PUBLIC_PATHS: tuple[str, ...] = (
     "/api/pairing/peer-accept",  # §11 bootstrap — Ed25519 body sig
     "/api/pairing/peer-confirm",  # §11 bootstrap — Ed25519 body sig
     "/api/auth/token",  # standalone login — issues the token
+    "/api/auth/redeem-password-reset",  # admin-issued reset → new password
     # First-boot wizard — the SPA hits these before it has a token.
     # The setup_service gate (`is_required`) inside each handler stops
     # them being usable after first boot, so leaving them public is safe.

@@ -102,6 +102,7 @@ from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
 from .repositories.household_features_repo import SqliteHouseholdFeaturesRepo
 from .repositories.pairing_relay_repo import SqlitePairingRelayRepo
+from .repositories.password_reset_repo import SqlitePasswordResetRepo
 from .repositories.poll_repo import SqlitePollRepo
 from .repositories.space_poll_repo import SqliteSpacePollRepo
 from .repositories.profile_picture_repo import SqliteProfilePictureRepo
@@ -335,6 +336,7 @@ def _build_repos(db: AsyncDatabase):
         alias=SqliteAliasRepo(db),
         pairing_relay=SqlitePairingRelayRepo(db),
         space_zone=SqliteSpaceZoneRepo(db),
+        password_reset=SqlitePasswordResetRepo(db),
     )
 
 
@@ -1301,6 +1303,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.space_bot_service_key] = space_bot_service
     app[K.bot_bridge_service_key] = bot_bridge_service
     app[K.user_repo_key] = user_repo
+    app[K.password_reset_repo_key] = repos.password_reset
     app[K.profile_picture_repo_key] = profile_picture_repo
     app[K.space_cover_repo_key] = space_cover_repo
     app[K.post_repo_key] = post_repo

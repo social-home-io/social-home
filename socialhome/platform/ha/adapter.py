@@ -156,6 +156,19 @@ class HaAdapter(PlatformAdapter):
             is_admin=is_admin,
         )
 
+    async def change_password(self, username: str, new_password: str) -> None:
+        """Rotate ``username``'s password (admin-issued reset redeem).
+
+        Mirrors :meth:`StandaloneAdapter.change_password` so the
+        password-reset route can call ``adapter.change_password`` in
+        either mode. Doesn't touch ``display_name`` / ``is_admin`` —
+        only the hash. Raises ``RuntimeError`` before ``on_startup``."""
+        if self._credentials is None:
+            raise RuntimeError(
+                "HaAdapter.change_password called before on_startup",
+            )
+        await self._credentials.set_password(username, new_password)
+
     @staticmethod
     def hash_password(password: str, *, salt: bytes | None = None) -> str:
         return _hash_password(password, salt=salt)
