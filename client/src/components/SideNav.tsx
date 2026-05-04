@@ -188,10 +188,15 @@ export function SideNav() {
         </>
       )}
       {user && (
-        <div class="sh-sidenav-identity" aria-label="Signed in user">
+        <a
+          href="/settings"
+          class="sh-sidenav-identity"
+          aria-label={`Signed in as ${user.display_name} — open settings`}
+          aria-current={currentPath === '/settings' ? 'page' : undefined}
+        >
           <Avatar src={user.picture_url} name={user.display_name} size={32} />
           <span class="sh-sidenav-identity__name">{user.display_name}</span>
-        </div>
+        </a>
       )}
     </aside>
   )
