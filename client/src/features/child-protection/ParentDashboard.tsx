@@ -43,6 +43,8 @@ interface DmContactRow {
   conversation_id: string
 }
 
+type SectionKey = 'blocks' | 'spaces' | 'conversations' | 'contacts'
+
 interface MinorBundle {
   user_id: string
   display_name: string
@@ -51,6 +53,58 @@ interface MinorBundle {
   spaces: SpaceRow[]
   conversations: ConversationRow[]
   contacts: DmContactRow[]
+  /** Per-section load failures. Each section that failed renders an
+   *  error chip with Retry instead of an empty list — guardians could
+   *  otherwise act on a silently-incomplete picture of the minor. */
+  errors: Partial<Record<SectionKey, boolean>>
+}
+
+/** Section-scoped fetchers. Indexed by ``SectionKey`` so the retry
+ *  helper can call exactly the one that failed without re-running the
+ *  rest. */
+const SECTION_FETCHERS: Record<
+  SectionKey,
+  (id: string) => Promise<Partial<MinorBundle>>
+> = {
+  async blocks(id) {
+    const r = await api.get(
+      `/api/cp/minors/${id}/blocks`,
+    ) as { blocks: BlockRow[] }
+    return { blocks: r.blocks }
+  },
+  async spaces(id) {
+    const r = await api.get(
+      `/api/cp/minors/${id}/spaces`,
+    ) as { spaces: SpaceRow[] }
+    return { spaces: r.spaces }
+  },
+  async conversations(id) {
+    const r = await api.get(
+      `/api/cp/minors/${id}/conversations`,
+    ) as { conversations: ConversationRow[] }
+    return { conversations: r.conversations }
+  },
+  async contacts(id) {
+    const r = await api.get(
+      `/api/cp/minors/${id}/dm-contacts`,
+    ) as { contacts: DmContactRow[] }
+    return { contacts: r.contacts }
+  },
+}
+
+async function retrySection(minorId: string, section: SectionKey): Promise<void> {
+  try {
+    const patch = await SECTION_FETCHERS[section](minorId)
+    minors.value = minors.value.map(m =>
+      m.user_id === minorId
+        ? { ...m, ...patch, errors: { ...m.errors, [section]: false } }
+        : m,
+    )
+  } catch (err: unknown) {
+    showToast(
+      `Retry failed: ${(err as Error)?.message ?? err}`, 'error',
+    )
+  }
 }
 
 const minors    = signal<MinorBundle[]>([])
@@ -71,45 +125,31 @@ async function loadMinors(): Promise<void> {
     //    the set the parent dashboard cares about.
     const users = await api.get('/api/users') as User[]
     const byId = new Map(users.map(u => [u.user_id, u]))
-    // 3. For each minor, load their block list + joined spaces in parallel.
+    // 3. For each minor, load their block list + joined spaces in
+    //    parallel. Each section is independent — a 5xx on /spaces
+    //    must not silently empty out /blocks. Track which sections
+    //    failed so the render can show a Retry chip per section
+    //    instead of acting on partial data.
     const bundles = await Promise.all(ids.map(async id => {
       const u = byId.get(id)
-      let blocks: BlockRow[] = []
-      let spaces: SpaceRow[] = []
-      let conversations: ConversationRow[] = []
-      let contacts: DmContactRow[] = []
-      try {
-        const r = await api.get(
-          `/api/cp/minors/${id}/blocks`,
-        ) as { blocks: BlockRow[] }
-        blocks = r.blocks
-      } catch {
-        blocks = []
+      const errors: Partial<Record<SectionKey, boolean>> = {}
+      const blocks: BlockRow[] = []
+      const spaces: SpaceRow[] = []
+      const conversations: ConversationRow[] = []
+      const contacts: DmContactRow[] = []
+      const sections: SectionKey[] = ['blocks', 'spaces', 'conversations', 'contacts']
+      const data: Record<SectionKey, unknown[]> = {
+        blocks, spaces, conversations, contacts,
       }
-      try {
-        const r = await api.get(
-          `/api/cp/minors/${id}/spaces`,
-        ) as { spaces: SpaceRow[] }
-        spaces = r.spaces
-      } catch {
-        spaces = []
-      }
-      try {
-        const r = await api.get(
-          `/api/cp/minors/${id}/conversations`,
-        ) as { conversations: ConversationRow[] }
-        conversations = r.conversations
-      } catch {
-        conversations = []
-      }
-      try {
-        const r = await api.get(
-          `/api/cp/minors/${id}/dm-contacts`,
-        ) as { contacts: DmContactRow[] }
-        contacts = r.contacts
-      } catch {
-        contacts = []
-      }
+      await Promise.all(sections.map(async section => {
+        try {
+          const patch = await SECTION_FETCHERS[section](id)
+          const rows = (patch[section] ?? []) as unknown[]
+          data[section].push(...rows)
+        } catch {
+          errors[section] = true
+        }
+      }))
       return {
         user_id:      id,
         display_name: u?.display_name ?? id,
@@ -118,6 +158,7 @@ async function loadMinors(): Promise<void> {
         spaces,
         conversations,
         contacts,
+        errors,
       }
     }))
     minors.value = bundles
@@ -194,7 +235,9 @@ export default function ParentDashboard() {
 
               <section class="sh-cp-blocks">
                 <strong>Blocked users</strong>
-                {m.blocks.length === 0 ? (
+                {m.errors.blocks ? (
+                  <SectionError minorId={m.user_id} section="blocks" />
+                ) : m.blocks.length === 0 ? (
                   <p class="sh-muted">No blocks set.</p>
                 ) : (
                   <ul>
@@ -216,7 +259,9 @@ export default function ParentDashboard() {
 
               <section class="sh-cp-spaces">
                 <strong>Joined spaces</strong>
-                {m.spaces.length === 0 ? (
+                {m.errors.spaces ? (
+                  <SectionError minorId={m.user_id} section="spaces" />
+                ) : m.spaces.length === 0 ? (
                   <p class="sh-muted">Not in any space.</p>
                 ) : (
                   <ul>
@@ -237,7 +282,9 @@ export default function ParentDashboard() {
 
               <section class="sh-cp-convs">
                 <strong>Active conversations</strong>
-                {m.conversations.length === 0 ? (
+                {m.errors.conversations ? (
+                  <SectionError minorId={m.user_id} section="conversations" />
+                ) : m.conversations.length === 0 ? (
                   <p class="sh-muted">Not in any conversation.</p>
                 ) : (
                   <ul>
@@ -257,7 +304,9 @@ export default function ParentDashboard() {
 
               <section class="sh-cp-contacts">
                 <strong>Chats with</strong>
-                {m.contacts.length === 0 ? (
+                {m.errors.contacts ? (
+                  <SectionError minorId={m.user_id} section="contacts" />
+                ) : m.contacts.length === 0 ? (
                   <p class="sh-muted">Not messaging anyone.</p>
                 ) : (
                   <ul>
@@ -282,6 +331,24 @@ export default function ParentDashboard() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function SectionError({
+  minorId, section,
+}: { minorId: string; section: SectionKey }) {
+  return (
+    <div class="sh-error" role="alert" style={{ marginTop: '0.25rem' }}>
+      <p class="sh-muted" style={{ margin: 0 }}>
+        Couldn't load this section.
+      </p>
+      <Button
+        variant="secondary"
+        onClick={() => void retrySection(minorId, section)}
+      >
+        Retry
+      </Button>
     </div>
   )
 }
