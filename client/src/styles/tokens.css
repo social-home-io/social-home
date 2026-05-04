@@ -115,6 +115,14 @@
    * stack directly under the bar. */
   --sh-topbar-height: 56px;
 
+  /* Shimmer highlight stripe used by ``.sh-skeleton`` (Skeleton.tsx).
+   * The flat fill is ``--sh-bg-tertiary``; this token defines the
+   * moving sheen on top. White-at-35% reads as a soft sheen on the
+   * cream-paper light theme; the dark-theme override drops the alpha
+   * so the same effect doesn't turn into a milky-bright stripe on
+   * dark surfaces. */
+  --sh-skeleton-highlight: color-mix(in srgb, #fff 35%, transparent);
+
   /* §23.125.4 — Household theme custom properties.
    * HouseholdThemeStudio writes to these; they default to the tokens
    * above so untouched households look identical. */
@@ -140,6 +148,10 @@
   --sh-bg:             #161821;  /* paper-deep dark */
   --sh-bg-secondary:   #1F222C;  /* one notch up for chrome */
   --sh-bg-tertiary:    #252834;  /* two notches up for nested cards */
+
+  /* On dark slate the light-theme white-35% stripe glares — drop to
+     10% so the sheen is visible without bleaching the placeholder. */
+  --sh-skeleton-highlight: color-mix(in srgb, #fff 10%, transparent);
   --sh-text:           #F1E9DA;  /* ink-light — warm cream */
   --sh-text-muted:     #8A8270;  /* ink-quiet dark */
   --sh-border:         #3A3A36;  /* warm-tinted hairline */
