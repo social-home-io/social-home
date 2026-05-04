@@ -1884,3 +1884,28 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_username
     ON password_reset_tokens(username);
+
+-- ── Auth audit log ────────────────────────────────────────────────────────
+-- Append-only audit trail for password-bearing auth events. Every login
+-- attempt, every password-reset issue, and every redeem (success and
+-- failure) writes one row. An admin can read this back via
+-- ``GET /api/admin/auth-audit`` to spot brute-force attempts or to
+-- correlate "I can't sign in" reports with what the server saw.
+--
+-- ``username`` is NULL when the request didn't carry a recoverable
+-- principal (e.g. an unknown username on login, an unknown reset
+-- token). ``metadata`` carries free-form JSON for context the future
+-- might want (e.g. token id, error code) — kept TEXT so additions
+-- don't need a migration.
+CREATE TABLE IF NOT EXISTS auth_audit_log (
+    id          TEXT PRIMARY KEY,
+    event_type  TEXT NOT NULL,
+    username    TEXT,
+    ip_address  TEXT,
+    metadata    TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_auth_audit_log_created_at
+    ON auth_audit_log(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_auth_audit_log_username
+    ON auth_audit_log(username) WHERE username IS NOT NULL;

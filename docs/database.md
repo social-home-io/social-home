@@ -36,6 +36,7 @@ anything below contradicts the file, the file wins.
 | `platform_users` | Standalone-mode local accounts (`platform/standalone/`). Empty in HA mode. Stores password hash, email, notify endpoint. |
 | `platform_tokens` | Bearer tokens for `platform_users`. Hash-only storage. |
 | `password_reset_tokens` | Admin-issued, single-use, 1h-TTL tokens that let a user set a new password. Stores SHA-256 of the raw token; `used_at` flips on consume so a token can't be replayed. |
+| `auth_audit_log` | Append-only trail of password-bearing auth events: `login_success`, `login_failure`, `reset_issue`, `reset_redeem_success`, `reset_redeem_failure`. Each row carries `username` (NULL when the request didn't carry a recoverable principal), `ip_address`, and free-form `metadata` JSON. Read by admins via `GET /api/admin/auth-audit`. |
 
 ## Federation: peers, pairing, outbox, replay
 

@@ -108,6 +108,7 @@ shopping_service_key: AppKey = AppKey("shopping_service")
 # ── Repos (exposed for routes / federation / inboxs) ───────────────────
 user_repo_key: AppKey = AppKey("user_repo")
 password_reset_repo_key: AppKey = AppKey("password_reset_repo")
+auth_audit_log_repo_key: AppKey = AppKey("auth_audit_log_repo")
 profile_picture_repo_key: AppKey = AppKey("profile_picture_repo")
 post_repo_key: AppKey = AppKey("post_repo")
 space_repo_key: AppKey = AppKey("space_repo")
