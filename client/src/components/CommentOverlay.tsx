@@ -25,7 +25,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { Avatar } from './Avatar'
-import { Spinner } from './Spinner'
+import { CommentThreadSkeleton } from './Skeleton'
 import { CommentThread } from './CommentThread'
 import { OnlinePill } from './OnlinePill'
 import { showToast } from './Toast'
@@ -258,7 +258,7 @@ export function CommentOverlay() {
         <div class="sh-comment-overlay-count" aria-live="polite">{heading}</div>
 
         <div class="sh-comment-overlay-body">
-          {loading && <Spinner />}
+          {loading && <CommentThreadSkeleton />}
           {!loading && (
             <CommentThread
               comments={comments}
