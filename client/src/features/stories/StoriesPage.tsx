@@ -17,6 +17,7 @@ import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { StoriesRingSkeleton } from '@/components/Skeleton'
 import { Avatar } from '@/components/Avatar'
+import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import type { StoryInboxItem } from '@/types'
@@ -120,10 +121,20 @@ export default function StoriesPage() {
       </section>
 
       {items.length === 0 && (
-        <p class="sh-muted sh-stories-empty">
-          No stories yet. Tap <strong>+ New</strong> to share a moment with your
-          household and connected peers.
-        </p>
+        <div class="sh-empty-state">
+          <div style={{ fontSize: '2rem' }} aria-hidden="true">🌅</div>
+          <h3 style={{ margin: 0 }}>No stories yet</h3>
+          <p>
+            Stories are short photo or video moments that disappear
+            after the day is over. Share one with your household and
+            connected peers.
+          </p>
+          <div style={{ marginTop: '0.75rem' }}>
+            <Button onClick={() => loc.route('/stories/new')}>
+              + Share your first story
+            </Button>
+          </div>
+        </div>
       )}
 
       {items.length > 0 && (
