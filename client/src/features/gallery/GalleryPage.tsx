@@ -67,7 +67,16 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
     return (
       <AlbumDetail
         album={activeAlbum.value}
-        onBack={() => { activeAlbum.value = null; items.value = [] }}
+        onBack={() => {
+          activeAlbum.value = null
+          items.value = []
+          // Re-fetch the album list so a freshly-uploaded cover +
+          // bumped item_count show up immediately. Without this,
+          // returning from an upload session still rendered the
+          // pre-upload zero-item placeholder until the user
+          // hard-reloaded.
+          void loadAlbums(spaceId)
+        }}
       />
     )
   }
