@@ -9,6 +9,7 @@ import { isGuardian, loadGuardian } from '@/store/guardian'
 import { pageTitle } from '@/store/pageTitle'
 import { toggles, loadToggles } from '@/components/HouseholdToggles'
 import { SetupPage } from '@/features/setup/SetupPage'
+import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage'
 import { routes } from './router'
 import { Button } from '@/components/Button'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -129,6 +130,9 @@ function LoginPage() {
           {busy ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
+      <p class="sh-muted" style={{ textAlign: 'center', marginTop: 'var(--sh-space-md)' }}>
+        <a class="sh-link" href="/forgot-password">Forgot password?</a>
+      </p>
     </div>
   )
 }
@@ -185,6 +189,19 @@ export function App() {
   if (cfg.value === null) return null
 
   if (cfg.value.setup_required) return <SetupPage />
+
+  // Public, pre-auth routes. The reset path is reachable from the
+  // ``Forgot password?`` link below the login form, AND from a token
+  // URL the admin hands the user out-of-band — the latter must work
+  // even when the user isn't signed in. Same for the static
+  // instructions card at /forgot-password.
+  const path = typeof window !== 'undefined' ? window.location.pathname : ''
+  if (path === '/forgot-password' || path === '/reset-password') {
+    const params = new URLSearchParams(
+      typeof window !== 'undefined' ? window.location.search : '',
+    )
+    return <ForgotPasswordPage token={params.get('token')} />
+  }
 
   if (!authed.value) return <LoginPage />
 
