@@ -1,6 +1,6 @@
 import { signal, computed } from '@preact/signals'
 import type { User } from '@/types'
-import { api } from '@/api'
+import { api, _resetApiLoggedOut } from '@/api'
 
 export const token       = signal<string | null>(localStorage.getItem('sh_token'))
 export const currentUser = signal<User | null>(null)
@@ -35,6 +35,8 @@ export async function loadCurrentUser(): Promise<User | null> {
 export function setToken(t: string) {
   token.value = t
   localStorage.setItem('sh_token', t)
+  // A fresh sign-in means the next 401 should show its own toast.
+  _resetApiLoggedOut()
 }
 
 export function logout() {
