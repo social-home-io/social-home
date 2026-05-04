@@ -20,6 +20,7 @@ import { ws } from '@/ws'
 import { Button } from './Button'
 import { Modal } from './Modal'
 import { showToast } from './Toast'
+import { t } from '@/i18n/i18n'
 
 interface PeerOption {
   instance_id: string
@@ -204,7 +205,7 @@ export function AutoPairDialog({ onPaired }: Props) {
               Connections page. You'll be notified as soon as their
               admin approves.
             </p>
-            <Button onClick={close}>OK</Button>
+            <Button onClick={close}>{t('common.ok')}</Button>
           </div>
         )}
 

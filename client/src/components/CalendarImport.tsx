@@ -13,6 +13,7 @@ import { api } from '@/api'
 import { token } from '@/store/auth'
 import { Button } from './Button'
 import { showToast } from './Toast'
+import { t } from '@/i18n/i18n'
 
 type Mode = null | 'menu' | 'image' | 'prompt'
 
@@ -110,7 +111,7 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
             <Button onClick={() => { mode.value = 'prompt' }} loading={busy.value}>
               From a description
             </Button>
-            <Button variant="secondary" onClick={close}>Cancel</Button>
+            <Button variant="secondary" onClick={close}>{t('common.cancel')}</Button>
           </div>
         </div>
       )}
@@ -125,7 +126,7 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
               onInput={(e) => { caption.value = (e.target as HTMLInputElement).value }}
             />
             <Button onClick={handleImagePick} loading={busy.value}>Choose image</Button>
-            <Button variant="secondary" onClick={close}>Cancel</Button>
+            <Button variant="secondary" onClick={close}>{t('common.cancel')}</Button>
           </div>
         </div>
       )}
@@ -140,7 +141,7 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
               onInput={(e) => { prompt.value = (e.target as HTMLTextAreaElement).value }}
             />
             <Button onClick={handlePromptSubmit} loading={busy.value}>Create events</Button>
-            <Button variant="secondary" onClick={close}>Cancel</Button>
+            <Button variant="secondary" onClick={close}>{t('common.cancel')}</Button>
           </div>
         </div>
       )}

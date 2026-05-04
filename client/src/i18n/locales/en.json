@@ -395,6 +395,8 @@
   "common.close": "Close",
   "common.retry": "Retry",
   "common.not_now": "Not now",
+  "common.ok": "OK",
+  "common.try_again": "Try again",
 
   "time.just_now": "just now",
   "time.minutes_ago": "{n} min ago",

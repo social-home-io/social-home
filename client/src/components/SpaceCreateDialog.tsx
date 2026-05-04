@@ -7,6 +7,7 @@ import { loadSpaces } from '@/store/spaces'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { showToast } from './Toast'
+import { t } from '@/i18n/i18n'
 
 const open = signal(false)
 const name = signal('')
@@ -91,7 +92,7 @@ export function SpaceCreateDialog() {
           </label>
         )}
         <div class="sh-form-actions">
-          <Button variant="secondary" onClick={() => open.value = false}>Cancel</Button>
+          <Button variant="secondary" onClick={() => open.value = false}>{t('common.cancel')}</Button>
           <Button onClick={handleSubmit} loading={submitting.value}
             disabled={!name.value.trim()}>
             Create
