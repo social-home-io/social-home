@@ -50,6 +50,7 @@ log aggregation.** Code must never log the full query string of
 | POST | `/api/auth/token` | Issue a bearer token (standalone mode). |
 | POST | `/api/auth/redeem-password-reset` | Public: redeem a one-time admin-issued reset token to set a new password. Body: `{token, new_password}`. 204 on success; 410 when expired / already used; 422 for short password / missing fields. Same per-IP rate limit as `/api/auth/token` (5 / 15 min). |
 | POST | `/api/admin/users/{username}/issue-password-reset` | Admin: mint a single-use, 1h-TTL reset token for a user. Returns `{token, expires_at, username}` once — admin hands the resulting `/reset-password?token=…` URL to the user out-of-band. Standalone mode has no SMTP, so this is the only recovery path. |
+| GET | `/api/admin/auth-audit` | Admin: read the auth audit log — append-only trail of login attempts (success + failure), reset issues, and reset redeems. Query `?limit=N` (default 100, max 500). |
 | GET | `/api/me` | Current user profile. |
 | PATCH | `/api/me` | Update display name, timezone, language, etc. |
 | GET | `/api/me/picture` | Download current user's avatar. |

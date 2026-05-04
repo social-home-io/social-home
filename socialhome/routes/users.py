@@ -24,6 +24,7 @@ from aiohttp import web
 from aiohttp.multipart import BodyPartReader
 
 from ..app_keys import (
+    auth_audit_log_repo_key,
     config_key,
     data_export_service_key,
     media_signer_key,
@@ -545,6 +546,13 @@ class IssuePasswordResetView(BaseView):
             username,
             ctx.user_id,
         )
+        audit = self.svc(auth_audit_log_repo_key)
+        await audit.record(
+            "reset_issue",
+            username=username,
+            ip_address=self.request.remote,
+            metadata={"issued_by": ctx.user_id},
+        )
         log.info(
             "password reset issued for %s by admin %s (expires %s)",
             username,
@@ -614,16 +622,48 @@ class RedeemPasswordResetView(BaseView):
                 "Password must be at least 8 characters.",
             )
         repo = self.svc(password_reset_repo_key)
+        audit = self.svc(auth_audit_log_repo_key)
         username = await repo.consume_token(token)
         if username is None:
+            await audit.record(
+                "reset_redeem_failure",
+                ip_address=self.request.remote,
+            )
             return error_response(
                 410,
                 "INVALID_TOKEN",
                 "This reset link has expired or already been used.",
             )
         await adapter.change_password(username, new_password)
+        await audit.record(
+            "reset_redeem_success",
+            username=username,
+            ip_address=self.request.remote,
+        )
         log.info("password reset redeemed for %s", username)
         return web.Response(status=204)
+
+
+class AdminAuthAuditLogView(BaseView):
+    """GET /api/admin/auth-audit — admin only.
+
+    Returns the most recent rows from the auth audit log so an admin
+    can spot brute-force attempts or correlate "I can't sign in"
+    reports with what the server saw.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        if ctx is None or not ctx.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        limit_raw = self.request.query.get("limit", "100")
+        try:
+            limit = max(1, min(500, int(limit_raw)))
+        except TypeError, ValueError:
+            limit = 100
+        repo = self.svc(auth_audit_log_repo_key)
+        rows = await repo.list_recent(limit)
+        return web.json_response({"events": rows})
 
 
 class AuthTokenView(BaseView):
@@ -664,6 +704,17 @@ class AuthTokenView(BaseView):
                 "username and password are required.",
             )
         token = await adapter.issue_bearer_token(username, password)
+        audit = self.svc(auth_audit_log_repo_key)
         if token is None:
+            await audit.record(
+                "login_failure",
+                username=username,
+                ip_address=self.request.remote,
+            )
             return error_response(401, "UNAUTHENTICATED", "Invalid credentials.")
+        await audit.record(
+            "login_success",
+            username=username,
+            ip_address=self.request.remote,
+        )
         return web.json_response({"token": token})
