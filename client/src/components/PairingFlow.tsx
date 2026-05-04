@@ -487,10 +487,35 @@ function ScanPaste({
 //  Main component
 // ────────────────────────────────────────────────────────────────
 
+/** Per-state timeout. Pairing waits indefinitely for the peer at
+ *  ``waiting`` (inviter showing QR) and ``sas-display`` (scanner
+ *  showing the 6-digit code) — five minutes is plenty for two
+ *  people in the same room and avoids leaving the modal "verifying"
+ *  forever when the peer never confirms. */
+const PAIRING_STEP_TIMEOUT_MS = 5 * 60 * 1000
+
 export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void }) {
   onGfsConnectedCb.value = onGfsConnected ?? null
   const sasAutofilledRef = useRef(false)
   const [pasteMode, setPasteMode] = useState(false)
+
+  // ── Per-state timeout ─────────────────────────────────────────────
+  // Watches ``step.value``; when the user enters one of the open-ended
+  // wait states, schedule a single fail-out so the modal doesn't sit
+  // forever if the peer ghosts.
+  useEffect(() => {
+    if (!open.value) return
+    if (step.value !== 'waiting' && step.value !== 'sas-display') return
+    const timer = setTimeout(() => {
+      // Re-check current state before flipping — the user might have
+      // advanced past the timed state by the time the timer fires.
+      if (step.value === 'waiting' || step.value === 'sas-display') {
+        step.value = 'failed'
+        peerHint.value = 'Pairing timed out — try again.'
+      }
+    }, PAIRING_STEP_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [step.value, open.value])
 
   // ── Live updates from the federation layer ─────────────────────────
   useEffect(() => {
@@ -720,6 +745,9 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
                       {t('pairing.clear_code')}
                     </button>
                   )}
+                  <button type="button" class="sh-link" onClick={resetAll}>
+                    {t('pairing.cancel')}
+                  </button>
                 </div>
               </div>
             )}
