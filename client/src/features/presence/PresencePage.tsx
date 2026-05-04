@@ -189,6 +189,16 @@ export default function PresencePage() {
       </div>
 
       <h2>Members</h2>
+      {presenceList.value.length === 0 && (
+        <div class="sh-empty-state">
+          <div style={{ fontSize: '2rem' }} aria-hidden="true">🏠</div>
+          <h3 style={{ margin: 0 }}>Just you here</h3>
+          <p>
+            Once other household members sign in, you'll see them
+            with their current state and zone.
+          </p>
+        </div>
+      )}
       {presenceList.value.map(p => {
         const online = p.is_online ? (p.is_idle ? 'idle' : 'online') : null
         const lastSeen = humanizeAgo(p.last_seen_at)
