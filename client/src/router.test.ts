@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { routes } from './router'
 
 describe('router', () => {
-  it('defines 33 routes', () => {
+  it('defines 34 routes', () => {
     // Routes added across recent passes:
     //   /dms/:id/calls   — per-conversation call history
     //   /calls/:callId   — in-call page
@@ -15,7 +15,8 @@ describe('router', () => {
     //   /setup           — first-boot wizard (platform/v2)
     //   /friends         — connected-people dashboard under Browse
     //   /stories, /stories/new, /stories/:storyId — Stories pillar (§Stories)
-    expect(Object.keys(routes).length).toBe(33)
+    //   /stories/archive — month-grid history browser (§Stories)
+    expect(Object.keys(routes).length).toBe(34)
   })
 
   it('has feed route at /', () => {
