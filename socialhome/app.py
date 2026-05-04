@@ -68,6 +68,9 @@ from .infrastructure.post_draft_scheduler import PostDraftCleanupScheduler
 from .infrastructure.gfs_ws_supervisor import GfsWebSocketSupervisor
 from .infrastructure.dm_gc_scheduler import DmGcScheduler
 from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionScheduler
+from .infrastructure.password_reset_cleanup_scheduler import (
+    PasswordResetCleanupScheduler,
+)
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
 from .infrastructure.story_retention_scheduler import StoryRetentionScheduler
@@ -1230,6 +1233,7 @@ def create_app(config: Config | None = None) -> web.Application:
     stale_call_scheduler: StaleCallCleanupScheduler | None = None
     gfs_ws_supervisor: GfsWebSocketSupervisor | None = None
     replay_cache_scheduler: ReplayCachePruneScheduler | None = None
+    password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
     dm_gc_scheduler: DmGcScheduler | None = None
     page_lock_scheduler: PageLockExpiryScheduler | None = None
@@ -1576,6 +1580,15 @@ def create_app(config: Config | None = None) -> web.Application:
         replay_cache_scheduler = ReplayCachePruneScheduler(federation_repo)
         await replay_cache_scheduler.start()
 
+        # Password-reset cleanup — drops expired admin-issued reset
+        # tokens so the table doesn't accumulate one row per reset
+        # forever (1h TTL, runs hourly).
+        nonlocal password_reset_cleanup_scheduler
+        password_reset_cleanup_scheduler = PasswordResetCleanupScheduler(
+            repos.password_reset,
+        )
+        await password_reset_cleanup_scheduler.start()
+
         # Online-status idle scanner — promotes online → idle after 5
         # minutes of WS-frame silence and back to online on activity.
         await online_status_service.start()
@@ -1672,6 +1685,8 @@ def create_app(config: Config | None = None) -> web.Application:
             await gfs_ws_supervisor.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
+        if password_reset_cleanup_scheduler is not None:
+            await password_reset_cleanup_scheduler.stop()
         await online_status_service.stop()
         if pairing_relay_scheduler is not None:
             await pairing_relay_scheduler.stop()
