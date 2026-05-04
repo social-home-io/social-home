@@ -12,6 +12,7 @@ import {
   BazaarSkeleton,
   TasksSkeleton,
   CommentThreadSkeleton,
+  NotificationListSkeleton,
 } from './Skeleton'
 
 describe('Skeleton primitive', () => {
@@ -119,5 +120,19 @@ describe('Page-shaped skeletons', () => {
     expect(
       container.querySelectorAll('.sh-comment-item--skeleton').length,
     ).toBe(5)
+  })
+
+  it('NotificationListSkeleton defaults to 5 rows', () => {
+    const { container } = render(<NotificationListSkeleton />)
+    expect(
+      container.querySelectorAll('.sh-notif-row--skeleton').length,
+    ).toBe(5)
+  })
+
+  it('NotificationListSkeleton honours the count prop', () => {
+    const { container } = render(<NotificationListSkeleton count={3} />)
+    expect(
+      container.querySelectorAll('.sh-notif-row--skeleton').length,
+    ).toBe(3)
   })
 })

@@ -6,7 +6,7 @@ import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
-import { Spinner } from '@/components/Spinner'
+import { NotificationListSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import type { Notification } from '@/types'
 
@@ -44,7 +44,7 @@ export default function NotificationsPage() {
     }
   }
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <NotificationListSkeleton />
 
   return (
     <div class="sh-notifications-page">

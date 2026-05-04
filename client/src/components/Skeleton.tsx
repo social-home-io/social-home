@@ -256,6 +256,37 @@ export function CommentThreadSkeleton({ count = 3 }: { count?: number } = {}) {
 }
 
 
+/** Stand-in for ``NotificationsPage``: a header + a stack of rows
+ *  with leading status dot + title + timestamp line. */
+export function NotificationListSkeleton({ count = 5 }: { count?: number } = {}) {
+  return (
+    <div class="sh-notifications-page sh-notifications-page--skeleton" aria-busy="true">
+      <div class="sh-page-header">
+        <Skeleton shape="rect" width={120} height={32} />
+      </div>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} class="sh-notif-row sh-notif-row--skeleton">
+          <Skeleton shape="circle" width={12} height={12} />
+          <div class="sh-notif-content">
+            <Skeleton
+              shape="line"
+              width={i % 2 === 0 ? '70%' : '55%'}
+              height={13}
+            />
+            <Skeleton
+              shape="line"
+              width="35%"
+              height={10}
+              class="sh-skeleton-spaced"
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
 /** Stand-in for ``TaskPage``: sidebar list + main column with task rows. */
 export function TasksSkeleton() {
   return (
