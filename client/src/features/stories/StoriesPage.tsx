@@ -99,6 +99,9 @@ export default function StoriesPage() {
     <div class="sh-stories-page">
       <header class="sh-stories-header">
         <h2>Stories</h2>
+        <a href="/stories/archive" class="sh-link sh-stories-settings-link">
+          📅 Archive
+        </a>
         <a href="/settings#stories" class="sh-link sh-stories-settings-link">
           Settings
         </a>

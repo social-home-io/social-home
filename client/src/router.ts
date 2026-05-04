@@ -30,6 +30,7 @@ export const routes: Record<string, ReturnType<typeof lazy>> = {
   '/calls':          lazy(() => import('@/features/calls/CallsPage')),
   '/calls/:callId':  lazy(() => import('@/features/calls/InCallPage')),
   '/stories':        lazy(() => import('@/features/stories/StoriesPage')),
+  '/stories/archive': lazy(() => import('@/features/stories/StoryArchivePage')),
   '/stories/new':    lazy(() => import('@/features/stories/StoryComposerPage')),
   '/stories/:storyId': lazy(() => import('@/features/stories/StoryViewerPage')),
   '/parent':         lazy(() => import('@/features/child-protection/ParentDashboard')),
