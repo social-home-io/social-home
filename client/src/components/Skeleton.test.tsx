@@ -11,6 +11,7 @@ import {
   SpaceListSkeleton,
   BazaarSkeleton,
   TasksSkeleton,
+  CommentThreadSkeleton,
 } from './Skeleton'
 
 describe('Skeleton primitive', () => {
@@ -104,5 +105,19 @@ describe('Page-shaped skeletons', () => {
     const { container } = render(<TasksSkeleton />)
     expect(container.querySelector('.sh-tasks-sidebar')).toBeTruthy()
     expect(container.querySelectorAll('.sh-skeleton-task-row').length).toBe(5)
+  })
+
+  it('CommentThreadSkeleton defaults to 3 comment rows', () => {
+    const { container } = render(<CommentThreadSkeleton />)
+    expect(
+      container.querySelectorAll('.sh-comment-item--skeleton').length,
+    ).toBe(3)
+  })
+
+  it('CommentThreadSkeleton honours the count prop', () => {
+    const { container } = render(<CommentThreadSkeleton count={5} />)
+    expect(
+      container.querySelectorAll('.sh-comment-item--skeleton').length,
+    ).toBe(5)
   })
 })

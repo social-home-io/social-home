@@ -229,6 +229,33 @@ export function BazaarSkeleton() {
 }
 
 
+/** Stand-in for the comment thread inside ``CommentOverlay``: a few
+ *  short rows with avatar + author + line. The overlay swaps this in
+ *  while the comment fetch is in flight, replacing the previous
+ *  full-width spinner so the user sees the chat-shaped layout
+ *  immediately. */
+export function CommentThreadSkeleton({ count = 3 }: { count?: number } = {}) {
+  return (
+    <div class="sh-comment-thread sh-comment-thread--skeleton" aria-busy="true">
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} class="sh-comment-item sh-comment-item--skeleton">
+          <Skeleton shape="circle" width={28} height={28} />
+          <div class="sh-comment-body">
+            <Skeleton shape="line" width="30%" height={11} />
+            <Skeleton
+              shape="line"
+              width={i % 2 === 0 ? '85%' : '60%'}
+              height={12}
+              class="sh-skeleton-spaced"
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
 /** Stand-in for ``TaskPage``: sidebar list + main column with task rows. */
 export function TasksSkeleton() {
   return (

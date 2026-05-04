@@ -2421,6 +2421,7 @@ a.sh-friends-member-chip:hover {
   gap: var(--sh-space-sm);
 }
 .sh-comment-item:hover { background: var(--sh-bg-secondary); }
+.sh-comment-item--skeleton:hover { background: transparent; }
 .sh-comment-body {
   flex: 1;
   min-width: 0;
