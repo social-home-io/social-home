@@ -11405,6 +11405,69 @@ a.sh-btn--ghost:hover {
   border-color: var(--sh-primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sh-primary) 30%, transparent);
 }
+/* Per-frame staged-frame cards in the multi-pick composer. Each card
+ * is a thumbnail + caption textarea + emoji-pick button row, stacked
+ * vertically so a 30-frame story is still scannable on mobile. */
+.sh-story-frames {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+}
+.sh-story-frame {
+  display: flex;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-sm);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg);
+}
+.sh-story-frame-thumb {
+  flex: 0 0 88px;
+  width: 88px;
+  height: 88px;
+  border-radius: var(--sh-radius-sm);
+  overflow: hidden;
+  background: var(--sh-bg-secondary);
+}
+.sh-story-frame-thumb img,
+.sh-story-frame-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sh-story-frame-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  min-width: 0;
+}
+.sh-story-frame-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text-muted);
+}
+.sh-story-frame-remove {
+  font-size: 1rem;
+  line-height: 1;
+}
+.sh-story-frame-caption-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sh-space-xs);
+}
+.sh-story-frame-caption-row textarea {
+  flex: 1 1 auto;
+  resize: vertical;
+  min-height: 2.5rem;
+}
+
 .sh-story-composer-audience {
   display: flex;
   flex-direction: column;
