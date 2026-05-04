@@ -1,7 +1,11 @@
 /**
  * NewPageDialog — modal replacement for the old window.prompt flow.
+ *
+ * Composes on top of ``Modal`` so it inherits the household focus-trap
+ * + Escape + focus-restore behaviour all other dialogs share.
  */
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { Modal } from './Modal'
 import { Button } from './Button'
 
 interface Props {
@@ -19,11 +23,13 @@ export function NewPageDialog({ open, onCreate, onCancel }: Props) {
     if (open) {
       setTitle('')
       setBusy(false)
+      // ``Modal`` focuses the first focusable on open. The title input
+      // is the first interactive element below, so this nudge keeps
+      // the caret in the field after the StrictMode double-mount + the
+      // input's own value/placeholder hydration completes.
       setTimeout(() => ref.current?.focus(), 10)
     }
   }, [open])
-
-  if (!open) return null
 
   const submit = async (e: Event) => {
     e.preventDefault()
@@ -35,43 +41,25 @@ export function NewPageDialog({ open, onCreate, onCancel }: Props) {
   }
 
   return (
-    <div class="sh-modal-overlay" role="presentation" onClick={onCancel}>
-      <div
-        class="sh-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sh-new-page-title"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div class="sh-modal-header">
-          <h3 id="sh-new-page-title" style={{ margin: 0 }}>New page</h3>
-          <button
-            type="button" class="sh-modal-close"
-            aria-label="Close dialog" onClick={onCancel}
-          >×</button>
+    <Modal open={open} onClose={onCancel} title="New page">
+      <form class="sh-form" onSubmit={submit}>
+        <label>
+          Title
+          <input
+            ref={ref}
+            value={title}
+            placeholder="e.g. Trip plan — Italy 2026"
+            onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
+            required
+          />
+        </label>
+        <div class="sh-form-actions">
+          <Button variant="secondary" type="button" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" loading={busy} disabled={!title.trim()}>
+            Create
+          </Button>
         </div>
-        <form class="sh-modal-body sh-form" onSubmit={submit}>
-          <label>
-            Title
-            <input
-              ref={ref}
-              value={title}
-              placeholder="e.g. Trip plan — Italy 2026"
-              onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') onCancel()
-              }}
-              required
-            />
-          </label>
-          <div class="sh-form-actions">
-            <Button variant="secondary" type="button" onClick={onCancel}>Cancel</Button>
-            <Button type="submit" loading={busy} disabled={!title.trim()}>
-              Create
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+      </form>
+    </Modal>
   )
 }
