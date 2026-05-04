@@ -34,7 +34,14 @@ export function Gallery({ spaceId }: { spaceId?: string }) {
         <div class="sh-album-grid">
           {albums.value.map(a => (
             <div key={a.id} class="sh-album-card" onClick={() => activeAlbum.value = a.id}>
-              {a.cover_url && <img src={a.cover_url} class="sh-album-cover" />}
+              {a.cover_url && (
+                <img
+                  src={a.cover_url}
+                  class="sh-album-cover"
+                  loading="lazy"
+                  alt={a.name}
+                />
+              )}
               <div class="sh-album-info">
                 <strong>{a.name}</strong>
                 <span class="sh-muted">{a.item_count} items</span>

@@ -406,7 +406,7 @@ function HaOwnerForm() {
                 />
                 <span class="sh-setup-person-avatar">
                   {p.picture_url
-                    ? <img src={p.picture_url} alt="" />
+                    ? <img src={p.picture_url} alt="" loading="lazy" />
                     : <span aria-hidden="true">{initials(p.display_name)}</span>}
                 </span>
                 <span class="sh-setup-person-name">{p.display_name}</span>
