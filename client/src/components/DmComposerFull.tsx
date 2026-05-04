@@ -13,6 +13,7 @@ import {
 import { EmojiPickButton } from './EmojiPickButton'
 import { SttButton } from './SttButton'
 import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
+import { showToast } from './Toast'
 import { sendTyping } from './TypingIndicator'
 
 const content = signal('')
@@ -55,7 +56,12 @@ export function DmComposerFull({ conversationId, onSend }: {
         mediaUrl.value = result.url
         mediaPreviewUrl.value = result.signed_url
         msgType.value = file.type.startsWith('video/') ? 'video' : 'image'
-      } catch {}
+      } catch (err: unknown) {
+        // Surface the failure rather than swallowing — a silent
+        // ``catch {}`` here let the user think a file had attached
+        // when it hadn't, and they only noticed on send.
+        showToast(`Upload failed: ${(err as Error)?.message ?? err}`, 'error')
+      }
     }
     input.click()
   }
