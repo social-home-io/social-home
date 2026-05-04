@@ -26,29 +26,27 @@ const bio = signal('')
 const landingPath = signal<LandingPath>('/')
 const avatarUrl = signal<string | null>(null)
 const onlineStatusVisible = signal(true)
-// Track whether the privacy fetch landed cleanly. Without this we
-// rendered the default-on toggle as if it were the server's value,
-// so a transient fetch failure silently flipped the user's privacy
-// without their consent.
-const privacyLoaded = signal(false)
-const privacyLoadError = signal<string | null>(null)
 const pushEnabled = signal(
   typeof Notification !== 'undefined' ? Notification.permission === 'granted' : false
 )
 
-async function loadPrivacy() {
-  privacyLoadError.value = null
+/** Read ``online_status_visible`` from the cached
+ *  ``currentUser.preferences_json``. The previous implementation
+ *  GET'd a non-existent ``/api/me/privacy`` endpoint, hard-failed
+ *  the route after PR #126's load-error chip surfaced the 404, and
+ *  showed every user a "Couldn't load your privacy settings" panel.
+ *  Privacy is just a user preference (same store as Stories prefs);
+ *  read it inline from the user we already loaded on cold start. */
+function syncOnlineStatusFromUser(): void {
+  const raw = (currentUser.value as unknown as { preferences_json?: string } | null)
+    ?.preferences_json
+  if (!raw) return
   try {
-    const data = await api.get('/api/me/privacy') as
-      { online_status_visible?: boolean }
-    if (typeof data.online_status_visible === 'boolean') {
-      onlineStatusVisible.value = data.online_status_visible
+    const prefs = JSON.parse(raw) as { online_status_visible?: boolean }
+    if (typeof prefs.online_status_visible === 'boolean') {
+      onlineStatusVisible.value = prefs.online_status_visible
     }
-    privacyLoaded.value = true
-  } catch (err: unknown) {
-    privacyLoadError.value = (err as Error).message ?? 'Could not load'
-    privacyLoaded.value = false
-  }
+  } catch { /* keep the default */ }
 }
 
 export default function SettingsPage() {
@@ -60,7 +58,7 @@ export default function SettingsPage() {
       avatarUrl.value = currentUser.value.picture_url
     }
     landingPath.value = getLandingPath()
-    void loadPrivacy()
+    syncOnlineStatusFromUser()
   }, [])
 
   const panelId = (t: SettingsTab) => `sh-settings-panel-${t}`
@@ -301,30 +299,27 @@ function PrivacyTab() {
   const toggleOnlineStatus = async () => {
     onlineStatusVisible.value = !onlineStatusVisible.value
     try {
-      await api.patch('/api/me/privacy', { online_status_visible: onlineStatusVisible.value })
+      // Privacy preferences ride on the existing
+      // ``users.preferences_json`` blob — same store ``StoriesPrefs``
+      // uses. PATCH /api/me with a ``preferences`` patch shallow-merges
+      // the keys, so unrelated prefs are untouched.
+      const updated = await api.patch('/api/me', {
+        preferences: { online_status_visible: onlineStatusVisible.value },
+      }) as { preferences_json?: string }
+      // Mirror the server's authoritative blob onto the auth store so
+      // a tab switch / reload reads the same value without an extra
+      // /api/me round-trip.
+      if (currentUser.value && updated.preferences_json) {
+        currentUser.value = {
+          ...currentUser.value,
+          preferences_json: updated.preferences_json,
+        } as User
+      }
       showToast('Privacy updated', 'success')
     } catch {
       onlineStatusVisible.value = !onlineStatusVisible.value
       showToast('Failed to update privacy', 'error')
     }
-  }
-
-  // If the load failed, surface that instead of letting the user
-  // think the rendered toggle reflects the server value. Toggling
-  // pre-load would push a default at the server they may not have
-  // chosen.
-  if (privacyLoadError.value) {
-    return (
-      <section class="sh-settings-section">
-        <h2>Privacy</h2>
-        <div class="sh-error" role="alert">
-          <p>Couldn't load your privacy settings.</p>
-          <Button variant="secondary" onClick={() => void loadPrivacy()}>
-            Retry
-          </Button>
-        </div>
-      </section>
-    )
   }
 
   return (
@@ -334,7 +329,6 @@ function PrivacyTab() {
         <input
           type="checkbox"
           checked={onlineStatusVisible.value}
-          disabled={!privacyLoaded.value}
           onChange={toggleOnlineStatus}
         />
         Show online status to other household members
