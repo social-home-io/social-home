@@ -9146,6 +9146,38 @@ hr {
   50%      { opacity: 0.4; }
 }
 
+/* Back-to-top floating button — appears past the fold on long lists.
+ * Sits above the toast region but below the lightbox so a media viewer
+ * still wins. Lifts above the mobile bottom-nav on small screens so
+ * it's not hidden behind the tab bar. */
+.sh-back-to-top {
+  position: fixed;
+  right: var(--sh-space-md);
+  bottom: calc(var(--sh-space-md) + env(safe-area-inset-bottom, 0px));
+  width: 44px;
+  height: 44px;
+  border-radius: var(--sh-radius-full);
+  border: 1px solid var(--sh-border);
+  background: var(--sh-bg);
+  color: var(--sh-text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--sh-shadow-md);
+  z-index: var(--sh-z-toast);
+  transition:
+    background var(--sh-transition-fast),
+    transform var(--sh-transition-fast);
+  animation: sh-fade-in 220ms var(--sh-ease-out);
+}
+.sh-back-to-top:hover {
+  background: var(--sh-bg-secondary);
+  transform: translateY(-1px);
+}
+@media (max-width: 768px) {
+  .sh-back-to-top { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+}
+
 /* Pull-to-refresh — host stays ``position: relative`` so the indicator
  * pill anchors to the top of the wrapped content. The wrapper does
  * NOT clip overflow: clipping would cut off menus / dropdowns that
