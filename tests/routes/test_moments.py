@@ -31,6 +31,34 @@ async def test_create_text_moment_and_list(client):
     assert r.status == 200
     items = await r.json()
     assert {m["id"] for m in items} == {body["id"]}
+    # Inbox rows always include the engagement counts so the SPA can
+    # render the Twitter-style chip row without follow-up fetches.
+    assert items[0]["reaction_count"] == 0
+    assert items[0]["reply_count"] == 0
+
+
+async def test_inbox_includes_aggregated_counts(client):
+    """Reactions + replies show up as integers on each inbox row."""
+    r = await client.post(
+        "/api/moments",
+        json={"content": "hi"},
+        headers=_auth(client._tok),
+    )
+    moment_id = (await r.json())["id"]
+    await client.put(
+        f"/api/moments/{moment_id}/reaction",
+        json={"emoji": "🔥"},
+        headers=_auth(client._tok),
+    )
+    await client.post(
+        "/api/moments",
+        json={"content": "yo", "parent_moment_id": moment_id},
+        headers=_auth(client._tok),
+    )
+    items = await (await client.get("/api/moments", headers=_auth(client._tok))).json()
+    parent = next(m for m in items if m["id"] == moment_id)
+    assert parent["reaction_count"] == 1
+    assert parent["reply_count"] == 1
 
 
 async def test_create_empty_rejected(client):

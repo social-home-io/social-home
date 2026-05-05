@@ -59,6 +59,12 @@ class AbstractMomentRepo(Protocol):
     ) -> None: ...
     async def list_reactions(self, moment_id: str) -> list[MomentReaction]: ...
 
+    # Engagement counters --------------------------------------------------
+    async def count_engagement_for(
+        self,
+        moment_ids: list[str],
+    ) -> dict[str, dict[str, int]]: ...
+
     # Retention -----------------------------------------------------------
     async def prune_expired(self) -> int: ...
 
@@ -225,6 +231,51 @@ class SqliteMomentRepo:
             )
             for r in rows
         ]
+
+    # ── Engagement counters ────────────────────────────────────────────
+
+    async def count_engagement_for(
+        self,
+        moment_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        """Aggregate reactions + replies for the given moment ids.
+
+        Returns ``{moment_id: {"reaction_count": N, "reply_count": M}}``
+        with zeros for ids that have no rows. One trip per table —
+        cheap enough for the typical inbox page (≤ 50 ids).
+
+        The Twitter-style row layout shows these counts inline, so the
+        SPA can render the chip row without a per-row follow-up fetch.
+        """
+        out: dict[str, dict[str, int]] = {
+            mid: {"reaction_count": 0, "reply_count": 0} for mid in moment_ids
+        }
+        if not moment_ids:
+            return out
+        placeholders = ",".join("?" for _ in moment_ids)
+        rxn_rows = await self._db.fetchall(
+            f"""
+            SELECT moment_id, COUNT(*) AS n
+              FROM moment_reactions
+             WHERE moment_id IN ({placeholders})
+             GROUP BY moment_id
+            """,
+            tuple(moment_ids),
+        )
+        for r in rxn_rows:
+            out[r["moment_id"]]["reaction_count"] = int(r["n"])
+        rep_rows = await self._db.fetchall(
+            f"""
+            SELECT parent_moment_id AS moment_id, COUNT(*) AS n
+              FROM moments
+             WHERE parent_moment_id IN ({placeholders})
+             GROUP BY parent_moment_id
+            """,
+            tuple(moment_ids),
+        )
+        for r in rep_rows:
+            out[r["moment_id"]]["reply_count"] = int(r["n"])
+        return out
 
     # ── Retention ──────────────────────────────────────────────────────
 
