@@ -181,6 +181,68 @@ async def test_list_blocked_unknown_user_raises(stack):
         await stack.user_svc.list_blocked("ghost")
 
 
+# ── Follows (§Momentum) ──────────────────────────────────────────────
+
+
+async def test_follow_unfollow_publishes_events(stack):
+    """``follow / unfollow`` emit :class:`UserFollowed` / :class:`UserUnfollowed`."""
+    from socialhome.domain.events import UserFollowed, UserUnfollowed
+
+    a = await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    seen: list = []
+    stack.bus.subscribe(UserFollowed, lambda ev: seen.append(("followed", ev)))
+    stack.bus.subscribe(UserUnfollowed, lambda ev: seen.append(("unfollowed", ev)))
+
+    await stack.user_svc.follow("anna", b.user_id)
+    await stack.user_svc.unfollow("anna", b.user_id)
+
+    kinds = [k for k, _ in seen]
+    assert kinds == ["followed", "unfollowed"]
+    assert seen[0][1].follower_user_id == a.user_id
+    assert seen[0][1].followed_user_id == b.user_id
+
+
+async def test_follow_self_rejected_at_service(stack):
+    a = await stack.provision_user("anna")
+    with pytest.raises(ValueError):
+        await stack.user_svc.follow("anna", a.user_id)
+
+
+async def test_follow_unknown_follower_raises(stack):
+    with pytest.raises(KeyError):
+        await stack.user_svc.follow("ghost", "uid-bob")
+
+
+async def test_unfollow_unknown_follower_raises(stack):
+    with pytest.raises(KeyError):
+        await stack.user_svc.unfollow("ghost", "uid-bob")
+
+
+async def test_list_following_returns_dicts_newest_first(stack):
+    a = await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    c = await stack.provision_user("carol")
+    await stack.db.enqueue(
+        "INSERT INTO user_follows(follower_user_id, followed_user_id, created_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, b.user_id, "2026-01-01T00:00:00Z"),
+    )
+    await stack.db.enqueue(
+        "INSERT INTO user_follows(follower_user_id, followed_user_id, created_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, c.user_id, "2026-02-01T00:00:00Z"),
+    )
+    rows = await stack.user_svc.list_following("anna")
+    assert [r["user_id"] for r in rows] == [c.user_id, b.user_id]
+    assert rows[0]["created_at"] == "2026-02-01T00:00:00Z"
+
+
+async def test_list_following_unknown_user_raises(stack):
+    with pytest.raises(KeyError):
+        await stack.user_svc.list_following("ghost")
+
+
 async def test_list_active_filters_deleted(stack):
     """list_active excludes deprovisioned users."""
     await stack.provision_user("anna")

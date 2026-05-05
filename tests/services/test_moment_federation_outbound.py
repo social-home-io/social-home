@@ -36,6 +36,7 @@ def _create_event(
         media_type=None,
         duration_ms=None,
         parent_moment_id=parent,
+        parent_author_user_id=None,
         origin_instance_id="self",
         expires_at="2026-06-01T00:00:00+00:00",
     )

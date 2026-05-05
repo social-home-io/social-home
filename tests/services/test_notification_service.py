@@ -803,3 +803,125 @@ async def test_user_self_follow_silent(stack):
         )
     )
     assert await stack.notif_repo.list(a.user_id, limit=10) == []
+
+
+async def test_moment_reaction_remote_author_silent(stack):
+    """Reactions for an author who lives on a peer instance get
+    notified on the *peer's* side, not on this instance."""
+    from socialhome.domain.events import MomentReactionChanged
+
+    b = await stack.provision_user("bob")
+    await stack.bus.publish(
+        MomentReactionChanged(
+            moment_id="m-1",
+            reactor_user_id=b.user_id,
+            author_user_id="uid-remote",  # lives on a peer
+            emoji="🔥",
+        )
+    )
+    # No local user has an unfilled bell — the reactor (bob) doesn't
+    # get a self-ping, and the remote author has no local row.
+    assert await stack.notif_repo.list(b.user_id, limit=10) == []
+
+
+async def test_moment_top_level_no_notification(stack):
+    """Top-level posts don't fire a notification — broadcast only."""
+    from socialhome.domain.events import MomentCreated
+
+    a = await stack.provision_user("anna")
+    await stack.bus.publish(
+        MomentCreated(
+            moment_id="m-1",
+            author_user_id=a.user_id,
+            content="hi",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id=None,
+            parent_author_user_id=None,
+            origin_instance_id="self",
+            expires_at="2026-12-01T00:00:00+00:00",
+        )
+    )
+    assert await stack.notif_repo.list(a.user_id, limit=10) == []
+
+
+async def test_moment_self_reply_silent(stack):
+    """Replying to your own thread shouldn't ping yourself."""
+    from socialhome.domain.events import MomentCreated
+
+    a = await stack.provision_user("anna")
+    await stack.bus.publish(
+        MomentCreated(
+            moment_id="m-2",
+            author_user_id=a.user_id,
+            content="self reply",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id="m-root",
+            parent_author_user_id=a.user_id,
+            origin_instance_id="self",
+            expires_at="2026-12-01T00:00:00+00:00",
+        )
+    )
+    assert await stack.notif_repo.list(a.user_id, limit=10) == []
+
+
+async def test_moment_reply_remote_parent_silent(stack):
+    """Reply to a parent whose author lives on a peer — no local notif."""
+    from socialhome.domain.events import MomentCreated
+
+    b = await stack.provision_user("bob")
+    await stack.bus.publish(
+        MomentCreated(
+            moment_id="m-3",
+            author_user_id=b.user_id,
+            content="hey",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id="m-root",
+            parent_author_user_id="uid-remote",
+            origin_instance_id="self",
+            expires_at="2026-12-01T00:00:00+00:00",
+        )
+    )
+    assert await stack.notif_repo.list(b.user_id, limit=10) == []
+
+
+async def test_moment_reply_without_parent_author_silent(stack):
+    """Defensive: empty parent_author_user_id short-circuits the handler."""
+    from socialhome.domain.events import MomentCreated
+
+    b = await stack.provision_user("bob")
+    await stack.bus.publish(
+        MomentCreated(
+            moment_id="m-4",
+            author_user_id=b.user_id,
+            content="hey",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id="m-root",
+            parent_author_user_id=None,
+            origin_instance_id="self",
+            expires_at="2026-12-01T00:00:00+00:00",
+        )
+    )
+    assert await stack.notif_repo.list(b.user_id, limit=10) == []
+
+
+async def test_user_followed_remote_recipient_silent(stack):
+    """Following a remote user fires no local notification — the
+    notification belongs to the followed user's home instance."""
+    from socialhome.domain.events import UserFollowed
+
+    a = await stack.provision_user("anna")
+    await stack.bus.publish(
+        UserFollowed(
+            follower_user_id=a.user_id,
+            followed_user_id="uid-remote",  # not local
+        )
+    )
+    assert await stack.notif_repo.list(a.user_id, limit=10) == []
