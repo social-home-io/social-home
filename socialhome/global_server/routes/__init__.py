@@ -74,6 +74,14 @@ from .stories import (
     StoryTokenRevokeView,
     StoryUnpublishView,
 )
+from .story_rtc import (
+    StoryIceServersView,
+    StoryRtcAnswerView,
+    StoryRtcAuthorIceView,
+    StoryRtcOfferView,
+    StoryRtcSessionView,
+    StoryRtcViewerIceView,
+)
 from .ws import GfsWebSocketView
 
 
@@ -153,6 +161,19 @@ def register_routes(
         "/story/{instance_id}/{story_id}/{token}",
         StoryPublicLandingView,
     )
+
+    # Public-viewer signalling for the public-story flow. The offer
+    # endpoint is anonymous (token-gated); the answer endpoints are
+    # Ed25519-signed by the author SH like the rest of /gfs/rtc/*.
+    app.router.add_view("/gfs/stories/ice-servers", StoryIceServersView)
+    app.router.add_view("/gfs/story_rtc/offer", StoryRtcOfferView)
+    app.router.add_view(
+        "/gfs/story_rtc/session/{session_id}",
+        StoryRtcSessionView,
+    )
+    app.router.add_view("/gfs/story_rtc/ice/viewer", StoryRtcViewerIceView)
+    app.router.add_view("/gfs/story_rtc/answer", StoryRtcAnswerView)
+    app.router.add_view("/gfs/story_rtc/ice/author", StoryRtcAuthorIceView)
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.

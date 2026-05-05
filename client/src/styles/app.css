@@ -12280,3 +12280,30 @@ a.sh-btn--ghost:hover {
     gap: var(--sh-space-xs);
   }
 }
+
+/* Public-link publish modal — author-only (§stories_public). */
+.sh-story-publish-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  margin-top: var(--sh-space-sm);
+}
+.sh-story-publish-issued {
+  margin-top: var(--sh-space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-story-publish-url {
+  display: block;
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  background: var(--sh-surface-2);
+  border-radius: var(--sh-radius-sm);
+  word-break: break-all;
+  font-size: 0.85rem;
+}
+.sh-modal-actions--secondary {
+  margin-top: var(--sh-space-md);
+  border-top: 1px solid var(--sh-border);
+  padding-top: var(--sh-space-md);
+}

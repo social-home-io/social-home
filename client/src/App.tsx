@@ -26,6 +26,7 @@ import { StoryPickerDialog } from '@/components/StoryPickerDialog'
 import { CallTypePickerDialog } from '@/components/CallTypePickerDialog'
 import { ConfirmDialogHost } from '@/components/confirm'
 import { UserActionsMenu } from '@/components/UserActionsMenu'
+import { StoryPublishMenu } from '@/features/stories/StoryPublishMenu'
 import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
@@ -261,6 +262,7 @@ export function App() {
           <CallTypePickerDialog />
           <ConfirmDialogHost />
           <UserActionsMenu />
+          <StoryPublishMenu />
         </div>
       </LocationProvider>
     </ErrorBoundary>
