@@ -25,6 +25,7 @@ import { StickyDialog } from '@/components/StickyDialog'
 import { StoryPickerDialog } from '@/components/StoryPickerDialog'
 import { CallTypePickerDialog } from '@/components/CallTypePickerDialog'
 import { ConfirmDialogHost } from '@/components/confirm'
+import { UserActionsMenu } from '@/components/UserActionsMenu'
 import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
@@ -259,6 +260,7 @@ export function App() {
           <StoryPickerDialog />
           <CallTypePickerDialog />
           <ConfirmDialogHost />
+          <UserActionsMenu />
         </div>
       </LocationProvider>
     </ErrorBoundary>

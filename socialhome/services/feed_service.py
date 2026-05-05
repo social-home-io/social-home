@@ -208,14 +208,28 @@ class FeedService:
         *,
         before: str | None = None,
         limit: int = 20,
+        viewer_user_id: str | None = None,
     ) -> list[Post]:
         """Return a page of posts ordered newest-first.
 
         Caller is responsible for clamping ``limit`` at the route layer
         (§5.2 pagination rule — 1 ≤ limit ≤ 50).
+
+        When ``viewer_user_id`` is provided, posts authored by users on
+        the viewer's personal block list are filtered out (§Privacy).
+        The filter runs in Python because ``post_repo.list_feed`` has no
+        viewer parameter today; the page size is small enough (≤ 50)
+        that the cost is negligible. The page may end up shorter than
+        ``limit`` if the viewer blocked enough recent authors.
         """
         limit = max(1, min(int(limit), 50))
-        return await self._posts.list_feed(before=before, limit=limit)
+        posts = await self._posts.list_feed(before=before, limit=limit)
+        if viewer_user_id is None or not posts:
+            return posts
+        blocked = {uid for uid, _ in await self._users.list_blocked(viewer_user_id)}
+        if not blocked:
+            return posts
+        return [p for p in posts if p.author not in blocked]
 
     # ── Reactions ──────────────────────────────────────────────────────
 

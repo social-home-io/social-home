@@ -64,3 +64,32 @@ async def test_get_by_user_id(env):
     u = await env.user_svc.provision(username="alice", display_name="Alice")
     got = await env.user_svc.get_by_user_id(u.user_id)
     assert got.username == "alice"
+
+
+async def test_list_blocked_returns_newest_first(env):
+    """list_blocked returns (blocked_user_id, blocked_at) ordered desc."""
+    a = await env.user_svc.provision(username="alice", display_name="Alice")
+    b = await env.user_svc.provision(username="bob", display_name="Bob")
+    c = await env.user_svc.provision(username="carol", display_name="Carol")
+
+    # Force differentiable timestamps so the ORDER BY is meaningful.
+    await env.db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id, blocked_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, b.user_id, "2026-01-01T00:00:00Z"),
+    )
+    await env.db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id, blocked_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, c.user_id, "2026-02-01T00:00:00Z"),
+    )
+
+    blocked = await env.user_repo.list_blocked(a.user_id)
+    assert [bid for bid, _ in blocked] == [c.user_id, b.user_id]
+    assert blocked[0][1] == "2026-02-01T00:00:00Z"
+
+
+async def test_list_blocked_empty(env):
+    """list_blocked is [] when nobody is blocked."""
+    a = await env.user_svc.provision(username="alice", display_name="Alice")
+    assert await env.user_repo.list_blocked(a.user_id) == []

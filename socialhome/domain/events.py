@@ -1336,3 +1336,29 @@ class HouseholdConfigChanged(DomainEvent):
 
     changed: dict
     occurred_at: datetime = field(default_factory=_now)
+
+
+# ─── Personal user blocks (§Privacy) ──────────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class UserBlocked(DomainEvent):
+    """A local user added another user to their personal block list.
+
+    Distinct from the parent-driven :class:`CpBlockAdded` (CP/§child-protection):
+    this is the adult-to-adult voluntary mute that hides stories, posts,
+    DMs, presence and notifications surfacing the blocked user.
+    """
+
+    blocker_user_id: str
+    blocked_user_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class UserUnblocked(DomainEvent):
+    """A local user removed another user from their personal block list."""
+
+    blocker_user_id: str
+    blocked_user_id: str
+    occurred_at: datetime = field(default_factory=_now)

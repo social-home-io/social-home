@@ -34,6 +34,8 @@ async def stack(tmp_dir):
 
     s = Stack()
     s.db = db
+    s.bus = bus
+    s.user_repo = user_repo
     s.user_svc = user_svc
 
     async def provision_user(username, **kw):
@@ -127,6 +129,56 @@ async def test_self_block_rejected(stack):
     a = await stack.provision_user("anna")
     with pytest.raises(ValueError):
         await stack.user_svc.block("anna", a.user_id)
+
+
+async def test_block_publishes_user_blocked_event(stack):
+    """``block()`` emits :class:`UserBlocked` so realtime listeners can react."""
+    from socialhome.domain.events import UserBlocked, UserUnblocked
+
+    a = await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    seen: list = []
+    stack.bus.subscribe(UserBlocked, lambda ev: seen.append(("blocked", ev)))
+    stack.bus.subscribe(UserUnblocked, lambda ev: seen.append(("unblocked", ev)))
+
+    await stack.user_svc.block("anna", b.user_id)
+    await stack.user_svc.unblock("anna", b.user_id)
+
+    kinds = [k for k, _ in seen]
+    assert kinds == ["blocked", "unblocked"]
+    assert seen[0][1].blocker_user_id == a.user_id
+    assert seen[0][1].blocked_user_id == b.user_id
+    assert seen[1][1].blocker_user_id == a.user_id
+    assert seen[1][1].blocked_user_id == b.user_id
+
+
+async def test_list_blocked_returns_dicts_newest_first(stack):
+    """``list_blocked`` exposes blocked entries with timestamps."""
+    a = await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    c = await stack.provision_user("carol")
+
+    # Forced timestamps so ORDER BY is testable without sleeping.
+    await stack.db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id, blocked_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, b.user_id, "2026-01-01T00:00:00Z"),
+    )
+    await stack.db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id, blocked_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, c.user_id, "2026-02-01T00:00:00Z"),
+    )
+
+    rows = await stack.user_svc.list_blocked("anna")
+    assert [r["user_id"] for r in rows] == [c.user_id, b.user_id]
+    assert rows[0]["blocked_at"] == "2026-02-01T00:00:00Z"
+
+
+async def test_list_blocked_unknown_user_raises(stack):
+    """``list_blocked`` for an unknown blocker raises KeyError → maps to 404."""
+    with pytest.raises(KeyError):
+        await stack.user_svc.list_blocked("ghost")
 
 
 async def test_list_active_filters_deleted(stack):

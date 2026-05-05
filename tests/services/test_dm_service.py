@@ -115,6 +115,62 @@ async def test_leave(stack):
     assert dm.id not in {c.id for c in convos}
 
 
+async def test_create_dm_rejected_when_recipient_blocked_sender(stack):
+    """Recipient → sender block rejects new 1:1 DM creation."""
+    from socialhome.services.dm_service import RecipientBlockedError
+
+    a = await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    await stack.user_svc.block("bob", a.user_id)
+    with pytest.raises(RecipientBlockedError):
+        await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+
+
+async def test_create_dm_rejected_when_sender_blocked_recipient(stack):
+    """Sender → recipient block rejects new 1:1 DM creation."""
+    from socialhome.services.dm_service import RecipientBlockedError
+
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    await stack.user_svc.block("anna", b.user_id)
+    with pytest.raises(RecipientBlockedError):
+        await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+
+
+async def test_send_message_rejected_when_recipient_blocked_sender(stack):
+    """A block on an *existing* 1:1 DM rejects sends on both sides.
+
+    Symmetric write gate: once bob blocks anna, neither can post in the
+    DM — this matches WhatsApp's expectation that you cannot talk to
+    someone you blocked.
+    """
+    from socialhome.services.dm_service import RecipientBlockedError
+
+    a = await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    dm = await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+    await stack.user_svc.block("bob", a.user_id)
+    with pytest.raises(RecipientBlockedError):
+        await stack.dm_svc.send_message(dm.id, sender_username="anna", content="hi")
+    with pytest.raises(RecipientBlockedError):
+        await stack.dm_svc.send_message(dm.id, sender_username="bob", content="bye")
+
+
+async def test_group_dm_send_ignores_personal_block(stack):
+    """Group DMs are not gated by personal block in v1 — see read-side note."""
+    a = await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    await stack.provision_user("carol")
+    g = await stack.dm_svc.create_group_dm(
+        creator_username="anna",
+        member_usernames=["bob", "carol"],
+    )
+    # bob blocks anna; anna's group send still goes through.
+    await stack.user_svc.block("bob", a.user_id)
+    msg = await stack.dm_svc.send_message(g.id, sender_username="anna", content="hi")
+    assert msg.content == "hi"
+
+
 async def test_self_dm_rejected(stack):
     """Creating a DM to yourself raises ValueError."""
     await stack.provision_user("a")

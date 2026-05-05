@@ -43,7 +43,7 @@ class PresenceCollectionView(BaseView):
     """
 
     async def get(self) -> web.Response:
-        self.user
+        ctx = self.user
         entries = await self.svc(presence_service_key).list_presence()
         online_svc = self.request.app.get(online_status_service_key)
         # ``user_repo.list_by_ids`` is the source for offline users'
@@ -54,6 +54,14 @@ class PresenceCollectionView(BaseView):
         if user_repo is not None and entries:
             users = await user_repo.list_by_ids({p.user_id for p in entries})
             persisted = {u.user_id: u.last_seen_at for u in users}
+        # §Privacy — drop blocked household members from the viewer's
+        # presence list. The block is local to this viewer; other
+        # members still see the full roster.
+        blocked: set[str] = set()
+        if user_repo is not None and ctx is not None:
+            blocked = {uid for uid, _ in await user_repo.list_blocked(ctx.user_id)}
+        if blocked:
+            entries = [p for p in entries if p.user_id not in blocked]
         rows: list[dict] = []
         for p in entries:
             is_online = bool(online_svc and online_svc.is_online(p.user_id))

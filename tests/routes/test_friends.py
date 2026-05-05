@@ -193,3 +193,45 @@ async def test_friends_local_instance_carries_identity_metadata(client):
     assert inst["home_lat"] == 52.0907
     assert inst["home_lon"] == 5.1214
     assert inst["instance_id"]  # non-empty string
+
+
+async def test_friends_drops_blocked_local_and_remote_users(client):
+    """A blocked household member is filtered from the local block; a
+    blocked remote user is filtered from their household's member list."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-block"))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-blocked",
+        instance_id="peer-block",
+        name="Blocky",
+    )
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-visible",
+        instance_id="peer-block",
+        name="Visible",
+    )
+    # Add a second local user so we can verify the local-block filter too.
+    await client._db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("local_blockee", "uid-local-blockee", "LocalBlockee"),
+    )
+    # Block both via the API, then assert the dashboard hides them.
+    for uid in ("ru-blocked", "uid-local-blockee"):
+        r = await client.post(
+            "/api/blocks",
+            json={"user_id": uid},
+            headers=_auth(client._tok),
+        )
+        assert r.status == 201
+
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    local_ids = {m["user_id"] for m in body["instance"]["members"]}
+    assert "uid-local-blockee" not in local_ids
+    h = next(h for h in body["households"] if h["instance_id"] == "peer-block")
+    remote_ids = {m["user_id"] for m in h["members"]}
+    assert "ru-blocked" not in remote_ids
+    assert "ru-visible" in remote_ids
+    assert h["member_count"] == 1

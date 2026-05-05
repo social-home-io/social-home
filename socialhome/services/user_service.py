@@ -19,10 +19,12 @@ from datetime import datetime, timezone
 
 from ..crypto import derive_user_id
 from ..domain.events import (
+    UserBlocked,
     UserDeprovisioned,
     UserProfileUpdated,
     UserProvisioned,
     UserStatusChanged,
+    UserUnblocked,
 )
 from ..domain.user import RESERVED_USERNAMES, User, UserStatus
 from ..infrastructure.event_bus import EventBus
@@ -428,12 +430,24 @@ class UserService:
         if blocker.user_id == blocked_user_id:
             raise ValueError("Cannot block yourself")
         await self._repo.block(blocker.user_id, blocked_user_id)
+        await self._bus.publish(
+            UserBlocked(
+                blocker_user_id=blocker.user_id,
+                blocked_user_id=blocked_user_id,
+            )
+        )
 
     async def unblock(self, blocker_username: str, blocked_user_id: str) -> None:
         blocker = await self._repo.get(blocker_username)
         if blocker is None:
             raise KeyError(f"user {blocker_username!r} not found")
         await self._repo.unblock(blocker.user_id, blocked_user_id)
+        await self._bus.publish(
+            UserUnblocked(
+                blocker_user_id=blocker.user_id,
+                blocked_user_id=blocked_user_id,
+            )
+        )
 
     async def is_blocked(
         self,
@@ -441,6 +455,18 @@ class UserService:
         candidate_user_id: str,
     ) -> bool:
         return await self._repo.is_blocked(blocker_user_id, candidate_user_id)
+
+    async def list_blocked(self, blocker_username: str) -> list[dict]:
+        """Return [{user_id, blocked_at}, …] for the blocker, newest first.
+
+        Resolves the username → user_id once so callers can pass the
+        authenticated session's username straight from the route.
+        """
+        blocker = await self._repo.get(blocker_username)
+        if blocker is None:
+            raise KeyError(f"user {blocker_username!r} not found")
+        rows = await self._repo.list_blocked(blocker.user_id)
+        return [{"user_id": uid, "blocked_at": at} for uid, at in rows]
 
     # ── Queries ─────────────────────────────────────────────────────────
 

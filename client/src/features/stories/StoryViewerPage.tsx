@@ -17,6 +17,7 @@ import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import type { Story, StoryFrame } from '@/types'
 import { confirmDialog } from '@/components/confirm'
+import { openUserActions } from '@/components/UserActionsMenu'
 
 interface StoryDetail {
   story: Story
@@ -189,6 +190,16 @@ export default function StoryViewerPage() {
       <header class="sh-story-viewer-header">
         <strong>{story.author_user_id}</strong>
         <span class="sh-muted">{story.story_date}</span>
+        {!isAuthor && (
+          <button
+            type="button"
+            class="sh-story-viewer-overflow"
+            aria-label={`More actions for ${story.author_user_id}`}
+            onClick={() => openUserActions(story.author_user_id)}
+          >
+            ⋯
+          </button>
+        )}
         <Button variant="ghost" onClick={() => loc.route('/stories')}>Close</Button>
       </header>
 

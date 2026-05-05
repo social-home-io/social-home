@@ -18,6 +18,7 @@ from .backup import (
     BackupPostView,
     BackupPreView,
 )
+from .blocks import BlockCollectionView, BlockDetailView
 from .bazaar import (
     BazaarBidAcceptView,
     BazaarBidCollectionView,
@@ -360,6 +361,8 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     # Personal user aliases (§4.1.6) — viewer-private renames.
     app.router.add_view("/api/aliases/users", AliasCollectionView)
     app.router.add_view("/api/aliases/users/{user_id}", AliasItemView)
+    app.router.add_view("/api/blocks", BlockCollectionView)
+    app.router.add_view("/api/blocks/{user_id}", BlockDetailView)
     app.router.add_view("/api/auth/token", AuthTokenView)
     app.router.add_view(
         "/api/auth/redeem-password-reset",

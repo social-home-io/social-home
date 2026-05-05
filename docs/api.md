@@ -89,6 +89,16 @@ Viewer-private renames of other users (local or remote). Aliases never federate 
 | PUT | `/api/aliases/users/{user_id}` | Set or update the viewer's alias for a target user. |
 | DELETE | `/api/aliases/users/{user_id}` | Clear the viewer's alias for a target user. |
 
+### Personal user blocks (§Privacy)
+
+Voluntary adult-to-adult block list — the viewer hides another user's stories, household-feed posts, presence, notifications, friends-list entry and DMs. Distinct from the parent-driven CP block (`/api/cp/minors/{minor_id}/blocks`). The block stays local to the viewer's instance — the inbound DM gate runs on the receive side, so a remote sender is also rejected without exporting the block list.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/blocks` | List the caller's blocks `[{user_id, blocked_at}]`, newest first. |
+| POST | `/api/blocks` | Add a block. Body: `{user_id}`. Self-block → 422. |
+| DELETE | `/api/blocks/{user_id}` | Remove a block. Idempotent. |
+
 ## HFS — Household feed
 
 | Method | Path | Purpose |

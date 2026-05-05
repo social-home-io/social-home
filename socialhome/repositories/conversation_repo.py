@@ -173,12 +173,36 @@ class SqliteConversationRepo:
         Excludes conversations the user has soft-left
         (``conversation_members.deleted_at IS NOT NULL``). Ordered by
         ``last_message_at DESC`` so the most active chats come first.
+
+        DM threads (``type='dm'``) where the other participant is on the
+        viewer's personal block list are filtered out (§Privacy).
+        Group threads (``type='group_dm'``) are not filtered here — a
+        per-message hide would be the right call there, and group-level
+        gating is out of scope for the v1 block. The blocker can leave
+        the group manually if the presence is unwanted.
         """
         rows = await self._db.fetchall(
             """
             SELECT c.* FROM conversations c
               JOIN conversation_members m ON m.conversation_id = c.id
              WHERE m.username = ? AND m.deleted_at IS NULL
+               AND NOT (
+                   c.type = 'dm'
+                   AND EXISTS (
+                       SELECT 1
+                         FROM conversation_members peer
+                         JOIN users peer_user
+                           ON peer_user.username = peer.username
+                         JOIN users self_user
+                           ON self_user.username = m.username
+                         JOIN user_blocks ub
+                           ON ub.blocker_user_id = self_user.user_id
+                          AND ub.blocked_user_id = peer_user.user_id
+                        WHERE peer.conversation_id = c.id
+                          AND peer.username <> m.username
+                          AND peer.deleted_at IS NULL
+                   )
+               )
              ORDER BY COALESCE(c.last_message_at, c.created_at) DESC
             """,
             (username,),
