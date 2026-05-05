@@ -121,7 +121,11 @@ export interface StoryInboxItem {
 
 /** A single Momentum post (§Momentum) — household broadcast that fans
  *  out to a 3-hop peer mesh. ``parent_moment_id`` is the reply parent
- *  (always the *root* of the thread; v1 keeps replies flat). */
+ *  (always the *root* of the thread; v1 keeps replies flat).
+ *
+ *  ``reaction_count`` and ``reply_count`` are aggregated server-side
+ *  for the Twitter-style row chips so the inbox doesn't need a per-
+ *  row follow-up fetch. */
 export interface Moment {
   id:                 string
   author_user_id:     string
@@ -133,6 +137,8 @@ export interface Moment {
   origin_instance_id: string
   created_at:         string
   expires_at:         string
+  reaction_count:     number
+  reply_count:        number
 }
 
 export interface MomentReaction {

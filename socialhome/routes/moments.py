@@ -26,6 +26,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from ..app_keys import (
+    moment_repo_key,
     moment_service_key,
     report_service_key,
     user_service_key,
@@ -40,8 +41,12 @@ from ..security import error_response
 from .base import BaseView
 
 
-def _moment_dict(m: Moment) -> dict:
-    return {
+def _moment_dict(
+    m: Moment,
+    *,
+    counts: dict[str, int] | None = None,
+) -> dict:
+    base: dict = {
         "id": m.id,
         "author_user_id": m.author_user_id,
         "content": m.content,
@@ -52,7 +57,13 @@ def _moment_dict(m: Moment) -> dict:
         "origin_instance_id": m.origin_instance_id,
         "created_at": m.created_at,
         "expires_at": m.expires_at,
+        "reaction_count": 0,
+        "reply_count": 0,
     }
+    if counts is not None:
+        base["reaction_count"] = counts.get("reaction_count", 0)
+        base["reply_count"] = counts.get("reply_count", 0)
+    return base
 
 
 def _reaction_dict(r: MomentReaction) -> dict:
@@ -86,7 +97,9 @@ class MomentCollectionView(BaseView):
             before=before,
             limit=limit,
         )
-        return self._json([_moment_dict(m) for m in moments])
+        repo = self.svc(moment_repo_key)
+        counts = await repo.count_engagement_for([m.id for m in moments])
+        return self._json([_moment_dict(m, counts=counts.get(m.id)) for m in moments])
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -121,7 +134,9 @@ class MomentArchiveView(BaseView):
         await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         moments = await svc.list_inbox(viewer_user_id=ctx.user_id, limit=100)
-        return self._json([_moment_dict(m) for m in moments])
+        repo = self.svc(moment_repo_key)
+        counts = await repo.count_engagement_for([m.id for m in moments])
+        return self._json([_moment_dict(m, counts=counts.get(m.id)) for m in moments])
 
 
 class MomentDetailView(BaseView):
@@ -137,10 +152,13 @@ class MomentDetailView(BaseView):
         moment = await svc.get_moment(moment_id)
         replies = await svc.list_replies(moment_id)
         reactions = await svc.list_reactions(moment_id)
+        repo = self.svc(moment_repo_key)
+        ids = [moment.id, *[r.id for r in replies]]
+        counts = await repo.count_engagement_for(ids)
         return self._json(
             {
-                "moment": _moment_dict(moment),
-                "replies": [_moment_dict(r) for r in replies],
+                "moment": _moment_dict(moment, counts=counts.get(moment.id)),
+                "replies": [_moment_dict(r, counts=counts.get(r.id)) for r in replies],
                 "reactions": [_reaction_dict(r) for r in reactions],
             }
         )

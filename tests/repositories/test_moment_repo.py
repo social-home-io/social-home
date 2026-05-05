@@ -145,6 +145,27 @@ async def test_set_and_clear_reaction(db, repo):
     assert await repo.list_reactions("m-r") == []
 
 
+async def test_count_engagement_for(db, repo):
+    """Aggregate query returns reaction + reply counts per id."""
+    await repo.save(_moment(id="m-a", author="u-a"))
+    await repo.save(_moment(id="m-b", author="u-b"))
+    await repo.save(_moment(id="m-c", author="u-c"))
+    # m-a has 2 reactions, 1 reply; m-b has 1 reaction; m-c has neither.
+    await repo.set_reaction("m-a", "u-x", "🔥")
+    await repo.set_reaction("m-a", "u-y", "❤️")
+    await repo.set_reaction("m-b", "u-x", "👏")
+    await repo.save(_moment(id="m-rep", author="u-z", parent_moment_id="m-a"))
+
+    counts = await repo.count_engagement_for(["m-a", "m-b", "m-c"])
+    assert counts["m-a"] == {"reaction_count": 2, "reply_count": 1}
+    assert counts["m-b"] == {"reaction_count": 1, "reply_count": 0}
+    assert counts["m-c"] == {"reaction_count": 0, "reply_count": 0}
+
+
+async def test_count_engagement_empty_list(db, repo):
+    assert await repo.count_engagement_for([]) == {}
+
+
 async def test_prune_expired_drops_past_cap(db, repo):
     fresh = _moment(id="m-fresh")
     expired = Moment(
