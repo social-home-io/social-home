@@ -11,7 +11,7 @@ import { useLocation, useRoute } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
-import { Spinner } from '@/components/Spinner'
+import { MomentumDetailSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { confirmDialog } from '@/components/confirm'
 import { openReport } from '@/components/ReportDialog'
@@ -68,7 +68,7 @@ export default function MomentumDetailPage() {
     return () => { dispose.forEach(d => d()) }
   }, [momentId])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <MomentumDetailSkeleton />
   if (!detail.value) return null
   const m = detail.value.moment
   const isAuthor = m.author_user_id === me
@@ -229,12 +229,18 @@ export default function MomentumDetailPage() {
         )}
       </footer>
 
-      <section class="sh-momentum-replies" aria-label="Replies">
-        <h3>{detail.value.replies.length} replies</h3>
-        <ul class="sh-momentum-list">
-          {detail.value.replies.map(renderRow)}
-        </ul>
-      </section>
+      {detail.value.replies.length > 0 && (
+        <section class="sh-momentum-replies" aria-label="Replies">
+          <h3>
+            {detail.value.replies.length === 1
+              ? '1 reply'
+              : `${detail.value.replies.length} replies`}
+          </h3>
+          <ul class="sh-momentum-list">
+            {detail.value.replies.map(renderRow)}
+          </ul>
+        </section>
+      )}
     </div>
   )
 }

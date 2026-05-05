@@ -15,7 +15,7 @@ import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
-import { Spinner } from '@/components/Spinner'
+import { MomentumInboxSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { blockedUserIds, loadBlocks } from '@/store/blocks'
@@ -75,7 +75,7 @@ export default function MomentumPage() {
     return () => { dispose.forEach(d => d()) }
   }, [])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <MomentumInboxSkeleton />
 
   const blocked = blockedUserIds.value
   const visible = moments.value.filter(m => !blocked.has(m.author_user_id))

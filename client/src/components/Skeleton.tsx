@@ -324,6 +324,138 @@ export function NotificationListSkeleton({ count = 5 }: { count?: number } = {})
 }
 
 
+/** Stand-in for ``MomentumPage``: composer entry + 3 rows. Each row
+ *  has the avatar + author/time meta + 1-2 content bars + the
+ *  reply/reaction chip strip so the layout doesn't shift when the real
+ *  inbox lands. */
+export function MomentumInboxSkeleton({ count = 3 }: { count?: number } = {}) {
+  return (
+    <div class="sh-momentum sh-momentum--skeleton" aria-busy="true">
+      <header class="sh-momentum-header">
+        <Skeleton shape="line" width={120} height={22} />
+      </header>
+      <Skeleton
+        shape="rect"
+        width="100%"
+        height={48}
+        class="sh-skeleton-momentum-compose"
+      />
+      <ul class="sh-momentum-list">
+        {Array.from({ length: count }).map((_, i) => (
+          <li key={i} class="sh-momentum-row sh-momentum-row--skeleton">
+            <Skeleton shape="circle" width={36} height={36} />
+            <div class="sh-momentum-row-body">
+              <div class="sh-momentum-row-head">
+                <Skeleton shape="line" width="30%" height={12} />
+                <Skeleton
+                  shape="line"
+                  width={40}
+                  height={10}
+                  class="sh-skeleton-spaced"
+                />
+              </div>
+              <Skeleton shape="line" width="85%" height={12} />
+              <Skeleton
+                shape="line"
+                width="65%"
+                height={12}
+                class="sh-skeleton-spaced"
+              />
+              <div class="sh-momentum-row-chips">
+                <Skeleton shape="rect" width={48} height={20} />
+                <Skeleton shape="rect" width={48} height={20} />
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+
+/** Stand-in for ``MomentumDetailPage``: detail header + content +
+ *  reaction strip + replies list. Same row shape as the inbox skeleton
+ *  so transition between the two routes feels continuous. */
+export function MomentumDetailSkeleton() {
+  return (
+    <div class="sh-momentum-detail sh-momentum-detail--skeleton" aria-busy="true">
+      <header class="sh-momentum-detail-header">
+        <Skeleton shape="circle" width={48} height={48} />
+        <div class="sh-momentum-detail-meta">
+          <Skeleton shape="line" width={140} height={14} />
+          <Skeleton
+            shape="line"
+            width={100}
+            height={11}
+            class="sh-skeleton-spaced"
+          />
+        </div>
+      </header>
+      <Skeleton shape="line" width="92%" height={12} />
+      <Skeleton shape="line" width="78%" height={12} class="sh-skeleton-spaced" />
+      <Skeleton shape="line" width="60%" height={12} class="sh-skeleton-spaced" />
+      <div class="sh-momentum-reactions">
+        <Skeleton shape="rect" width={220} height={36} />
+      </div>
+      <ul class="sh-momentum-list">
+        {[0, 1].map(i => (
+          <li key={i} class="sh-momentum-row sh-momentum-row--skeleton">
+            <Skeleton shape="circle" width={32} height={32} />
+            <div class="sh-momentum-row-body">
+              <Skeleton shape="line" width="25%" height={11} />
+              <Skeleton
+                shape="line"
+                width="70%"
+                height={12}
+                class="sh-skeleton-spaced"
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+
+/** Stand-in for ``MomentumArchivePage``: title row + a day section
+ *  with 2 rows. The chip row appears later (only after trending lands)
+ *  so the skeleton omits it. */
+export function MomentumArchiveSkeleton() {
+  return (
+    <div class="sh-momentum-archive sh-momentum-archive--skeleton" aria-busy="true">
+      <Skeleton shape="line" width={180} height={22} />
+      <Skeleton
+        shape="line"
+        width="60%"
+        height={12}
+        class="sh-skeleton-spaced"
+      />
+      <section class="sh-momentum-archive-day">
+        <Skeleton shape="line" width={220} height={14} />
+        <ul class="sh-momentum-list">
+          {[0, 1].map(i => (
+            <li key={i} class="sh-momentum-row sh-momentum-row--skeleton">
+              <Skeleton shape="circle" width={32} height={32} />
+              <div class="sh-momentum-row-body">
+                <Skeleton shape="line" width="30%" height={11} />
+                <Skeleton
+                  shape="line"
+                  width="80%"
+                  height={12}
+                  class="sh-skeleton-spaced"
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  )
+}
+
+
 /** Stand-in for ``TaskPage``: sidebar list + main column with task rows. */
 export function TasksSkeleton() {
   return (
