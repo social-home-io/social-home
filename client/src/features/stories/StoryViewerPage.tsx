@@ -20,6 +20,7 @@ import { confirmDialog } from '@/components/confirm'
 import { openReport } from '@/components/ReportDialog'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { ws } from '@/ws'
+import { openPublishMenu } from './StoryPublishMenu'
 
 interface StoryDetail {
   story: Story
@@ -334,6 +335,12 @@ export default function StoryViewerPage() {
             <span class="sh-story-author-meta">
               👁 {myViews.length} · {myReactions.length} reactions
             </span>
+            <Button
+              variant="ghost"
+              onClick={() => openPublishMenu(story.id, !!story.public_gfs_id)}
+            >
+              🔗 Publish public link
+            </Button>
             <Button variant="danger" onClick={deleteFrame}>Delete frame</Button>
           </>
         )}

@@ -52,9 +52,19 @@ Public (no signature):
 |---|---|---|
 | GET | `/story/{instance_id}/{story_id}/{token}` | SSR landing page. `200` (token active + author online), `410 Gone` (token revoked / publication missing / story expired / URL mismatch), `503 Unavailable` (author offline). |
 
-PR2 will add `/gfs/story_rtc/{offer,answer-poll,ice}` for the
-public-viewer signalling and `/gfs/stories/ice-servers` for the
-browser bootstrap.
+Public-viewer WebRTC signalling (added in PR2):
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/gfs/stories/ice-servers` | Anonymous list of STUN/TURN URLs the browser bootstrap feeds into `RTCPeerConnection`. |
+| POST | `/gfs/story_rtc/offer` | Anonymous. Body: `{instance_id, story_id, token, sdp}`. GFS verifies the token, stores the offer in :class:`GfsRtcSession`, and pushes a `story_signal` WS frame to the author's instance. Returns `{session_id}`. |
+| GET | `/gfs/story_rtc/session/{session_id}` | Anonymous. Browser polls until `answer_sdp` and any author-side ICE candidates land. |
+| POST | `/gfs/story_rtc/ice/viewer` | Anonymous. Body: `{session_id, candidate}`. Forwards to the author's WS as a `story_signal kind=ice` frame. |
+| POST | `/gfs/story_rtc/answer` | Author SH only (Ed25519-signed). Body: `{instance_id, session_id, sdp, signature}`. Authority guard: `session.initiator_id` must match the signing instance. |
+| POST | `/gfs/story_rtc/ice/author` | Author SH only (signed). Same authority guard; appends to `ice_candidates` so the next viewer poll sees it. |
+
+The viewer DataChannel has label `story-public-v1` and uses the
+length-prefixed JSON-header / binary-payload framing detailed below.
 
 ## Retention
 
@@ -76,6 +86,61 @@ live SH↔GFS WebSocket. The landing-page handler queries
 `GfsWebSocketRegistry.is_connected(instance_id)`; offline author →
 503 with a 10-second auto-refresh meta tag. PR2 needs the live WS
 anyway because it pushes the public viewer's WebRTC offer over it.
+
+## DataChannel framing
+
+Single ordered DataChannel labelled `story-public-v1`. Every frame on
+the wire is:
+
+```
+[u32 header_len BE][header_json][u32 payload_len BE][payload_bytes]
+```
+
+`header_json` is UTF-8 JSON with a `kind` field. Reserved kinds (v1):
+
+| `kind` | Direction | Header fields | Payload |
+|---|---|---|---|
+| `story_meta` | author → viewer (first frame) | `story` (full Story dict), `frames` (manifest: `[{frame_id, sequence, content_type, byte_length, caption_text, caption_emoji, duration_ms}, …]`) | empty |
+| `frame_chunk` | author → viewer | `frame_id`, `sequence`, `chunk_index`, `is_last_chunk`, `byte_length` | up to `CHUNK_SIZE` (64 KiB) bytes |
+| `stream_end` | author → viewer (terminator) | `kind` only | empty |
+| `error` | author → viewer | `error` (one of `expired`, `unauthorized`, `backpressure`) | empty |
+
+Backpressure: author waits on `RTCDataChannel.bufferedAmount <
+SEND_HWM_BYTES` (1 MiB) before pushing the next chunk. Reference
+encoder + decoder: `socialhome/services/story_public_framing.py`;
+golden-bytes test in `tests/protocol/test_story_public_framing.py`
+(release-blocker per CLAUDE.md §27.9).
+
+## Sequence (public viewer flow)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant V as Viewer<br/>(browser)
+    participant G as GFS
+    participant A as Author SH
+
+    V->>G: GET /story/{i}/{s}/{t}
+    G->>G: resolve_token + author_online
+    G-->>V: 200 SSR landing + bootstrap.js
+    V->>G: GET /gfs/stories/ice-servers
+    G-->>V: { servers: [...] }
+    V->>G: POST /gfs/story_rtc/offer {sdp}
+    G->>G: store offer in GfsRtcSession
+    G->>A: WS push { type:"story_signal", kind:"offer", session_id, sdp }
+    G-->>V: 201 { session_id }
+    A->>A: open answerer PeerConnection
+    A->>G: POST /gfs/story_rtc/answer (signed) {session_id, sdp}
+    A->>G: POST /gfs/story_rtc/ice/author (signed) (xN)
+    V->>G: POST /gfs/story_rtc/ice/viewer (xN)
+    G->>A: WS push { kind:"ice", candidate } (xN)
+    V->>G: GET /gfs/story_rtc/session/{id} (poll)
+    G-->>V: { answer_sdp, ice_candidates }
+    V-->>A: DataChannel "story-public-v1" opens (direct, no GFS)
+    A->>V: story_meta frame
+    A->>V: frame_chunk × N (per frame)
+    A->>V: stream_end
+```
 
 ## Implementation pointers
 

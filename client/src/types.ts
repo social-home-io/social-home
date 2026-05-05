@@ -110,6 +110,10 @@ export interface Story {
   audience: string[]
   created_at: string
   expires_at: string
+  /** When the author has opted into public sharing via a GFS, the
+   *  ``gfs_connections.id``. ``null`` while not published. */
+  public_gfs_id?: string | null
+  public_published_at?: string | null
 }
 
 /** Inbox item: story + frames + how many frames the viewer has not seen. */
