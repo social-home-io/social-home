@@ -32,7 +32,9 @@ from ..domain.events import (
     SpaceMemberProfileUpdated,
     SpacePostCreated,
     StoryFrameAdded,
+    StoryFrameReactionChanged,
     StoryFrameRemoved,
+    StoryFrameViewed,
     StoryRemoved,
     UserStatusChanged,
 )
@@ -143,6 +145,12 @@ class FederationInboundService:
             registry.register(FET.STORY_FRAME_APPENDED, self._on_story_frame_appended)
             registry.register(FET.STORY_FRAME_DELETED, self._on_story_frame_deleted)
             registry.register(FET.STORY_DELETED, self._on_story_deleted)
+            registry.register(FET.STORY_FRAME_VIEWED, self._on_story_frame_viewed)
+            registry.register(FET.STORY_FRAME_REACTED, self._on_story_frame_reacted)
+            registry.register(
+                FET.STORY_FRAME_REACTION_REMOVED,
+                self._on_story_frame_reaction_removed,
+            )
 
     # ── DM handlers ────────────────────────────────────────────────────
 
@@ -624,6 +632,86 @@ class FederationInboundService:
                 author_user_id=story.author_user_id,
                 audience_kind=story.audience_kind.value,
                 audience=story.audience,
+            )
+        )
+
+    async def _on_story_frame_viewed(self, event: "FederationEvent") -> None:
+        """A remote viewer marked one of *our* author's frames as seen.
+
+        Persists the row in ``story_frame_views`` and republishes
+        :class:`StoryFrameViewed` so the realtime layer pushes the
+        view-count update to the author's WS sessions.
+        """
+        if self._story_repo is None:
+            return
+        p = event.payload
+        story_id = str(p.get("story_id") or "")
+        frame_id = str(p.get("frame_id") or "")
+        viewer_user_id = str(p.get("viewer_user_id") or "")
+        author_user_id = str(p.get("author_user_id") or "")
+        if not (story_id and frame_id and viewer_user_id and author_user_id):
+            return
+        # Authority check: the envelope's signed sender must be the
+        # viewer's home instance — peers can't fabricate views from a
+        # user that doesn't live on their household.
+        if not await self._authority_matches(event.from_instance, viewer_user_id):
+            log.warning(
+                "STORY_FRAME_VIEWED authority mismatch — dropped",
+            )
+            return
+        await self._story_repo.mark_viewed(frame_id, viewer_user_id)
+        await self._bus.publish(
+            StoryFrameViewed(
+                story_id=story_id,
+                frame_id=frame_id,
+                viewer_user_id=viewer_user_id,
+                author_user_id=author_user_id,
+            )
+        )
+
+    async def _on_story_frame_reacted(self, event: "FederationEvent") -> None:
+        await self._handle_reaction_envelope(event, removed=False)
+
+    async def _on_story_frame_reaction_removed(
+        self,
+        event: "FederationEvent",
+    ) -> None:
+        await self._handle_reaction_envelope(event, removed=True)
+
+    async def _handle_reaction_envelope(
+        self,
+        event: "FederationEvent",
+        *,
+        removed: bool,
+    ) -> None:
+        if self._story_repo is None:
+            return
+        p = event.payload
+        story_id = str(p.get("story_id") or "")
+        frame_id = str(p.get("frame_id") or "")
+        reactor_user_id = str(p.get("reactor_user_id") or "")
+        author_user_id = str(p.get("author_user_id") or "")
+        emoji = None if removed else (p.get("emoji") or None)
+        if not (story_id and frame_id and reactor_user_id and author_user_id):
+            return
+        if not await self._authority_matches(event.from_instance, reactor_user_id):
+            log.warning(
+                "STORY_FRAME_REACT* authority mismatch — dropped",
+            )
+            return
+        if removed or emoji is None:
+            await self._story_repo.clear_reaction(frame_id, reactor_user_id)
+            published_emoji: str | None = None
+        else:
+            await self._story_repo.set_reaction(frame_id, reactor_user_id, emoji)
+            published_emoji = emoji
+        await self._bus.publish(
+            StoryFrameReactionChanged(
+                story_id=story_id,
+                frame_id=frame_id,
+                reactor_user_id=reactor_user_id,
+                author_user_id=author_user_id,
+                emoji=published_emoji,
             )
         )
 

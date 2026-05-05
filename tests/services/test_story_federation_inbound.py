@@ -18,7 +18,9 @@ import pytest
 
 from socialhome.domain.events import (
     StoryFrameAdded,
+    StoryFrameReactionChanged,
     StoryFrameRemoved,
+    StoryFrameViewed,
     StoryRemoved,
 )
 from socialhome.domain.federation import FederationEvent, FederationEventType
@@ -239,6 +241,122 @@ async def test_handlers_registered_when_story_repo_present(db, bus):
     assert FederationEventType.STORY_FRAME_APPENDED in registered
     assert FederationEventType.STORY_FRAME_DELETED in registered
     assert FederationEventType.STORY_DELETED in registered
+    assert FederationEventType.STORY_FRAME_VIEWED in registered
+    assert FederationEventType.STORY_FRAME_REACTED in registered
+    assert FederationEventType.STORY_FRAME_REACTION_REMOVED in registered
+
+
+async def test_story_frame_viewed_persists_and_publishes(db, bus, inbound):
+    """A remote viewer's view receipt lands in story_frame_views and
+    fires StoryFrameViewed so realtime can ping the author."""
+    # Seed the parent story + frame via the CREATED handler.
+    await inbound._on_story_created(
+        _event(FederationEventType.STORY_CREATED, _create_payload()),
+    )
+    captured: list[StoryFrameViewed] = []
+    bus.subscribe(StoryFrameViewed, captured.append)
+
+    await inbound._on_story_frame_viewed(
+        _event(
+            FederationEventType.STORY_FRAME_VIEWED,
+            {
+                "story_id": "s-fed-1",
+                "frame_id": "f-fed-1",
+                # ``uid-remote`` lives on peer-a (seeded in the fixture);
+                # so does the envelope from_instance — authority matches.
+                "viewer_user_id": "uid-remote",
+                "author_user_id": "uid-local",
+            },
+        ),
+    )
+    views = await inbound._story_repo.list_views_for_frame("f-fed-1")
+    assert len(views) == 1 and views[0].viewer_user_id == "uid-remote"
+    assert len(captured) == 1
+    assert captured[0].viewer_user_id == "uid-remote"
+
+
+async def test_story_frame_viewed_authority_mismatch_dropped(db, bus, inbound):
+    """The viewer must live on the envelope's signed sender."""
+    await inbound._on_story_created(
+        _event(FederationEventType.STORY_CREATED, _create_payload()),
+    )
+    captured: list[StoryFrameViewed] = []
+    bus.subscribe(StoryFrameViewed, captured.append)
+
+    await inbound._on_story_frame_viewed(
+        _event(
+            FederationEventType.STORY_FRAME_VIEWED,
+            {
+                "story_id": "s-fed-1",
+                "frame_id": "f-fed-1",
+                "viewer_user_id": "uid-remote",  # lives on peer-a
+                "author_user_id": "uid-local",
+            },
+            from_instance="peer-b",  # mismatch
+        ),
+    )
+    assert await inbound._story_repo.list_views_for_frame("f-fed-1") == []
+    assert captured == []
+
+
+async def test_story_frame_reacted_persists_and_publishes(db, bus, inbound):
+    await inbound._on_story_created(
+        _event(FederationEventType.STORY_CREATED, _create_payload()),
+    )
+    captured: list[StoryFrameReactionChanged] = []
+    bus.subscribe(StoryFrameReactionChanged, captured.append)
+
+    await inbound._on_story_frame_reacted(
+        _event(
+            FederationEventType.STORY_FRAME_REACTED,
+            {
+                "story_id": "s-fed-1",
+                "frame_id": "f-fed-1",
+                "reactor_user_id": "uid-remote",
+                "author_user_id": "uid-local",
+                "emoji": "🔥",
+            },
+        ),
+    )
+    rs = await inbound._story_repo.list_reactions_for_frame("f-fed-1")
+    assert len(rs) == 1 and rs[0].emoji == "🔥"
+    assert len(captured) == 1 and captured[0].emoji == "🔥"
+
+
+async def test_story_frame_reaction_removed_clears(db, bus, inbound):
+    """REACTION_REMOVED clears the row and publishes ``emoji=None``."""
+    await inbound._on_story_created(
+        _event(FederationEventType.STORY_CREATED, _create_payload()),
+    )
+    # Seed a reaction first.
+    await inbound._on_story_frame_reacted(
+        _event(
+            FederationEventType.STORY_FRAME_REACTED,
+            {
+                "story_id": "s-fed-1",
+                "frame_id": "f-fed-1",
+                "reactor_user_id": "uid-remote",
+                "author_user_id": "uid-local",
+                "emoji": "🔥",
+            },
+        ),
+    )
+    captured: list[StoryFrameReactionChanged] = []
+    bus.subscribe(StoryFrameReactionChanged, captured.append)
+
+    await inbound._on_story_frame_reaction_removed(
+        _event(
+            FederationEventType.STORY_FRAME_REACTION_REMOVED,
+            {
+                "story_id": "s-fed-1",
+                "frame_id": "f-fed-1",
+                "reactor_user_id": "uid-remote",
+                "author_user_id": "uid-local",
+            },
+        ),
+    )
+    assert await inbound._story_repo.list_reactions_for_frame("f-fed-1") == []
+    assert len(captured) == 1 and captured[0].emoji is None
 
 
 async def test_handlers_skipped_when_story_repo_missing(db, bus):

@@ -18,6 +18,7 @@ import { currentUser } from '@/store/auth'
 import type { Story, StoryFrame } from '@/types'
 import { confirmDialog } from '@/components/confirm'
 import { openUserActions } from '@/components/UserActionsMenu'
+import { ws } from '@/ws'
 
 interface StoryDetail {
   story: Story
@@ -50,16 +51,37 @@ export default function StoryViewerPage() {
     currentIndex.value = 0
     paused.value = false
     reactionsOpen.value = false
-    api.get(`/api/stories/${storyId}`)
-      .then((d: StoryDetail) => {
-        detail.value = d
-        loading.value = false
-      })
-      .catch((err: unknown) => {
-        showToast(`Couldn't load story: ${(err as Error)?.message ?? err}`,
-          'error')
-        loc.route('/stories')
-      })
+    const refetch = (initial: boolean) =>
+      api.get(`/api/stories/${storyId}`)
+        .then((d: StoryDetail) => {
+          detail.value = d
+          if (initial) loading.value = false
+        })
+        .catch((err: unknown) => {
+          if (initial) {
+            showToast(
+              `Couldn't load story: ${(err as Error)?.message ?? err}`,
+              'error',
+            )
+            loc.route('/stories')
+          }
+        })
+    void refetch(true)
+    // Live counters for authors viewing their own story page —
+    // ``story.frame_viewed`` / ``story.frame_reaction_changed`` arrive
+    // when a peer's viewer marks a frame seen or reacts. Cheap re-
+    // fetch of the detail keeps the count chip authoritative without
+    // bespoke list-merging logic.
+    const matches = (data: { story_id?: string }) => data.story_id === storyId
+    const dispose = [
+      ws.on('story.frame_viewed', (e) => {
+        if (matches(e.data as { story_id?: string })) void refetch(false)
+      }),
+      ws.on('story.frame_reaction_changed', (e) => {
+        if (matches(e.data as { story_id?: string })) void refetch(false)
+      }),
+    ]
+    return () => { dispose.forEach(d => d()) }
   }, [storyId])
 
   // Auto-progress: stamp a per-frame timer that ticks the index.
