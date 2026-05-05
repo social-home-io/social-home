@@ -65,6 +65,9 @@ from ..domain.events import (
     StickyCreated,
     StickyDeleted,
     StickyUpdated,
+    StoryFrameAdded,
+    StoryFrameRemoved,
+    StoryRemoved,
     PresenceUpdated,
     ShoppingItemAdded,
     ShoppingItemRemoved,
@@ -305,6 +308,14 @@ class RealtimeService:
         self._bus.subscribe(StickyUpdated, self._on_sticky_updated)
         self._bus.subscribe(StickyDeleted, self._on_sticky_deleted)
         self._bus.subscribe(CpSpaceAgeGateChanged, self._on_cp_age_gate_changed)
+        # Stories — both local-write and inbound-federation paths publish
+        # these on the bus, so the same handler covers "I posted a frame"
+        # and "a paired peer's frame just landed". The SPA fetches
+        # ``/api/stories`` on receipt to pull the audience-filtered list,
+        # so the WS frames stay narrow.
+        self._bus.subscribe(StoryFrameAdded, self._on_story_frame_added)
+        self._bus.subscribe(StoryFrameRemoved, self._on_story_frame_removed)
+        self._bus.subscribe(StoryRemoved, self._on_story_removed)
 
     # ─── Household feed events ────────────────────────────────────────────
 
@@ -1091,6 +1102,39 @@ class RealtimeService:
             await self._broadcast_household(payload)
         else:
             await self._broadcast_space(event.space_id, payload)
+
+    # ─── Stories (§Stories) ───────────────────────────────────────────────
+
+    async def _on_story_frame_added(self, event: StoryFrameAdded) -> None:
+        await self._broadcast_household(
+            {
+                "type": "story.frame_added",
+                "story_id": event.story_id,
+                "frame_id": event.frame_id,
+                "author_user_id": event.author_user_id,
+                "story_date": event.story_date,
+                "is_first_frame": event.is_first_frame,
+            }
+        )
+
+    async def _on_story_frame_removed(self, event: StoryFrameRemoved) -> None:
+        await self._broadcast_household(
+            {
+                "type": "story.frame_removed",
+                "story_id": event.story_id,
+                "frame_id": event.frame_id,
+                "author_user_id": event.author_user_id,
+            }
+        )
+
+    async def _on_story_removed(self, event: StoryRemoved) -> None:
+        await self._broadcast_household(
+            {
+                "type": "story.removed",
+                "story_id": event.story_id,
+                "author_user_id": event.author_user_id,
+            }
+        )
 
     # ─── Fan-out helpers ──────────────────────────────────────────────────
 

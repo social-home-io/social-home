@@ -31,10 +31,14 @@ from ..domain.events import (
     PostDeleted,
     SpaceMemberProfileUpdated,
     SpacePostCreated,
+    StoryFrameAdded,
+    StoryFrameRemoved,
+    StoryRemoved,
     UserStatusChanged,
 )
 from ..domain.post import Comment, CommentType, LocationData, Post, PostType
 from ..domain.space import SpaceMember
+from ..domain.story import Story, StoryAudience, StoryFrame, StoryFrameType
 from ..domain.user import RemoteUser, UserStatus
 from ..infrastructure.event_bus import EventBus
 from ..media.image_processor import ImageProcessor
@@ -47,6 +51,7 @@ if TYPE_CHECKING:
     from ..repositories.conversation_repo import AbstractConversationRepo
     from ..repositories.space_post_repo import AbstractSpacePostRepo
     from ..repositories.space_repo import AbstractSpaceRepo
+    from ..repositories.story_repo import AbstractStoryRepo
     from ..repositories.user_repo import AbstractUserRepo
 
 log = logging.getLogger(__name__)
@@ -71,6 +76,7 @@ class FederationInboundService:
         "_space_post_repo",
         "_space_repo",
         "_user_repo",
+        "_story_repo",
         "_profile_picture_repo",
         "_report_service",
         "_dm_routing_repo",
@@ -84,6 +90,7 @@ class FederationInboundService:
         space_post_repo: "AbstractSpacePostRepo",
         space_repo: "AbstractSpaceRepo",
         user_repo: "AbstractUserRepo",
+        story_repo: "AbstractStoryRepo | None" = None,
         profile_picture_repo=None,
         report_service=None,
         dm_routing_repo=None,
@@ -93,6 +100,7 @@ class FederationInboundService:
         self._space_post_repo = space_post_repo
         self._space_repo = space_repo
         self._user_repo = user_repo
+        self._story_repo = story_repo
         self._profile_picture_repo = profile_picture_repo
         self._report_service = report_service
         self._dm_routing_repo = dm_routing_repo
@@ -126,6 +134,15 @@ class FederationInboundService:
         registry.register(FET.USER_STATUS_UPDATED, self._on_user_status_updated)
 
         registry.register(FET.SPACE_REPORT, self._on_space_report)
+
+        # Stories — only registered when a story repo is wired in. Tests
+        # that instantiate :class:`FederationInboundService` for non-
+        # story coverage don't need to plumb a story repo through.
+        if self._story_repo is not None:
+            registry.register(FET.STORY_CREATED, self._on_story_created)
+            registry.register(FET.STORY_FRAME_APPENDED, self._on_story_frame_appended)
+            registry.register(FET.STORY_FRAME_DELETED, self._on_story_frame_deleted)
+            registry.register(FET.STORY_DELETED, self._on_story_deleted)
 
     # ── DM handlers ────────────────────────────────────────────────────
 
@@ -466,6 +483,252 @@ class FederationInboundService:
                     expires_at=str(p["expires_at"]) if p.get("expires_at") else None,
                 )
         await self._bus.publish(UserStatusChanged(user_id=user_id, status=status))
+
+    # ── Story handlers ─────────────────────────────────────────────────
+
+    async def _on_story_created(self, event: "FederationEvent") -> None:
+        """Land a remote ``STORY_CREATED`` envelope.
+
+        Persists the parent ``Story`` row (or upserts an existing one
+        with refreshed audience/expiry) plus the first frame, then
+        republishes :class:`StoryFrameAdded` so :class:`RealtimeService`
+        can fan a ``story.frame_added`` WS frame to local viewers.
+
+        Authority check: the envelope's signed sender (``from_instance``)
+        must equal the home instance of the payload's
+        ``author_user_id`` — peers can't impersonate stories from
+        someone else's instance.
+        """
+        if self._story_repo is None:
+            return
+        p = event.payload
+        story = self._story_from_payload(p)
+        if story is None:
+            log.debug("STORY_CREATED missing required field: %s", p)
+            return
+        if not await self._authority_matches(event.from_instance, story.author_user_id):
+            log.warning(
+                "STORY_CREATED authority mismatch: envelope from %s, "
+                "author %s lives elsewhere — dropped",
+                event.from_instance,
+                story.author_user_id,
+            )
+            return
+        await self._story_repo.save_story(story)
+        frame = self._frame_from_payload(story.id, p)
+        if frame is not None:
+            await self._story_repo.save_frame(frame)
+            await self._publish_frame_added(story, frame, is_first=True, p=p)
+
+    async def _on_story_frame_appended(self, event: "FederationEvent") -> None:
+        """Append a frame to an existing remote story.
+
+        We expect the ``STORY_CREATED`` envelope to have arrived first —
+        if the parent story is missing locally (out-of-order delivery
+        or pruned by retention), we lazily upsert it from the same
+        payload, since every frame envelope carries the routing fields
+        the parent needs.
+        """
+        if self._story_repo is None:
+            return
+        p = event.payload
+        story_id = str(p.get("story_id") or "")
+        if not story_id:
+            log.debug("STORY_FRAME_APPENDED missing story_id: %s", p)
+            return
+        story = await self._story_repo.get_story(story_id)
+        if story is None:
+            story = self._story_from_payload(p)
+            if story is None:
+                log.debug(
+                    "STORY_FRAME_APPENDED for unknown story_id %s and no "
+                    "fallback metadata — dropped",
+                    story_id,
+                )
+                return
+            if not await self._authority_matches(
+                event.from_instance, story.author_user_id
+            ):
+                log.warning(
+                    "STORY_FRAME_APPENDED authority mismatch (lazy parent): "
+                    "envelope from %s, author %s lives elsewhere — dropped",
+                    event.from_instance,
+                    story.author_user_id,
+                )
+                return
+            await self._story_repo.save_story(story)
+        else:
+            if not await self._authority_matches(
+                event.from_instance, story.author_user_id
+            ):
+                log.warning(
+                    "STORY_FRAME_APPENDED authority mismatch: envelope from "
+                    "%s, story author %s lives elsewhere — dropped",
+                    event.from_instance,
+                    story.author_user_id,
+                )
+                return
+        frame = self._frame_from_payload(story.id, p)
+        if frame is None:
+            log.debug("STORY_FRAME_APPENDED missing frame fields: %s", p)
+            return
+        await self._story_repo.save_frame(frame)
+        await self._publish_frame_added(story, frame, is_first=False, p=p)
+
+    async def _on_story_frame_deleted(self, event: "FederationEvent") -> None:
+        if self._story_repo is None:
+            return
+        p = event.payload
+        frame_id = str(p.get("frame_id") or "")
+        if not frame_id:
+            return
+        frame = await self._story_repo.get_frame(frame_id)
+        story_id = frame.story_id if frame is not None else str(p.get("story_id") or "")
+        story = await self._story_repo.get_story(story_id) if story_id else None
+        if story is not None and not await self._authority_matches(
+            event.from_instance, story.author_user_id
+        ):
+            log.warning(
+                "STORY_FRAME_DELETED authority mismatch: dropped",
+            )
+            return
+        await self._story_repo.delete_frame(frame_id)
+        if story is not None:
+            await self._bus.publish(
+                StoryFrameRemoved(
+                    story_id=story.id,
+                    frame_id=frame_id,
+                    author_user_id=story.author_user_id,
+                    audience_kind=story.audience_kind.value,
+                    audience=story.audience,
+                )
+            )
+
+    async def _on_story_deleted(self, event: "FederationEvent") -> None:
+        if self._story_repo is None:
+            return
+        p = event.payload
+        story_id = str(p.get("story_id") or "")
+        if not story_id:
+            return
+        story = await self._story_repo.get_story(story_id)
+        if story is None:
+            return
+        if not await self._authority_matches(event.from_instance, story.author_user_id):
+            log.warning("STORY_DELETED authority mismatch: dropped")
+            return
+        await self._story_repo.delete_story(story_id)
+        await self._bus.publish(
+            StoryRemoved(
+                story_id=story_id,
+                author_user_id=story.author_user_id,
+                audience_kind=story.audience_kind.value,
+                audience=story.audience,
+            )
+        )
+
+    async def _publish_frame_added(
+        self,
+        story: Story,
+        frame: StoryFrame,
+        *,
+        is_first: bool,
+        p: dict,
+    ) -> None:
+        await self._bus.publish(
+            StoryFrameAdded(
+                story_id=story.id,
+                frame_id=frame.id,
+                author_user_id=story.author_user_id,
+                story_date=story.story_date,
+                sequence=frame.sequence,
+                is_first_frame=is_first,
+                audience_kind=story.audience_kind.value,
+                audience=story.audience,
+                frame_type=frame.frame_type.value,
+                media_url=frame.media_url,
+                caption_text=frame.caption_text,
+                caption_emoji=frame.caption_emoji,
+                duration_ms=frame.duration_ms,
+                expires_at=story.expires_at or str(p.get("expires_at") or ""),
+            )
+        )
+
+    @staticmethod
+    def _story_from_payload(payload: dict) -> Story | None:
+        story_id = str(payload.get("story_id") or "")
+        author = str(payload.get("author_user_id") or "")
+        story_date = str(payload.get("story_date") or "")
+        if not story_id or not author or not story_date:
+            return None
+        try:
+            kind = StoryAudience(str(payload.get("audience_kind") or "all_paired"))
+        except ValueError:
+            kind = StoryAudience.ALL_PAIRED
+        audience = tuple(str(x) for x in (payload.get("audience") or ()))
+        return Story(
+            id=story_id,
+            author_user_id=author,
+            story_date=story_date,
+            audience_kind=kind,
+            audience=audience,
+            expires_at=str(payload.get("expires_at") or "") or None,
+        )
+
+    @staticmethod
+    def _frame_from_payload(story_id: str, payload: dict) -> StoryFrame | None:
+        frame_id = str(payload.get("frame_id") or "")
+        if not frame_id:
+            return None
+        try:
+            ftype = StoryFrameType(str(payload.get("frame_type") or "image"))
+        except ValueError:
+            ftype = StoryFrameType.IMAGE
+        try:
+            sequence = int(payload.get("sequence") or 1)
+        except TypeError, ValueError:
+            sequence = 1
+        try:
+            duration = (
+                int(payload["duration_ms"])
+                if payload.get("duration_ms") is not None
+                else None
+            )
+        except TypeError, ValueError:
+            duration = None
+        media_url = str(payload.get("media_url") or "")
+        if not media_url:
+            return None
+        return StoryFrame(
+            id=frame_id,
+            story_id=story_id,
+            sequence=sequence,
+            frame_type=ftype,
+            media_url=media_url,
+            caption_text=payload.get("caption_text"),
+            caption_emoji=payload.get("caption_emoji"),
+            duration_ms=duration,
+        )
+
+    async def _authority_matches(
+        self,
+        from_instance: str,
+        author_user_id: str,
+    ) -> bool:
+        """Reject envelopes that claim authorship for a user not on the
+        sending instance. Mismatches are logged + dropped so a misbehaved
+        peer can't plant content on the audience's behalf."""
+        try:
+            home = await self._user_repo.get_instance_for_user(author_user_id)
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug("story authority lookup failed: %s", exc)
+            return False
+        # If the author is unknown locally, accept on first sight — the
+        # ``USER_UPDATED`` / ``USERS_SYNC`` envelope from the same peer
+        # will arrive eventually and seed ``remote_users``.
+        if home is None:
+            return True
+        return home == from_instance
 
     # ── Helpers ────────────────────────────────────────────────────────
 

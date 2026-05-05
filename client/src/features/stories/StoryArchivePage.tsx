@@ -24,6 +24,7 @@ import { Button } from '@/components/Button'
 import { CalendarSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { resolveDisplayName } from '@/utils/avatar'
+import { ws } from '@/ws'
 import type { StoryInboxItem } from '@/types'
 
 
@@ -66,16 +67,24 @@ export default function StoryArchivePage() {
   useEffect(() => {
     loading.value = true
     loadError.value = null
-    api.get('/api/stories')
-      .then((rows: StoryInboxItem[]) => {
-        inbox.value = rows ?? []
-        loading.value = false
-      })
-      .catch((err: unknown) => {
-        loadError.value = (err as Error)?.message ?? 'Could not load'
-        loading.value = false
-        showToast(`Failed to load story archive: ${loadError.value}`, 'error')
-      })
+    const fetchInbox = (initial: boolean) =>
+      api.get('/api/stories')
+        .then((rows: StoryInboxItem[]) => {
+          inbox.value = rows ?? []
+          if (initial) loading.value = false
+        })
+        .catch((err: unknown) => {
+          loadError.value = (err as Error)?.message ?? 'Could not load'
+          if (initial) loading.value = false
+          showToast(`Failed to load story archive: ${loadError.value}`, 'error')
+        })
+    void fetchInbox(true)
+    const dispose = [
+      ws.on('story.frame_added',   () => { void fetchInbox(false) }),
+      ws.on('story.frame_removed', () => { void fetchInbox(false) }),
+      ws.on('story.removed',       () => { void fetchInbox(false) }),
+    ]
+    return () => { dispose.forEach(d => d()) }
   }, [])
 
   if (loading.value) return <CalendarSkeleton />
