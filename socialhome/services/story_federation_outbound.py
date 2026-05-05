@@ -26,7 +26,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..domain.events import StoryFrameAdded, StoryFrameRemoved, StoryRemoved
+from ..domain.events import (
+    StoryFrameAdded,
+    StoryFrameReactionChanged,
+    StoryFrameRemoved,
+    StoryFrameViewed,
+    StoryRemoved,
+)
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 
@@ -61,6 +67,11 @@ class StoryFederationOutbound:
         self._bus.subscribe(StoryFrameAdded, self._on_frame_added)
         self._bus.subscribe(StoryFrameRemoved, self._on_frame_removed)
         self._bus.subscribe(StoryRemoved, self._on_story_removed)
+        # Back-channel events flow viewer → author. The echo-loop guard
+        # gates on "is the *actor* (viewer / reactor) local?" — same
+        # idea as the author-side gate above, just on a different field.
+        self._bus.subscribe(StoryFrameViewed, self._on_frame_viewed)
+        self._bus.subscribe(StoryFrameReactionChanged, self._on_reaction_changed)
 
     # ── Bus handlers ─────────────────────────────────────────────────────
 
@@ -124,16 +135,76 @@ class StoryFederationOutbound:
             },
         )
 
+    # ── Back-channel: viewer/reactor → author ────────────────────────────
+
+    async def _on_frame_viewed(self, event: StoryFrameViewed) -> None:
+        if not await self._is_local_user(event.viewer_user_id):
+            return  # echo from inbound or the author's own view — drop
+        # Author-only delivery: the only peer that needs the view
+        # receipt is the author's home instance. If the author *is*
+        # local (i.e. local viewer + local author), there's no
+        # federation work — the local realtime layer already fanned.
+        target = await self._home_instance_or_none(event.author_user_id)
+        if target is None or target == self._federation.own_instance_id:
+            return
+        await self._send_to(
+            instance_id=target,
+            event_type=FederationEventType.STORY_FRAME_VIEWED,
+            payload={
+                "story_id": event.story_id,
+                "frame_id": event.frame_id,
+                "viewer_user_id": event.viewer_user_id,
+                "author_user_id": event.author_user_id,
+                "occurred_at": event.occurred_at.isoformat(),
+            },
+        )
+
+    async def _on_reaction_changed(self, event: StoryFrameReactionChanged) -> None:
+        if not await self._is_local_user(event.reactor_user_id):
+            return
+        target = await self._home_instance_or_none(event.author_user_id)
+        if target is None or target == self._federation.own_instance_id:
+            return
+        if event.emoji is None:
+            ev_type = FederationEventType.STORY_FRAME_REACTION_REMOVED
+        else:
+            ev_type = FederationEventType.STORY_FRAME_REACTED
+        await self._send_to(
+            instance_id=target,
+            event_type=ev_type,
+            payload={
+                "story_id": event.story_id,
+                "frame_id": event.frame_id,
+                "reactor_user_id": event.reactor_user_id,
+                "author_user_id": event.author_user_id,
+                "emoji": event.emoji,
+                "occurred_at": event.occurred_at.isoformat(),
+            },
+        )
+
     # ── Helpers ──────────────────────────────────────────────────────────
 
     async def _is_local_author(self, author_user_id: str) -> bool:
+        return await self._is_local_user(author_user_id)
+
+    async def _is_local_user(self, user_id: str) -> bool:
+        """Generic 'does this user_id live on *this* instance?' check.
+
+        Used by both the author-side gate (frame added / removed /
+        story removed) and the actor-side gate (frame viewed / reaction
+        changed). Same semantics — different field on the event.
+        """
+        return (
+            await self._home_instance_or_none(user_id)
+            == self._federation.own_instance_id
+        )
+
+    async def _home_instance_or_none(self, user_id: str) -> str | None:
         try:
-            home = await self._user_repo.get_instance_for_user(author_user_id)
+            return await self._user_repo.get_instance_for_user(user_id)
         except Exception as exc:  # pragma: no cover — defensive
             log.debug("story-outbound: user lookup failed: %s", exc)
-            return False
-        own = self._federation.own_instance_id
-        return bool(home) and home == own
+            return None
 
     async def _resolve_audience(
         self,
@@ -185,16 +256,35 @@ class StoryFederationOutbound:
     ) -> None:
         targets = await self._resolve_audience(audience_kind, audience)
         for instance_id in targets:
-            try:
-                await self._federation.send_event(
-                    to_instance_id=instance_id,
-                    event_type=event_type,
-                    payload=payload,
-                )
-            except Exception as exc:  # pragma: no cover — defensive
-                log.debug(
-                    "story-outbound: send %s to %s failed: %s",
-                    event_type,
-                    instance_id,
-                    exc,
-                )
+            await self._send_to(
+                instance_id=instance_id,
+                event_type=event_type,
+                payload=payload,
+            )
+
+    async def _send_to(
+        self,
+        *,
+        instance_id: str,
+        event_type: FederationEventType,
+        payload: dict,
+    ) -> None:
+        """Single-target wrapper around ``federation_service.send_event``
+        that swallows errors so one bad peer doesn't kill the bus
+        subscriber. Identical contract to the loop body in
+        ``_fan_to_audience`` — extracted so the back-channel handlers
+        (which are unicast to the author's home instance) don't have to
+        rebuild the audience structure."""
+        try:
+            await self._federation.send_event(
+                to_instance_id=instance_id,
+                event_type=event_type,
+                payload=payload,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug(
+                "story-outbound: send %s to %s failed: %s",
+                event_type,
+                instance_id,
+                exc,
+            )

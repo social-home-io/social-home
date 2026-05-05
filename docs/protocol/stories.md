@@ -104,19 +104,27 @@ sequenceDiagram
     ``user_repo.get_instance_for_user``.
 - Inbound federation: handler block in
   ``socialhome/services/federation_inbound_service.py`` registered
-  by ``attach_to`` for ``STORY_CREATED`` /
-  ``STORY_FRAME_APPENDED`` / ``STORY_FRAME_DELETED`` /
-  ``STORY_DELETED``. Each persists via ``story_repo`` and republishes
-  the matching domain event so :class:`RealtimeService` fans the WS
-  frame to local viewers. ``STORY_FRAME_VIEWED`` /
-  ``STORY_FRAME_REACTED`` / ``STORY_FRAME_REACTION_REMOVED`` are
-  declared in the enum but not yet wired (deferred follow-up — they
-  flow back from viewer instance to author instance only).
+  by ``attach_to`` for all seven ``STORY_*`` event types
+  (``STORY_CREATED`` / ``STORY_FRAME_APPENDED`` /
+  ``STORY_FRAME_DELETED`` / ``STORY_DELETED`` are author → audience;
+  ``STORY_FRAME_VIEWED`` / ``STORY_FRAME_REACTED`` /
+  ``STORY_FRAME_REACTION_REMOVED`` are viewer → author back-channel).
+  Each persists via ``story_repo`` and republishes the matching
+  domain event so :class:`RealtimeService` fans the WS frame to the
+  right local audience. The back-channel handlers verify the
+  envelope's signed sender is the *viewer's* / *reactor's* home
+  instance — peers can't fabricate views or reactions on behalf of
+  someone else.
 - Realtime push: ``socialhome/services/realtime_service.py`` —
-  subscribes to the three Story bus events and broadcasts narrow
-  ``story.frame_added`` / ``story.frame_removed`` / ``story.removed``
-  WS frames to the household so the SPA refetches ``/api/stories``
-  (audience-filtered server-side).
+  subscribes to the five Story bus events. Author-side events
+  (``StoryFrameAdded`` / ``StoryFrameRemoved`` / ``StoryRemoved``)
+  fan ``story.frame_added`` / ``story.frame_removed`` /
+  ``story.removed`` WS frames to the whole household so the SPA
+  refetches ``/api/stories`` (audience-filtered server-side).
+  Back-channel events (``StoryFrameViewed`` /
+  ``StoryFrameReactionChanged``) fan ``story.frame_viewed`` /
+  ``story.frame_reaction_changed`` only to the *author's* WS
+  sessions — unrelated household members don't need the noise.
 - Routes: `socialhome/routes/stories.py`.
 - Retention scheduler:
   `socialhome/infrastructure/story_retention_scheduler.py` (copies the
