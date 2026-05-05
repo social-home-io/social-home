@@ -14,6 +14,7 @@ import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { confirmDialog } from '@/components/confirm'
+import { openReport } from '@/components/ReportDialog'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { currentUser } from '@/store/auth'
 import { useTitle } from '@/store/pageTitle'
@@ -98,20 +99,7 @@ export default function MomentumDetailPage() {
     }
   }
 
-  const report = async () => {
-    const cat = window.prompt(
-      'Report category (spam | harassment | inappropriate | misinformation | other):',
-      'spam',
-    )
-    if (!cat) return
-    const notes = window.prompt('Notes (optional):', '') || ''
-    try {
-      await api.post(`/api/moments/${m.id}/report`, { category: cat, notes })
-      showToast('Report submitted', 'success')
-    } catch (err: unknown) {
-      showToast(`Couldn't submit: ${(err as Error)?.message ?? err}`, 'error')
-    }
-  }
+  const report = () => openReport('moment', m.id)
 
   const myReaction = detail.value.reactions.find(
     r => r.reactor_user_id === me,

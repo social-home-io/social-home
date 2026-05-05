@@ -786,6 +786,13 @@ class FederationInboundService:
             expires_at=str(p.get("expires_at") or _now_iso()),
         )
         await self._moment_repo.save(moment)
+        # Look up the parent's author so the local notification handler
+        # can ping them when the inbound moment is a reply.
+        parent_author_user_id: str | None = None
+        if moment.parent_moment_id is not None:
+            parent = await self._moment_repo.get(moment.parent_moment_id)
+            if parent is not None:
+                parent_author_user_id = parent.author_user_id
         # Bus republish so the realtime layer + downstream listeners
         # see the same shape they'd see on a local write.
         await self._bus.publish(
@@ -797,6 +804,7 @@ class FederationInboundService:
                 media_type=moment.media_type,
                 duration_ms=moment.duration_ms,
                 parent_moment_id=moment.parent_moment_id,
+                parent_author_user_id=parent_author_user_id,
                 origin_instance_id=moment.origin_instance_id,
                 expires_at=moment.expires_at,
             )

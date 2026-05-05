@@ -18,6 +18,7 @@ import {
 } from '@/utils/preferences'
 import { confirmDialog } from '@/components/confirm'
 import { blockedUsers, loadBlocks, unblockUser } from '@/store/blocks'
+import { followedUsers, loadFollows, unfollowUser } from '@/store/follows'
 
 type SettingsTab = 'profile' | 'privacy' | 'notifications' | 'appearance'
 
@@ -336,7 +337,67 @@ function PrivacyTab() {
       </label>
       <StoriesPreferencesPanel />
       <BlockedAccountsPanel />
+      <FollowingPanel />
     </section>
+  )
+}
+
+
+function FollowingPanel() {
+  useEffect(() => {
+    void loadFollows(true)
+  }, [])
+  const rows = followedUsers.value
+
+  const onUnfollow = async (userId: string) => {
+    if (!await confirmDialog(
+      `Unfollow ${userId}? Their moments older than 24 hours will stop `
+      + `surfacing in your inbox.`,
+      { confirmLabel: 'Unfollow' },
+    )) return
+    try {
+      await unfollowUser(userId)
+      showToast('Unfollowed', 'success')
+    } catch (e: unknown) {
+      showToast(`Couldn't unfollow: ${(e as Error)?.message ?? e}`, 'error')
+    }
+  }
+
+  return (
+    <div class="sh-following">
+      <h3 style={{ marginBottom: 0 }}>Following</h3>
+      <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
+        Following someone extends the moments retention window from 24
+        hours to 7 days for their posts in your inbox.
+      </p>
+      {rows.length === 0 && (
+        <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
+          You aren't following anyone. Tap a moment author's name and
+          choose Follow to start.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <ul class="sh-following-list" aria-label="Following">
+          {rows.map(f => (
+            <li key={f.user_id} class="sh-following-row">
+              <Avatar name={f.user_id} size={32} />
+              <span class="sh-following-meta">
+                <strong>{f.user_id}</strong>
+                <span class="sh-muted">
+                  Following since {new Date(f.created_at).toLocaleDateString()}
+                </span>
+              </span>
+              <Button
+                variant="secondary"
+                onClick={() => void onUnfollow(f.user_id)}
+              >
+                Unfollow
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 

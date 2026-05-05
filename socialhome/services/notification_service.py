@@ -41,6 +41,8 @@ from ..domain.events import (
     EventReminderDue,
     DmContactRequested,
     DmMessageCreated,
+    MomentCreated,
+    MomentReactionChanged,
     NotificationCreated,
     PostCreated,
     RemoteSpaceInviteAccepted,
@@ -55,6 +57,7 @@ from ..domain.events import (
     TaskAssigned,
     TaskCompleted,
     TaskDeadlineDue,
+    UserFollowed,
 )
 from ..i18n import Catalog
 from ..infrastructure.event_bus import EventBus
@@ -252,6 +255,10 @@ class NotificationService:
             RemoteSpaceInviteDeclined,
             self.on_remote_invite_declined,
         )
+        # Momentum (§Momentum) — reactions, replies, and new follows.
+        self._bus.subscribe(MomentReactionChanged, self.on_moment_reaction_changed)
+        self._bus.subscribe(MomentCreated, self.on_moment_created)
+        self._bus.subscribe(UserFollowed, self.on_user_followed)
 
     # ── Handlers ───────────────────────────────────────────────────────
 
@@ -920,3 +927,78 @@ class NotificationService:
                     link_url=None,
                 )
             )
+
+    # ── Momentum (§Momentum) ──────────────────────────────────────────
+
+    async def on_moment_reaction_changed(
+        self,
+        event: MomentReactionChanged,
+    ) -> None:
+        """Notify the moment author when someone reacts.
+
+        Cleared reactions (``emoji is None``) intentionally don't fire
+        a notification — the author already saw the original. Self-
+        reactions are silent. The recipient must live on this instance.
+        """
+        if event.emoji is None:
+            return
+        if event.reactor_user_id == event.author_user_id:
+            return
+        author = await self._users.get_by_user_id(event.author_user_id)
+        if author is None:
+            return  # remote author — their instance fires the local notif
+        reactor = await self._users.get_by_user_id(event.reactor_user_id)
+        name = reactor.display_name if reactor is not None else event.reactor_user_id
+        await self._save_notif(
+            new_notification(
+                user_id=event.author_user_id,
+                type="moment_reacted",
+                title=f"{name} reacted {event.emoji} to your moment",
+                link_url=f"/momentum/{event.moment_id}",
+            )
+        )
+
+    async def on_moment_created(self, event: MomentCreated) -> None:
+        """Notify the parent author when this moment is a reply.
+
+        Top-level moments don't fire a notification per recipient —
+        broadcast posts are picked up via the WS frame and the inbox
+        refresh; pinging every household member would be too noisy.
+        """
+        if event.parent_moment_id is None:
+            return
+        if not event.parent_author_user_id:
+            return
+        if event.parent_author_user_id == event.author_user_id:
+            return  # author replied to their own thread
+        recipient = await self._users.get_by_user_id(event.parent_author_user_id)
+        if recipient is None:
+            return  # parent author lives on a peer instance
+        replier = await self._users.get_by_user_id(event.author_user_id)
+        name = replier.display_name if replier is not None else event.author_user_id
+        await self._save_notif(
+            new_notification(
+                user_id=event.parent_author_user_id,
+                type="moment_replied",
+                title=f"{name} replied to your moment",
+                link_url=f"/momentum/{event.parent_moment_id}",
+            )
+        )
+
+    async def on_user_followed(self, event: UserFollowed) -> None:
+        """Notify the followed user when someone starts following them."""
+        if event.follower_user_id == event.followed_user_id:
+            return
+        recipient = await self._users.get_by_user_id(event.followed_user_id)
+        if recipient is None:
+            return
+        follower = await self._users.get_by_user_id(event.follower_user_id)
+        name = follower.display_name if follower is not None else event.follower_user_id
+        await self._save_notif(
+            new_notification(
+                user_id=event.followed_user_id,
+                type="user_followed",
+                title=f"{name} started following you",
+                link_url="/momentum",
+            )
+        )

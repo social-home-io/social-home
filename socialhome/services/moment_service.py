@@ -115,6 +115,7 @@ class MomentService:
         if media_type != "video":
             duration_ms = None
 
+        parent_author_user_id: str | None = None
         if parent_moment_id is not None:
             parent = await self._moments.get(parent_moment_id)
             if parent is None:
@@ -123,7 +124,13 @@ class MomentService:
             # original root so list_replies(root) returns the whole
             # conversation in a single query.
             if parent.parent_moment_id is not None:
+                root = await self._moments.get(parent.parent_moment_id)
                 parent_moment_id = parent.parent_moment_id
+                parent_author_user_id = (
+                    root.author_user_id if root is not None else parent.author_user_id
+                )
+            else:
+                parent_author_user_id = parent.author_user_id
 
         # Rate-limit only top-level moments (replies are exempt).
         if parent_moment_id is None:
@@ -161,6 +168,7 @@ class MomentService:
                 media_type=moment.media_type,
                 duration_ms=moment.duration_ms,
                 parent_moment_id=moment.parent_moment_id,
+                parent_author_user_id=parent_author_user_id,
                 origin_instance_id=moment.origin_instance_id,
                 expires_at=moment.expires_at,
             )

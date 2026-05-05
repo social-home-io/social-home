@@ -1384,6 +1384,10 @@ class MomentCreated(DomainEvent):
     media_type: str | None
     duration_ms: int | None
     parent_moment_id: str | None
+    #: The author of the parent moment when this is a reply, otherwise
+    #: ``None``. Carried on the event so :class:`NotificationService`
+    #: can ping the parent author without a repo lookup.
+    parent_author_user_id: str | None
     origin_instance_id: str
     expires_at: str
     occurred_at: datetime = field(default_factory=_now)

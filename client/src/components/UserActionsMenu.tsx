@@ -17,6 +17,12 @@ import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { showToast } from './Toast'
 import { blockUser, unblockUser, isBlocked } from '@/store/blocks'
+import {
+  followUser,
+  unfollowUser,
+  isFollowing,
+  loadFollows,
+} from '@/store/follows'
 
 const open = signal(false)
 const targetUserId = signal('')
@@ -31,10 +37,14 @@ export function openUserActions(userId: string, displayName?: string): void {
   targetDisplayName.value = displayName?.trim() || userId
   showConfirmBlock.value = false
   open.value = true
+  // Hydrate the follow cache so the Follow / Unfollow toggle reflects
+  // the current state when the modal opens.
+  void loadFollows()
 }
 
 export function UserActionsMenu() {
   const alreadyBlocked = isBlocked(targetUserId.value)
+  const alreadyFollowing = isFollowing(targetUserId.value)
 
   const onBlock = async () => {
     try {
@@ -57,6 +67,26 @@ export function UserActionsMenu() {
     }
   }
 
+  const onFollow = async () => {
+    try {
+      await followUser(targetUserId.value)
+      showToast(`Following ${targetDisplayName.value}`, 'success')
+      open.value = false
+    } catch (e: unknown) {
+      showToast(`Couldn't follow: ${(e as Error)?.message ?? e}`, 'error')
+    }
+  }
+
+  const onUnfollow = async () => {
+    try {
+      await unfollowUser(targetUserId.value)
+      showToast(`Unfollowed ${targetDisplayName.value}`, 'success')
+      open.value = false
+    } catch (e: unknown) {
+      showToast(`Couldn't unfollow: ${(e as Error)?.message ?? e}`, 'error')
+    }
+  }
+
   return (
     <>
       <Modal
@@ -65,6 +95,16 @@ export function UserActionsMenu() {
         title={targetDisplayName.value}
       >
         <div class="sh-user-actions">
+          {!alreadyBlocked && !alreadyFollowing && (
+            <Button variant="primary" onClick={onFollow}>
+              ➕ Follow
+            </Button>
+          )}
+          {!alreadyBlocked && alreadyFollowing && (
+            <Button variant="secondary" onClick={onUnfollow}>
+              ✓ Unfollow
+            </Button>
+          )}
           {!alreadyBlocked && (
             <Button
               variant="danger"
