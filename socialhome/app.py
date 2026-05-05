@@ -162,6 +162,7 @@ from .services.space_member_profile_federation_outbound import (
 )
 from .services.gallery_federation_outbound import GalleryFederationOutbound
 from .services.sticky_federation_outbound import StickyFederationOutbound
+from .services.story_federation_outbound import StoryFederationOutbound
 from .services.space_location_outbound import SpaceLocationOutbound
 from .services.space_zone_outbound import SpaceZoneOutbound
 from .services.space_zone_service import SpaceZoneService
@@ -365,6 +366,7 @@ def _wire_federation_stack(
     profile_picture_repo,
     page_repo,
     sticky_repo,
+    story_repo,
     space_task_repo,
     space_calendar_repo,
     dm_contact_repo,
@@ -470,6 +472,7 @@ def _wire_federation_stack(
         space_post_repo=space_post_repo,
         space_repo=space_repo,
         user_repo=user_repo,
+        story_repo=story_repo,
         profile_picture_repo=profile_picture_repo,
         report_service=report_service,
         dm_routing_repo=dm_routing_repo,
@@ -656,6 +659,18 @@ def _wire_federation_stack(
         federation_repo=federation_repo,
     )
     profile_federation_outbound.wire()
+
+    # §Stories — fan StoryFrameAdded / StoryRemoved / StoryFrameRemoved
+    # to peer instances based on the story's audience. The subscriber
+    # gates on "is the author local?" so it doesn't re-fan inbound
+    # republished events.
+    story_federation_outbound = StoryFederationOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        federation_repo=federation_repo,
+        user_repo=user_repo,
+    )
+    story_federation_outbound.wire()
 
     # §11 URL rotation fan-out. Triggered by
     # PATCH /api/ha/integration/federation-base when the HA integration
@@ -1450,6 +1465,7 @@ def create_app(config: Config | None = None) -> web.Application:
             profile_picture_repo=profile_picture_repo,
             page_repo=page_repo,
             sticky_repo=sticky_repo,
+            story_repo=story_repo,
             space_task_repo=space_task_repo,
             space_calendar_repo=space_cal_repo,
             dm_contact_repo=dm_contact_repo,

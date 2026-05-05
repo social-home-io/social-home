@@ -22,6 +22,7 @@ import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { blockedUserIds, loadBlocks } from '@/store/blocks'
+import { ws } from '@/ws'
 import type { StoryInboxItem } from '@/types'
 
 const inbox = signal<StoryInboxItem[]>([])
@@ -55,16 +56,27 @@ export default function StoriesPage() {
   useEffect(() => {
     loading.value = true
     void loadBlocks()  // populate the optimistic block-id set
-    api.get('/api/stories')
-      .then((rows: StoryInboxItem[]) => {
-        inbox.value = rows ?? []
-        loading.value = false
-      })
-      .catch((err: unknown) => {
-        showToast(`Failed to load stories: ${(err as Error)?.message ?? err}`,
-          'error')
-        loading.value = false
-      })
+    const fetchInbox = (initial: boolean) =>
+      api.get('/api/stories')
+        .then((rows: StoryInboxItem[]) => {
+          inbox.value = rows ?? []
+          if (initial) loading.value = false
+        })
+        .catch((err: unknown) => {
+          if (initial) loading.value = false
+          showToast(`Failed to load stories: ${(err as Error)?.message ?? err}`,
+            'error')
+        })
+    void fetchInbox(true)
+    // Live updates — both local writes and federated arrivals fan a
+    // narrow ``story.*`` frame; we just refetch so the audience filter
+    // and unseen counts stay server-authoritative.
+    const dispose = [
+      ws.on('story.frame_added',   () => { void fetchInbox(false) }),
+      ws.on('story.frame_removed', () => { void fetchInbox(false) }),
+      ws.on('story.removed',       () => { void fetchInbox(false) }),
+    ]
+    return () => { dispose.forEach(d => d()) }
   }, [])
 
   if (loading.value) return <StoriesRingSkeleton />

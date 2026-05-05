@@ -1051,7 +1051,12 @@ CREATE TABLE IF NOT EXISTS message_reactions (
 
 CREATE TABLE IF NOT EXISTS stories (
     id              TEXT PRIMARY KEY,
-    author_user_id  TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    -- Plain-text user_id without a foreign key — stories from remote
+    -- authors land here too (federation outbound/inbound persist the
+    -- author's home-instance user_id), and remote users live in
+    -- ``remote_users``, not ``users``. Same convention as
+    -- ``conversation_messages.sender_user_id``.
+    author_user_id  TEXT NOT NULL,
     -- ``YYYY-MM-DD`` UTC. UNIQUE(author, day) enforces the "one story per
     -- author per day, frames append" rule.
     story_date      TEXT NOT NULL,

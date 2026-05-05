@@ -81,17 +81,48 @@ sequenceDiagram
 
 - Schema: `socialhome/migrations/0001_initial.sql` — `stories`,
   `story_frames`, `story_frame_views`, `story_frame_reactions`.
+  ``stories.author_user_id`` is plain text (no FK to ``users``) so
+  remote-author rows from the inbound pipeline land alongside local
+  rows; same convention as ``conversation_messages.sender_user_id``.
 - Domain: `socialhome/domain/story.py`.
-- Repo: `socialhome/repositories/story_repo.py` (Spec-style audience
-  filter on `list_visible_to`).
+- Repo: `socialhome/repositories/story_repo.py` —
+  ``list_visible_to`` filters by audience and personal block list,
+  ``save_story`` / ``save_frame`` are upsert helpers used by the
+  inbound handlers.
 - Service: `socialhome/services/story_service.py`. `expire_due()`
-  drives the scheduler.
+  drives the scheduler. Local writes publish ``StoryFrameAdded`` /
+  ``StoryFrameRemoved`` / ``StoryRemoved`` on the bus.
+- Outbound federation:
+  ``socialhome/services/story_federation_outbound.py``. Subscribes to
+  the three Story domain events; gates each on "is the author local
+  on *this* instance?" (``user_repo.get_instance_for_user(author) ==
+  own``) so the same events republished from the inbound path don't
+  echo back to peers. Audience routing:
+  - ``all_paired`` → ``federation_repo.list_instances(status='paired')``
+  - ``households`` → use the listed instance ids verbatim
+  - ``users``      → resolve each user_id to its home instance via
+    ``user_repo.get_instance_for_user``.
+- Inbound federation: handler block in
+  ``socialhome/services/federation_inbound_service.py`` registered
+  by ``attach_to`` for ``STORY_CREATED`` /
+  ``STORY_FRAME_APPENDED`` / ``STORY_FRAME_DELETED`` /
+  ``STORY_DELETED``. Each persists via ``story_repo`` and republishes
+  the matching domain event so :class:`RealtimeService` fans the WS
+  frame to local viewers. ``STORY_FRAME_VIEWED`` /
+  ``STORY_FRAME_REACTED`` / ``STORY_FRAME_REACTION_REMOVED`` are
+  declared in the enum but not yet wired (deferred follow-up — they
+  flow back from viewer instance to author instance only).
+- Realtime push: ``socialhome/services/realtime_service.py`` —
+  subscribes to the three Story bus events and broadcasts narrow
+  ``story.frame_added`` / ``story.frame_removed`` / ``story.removed``
+  WS frames to the household so the SPA refetches ``/api/stories``
+  (audience-filtered server-side).
 - Routes: `socialhome/routes/stories.py`.
 - Retention scheduler:
   `socialhome/infrastructure/story_retention_scheduler.py` (copies the
   `_stop: asyncio.Event` template from `replay_cache_scheduler.py`).
-- Frontend: `client/src/features/stories/` (3 pages),
-  `client/src/components/StoryShareCard.tsx`, and
+- Frontend: `client/src/features/stories/` (4 pages — inbox, viewer,
+  composer, archive), `client/src/components/StoryShareCard.tsx`, and
   `client/src/components/StoryPickerDialog.tsx` for sharing into a feed.
 
 ## Spec refs
