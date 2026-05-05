@@ -17,6 +17,7 @@ import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import type { Story, StoryFrame } from '@/types'
 import { confirmDialog } from '@/components/confirm'
+import { openReport } from '@/components/ReportDialog'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { ws } from '@/ws'
 
@@ -130,6 +131,19 @@ export default function StoryViewerPage() {
     if (currentIndex.value > 0) currentIndex.value -= 1
   }
 
+  // Keyboard navigation — left/right arrows step through frames, Esc
+  // closes the viewer. Bound on `window` so users don't have to focus
+  // the tap zones first.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'ArrowRight') { ev.preventDefault(); advance() }
+      else if (ev.key === 'ArrowLeft') { ev.preventDefault(); goBack() }
+      else if (ev.key === 'Escape') { ev.preventDefault(); loc.route('/stories') }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [detail.value?.story.id])
+
   if (loading.value) return <Spinner />
   if (!detail.value) return null
 
@@ -208,6 +222,9 @@ export default function StoryViewerPage() {
           />
         ))}
       </div>
+      <span class="sr-only" aria-live="polite">
+        Frame {currentIndex.value + 1} of {frames.length}
+      </span>
 
       <header class="sh-story-viewer-header">
         <strong>{story.author_user_id}</strong>
@@ -271,6 +288,14 @@ export default function StoryViewerPage() {
               aria-label="Reply to this frame"
             >
               💬 Reply
+            </button>
+            <button
+              type="button"
+              class="sh-story-report-btn"
+              onClick={() => openReport('story', story.id)}
+              aria-label="Report this story"
+            >
+              🚩 Report
             </button>
           </>
         )}
