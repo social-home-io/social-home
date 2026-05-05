@@ -142,6 +142,18 @@ sequenceDiagram
     A->>V: stream_end
 ```
 
+## Public viewer bundle
+
+The viewer that the GFS landing serves is a Preact component built
+from `client/gfs/public_story.tsx` via a separate Vite config
+(`client/vite.gfs.config.ts`) that emits a single self-contained
+IIFE bundle to `socialhome/global_server/static/story_public_viewer.js`.
+Sharing the SPA's Preact + Vite tooling gives us one component model
+across both surfaces; future GFS UI work (admin portal port, public
+global-space pages) plugs in as additional rollup inputs without a
+second toolchain. Run `pnpm build:gfs` from `client/` to rebuild the
+GFS bundle alone, or `pnpm build` for both.
+
 ## Implementation pointers
 
 - Schema (SH side): `socialhome/migrations/0001_initial.sql` —
@@ -158,7 +170,13 @@ sequenceDiagram
 - Services: `socialhome/services/story_publication_service.py` (SH);
   `socialhome/global_server/story_publications.py` (GFS registry).
 - Routes: `socialhome/routes/story_publications.py` (SH);
-  `socialhome/global_server/routes/stories.py` (GFS).
+  `socialhome/global_server/routes/stories.py` (GFS);
+  `socialhome/global_server/routes/story_rtc.py` (public + author RTC).
+- Author-side answerer: `socialhome/services/story_signaling_handler.py`.
+- Framing: `socialhome/services/story_public_framing.py` +
+  `tests/protocol/test_story_public_framing.py` (golden-bytes test).
+- Public viewer: `client/gfs/public_story.tsx` + the matching Vite
+  config at `client/vite.gfs.config.ts`.
 
 ## Security notes
 

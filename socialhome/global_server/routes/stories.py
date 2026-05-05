@@ -17,6 +17,7 @@ GFS only relays SDP/ICE later.
 
 from __future__ import annotations
 
+import json
 import logging
 
 from aiohttp import web
@@ -172,17 +173,39 @@ class StoryPublicLandingView(GfsBaseView):
         if not await registry.author_online(instance_id):
             return _unavailable_html(instance_id, story_id)
 
-        # PR1 placeholder — the actual viewer JS lands in PR2.
+        # Boot payload — the bootstrap JS reads this <script id="boot">
+        # tag for the (instance_id, story_id, token) triple it needs to
+        # POST /gfs/story_rtc/offer. Keeping the values inline lets the
+        # JS bundle stay zero-state — no URL parsing on the client side.
+        boot = json.dumps(
+            {"instanceId": instance_id, "storyId": story_id, "token": token}
+        )
         body = (
-            "<!doctype html><html><head>"
+            "<!doctype html><html lang='en'><head>"
             "<meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>Story</title>"
+            "<style>"
+            "html,body{margin:0;padding:0;background:#111;color:#eee;"
+            "font-family:system-ui,sans-serif;height:100%;}"
+            "#root{height:100vh;display:flex;}"
+            ".story-viewer{display:flex;flex-direction:column;width:100%;}"
+            ".progress{display:flex;gap:4px;padding:12px;}"
+            ".progress .seg{flex:1;height:3px;background:rgba(255,255,255,.2);border-radius:2px;}"
+            ".progress .seg.done{background:rgba(255,255,255,.6);}"
+            ".progress .seg.active{background:#fff;}"
+            ".stage{flex:1;display:flex;align-items:center;justify-content:center;"
+            "padding:0 12px;position:relative;}"
+            ".stage img,.stage video{max-width:100%;max-height:100%;border-radius:8px;}"
+            ".caption{position:absolute;bottom:24px;padding:8px 14px;"
+            "background:rgba(0,0,0,.5);border-radius:8px;max-width:80%;}"
+            ".story-error,.story-end{padding:24px;text-align:center;width:100%;}"
+            ".status{color:#aaa;font-size:.9em;text-align:center;}"
+            "</style>"
             "</head><body>"
-            "<h1>Story coming soon</h1>"
-            "<p>The owner has shared a story with you. The full viewer "
-            "is being rolled out — refresh in a moment.</p>"
-            f"<p><small>{instance_id}/{story_id}</small></p>"
+            "<div id='root'></div>"
+            f"<script id='boot' type='application/json'>{boot}</script>"
+            "<script src='/static/story_public_viewer.js' defer></script>"
             "</body></html>"
         )
         return web.Response(text=body, content_type="text/html", status=200)

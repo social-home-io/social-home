@@ -329,3 +329,107 @@ async def test_ice_servers_returns_stun(client):
     data = await resp.json()
     assert data["servers"]
     assert any("stun:" in s["urls"][0] for s in data["servers"])
+
+
+# ─── Validation edges ────────────────────────────────────────────────────
+
+
+async def test_viewer_ice_invalid_payload_returns_422(client):
+    r = await client.post("/gfs/story_rtc/ice/viewer", json={})
+    assert r.status == 422
+    r = await client.post(
+        "/gfs/story_rtc/ice/viewer",
+        json={"session_id": "x", "candidate": "not-a-dict"},
+    )
+    assert r.status == 422
+
+
+async def test_answer_missing_session_id_returns_422(client):
+    body = _sign(client._seed, {"instance_id": "inst-author", "sdp": "v=0"})
+    r = await client.post("/gfs/story_rtc/answer", json=body)
+    assert r.status == 422
+
+
+async def test_answer_unknown_session_returns_404(client):
+    body = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "session_id": "missing", "sdp": "v=0"},
+    )
+    r = await client.post("/gfs/story_rtc/answer", json=body)
+    assert r.status == 404
+
+
+async def test_author_ice_invalid_payload_returns_422(client):
+    body = _sign(client._seed, {"instance_id": "inst-author"})
+    r = await client.post("/gfs/story_rtc/ice/author", json=body)
+    assert r.status == 422
+
+
+async def test_author_ice_unknown_session_returns_404(client):
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "session_id": "missing",
+            "candidate": {"candidate": "x"},
+        },
+    )
+    r = await client.post("/gfs/story_rtc/ice/author", json=body)
+    assert r.status == 404
+
+
+async def test_author_ice_wrong_instance_returns_403(client):
+    """Even with a valid session, only the instance the offer was
+    pushed to may push ICE for it."""
+    offer = await (
+        await client.post(
+            "/gfs/story_rtc/offer",
+            json={
+                "instance_id": "inst-author",
+                "story_id": "s-1",
+                "token": client._token,
+                "sdp": "v=0",
+            },
+        )
+    ).json()
+    other_seed, other_pk = _make_keypair()
+    await client._app[gfs_fed_repo_key].upsert_instance(
+        ClientInstance(
+            instance_id="inst-other",
+            display_name="Other",
+            public_key=other_pk,
+            inbox_url="http://other/wh",
+            status="active",
+        )
+    )
+    body = _sign(
+        other_seed,
+        {
+            "instance_id": "inst-other",
+            "session_id": offer["session_id"],
+            "candidate": {"candidate": "x"},
+        },
+    )
+    r = await client.post("/gfs/story_rtc/ice/author", json=body)
+    assert r.status == 403
+
+
+async def test_ice_servers_includes_turn_when_configured(client):
+    """The /gfs/stories/ice-servers helper passes a TURN server through
+    when the operator set it on the GFS config — GfsConfig is a frozen
+    dataclass so we swap in a tiny ``SimpleNamespace`` that satisfies
+    the same ``getattr``-based shape the route expects."""
+    from types import SimpleNamespace
+
+    from socialhome.global_server.app_keys import gfs_config_key
+
+    client._app[gfs_config_key] = SimpleNamespace(  # type: ignore[assignment]
+        ice_stun_url="stun:stun.l.google.com:19302",
+        ice_turn_url="turn:turn.example:3478",
+        ice_turn_user="alice",
+        ice_turn_credential="secret",
+    )
+    resp = await client.get("/gfs/stories/ice-servers")
+    data = await resp.json()
+    urls = [s["urls"][0] for s in data["servers"]]
+    assert any("turn:" in u for u in urls)

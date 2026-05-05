@@ -64,6 +64,7 @@ log = logging.getLogger(__name__)
 
 _MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 _ADMIN_UI_DIR = Path(__file__).resolve().parent / "admin_ui"
+_PUBLIC_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 # ─── Application factory ───────────────────────────────────────────────
@@ -227,6 +228,7 @@ class GfsApp:
             self.app,
             admin_ui_dir=_ADMIN_UI_DIR,
             media_dir=self.config.media_dir,
+            public_static_dir=_PUBLIC_STATIC_DIR,
         )
 
     def _register_lifecycle(self) -> None:

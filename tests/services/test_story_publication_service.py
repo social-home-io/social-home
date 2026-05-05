@@ -214,6 +214,68 @@ async def test_publish_without_session_raises(repos, seeded_story):
         await svc.publish(seeded_story.id, "u1", gfs_id="gfs-abc")
 
 
+async def test_publish_response_missing_token_raises(repos, seeded_story):
+    sess = _StubSession(body={"url": "https://gfs/u/s/A"})  # missing token
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryPublicationError):
+        await svc.publish(seeded_story.id, "u1", gfs_id="gfs-abc")
+
+
+async def test_revoke_token_to_inactive_gfs_raises(repos, seeded_story):
+    """When the publication points at a now-suspended GFS, revoke fails
+    with a service-level error rather than reaching the network."""
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+    await repos["gfs"]._db.enqueue(
+        "UPDATE gfs_connections SET status='suspended' WHERE id='gfs-abc'"
+    )
+    svc = _make_service(repos, session=_StubSession())
+    with pytest.raises(StoryPublicationError):
+        await svc.revoke_token(seeded_story.id, "u1", token="tok-A")
+
+
+async def test_unpublish_logs_and_clears_on_aiohttp_client_error(repos, seeded_story):
+    """If the GFS request raises ClientError (network down), the local
+    flag is still cleared — author asked to unpublish."""
+    import aiohttp as _aiohttp
+
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    class _BoomSession(_StubSession):
+        def post(self, url, *, json=None, **_kw):
+            self.posts.append((url, json or {}))
+            raise _aiohttp.ClientError("network down")
+
+    svc = _make_service(repos, session=_BoomSession())
+    await svc.unpublish(seeded_story.id, "u1")
+    refreshed = await repos["stories"].get_story(seeded_story.id)
+    assert refreshed.public_gfs_id is None
+
+
+async def test_expires_to_unix_handles_legacy_unix_string(repos):
+    """Legacy callers may have stored ``stories.expires_at`` as a unix
+    epoch in a TEXT column; the helper still resolves it."""
+    from socialhome.services.story_publication_service import _expires_to_unix
+
+    assert _expires_to_unix("1730000000") == 1730000000
+
+
+async def test_expires_to_unix_handles_iso(repos):
+    from socialhome.services.story_publication_service import _expires_to_unix
+
+    # Round-trip via the same parser the helper uses so timezone math
+    # stays out of the assertion.
+    expected = int(datetime.fromisoformat("2026-05-03T12:00:00+00:00").timestamp())
+    assert _expires_to_unix("2026-05-03T12:00:00Z") == expected
+
+
 # ── Story type sanity (read-only) ────────────────────────────────────────
 
 

@@ -70,9 +70,7 @@ async def test_supervisor_starts_clients_for_active_pairings(http_session):
     started: list[str] = []
 
     class _StubClient:
-        def __init__(
-            self, *, gfs_url, instance_id, signing_key, session_factory, on_relay
-        ):
+        def __init__(self, *, gfs_url, **_kwargs):
             self.gfs_url = gfs_url
             started.append(gfs_url)
 

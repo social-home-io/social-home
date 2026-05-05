@@ -139,6 +139,7 @@ from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
 from .services.moment_service import MomentService
 from .services.story_publication_service import StoryPublicationService
 from .services.story_service import StoryService
+from .services.story_signaling_handler import StorySignalingHandler
 from .services.bot_bridge_service import BotBridgeService
 from .services.space_bot_service import SpaceBotService
 from .services.calendar_import_service import CalendarImportService
@@ -1176,6 +1177,15 @@ def create_app(config: Config | None = None) -> web.Application:
         story_repo,
         repos.gfs_connection,
     )
+    # Author-side signalling answerer for the public-story flow.
+    # ``attach_session`` + ``attach_identity`` happen in the startup
+    # hook (mirrors ``StoryPublicationService``); the WS supervisor
+    # forwards every ``story_signal`` frame here.
+    story_signaling_handler = StorySignalingHandler(
+        story_repo,
+        repos.gfs_connection,
+        media_dir=str(config.media_path),
+    )
 
     # ── Momentum (§Momentum) ───────────────────────────────────────────
     # ``own_instance_id`` is bound after federation identity is loaded
@@ -1462,6 +1472,15 @@ def create_app(config: Config | None = None) -> web.Application:
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
+        # And the matching wiring for the answerer side. The handler
+        # will receive ``story_signal`` frames once the supervisor
+        # gets ``attach_story_signal_handler`` — see below where the
+        # supervisor is constructed.
+        story_signaling_handler.attach_session(http_session)
+        story_signaling_handler.attach_identity(
+            own_instance_id=real_instance_id,
+            signing_key=identity_seed,
+        )
 
         # 3. Replace UserService with one carrying the real public key.
         real_user_service = UserService(
@@ -1620,6 +1639,7 @@ def create_app(config: Config | None = None) -> web.Application:
             signing_key=identity_seed,
             session_factory=lambda: http_session,
             on_relay=_on_gfs_relay,
+            on_story_signal=story_signaling_handler.handle_signal,
         )
         await gfs_ws_supervisor.start()
         app[K.gfs_ws_supervisor_key] = gfs_ws_supervisor
@@ -1758,6 +1778,9 @@ def create_app(config: Config | None = None) -> web.Application:
             await stale_call_scheduler.stop()
         if gfs_ws_supervisor is not None:
             await gfs_ws_supervisor.stop()
+        # Wind down any in-flight public-viewer sessions before
+        # closing the shared aiohttp client below.
+        await story_signaling_handler.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
         if password_reset_cleanup_scheduler is not None:
