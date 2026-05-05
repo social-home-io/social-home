@@ -205,6 +205,12 @@ class FederationEventType(str, enum.Enum):
     STORY_FRAME_REACTED = "story_frame_reacted"
     STORY_FRAME_REACTION_REMOVED = "story_frame_reaction_removed"
 
+    # ── Momentum (§Momentum) — household-broadcast posts with 3-hop relay ──
+    MOMENT_CREATED = "moment_created"
+    MOMENT_DELETED = "moment_deleted"
+    MOMENT_REACTED = "moment_reacted"
+    MOMENT_REACTION_REMOVED = "moment_reaction_removed"
+
     # ── Network discovery ──
     NETWORK_SYNC = "network_sync"
 

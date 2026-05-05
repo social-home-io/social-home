@@ -28,6 +28,9 @@ from ..domain.events import (
     CommentDeleted,
     CommentUpdated,
     DmMessageCreated,
+    MomentCreated,
+    MomentDeleted,
+    MomentReactionChanged,
     PostDeleted,
     SpaceMemberProfileUpdated,
     SpacePostCreated,
@@ -51,10 +54,12 @@ from ..utils.datetime import parse_iso8601_lenient
 if TYPE_CHECKING:
     from ..domain.federation import FederationEvent
     from ..repositories.conversation_repo import AbstractConversationRepo
+    from ..repositories.moment_repo import AbstractMomentRepo
     from ..repositories.space_post_repo import AbstractSpacePostRepo
     from ..repositories.space_repo import AbstractSpaceRepo
     from ..repositories.story_repo import AbstractStoryRepo
     from ..repositories.user_repo import AbstractUserRepo
+    from .moment_federation_outbound import MomentFederationOutbound
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +84,8 @@ class FederationInboundService:
         "_space_repo",
         "_user_repo",
         "_story_repo",
+        "_moment_repo",
+        "_moment_outbound",
         "_profile_picture_repo",
         "_report_service",
         "_dm_routing_repo",
@@ -93,6 +100,8 @@ class FederationInboundService:
         space_repo: "AbstractSpaceRepo",
         user_repo: "AbstractUserRepo",
         story_repo: "AbstractStoryRepo | None" = None,
+        moment_repo: "AbstractMomentRepo | None" = None,
+        moment_outbound: "MomentFederationOutbound | None" = None,
         profile_picture_repo=None,
         report_service=None,
         dm_routing_repo=None,
@@ -103,6 +112,8 @@ class FederationInboundService:
         self._space_repo = space_repo
         self._user_repo = user_repo
         self._story_repo = story_repo
+        self._moment_repo = moment_repo
+        self._moment_outbound = moment_outbound
         self._profile_picture_repo = profile_picture_repo
         self._report_service = report_service
         self._dm_routing_repo = dm_routing_repo
@@ -150,6 +161,16 @@ class FederationInboundService:
             registry.register(
                 FET.STORY_FRAME_REACTION_REMOVED,
                 self._on_story_frame_reaction_removed,
+            )
+
+        # Moments — only registered when the moment repo is wired.
+        if self._moment_repo is not None:
+            registry.register(FET.MOMENT_CREATED, self._on_moment_created)
+            registry.register(FET.MOMENT_DELETED, self._on_moment_deleted)
+            registry.register(FET.MOMENT_REACTED, self._on_moment_reacted)
+            registry.register(
+                FET.MOMENT_REACTION_REMOVED,
+                self._on_moment_reaction_removed,
             )
 
     # ── DM handlers ────────────────────────────────────────────────────
@@ -635,6 +656,8 @@ class FederationInboundService:
             )
         )
 
+    # ── Story back-channel handlers ────────────────────────────────────
+
     async def _on_story_frame_viewed(self, event: "FederationEvent") -> None:
         """A remote viewer marked one of *our* author's frames as seen.
 
@@ -714,6 +737,203 @@ class FederationInboundService:
                 emoji=published_emoji,
             )
         )
+
+    # ── Momentum handlers ──────────────────────────────────────────────
+
+    async def _on_moment_created(self, event: "FederationEvent") -> None:
+        """Land a remote moment and fire :class:`MomentCreated`.
+
+        Authority check: the envelope's signed sender (``from_instance``)
+        must equal the home of ``payload.author_user_id`` for a top-level
+        post. The 3-hop relay re-broadcasts the *original* envelope, so
+        when the relay path is in play the receiver verifies against
+        ``payload.origin_instance_id`` instead — that's the only field
+        that pins the original sender across hops.
+        """
+        if self._moment_repo is None:
+            return
+        from ..domain.moment import Moment
+
+        p = event.payload
+        moment_id = str(p.get("moment_id") or "")
+        author_user_id = str(p.get("author_user_id") or "")
+        origin_instance_id = str(p.get("origin_instance_id") or "")
+        if not (moment_id and author_user_id and origin_instance_id):
+            log.debug("MOMENT_CREATED missing required fields: %s", p)
+            return
+        if not await self._moment_authority_matches(
+            event.from_instance,
+            origin_instance_id,
+            author_user_id,
+        ):
+            log.warning("MOMENT_CREATED authority mismatch — dropped")
+            return
+        media_type = p.get("media_type")
+        if media_type not in ("image", "video", None):
+            media_type = None
+        moment = Moment(
+            id=moment_id,
+            author_user_id=author_user_id,
+            content=str(p.get("content") or ""),
+            media_url=p.get("media_url"),
+            media_type=media_type,
+            duration_ms=(
+                int(p["duration_ms"]) if p.get("duration_ms") is not None else None
+            ),
+            parent_moment_id=p.get("parent_moment_id"),
+            origin_instance_id=origin_instance_id,
+            created_at=str(p.get("occurred_at") or _now_iso()),
+            expires_at=str(p.get("expires_at") or _now_iso()),
+        )
+        await self._moment_repo.save(moment)
+        # Bus republish so the realtime layer + downstream listeners
+        # see the same shape they'd see on a local write.
+        await self._bus.publish(
+            MomentCreated(
+                moment_id=moment.id,
+                author_user_id=moment.author_user_id,
+                content=moment.content,
+                media_url=moment.media_url,
+                media_type=moment.media_type,
+                duration_ms=moment.duration_ms,
+                parent_moment_id=moment.parent_moment_id,
+                origin_instance_id=moment.origin_instance_id,
+                expires_at=moment.expires_at,
+            )
+        )
+        # 3-hop relay: forward to the rest of *our* paired peers. The
+        # outbound's bus subscriber would skip this event (author isn't
+        # local), so the relay must be triggered explicitly here.
+        await self._maybe_relay(
+            event_type=event.event_type,
+            payload=p,
+            from_instance=event.from_instance,
+        )
+
+    async def _on_moment_deleted(self, event: "FederationEvent") -> None:
+        if self._moment_repo is None:
+            return
+        p = event.payload
+        moment_id = str(p.get("moment_id") or "")
+        author_user_id = str(p.get("author_user_id") or "")
+        origin_instance_id = str(p.get("origin_instance_id") or "")
+        if not (moment_id and author_user_id and origin_instance_id):
+            return
+        if not await self._moment_authority_matches(
+            event.from_instance,
+            origin_instance_id,
+            author_user_id,
+        ):
+            log.warning("MOMENT_DELETED authority mismatch — dropped")
+            return
+        await self._moment_repo.delete(moment_id)
+        await self._bus.publish(
+            MomentDeleted(
+                moment_id=moment_id,
+                author_user_id=author_user_id,
+                origin_instance_id=origin_instance_id,
+            )
+        )
+        await self._maybe_relay(
+            event_type=event.event_type,
+            payload=p,
+            from_instance=event.from_instance,
+        )
+
+    async def _on_moment_reacted(self, event: "FederationEvent") -> None:
+        await self._handle_moment_reaction(event, removed=False)
+
+    async def _on_moment_reaction_removed(
+        self,
+        event: "FederationEvent",
+    ) -> None:
+        await self._handle_moment_reaction(event, removed=True)
+
+    async def _handle_moment_reaction(
+        self,
+        event: "FederationEvent",
+        *,
+        removed: bool,
+    ) -> None:
+        if self._moment_repo is None:
+            return
+        p = event.payload
+        moment_id = str(p.get("moment_id") or "")
+        reactor_user_id = str(p.get("reactor_user_id") or "")
+        author_user_id = str(p.get("author_user_id") or "")
+        if not (moment_id and reactor_user_id and author_user_id):
+            return
+        # Authority: envelope sender == reactor's home instance.
+        if not await self._authority_matches(event.from_instance, reactor_user_id):
+            log.warning("MOMENT_REACT* authority mismatch — dropped")
+            return
+        emoji = None if removed else (p.get("emoji") or None)
+        if removed or emoji is None:
+            await self._moment_repo.clear_reaction(moment_id, reactor_user_id)
+            published_emoji: str | None = None
+        else:
+            await self._moment_repo.set_reaction(
+                moment_id,
+                reactor_user_id,
+                emoji,
+            )
+            published_emoji = emoji
+        await self._bus.publish(
+            MomentReactionChanged(
+                moment_id=moment_id,
+                reactor_user_id=reactor_user_id,
+                author_user_id=author_user_id,
+                emoji=published_emoji,
+            )
+        )
+
+    async def _moment_authority_matches(
+        self,
+        from_instance: str,
+        origin_instance_id: str,
+        author_user_id: str,
+    ) -> bool:
+        """Origin-vs-relay authority check.
+
+        On a 1-hop direct delivery, ``from_instance == origin_instance_id``
+        and ``origin_instance_id`` should be the author's home instance.
+        On a 2/3-hop relay, ``from_instance != origin_instance_id`` —
+        we trust the origin field on the payload as long as the
+        author's home instance lookup matches. Unknown authors (the
+        ``USER_UPDATED`` envelope hasn't landed yet) fall through and
+        accept the row.
+        """
+        if from_instance == origin_instance_id:
+            # Direct delivery — also check the author lives there.
+            try:
+                home = await self._user_repo.get_instance_for_user(author_user_id)
+            except Exception:  # pragma: no cover — defensive
+                return True
+            return home is None or home == origin_instance_id
+        # Relay: trust the origin field; sender just relayed.
+        try:
+            home = await self._user_repo.get_instance_for_user(author_user_id)
+        except Exception:  # pragma: no cover — defensive
+            return True
+        return home is None or home == origin_instance_id
+
+    async def _maybe_relay(
+        self,
+        *,
+        event_type,
+        payload: dict,
+        from_instance: str,
+    ) -> None:
+        if self._moment_outbound is None:
+            return
+        try:
+            await self._moment_outbound.relay_inbound(
+                event_type=event_type,
+                payload=payload,
+                from_instance=from_instance,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug("moment-relay failed: %s", exc)
 
     async def _publish_frame_added(
         self,

@@ -1362,3 +1362,67 @@ class UserUnblocked(DomainEvent):
     blocker_user_id: str
     blocked_user_id: str
     occurred_at: datetime = field(default_factory=_now)
+
+
+# ─── Momentum (§Momentum) ─────────────────────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class MomentCreated(DomainEvent):
+    """A moment was created — locally posted or federated in.
+
+    Carries enough for federation outbound to fan to peers and for
+    :class:`RealtimeService` to broadcast the ``moment.created`` WS
+    frame. Replies set ``parent_moment_id`` to the parent moment id;
+    otherwise it's ``None``.
+    """
+
+    moment_id: str
+    author_user_id: str
+    content: str
+    media_url: str | None
+    media_type: str | None
+    duration_ms: int | None
+    parent_moment_id: str | None
+    origin_instance_id: str
+    expires_at: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class MomentDeleted(DomainEvent):
+    """A moment was deleted (by author or admin)."""
+
+    moment_id: str
+    author_user_id: str
+    origin_instance_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class MomentReactionChanged(DomainEvent):
+    """Reaction set, changed, or cleared.
+
+    ``emoji is None`` ⇒ cleared. The reactor's home instance federates
+    this back to the author's instance for the live counter update.
+    """
+
+    moment_id: str
+    reactor_user_id: str
+    author_user_id: str
+    emoji: str | None
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class UserFollowed(DomainEvent):
+    follower_user_id: str
+    followed_user_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class UserUnfollowed(DomainEvent):
+    follower_user_id: str
+    followed_user_id: str
+    occurred_at: datetime = field(default_factory=_now)

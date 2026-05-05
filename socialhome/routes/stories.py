@@ -32,8 +32,14 @@ from aiohttp import web
 from ..app_keys import (
     dm_service_key,
     feed_service_key,
+    report_service_key,
     space_service_key,
     story_service_key,
+)
+from ..domain.report import (
+    DuplicateReportError,
+    ReportRateLimitedError,
+    ReportTargetType,
 )
 from ..domain.story import (
     Story,
@@ -326,6 +332,45 @@ class StoryDmReplyView(BaseView):
         )
 
 
+class StoryReportView(BaseView):
+    """``POST /api/stories/{id}/report`` — wraps the existing
+    :class:`ReportService` with ``target_type='story'`` pre-filled."""
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        if ctx is None:
+            return error_response(401, "UNAUTHENTICATED", "Login required.")
+        await self.require_household_feature("stories")
+        body = await self.body()
+        category = str(body.get("category") or "").strip()
+        if not category:
+            return error_response(422, "UNPROCESSABLE", "category is required.")
+        notes = body.get("notes")
+        svc = self.svc(report_service_key)
+        story_id = self.match("id")
+        try:
+            report, federated = await svc.create_report(
+                reporter_user_id=ctx.user_id,
+                target_type=ReportTargetType.STORY.value,
+                target_id=story_id,
+                category=category,
+                notes=str(notes) if notes else None,
+                forward_gfs=False,
+            )
+        except DuplicateReportError as exc:
+            return error_response(409, "DUPLICATE_REPORT", str(exc))
+        except ReportRateLimitedError as exc:
+            return error_response(429, "REPORT_RATE_LIMIT", str(exc))
+        return self._json(
+            {
+                "id": report.id,
+                "status": report.status.value,
+                "federated": federated,
+            },
+            status=201,
+        )
+
+
 __all__ = [
     "StoriesCollectionView",
     "StoryDetailView",
@@ -334,5 +379,6 @@ __all__ = [
     "StoryFrameReactionView",
     "StoryFrameViewView",
     "StoryFramesCollectionView",
+    "StoryReportView",
     "StoryShareView",
 ]

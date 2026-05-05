@@ -48,6 +48,7 @@ interface SideNavState {
   feat_pages: boolean
   feat_stickies: boolean
   feat_stories: boolean
+  feat_momentum: boolean
 }
 
 const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian'> = {
@@ -57,6 +58,7 @@ const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian'> = {
   feat_pages: true,
   feat_stickies: true,
   feat_stories: true,
+  feat_momentum: true,
 }
 
 const HOME_GROUP: SideNavGroup = {
@@ -87,6 +89,8 @@ const TALK_GROUP: SideNavGroup = {
     { key: 'calls',    label: 'Calls',    href: '/calls',   icon: 'calls' },
     { key: 'stories',  label: 'Stories',  href: '/stories', icon: 'stories',
       gate: s => s.feat_stories },
+    { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum',
+      gate: s => s.feat_momentum },
   ],
 }
 
@@ -100,6 +104,8 @@ const BROWSE_GROUP: SideNavGroup = {
     { key: 'corner',         label: 'Corner',        href: '/dashboard',        icon: 'corner' },
     { key: 'story-archive',  label: 'Story archive', href: '/stories/archive',  icon: 'stories',
       gate: s => s.feat_stories },
+    { key: 'moments-archive', label: 'Moments archive', href: '/momentum/archive', icon: 'momentum',
+      gate: s => s.feat_momentum },
   ],
 }
 
@@ -139,6 +145,7 @@ export function SideNav() {
             feat_pages: t.feat_pages,
             feat_stickies: t.feat_stickies,
             feat_stories: t.feat_stories,
+            feat_momentum: t.feat_momentum ?? true,
           }
         : ALL_ON),
     }

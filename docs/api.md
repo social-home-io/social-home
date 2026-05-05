@@ -99,6 +99,25 @@ Voluntary adult-to-adult block list — the viewer hides another user's stories,
 | POST | `/api/blocks` | Add a block. Body: `{user_id}`. Self-block → 422. |
 | DELETE | `/api/blocks/{user_id}` | Remove a block. Idempotent. |
 
+### Momentum (§Momentum)
+
+Household-broadcast posts that fan to a 3-hop peer mesh. Replies are themselves moments, linked via `parent_moment_id`. Rate-limited at one top-level moment per author per 15 minutes; replies and reactions are exempt. Default visibility: 24h; 7d for moments authored by anyone the viewer follows.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/moments` | List visible moments (block-aware, follow-aware). |
+| POST | `/api/moments` | Create a moment. Body: `{content, media_url?, media_type?, duration_ms?, parent_moment_id?}`. |
+| GET | `/api/moments/archive` | Full retention-window list. |
+| GET | `/api/moments/{id}` | Detail incl. replies + reactions. |
+| DELETE | `/api/moments/{id}` | Author or admin delete. |
+| PUT | `/api/moments/{id}/reaction` | Set / change reaction. Body: `{emoji}`. |
+| DELETE | `/api/moments/{id}/reaction` | Clear own reaction. |
+| POST | `/api/moments/{id}/report` | Report a moment. Body: `{category, notes?}`. |
+| GET | `/api/moments/follows` | List who I follow. |
+| POST | `/api/moments/follows` | Follow a user. Body: `{user_id}`. |
+| DELETE | `/api/moments/follows/{user_id}` | Unfollow. |
+| POST | `/api/stories/{id}/report` | Report a story (same `content_reports` queue). |
+
 ## HFS — Household feed
 
 | Method | Path | Purpose |

@@ -11,7 +11,7 @@ import type { JSX } from 'preact'
 export type SideNavIconName =
   | 'feed' | 'calendar' | 'tasks' | 'shopping' | 'presence'
   | 'gallery' | 'pages' | 'stickies'
-  | 'messages' | 'calls' | 'stories'
+  | 'messages' | 'calls' | 'stories' | 'momentum'
   | 'spaces' | 'bazaar' | 'corner'
   | 'parent-control' | 'settings' | 'connections' | 'admin'
 
@@ -113,6 +113,15 @@ const GLYPHS: Record<SideNavIconName, JSX.Element> = {
     <svg {...COMMON}>
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="4" />
+    </svg>
+  ),
+  momentum: (
+    /* Broadcast antenna over a single node — evokes the
+     * "one-shot post that fans out" shape of a moment. */
+    <svg {...COMMON}>
+      <circle cx="12" cy="14" r="2" />
+      <path d="M5 8 a8 8 0 0 1 14 0" />
+      <path d="M8 11 a4 4 0 0 1 8 0" />
     </svg>
   ),
   spaces: (

@@ -119,6 +119,35 @@ export interface StoryInboxItem {
   unseen_count: number
 }
 
+/** A single Momentum post (§Momentum) — household broadcast that fans
+ *  out to a 3-hop peer mesh. ``parent_moment_id`` is the reply parent
+ *  (always the *root* of the thread; v1 keeps replies flat). */
+export interface Moment {
+  id:                 string
+  author_user_id:     string
+  content:            string
+  media_url:          string | null
+  media_type:         'image' | 'video' | null
+  duration_ms:        number | null
+  parent_moment_id:   string | null
+  origin_instance_id: string
+  created_at:         string
+  expires_at:         string
+}
+
+export interface MomentReaction {
+  moment_id:       string
+  reactor_user_id: string
+  emoji:           string
+  reacted_at:      string
+}
+
+export interface MomentDetail {
+  moment:    Moment
+  replies:   Moment[]
+  reactions: MomentReaction[]
+}
+
 export type BotScope = 'space' | 'member'
 
 export interface SpaceBotSummary {

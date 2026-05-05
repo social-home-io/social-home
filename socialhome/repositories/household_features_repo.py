@@ -22,6 +22,7 @@ _FEATURE_KEYS: tuple[str, ...] = (
     "feat_stickies",
     "feat_calendar",
     "feat_stories",
+    "feat_momentum",
 )
 _ALLOW_KEYS: tuple[str, ...] = (
     "allow_text",
