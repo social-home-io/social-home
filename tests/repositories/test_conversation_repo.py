@@ -113,6 +113,48 @@ async def test_list_for_user_excludes_left(env):
     assert not any(c.id == "conv-left" for c in result)
 
 
+async def test_list_for_user_drops_dm_with_blocked_peer(env):
+    """list_for_user hides DMs whose other peer the viewer has blocked."""
+    conv = _conv("conv-dm-blocked")
+    await env.repo.create(conv)
+    await env.repo.add_member(_member("conv-dm-blocked", "alice"))
+    await env.repo.add_member(_member("conv-dm-blocked", "bob"))
+
+    # Without a block alice sees the DM.
+    result = await env.repo.list_for_user("alice")
+    assert any(c.id == "conv-dm-blocked" for c in result)
+
+    # After alice blocks bob, the DM is hidden from her thread list.
+    await env.db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id) VALUES(?, ?)",
+        ("uid-alice", "uid-bob"),
+    )
+    result = await env.repo.list_for_user("alice")
+    assert not any(c.id == "conv-dm-blocked" for c in result)
+    # bob still sees the thread — block is asymmetric.
+    result = await env.repo.list_for_user("bob")
+    assert any(c.id == "conv-dm-blocked" for c in result)
+
+
+async def test_list_for_user_keeps_groups_with_blocked_member(env):
+    """Group DMs stay visible even if one member is blocked — v1 limitation."""
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("carol", "uid-carol", "Carol"),
+    )
+    conv = _conv("conv-grp", type=ConversationType.GROUP_DM)
+    await env.repo.create(conv)
+    await env.repo.add_member(_member("conv-grp", "alice"))
+    await env.repo.add_member(_member("conv-grp", "bob"))
+    await env.repo.add_member(_member("conv-grp", "carol"))
+    await env.db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id) VALUES(?, ?)",
+        ("uid-alice", "uid-bob"),
+    )
+    result = await env.repo.list_for_user("alice")
+    assert any(c.id == "conv-grp" for c in result)
+
+
 async def test_touch_last_message(env):
     """touch_last_message updates the last_message_at on the conversation."""
     conv = _conv("conv-touch")

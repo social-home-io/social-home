@@ -178,3 +178,29 @@ async def test_update_location_missing_username_422(client):
         headers=_auth(client._tok),
     )
     assert r.status == 422
+
+
+async def test_presence_drops_blocked_household_member(client):
+    """A blocked user is filtered out of the caller's /api/presence list."""
+    # Seed a second household member with a presence row.
+    await client._db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("bob", "uid-bob-presence", "Bob"),
+    )
+    await client.post(
+        "/api/presence/location",
+        json={"username": "bob", "zone_name": "home"},
+        headers=_auth(client._tok),
+    )
+    # Without a block, bob is in the list.
+    body = await (await client.get("/api/presence", headers=_auth(client._tok))).json()
+    assert any(p["user_id"] == "uid-bob-presence" for p in body)
+    # After admin blocks bob, bob disappears for admin.
+    r = await client.post(
+        "/api/blocks",
+        json={"user_id": "uid-bob-presence"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await (await client.get("/api/presence", headers=_auth(client._tok))).json()
+    assert not any(p["user_id"] == "uid-bob-presence" for p in body)

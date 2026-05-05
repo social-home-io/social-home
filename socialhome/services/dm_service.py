@@ -51,6 +51,15 @@ log = logging.getLogger(__name__)
 MAX_DM_LENGTH: int = 1000
 
 
+class RecipientBlockedError(PermissionError):
+    """Raised when a DM cannot be sent because of a personal block.
+
+    Symmetric: rejects both "I blocked them, why am I DMing them?" and
+    "they blocked me, they don't want this." :class:`BaseView._iter`
+    maps :class:`PermissionError` (and subclasses) to a 403 response.
+    """
+
+
 class DmService:
     """Conversation + message CRUD for household DMs."""
 
@@ -109,6 +118,7 @@ class DmService:
         other = await self._require_user(other_username)
         if creator.username == other.username:
             raise ValueError("cannot DM yourself")
+        await self._guard_block_pair(creator.user_id, other.user_id)
 
         # Check for existing 1:1 between these two
         existing = await self._convos.list_for_user(creator_username)
@@ -259,9 +269,21 @@ class DmService:
         Content is stored verbatim — sanitisation is the route layer's
         responsibility.
         """
-        await self._require_conversation(conversation_id)
+        conv = await self._require_conversation(conversation_id)
         await self._require_membership(conversation_id, sender_username)
         sender = await self._require_user(sender_username)
+        # 1:1 DM block gate (§Privacy). Group DMs ignore personal blocks
+        # in v1 — see ``conversation_repo.list_for_user`` for the
+        # matching read-side note.
+        if conv.type is ConversationType.DM:
+            members = await self._convos.list_members(conversation_id)
+            for m in members:
+                if m.username == sender_username:
+                    continue
+                peer = await self._users.get(m.username)
+                if peer is None:
+                    continue
+                await self._guard_block_pair(sender.user_id, peer.user_id)
         if type not in MESSAGE_TYPES:
             raise ValueError(f"invalid message type {type!r}")
         if not content and type == "text":
@@ -575,6 +597,22 @@ class DmService:
         if user is None:
             raise KeyError(f"user {username!r} not found")
         return user
+
+    async def _guard_block_pair(self, sender_id: str, recipient_id: str) -> None:
+        """Reject a 1:1 DM action when either side has blocked the other.
+
+        Symmetric — the sender can't reach a user who blocked them, and
+        the sender can't message a user they themselves blocked. Raise
+        :class:`RecipientBlockedError` so :class:`BaseView._iter` maps
+        it to 403.
+        """
+        if await self._users.is_blocked(recipient_id, sender_id):
+            raise RecipientBlockedError("Recipient has you blocked.")
+        if await self._users.is_blocked(sender_id, recipient_id):
+            raise RecipientBlockedError(
+                "You have blocked this user — unblock them in Settings to "
+                "continue this conversation."
+            )
 
     async def _require_conversation(
         self,

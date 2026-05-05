@@ -167,10 +167,18 @@ class SqliteStoryRepo:
         # by the time we read locally we trust ``stories`` rows. The
         # ``USERS``-kind filter still applies because one row can be
         # surfaced to a strict subset of an instance's users.
+        # Personal blocks are applied here (§Privacy): authors the viewer
+        # has blocked never surface in their inbox, even if the audience
+        # would otherwise admit them. Block list stays local — see
+        # ``user_blocks`` table.
         rows = await self._db.fetchall(
             """
             SELECT * FROM stories
             WHERE expires_at > datetime('now')
+              AND author_user_id NOT IN (
+                  SELECT blocked_user_id FROM user_blocks
+                  WHERE blocker_user_id = ?
+              )
               AND (
                   audience_kind IN ('all_paired','households')
                   OR (audience_kind = 'users' AND EXISTS (
@@ -181,7 +189,7 @@ class SqliteStoryRepo:
               )
             ORDER BY story_date DESC, created_at DESC
             """,
-            (viewer_user_id, viewer_user_id),
+            (viewer_user_id, viewer_user_id, viewer_user_id),
         )
         return [s for s in (_row_to_story(d) for d in rows_to_dicts(rows)) if s]
 

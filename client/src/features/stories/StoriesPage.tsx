@@ -20,6 +20,8 @@ import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
+import { openUserActions } from '@/components/UserActionsMenu'
+import { blockedUserIds, loadBlocks } from '@/store/blocks'
 import type { StoryInboxItem } from '@/types'
 
 const inbox = signal<StoryInboxItem[]>([])
@@ -52,6 +54,7 @@ export default function StoriesPage() {
 
   useEffect(() => {
     loading.value = true
+    void loadBlocks()  // populate the optimistic block-id set
     api.get('/api/stories')
       .then((rows: StoryInboxItem[]) => {
         inbox.value = rows ?? []
@@ -66,7 +69,11 @@ export default function StoriesPage() {
 
   if (loading.value) return <StoriesRingSkeleton />
 
-  const items = inbox.value
+  // Belt + braces: the server already strips blocked authors. The
+  // local hide makes a same-tab "Block @bob" land in the rings list
+  // without a refresh — the next /api/stories fetch confirms it.
+  const blocked = blockedUserIds.value
+  const items = inbox.value.filter(i => !blocked.has(i.story.author_user_id))
 
   // Build a "rings" row: my own + everyone else's, grouped by author.
   const myItems = items.filter(i => i.story.author_user_id === me)
@@ -77,21 +84,36 @@ export default function StoriesPage() {
       ? 'sh-story-ring sh-story-ring--unseen'
       : 'sh-story-ring'
     const onClick = () => loc.route(`/stories/${item.story.id}`)
+    const isMine = item.story.author_user_id === me
     return (
-      <button
-        key={item.story.id}
-        type="button"
-        class={cls}
-        onClick={onClick}
-        aria-label={`Open ${item.story.author_user_id}'s story`}
-      >
-        <span class="sh-story-ring-avatar">
-          <Avatar name={item.story.author_user_id} size={56} />
-        </span>
-        <span class="sh-story-ring-label">
-          {item.story.author_user_id === me ? 'Your story' : item.story.author_user_id}
-        </span>
-      </button>
+      <div key={item.story.id} class="sh-story-ring-wrap">
+        <button
+          type="button"
+          class={cls}
+          onClick={onClick}
+          aria-label={`Open ${item.story.author_user_id}'s story`}
+        >
+          <span class="sh-story-ring-avatar">
+            <Avatar name={item.story.author_user_id} size={56} />
+          </span>
+          <span class="sh-story-ring-label">
+            {isMine ? 'Your story' : item.story.author_user_id}
+          </span>
+        </button>
+        {!isMine && (
+          <button
+            type="button"
+            class="sh-story-ring-overflow"
+            aria-label={`More actions for ${item.story.author_user_id}`}
+            onClick={(ev) => {
+              ev.stopPropagation()
+              openUserActions(item.story.author_user_id)
+            }}
+          >
+            ⋯
+          </button>
+        )}
+      </div>
     )
   }
 

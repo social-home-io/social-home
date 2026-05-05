@@ -149,6 +149,29 @@ async def test_visibility_filters_users_audience(db, repo):
     assert len(seen_by_u1) == 1
 
 
+async def test_visibility_excludes_blocked_authors(db, repo):
+    """list_visible_to skips stories from authors the viewer has blocked."""
+    await _seed_user(db, "u1", "pascal")  # author
+    await _seed_user(db, "u2", "maria")  # viewer
+    await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    # Without a block u2 sees the story.
+    assert len(await repo.list_visible_to("u2")) == 1
+    # After blocking u1, the story is hidden from u2's inbox.
+    await db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id) VALUES(?, ?)",
+        ("u2", "u1"),
+    )
+    assert await repo.list_visible_to("u2") == []
+    # The author still sees their own story — block doesn't gag yourself.
+    assert len(await repo.list_visible_to("u1")) == 1
+
+
 async def test_count_unseen_frames_drops_to_zero_after_view(db, repo):
     await _seed_user(db, "u1", "pascal")
     await _seed_user(db, "u2", "maria")

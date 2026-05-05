@@ -67,6 +67,10 @@ class AbstractUserRepo(Protocol):
     async def block(self, blocker_user_id: str, blocked_user_id: str) -> None: ...
     async def unblock(self, blocker_user_id: str, blocked_user_id: str) -> None: ...
     async def is_blocked(self, blocker_user_id: str, blocked_user_id: str) -> bool: ...
+    async def list_blocked(
+        self,
+        blocker_user_id: str,
+    ) -> list[tuple[str, str]]: ...
 
     # Profile picture (hash only — bytes live in ProfilePictureRepo) ------
     async def set_picture_hash(
@@ -418,6 +422,22 @@ class SqliteUserRepo:
             (blocker_user_id, blocked_user_id),
         )
         return row is not None
+
+    async def list_blocked(
+        self,
+        blocker_user_id: str,
+    ) -> list[tuple[str, str]]:
+        """Return ``[(blocked_user_id, blocked_at), ...]`` for the blocker.
+
+        Newest blocks first so the Settings → Privacy → Blocked accounts
+        panel can show recent additions at the top without re-sorting.
+        """
+        rows = await self._db.fetchall(
+            "SELECT blocked_user_id, blocked_at FROM user_blocks "
+            "WHERE blocker_user_id=? ORDER BY blocked_at DESC",
+            (blocker_user_id,),
+        )
+        return [(r["blocked_user_id"], r["blocked_at"]) for r in rows]
 
     async def set_picture_hash(
         self,

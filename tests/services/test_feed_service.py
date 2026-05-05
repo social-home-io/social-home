@@ -238,6 +238,31 @@ async def test_list_feed_pagination(stack):
     assert len(page2) == 2
 
 
+async def test_list_feed_drops_blocked_authors(stack):
+    """When ``viewer_user_id`` is set, posts by blocked authors are filtered."""
+    a = await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    await stack.feed_svc.create_post(
+        author_user_id=a.user_id, type=PostType.TEXT, content="from anna"
+    )
+    await stack.feed_svc.create_post(
+        author_user_id=b.user_id, type=PostType.TEXT, content="from bob"
+    )
+    # Without a block, anna sees both.
+    feed = await stack.feed_svc.list_feed(viewer_user_id=a.user_id, limit=10)
+    assert {p.author for p in feed} == {a.user_id, b.user_id}
+    # After blocking bob, anna sees only her own post.
+    await stack.user_svc.block("anna", b.user_id)
+    feed = await stack.feed_svc.list_feed(viewer_user_id=a.user_id, limit=10)
+    assert {p.author for p in feed} == {a.user_id}
+    # bob still sees everything — block is asymmetric.
+    feed = await stack.feed_svc.list_feed(viewer_user_id=b.user_id, limit=10)
+    assert {p.author for p in feed} == {a.user_id, b.user_id}
+    # No viewer set → no filter (matches the legacy call shape).
+    feed = await stack.feed_svc.list_feed(limit=10)
+    assert {p.author for p in feed} == {a.user_id, b.user_id}
+
+
 async def test_image_post_accepted(stack):
     """Image post with image_urls is accepted."""
     u = await stack.provision_user("a")

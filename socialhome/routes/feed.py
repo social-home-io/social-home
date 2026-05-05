@@ -94,13 +94,18 @@ class FeedCollectionView(BaseView):
     """GET /api/feed — list the household feed, newest-first."""
 
     async def get(self) -> web.Response:
+        ctx = self.user
         svc = self.svc(feed_service_key)
         before = self.request.query.get("before")
         try:
             limit = int(self.request.query.get("limit", 20))
         except ValueError:
             limit = 20
-        posts = await svc.list_feed(before=before, limit=limit)
+        posts = await svc.list_feed(
+            before=before,
+            limit=limit,
+            viewer_user_id=ctx.user_id if ctx else None,
+        )
         return web.json_response(
             [_serialise_signed(self.request, p) for p in posts],
         )

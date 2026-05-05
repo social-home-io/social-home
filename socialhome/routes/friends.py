@@ -116,14 +116,20 @@ class FriendsView(BaseView):
     """
 
     async def get(self) -> web.Response:
-        self.user  # auth check; raises 401 for anonymous
+        ctx = self.user  # auth check; raises 401 for anonymous
         fed_repo = self.svc(federation_repo_key)
         user_repo = self.svc(user_repo_key)
         online_svc = self.request.app.get(online_status_service_key)
 
+        # Personal blocks (§Privacy) — drop blocked household members so
+        # the constellation doesn't surface someone the viewer hid.
+        blocked_ids = {uid for uid, _ in await user_repo.list_blocked(ctx.user_id)}
+
         # Local block — own household first.
         local_id = await fed_repo.get_local_identity()
-        local_users = await user_repo.list_active()
+        local_users = [
+            u for u in await user_repo.list_active() if u.user_id not in blocked_ids
+        ]
         local_block = {
             "instance_id": local_id["instance_id"] if local_id else None,
             "display_name": (local_id or {}).get("display_name") or "Home",
@@ -141,7 +147,11 @@ class FriendsView(BaseView):
         )
         households: list[dict] = []
         for inst in instances:
-            remote_members = await user_repo.list_remote_for_instance(inst.id)
+            remote_members = [
+                ru
+                for ru in await user_repo.list_remote_for_instance(inst.id)
+                if ru.user_id not in blocked_ids
+            ]
             households.append(
                 _instance_safe_dict(
                     inst,

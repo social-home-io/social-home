@@ -17,6 +17,7 @@ import {
   type LandingPath,
 } from '@/utils/preferences'
 import { confirmDialog } from '@/components/confirm'
+import { blockedUsers, loadBlocks, unblockUser } from '@/store/blocks'
 
 type SettingsTab = 'profile' | 'privacy' | 'notifications' | 'appearance'
 
@@ -334,7 +335,63 @@ function PrivacyTab() {
         Show online status to other household members
       </label>
       <StoriesPreferencesPanel />
+      <BlockedAccountsPanel />
     </section>
+  )
+}
+
+
+function BlockedAccountsPanel() {
+  useEffect(() => {
+    void loadBlocks(true)
+  }, [])
+  const rows = blockedUsers.value
+
+  const onUnblock = async (userId: string) => {
+    if (!await confirmDialog(
+      `Unblock ${userId}? Their stories, posts, presence and DMs will be `
+      + `visible to you again.`,
+      { confirmLabel: 'Unblock' },
+    )) return
+    try {
+      await unblockUser(userId)
+      showToast('Unblocked', 'success')
+    } catch (e: unknown) {
+      showToast(`Couldn't unblock: ${(e as Error)?.message ?? e}`, 'error')
+    }
+  }
+
+  return (
+    <div class="sh-blocked-accounts">
+      <h3 style={{ marginBottom: 0 }}>Blocked accounts</h3>
+      {rows.length === 0 && (
+        <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
+          You haven't blocked anyone. Open a story or profile and tap
+          the ⋯ menu to block someone.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <ul class="sh-blocked-accounts-list" aria-label="Blocked accounts">
+          {rows.map(b => (
+            <li key={b.user_id} class="sh-blocked-accounts-row">
+              <Avatar name={b.user_id} size={32} />
+              <span class="sh-blocked-accounts-meta">
+                <strong>{b.user_id}</strong>
+                <span class="sh-muted">
+                  Blocked {new Date(b.blocked_at).toLocaleDateString()}
+                </span>
+              </span>
+              <Button
+                variant="secondary"
+                onClick={() => void onUnblock(b.user_id)}
+              >
+                Unblock
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
