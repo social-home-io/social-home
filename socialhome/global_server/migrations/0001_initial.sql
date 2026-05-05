@@ -188,3 +188,47 @@ CREATE TABLE IF NOT EXISTS cluster_nodes (
     added_at             TEXT NOT NULL DEFAULT (datetime('now')),
     active_sync_sessions INTEGER NOT NULL DEFAULT 0
 );
+
+-- ── Public story publications (§stories_public) ──────────────────────────
+--
+-- A SH instance opts in to share a single story via this GFS. The row
+-- holds zero story bytes — only enough metadata to (a) verify the
+-- author signed the publish, (b) gate the public landing page on the
+-- story's absolute ``expires_at``, and (c) give the WebRTC signalling
+-- relay a key it can match against incoming offers. Story content
+-- never transits GFS; it streams over WebRTC author → viewer.
+--
+-- One publication per (story, instance). Tokens for individual share
+-- links live in ``gfs_story_tokens`` below.
+CREATE TABLE IF NOT EXISTS gfs_story_publications (
+    story_id          TEXT NOT NULL,
+    instance_id       TEXT NOT NULL REFERENCES client_instances(instance_id) ON DELETE CASCADE,
+    -- Unix epoch — mirrors the author's ``stories.expires_at`` and is
+    -- the absolute lifetime for every token under this publication.
+    expires_at        INTEGER NOT NULL,
+    published_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    -- Ed25519 over the canonical publish body. Cached for audits;
+    -- empty string is acceptable when the route doesn't capture the
+    -- signature header (PR1 — re-verification is PR2 territory).
+    publish_signature TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (story_id, instance_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gfs_story_pub_expires
+    ON gfs_story_publications(expires_at);
+
+-- Per-link revocable tokens. The author can mint multiple — one per
+-- platform / recipient — and revoke any of them independently. Token
+-- lookup is the entry point for the public landing page; ``revoked_at``
+-- and the parent's ``expires_at`` together gate visibility.
+CREATE TABLE IF NOT EXISTS gfs_story_tokens (
+    token         TEXT PRIMARY KEY,
+    story_id      TEXT NOT NULL,
+    instance_id   TEXT NOT NULL,
+    label         TEXT,
+    created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    revoked_at    INTEGER,
+    FOREIGN KEY (story_id, instance_id)
+        REFERENCES gfs_story_publications(story_id, instance_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_gfs_story_tokens_pub
+    ON gfs_story_tokens(story_id, instance_id);

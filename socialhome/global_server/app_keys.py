@@ -15,8 +15,11 @@ from .repositories import (
     AbstractClusterRepo,
     AbstractGfsAdminRepo,
     AbstractGfsFederationRepo,
+    AbstractGfsStoryPublicationRepo,
+    AbstractGfsStoryTokenRepo,
 )
 from .rtc_transport import GfsRtcSession
+from .story_publications import StoryPublicationRegistry
 from .ws_registry import GfsWebSocketRegistry
 
 gfs_db_key: AppKey[AsyncDatabase] = AppKey("gfs_db")
@@ -31,3 +34,12 @@ gfs_cluster_repo_key: AppKey[AbstractClusterRepo] = AppKey("gfs_cluster_repo")
 gfs_rtc_key: AppKey[GfsRtcSession] = AppKey("gfs_rtc")
 gfs_ws_registry_key: AppKey[GfsWebSocketRegistry] = AppKey("gfs_ws_registry")
 gfs_http_session_key: AppKey[aiohttp.ClientSession] = AppKey("gfs_http_session")
+gfs_story_pub_repo_key: AppKey[AbstractGfsStoryPublicationRepo] = AppKey(
+    "gfs_story_pub_repo"
+)
+gfs_story_token_repo_key: AppKey[AbstractGfsStoryTokenRepo] = AppKey(
+    "gfs_story_token_repo"
+)
+gfs_story_pub_service_key: AppKey[StoryPublicationRegistry] = AppKey(
+    "gfs_story_pub_service"
+)

@@ -67,6 +67,13 @@ from .rtc import (
     RtcPingView,
     RtcSessionView,
 )
+from .stories import (
+    StoryPublicLandingView,
+    StoryPublishView,
+    StoryTokenMintView,
+    StoryTokenRevokeView,
+    StoryUnpublishView,
+)
 from .ws import GfsWebSocketView
 
 
@@ -123,6 +130,29 @@ def register_routes(
     app.router.add_view("/gfs/rtc/ice", RtcIceView)
     app.router.add_view("/gfs/rtc/ping", RtcPingView)
     app.router.add_view("/gfs/rtc/session/{session_id}", RtcSessionView)
+
+    # Public story publications (§stories_public). Signed wire endpoints
+    # for author SH instances; the public landing is anonymous.
+    app.router.add_view(
+        "/gfs/stories/{story_id}/publish",
+        StoryPublishView,
+    )
+    app.router.add_view(
+        "/gfs/stories/{story_id}/tokens",
+        StoryTokenMintView,
+    )
+    app.router.add_view(
+        "/gfs/story_tokens/{token}/revoke",
+        StoryTokenRevokeView,
+    )
+    app.router.add_view(
+        "/gfs/stories/{story_id}/unpublish",
+        StoryUnpublishView,
+    )
+    app.router.add_view(
+        "/story/{instance_id}/{story_id}/{token}",
+        StoryPublicLandingView,
+    )
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.

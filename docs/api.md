@@ -327,6 +327,10 @@ in-process retention scheduler prunes expired and over-quota rows.
 | DELETE | `/api/stories/frames/{id}/reaction` | Clear the caller's reaction on this frame. |
 | POST   | `/api/stories/{id}/share` | Author shares the story into a feed. Body: `{scope: 'household' \| 'space', space_id?, note?}`. Creates a `story_share` post; returns 201 `{post_id, story_id}` or 202 `{queued: true}` for moderated spaces. |
 | POST   | `/api/stories/frames/{id}/dm-reply` | Send a DM that quotes a frame. Body: `{conversation_id, content}`. The frame snapshot is frozen on the message so the reply survives retention. |
+| POST   | `/api/stories/{id}/publish` | Author mints a public share token via a paired GFS. Body: `{gfs_id, label?}`. Returns 201 `{token, url, label}` — the URL is `https://{gfs}/story/{instance}/{story}/{token}`. Mint additional tokens with repeat calls. |
+| GET    | `/api/stories/{id}/publish` | Local publication snapshot: `{published, gfs_id, published_at}`. Token list lives on the GFS. |
+| DELETE | `/api/stories/{id}/publish` | Drop the publication; CASCADE on the GFS revokes every token. |
+| DELETE | `/api/stories/{id}/publish/{token}` | Revoke a single share token; other tokens under the same publication keep working. |
 
 Audience kinds:
 

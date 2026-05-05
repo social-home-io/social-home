@@ -60,6 +60,14 @@ class Story:
     #: ISO-8601 UTC. Story is purged by the retention scheduler once
     #: the wall-clock passes this point.
     expires_at: str | None = None
+    #: When the author opts to share the story via a GFS (§stories_public),
+    #: the GFS connection id used. ``None`` while not published. Cleared
+    #: by ``unpublish``. Tokens (one per share link) live on the GFS;
+    #: SH only knows whether *some* publication exists.
+    public_gfs_id: str | None = None
+    #: ISO-8601 UTC of the original publish call. Persisted so the SPA
+    #: can show "published 12 minutes ago" without an extra GFS round-trip.
+    public_published_at: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

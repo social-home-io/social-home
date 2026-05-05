@@ -108,6 +108,7 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
   - [Presence](./presence.md) — online/away/home + truncated location.
   - [Calls](./calls.md) — WebRTC voice/video signalling.
   - [Stories](./stories.md) — per-author per-day frame bag with author-controlled retention and audience.
+  - [Stories — public sharing](./stories_public.md) — GFS-brokered public URL for a single story; data flows author → viewer over WebRTC, GFS holds zero story data.
 - **Relay**
   - [Push & RTC relay](./push-relay.md) — GFS-mediated push fan-out and RTC signalling bootstrap.
 

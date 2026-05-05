@@ -266,6 +266,7 @@ from .stories import (
     StoryReportView,
     StoryShareView,
 )
+from .story_publications import StoryPublishTokenView, StoryPublishView
 from .moments import (
     MomentArchiveView,
     MomentCollectionView,
@@ -709,6 +710,12 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         StoryDmReplyView,
     )
     app.router.add_view("/api/stories/{id}/report", StoryReportView)
+    # Public-publish surface — author-only; the GFS holds the tokens.
+    app.router.add_view("/api/stories/{id}/publish", StoryPublishView)
+    app.router.add_view(
+        "/api/stories/{id}/publish/{token}",
+        StoryPublishTokenView,
+    )
 
     # ── Moments (§Momentum) ─────────────────────────────────────────────
     # ``/api/moments/archive`` and ``/api/moments/follows`` come before

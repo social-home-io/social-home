@@ -100,6 +100,21 @@ class AbstractStoryRepo(Protocol):
     async def save_frame(self, frame: StoryFrame) -> StoryFrame: ...
     async def list_authors_with_stories(self) -> builtins.list[str]: ...
 
+    # Public publication state (§stories_public). The token registry
+    # lives on GFS — SH only knows whether *some* publication exists.
+    async def mark_published(
+        self,
+        story_id: str,
+        *,
+        gfs_id: str,
+        published_at: str,
+    ) -> None: ...
+    async def mark_unpublished(self, story_id: str) -> None: ...
+    async def list_published_for(
+        self,
+        author_user_id: str,
+    ) -> builtins.list[Story]: ...
+
 
 class SqliteStoryRepo:
     """SQLite-backed :class:`AbstractStoryRepo`."""
@@ -475,6 +490,44 @@ class SqliteStoryRepo:
         )
         return frame
 
+    # ── Public publication (§stories_public) ─────────────────────────────
+
+    async def mark_published(
+        self,
+        story_id: str,
+        *,
+        gfs_id: str,
+        published_at: str,
+    ) -> None:
+        """Record that ``story_id`` has been published via ``gfs_id``.
+
+        Idempotent re-publish — overwrites the timestamp + gfs_id when
+        the same story is published a second time (e.g. switched to a
+        different GFS).
+        """
+        await self._db.enqueue(
+            "UPDATE stories SET public_gfs_id=?, public_published_at=? WHERE id=?",
+            (gfs_id, published_at, story_id),
+        )
+
+    async def mark_unpublished(self, story_id: str) -> None:
+        """Clear the publication state. Caller is responsible for the
+        GFS-side DELETE — this method only flips the local flag."""
+        await self._db.enqueue(
+            "UPDATE stories SET public_gfs_id=NULL, public_published_at=NULL "
+            "WHERE id=?",
+            (story_id,),
+        )
+
+    async def list_published_for(self, author_user_id: str) -> list[Story]:
+        rows = await self._db.fetchall(
+            "SELECT * FROM stories "
+            "WHERE author_user_id=? AND public_gfs_id IS NOT NULL "
+            "ORDER BY public_published_at DESC",
+            (author_user_id,),
+        )
+        return [s for s in (_row_to_story(d) for d in rows_to_dicts(rows)) if s]
+
 
 def _row_to_story(row: dict | None) -> Story | None:
     if row is None:
@@ -495,6 +548,8 @@ def _row_to_story(row: dict | None) -> Story | None:
         audience=audience,
         created_at=row.get("created_at"),
         expires_at=row.get("expires_at"),
+        public_gfs_id=row.get("public_gfs_id"),
+        public_published_at=row.get("public_published_at"),
     )
 
 
