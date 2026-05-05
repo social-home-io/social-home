@@ -17,6 +17,7 @@ root parent_moment_id).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -60,3 +61,44 @@ class MomentReaction:
     reactor_user_id: str
     emoji: str
     reacted_at: str
+
+
+#: Cap on how many tags survive per moment. Twitter is generous on
+#: tags-in-a-tweet but most quality timelines stay below 5; clamp here
+#: so a tag-spam moment doesn't inflate the trending list.
+MOMENT_MAX_HASHTAGS_PER_POST: int = 10
+
+#: Per-tag length cap (chars after the leading ``#``). Anything longer
+#: is dropped silently — same shape as the WhatsApp behaviour where
+#: the parser only takes contiguous word characters.
+MOMENT_MAX_HASHTAG_LEN: int = 32
+
+#: ``#tag`` matcher. Word characters only — no spaces, punctuation,
+#: emoji. Matches the URL-safe charset so the SPA can route to
+#: ``/momentum/archive?tag=<tag>`` without escaping.
+_HASHTAG_RE = re.compile(r"(?<!\w)#([A-Za-z0-9_]{1,%d})" % MOMENT_MAX_HASHTAG_LEN)
+
+
+def extract_hashtags(content: str) -> list[str]:
+    """Return the unique lowercased hashtags found in ``content``.
+
+    * Order is preserved by *first* occurrence in the source so the
+      trending query can use the natural insertion order if it ever
+      wants to surface "first-seen" semantics.
+    * Adjacent ``##foo`` only counts as one tag (``foo``); the negative
+      lookbehind on ``\\w`` prevents matching mid-word like ``b##foo``.
+    * Capped at :data:`MOMENT_MAX_HASHTAGS_PER_POST`.
+    """
+    if not content:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _HASHTAG_RE.finditer(content):
+        tag = m.group(1).lower()
+        if tag in seen:
+            continue
+        seen.add(tag)
+        out.append(tag)
+        if len(out) >= MOMENT_MAX_HASHTAGS_PER_POST:
+            break
+    return out

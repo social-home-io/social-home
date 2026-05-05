@@ -23,6 +23,7 @@ import { currentUser } from '@/store/auth'
 import { useTitle } from '@/store/pageTitle'
 import { ws } from '@/ws'
 import type { Moment } from '@/types'
+import { renderHashtagged } from './hashtags'
 
 const moments = signal<Moment[]>([])
 const loading = signal<boolean>(true)
@@ -146,6 +147,7 @@ export default function MomentumPage() {
             mine={m.author_user_id === me}
             onOpen={() => loc.route(`/momentum/${m.id}`)}
             onReact={(ev) => void quickReact(m, ev)}
+            onTagClick={(t) => loc.route(`/momentum/archive?tag=${encodeURIComponent(t)}`)}
           />
         ))}
       </ul>
@@ -159,11 +161,13 @@ function MomentRow({
   mine,
   onOpen,
   onReact,
+  onTagClick,
 }: {
   m: Moment
   mine: boolean
   onOpen: () => void
   onReact: (ev: Event) => void
+  onTagClick: (tag: string) => void
 }) {
   const expanded = signal(false)
   const longContent = m.content.length > CONTENT_TRUNCATE_AT
@@ -198,7 +202,11 @@ function MomentRow({
 
         {m.content && (
           <p class="sh-momentum-row-content">
-            {visibleText}
+            {renderHashtagged(visibleText, (t, ev) => {
+              ev.preventDefault()
+              ev.stopPropagation()
+              onTagClick(t)
+            })}
             {longContent && !expanded.value && (
               <button
                 type="button"

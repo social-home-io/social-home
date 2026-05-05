@@ -107,7 +107,8 @@ Household-broadcast posts that fan to a 3-hop peer mesh. Replies are themselves 
 |---|---|---|
 | GET | `/api/moments` | List visible moments (block-aware, follow-aware). |
 | POST | `/api/moments` | Create a moment. Body: `{content, media_url?, media_type?, duration_ms?, parent_moment_id?}`. |
-| GET | `/api/moments/archive` | Full retention-window list. |
+| GET | `/api/moments/archive` | Full retention-window list. Optional `?tag=<name>` filters to moments tagged with that hashtag (lowercase, no leading `#`). |
+| GET | `/api/moments/hashtags` | Trending hashtags inside the viewer's visibility window. Returns `{"hashtags": [{"tag", "count"}, …]}`; `?limit=N` (default 20, capped at 50). |
 | GET | `/api/moments/{id}` | Detail incl. replies + reactions. |
 | DELETE | `/api/moments/{id}` | Author or admin delete. |
 | PUT | `/api/moments/{id}/reaction` | Set / change reaction. Body: `{emoji}`. |

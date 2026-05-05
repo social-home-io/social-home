@@ -125,6 +125,10 @@ class MomentArchiveView(BaseView):
     Same data shape as the inbox; the page chrome on the SPA side
     differs (calendar grouping vs. flat list). The visibility filter
     (block-aware, follower-aware) still applies.
+
+    Optional ``?tag=<name>`` restricts the result to moments tagged
+    with that hashtag (lowercase, no leading ``#``). The Browse page
+    uses this for the trending-tag chip row.
     """
 
     async def get(self) -> web.Response:
@@ -133,10 +137,40 @@ class MomentArchiveView(BaseView):
             return error_response(401, "UNAUTHENTICATED", "Login required.")
         await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
-        moments = await svc.list_inbox(viewer_user_id=ctx.user_id, limit=100)
+        tag = self.request.query.get("tag")
+        moments = await svc.list_inbox(
+            viewer_user_id=ctx.user_id,
+            limit=100,
+            tag=tag,
+        )
         repo = self.svc(moment_repo_key)
         counts = await repo.count_engagement_for([m.id for m in moments])
         return self._json([_moment_dict(m, counts=counts.get(m.id)) for m in moments])
+
+
+class MomentHashtagsView(BaseView):
+    """``GET /api/moments/hashtags`` — trending tags for the chip row.
+
+    Returns ``[{"tag": str, "count": int}, …]`` sorted by descending
+    count. The aggregation re-applies the inbox visibility filter so
+    blocked authors and out-of-window moments don't pollute the row.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        if ctx is None:
+            return error_response(401, "UNAUTHENTICATED", "Login required.")
+        await self.require_household_feature("momentum")
+        svc = self.svc(moment_service_key)
+        try:
+            limit = int(self.request.query.get("limit", 20))
+        except ValueError:
+            limit = 20
+        rows = await svc.list_top_hashtags(
+            viewer_user_id=ctx.user_id,
+            limit=limit,
+        )
+        return self._json({"hashtags": rows})
 
 
 class MomentDetailView(BaseView):

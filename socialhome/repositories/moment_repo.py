@@ -21,7 +21,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
-from ..domain.moment import Moment, MomentReaction
+from ..domain.moment import Moment, MomentReaction, extract_hashtags
 from .base import row_to_dict, rows_to_dicts
 
 
@@ -36,6 +36,7 @@ class AbstractMomentRepo(Protocol):
         *,
         before: str | None = None,
         limit: int = 50,
+        tag: str | None = None,
     ) -> list[Moment]: ...
     async def list_replies(self, parent_moment_id: str) -> list[Moment]: ...
     async def count_recent_for_author(
@@ -65,6 +66,15 @@ class AbstractMomentRepo(Protocol):
         moment_ids: list[str],
     ) -> dict[str, dict[str, int]]: ...
 
+    # Hashtags ------------------------------------------------------------
+    async def list_hashtags_for(self, moment_id: str) -> list[str]: ...
+    async def list_top_hashtags(
+        self,
+        viewer_user_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[tuple[str, int]]: ...
+
     # Retention -----------------------------------------------------------
     async def prune_expired(self) -> int: ...
 
@@ -79,7 +89,12 @@ class SqliteMomentRepo:
 
     async def save(self, moment: Moment) -> Moment:
         """Upsert by id. Inbound federation handlers call this with
-        the dedup-by-id semantics the relay needs."""
+        the dedup-by-id semantics the relay needs.
+
+        Re-extracts hashtags from the (possibly edited) content and
+        rewrites the ``moment_hashtags`` rows so the trending list
+        and the tag-filter query stay correct after a relayed update.
+        """
         await self._db.enqueue(
             """
             INSERT INTO moments(
@@ -107,6 +122,19 @@ class SqliteMomentRepo:
                 moment.expires_at,
             ),
         )
+        # DELETE-INSERT keeps the tag set in sync with the latest
+        # content. Cheap because moment_hashtags is keyed on
+        # (moment_id, tag) and a moment has at most
+        # ``MOMENT_MAX_HASHTAGS_PER_POST`` rows.
+        await self._db.enqueue(
+            "DELETE FROM moment_hashtags WHERE moment_id=?",
+            (moment.id,),
+        )
+        for tag in extract_hashtags(moment.content):
+            await self._db.enqueue(
+                "INSERT OR IGNORE INTO moment_hashtags(moment_id, tag) VALUES(?, ?)",
+                (moment.id, tag),
+            )
         return moment
 
     async def get(self, moment_id: str) -> Moment | None:
@@ -128,6 +156,7 @@ class SqliteMomentRepo:
         *,
         before: str | None = None,
         limit: int = 50,
+        tag: str | None = None,
     ) -> list[Moment]:
         """One query covers blocks, retention, and the cursor.
 
@@ -137,29 +166,46 @@ class SqliteMomentRepo:
           author (then up to 7 d, the absolute ``expires_at``).
         * ``before`` is an ISO-8601 ``created_at`` cursor; ``NULL``
           fetches from newest.
+        * ``tag`` (lowercase) restricts the result to moments tagged
+          with that hashtag — used by the Browse / archive page.
         """
         limit = max(1, min(int(limit), 100))
+        normalised_tag = tag.strip().lower().lstrip("#") if tag else None
         rows = await self._db.fetchall(
             """
-            SELECT * FROM moments
-             WHERE author_user_id NOT IN (
+            SELECT m.* FROM moments AS m
+             WHERE m.author_user_id NOT IN (
                  SELECT blocked_user_id FROM user_blocks
                   WHERE blocker_user_id = ?
              )
                AND (
-                 (julianday('now') - julianday(created_at)) * 24 < 24
+                 (julianday('now') - julianday(m.created_at)) * 24 < 24
                  OR EXISTS (
                      SELECT 1 FROM user_follows
                       WHERE follower_user_id = ?
-                        AND followed_user_id = moments.author_user_id
+                        AND followed_user_id = m.author_user_id
                  )
                )
-               AND expires_at > datetime('now')
-               AND (? IS NULL OR created_at < ?)
-             ORDER BY created_at DESC
+               AND m.expires_at > datetime('now')
+               AND (? IS NULL OR m.created_at < ?)
+               AND (
+                 ? IS NULL OR EXISTS (
+                     SELECT 1 FROM moment_hashtags
+                      WHERE moment_id = m.id AND tag = ?
+                 )
+               )
+             ORDER BY m.created_at DESC
              LIMIT ?
             """,
-            (viewer_user_id, viewer_user_id, before, before, limit),
+            (
+                viewer_user_id,
+                viewer_user_id,
+                before,
+                before,
+                normalised_tag,
+                normalised_tag,
+                limit,
+            ),
         )
         return [m for m in (_row_to_moment(d) for d in rows_to_dicts(rows)) if m]
 
@@ -276,6 +322,57 @@ class SqliteMomentRepo:
         for r in rep_rows:
             out[r["moment_id"]]["reply_count"] = int(r["n"])
         return out
+
+    # ── Hashtags ───────────────────────────────────────────────────────
+
+    async def list_hashtags_for(self, moment_id: str) -> list[str]:
+        rows = await self._db.fetchall(
+            "SELECT tag FROM moment_hashtags WHERE moment_id=? ORDER BY tag",
+            (moment_id,),
+        )
+        return [r["tag"] for r in rows]
+
+    async def list_top_hashtags(
+        self,
+        viewer_user_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[tuple[str, int]]:
+        """Return ``[(tag, n), …]`` of the most-used tags inside the
+        viewer's visible window.
+
+        The aggregation re-applies the same visibility filter as
+        :meth:`list_visible_to` so a tag from a blocked author or a
+        moment past the viewer's retention window doesn't pollute the
+        trending list. Sorted by count desc, then alphabetically so
+        the order is stable for equal counts.
+        """
+        limit = max(1, min(int(limit), 50))
+        rows = await self._db.fetchall(
+            """
+            SELECT mh.tag AS tag, COUNT(*) AS n
+              FROM moment_hashtags AS mh
+              JOIN moments AS m ON m.id = mh.moment_id
+             WHERE m.author_user_id NOT IN (
+                 SELECT blocked_user_id FROM user_blocks
+                  WHERE blocker_user_id = ?
+             )
+               AND (
+                 (julianday('now') - julianday(m.created_at)) * 24 < 24
+                 OR EXISTS (
+                     SELECT 1 FROM user_follows
+                      WHERE follower_user_id = ?
+                        AND followed_user_id = m.author_user_id
+                 )
+               )
+               AND m.expires_at > datetime('now')
+             GROUP BY mh.tag
+             ORDER BY n DESC, mh.tag ASC
+             LIMIT ?
+            """,
+            (viewer_user_id, viewer_user_id, limit),
+        )
+        return [(r["tag"], int(r["n"])) for r in rows]
 
     # ── Retention ──────────────────────────────────────────────────────
 

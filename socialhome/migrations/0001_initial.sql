@@ -1546,6 +1546,19 @@ CREATE TABLE IF NOT EXISTS moment_reactions (
     PRIMARY KEY (moment_id, reactor_user_id)
 );
 
+-- One row per (moment, hashtag). Tags are lowercased + ASCII at the
+-- service-layer extractor (``domain/moment.py``); the column is
+-- pre-normalised so the index lookup is exact-match. The Browse
+-- section's archive uses these rows to filter by tag and to surface
+-- trending tags.
+CREATE TABLE IF NOT EXISTS moment_hashtags (
+    moment_id  TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+    tag        TEXT NOT NULL,
+    PRIMARY KEY (moment_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_moment_hashtags_tag
+    ON moment_hashtags(tag, moment_id);
+
 -- ── Shopping list (§23.120) ────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS shopping_list_items (

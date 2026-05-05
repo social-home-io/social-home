@@ -20,6 +20,7 @@ import { currentUser } from '@/store/auth'
 import { useTitle } from '@/store/pageTitle'
 import { ws } from '@/ws'
 import type { Moment, MomentDetail } from '@/types'
+import { renderHashtagged } from './hashtags'
 
 const QUICK_REACTIONS = ['❤️', '🔥', '😂', '😮', '😢', '👏'] as const
 
@@ -120,7 +121,15 @@ export default function MomentumDetailPage() {
           </strong>
           <span class="sh-muted">{mm.created_at.slice(11, 16)}</span>
         </div>
-        {mm.content && <p class="sh-momentum-row-content">{mm.content}</p>}
+        {mm.content && (
+          <p class="sh-momentum-row-content">
+            {renderHashtagged(mm.content, (t, ev) => {
+              ev.preventDefault()
+              ev.stopPropagation()
+              loc.route(`/momentum/archive?tag=${encodeURIComponent(t)}`)
+            })}
+          </p>
+        )}
         {mm.media_type === 'image' && mm.media_url && (
           <img src={mm.media_url} alt="" loading="lazy"
             class="sh-momentum-row-media" />
@@ -158,7 +167,15 @@ export default function MomentumDetailPage() {
         </Button>
       </header>
 
-      {m.content && <p class="sh-momentum-detail-content">{m.content}</p>}
+      {m.content && (
+        <p class="sh-momentum-detail-content">
+          {renderHashtagged(m.content, (t, ev) => {
+            ev.preventDefault()
+            ev.stopPropagation()
+            loc.route(`/momentum/archive?tag=${encodeURIComponent(t)}`)
+          })}
+        </p>
+      )}
       {m.media_type === 'image' && m.media_url && (
         <img src={m.media_url} alt="" class="sh-momentum-detail-media" />
       )}
