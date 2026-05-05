@@ -16,5 +16,5 @@
     },
     "baseUrl": "."
   },
-  "include": ["src"]
+  "include": ["src", "gfs"]
 }

@@ -86,13 +86,19 @@ from .ws import GfsWebSocketView
 
 
 def register_routes(
-    app: web.Application, *, admin_ui_dir: Path, media_dir: str
+    app: web.Application,
+    *,
+    admin_ui_dir: Path,
+    media_dir: str,
+    public_static_dir: Path | None = None,
 ) -> None:
     """Mount every GFS view onto *app*.
 
-    Accepts ``admin_ui_dir`` for the admin-static mount and ``media_dir``
-    (absolute) for the public ``/media/`` file mount so deployment layout
-    stays in the caller's hands.
+    Accepts ``admin_ui_dir`` for the admin-static mount, ``media_dir``
+    (absolute) for the public ``/media/`` file mount, and the optional
+    ``public_static_dir`` that holds the §stories_public viewer
+    bundle. Tests pass ``None`` for the static dir when they don't
+    care about the public landing JS.
     """
     # Pairing handshake (spec §24.12 — the only HTTPS hop in the
     # primary flow; everything afterwards rides the WebSocket below).
@@ -186,6 +192,10 @@ def register_routes(
         app.router.add_static("/admin/static/", admin_ui_dir)
     if Path(media_dir).is_dir():
         app.router.add_static("/media/", media_dir)
+    if public_static_dir is not None and public_static_dir.is_dir():
+        # Hosts the vanilla-JS public-viewer bundle for §stories_public.
+        # The landing page references ``/static/story_public_viewer.js``.
+        app.router.add_static("/static/", str(public_static_dir))
 
     # Admin JSON API (all behind admin_auth_middleware).
     app.router.add_view("/admin/api/overview", AdminOverviewView)
