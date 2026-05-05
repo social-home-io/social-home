@@ -50,7 +50,7 @@ class StoryPublishView(GfsBaseView):
             )
         try:
             expires_at = int(body.get("expires_at") or 0)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return web.json_response({"error": "invalid_expires_at"}, status=422)
         if expires_at <= 0:
             return web.json_response({"error": "invalid_expires_at"}, status=422)

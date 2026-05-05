@@ -1,17 +1,22 @@
 """Tests for the GFS public story routes (§stories_public).
 
-The signed wire endpoints (publish / mint / revoke / unpublish) require
-Ed25519-authenticated bodies. Rather than rebuild the full signing
-flow here we exercise the public landing page end-to-end and unit-test
-the registry directly in ``test_story_publications`` for the rest.
-The signed handlers themselves get a smoke test that returns 401 on a
-missing signature so the auth wiring is at least live.
+Exercises both surfaces:
+
+* The public landing page (no auth) — 200 / 410 / 503 paths.
+* The Ed25519-signed wire endpoints (publish / mint / revoke /
+  unpublish) — full sign + verify path, mirroring
+  ``test_federation`` so the auth middleware is live.
 """
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from socialhome.global_server.app_keys import (
     gfs_fed_repo_key,
@@ -33,19 +38,53 @@ def _config(tmp_dir):
     )
 
 
+def _make_keypair() -> tuple[bytes, str]:
+    """Return ``(private_seed, public_key_hex)`` for a fresh Ed25519 pair."""
+    sk = Ed25519PrivateKey.generate()
+    seed = sk.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    pk_hex = (
+        sk.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        .hex()
+    )
+    return seed, pk_hex
+
+
+def _sign(seed: bytes, body: dict) -> dict:
+    """Return ``body`` with an appended urlsafe-base64 Ed25519 signature."""
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    sk = Ed25519PrivateKey.from_private_bytes(seed)
+    sig = base64.urlsafe_b64encode(sk.sign(canonical)).rstrip(b"=").decode("ascii")
+    return {**body, "signature": sig}
+
+
 @pytest.fixture
-async def client(tmp_dir):
+async def keypair():
+    return _make_keypair()
+
+
+@pytest.fixture
+async def client(tmp_dir, keypair):
+    seed, pk_hex = keypair
     app = create_gfs_app(_config(tmp_dir))
     async with TestClient(TestServer(app)) as tc:
         tc._app = app
-        # Seed the author instance the publication points at — the FK
-        # on gfs_story_publications.instance_id would otherwise reject
-        # the upsert.
+        tc._seed = seed
+        # Seed the author instance — both the FK on
+        # ``gfs_story_publications.instance_id`` and the signed-wire
+        # auth middleware look it up.
         await app[gfs_fed_repo_key].upsert_instance(
             ClientInstance(
                 instance_id="inst-author",
                 display_name="Author",
-                public_key="aa" * 32,
+                public_key=pk_hex,
                 inbox_url="http://author/wh",
                 status="active",
             )
@@ -149,7 +188,7 @@ async def test_landing_returns_410_for_unknown_token(client):
     assert resp.status == 410
 
 
-# ── Signed-wire smoke ────────────────────────────────────────────────────
+# ── Signed-wire endpoints ───────────────────────────────────────────────
 
 
 async def test_publish_endpoint_rejects_missing_signature(client):
@@ -159,3 +198,136 @@ async def test_publish_endpoint_rejects_missing_signature(client):
         json={"instance_id": "inst-author", "story_id": "s-1", "expires_at": 1},
     )
     assert resp.status in (401, 403)
+
+
+async def test_publish_signed_creates_publication_and_returns_url(client):
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "expires_at": 10_000_000_000,
+            "label": "twitter",
+        },
+    )
+    resp = await client.post("/gfs/stories/s-1/publish", json=body)
+    assert resp.status == 201
+    data = await resp.json()
+    assert data["token"]
+    assert data["url"].startswith("http://gfs.test/story/inst-author/s-1/")
+    assert data["label"] == "twitter"
+
+
+async def test_publish_rejects_story_id_mismatch(client):
+    """URL story_id and body story_id must agree."""
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-OTHER",
+            "expires_at": 10_000_000_000,
+        },
+    )
+    resp = await client.post("/gfs/stories/s-1/publish", json=body)
+    assert resp.status == 422
+
+
+async def test_publish_rejects_invalid_expires_at(client):
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "expires_at": 0,
+        },
+    )
+    resp = await client.post("/gfs/stories/s-1/publish", json=body)
+    assert resp.status == 422
+
+
+async def test_mint_extra_token_under_existing_pub(client):
+    # First publish creates the parent + first token.
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "expires_at": 10_000_000_000,
+        },
+    )
+    await client.post("/gfs/stories/s-1/publish", json=body)
+    # Then a second token under the same publication.
+    extra = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "label": "email"},
+    )
+    resp = await client.post("/gfs/stories/s-1/tokens", json=extra)
+    assert resp.status == 201
+    data = await resp.json()
+    assert data["label"] == "email"
+
+
+async def test_mint_token_without_publish_returns_404(client):
+    extra = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "label": "email"},
+    )
+    resp = await client.post("/gfs/stories/s-no-pub/tokens", json=extra)
+    assert resp.status == 404
+
+
+async def test_revoke_signed_drops_token(client):
+    publish = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "expires_at": 10_000_000_000,
+        },
+    )
+    publish_resp = await client.post("/gfs/stories/s-1/publish", json=publish)
+    token = (await publish_resp.json())["token"]
+
+    revoke = _sign(client._seed, {"instance_id": "inst-author", "token": token})
+    resp = await client.post(f"/gfs/story_tokens/{token}/revoke", json=revoke)
+    assert resp.status == 200
+
+
+async def test_revoke_unknown_token_returns_404(client):
+    revoke = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "token": "nope"},
+    )
+    resp = await client.post("/gfs/story_tokens/nope/revoke", json=revoke)
+    assert resp.status == 404
+
+
+async def test_unpublish_signed_removes_publication(client):
+    publish = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "expires_at": 10_000_000_000,
+        },
+    )
+    await client.post("/gfs/stories/s-1/publish", json=publish)
+
+    unpublish = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "story_id": "s-1"},
+    )
+    resp = await client.post("/gfs/stories/s-1/unpublish", json=unpublish)
+    assert resp.status == 200
+
+
+async def test_unpublish_unknown_returns_404(client):
+    unpublish = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "story_id": "s-missing"},
+    )
+    resp = await client.post(
+        "/gfs/stories/s-missing/unpublish",
+        json=unpublish,
+    )
+    assert resp.status == 404
