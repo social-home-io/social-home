@@ -16,6 +16,11 @@ import { resolve } from 'path'
 
 export default defineConfig({
   plugins: [preact()],
+  // The SPA's ``public/`` folder belongs to the main Preact app
+  // (favicon, manifest, service worker). The GFS bundle is a library
+  // build with no SSR or PWA chrome — turn off the public copy so we
+  // don't accidentally land an SPA manifest in the GFS static dir.
+  publicDir: false,
   build: {
     outDir: '../socialhome/global_server/static',
     emptyOutDir: false, // keep alongside admin / future bundles
