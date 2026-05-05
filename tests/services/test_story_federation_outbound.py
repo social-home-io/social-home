@@ -16,7 +16,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from socialhome.domain.events import StoryFrameAdded, StoryFrameRemoved, StoryRemoved
+from socialhome.domain.events import (
+    StoryFrameAdded,
+    StoryFrameReactionChanged,
+    StoryFrameRemoved,
+    StoryFrameViewed,
+    StoryRemoved,
+)
 from socialhome.domain.federation import FederationEventType, RemoteInstance
 from socialhome.services.story_federation_outbound import StoryFederationOutbound
 
@@ -197,3 +203,119 @@ async def test_send_failure_does_not_abort_other_peers(stack):
     await out._on_frame_added(_frame_event())
     sent = [c.kwargs["to_instance_id"] for c in fed.send_event.call_args_list]
     assert sent == ["peer-bad", "peer-ok"] or sent == ["peer-ok", "peer-bad"]
+
+
+# ─── Back-channel: viewer/reactor → author ───────────────────────────────
+
+
+async def test_frame_viewed_unicast_to_author_home(stack):
+    """A local viewer's view receipt is sent only to the author's home."""
+    out, fed, _fed_repo, user_repo = stack
+
+    async def _home(uid):
+        return {
+            "uid-viewer": "self",  # local viewer
+            "uid-author": "peer-author",
+        }.get(uid)
+
+    user_repo.get_instance_for_user = AsyncMock(side_effect=_home)
+    await out._on_frame_viewed(
+        StoryFrameViewed(
+            story_id="s-1",
+            frame_id="f-1",
+            viewer_user_id="uid-viewer",
+            author_user_id="uid-author",
+        ),
+    )
+    fed.send_event.assert_awaited_once()
+    kwargs = fed.send_event.call_args.kwargs
+    assert kwargs["to_instance_id"] == "peer-author"
+    assert kwargs["event_type"] is FederationEventType.STORY_FRAME_VIEWED
+
+
+async def test_frame_viewed_skipped_when_viewer_remote(stack):
+    """The author's instance gets the inbound republished event but
+    must not re-fan it back to the viewer's instance."""
+    out, fed, _fed_repo, user_repo = stack
+    user_repo.get_instance_for_user = AsyncMock(return_value="peer-source")
+    await out._on_frame_viewed(
+        StoryFrameViewed(
+            story_id="s-1",
+            frame_id="f-1",
+            viewer_user_id="uid-viewer",  # remote
+            author_user_id="uid-author",
+        ),
+    )
+    fed.send_event.assert_not_called()
+
+
+async def test_frame_viewed_skipped_when_author_local_too(stack):
+    """Local viewer + local author = nothing to federate."""
+    out, fed, _fed_repo, user_repo = stack
+    user_repo.get_instance_for_user = AsyncMock(return_value="self")
+    await out._on_frame_viewed(
+        StoryFrameViewed(
+            story_id="s-1",
+            frame_id="f-1",
+            viewer_user_id="uid-viewer",
+            author_user_id="uid-author",
+        ),
+    )
+    fed.send_event.assert_not_called()
+
+
+async def test_reaction_set_uses_reacted_event_type(stack):
+    out, fed, _fed_repo, user_repo = stack
+
+    async def _home(uid):
+        return {"uid-reactor": "self", "uid-author": "peer-author"}.get(uid)
+
+    user_repo.get_instance_for_user = AsyncMock(side_effect=_home)
+    await out._on_reaction_changed(
+        StoryFrameReactionChanged(
+            story_id="s-1",
+            frame_id="f-1",
+            reactor_user_id="uid-reactor",
+            author_user_id="uid-author",
+            emoji="🔥",
+        ),
+    )
+    kwargs = fed.send_event.call_args.kwargs
+    assert kwargs["event_type"] is FederationEventType.STORY_FRAME_REACTED
+    assert kwargs["payload"]["emoji"] == "🔥"
+
+
+async def test_reaction_cleared_uses_reaction_removed_event_type(stack):
+    out, fed, _fed_repo, user_repo = stack
+
+    async def _home(uid):
+        return {"uid-reactor": "self", "uid-author": "peer-author"}.get(uid)
+
+    user_repo.get_instance_for_user = AsyncMock(side_effect=_home)
+    await out._on_reaction_changed(
+        StoryFrameReactionChanged(
+            story_id="s-1",
+            frame_id="f-1",
+            reactor_user_id="uid-reactor",
+            author_user_id="uid-author",
+            emoji=None,  # cleared
+        ),
+    )
+    kwargs = fed.send_event.call_args.kwargs
+    assert kwargs["event_type"] is FederationEventType.STORY_FRAME_REACTION_REMOVED
+    assert kwargs["payload"]["emoji"] is None
+
+
+async def test_reaction_changed_skipped_when_reactor_remote(stack):
+    out, fed, _fed_repo, user_repo = stack
+    user_repo.get_instance_for_user = AsyncMock(return_value="peer-source")
+    await out._on_reaction_changed(
+        StoryFrameReactionChanged(
+            story_id="s-1",
+            frame_id="f-1",
+            reactor_user_id="uid-reactor",
+            author_user_id="uid-author",
+            emoji="🔥",
+        ),
+    )
+    fed.send_event.assert_not_called()

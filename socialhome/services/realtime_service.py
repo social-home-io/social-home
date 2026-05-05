@@ -66,7 +66,9 @@ from ..domain.events import (
     StickyDeleted,
     StickyUpdated,
     StoryFrameAdded,
+    StoryFrameReactionChanged,
     StoryFrameRemoved,
+    StoryFrameViewed,
     StoryRemoved,
     MomentCreated,
     MomentDeleted,
@@ -319,6 +321,13 @@ class RealtimeService:
         self._bus.subscribe(StoryFrameAdded, self._on_story_frame_added)
         self._bus.subscribe(StoryFrameRemoved, self._on_story_frame_removed)
         self._bus.subscribe(StoryRemoved, self._on_story_removed)
+        # Story view / reaction back-channel — only the author needs
+        # the update so we narrow the broadcast to their WS sessions.
+        self._bus.subscribe(StoryFrameViewed, self._on_story_frame_viewed)
+        self._bus.subscribe(
+            StoryFrameReactionChanged,
+            self._on_story_frame_reaction_changed,
+        )
         # Momentum — broadcast new moments / deletions to the whole
         # household; reaction-changed unicasts to the author.
         self._bus.subscribe(MomentCreated, self._on_moment_created)
@@ -1145,6 +1154,37 @@ class RealtimeService:
                 "story_id": event.story_id,
                 "author_user_id": event.author_user_id,
             }
+        )
+
+    # ─── Story view / reaction back-channel ──────────────────────────────
+
+    async def _on_story_frame_viewed(self, event: StoryFrameViewed) -> None:
+        # Only the author cares about a view receipt — narrow the WS
+        # frame to their sessions so unrelated household members don't
+        # see the noise.
+        await self._ws.broadcast_to_users(
+            [event.author_user_id],
+            {
+                "type": "story.frame_viewed",
+                "story_id": event.story_id,
+                "frame_id": event.frame_id,
+                "viewer_user_id": event.viewer_user_id,
+            },
+        )
+
+    async def _on_story_frame_reaction_changed(
+        self,
+        event: StoryFrameReactionChanged,
+    ) -> None:
+        await self._ws.broadcast_to_users(
+            [event.author_user_id],
+            {
+                "type": "story.frame_reaction_changed",
+                "story_id": event.story_id,
+                "frame_id": event.frame_id,
+                "reactor_user_id": event.reactor_user_id,
+                "emoji": event.emoji,  # None when cleared
+            },
         )
 
     # ─── Momentum (§Momentum) ─────────────────────────────────────────────
