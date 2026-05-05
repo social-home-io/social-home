@@ -407,3 +407,146 @@ async def test_stop_cancels_in_flight_sessions(repos, published_story):
     await handler.stop()
     assert peers[0].closed
     assert "s-1" not in handler._sessions
+
+
+# ─── Extra branch coverage ───────────────────────────────────────────────
+
+
+async def test_handle_signal_unknown_kind_is_no_op(repos):
+    handler, peers = _make_handler(repos)
+    await handler.handle_signal({"kind": "weather", "session_id": "x"})
+    assert peers == []
+
+
+async def test_offer_missing_fields_is_no_op(repos):
+    handler, peers = _make_handler(repos)
+    await handler.handle_signal({"kind": "offer", "session_id": ""})
+    assert peers == []
+
+
+async def test_ice_with_non_dict_candidate_is_dropped(repos, published_story):
+    story_id, *_ = published_story
+    handler, _ = _make_handler(repos)
+    # No exception, no crash.
+    await handler.handle_signal(
+        {"kind": "ice", "session_id": "s-1", "candidate": "not-a-dict"}
+    )
+
+
+async def test_post_answer_fails_when_gfs_inactive(repos, published_story):
+    """If the publication's GFS is suspended, no answer is posted (peer
+    still gets cleaned up, viewer times out)."""
+    story_id, *_ = published_story
+    # Suspend the GFS.
+    await repos["gfs"]._db.enqueue(
+        "UPDATE gfs_connections SET status='suspended' WHERE id='gfs-abc'"
+    )
+    sess = _StubSession()
+    handler, _peers = _make_handler(repos)
+    handler._http_client = sess  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "offer", "session_id": "s-1", "story_id": story_id, "sdp": "v=0"}
+    )
+    await _drain(handler)
+    # No answer ever went out.
+    assert sess.posts == []
+
+
+async def test_post_answer_logs_on_http_error(repos, published_story):
+    """A 500 from the GFS is logged but doesn't crash the serve task."""
+    story_id, *_ = published_story
+
+    class _ErrSession(_StubSession):
+        def post(self, url, *, json=None, **_kw):
+            self.posts.append((url, json or {}))
+            return _StubResp(500, {"error": "down"})
+
+    handler, _ = _make_handler(repos)
+    handler._http_client = _ErrSession()  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "offer", "session_id": "s-1", "story_id": story_id, "sdp": "v=0"}
+    )
+    await _drain(handler)
+    # No exception escaped — sessions cleared.
+    assert handler._sessions == {}
+
+
+async def test_per_instance_cap_takes_priority(repos, published_story):
+    """If MAX_CONCURRENT_VIEWERS_PER_INSTANCE is reached the next offer
+    is rejected before the per-story cap is even consulted."""
+    from socialhome.services import story_signaling_handler as mod
+
+    story_id, *_ = published_story
+
+    open_event = asyncio.Event()
+
+    class _SlowPeer(_StubPeer):
+        async def wait_open(self) -> None:
+            await open_event.wait()
+
+    peers: list[_StubPeer] = []
+
+    def _factory(_ice):
+        p = _SlowPeer()
+        peers.append(p)
+        return p
+
+    handler, _ = _make_handler(repos, peer_factory=_factory)
+    # Tighten the cap so the test runs cheaply.
+    saved = mod.MAX_CONCURRENT_VIEWERS_PER_INSTANCE
+    mod.MAX_CONCURRENT_VIEWERS_PER_INSTANCE = 1
+    try:
+        await handler.handle_signal(
+            {"kind": "offer", "session_id": "a", "story_id": story_id, "sdp": "v=0"}
+        )
+        before = len(peers)
+        await handler.handle_signal(
+            {"kind": "offer", "session_id": "b", "story_id": story_id, "sdp": "v=0"}
+        )
+        assert len(peers) == before
+    finally:
+        mod.MAX_CONCURRENT_VIEWERS_PER_INSTANCE = saved
+        open_event.set()
+        await _drain(handler)
+
+
+async def test_handler_requires_identity_attach_to_sign():
+    handler = StorySignalingHandler.__new__(StorySignalingHandler)
+    # Call private _sign through the handler's protocol — but easier:
+    # construct a real handler and skip attach_identity.
+    from socialhome.repositories.story_repo import SqliteStoryRepo
+    from socialhome.repositories.gfs_connection_repo import SqliteGfsConnectionRepo
+
+    handler = StorySignalingHandler(
+        SqliteStoryRepo.__new__(SqliteStoryRepo),
+        SqliteGfsConnectionRepo.__new__(SqliteGfsConnectionRepo),
+        media_dir="/tmp",
+    )
+    with pytest.raises(RuntimeError):
+        handler._sign({"a": 1})
+    with pytest.raises(RuntimeError):
+        handler._require_instance_id()
+
+
+async def test_resolve_media_path_rejects_traversal(repos):
+    handler, _ = _make_handler(repos)
+    assert handler._resolve_media_path("/api/media/../etc/passwd") is None
+    assert handler._resolve_media_path("/api/media/.hidden") is None
+    assert handler._resolve_media_path("not-a-media-url") is None
+    assert handler._resolve_media_path(None) is None
+
+
+async def test_default_peer_factory_raises_until_overridden():
+    from socialhome.services.story_signaling_handler import _default_peer_factory
+
+    with pytest.raises(NotImplementedError):
+        _default_peer_factory([])
+
+
+async def test_content_type_helper_picks_extensions():
+    from socialhome.services.story_signaling_handler import _content_type_for
+
+    assert _content_type_for("/api/media/a.jpg") == "image/jpeg"
+    assert _content_type_for("/api/media/a.mp4") == "video/mp4"
+    assert _content_type_for("/api/media/a.unknown") == "application/octet-stream"
+    assert _content_type_for(None) == "application/octet-stream"
