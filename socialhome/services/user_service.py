@@ -21,10 +21,12 @@ from ..crypto import derive_user_id
 from ..domain.events import (
     UserBlocked,
     UserDeprovisioned,
+    UserFollowed,
     UserProfileUpdated,
     UserProvisioned,
     UserStatusChanged,
     UserUnblocked,
+    UserUnfollowed,
 )
 from ..domain.user import RESERVED_USERNAMES, User, UserStatus
 from ..infrastructure.event_bus import EventBus
@@ -467,6 +469,42 @@ class UserService:
             raise KeyError(f"user {blocker_username!r} not found")
         rows = await self._repo.list_blocked(blocker.user_id)
         return [{"user_id": uid, "blocked_at": at} for uid, at in rows]
+
+    # ── Follows (§Momentum) ────────────────────────────────────────────
+
+    async def follow(self, follower_username: str, followed_user_id: str) -> None:
+        follower = await self._repo.get(follower_username)
+        if follower is None:
+            raise KeyError(f"user {follower_username!r} not found")
+        if follower.user_id == followed_user_id:
+            raise ValueError("Cannot follow yourself")
+        await self._repo.follow(follower.user_id, followed_user_id)
+        await self._bus.publish(
+            UserFollowed(
+                follower_user_id=follower.user_id,
+                followed_user_id=followed_user_id,
+            )
+        )
+
+    async def unfollow(self, follower_username: str, followed_user_id: str) -> None:
+        follower = await self._repo.get(follower_username)
+        if follower is None:
+            raise KeyError(f"user {follower_username!r} not found")
+        await self._repo.unfollow(follower.user_id, followed_user_id)
+        await self._bus.publish(
+            UserUnfollowed(
+                follower_user_id=follower.user_id,
+                followed_user_id=followed_user_id,
+            )
+        )
+
+    async def list_following(self, follower_username: str) -> list[dict]:
+        """Return ``[{user_id, created_at}, …]`` for the follower."""
+        follower = await self._repo.get(follower_username)
+        if follower is None:
+            raise KeyError(f"user {follower_username!r} not found")
+        rows = await self._repo.list_following(follower.user_id)
+        return [{"user_id": uid, "created_at": at} for uid, at in rows]
 
     # ── Queries ─────────────────────────────────────────────────────────
 

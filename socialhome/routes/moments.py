@@ -28,7 +28,7 @@ from aiohttp import web
 from ..app_keys import (
     moment_service_key,
     report_service_key,
-    user_repo_key,
+    user_service_key,
 )
 from ..domain.moment import Moment, MomentReaction
 from ..domain.report import (
@@ -243,13 +243,9 @@ class MomentFollowsCollectionView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        repo = self.svc(user_repo_key)
-        rows = await repo.list_following(ctx.user_id)
-        return self._json(
-            {
-                "follows": [{"user_id": uid, "created_at": at} for uid, at in rows],
-            }
-        )
+        svc = self.svc(user_service_key)
+        rows = await svc.list_following(ctx.username)
+        return self._json({"follows": rows})
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -259,8 +255,8 @@ class MomentFollowsCollectionView(BaseView):
         target = str(body.get("user_id") or "").strip()
         if not target:
             return error_response(400, "BAD_REQUEST", "Missing user_id.")
-        repo = self.svc(user_repo_key)
-        await repo.follow(ctx.user_id, target)
+        svc = self.svc(user_service_key)
+        await svc.follow(ctx.username, target)
         return self._json({"user_id": target}, status=201)
 
 
@@ -272,6 +268,6 @@ class MomentFollowsDetailView(BaseView):
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
         target = self.match("user_id")
-        repo = self.svc(user_repo_key)
-        await repo.unfollow(ctx.user_id, target)
+        svc = self.svc(user_service_key)
+        await svc.unfollow(ctx.username, target)
         return self._json({"user_id": target})

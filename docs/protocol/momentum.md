@@ -99,6 +99,25 @@ sequenceDiagram
     Note over C: persist + republish<br/>(no further relay; hop_count==2 + relay path → hop=3)
 ```
 
+## Notifications
+
+``NotificationService`` subscribes to the moment + follow bus
+events and writes a :class:`Notification` row to the recipient's
+bell when:
+
+| Event                          | Recipient                | Type                |
+|--------------------------------|--------------------------|---------------------|
+| ``MomentReactionChanged``      | The moment author        | ``moment_reacted``  |
+| ``MomentCreated`` (with parent)| The parent moment author | ``moment_replied``  |
+| ``UserFollowed``               | The followed user        | ``user_followed``   |
+
+Cleared reactions (``emoji is None``) don't fire a new
+notification — the original reaction was the signal. Self-
+reactions, self-replies, and self-follows are silent. Recipients
+who live on a peer instance get the notification on *their*
+instance after the federation event lands, not on the actor's
+instance.
+
 ## Block + report
 
 * **Block.** The viewer's personal block list (``user_blocks``) is
