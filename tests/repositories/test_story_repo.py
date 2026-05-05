@@ -282,3 +282,102 @@ async def test_list_authors_with_stories(db, repo):
         )
     authors = sorted(await repo.list_authors_with_stories())
     assert authors == ["u1", "u2"]
+
+
+# ── Public publication state (§stories_public) ───────────────────────────
+
+
+async def _seed_gfs_connection(db, gfs_id: str = "gfs-abc") -> None:
+    await db.enqueue(
+        """
+        INSERT INTO gfs_connections(
+            id, gfs_instance_id, display_name, public_key, inbox_url,
+            status, paired_at
+        ) VALUES(?,?,?,?,?,?,datetime('now'))
+        """,
+        (gfs_id, gfs_id, gfs_id, "ff" * 32, f"https://{gfs_id}.example", "active"),
+    )
+
+
+async def test_mark_published_sets_flag_and_persists(db, repo):
+    await _seed_user(db)
+    await _seed_gfs_connection(db)
+    story = await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    await repo.mark_published(
+        story.id,
+        gfs_id="gfs-abc",
+        published_at="2026-05-03T12:00:00+00:00",
+    )
+    refreshed = await repo.get_story(story.id)
+    assert refreshed is not None
+    assert refreshed.public_gfs_id == "gfs-abc"
+    assert refreshed.public_published_at == "2026-05-03T12:00:00+00:00"
+
+
+async def test_mark_unpublished_clears_flag(db, repo):
+    await _seed_user(db)
+    await _seed_gfs_connection(db)
+    story = await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    await repo.mark_published(
+        story.id,
+        gfs_id="gfs-abc",
+        published_at="2026-05-03T12:00:00+00:00",
+    )
+    await repo.mark_unpublished(story.id)
+    refreshed = await repo.get_story(story.id)
+    assert refreshed is not None
+    assert refreshed.public_gfs_id is None
+    assert refreshed.public_published_at is None
+
+
+async def test_list_published_for_filters_to_author_and_published(db, repo):
+    await _seed_user(db, user_id="u1", username="alice")
+    await _seed_user(db, user_id="u2", username="bob")
+    await _seed_gfs_connection(db, gfs_id="gfs-abc")
+    await _seed_gfs_connection(db, gfs_id="gfs-xyz")
+    s1 = await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    await repo.find_or_create_today(  # u1 unpublished — should be skipped
+        author_user_id="u1",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-04",
+        expires_at=_expires(),
+    )
+    s3 = await repo.find_or_create_today(  # u2 published — different author
+        author_user_id="u2",
+        audience_kind=StoryAudience.ALL_PAIRED,
+        audience=(),
+        story_date="2026-05-03",
+        expires_at=_expires(),
+    )
+    await repo.mark_published(
+        s1.id,
+        gfs_id="gfs-abc",
+        published_at="2026-05-03T10:00:00+00:00",
+    )
+    await repo.mark_published(
+        s3.id,
+        gfs_id="gfs-xyz",
+        published_at="2026-05-03T11:00:00+00:00",
+    )
+
+    out = await repo.list_published_for("u1")
+    assert [s.id for s in out] == [s1.id]

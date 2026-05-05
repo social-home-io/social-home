@@ -52,9 +52,12 @@ from .repositories import (
     SqliteClusterRepo,
     SqliteGfsAdminRepo,
     SqliteGfsFederationRepo,
+    SqliteGfsStoryPublicationRepo,
+    SqliteGfsStoryTokenRepo,
 )
 from .routes import register_routes
 from .rtc_transport import GfsRtcSession
+from .story_publications import StoryPublicationRegistry
 from .ws_registry import GfsWebSocketRegistry
 
 log = logging.getLogger(__name__)
@@ -120,11 +123,13 @@ class GfsApp:
         return AsyncDatabase(resolved_db, migrations_dir=_MIGRATIONS_DIR)
 
     def _build_repos(self, db: AsyncDatabase) -> SimpleNamespace:
-        """Instantiate the three GFS repositories."""
+        """Instantiate the GFS repositories."""
         return SimpleNamespace(
             federation=SqliteGfsFederationRepo(db),
             admin=SqliteGfsAdminRepo(db),
             cluster=SqliteClusterRepo(db),
+            story_pubs=SqliteGfsStoryPublicationRepo(db),
+            story_tokens=SqliteGfsStoryTokenRepo(db),
         )
 
     def _build_services(
@@ -170,6 +175,12 @@ class GfsApp:
             enabled=config.cluster_enabled,
         )
         admin.attach_cluster(cluster)
+        story_pubs = StoryPublicationRegistry(
+            repos.story_pubs,
+            repos.story_tokens,
+            ws_registry,
+            base_url=config.base_url,
+        )
         return SimpleNamespace(
             federation=federation,
             cluster=cluster,
@@ -178,6 +189,7 @@ class GfsApp:
             tokens=PairingTokenService(repos.admin),
             rtc=GfsRtcSession(),
             ws_registry=ws_registry,
+            story_pubs=story_pubs,
         )
 
     def _build_app(self) -> web.Application:
@@ -202,6 +214,9 @@ class GfsApp:
         a[K.gfs_admin_service_key] = self.services.admin
         a[K.gfs_rtc_key] = self.services.rtc
         a[K.gfs_ws_registry_key] = self.services.ws_registry
+        a[K.gfs_story_pub_repo_key] = self.repos.story_pubs
+        a[K.gfs_story_token_repo_key] = self.repos.story_tokens
+        a[K.gfs_story_pub_service_key] = self.services.story_pubs
         # Non-typed helpers the admin module reads directly.
         a["admin_auth"] = self.services.admin_auth
         a["gfs_token_service"] = self.services.tokens

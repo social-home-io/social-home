@@ -27,6 +27,8 @@ from .domain import (
     ClusterNode,
     GfsAppeal,
     GfsFraudReport,
+    GfsStoryPublication,
+    GfsStoryToken,
     GfsSubscriber,
     GlobalSpace,
     RtcConnection,
@@ -969,4 +971,273 @@ def _row_to_report(row: dict | None) -> GfsFraudReport | None:
         created_at=int(row["created_at"]),
         reviewed_by=row.get("reviewed_by"),
         reviewed_at=int(row["reviewed_at"]) if row.get("reviewed_at") else None,
+    )
+
+
+# ─── Story publication repos (§stories_public) ───────────────────────────
+
+
+@runtime_checkable
+class AbstractGfsStoryPublicationRepo(Protocol):
+    async def upsert(self, pub: GfsStoryPublication) -> None: ...
+    async def get(
+        self,
+        story_id: str,
+        instance_id: str,
+    ) -> GfsStoryPublication | None: ...
+    async def delete(self, story_id: str, instance_id: str) -> int: ...
+    async def prune_expired(self, now: int) -> int: ...
+    async def list_for_instance(
+        self,
+        instance_id: str,
+    ) -> list[GfsStoryPublication]: ...
+
+
+class SqliteGfsStoryPublicationRepo:
+    """SQLite-backed :class:`AbstractGfsStoryPublicationRepo`."""
+
+    __slots__ = ("_db",)
+
+    def __init__(self, db: AsyncDatabase) -> None:
+        self._db = db
+
+    async def upsert(self, pub: GfsStoryPublication) -> None:
+        await self._db.enqueue(
+            """
+            INSERT INTO gfs_story_publications(
+                story_id, instance_id, expires_at, published_at, publish_signature
+            ) VALUES(?,?,?,?,?)
+            ON CONFLICT(story_id, instance_id) DO UPDATE SET
+                expires_at        = excluded.expires_at,
+                published_at      = excluded.published_at,
+                publish_signature = excluded.publish_signature
+            """,
+            (
+                pub.story_id,
+                pub.instance_id,
+                pub.expires_at,
+                pub.published_at,
+                pub.publish_signature,
+            ),
+        )
+
+    async def get(
+        self,
+        story_id: str,
+        instance_id: str,
+    ) -> GfsStoryPublication | None:
+        row = await self._db.fetchone(
+            "SELECT story_id, instance_id, expires_at, published_at, "
+            "publish_signature FROM gfs_story_publications "
+            "WHERE story_id=? AND instance_id=?",
+            (story_id, instance_id),
+        )
+        return _row_to_story_pub(_as_dict(row))
+
+    async def delete(self, story_id: str, instance_id: str) -> int:
+        # ``rowcount`` lets the caller distinguish "no-op" from "deleted"
+        # so the unpublish route can return 404 on stale tokens.
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "DELETE FROM gfs_story_publications WHERE story_id=? AND instance_id=?",
+                (story_id, instance_id),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
+
+    async def prune_expired(self, now: int) -> int:
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "DELETE FROM gfs_story_publications WHERE expires_at < ?",
+                (now,),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
+
+    async def list_for_instance(
+        self,
+        instance_id: str,
+    ) -> list[GfsStoryPublication]:
+        rows = await self._db.fetchall(
+            "SELECT story_id, instance_id, expires_at, published_at, "
+            "publish_signature FROM gfs_story_publications "
+            "WHERE instance_id=? ORDER BY published_at DESC",
+            (instance_id,),
+        )
+        out: list[GfsStoryPublication] = []
+        for r in rows:
+            pub = _row_to_story_pub(_as_dict(r))
+            if pub is not None:
+                out.append(pub)
+        return out
+
+
+@runtime_checkable
+class AbstractGfsStoryTokenRepo(Protocol):
+    async def insert(self, token: GfsStoryToken) -> None: ...
+    async def lookup_active(
+        self,
+        token: str,
+        *,
+        now: int,
+    ) -> tuple[GfsStoryToken, GfsStoryPublication] | None: ...
+    async def list_for(
+        self,
+        story_id: str,
+        instance_id: str,
+    ) -> list[GfsStoryToken]: ...
+    async def revoke(
+        self,
+        token: str,
+        instance_id: str,
+        *,
+        now: int,
+    ) -> int: ...
+
+
+class SqliteGfsStoryTokenRepo:
+    """SQLite-backed :class:`AbstractGfsStoryTokenRepo`.
+
+    ``lookup_active`` joins against ``gfs_story_publications`` so the
+    public landing page can resolve a token in one round-trip and
+    apply the parent's ``expires_at`` cap server-side.
+    """
+
+    __slots__ = ("_db",)
+
+    def __init__(self, db: AsyncDatabase) -> None:
+        self._db = db
+
+    async def insert(self, token: GfsStoryToken) -> None:
+        await self._db.enqueue(
+            """
+            INSERT INTO gfs_story_tokens(
+                token, story_id, instance_id, label, created_at, revoked_at
+            ) VALUES(?,?,?,?,?,?)
+            """,
+            (
+                token.token,
+                token.story_id,
+                token.instance_id,
+                token.label,
+                token.created_at,
+                token.revoked_at,
+            ),
+        )
+
+    async def lookup_active(
+        self,
+        token: str,
+        *,
+        now: int,
+    ) -> tuple[GfsStoryToken, GfsStoryPublication] | None:
+        row = await self._db.fetchone(
+            """
+            SELECT t.token, t.story_id, t.instance_id, t.label,
+                   t.created_at AS t_created_at, t.revoked_at AS t_revoked_at,
+                   p.expires_at, p.published_at, p.publish_signature
+              FROM gfs_story_tokens AS t
+              JOIN gfs_story_publications AS p
+                ON p.story_id = t.story_id AND p.instance_id = t.instance_id
+             WHERE t.token = ?
+               AND t.revoked_at IS NULL
+               AND p.expires_at > ?
+            """,
+            (token, now),
+        )
+        if row is None:
+            return None
+        d = _as_dict(row)
+        tok = GfsStoryToken(
+            token=d["token"],
+            story_id=d["story_id"],
+            instance_id=d["instance_id"],
+            label=d.get("label"),
+            created_at=int(d["t_created_at"]),
+            revoked_at=(
+                int(d["t_revoked_at"]) if d.get("t_revoked_at") is not None else None
+            ),
+        )
+        pub = GfsStoryPublication(
+            story_id=d["story_id"],
+            instance_id=d["instance_id"],
+            expires_at=int(d["expires_at"]),
+            published_at=int(d["published_at"]),
+            publish_signature=d["publish_signature"],
+        )
+        return tok, pub
+
+    async def list_for(
+        self,
+        story_id: str,
+        instance_id: str,
+    ) -> list[GfsStoryToken]:
+        rows = await self._db.fetchall(
+            "SELECT token, story_id, instance_id, label, created_at, revoked_at "
+            "FROM gfs_story_tokens "
+            "WHERE story_id=? AND instance_id=? ORDER BY created_at DESC",
+            (story_id, instance_id),
+        )
+        out: list[GfsStoryToken] = []
+        for r in rows:
+            d = _as_dict(r)
+            out.append(
+                GfsStoryToken(
+                    token=d["token"],
+                    story_id=d["story_id"],
+                    instance_id=d["instance_id"],
+                    label=d.get("label"),
+                    created_at=int(d["created_at"]),
+                    revoked_at=(
+                        int(d["revoked_at"])
+                        if d.get("revoked_at") is not None
+                        else None
+                    ),
+                )
+            )
+        return out
+
+    async def revoke(
+        self,
+        token: str,
+        instance_id: str,
+        *,
+        now: int,
+    ) -> int:
+        # ``instance_id`` guard: only the owning instance can revoke its
+        # own tokens, not whoever happens to know the token string.
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "UPDATE gfs_story_tokens SET revoked_at=? "
+                "WHERE token=? AND instance_id=? AND revoked_at IS NULL",
+                (now, token, instance_id),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
+
+
+def _as_dict(row: Any) -> dict:
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return row
+    # sqlite3.Row supports keys() + indexing.
+    try:
+        return {k: row[k] for k in row.keys()}
+    except Exception:
+        return dict(row)
+
+
+def _row_to_story_pub(row: dict) -> GfsStoryPublication | None:
+    if not row:
+        return None
+    return GfsStoryPublication(
+        story_id=row["story_id"],
+        instance_id=row["instance_id"],
+        expires_at=int(row["expires_at"]),
+        published_at=int(row["published_at"]),
+        publish_signature=row["publish_signature"],
     )

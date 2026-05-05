@@ -137,6 +137,7 @@ from .services import (
 from .services.backup_service import BackupService
 from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
 from .services.moment_service import MomentService
+from .services.story_publication_service import StoryPublicationService
 from .services.story_service import StoryService
 from .services.bot_bridge_service import BotBridgeService
 from .services.space_bot_service import SpaceBotService
@@ -1167,6 +1168,14 @@ def create_app(config: Config | None = None) -> web.Application:
     # ── Stories (§Stories) ────────────────────────────────────────────
     story_service = StoryService(story_repo, user_repo, bus)
     story_retention_scheduler = StoryRetentionScheduler(story_service)
+    # Public-publish service. ``attach_session`` + ``attach_identity``
+    # are called from the startup hook once the shared aiohttp client
+    # and federation signing key are available — same lifecycle as
+    # ``ReportService``.
+    story_publication_service = StoryPublicationService(
+        story_repo,
+        repos.gfs_connection,
+    )
 
     # ── Momentum (§Momentum) ───────────────────────────────────────────
     # ``own_instance_id`` is bound after federation identity is loaded
@@ -1378,6 +1387,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.story_repo_key] = story_repo
     app[K.story_service_key] = story_service
     app[K.story_retention_scheduler_key] = story_retention_scheduler
+    app[K.story_publication_service_key] = story_publication_service
     app[K.moment_repo_key] = moment_repo
     app[K.moment_service_key] = moment_service
     app[K.moment_retention_scheduler_key] = moment_retention_scheduler
@@ -1442,6 +1452,14 @@ def create_app(config: Config | None = None) -> web.Application:
         # Identity seed is the Ed25519 signing key used on /gfs/report.
         report_service.attach_gfs(
             gfs_connection_service,
+            signing_key=identity_seed,
+        )
+        # Same identity binding for the public-story publish service —
+        # needs the signing key for the GFS publish/revoke envelopes
+        # plus the shared aiohttp client for the round-trip itself.
+        story_publication_service.attach_session(http_session)
+        story_publication_service.attach_identity(
+            own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
 

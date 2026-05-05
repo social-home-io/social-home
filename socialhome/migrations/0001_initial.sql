@@ -1070,6 +1070,12 @@ CREATE TABLE IF NOT EXISTS stories (
     -- Retention cutoff (created_at + author retention_days). The retention
     -- scheduler deletes stories where ``expires_at < now()``.
     expires_at      TEXT NOT NULL,
+    -- Public-link publication state (§stories_public). Author opts a
+    -- single story in via the SPA toggle; ``StoryPublicationService``
+    -- POSTs to the matching GFS, which mints share tokens. NULL on
+    -- both columns until publish; ``mark_unpublished`` clears them.
+    public_gfs_id          TEXT REFERENCES gfs_connections(id) ON DELETE SET NULL,
+    public_published_at    TEXT,
     UNIQUE(author_user_id, story_date)
 );
 CREATE INDEX IF NOT EXISTS idx_stories_expires ON stories(expires_at);

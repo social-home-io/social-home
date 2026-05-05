@@ -135,12 +135,19 @@ in-process `StoryRetentionScheduler`.
 
 | Table | Purpose |
 |---|---|
-| `stories` | One row per author per day (`UNIQUE(author_user_id, story_date)`). Carries `audience_kind`, an `audience_json` allow-list, and an `expires_at` cutoff set to `created_at + retention_days`. |
+| `stories` | One row per author per day (`UNIQUE(author_user_id, story_date)`). Carries `audience_kind`, an `audience_json` allow-list, and an `expires_at` cutoff set to `created_at + retention_days`. `public_gfs_id` (FK SET NULL → `gfs_connections.id`) and `public_published_at` flip when the author opts the story into public sharing via a GFS (§stories_public). |
 | `story_frames` | Image / short-video frames keyed by `(story_id, sequence)`. `frame_type` ∈ `image \| video`; `media_url` is the canonical `/api/media/{filename}` path. |
 | `story_frame_views` | Per-`(frame, viewer)` view record. Drives the "viewed by N" UX surfaced on the author's viewer. |
 | `story_frame_reactions` | Per-`(frame, reactor)` quick-reaction. Single row per viewer per frame; UPSERT to change. |
 | `feed_posts.linked_story_id` | When `type = 'story_share'`, points at `stories.id`. ON DELETE SET NULL — the share-card flips to a "Story has ended" placeholder when retention purges the source. |
 | `space_posts.linked_story_id` | Same pointer for `space_posts`; FK-free since the linked story may live on a remote instance. |
+
+GFS-side tables (in `socialhome/global_server/migrations/0001_initial.sql`):
+
+| Table | Purpose |
+|---|---|
+| `gfs_story_publications` | One row per `(story_id, instance_id)` opted into public sharing. `expires_at` mirrors the author's retention so a publication can never outlive the story it advertises. `publish_signature` caches the Ed25519 over the publish body for audit. |
+| `gfs_story_tokens` | Revocable share-link tokens under a publication (composite FK CASCADE on the publication PK). `revoked_at` is `NULL` while active; ``label`` is the author-supplied "for-twitter" hint. |
 
 ## Momentum
 

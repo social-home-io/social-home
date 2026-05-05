@@ -121,6 +121,46 @@ class RtcConnection:
     last_ping_at: str = ""
 
 
+@dataclass(slots=True, frozen=True)
+class GfsStoryPublication:
+    """A SH instance's opt-in to share a single story via this GFS.
+
+    GFS holds zero story bytes — only the routing metadata + a cached
+    Ed25519 signature so the publish can be re-verified during audits
+    or signalling. The story itself streams over WebRTC author →
+    viewer once the public landing page bootstraps a peer connection.
+
+    ``expires_at`` is unix epoch and mirrors the author's
+    ``stories.expires_at`` so a publication can never outlive the
+    story it advertises.
+    """
+
+    story_id: str
+    instance_id: str
+    expires_at: int
+    published_at: int
+    publish_signature: str
+
+
+@dataclass(slots=True, frozen=True)
+class GfsStoryToken:
+    """One revocable share link under a :class:`GfsStoryPublication`.
+
+    Authors mint multiple tokens per publication — one per platform
+    or recipient — so they can revoke a single audience without
+    pulling the rest. ``revoked_at`` is ``None`` while active; setting
+    it to a unix epoch makes the resolver return ``None`` immediately
+    on the next public landing-page hit.
+    """
+
+    token: str
+    story_id: str
+    instance_id: str
+    label: str | None
+    created_at: int
+    revoked_at: int | None
+
+
 # Backwards-compatible aliases for the pre-spec stub names so existing
 # tests / imports keep working through the transition.
 GfsInstance = ClientInstance
