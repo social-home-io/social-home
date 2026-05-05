@@ -232,6 +232,144 @@ async def test_moment_reaction_removed_clears(db, bus, inbound):
     assert len(captured) == 1 and captured[0].emoji is None
 
 
+async def test_moment_created_missing_fields_dropped(db, bus, inbound):
+    """Empty / missing routing fields silently drop without persist or relay."""
+    svc, relay = inbound
+    relay.relay_inbound.reset_mock()
+    await svc._on_moment_created(
+        _event(FederationEventType.MOMENT_CREATED, {"moment_id": ""}),
+    )
+    assert await svc._moment_repo.get("") is None
+    relay.relay_inbound.assert_not_called()
+
+
+async def test_moment_created_unknown_media_type_falls_back(db, bus, inbound):
+    """A peer sending an invalid ``media_type`` is normalised to None."""
+    svc, _relay = inbound
+    payload = _create_payload(media_type="audio", media_url="/api/media/x.mp3")
+    await svc._on_moment_created(
+        _event(FederationEventType.MOMENT_CREATED, payload),
+    )
+    m = await svc._moment_repo.get("m-fed-1")
+    assert m is not None and m.media_type is None
+
+
+async def test_moment_deleted_missing_fields_dropped(db, bus, inbound):
+    svc, relay = inbound
+    relay.relay_inbound.reset_mock()
+    await svc._on_moment_deleted(
+        _event(
+            FederationEventType.MOMENT_DELETED,
+            {"moment_id": ""},
+        ),
+    )
+    relay.relay_inbound.assert_not_called()
+
+
+async def test_moment_deleted_authority_mismatch_dropped(db, bus, inbound):
+    """Peer-b can't delete a moment whose author lives on peer-a."""
+    svc, relay = inbound
+    await svc._on_moment_created(
+        _event(FederationEventType.MOMENT_CREATED, _create_payload()),
+    )
+    relay.relay_inbound.reset_mock()
+    await svc._on_moment_deleted(
+        _event(
+            FederationEventType.MOMENT_DELETED,
+            {
+                "moment_id": "m-fed-1",
+                "author_user_id": "uid-remote",
+                "origin_instance_id": "peer-b",  # claims itself as origin
+                "hop_count": 1,
+            },
+            from_instance="peer-b",
+        ),
+    )
+    # Moment still present; relay was not triggered.
+    assert await svc._moment_repo.get("m-fed-1") is not None
+    relay.relay_inbound.assert_not_called()
+
+
+async def test_moment_reaction_missing_fields_dropped(db, bus, inbound):
+    svc, _relay = inbound
+    await svc._on_moment_reacted(
+        _event(
+            FederationEventType.MOMENT_REACTED,
+            {"moment_id": ""},
+        ),
+    )
+    # Nothing landed in the reactions table.
+    assert await svc._moment_repo.list_reactions("") == []
+
+
+async def test_moment_reaction_authority_mismatch_dropped(db, bus, inbound):
+    svc, _relay = inbound
+    await svc._on_moment_created(
+        _event(FederationEventType.MOMENT_CREATED, _create_payload()),
+    )
+    # peer-b claims a reaction from uid-remote (lives on peer-a) — drop.
+    await svc._on_moment_reacted(
+        _event(
+            FederationEventType.MOMENT_REACTED,
+            {
+                "moment_id": "m-fed-1",
+                "reactor_user_id": "uid-remote",
+                "author_user_id": "uid-local",
+                "emoji": "🔥",
+            },
+            from_instance="peer-b",
+        ),
+    )
+    assert await svc._moment_repo.list_reactions("m-fed-1") == []
+
+
+async def test_relay_swallowed_when_outbound_raises(db, bus, inbound):
+    """A misbehaving outbound doesn't break the inbound dispatch loop."""
+    svc, relay = inbound
+    relay.relay_inbound.side_effect = RuntimeError("boom")
+    # Should NOT raise — exception is logged and swallowed.
+    await svc._on_moment_created(
+        _event(FederationEventType.MOMENT_CREATED, _create_payload()),
+    )
+    assert await svc._moment_repo.get("m-fed-1") is not None
+
+
+async def test_moment_authority_direct_path_with_unknown_author(db, bus, inbound):
+    """Author unknown locally + sender == origin → accept on first sight."""
+    svc, _relay = inbound
+    # uid-stranger isn't in users / remote_users; from_instance == origin.
+    await svc._on_moment_created(
+        _event(
+            FederationEventType.MOMENT_CREATED,
+            _create_payload(author_user_id="uid-stranger"),
+        ),
+    )
+    m = await svc._moment_repo.get("m-fed-1")
+    assert m is not None and m.author_user_id == "uid-stranger"
+
+
+async def test_handlers_skipped_when_moment_repo_missing(db, bus):
+    user_repo = SqliteUserRepo(db)
+    svc = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=user_repo,
+    )
+    fake_fed = type("F", (), {})()
+    fake_fed._event_registry = type(
+        "R",
+        (),
+        {
+            "_handlers": {},
+            "register": lambda self, t, h: self._handlers.__setitem__(t, h),
+        },
+    )()
+    svc.attach_to(fake_fed)
+    assert FederationEventType.MOMENT_CREATED not in fake_fed._event_registry._handlers
+
+
 async def test_handlers_registered(db, bus):
     user_repo = SqliteUserRepo(db)
     svc = FederationInboundService(

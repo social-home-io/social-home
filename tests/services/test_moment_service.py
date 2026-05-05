@@ -235,6 +235,91 @@ async def test_get_unknown_moment_raises(stack):
         await stack.moment_svc.get_moment("ghost")
 
 
+async def test_react_with_empty_emoji_rejected(stack):
+    a = await stack.provision("alice")
+    m = await stack.moment_svc.create_moment(author_user_id=a.user_id, content="hi")
+    with pytest.raises(ValueError):
+        await stack.moment_svc.react(m.id, reactor_user_id=a.user_id, emoji="")
+
+
+async def test_invalid_media_type_rejected(stack):
+    a = await stack.provision("alice")
+    with pytest.raises(ValueError):
+        await stack.moment_svc.create_moment(
+            author_user_id=a.user_id,
+            content="hi",
+            media_url="/api/media/x.bin",
+            media_type="audio",
+        )
+
+
+async def test_image_rejects_duration_silently(stack):
+    """``duration_ms`` only applies to videos — silently dropped otherwise."""
+    a = await stack.provision("alice")
+    m = await stack.moment_svc.create_moment(
+        author_user_id=a.user_id,
+        content="x",
+        media_url="/api/media/x.webp",
+        media_type="image",
+        duration_ms=3000,
+    )
+    assert m.duration_ms is None
+
+
+async def test_reply_to_unknown_parent_raises(stack):
+    a = await stack.provision("alice")
+    with pytest.raises(MomentNotFoundError):
+        await stack.moment_svc.create_moment(
+            author_user_id=a.user_id,
+            content="orphan",
+            parent_moment_id="ghost",
+        )
+
+
+async def test_clear_reaction_on_unknown_moment_raises(stack):
+    a = await stack.provision("alice")
+    with pytest.raises(MomentNotFoundError):
+        await stack.moment_svc.clear_reaction("ghost", reactor_user_id=a.user_id)
+
+
+async def test_list_replies_returns_chronological(stack):
+    a = await stack.provision("alice")
+    b = await stack.provision("bob")
+    root = await stack.moment_svc.create_moment(
+        author_user_id=a.user_id, content="root"
+    )
+    r1 = await stack.moment_svc.create_moment(
+        author_user_id=b.user_id,
+        content="r1",
+        parent_moment_id=root.id,
+    )
+    r2 = await stack.moment_svc.create_moment(
+        author_user_id=b.user_id,
+        content="r2",
+        parent_moment_id=root.id,
+    )
+    replies = await stack.moment_svc.list_replies(root.id)
+    assert [m.id for m in replies] == [r1.id, r2.id]
+
+
+async def test_delete_unknown_moment_raises(stack):
+    a = await stack.provision("alice")
+    with pytest.raises(MomentNotFoundError):
+        await stack.moment_svc.delete_moment("ghost", actor_user_id=a.user_id)
+
+
+async def test_attach_instance_id_late_binding(stack):
+    """Service constructed without an instance id, then bound later."""
+    bus = stack.bus
+    user_repo = stack.user_svc._repo
+    moment_repo = stack.moment_repo
+    svc = MomentService(moment_repo, user_repo, bus)
+    svc.attach_instance_id("self-late")
+    a = await stack.provision("zoe")
+    m = await svc.create_moment(author_user_id=a.user_id, content="late")
+    assert m.origin_instance_id == "self-late"
+
+
 async def test_expire_due_drops_expired(stack):
     """Insert a row directly with a past expires_at and verify the
     scheduler hook prunes it without affecting fresh rows."""

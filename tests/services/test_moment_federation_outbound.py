@@ -211,3 +211,31 @@ async def test_relay_inbound_skips_with_invalid_hop(stack):
         from_instance="peer-sender",
     )
     fed.send_event.assert_not_called()
+
+
+async def test_send_failure_swallowed_per_peer(stack):
+    """A misbehaving peer doesn't break the relay loop."""
+    out, fed, fed_repo, user_repo = stack
+    user_repo.get_instance_for_user = AsyncMock(return_value="self")
+    fed_repo.list_instances = AsyncMock(
+        return_value=[_peer("peer-bad"), _peer("peer-ok")],
+    )
+
+    async def _maybe_fail(**kwargs):
+        if kwargs["to_instance_id"] == "peer-bad":
+            raise RuntimeError("peer down")
+
+    fed.send_event.side_effect = _maybe_fail
+    # Should NOT raise — should still reach peer-ok.
+    await out._on_created(_create_event())
+    sent = {c.kwargs["to_instance_id"] for c in fed.send_event.call_args_list}
+    assert "peer-ok" in sent
+
+
+async def test_list_instances_failure_returns_no_peers(stack):
+    """A failing federation_repo.list_instances logs and returns []."""
+    out, fed, fed_repo, user_repo = stack
+    user_repo.get_instance_for_user = AsyncMock(return_value="self")
+    fed_repo.list_instances = AsyncMock(side_effect=RuntimeError("db down"))
+    await out._on_created(_create_event())
+    fed.send_event.assert_not_called()

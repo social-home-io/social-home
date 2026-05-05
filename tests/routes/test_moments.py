@@ -206,3 +206,103 @@ async def test_follow_self_rejected(client):
         headers=_auth(client._tok),
     )
     assert r.status == 422
+
+
+async def test_archive_returns_visible_moments(client):
+    await client.post(
+        "/api/moments",
+        json={"content": "one"},
+        headers=_auth(client._tok),
+    )
+    r = await client.get("/api/moments/archive", headers=_auth(client._tok))
+    assert r.status == 200
+    items = await r.json()
+    assert len(items) == 1
+
+
+async def test_reaction_clear_returns_null(client):
+    r = await client.post(
+        "/api/moments",
+        json={"content": "rx"},
+        headers=_auth(client._tok),
+    )
+    moment_id = (await r.json())["id"]
+    await client.put(
+        f"/api/moments/{moment_id}/reaction",
+        json={"emoji": "🔥"},
+        headers=_auth(client._tok),
+    )
+    r = await client.delete(
+        f"/api/moments/{moment_id}/reaction",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    assert (await r.json()) == {"moment_id": moment_id, "emoji": None}
+
+
+async def test_reaction_empty_emoji_rejected(client):
+    r = await client.post(
+        "/api/moments",
+        json={"content": "x"},
+        headers=_auth(client._tok),
+    )
+    moment_id = (await r.json())["id"]
+    r = await client.put(
+        f"/api/moments/{moment_id}/reaction",
+        json={"emoji": "  "},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_delete_moment_round_trip(client):
+    r = await client.post(
+        "/api/moments",
+        json={"content": "byes"},
+        headers=_auth(client._tok),
+    )
+    moment_id = (await r.json())["id"]
+    r = await client.delete(
+        f"/api/moments/{moment_id}",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    r = await client.get(
+        f"/api/moments/{moment_id}",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+
+
+async def test_endpoints_require_auth(client):
+    for path in ["/api/moments", "/api/moments/archive", "/api/moments/follows"]:
+        r = await client.get(path)
+        assert r.status == 401, path
+    r = await client.post("/api/moments", json={"content": "x"})
+    assert r.status == 401
+    r = await client.post("/api/moments/follows", json={"user_id": "uid-bob"})
+    assert r.status == 401
+
+
+async def test_create_missing_user_id_on_follow(client):
+    r = await client.post(
+        "/api/moments/follows",
+        json={},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+
+
+async def test_report_missing_category_rejected(client):
+    r = await client.post(
+        "/api/moments",
+        json={"content": "x"},
+        headers=_auth(client._tok),
+    )
+    moment_id = (await r.json())["id"]
+    r = await client.post(
+        f"/api/moments/{moment_id}/report",
+        json={},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
