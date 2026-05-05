@@ -72,6 +72,17 @@ class AbstractUserRepo(Protocol):
         blocker_user_id: str,
     ) -> list[tuple[str, str]]: ...
 
+    # Follows -------------------------------------------------------------
+    async def follow(self, follower_user_id: str, followed_user_id: str) -> None: ...
+    async def unfollow(self, follower_user_id: str, followed_user_id: str) -> None: ...
+    async def is_following(
+        self, follower_user_id: str, followed_user_id: str
+    ) -> bool: ...
+    async def list_following(
+        self,
+        follower_user_id: str,
+    ) -> list[tuple[str, str]]: ...
+
     # Profile picture (hash only — bytes live in ProfilePictureRepo) ------
     async def set_picture_hash(
         self,
@@ -438,6 +449,47 @@ class SqliteUserRepo:
             (blocker_user_id,),
         )
         return [(r["blocked_user_id"], r["blocked_at"]) for r in rows]
+
+    # ── Follows (§Momentum) ────────────────────────────────────────────
+
+    async def follow(self, follower_user_id: str, followed_user_id: str) -> None:
+        if follower_user_id == followed_user_id:
+            raise ValueError("Cannot follow yourself")
+        await self._db.enqueue(
+            "INSERT OR IGNORE INTO user_follows(follower_user_id, followed_user_id) "
+            "VALUES(?, ?)",
+            (follower_user_id, followed_user_id),
+        )
+
+    async def unfollow(self, follower_user_id: str, followed_user_id: str) -> None:
+        await self._db.enqueue(
+            "DELETE FROM user_follows WHERE follower_user_id=? AND followed_user_id=?",
+            (follower_user_id, followed_user_id),
+        )
+
+    async def is_following(self, follower_user_id: str, followed_user_id: str) -> bool:
+        row = await self._db.fetchone(
+            "SELECT 1 FROM user_follows "
+            "WHERE follower_user_id=? AND followed_user_id=?",
+            (follower_user_id, followed_user_id),
+        )
+        return row is not None
+
+    async def list_following(
+        self,
+        follower_user_id: str,
+    ) -> list[tuple[str, str]]:
+        """Return ``[(followed_user_id, created_at), ...]``, newest first.
+
+        Drives the Momentum follows-management panel so the user sees
+        recent follows at the top without resorting.
+        """
+        rows = await self._db.fetchall(
+            "SELECT followed_user_id, created_at FROM user_follows "
+            "WHERE follower_user_id=? ORDER BY created_at DESC",
+            (follower_user_id,),
+        )
+        return [(r["followed_user_id"], r["created_at"]) for r in rows]
 
     async def set_picture_hash(
         self,

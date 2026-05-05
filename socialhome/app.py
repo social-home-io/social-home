@@ -73,6 +73,7 @@ from .infrastructure.password_reset_cleanup_scheduler import (
 )
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
+from .infrastructure.moment_retention_scheduler import MomentRetentionScheduler
 from .infrastructure.story_retention_scheduler import StoryRetentionScheduler
 from .platform import build_platform_adapter
 from .platform.adapter import Capability
@@ -113,6 +114,7 @@ from .repositories.profile_picture_repo import SqliteProfilePictureRepo
 from .repositories.space_bot_repo import SqliteSpaceBotRepo
 from .repositories.space_cover_repo import SqliteSpaceCoverRepo
 from .repositories.space_zone_repo import SqliteSpaceZoneRepo
+from .repositories.moment_repo import SqliteMomentRepo
 from .repositories.story_repo import SqliteStoryRepo
 from .repositories.presence_repo import SqlitePresenceRepo
 from .repositories.peer_space_directory_repo import SqlitePeerSpaceDirectoryRepo
@@ -134,6 +136,7 @@ from .services import (
 )
 from .services.backup_service import BackupService
 from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
+from .services.moment_service import MomentService
 from .services.story_service import StoryService
 from .services.bot_bridge_service import BotBridgeService
 from .services.space_bot_service import SpaceBotService
@@ -162,6 +165,7 @@ from .services.space_member_profile_federation_outbound import (
 )
 from .services.gallery_federation_outbound import GalleryFederationOutbound
 from .services.sticky_federation_outbound import StickyFederationOutbound
+from .services.moment_federation_outbound import MomentFederationOutbound
 from .services.story_federation_outbound import StoryFederationOutbound
 from .services.space_location_outbound import SpaceLocationOutbound
 from .services.space_zone_outbound import SpaceZoneOutbound
@@ -316,6 +320,7 @@ def _build_repos(db: AsyncDatabase):
         page=SqlitePageRepo(db),
         sticky=SqliteStickyRepo(db),
         story=SqliteStoryRepo(db),
+        moment=SqliteMomentRepo(db),
         bazaar=SqliteBazaarRepo(db),
         push_sub=SqlitePushSubscriptionRepo(db),
         gallery=SqliteGalleryRepo(db),
@@ -367,6 +372,7 @@ def _wire_federation_stack(
     page_repo,
     sticky_repo,
     story_repo,
+    moment_repo,
     space_task_repo,
     space_calendar_repo,
     dm_contact_repo,
@@ -466,6 +472,17 @@ def _wire_federation_stack(
         own_instance_id=identity.instance_id,
     )
 
+    # §Momentum outbound is constructed first so the inbound handler
+    # can hand it off as the relay bridge — the inbound calls
+    # ``relay_inbound`` to forward an envelope another hop.
+    moment_federation_outbound = MomentFederationOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        federation_repo=federation_repo,
+        user_repo=user_repo,
+    )
+    moment_federation_outbound.wire()
+
     inbound_service = FederationInboundService(
         bus=bus,
         conversation_repo=conversation_repo,
@@ -473,6 +490,8 @@ def _wire_federation_stack(
         space_repo=space_repo,
         user_repo=user_repo,
         story_repo=story_repo,
+        moment_repo=moment_repo,
+        moment_outbound=moment_federation_outbound,
         profile_picture_repo=profile_picture_repo,
         report_service=report_service,
         dm_routing_repo=dm_routing_repo,
@@ -897,6 +916,7 @@ def create_app(config: Config | None = None) -> web.Application:
     page_repo = repos.page
     sticky_repo = repos.sticky
     story_repo = repos.story
+    moment_repo = repos.moment
     dm_contact_repo = repos.dm_contact
     bazaar_repo = repos.bazaar
     push_sub_repo = repos.push_sub
@@ -1148,6 +1168,14 @@ def create_app(config: Config | None = None) -> web.Application:
     story_service = StoryService(story_repo, user_repo, bus)
     story_retention_scheduler = StoryRetentionScheduler(story_service)
 
+    # ── Momentum (§Momentum) ───────────────────────────────────────────
+    # ``own_instance_id`` is bound after federation identity is loaded
+    # in the startup hook (see ``moment_service.attach_instance_id``).
+    # ``moment_repo`` is shared with the federation inbound handler so
+    # remote-author rows land in the same table.
+    moment_service = MomentService(moment_repo, user_repo, bus)
+    moment_retention_scheduler = MomentRetentionScheduler(moment_service)
+
     # ── My Corner aggregator (§23) ─────────────────────────────────────
     corner_service = CornerService(
         notification_repo=notification_repo,
@@ -1350,6 +1378,9 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.story_repo_key] = story_repo
     app[K.story_service_key] = story_service
     app[K.story_retention_scheduler_key] = story_retention_scheduler
+    app[K.moment_repo_key] = moment_repo
+    app[K.moment_service_key] = moment_service
+    app[K.moment_retention_scheduler_key] = moment_retention_scheduler
 
     # ── Mount routes ─────────────────────────────────────────────────────
     setup_routes(app)
@@ -1390,6 +1421,9 @@ def create_app(config: Config | None = None) -> web.Application:
         real_instance_id = identity.instance_id
         app[K.instance_id_key] = real_instance_id
         app[K.instance_signing_key_key] = identity_seed
+        # Stamp Momentum rows with the local instance_id so the 3-hop
+        # relay can guard against echo loops (origin_instance_id check).
+        moment_service.attach_instance_id(real_instance_id)
 
         # Short-lived signed URLs for browser-loaded media — see §23.21
         # ``media_signer.py``. The HMAC key is HKDF-derived from the
@@ -1466,6 +1500,7 @@ def create_app(config: Config | None = None) -> web.Application:
             page_repo=page_repo,
             sticky_repo=sticky_repo,
             story_repo=story_repo,
+            moment_repo=moment_repo,
             space_task_repo=space_task_repo,
             space_calendar_repo=space_cal_repo,
             dm_contact_repo=dm_contact_repo,
@@ -1633,6 +1668,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # Stories retention — drops expired + over-max stories per author.
         await story_retention_scheduler.start()
 
+        # Momentum retention — drops moments past the absolute 7-day cap.
+        await moment_retention_scheduler.start()
+
         # Page-lock + retention + draft cleanup schedulers.
         nonlocal page_lock_scheduler, space_retention_scheduler
         nonlocal post_draft_scheduler, calendar_reminder_scheduler
@@ -1729,6 +1767,7 @@ def create_app(config: Config | None = None) -> web.Application:
             await sync_sched.stop()
         await bazaar_expiry_scheduler.stop()
         await story_retention_scheduler.stop()
+        await moment_retention_scheduler.stop()
         # Close all RTC DataChannels so the peers see a clean EOF.
         fed_svc = app.get(K.federation_service_key)
         if fed_svc is not None and getattr(fed_svc, "_transport", None) is not None:

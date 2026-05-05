@@ -68,6 +68,9 @@ from ..domain.events import (
     StoryFrameAdded,
     StoryFrameRemoved,
     StoryRemoved,
+    MomentCreated,
+    MomentDeleted,
+    MomentReactionChanged,
     PresenceUpdated,
     ShoppingItemAdded,
     ShoppingItemRemoved,
@@ -316,6 +319,14 @@ class RealtimeService:
         self._bus.subscribe(StoryFrameAdded, self._on_story_frame_added)
         self._bus.subscribe(StoryFrameRemoved, self._on_story_frame_removed)
         self._bus.subscribe(StoryRemoved, self._on_story_removed)
+        # Momentum — broadcast new moments / deletions to the whole
+        # household; reaction-changed unicasts to the author.
+        self._bus.subscribe(MomentCreated, self._on_moment_created)
+        self._bus.subscribe(MomentDeleted, self._on_moment_deleted)
+        self._bus.subscribe(
+            MomentReactionChanged,
+            self._on_moment_reaction_changed,
+        )
 
     # ─── Household feed events ────────────────────────────────────────────
 
@@ -1134,6 +1145,44 @@ class RealtimeService:
                 "story_id": event.story_id,
                 "author_user_id": event.author_user_id,
             }
+        )
+
+    # ─── Momentum (§Momentum) ─────────────────────────────────────────────
+
+    async def _on_moment_created(self, event: MomentCreated) -> None:
+        # Whole-household broadcast — the SPA refetches ``/api/moments``
+        # to pick up the audience-filtered shape (block-aware, etc.).
+        await self._broadcast_household(
+            {
+                "type": "moment.created",
+                "moment_id": event.moment_id,
+                "author_user_id": event.author_user_id,
+                "parent_moment_id": event.parent_moment_id,
+            }
+        )
+
+    async def _on_moment_deleted(self, event: MomentDeleted) -> None:
+        await self._broadcast_household(
+            {
+                "type": "moment.deleted",
+                "moment_id": event.moment_id,
+                "author_user_id": event.author_user_id,
+            }
+        )
+
+    async def _on_moment_reaction_changed(
+        self,
+        event: MomentReactionChanged,
+    ) -> None:
+        # Author-only — unrelated household members don't need the noise.
+        await self._ws.broadcast_to_users(
+            [event.author_user_id],
+            {
+                "type": "moment.reaction_changed",
+                "moment_id": event.moment_id,
+                "reactor_user_id": event.reactor_user_id,
+                "emoji": event.emoji,
+            },
         )
 
     # ─── Fan-out helpers ──────────────────────────────────────────────────

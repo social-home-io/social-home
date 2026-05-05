@@ -13,6 +13,7 @@ import { showToast } from './Toast'
 interface Toggles {
   feat_feed: boolean; feat_pages: boolean; feat_tasks: boolean
   feat_stickies: boolean; feat_calendar: boolean; feat_stories: boolean
+  feat_momentum: boolean
   allow_text: boolean; allow_image: boolean; allow_video: boolean
   allow_file: boolean; allow_poll: boolean; allow_schedule: boolean
   allow_story_share: boolean
@@ -58,7 +59,7 @@ export function HouseholdToggles() {
   const features: [keyof Toggles, string][] = [
     ['feat_feed', 'Feed'], ['feat_pages', 'Pages'], ['feat_tasks', 'Tasks'],
     ['feat_stickies', 'Stickies'], ['feat_calendar', 'Calendar'],
-    ['feat_stories', 'Stories'],
+    ['feat_stories', 'Stories'], ['feat_momentum', 'Momentum'],
   ]
   const postTypes: [keyof Toggles, string][] = [
     ['allow_text', 'Text'], ['allow_image', 'Image'], ['allow_video', 'Video'],

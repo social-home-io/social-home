@@ -263,7 +263,17 @@ from .stories import (
     StoryFrameReactionView,
     StoryFrameViewView,
     StoryFramesCollectionView,
+    StoryReportView,
     StoryShareView,
+)
+from .moments import (
+    MomentArchiveView,
+    MomentCollectionView,
+    MomentDetailView,
+    MomentFollowsCollectionView,
+    MomentFollowsDetailView,
+    MomentReactionView,
+    MomentReportView,
 )
 from .ha_users import HaUserProvisionView, HaUsersCollectionView
 from .reports import (
@@ -696,6 +706,30 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/stories/frames/{id}/dm-reply",
         StoryDmReplyView,
+    )
+    app.router.add_view("/api/stories/{id}/report", StoryReportView)
+
+    # ── Moments (§Momentum) ─────────────────────────────────────────────
+    # ``/api/moments/archive`` and ``/api/moments/follows`` come before
+    # the ``{id}`` detail route so aiohttp's literal-prefix match wins.
+    app.router.add_view("/api/moments", MomentCollectionView)
+    app.router.add_view("/api/moments/archive", MomentArchiveView)
+    app.router.add_view(
+        "/api/moments/follows",
+        MomentFollowsCollectionView,
+    )
+    app.router.add_view(
+        "/api/moments/follows/{user_id}",
+        MomentFollowsDetailView,
+    )
+    app.router.add_view("/api/moments/{id}", MomentDetailView)
+    app.router.add_view(
+        "/api/moments/{id}/reaction",
+        MomentReactionView,
+    )
+    app.router.add_view(
+        "/api/moments/{id}/report",
+        MomentReportView,
     )
 
     # ── Bazaar ──────────────────────────────────────────────────────────

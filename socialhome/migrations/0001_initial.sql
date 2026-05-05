@@ -280,6 +280,7 @@ CREATE TABLE IF NOT EXISTS household_features (
     feat_stickies     INTEGER NOT NULL DEFAULT 1,
     feat_calendar     INTEGER NOT NULL DEFAULT 1,
     feat_stories      INTEGER NOT NULL DEFAULT 1,
+    feat_momentum     INTEGER NOT NULL DEFAULT 1,
     -- Bazaar is a per-space feature only (gated by ``space.features``).
     -- The household feed never carries bazaar posts, so no
     -- ``feat_bazaar`` / ``allow_bazaar`` here.
@@ -806,7 +807,7 @@ CREATE TABLE IF NOT EXISTS space_moderation_queue (
 CREATE TABLE IF NOT EXISTS content_reports (
     id                    TEXT PRIMARY KEY,
     target_type           TEXT NOT NULL
-                          CHECK(target_type IN ('post','comment','user','space')),
+                          CHECK(target_type IN ('post','comment','user','space','story','moment')),
     target_id             TEXT NOT NULL,
     reporter_user_id      TEXT NOT NULL,
     reporter_instance_id  TEXT,
@@ -1474,7 +1475,7 @@ CREATE INDEX IF NOT EXISTS idx_peer_space_directory_instance
 CREATE TABLE IF NOT EXISTS content_reports (
     id              TEXT PRIMARY KEY,
     reporter_user_id TEXT NOT NULL,
-    target_type     TEXT NOT NULL CHECK(target_type IN ('post','comment','user','space')),
+    target_type     TEXT NOT NULL CHECK(target_type IN ('post','comment','user','space','story','moment')),
     target_id       TEXT NOT NULL,
     category        TEXT NOT NULL,
     notes           TEXT,
@@ -1492,6 +1493,57 @@ CREATE TABLE IF NOT EXISTS user_blocks (
     blocked_user_id  TEXT NOT NULL,
     blocked_at       TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (blocker_user_id, blocked_user_id)
+);
+
+-- ── User follows (§Momentum) ───────────────────────────────────────────────
+-- Adult-to-adult voluntary follow. The Momentum retention query reads
+-- this to decide whether a viewer sees a moment past the 24h window
+-- (followed authors → 7d cap; non-followers → 24h). Follows stay local
+-- on each instance — no federation envelope.
+
+CREATE TABLE IF NOT EXISTS user_follows (
+    follower_user_id  TEXT NOT NULL,
+    followed_user_id  TEXT NOT NULL,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (follower_user_id, followed_user_id)
+);
+
+-- ── Momentum (§Momentum) ───────────────────────────────────────────────────
+-- Household-broadcast posts that fan to a 3-hop peer mesh. 24h base
+-- retention; 7d for moments where the local viewer follows the author.
+
+CREATE TABLE IF NOT EXISTS moments (
+    id                 TEXT PRIMARY KEY,
+    -- Plain-text user_id (no FK) so federated remote-author rows
+    -- live alongside local rows; same convention as
+    -- conversation_messages.sender_user_id.
+    author_user_id     TEXT NOT NULL,
+    -- Optional text up to 1000 chars (composer-enforced).
+    content            TEXT NOT NULL DEFAULT '',
+    media_url          TEXT,
+    media_type         TEXT CHECK(media_type IN ('image','video') OR media_type IS NULL),
+    duration_ms        INTEGER,                            -- video only, ≤ 15000
+    -- Reply parent. ON DELETE SET NULL so a reply chain survives the
+    -- retention pruner deleting the root.
+    parent_moment_id   TEXT REFERENCES moments(id) ON DELETE SET NULL,
+    -- Origin instance for the 3-hop relay echo-loop guard.
+    origin_instance_id TEXT NOT NULL,
+    created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Absolute retention cap (created_at + 7 days). The list query
+    -- collapses this to 24h for non-followers.
+    expires_at         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_moments_created_at  ON moments(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_moments_expires     ON moments(expires_at);
+CREATE INDEX IF NOT EXISTS idx_moments_parent      ON moments(parent_moment_id);
+CREATE INDEX IF NOT EXISTS idx_moments_author_date ON moments(author_user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS moment_reactions (
+    moment_id        TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
+    reactor_user_id  TEXT NOT NULL,
+    emoji            TEXT NOT NULL,
+    reacted_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (moment_id, reactor_user_id)
 );
 
 -- ── Shopping list (§23.120) ────────────────────────────────────────────────

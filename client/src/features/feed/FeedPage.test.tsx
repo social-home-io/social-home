@@ -50,6 +50,7 @@ describe('FeedPage', () => {
       household_name: 'The Smiths',
       feat_feed: true, feat_pages: true, feat_tasks: true,
       feat_stickies: true, feat_calendar: true, feat_stories: true,
+      feat_momentum: true,
       allow_text: true, allow_image: true, allow_video: true,
       allow_file: true, allow_poll: true, allow_schedule: true,
       allow_story_share: true,

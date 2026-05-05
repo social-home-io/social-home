@@ -93,3 +93,51 @@ async def test_list_blocked_empty(env):
     """list_blocked is [] when nobody is blocked."""
     a = await env.user_svc.provision(username="alice", display_name="Alice")
     assert await env.user_repo.list_blocked(a.user_id) == []
+
+
+# ── Follows (§Momentum) ──────────────────────────────────────────────
+
+
+async def test_follow_unfollow_roundtrip(env):
+    a = await env.user_svc.provision(username="alice", display_name="Alice")
+    b = await env.user_svc.provision(username="bob", display_name="Bob")
+    assert not await env.user_repo.is_following(a.user_id, b.user_id)
+    await env.user_repo.follow(a.user_id, b.user_id)
+    assert await env.user_repo.is_following(a.user_id, b.user_id)
+    await env.user_repo.unfollow(a.user_id, b.user_id)
+    assert not await env.user_repo.is_following(a.user_id, b.user_id)
+
+
+async def test_follow_self_rejected(env):
+    a = await env.user_svc.provision(username="alice", display_name="Alice")
+    import pytest as _pt
+
+    with _pt.raises(ValueError):
+        await env.user_repo.follow(a.user_id, a.user_id)
+
+
+async def test_follow_is_idempotent(env):
+    a = await env.user_svc.provision(username="alice", display_name="Alice")
+    b = await env.user_svc.provision(username="bob", display_name="Bob")
+    await env.user_repo.follow(a.user_id, b.user_id)
+    await env.user_repo.follow(a.user_id, b.user_id)  # no-op
+    rows = await env.user_repo.list_following(a.user_id)
+    assert len(rows) == 1
+
+
+async def test_list_following_newest_first(env):
+    a = await env.user_svc.provision(username="alice", display_name="Alice")
+    b = await env.user_svc.provision(username="bob", display_name="Bob")
+    c = await env.user_svc.provision(username="carol", display_name="Carol")
+    await env.db.enqueue(
+        "INSERT INTO user_follows(follower_user_id, followed_user_id, created_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, b.user_id, "2026-01-01T00:00:00Z"),
+    )
+    await env.db.enqueue(
+        "INSERT INTO user_follows(follower_user_id, followed_user_id, created_at) "
+        "VALUES(?, ?, ?)",
+        (a.user_id, c.user_id, "2026-02-01T00:00:00Z"),
+    )
+    following = await env.user_repo.list_following(a.user_id)
+    assert [uid for uid, _ in following] == [c.user_id, b.user_id]

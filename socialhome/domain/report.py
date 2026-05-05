@@ -32,6 +32,8 @@ class ReportTargetType(StrEnum):
     COMMENT = "comment"
     USER = "user"
     SPACE = "space"
+    STORY = "story"
+    MOMENT = "moment"
 
 
 @dataclass(slots=True, frozen=True)

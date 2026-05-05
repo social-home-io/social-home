@@ -34,6 +34,7 @@ SECTIONS: tuple[str, ...] = (
     "stickies",
     "calendar",
     "stories",
+    "momentum",
 )
 
 #: Post types mapped to their ``allow_*`` attribute names. Bazaar
@@ -64,6 +65,10 @@ class HouseholdFeatures:
     #: Personal "stories" pillar in the Talk sidebar group. Default on
     #: so the user discovers the feature without an admin step.
     feat_stories: bool = True
+    #: Momentum — household-broadcast posts pillar (§Momentum). Same
+    #: discovery default as Stories; admin can disable in household
+    #: settings.
+    feat_momentum: bool = True
     allow_text: bool = True
     allow_image: bool = True
     allow_video: bool = True

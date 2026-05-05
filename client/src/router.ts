@@ -33,6 +33,11 @@ export const routes: Record<string, ReturnType<typeof lazy>> = {
   '/stories/archive': lazy(() => import('@/features/stories/StoryArchivePage')),
   '/stories/new':    lazy(() => import('@/features/stories/StoryComposerPage')),
   '/stories/:storyId': lazy(() => import('@/features/stories/StoryViewerPage')),
+  '/momentum':              lazy(() => import('@/features/momentum/MomentumPage')),
+  '/momentum/archive':      lazy(() => import('@/features/momentum/MomentumArchivePage')),
+  '/momentum/new':          lazy(() => import('@/features/momentum/MomentumComposerPage')),
+  '/momentum/:momentId':    lazy(() => import('@/features/momentum/MomentumDetailPage')),
+  '/momentum/:momentId/reply': lazy(() => import('@/features/momentum/MomentumComposerPage')),
   '/parent':         lazy(() => import('@/features/child-protection/ParentDashboard')),
   '/setup':          lazy(() => import('@/features/setup/SetupPage')),
 }

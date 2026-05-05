@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { routes } from './router'
 
 describe('router', () => {
-  it('defines 34 routes', () => {
+  it('defines 39 routes', () => {
     // Routes added across recent passes:
     //   /dms/:id/calls   — per-conversation call history
     //   /calls/:callId   — in-call page
@@ -16,7 +16,9 @@ describe('router', () => {
     //   /friends         — connected-people dashboard under Browse
     //   /stories, /stories/new, /stories/:storyId — Stories pillar (§Stories)
     //   /stories/archive — month-grid history browser (§Stories)
-    expect(Object.keys(routes).length).toBe(34)
+    //   /momentum, /momentum/new, /momentum/:id, /momentum/:id/reply,
+    //     /momentum/archive — Momentum pillar (§Momentum)
+    expect(Object.keys(routes).length).toBe(39)
   })
 
   it('has feed route at /', () => {
@@ -27,7 +29,7 @@ describe('router', () => {
     for (const path of ['/spaces', '/dms', '/calendar', '/shopping',
       '/notifications', '/tasks', '/pages', '/stickies', '/bazaar',
       '/settings', '/admin', '/connections',
-      '/gallery', '/search', '/calls', '/parent']) {
+      '/gallery', '/search', '/calls', '/parent', '/momentum']) {
       expect(routes[path]).toBeTruthy()
     }
   })
