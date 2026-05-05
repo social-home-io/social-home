@@ -11420,13 +11420,20 @@ a.sh-btn--ghost:hover {
   background: rgba(0, 0, 0, 0.45);
 }
 .sh-story-react-btn,
-.sh-story-reply-btn {
+.sh-story-reply-btn,
+.sh-story-report-btn {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.3);
   border-radius: var(--sh-radius-full);
   padding: 6px 14px;
   cursor: pointer;
+}
+.sh-story-react-btn:focus-visible,
+.sh-story-reply-btn:focus-visible,
+.sh-story-report-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 .sh-story-author-meta {
   flex: 1;
@@ -11503,6 +11510,10 @@ a.sh-btn--ghost:hover {
 }
 .sh-story-archive-day--has:hover {
   border-color: var(--sh-primary);
+}
+.sh-story-archive-day:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
 }
 .sh-story-archive-day--today {
   outline: 2px solid var(--sh-primary);
@@ -12123,6 +12134,11 @@ a.sh-btn--ghost:hover {
 }
 .sh-momentum-chip:hover {
   background: var(--sh-surface-3);
+}
+.sh-momentum-chip:focus-visible,
+.sh-hashtag:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
 }
 .sh-momentum-chip--active {
   background: var(--sh-accent-soft, var(--sh-surface-3));
