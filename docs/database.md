@@ -142,6 +142,19 @@ in-process `StoryRetentionScheduler`.
 | `feed_posts.linked_story_id` | When `type = 'story_share'`, points at `stories.id`. ON DELETE SET NULL — the share-card flips to a "Story has ended" placeholder when retention purges the source. |
 | `space_posts.linked_story_id` | Same pointer for `space_posts`; FK-free since the linked story may live on a remote instance. |
 
+## Momentum
+
+Household-broadcast posts that fan to a 3-hop peer mesh. Replies are
+themselves moments and link to the conversation root via
+`parent_moment_id`.
+
+| Table | Purpose |
+|---|---|
+| `moments` | One row per moment. `author_user_id` is plaintext (no FK) so federated remote-author rows live alongside local rows. `expires_at` is the absolute 7-day cap; `list_visible_to` collapses to 24 h for non-followers. |
+| `moment_reactions` | Per-`(moment, reactor)` emoji. PK on `(moment_id, reactor_user_id)`, UPSERT to change. Cascades on moment delete. |
+| `moment_hashtags` | Per-`(moment, tag)` index of ASCII `#tag` tokens extracted from `moments.content` at save time. PK on `(moment_id, tag)`; secondary index on `(tag, moment_id)` powers the trending and tag-filter queries. Cascades on moment delete. |
+| `user_follows` | Voluntary adult-to-adult follow. PK on `(follower_user_id, followed_user_id)`. Used by `list_visible_to` to extend the visibility window from 24 h to 7 d for the followed author's moments. |
+
 ## Notifications and push
 
 | Table | Purpose |

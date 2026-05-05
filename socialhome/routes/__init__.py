@@ -272,6 +272,7 @@ from .moments import (
     MomentDetailView,
     MomentFollowsCollectionView,
     MomentFollowsDetailView,
+    MomentHashtagsView,
     MomentReactionView,
     MomentReportView,
 )
@@ -714,6 +715,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     # the ``{id}`` detail route so aiohttp's literal-prefix match wins.
     app.router.add_view("/api/moments", MomentCollectionView)
     app.router.add_view("/api/moments/archive", MomentArchiveView)
+    app.router.add_view("/api/moments/hashtags", MomentHashtagsView)
     app.router.add_view(
         "/api/moments/follows",
         MomentFollowsCollectionView,

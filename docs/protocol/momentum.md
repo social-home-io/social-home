@@ -35,6 +35,22 @@ data only — everything else (`content`, `media_url`, `media_type`,
 * The retention scheduler runs hourly and deletes anything past the
   absolute cap; reactions cascade.
 
+## Hashtags
+
+A moment's content is scanned at save time for ASCII ``#tag`` tokens
+(charset ``[A-Za-z0-9_]``, max 32 chars). Up to ten tags per post are
+lowercased and stored in ``moment_hashtags`` (composite PK
+``(moment_id, tag)``). The same regex runs on the SPA so the rendered
+chip and the indexed row stay in lockstep. Federated edits / relay
+updates rewrite the row set on each ``save`` so the trending list is
+always derived from the *current* content.
+
+* ``GET /api/moments/archive?tag=<name>`` filters to a single tag.
+* ``GET /api/moments/hashtags`` returns the trending tags inside the
+  viewer's visibility window — block-aware and follow-aware via the
+  same filter as ``list_visible_to`` so a blocked author's tag never
+  surfaces.
+
 ## Rate limit
 
 One **top-level** moment per author per 15 minutes.

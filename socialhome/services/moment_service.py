@@ -246,11 +246,13 @@ class MomentService:
         viewer_user_id: str,
         before: str | None = None,
         limit: int = 50,
+        tag: str | None = None,
     ) -> list[Moment]:
         return await self._moments.list_visible_to(
             viewer_user_id,
             before=before,
             limit=limit,
+            tag=tag,
         )
 
     async def list_replies(self, moment_id: str) -> list[Moment]:
@@ -258,6 +260,24 @@ class MomentService:
 
     async def list_reactions(self, moment_id: str):
         return await self._moments.list_reactions(moment_id)
+
+    async def list_top_hashtags(
+        self,
+        *,
+        viewer_user_id: str,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Trending tags inside the viewer's visibility window.
+
+        The repo aggregates with the same block + retention filter as
+        :meth:`list_inbox`, so a blocked author or an out-of-window
+        moment doesn't pollute the chip row.
+        """
+        rows = await self._moments.list_top_hashtags(
+            viewer_user_id,
+            limit=limit,
+        )
+        return [{"tag": tag, "count": n} for tag, n in rows]
 
     # ── Retention scheduler hook ───────────────────────────────────────
 

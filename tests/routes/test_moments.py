@@ -248,6 +248,46 @@ async def test_archive_returns_visible_moments(client):
     assert len(items) == 1
 
 
+async def test_archive_filters_by_tag(client):
+    await client.post(
+        "/api/moments",
+        json={"content": "hike day #outdoors"},
+        headers=_auth(client._tok),
+    )
+    # Service rate-limits 1 top-level moment / 15 min, so only one
+    # author-side post per test. Seed a second moment via the bus.
+    await client._db.enqueue(
+        "UPDATE moments SET created_at=datetime('now', '-20 minutes') "
+        "WHERE author_user_id=?",
+        (client._uid,),
+    )
+    await client.post(
+        "/api/moments",
+        json={"content": "kitchen #cooking"},
+        headers=_auth(client._tok),
+    )
+    r = await client.get(
+        "/api/moments/archive?tag=outdoors",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    items = await r.json()
+    assert {m["content"] for m in items} == {"hike day #outdoors"}
+
+
+async def test_hashtags_endpoint_returns_aggregates(client):
+    await client.post(
+        "/api/moments",
+        json={"content": "#alpha and #beta"},
+        headers=_auth(client._tok),
+    )
+    r = await client.get("/api/moments/hashtags", headers=_auth(client._tok))
+    assert r.status == 200
+    body = await r.json()
+    tags = {row["tag"]: row["count"] for row in body["hashtags"]}
+    assert tags == {"alpha": 1, "beta": 1}
+
+
 async def test_reaction_clear_returns_null(client):
     r = await client.post(
         "/api/moments",

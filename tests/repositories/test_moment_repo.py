@@ -166,6 +166,58 @@ async def test_count_engagement_empty_list(db, repo):
     assert await repo.count_engagement_for([]) == {}
 
 
+async def test_save_extracts_hashtags(db, repo):
+    """``save`` materialises ``moment_hashtags`` rows from the content
+    so the tag-filter query and the trending list stay in sync."""
+    await repo.save(_moment(id="m-tag", content="Trip #Berlin and #berlin again"))
+    tags = await repo.list_hashtags_for("m-tag")
+    # Lowercased + deduped.
+    assert tags == ["berlin"]
+
+
+async def test_save_rewrites_hashtags_on_edit(db, repo):
+    """An upsert with new content drops the old tag rows."""
+    await repo.save(_moment(id="m-tag", content="hello #foo"))
+    assert await repo.list_hashtags_for("m-tag") == ["foo"]
+    # Federated relay update — same id, different content.
+    await repo.save(_moment(id="m-tag", content="hello #bar"))
+    assert await repo.list_hashtags_for("m-tag") == ["bar"]
+
+
+async def test_list_visible_filters_by_tag(db, repo):
+    await repo.save(_moment(id="m-a", content="hike #outdoors today"))
+    await repo.save(_moment(id="m-b", content="indoor #cooking experiments"))
+    await repo.save(_moment(id="m-c", content="no tags here"))
+    visible = await repo.list_visible_to("u-me", tag="outdoors")
+    assert {m.id for m in visible} == {"m-a"}
+    visible = await repo.list_visible_to("u-me", tag="cooking")
+    assert {m.id for m in visible} == {"m-b"}
+    # Untagged → all three (subject to other filters).
+    all_visible = await repo.list_visible_to("u-me")
+    assert {m.id for m in all_visible} == {"m-a", "m-b", "m-c"}
+
+
+async def test_list_top_hashtags_counts_and_orders(db, repo):
+    """Most-used tag wins; alpha tiebreak keeps the order stable."""
+    await repo.save(_moment(id="m-1", content="#alpha #beta"))
+    await repo.save(_moment(id="m-2", content="#alpha"))
+    await repo.save(_moment(id="m-3", content="#beta"))
+    rows = await repo.list_top_hashtags("u-me")
+    assert rows == [("alpha", 2), ("beta", 2)]
+
+
+async def test_list_top_hashtags_respects_blocks(db, repo):
+    """A blocked author's tags don't pollute the trending row."""
+    await repo.save(_moment(id="m-bad", author="u-bad", content="#spam everywhere"))
+    await repo.save(_moment(id="m-good", author="u-ok", content="#fresh tag"))
+    await db.enqueue(
+        "INSERT INTO user_blocks(blocker_user_id, blocked_user_id) VALUES(?, ?)",
+        ("u-me", "u-bad"),
+    )
+    rows = await repo.list_top_hashtags("u-me")
+    assert rows == [("fresh", 1)]
+
+
 async def test_prune_expired_drops_past_cap(db, repo):
     fresh = _moment(id="m-fresh")
     expired = Moment(
