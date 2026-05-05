@@ -10,7 +10,7 @@ import { signal, computed } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
-import { Spinner } from '@/components/Spinner'
+import { MomentumArchiveSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
 import { ws } from '@/ws'
@@ -69,7 +69,7 @@ export default function MomentumArchivePage() {
     return () => { dispose.forEach(d => d()) }
   }, [loc.path, loc.url])
 
-  if (loading.value) return <Spinner />
+  if (loading.value) return <MomentumArchiveSkeleton />
 
   const days = [...grouped.value.keys()]  // already newest-first
   const tag = activeTag.value

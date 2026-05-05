@@ -12202,3 +12202,81 @@ a.sh-btn--ghost:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Skeleton compose-entry — matches the inline composer chip's height
+ * so the swap to the real button doesn't shift layout. */
+.sh-skeleton-momentum-compose {
+  border-radius: var(--sh-radius-full);
+  margin-bottom: var(--sh-space-sm);
+}
+
+/* ── Mobile tightening — Momentum ─────────────────────────────────── */
+@media (max-width: 640px) {
+  .sh-momentum {
+    padding: var(--sh-space-sm);
+  }
+  .sh-momentum-header {
+    gap: var(--sh-space-xs);
+  }
+  .sh-momentum-row {
+    gap: var(--sh-space-xs);
+    padding: var(--sh-space-xs);
+  }
+  .sh-momentum-row-content {
+    /* Wrap long URLs / hashtags so they don't push the row off-screen. */
+    overflow-wrap: anywhere;
+  }
+  .sh-momentum-row-media {
+    /* Lock images / videos to the row width on narrow viewports. */
+    max-width: 100%;
+    height: auto;
+  }
+  .sh-momentum-detail {
+    padding: var(--sh-space-sm);
+  }
+  .sh-momentum-detail-header {
+    flex-wrap: wrap;
+  }
+  .sh-momentum-detail-actions {
+    flex-wrap: wrap;
+    gap: var(--sh-space-xs);
+  }
+  .sh-momentum-archive {
+    padding: var(--sh-space-sm);
+  }
+  .sh-momentum-trending {
+    /* Allow horizontal scroll on a long trending list rather than
+     * wrapping onto multiple lines that push the day list down. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sh-momentum-chip {
+    flex-shrink: 0;
+  }
+}
+
+/* ── Mobile tightening — Stories ──────────────────────────────────── */
+@media (max-width: 640px) {
+  .sh-story-rings {
+    gap: var(--sh-space-xs);
+    overflow-x: auto;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: var(--sh-space-xs);
+  }
+  .sh-story-ring {
+    flex: 0 0 auto;
+  }
+  .sh-story-ring-label {
+    max-width: 64px;
+  }
+  .sh-story-archive-day-num {
+    font-size: 0.75rem;
+  }
+  .sh-story-viewer-footer {
+    flex-wrap: wrap;
+    gap: var(--sh-space-xs);
+  }
+}
