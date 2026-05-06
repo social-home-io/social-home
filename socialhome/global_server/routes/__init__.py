@@ -84,6 +84,16 @@ from .highlight_rtc import (
     HighlightRtcSessionView,
     HighlightRtcViewerIceView,
 )
+from .moments_public import (
+    GfsMomentPublicDeleteView,
+    GfsMomentPublicPublishView,
+    GfsUserDeregisterView,
+    GfsUserDirectoryHtmlView,
+    GfsUserDirectoryView,
+    GfsUserFollowView,
+    GfsUserRegisterView,
+    GfsUserUnfollowView,
+)
 from .ws import GfsWebSocketView
 
 
@@ -195,6 +205,17 @@ def register_routes(
     app.router.add_view("/gfs/highlight_rtc/ice/viewer", HighlightRtcViewerIceView)
     app.router.add_view("/gfs/highlight_rtc/answer", HighlightRtcAnswerView)
     app.router.add_view("/gfs/highlight_rtc/ice/author", HighlightRtcAuthorIceView)
+
+    # Public Momentum (§Momentum-public). Signed wire endpoints for
+    # registration / follow + unsigned discovery for households.
+    app.router.add_view("/gfs/users/register", GfsUserRegisterView)
+    app.router.add_view("/gfs/users/{user_id}/deregister", GfsUserDeregisterView)
+    app.router.add_view("/gfs/users/{user_id}/follow", GfsUserFollowView)
+    app.router.add_view("/gfs/users/{user_id}/unfollow", GfsUserUnfollowView)
+    app.router.add_view("/gfs/moments/publish", GfsMomentPublicPublishView)
+    app.router.add_view("/gfs/moments/delete", GfsMomentPublicDeleteView)
+    app.router.add_view("/gfs/users", GfsUserDirectoryView)
+    app.router.add_view("/users", GfsUserDirectoryHtmlView)
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.

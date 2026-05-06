@@ -51,6 +51,15 @@ class Moment:
     origin_instance_id: str
     created_at: str
     expires_at: str
+    #: Author chose to fan out via at least one GFS (§Momentum-public).
+    is_public: bool = False
+    #: How this row landed locally — ``self``/``household``/``gfs``.
+    #: GFS-received rows must NOT be relayed to paired peers (the
+    #: no-redistribute rule); the federation outbound checks this.
+    received_via: str = "self"
+    #: When ``received_via='gfs'``, points at the GFS connection that
+    #: relayed the moment. NULL otherwise.
+    received_via_gfs_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

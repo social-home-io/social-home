@@ -54,10 +54,13 @@ from .repositories import (
     SqliteGfsFederationRepo,
     SqliteGfsHighlightPublicationRepo,
     SqliteGfsHighlightTokenRepo,
+    SqliteGfsMomentFollowRepo,
+    SqliteGfsUserRegistrationRepo,
 )
 from .routes import register_routes
 from .rtc_transport import GfsRtcSession
 from .highlight_publications import HighlightPublicationRegistry
+from .moment_public_registry import MomentPublicRegistry
 from .ws_registry import GfsWebSocketRegistry
 
 log = logging.getLogger(__name__)
@@ -131,6 +134,8 @@ class GfsApp:
             cluster=SqliteClusterRepo(db),
             highlight_pubs=SqliteGfsHighlightPublicationRepo(db),
             highlight_tokens=SqliteGfsHighlightTokenRepo(db),
+            moment_public_users=SqliteGfsUserRegistrationRepo(db),
+            moment_public_follows=SqliteGfsMomentFollowRepo(db),
         )
 
     def _build_services(
@@ -184,6 +189,11 @@ class GfsApp:
             base_url=config.base_url,
             og_thumbnail_dir=og_dir,
         )
+        moment_public = MomentPublicRegistry(
+            repos.moment_public_users,
+            repos.moment_public_follows,
+            ws_registry,
+        )
         return SimpleNamespace(
             federation=federation,
             cluster=cluster,
@@ -193,6 +203,7 @@ class GfsApp:
             rtc=GfsRtcSession(),
             ws_registry=ws_registry,
             highlight_pubs=highlight_pubs,
+            moment_public=moment_public,
         )
 
     def _build_app(self) -> web.Application:
@@ -220,6 +231,9 @@ class GfsApp:
         a[K.gfs_highlight_pub_repo_key] = self.repos.highlight_pubs
         a[K.gfs_highlight_token_repo_key] = self.repos.highlight_tokens
         a[K.gfs_highlight_pub_service_key] = self.services.highlight_pubs
+        a[K.gfs_moment_public_user_repo_key] = self.repos.moment_public_users
+        a[K.gfs_moment_public_follow_repo_key] = self.repos.moment_public_follows
+        a[K.gfs_moment_public_registry_key] = self.services.moment_public
         # Non-typed helpers the admin module reads directly.
         a["admin_auth"] = self.services.admin_auth
         a["gfs_token_service"] = self.services.tokens

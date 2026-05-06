@@ -29,7 +29,9 @@ from .domain import (
     GfsFraudReport,
     GfsHighlightPublication,
     GfsHighlightToken,
+    GfsMomentFollow,
     GfsSubscriber,
+    GfsUserRegistration,
     GlobalSpace,
     RtcConnection,
 )
@@ -1285,4 +1287,180 @@ def _row_to_highlight_pub(row: dict) -> GfsHighlightPublication | None:
         published_at=int(row["published_at"]),
         publish_signature=row["publish_signature"],
         og_thumbnail_filename=row.get("og_thumbnail_filename"),
+    )
+
+
+# ─── Public Momentum directory + follow graph (§Momentum-public) ─────────
+
+
+@runtime_checkable
+class AbstractGfsUserRegistrationRepo(Protocol):
+    async def upsert(self, reg: GfsUserRegistration) -> None: ...
+    async def delete(self, user_id: str) -> int: ...
+    async def get(self, user_id: str) -> GfsUserRegistration | None: ...
+    async def list_active(self) -> list[GfsUserRegistration]: ...
+    async def list_for_instance(
+        self, instance_id: str
+    ) -> list[GfsUserRegistration]: ...
+
+
+class SqliteGfsUserRegistrationRepo:
+    def __init__(self, db: AsyncDatabase) -> None:
+        self._db = db
+
+    async def upsert(self, reg: GfsUserRegistration) -> None:
+        await self._db.enqueue(
+            "INSERT INTO gfs_user_registrations("
+            "user_id, instance_id, username, display_name, picture_url, "
+            "home_instance_pk, registered_at, status) "
+            "VALUES(?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "instance_id=excluded.instance_id, "
+            "username=excluded.username, "
+            "display_name=excluded.display_name, "
+            "picture_url=excluded.picture_url, "
+            "home_instance_pk=excluded.home_instance_pk, "
+            "status=excluded.status",
+            (
+                reg.user_id,
+                reg.instance_id,
+                reg.username,
+                reg.display_name,
+                reg.picture_url,
+                reg.home_instance_pk,
+                reg.registered_at,
+                reg.status,
+            ),
+        )
+
+    async def delete(self, user_id: str) -> int:
+        return await self._db.enqueue(
+            "DELETE FROM gfs_user_registrations WHERE user_id=?",
+            (user_id,),
+        )
+
+    async def get(self, user_id: str) -> GfsUserRegistration | None:
+        row = await self._db.fetchone(
+            "SELECT user_id, instance_id, username, display_name, picture_url, "
+            "home_instance_pk, registered_at, status "
+            "FROM gfs_user_registrations WHERE user_id=?",
+            (user_id,),
+        )
+        return _row_to_user_reg(_dict(row))
+
+    async def list_active(self) -> list[GfsUserRegistration]:
+        rows = await self._db.fetchall(
+            "SELECT user_id, instance_id, username, display_name, picture_url, "
+            "home_instance_pk, registered_at, status "
+            "FROM gfs_user_registrations WHERE status='active' "
+            "ORDER BY registered_at DESC",
+            (),
+        )
+        out = [_row_to_user_reg(_dict(r)) for r in rows]
+        return [r for r in out if r is not None]
+
+    async def list_for_instance(self, instance_id: str) -> list[GfsUserRegistration]:
+        rows = await self._db.fetchall(
+            "SELECT user_id, instance_id, username, display_name, picture_url, "
+            "home_instance_pk, registered_at, status "
+            "FROM gfs_user_registrations WHERE instance_id=?",
+            (instance_id,),
+        )
+        out = [_row_to_user_reg(_dict(r)) for r in rows]
+        return [r for r in out if r is not None]
+
+
+def _dict(row: Any) -> dict | None:
+    if row is None:
+        return None
+    return dict(row)
+
+
+def _row_to_user_reg(row: dict | None) -> GfsUserRegistration | None:
+    if row is None:
+        return None
+    return GfsUserRegistration(
+        user_id=row["user_id"],
+        instance_id=row["instance_id"],
+        username=row["username"],
+        display_name=row["display_name"],
+        picture_url=row.get("picture_url"),
+        home_instance_pk=row["home_instance_pk"],
+        registered_at=int(row["registered_at"]),
+        status=row.get("status") or "active",
+    )
+
+
+@runtime_checkable
+class AbstractGfsMomentFollowRepo(Protocol):
+    async def upsert(self, follow: GfsMomentFollow) -> None: ...
+    async def delete(self, *, follower_user_id: str, followed_user_id: str) -> int: ...
+    async def followers_of(self, followed_user_id: str) -> list[GfsMomentFollow]: ...
+    async def following_of(self, follower_user_id: str) -> list[GfsMomentFollow]: ...
+    async def follower_count(self, followed_user_id: str) -> int: ...
+
+
+class SqliteGfsMomentFollowRepo:
+    def __init__(self, db: AsyncDatabase) -> None:
+        self._db = db
+
+    async def upsert(self, follow: GfsMomentFollow) -> None:
+        await self._db.enqueue(
+            "INSERT INTO gfs_moment_follows("
+            "follower_user_id, follower_instance_id, followed_user_id, created_at) "
+            "VALUES(?,?,?,?) "
+            "ON CONFLICT(follower_user_id, followed_user_id) DO UPDATE SET "
+            "follower_instance_id=excluded.follower_instance_id",
+            (
+                follow.follower_user_id,
+                follow.follower_instance_id,
+                follow.followed_user_id,
+                follow.created_at,
+            ),
+        )
+
+    async def delete(self, *, follower_user_id: str, followed_user_id: str) -> int:
+        return await self._db.enqueue(
+            "DELETE FROM gfs_moment_follows "
+            "WHERE follower_user_id=? AND followed_user_id=?",
+            (follower_user_id, followed_user_id),
+        )
+
+    async def followers_of(self, followed_user_id: str) -> list[GfsMomentFollow]:
+        rows = await self._db.fetchall(
+            "SELECT follower_user_id, follower_instance_id, followed_user_id, created_at "
+            "FROM gfs_moment_follows WHERE followed_user_id=? "
+            "ORDER BY created_at DESC",
+            (followed_user_id,),
+        )
+        out = [_row_to_follow(_dict(r)) for r in rows]
+        return [f for f in out if f is not None]
+
+    async def following_of(self, follower_user_id: str) -> list[GfsMomentFollow]:
+        rows = await self._db.fetchall(
+            "SELECT follower_user_id, follower_instance_id, followed_user_id, created_at "
+            "FROM gfs_moment_follows WHERE follower_user_id=? "
+            "ORDER BY created_at DESC",
+            (follower_user_id,),
+        )
+        out = [_row_to_follow(_dict(r)) for r in rows]
+        return [f for f in out if f is not None]
+
+    async def follower_count(self, followed_user_id: str) -> int:
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS c FROM gfs_moment_follows WHERE followed_user_id=?",
+            (followed_user_id,),
+        )
+        d = _dict(row) or {}
+        return int(d.get("c") or 0)
+
+
+def _row_to_follow(row: dict | None) -> GfsMomentFollow | None:
+    if row is None:
+        return None
+    return GfsMomentFollow(
+        follower_user_id=row["follower_user_id"],
+        follower_instance_id=row["follower_instance_id"],
+        followed_user_id=row["followed_user_id"],
+        created_at=int(row["created_at"]),
     )

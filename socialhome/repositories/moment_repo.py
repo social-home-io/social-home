@@ -100,14 +100,18 @@ class SqliteMomentRepo:
             INSERT INTO moments(
                 id, author_user_id, content, media_url, media_type,
                 duration_ms, parent_moment_id, origin_instance_id,
-                created_at, expires_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                created_at, expires_at, is_public, received_via,
+                received_via_gfs_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content,
                 media_url=excluded.media_url,
                 media_type=excluded.media_type,
                 duration_ms=excluded.duration_ms,
-                expires_at=excluded.expires_at
+                expires_at=excluded.expires_at,
+                is_public=excluded.is_public,
+                received_via=excluded.received_via,
+                received_via_gfs_id=excluded.received_via_gfs_id
             """,
             (
                 moment.id,
@@ -120,6 +124,9 @@ class SqliteMomentRepo:
                 moment.origin_instance_id,
                 moment.created_at,
                 moment.expires_at,
+                int(moment.is_public),
+                moment.received_via,
+                moment.received_via_gfs_id,
             ),
         )
         # DELETE-INSERT keeps the tag set in sync with the latest
@@ -404,4 +411,7 @@ def _row_to_moment(row: dict | None) -> Moment | None:
         origin_instance_id=row["origin_instance_id"],
         created_at=row["created_at"],
         expires_at=row["expires_at"],
+        is_public=bool(row.get("is_public") or 0),
+        received_via=row.get("received_via") or "self",
+        received_via_gfs_id=row.get("received_via_gfs_id"),
     )

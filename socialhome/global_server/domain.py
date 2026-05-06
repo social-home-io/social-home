@@ -168,6 +168,43 @@ class GfsHighlightToken:
     revoked_at: int | None
 
 
+@dataclass(slots=True, frozen=True)
+class GfsUserRegistration:
+    """A user opted in to public-Momentum via this GFS (§Momentum-public).
+
+    Lives only on the GFS. Carries the routing fields the broker
+    needs (``instance_id``, ``home_instance_pk``) plus the
+    user-supplied directory metadata (``display_name``,
+    ``picture_url``) shown by the public ``/users`` listing.
+    """
+
+    user_id: str
+    instance_id: str
+    username: str
+    display_name: str
+    picture_url: str | None
+    home_instance_pk: str
+    registered_at: int
+    status: str = "active"  # 'active' | 'suspended'
+
+
+@dataclass(slots=True, frozen=True)
+class GfsMomentFollow:
+    """A follower instance has subscribed to a registered author.
+
+    Used by the broker's fan-out: when the author's instance pushes
+    a ``moment_public`` frame, the broker reads
+    ``followers_of(author_user_id)`` and forwards an
+    ``incoming_public_moment`` frame over each unique
+    ``follower_instance_id``'s persistent WS.
+    """
+
+    follower_user_id: str
+    follower_instance_id: str
+    followed_user_id: str
+    created_at: int
+
+
 # Backwards-compatible aliases for the pre-spec stub names so existing
 # tests / imports keep working through the transition.
 GfsInstance = ClientInstance
