@@ -238,3 +238,48 @@ CREATE TABLE IF NOT EXISTS gfs_highlight_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_gfs_highlight_tokens_pub
     ON gfs_highlight_tokens(highlight_id, instance_id);
+
+-- ── Public Momentum directory (§Momentum-public) ────────────────────────────
+--
+-- A user opts in to fan their moments through this GFS. Stored per-user
+-- (a single SH instance can host several authors, only some of whom
+-- choose public sharing) and points back at the host instance so the
+-- WS fan-out can resolve the source connection on every push.
+--
+-- ``user_id`` is deterministic per spec §3.2 (HMAC of home instance pk
+-- + username), so ``home_instance_pk`` is also stored to let arbitrary
+-- followers verify the author's per-moment signature without first
+-- pairing with the host instance directly.
+CREATE TABLE IF NOT EXISTS gfs_user_registrations (
+    user_id            TEXT PRIMARY KEY,
+    instance_id        TEXT NOT NULL REFERENCES client_instances(instance_id) ON DELETE CASCADE,
+    username           TEXT NOT NULL,
+    display_name       TEXT NOT NULL,
+    picture_url        TEXT,
+    -- 64-hex Ed25519 of the author's home instance, denormalised from
+    -- ``client_instances.public_key`` so the public ``/gfs/users``
+    -- directory can be served without a join.
+    home_instance_pk   TEXT NOT NULL,
+    registered_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    -- ``active`` = visible in directory + receives fan-out;
+    -- ``suspended`` = admin-paused, kept for audit.
+    status             TEXT NOT NULL DEFAULT 'active'
+        CHECK(status IN ('active','suspended'))
+);
+CREATE INDEX IF NOT EXISTS idx_gfs_user_reg_instance
+    ON gfs_user_registrations(instance_id);
+
+-- Follower graph. ``follower_user_id`` is the calling user; the
+-- ``follower_instance_id`` is the home instance their follow notice
+-- arrived from (and the WS that fan-out frames push back into).
+CREATE TABLE IF NOT EXISTS gfs_moment_follows (
+    follower_user_id     TEXT NOT NULL,
+    follower_instance_id TEXT NOT NULL REFERENCES client_instances(instance_id) ON DELETE CASCADE,
+    followed_user_id     TEXT NOT NULL REFERENCES gfs_user_registrations(user_id) ON DELETE CASCADE,
+    created_at           INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    PRIMARY KEY (follower_user_id, followed_user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gfs_moment_follows_followed
+    ON gfs_moment_follows(followed_user_id);
+CREATE INDEX IF NOT EXISTS idx_gfs_moment_follows_follower_inst
+    ON gfs_moment_follows(follower_instance_id);

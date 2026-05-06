@@ -17,9 +17,12 @@ from .repositories import (
     AbstractGfsFederationRepo,
     AbstractGfsHighlightPublicationRepo,
     AbstractGfsHighlightTokenRepo,
+    AbstractGfsMomentFollowRepo,
+    AbstractGfsUserRegistrationRepo,
 )
 from .rtc_transport import GfsRtcSession
 from .highlight_publications import HighlightPublicationRegistry
+from .moment_public_registry import MomentPublicRegistry
 from .ws_registry import GfsWebSocketRegistry
 
 gfs_db_key: AppKey[AsyncDatabase] = AppKey("gfs_db")
@@ -42,4 +45,13 @@ gfs_highlight_token_repo_key: AppKey[AbstractGfsHighlightTokenRepo] = AppKey(
 )
 gfs_highlight_pub_service_key: AppKey[HighlightPublicationRegistry] = AppKey(
     "gfs_highlight_pub_service"
+)
+gfs_moment_public_user_repo_key: AppKey[AbstractGfsUserRegistrationRepo] = AppKey(
+    "gfs_moment_public_user_repo"
+)
+gfs_moment_public_follow_repo_key: AppKey[AbstractGfsMomentFollowRepo] = AppKey(
+    "gfs_moment_public_follow_repo"
+)
+gfs_moment_public_registry_key: AppKey[MomentPublicRegistry] = AppKey(
+    "gfs_moment_public_registry"
 )

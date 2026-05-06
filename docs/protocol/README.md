@@ -109,6 +109,8 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
   - [Calls](./calls.md) — WebRTC voice/video signalling.
   - [Highlights](./highlights.md) — per-author per-day frame bag with author-controlled retention and audience.
   - [Highlights — public sharing](./highlights_public.md) — GFS-brokered public URL for a single highlight; data flows author → viewer over WebRTC, GFS holds zero highlight data.
+  - [Momentum](./momentum.md) — short-lived household-broadcast posts with 3-hop relay.
+  - [Momentum — public sharing](./momentum_public.md) — GFS-brokered follow graph for public moment fan-out beyond the household mesh; recipients dedupe with the household relay path.
 - **Relay**
   - [Push & RTC relay](./push-relay.md) — GFS-mediated push fan-out and RTC signalling bootstrap.
 

@@ -149,8 +149,16 @@ class MomentFederationOutbound:
         """Re-broadcast an inbound moment envelope to *our* paired peers,
         bumping ``hop_count`` and excluding both the original origin
         and the immediate sender. No-op when the payload already hit
-        ``MOMENT_MAX_HOPS``.
+        ``MOMENT_MAX_HOPS``, OR when the source row arrived via a GFS
+        public-share fan-out (§Momentum-public no-redistribute rule).
         """
+        # No-redistribute rule for §Momentum-public: a moment that
+        # arrived through a GFS public fan-out must not bleed back into
+        # the household federation mesh. The sender flags this on the
+        # payload so we can skip the relay here without consulting
+        # local DB state on the inbound hot path.
+        if str(payload.get("received_via") or "") == "gfs":
+            return
         try:
             hop = int(payload.get("hop_count") or 0)
         except TypeError, ValueError:

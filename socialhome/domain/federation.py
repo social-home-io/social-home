@@ -211,6 +211,14 @@ class FederationEventType(str, enum.Enum):
     MOMENT_REACTED = "moment_reacted"
     MOMENT_REACTION_REMOVED = "moment_reaction_removed"
 
+    # ── Public Momentum (§Momentum-public) — GFS → author back-channel for
+    # follower bookkeeping. The public moment itself rides as a WS frame
+    # outside the §24.11 inbound pipeline, but the GFS surfaces follow
+    # changes back to the author over the same federation envelope shape
+    # so the author's instance can update follower-count UI and prefs.
+    MOMENT_PUBLIC_FOLLOW = "moment_public_follow"
+    MOMENT_PUBLIC_UNFOLLOW = "moment_public_unfollow"
+
     # ── Network discovery ──
     NETWORK_SYNC = "network_sync"
 

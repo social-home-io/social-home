@@ -1537,7 +1537,20 @@ CREATE TABLE IF NOT EXISTS moments (
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     -- Absolute retention cap (created_at + 7 days). The list query
     -- collapses this to 24h for non-followers.
-    expires_at         TEXT NOT NULL
+    expires_at         TEXT NOT NULL,
+    -- Public-via-GFS opt-in (§Momentum-public). 1 when the moment was
+    -- (or will be) fanned out via at least one GFS the author has
+    -- registered on. Author-side decision; recipients ignore.
+    is_public          INTEGER NOT NULL DEFAULT 0,
+    -- Provenance: how this row landed locally. ``self`` = composed
+    -- here; ``household`` = arrived via the §24.11 federation pipeline
+    -- (the relay-able path); ``gfs`` = arrived via a public-GFS
+    -- fan-out (must NOT be re-relayed onward — see §Momentum-public).
+    received_via       TEXT NOT NULL DEFAULT 'household'
+        CHECK(received_via IN ('self','household','gfs')),
+    -- When ``received_via='gfs'``, points at the GFS connection the
+    -- frame arrived through. Used for the inbox "via {gfs}" chip.
+    received_via_gfs_id TEXT REFERENCES gfs_connections(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_moments_created_at  ON moments(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_moments_expires     ON moments(expires_at);
@@ -1564,6 +1577,43 @@ CREATE TABLE IF NOT EXISTS moment_hashtags (
 );
 CREATE INDEX IF NOT EXISTS idx_moment_hashtags_tag
     ON moment_hashtags(tag, moment_id);
+
+-- ── Public Momentum via GFS (§Momentum-public) ────────────────────────────
+-- Per-user opt-in to fan a moment out via one or more GFS brokers. The
+-- registration lives on the user (one row per (user, gfs)); the GFS
+-- holds the authoritative directory + follow graph and pushes incoming
+-- public moments into the recipient's inbox over the same persistent
+-- WS channel that already brokers Highlights signalling.
+CREATE TABLE IF NOT EXISTS moment_public_registrations (
+    user_id        TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    gfs_id         TEXT NOT NULL REFERENCES gfs_connections(id) ON DELETE CASCADE,
+    registered_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    -- 1 = compose defaults to "Public via GFS"; 0 = the user must
+    -- explicitly tick the public chip per moment.
+    default_share  INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, gfs_id)
+);
+
+-- Follower-side: who this user follows publicly via which GFS. The
+-- author's home-instance public key is cached at follow-time so every
+-- subsequent ``incoming_public_moment`` frame can be Ed25519-verified
+-- locally without round-tripping back to the GFS.
+CREATE TABLE IF NOT EXISTS moment_public_follows (
+    follower_user_id      TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    followed_user_id      TEXT NOT NULL,
+    gfs_id                TEXT NOT NULL REFERENCES gfs_connections(id) ON DELETE CASCADE,
+    -- 64-hex Ed25519 of the author's home instance. Used by the
+    -- inbound WS handler to verify the moment envelope's signature.
+    followed_instance_pk  TEXT NOT NULL,
+    -- Cached display strings for the Discover UX so the inbox doesn't
+    -- have to re-fetch the GFS directory on every render.
+    followed_username     TEXT NOT NULL,
+    followed_display_name TEXT NOT NULL,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (follower_user_id, followed_user_id, gfs_id)
+);
+CREATE INDEX IF NOT EXISTS idx_moment_public_follows_followed
+    ON moment_public_follows(followed_user_id);
 
 -- ── Shopping list (§23.120) ────────────────────────────────────────────────
 

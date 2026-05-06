@@ -281,6 +281,13 @@ from .moments import (
     MomentReactionView,
     MomentReportView,
 )
+from .moments_public import (
+    GfsUserDirectoryProxyView,
+    MomentPublicFollowCollectionView,
+    MomentPublicFollowDetailView,
+    MomentPublicRegistrationCollectionView,
+    MomentPublicRegistrationDetailView,
+)
 from .ha_users import HaUserProvisionView, HaUsersCollectionView
 from .reports import (
     AdminReportCollectionView,
@@ -750,6 +757,28 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         "/api/moments/{id}/report",
         MomentReportView,
     )
+
+    # ── Public Momentum (§Momentum-public) ─────────────────────────────
+    # Author-side registration management + follow management. The
+    # ``follows`` collection wraps the GFS POST + caches the directory
+    # entry locally so signature verification doesn't hit the network.
+    app.router.add_view(
+        "/api/moments/public/registrations",
+        MomentPublicRegistrationCollectionView,
+    )
+    app.router.add_view(
+        "/api/moments/public/registrations/{gfs_id}",
+        MomentPublicRegistrationDetailView,
+    )
+    app.router.add_view(
+        "/api/moments/public/follows",
+        MomentPublicFollowCollectionView,
+    )
+    app.router.add_view(
+        "/api/moments/public/follows/{gfs_id}/{user_id}",
+        MomentPublicFollowDetailView,
+    )
+    app.router.add_view("/api/gfs/{gfs_id}/users", GfsUserDirectoryProxyView)
 
     # ── Bazaar ──────────────────────────────────────────────────────────
     app.router.add_view("/api/bazaar", BazaarCollectionView)

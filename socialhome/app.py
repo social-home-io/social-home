@@ -138,6 +138,13 @@ from .services.backup_service import BackupService
 from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
 from .services.moment_service import MomentService
 from .services.highlight_publication_service import HighlightPublicationService
+from .services.moment_public_service import MomentPublicService
+from .services.moment_public_outbound import MomentPublicOutbound
+from .services.moment_public_inbound import MomentPublicInbound
+from .repositories.moment_public_repo import (
+    SqliteMomentPublicFollowRepo,
+    SqliteMomentPublicRegistrationRepo,
+)
 from .services.highlight_service import HighlightService
 from .services.highlight_signaling_handler import HighlightSignalingHandler
 from .services.bot_bridge_service import BotBridgeService
@@ -1195,6 +1202,29 @@ def create_app(config: Config | None = None) -> web.Application:
     moment_service = MomentService(moment_repo, user_repo, bus)
     moment_retention_scheduler = MomentRetentionScheduler(moment_service)
 
+    # ── Public Momentum via GFS (§Momentum-public) ─────────────────────
+    moment_public_registration_repo = SqliteMomentPublicRegistrationRepo(db)
+    moment_public_follow_repo = SqliteMomentPublicFollowRepo(db)
+    moment_public_service = MomentPublicService(
+        moment_public_registration_repo,
+        moment_public_follow_repo,
+        user_repo,
+        repos.gfs_connection,
+    )
+    moment_public_outbound = MomentPublicOutbound(
+        bus=bus,
+        moment_repo=moment_repo,
+        registration_repo=moment_public_registration_repo,
+        user_repo=user_repo,
+        gfs_repo=repos.gfs_connection,
+    )
+    moment_public_outbound.wire()
+    moment_public_inbound = MomentPublicInbound(
+        bus=bus,
+        moment_repo=moment_repo,
+        follow_repo=moment_public_follow_repo,
+    )
+
     # ── My Corner aggregator (§23) ─────────────────────────────────────
     corner_service = CornerService(
         notification_repo=notification_repo,
@@ -1401,6 +1431,11 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.moment_repo_key] = moment_repo
     app[K.moment_service_key] = moment_service
     app[K.moment_retention_scheduler_key] = moment_retention_scheduler
+    app[K.moment_public_registration_repo_key] = moment_public_registration_repo
+    app[K.moment_public_follow_repo_key] = moment_public_follow_repo
+    app[K.moment_public_service_key] = moment_public_service
+    app[K.moment_public_outbound_key] = moment_public_outbound
+    app[K.moment_public_inbound_key] = moment_public_inbound
 
     # ── Mount routes ─────────────────────────────────────────────────────
     setup_routes(app)
@@ -1478,6 +1513,19 @@ def create_app(config: Config | None = None) -> web.Application:
         # supervisor is constructed.
         highlight_signaling_handler.attach_session(http_session)
         highlight_signaling_handler.attach_identity(
+            own_instance_id=real_instance_id,
+            signing_key=identity_seed,
+        )
+        # Public-Momentum service + outbound subscriber. Same shape as
+        # ``highlight_publication_service``: shared session + signing
+        # key wired up after federation identity loads.
+        moment_public_service.attach_session(http_session)
+        moment_public_service.attach_identity(
+            own_instance_id=real_instance_id,
+            signing_key=identity_seed,
+        )
+        moment_public_outbound.attach_session(http_session)
+        moment_public_outbound.attach_identity(
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
