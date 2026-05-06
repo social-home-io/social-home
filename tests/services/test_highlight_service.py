@@ -382,9 +382,7 @@ async def test_expire_due_runs_over_max_pass_per_author(db, svc):
     service, _ = svc
     # Seed a user with the lowest-allowed ``max_count`` (10 — clamped by
     # ``parse_highlights_preferences``) so 11 rows trigger one prune.
-    await _seed_user(
-        db, "u1", "pascal", prefs_json='{"highlights": {"max_count": 10}}'
-    )
+    await _seed_user(db, "u1", "pascal", prefs_json='{"highlights": {"max_count": 10}}')
     repo = service._highlights
     future = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
     for i in range(11):
