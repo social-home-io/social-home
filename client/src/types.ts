@@ -143,6 +143,46 @@ export interface Moment {
   expires_at:         string
   reaction_count:     number
   reply_count:        number
+  /** Author opted to fan this moment out via at least one GFS
+   *  (§Momentum-public). The Inbox renders a "via {gfs}" chip when
+   *  combined with ``received_via === 'gfs'``. */
+  is_public?:         boolean
+  /** ``self`` / ``household`` / ``gfs`` — provenance of the row. */
+  received_via?:      'self' | 'household' | 'gfs'
+  /** When ``received_via === 'gfs'``, points at the GFS connection
+   *  the row arrived through (so the inbox chip can show a label). */
+  received_via_gfs_id?: string | null
+}
+
+/** Author-side public-Momentum registration row. */
+export interface MomentPublicRegistration {
+  user_id:        string
+  gfs_id:         string
+  registered_at:  string
+  default_share:  boolean
+}
+
+/** Follower-side public-Momentum follow row, surfaces the cached
+ *  display fields so the Discover/inbox surfaces don't need a GFS
+ *  round-trip on every render. */
+export interface MomentPublicFollow {
+  follower_user_id:      string
+  followed_user_id:      string
+  gfs_id:                string
+  followed_username:     string
+  followed_display_name: string
+  created_at:            string
+}
+
+/** Entry in a GFS public-user directory (``GET /api/gfs/{id}/users``). */
+export interface MomentPublicDirectoryUser {
+  user_id:           string
+  instance_id:       string
+  username:          string
+  display_name:      string
+  picture_url:       string | null
+  home_instance_pk:  string
+  registered_at:     number
 }
 
 export interface MomentReaction {

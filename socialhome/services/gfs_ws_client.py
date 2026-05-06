@@ -65,6 +65,8 @@ class GfsWebSocketClient:
         "_session_factory",
         "_on_relay",
         "_on_highlight_signal",
+        "_on_moment_public",
+        "_on_follow_changed",
         "_reconnect_delays",
         "_stop",
         "_task",
@@ -80,6 +82,8 @@ class GfsWebSocketClient:
         session_factory: Callable[[], aiohttp.ClientSession],
         on_relay: Callable[[dict], Awaitable[None]],
         on_highlight_signal: Callable[[dict], Awaitable[None]] | None = None,
+        on_moment_public: Callable[[dict], Awaitable[None]] | None = None,
+        on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
         reconnect_delays: tuple[float, ...] = RECONNECT_DELAYS,
     ) -> None:
         self._gfs_url = gfs_url
@@ -88,6 +92,8 @@ class GfsWebSocketClient:
         self._session_factory = session_factory
         self._on_relay = on_relay
         self._on_highlight_signal = on_highlight_signal
+        self._on_moment_public = on_moment_public
+        self._on_follow_changed = on_follow_changed
         self._reconnect_delays = reconnect_delays
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
@@ -106,6 +112,27 @@ class GfsWebSocketClient:
         client.
         """
         self._on_highlight_signal = handler
+
+    def attach_moment_public_handler(
+        self,
+        handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        """Late-bound wiring for the §Momentum-public inbound handler.
+
+        Receives ``incoming_public_moment`` and
+        ``incoming_public_moment_delete`` frames pushed by the GFS
+        broker. The handler verifies the envelope's signature and
+        persists the moment locally with ``received_via='gfs'``.
+        """
+        self._on_moment_public = handler
+
+    def attach_follow_changed_handler(
+        self,
+        handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        """Receive ``follow_changed`` frames from the GFS — the
+        author's UI uses these to keep follower counts live."""
+        self._on_follow_changed = handler
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -225,6 +252,35 @@ class GfsWebSocketClient:
             except Exception as exc:  # defensive
                 log.warning(
                     "gfs.ws.client: on_highlight_signal handler raised for %s: %s",
+                    self._gfs_url,
+                    exc,
+                )
+            return
+        if frame_type in ("incoming_public_moment", "incoming_public_moment_delete"):
+            if self._on_moment_public is None:
+                log.debug(
+                    "gfs.ws.client: dropping %s — no handler attached on %s",
+                    frame_type,
+                    self._gfs_url,
+                )
+                return
+            try:
+                await self._on_moment_public(frame)
+            except Exception as exc:  # defensive
+                log.warning(
+                    "gfs.ws.client: on_moment_public handler raised for %s: %s",
+                    self._gfs_url,
+                    exc,
+                )
+            return
+        if frame_type == "follow_changed":
+            if self._on_follow_changed is None:
+                return
+            try:
+                await self._on_follow_changed(frame)
+            except Exception as exc:  # defensive
+                log.warning(
+                    "gfs.ws.client: on_follow_changed handler raised for %s: %s",
                     self._gfs_url,
                     exc,
                 )

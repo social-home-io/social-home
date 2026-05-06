@@ -1688,6 +1688,7 @@ def create_app(config: Config | None = None) -> web.Application:
             session_factory=lambda: http_session,
             on_relay=_on_gfs_relay,
             on_highlight_signal=highlight_signaling_handler.handle_signal,
+            on_moment_public=moment_public_inbound.handle,
         )
         await gfs_ws_supervisor.start()
         app[K.gfs_ws_supervisor_key] = gfs_ws_supervisor
