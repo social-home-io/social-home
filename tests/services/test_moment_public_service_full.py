@@ -446,3 +446,66 @@ async def test_fetch_picture_returns_none_on_404(repos):
     svc = _make_service(repos, session=_StubSession(status=404))
     out = await svc.fetch_picture("g1", "u-remote")
     assert out is None
+
+
+async def test_fetch_picture_5xx_raises(repos):
+    svc = _make_service(repos, session=_StubSession(status=503))
+    with pytest.raises(MomentPublicError):
+        await svc.fetch_picture("g1", "u-remote")
+
+
+async def test_fetch_picture_raises_on_client_error(repos):
+    svc = MomentPublicService(
+        repos["regs"], repos["follows"], repos["users"], repos["gfs"]
+    )
+    svc.attach_session(_RaisingSession())  # type: ignore[arg-type]
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    with pytest.raises(MomentPublicError):
+        await svc.fetch_picture("g1", "u-remote")
+
+
+async def test_push_picture_propagates_500(repos, db):
+    """Picture upload failure logs but doesn't break the register call."""
+    from socialhome.repositories.profile_picture_repo import (
+        SqliteProfilePictureRepo,
+    )
+
+    pic_repo = SqliteProfilePictureRepo(db)
+    await pic_repo.set_user_picture(
+        "u1",
+        bytes_webp=b"webp",
+        hash="hashv1",
+        width=64,
+        height=64,
+    )
+    await db.enqueue("UPDATE users SET picture_hash='hashv1' WHERE user_id='u1'")
+
+    # Sequential responses: register success, picture upload 500.
+    class _SeqSession:
+        def __init__(self):
+            self.posts = []
+            self._statuses = [201, 500]
+
+        def post(self, url, *, json=None, **_kw):
+            self.posts.append(url)
+            status = self._statuses.pop(0) if self._statuses else 201
+            return _StubResp(status, {})
+
+        def get(self, url, **_kw):
+            return _StubResp(200, {})
+
+    sess = _SeqSession()
+    svc = MomentPublicService(
+        repos["regs"],
+        repos["follows"],
+        repos["users"],
+        repos["gfs"],
+        profile_picture_repo=pic_repo,
+    )
+    svc.attach_session(sess)  # type: ignore[arg-type]
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    # register itself succeeds; the picture push 500 is logged but
+    # does not propagate.
+    await svc.register(user_id="u1", gfs_id="g1")
+    upload_paths = [u for u in sess.posts if u.endswith("/picture")]
+    assert len(upload_paths) == 1
