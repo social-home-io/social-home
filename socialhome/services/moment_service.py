@@ -95,6 +95,7 @@ class MomentService:
         media_type: str | None = None,
         duration_ms: int | None = None,
         parent_moment_id: str | None = None,
+        is_public: bool = False,
     ) -> Moment:
         content = (content or "").strip()
         if len(content) > MOMENT_MAX_CONTENT_LEN:
@@ -157,6 +158,8 @@ class MomentService:
             origin_instance_id=self._own_instance_id,
             created_at=now.isoformat(),
             expires_at=(now + timedelta(days=MOMENT_RETENTION_DAYS)).isoformat(),
+            is_public=is_public,
+            received_via="self",
         )
         await self._moments.save(moment)
         await self._bus.publish(

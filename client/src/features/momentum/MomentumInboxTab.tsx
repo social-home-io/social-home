@@ -176,6 +176,14 @@ function MomentRow({
             {mine ? 'You' : m.author_user_id}
           </strong>
           <span class="sh-muted">· {relativeTime(m.created_at)}</span>
+          {m.received_via === 'gfs' && (
+            <span
+              class="sh-momentum-row-via-gfs"
+              title="Received via a public-share GFS"
+            >
+              · via GFS
+            </span>
+          )}
           {!mine && (
             <button
               type="button"

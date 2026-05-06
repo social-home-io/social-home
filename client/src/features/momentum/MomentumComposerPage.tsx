@@ -17,6 +17,10 @@ import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
+import {
+  loadRegistrations,
+  registrations,
+} from '@/store/momentPublic'
 import type { Moment } from '@/types'
 
 const MAX_CONTENT = 1_000
@@ -27,6 +31,10 @@ const content = signal<string>('')
 const mediaUrl = signal<string | null>(null)
 const mediaType = signal<'image' | 'video' | null>(null)
 const durationMs = signal<number | null>(null)
+//: Per-moment override for the §Momentum-public public-share toggle.
+//: Defaults from the user's per-GFS ``default_share`` flag when at
+//: least one registration exists.
+const isPublic = signal<boolean>(false)
 
 
 export default function MomentumComposerPage() {
@@ -44,6 +52,12 @@ export default function MomentumComposerPage() {
     mediaType.value = null
     durationMs.value = null
     submitting.value = false
+    void loadRegistrations().then(() => {
+      // Default the per-moment toggle from any registered GFS's
+      // ``default_share`` flag — true if the user has opted any GFS
+      // in to default-on sharing.
+      isPublic.value = registrations.value.some((r) => r.default_share)
+    })
   }, [parentId])
 
   const onPick = async () => {
@@ -108,6 +122,7 @@ export default function MomentumComposerPage() {
         if (mediaType.value === 'video') body.duration_ms = durationMs.value
       }
       if (parentId) body.parent_moment_id = parentId
+      if (registrations.value.length > 0) body.is_public = isPublic.value
       const m = await api.post('/api/moments', body) as Moment
       loc.route(parentId ? `/momentum/${parentId}` : `/momentum/${m.id}`)
     } catch (err: unknown) {
@@ -167,6 +182,21 @@ export default function MomentumComposerPage() {
           />
         )}
       </div>
+
+      {registrations.value.length > 0 && (
+        <label class="sh-momentum-composer-public">
+          <input
+            type="checkbox"
+            checked={isPublic.value}
+            onChange={(ev) => {
+              isPublic.value = (ev.currentTarget as HTMLInputElement).checked
+            }}
+          />
+          Share publicly via {registrations.value.length === 1
+            ? '1 GFS'
+            : `${registrations.value.length} GFSes`} — uncheck to keep household-only
+        </label>
+      )}
 
       <div class="sh-momentum-composer-actions">
         <Button onClick={submit} disabled={submitting.value}>
