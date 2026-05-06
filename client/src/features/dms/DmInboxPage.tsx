@@ -1,25 +1,69 @@
+/**
+ * DmInboxPage — the **Chats** panel (Talk → Chats).
+ *
+ * Three tabs: ``dms`` (1:1 conversations), ``groups`` (multi-party
+ * conversations), ``calls`` (active call tray, replaces the old
+ * standalone ``/calls`` page). Tab state is URL-driven via the
+ * ``?tab=`` query param so deep-links from elsewhere in the app and
+ * external bookmarks (e.g. ``/calls`` redirects to
+ * ``/dms?tab=calls``) land on the right tab.
+ */
 import { useEffect } from 'preact/hooks'
-import { useTitle } from '@/store/pageTitle'
-import { signal } from '@preact/signals'
+import { signal, computed } from '@preact/signals'
+import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import type { Conversation } from '@/types'
 import { DmInboxSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
+import { TabHeader } from '@/components/TabHeader'
 import { openNewDm } from '@/components/NewDmDialog'
 import { Avatar } from '@/components/Avatar'
 import { PullToRefresh } from '@/components/PullToRefresh'
+import { useTitle } from '@/store/pageTitle'
+import CallsTab from './CallsTab'
+
+type ChatsTab = 'dms' | 'groups' | 'calls'
+
+const TABS: readonly ChatsTab[] = ['dms', 'groups', 'calls'] as const
+const TAB_LABELS: Readonly<Record<ChatsTab, string>> = {
+  dms:    'DMs',
+  groups: 'Groups',
+  calls:  'Calls',
+}
 
 const conversations = signal<Conversation[]>([])
 const loading = signal(true)
+const activeTab = signal<ChatsTab>('dms')
 
-const reload = () =>
-  api.get('/api/conversations').then(data => {
-    conversations.value = data
-  }).catch(() => { /* noop — keep current list on transient failures */ })
+const dmsList = computed(() =>
+  conversations.value.filter((c) => c.type !== 'group_dm'),
+)
+const groupsList = computed(() =>
+  conversations.value.filter((c) => c.type === 'group_dm'),
+)
+
+
+function tabFromUrl(url: string): ChatsTab {
+  // ``url`` is the location object's ``url`` — full path + query.
+  // ``URLSearchParams`` parses the query string after the first '?'.
+  const q = url.split('?')[1] ?? ''
+  const t = new URLSearchParams(q).get('tab')
+  if (t === 'dms' || t === 'groups' || t === 'calls') return t
+  return 'dms'
+}
+
 
 export default function DmInboxPage() {
-  useTitle('Messages')
+  useTitle('Chats')
+  const loc = useLocation()
+
+  // Sync tab state from the URL on mount and any subsequent route
+  // change (back/forward, deep links from another tab in the SPA).
+  useEffect(() => {
+    activeTab.value = tabFromUrl(loc.url)
+  }, [loc.url])
+
   useEffect(() => {
     void reload().finally(() => { loading.value = false })
     // Refresh on any DM frame the server fans out — new conversations
@@ -29,80 +73,128 @@ export default function DmInboxPage() {
     return () => { offMsg(); offConv() }
   }, [])
 
-  if (loading.value) return <DmInboxSkeleton />
+  const onSelectTab = (tab: ChatsTab) => {
+    activeTab.value = tab
+    const next = tab === 'dms' ? '/dms' : `/dms?tab=${tab}`
+    if (loc.url !== next) loc.route(next, true)
+  }
+
+  const tabHeader = (
+    <TabHeader<ChatsTab>
+      activeTab={activeTab.value}
+      visibleTabs={TABS}
+      labels={TAB_LABELS}
+      ariaLabel="Chats sections"
+      onSelectTab={onSelectTab}
+    />
+  )
+
+  if (loading.value && activeTab.value !== 'calls') {
+    return (
+      <div class="sh-dms">
+        {tabHeader}
+        <DmInboxSkeleton />
+      </div>
+    )
+  }
+
+  if (activeTab.value === 'calls') {
+    return (
+      <div class="sh-dms">
+        {tabHeader}
+        <CallsTab />
+      </div>
+    )
+  }
+
+  const list = activeTab.value === 'groups' ? groupsList.value : dmsList.value
+  const emptyCopy = activeTab.value === 'groups'
+    ? 'Group conversations are 3+ people. Start one to see it here.'
+    : 'Direct messages are 1:1 chats with people in your household or connected households.'
 
   return (
     <PullToRefresh onRefresh={reload}>
-    <div class="sh-dms">
-      <div class="sh-page-header">
-        <Button onClick={() => openNewDm()}>+ New message</Button>
-      </div>
-      {conversations.value.length === 0 && (
-        <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">💬</div>
-          <h3 style={{ margin: 0 }}>No conversations yet</h3>
-          <p>
-            Direct messages are 1:1 or small-group chats with people in
-            your household or connected households.
-          </p>
-          <div style={{ marginTop: '0.75rem' }}>
-            <Button onClick={() => openNewDm()}>
-              + Start a conversation
-            </Button>
-          </div>
+      <div class="sh-dms">
+        {tabHeader}
+        <div class="sh-page-header">
+          <Button onClick={() => openNewDm()}>+ New message</Button>
         </div>
-      )}
-      {conversations.value.map(c => {
-        const peers = c.members ?? []
-        // Display-name fallback: explicit name > peer display names
-        // (joined by "·") > "Direct message". The peer-name path is
-        // what most groups end up with — even unnamed ones read as
-        // "Anna · Bob · Carol" instead of an opaque "Direct message".
-        const fallbackName = peers.length > 0
-          ? peers.map(p => p.display_name).join(' · ')
-          : 'Direct message'
-        const displayName = c.name || fallbackName
-        // Stack up to 3 avatars, then a "+N" overflow chip. Falls
-        // back to a single avatar from the conversation name when
-        // members are missing (legacy rows from before this field).
-        const visiblePeers = peers.slice(0, 3)
-        const overflow = peers.length - visiblePeers.length
-        return (
-          <a key={c.id} href={`/dms/${c.id}`} class="sh-dm-row">
-            <div class="sh-dm-avatars">
-              {peers.length === 0 ? (
-                <Avatar name={displayName} size={40} />
-              ) : (
-                <>
-                  {visiblePeers.map(p => (
-                    <Avatar
-                      key={p.user_id}
-                      name={p.display_name}
-                      src={p.picture_url}
-                      size={32}
-                    />
-                  ))}
-                  {overflow > 0 && (
-                    <span class="sh-dm-avatar-more">+{overflow}</span>
-                  )}
-                </>
+        {list.length === 0 && (
+          <div class="sh-empty-state">
+            <div style={{ fontSize: '2rem' }} aria-hidden="true">💬</div>
+            <h3 style={{ margin: 0 }}>
+              {activeTab.value === 'groups' ? 'No groups yet' : 'No conversations yet'}
+            </h3>
+            <p>{emptyCopy}</p>
+            <div style={{ marginTop: '0.75rem' }}>
+              <Button onClick={() => openNewDm()}>+ Start a conversation</Button>
+            </div>
+          </div>
+        )}
+        {list.map((c) => {
+          const peers = c.members ?? []
+          // Display-name fallback: explicit name > peer display names
+          // (joined by "·") > "Direct message". The peer-name path is
+          // what most groups end up with — even unnamed ones read as
+          // "Anna · Bob · Carol" instead of an opaque "Direct message".
+          const fallbackName = peers.length > 0
+            ? peers.map((p) => p.display_name).join(' · ')
+            : 'Direct message'
+          const displayName = c.name || fallbackName
+          // Stack up to 3 avatars, then a "+N" overflow chip. Falls
+          // back to a single avatar from the conversation name when
+          // members are missing (legacy rows from before this field).
+          const visiblePeers = peers.slice(0, 3)
+          const overflow = peers.length - visiblePeers.length
+          return (
+            <a key={c.id} href={`/dms/${c.id}`} class="sh-dm-row">
+              <div class="sh-dm-avatars">
+                {peers.length === 0 ? (
+                  <Avatar name={displayName} size={40} />
+                ) : (
+                  <>
+                    {visiblePeers.map((p) => (
+                      <Avatar
+                        key={p.user_id}
+                        name={p.display_name}
+                        src={p.picture_url}
+                        size={32}
+                      />
+                    ))}
+                    {overflow > 0 && (
+                      <span class="sh-dm-avatar-more">+{overflow}</span>
+                    )}
+                  </>
+                )}
+              </div>
+              <div class="sh-dm-info">
+                <strong>{displayName}</strong>
+                <span class="sh-badge">
+                  {c.type === 'group_dm'
+                    ? `Group · ${c.member_count ?? peers.length + 1}`
+                    : 'DM'}
+                </span>
+              </div>
+              {c.last_message_at && (
+                <time class="sh-muted">
+                  {new Date(c.last_message_at).toLocaleString()}
+                </time>
               )}
-            </div>
-            <div class="sh-dm-info">
-              <strong>{displayName}</strong>
-              <span class="sh-badge">
-                {c.type === 'group_dm'
-                  ? `Group · ${c.member_count ?? peers.length + 1}`
-                  : 'DM'}
-              </span>
-            </div>
-            {c.last_message_at && (
-              <time class="sh-muted">{new Date(c.last_message_at).toLocaleString()}</time>
-            )}
-          </a>
-        )
-      })}
-    </div>
+            </a>
+          )
+        })}
+      </div>
     </PullToRefresh>
   )
 }
+
+
+const reload = () =>
+  api
+    .get('/api/conversations')
+    .then((data) => {
+      conversations.value = data
+    })
+    .catch(() => {
+      /* noop — keep current list on transient failures */
+    })

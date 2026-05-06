@@ -7,6 +7,7 @@ vi.mock('@/ws', () => ({ ws: { on: vi.fn(() => () => {}) } }))
 
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
+import { active as activeCalls } from '@/store/calls'
 import { toggles } from '@/components/HouseholdToggles'
 import { SideNav } from './SideNav'
 
@@ -45,6 +46,7 @@ function renderAt(path: string) {
 beforeEach(() => {
   currentUser.value = null
   isGuardian.value = false
+  activeCalls.value = []
   toggles.value = { ...ALL_FEATURES_ON }
 })
 
@@ -194,5 +196,25 @@ describe('SideNav', () => {
     const { queryByText } = renderAt('/')
     expect(queryByText('Notifications')).toBeNull()
     expect(queryByText('Search')).toBeNull()
+  })
+
+  it('hides the Calls fast-lane entry when no call is active', () => {
+    setUser({ is_admin: true })
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Calls')).toBeNull()
+    // Chats is always present under Talk.
+    expect(queryByText('Chats')).toBeTruthy()
+  })
+
+  it('shows the Calls fast-lane entry pointing at /dms?tab=calls when a call is live', () => {
+    setUser({ is_admin: true })
+    activeCalls.value = [{
+      call_id: 'c-1', status: 'in_progress', caller: 'u1',
+      callee: 'u2', call_type: 'audio', created_at: 0,
+    }]
+    const { getByText } = renderAt('/')
+    const link = getByText('Calls').closest('a')
+    expect(link).toBeTruthy()
+    expect(link?.getAttribute('href')).toBe('/dms?tab=calls')
   })
 })
