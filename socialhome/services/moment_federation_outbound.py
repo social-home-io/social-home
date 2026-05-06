@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.federation_repo import AbstractFederationRepo
     from ..repositories.user_repo import AbstractUserRepo
+    from .relay_policy import RelayPolicy
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,13 @@ log = logging.getLogger(__name__)
 class MomentFederationOutbound:
     """Publish moment mutations to the 3-hop peer mesh."""
 
-    __slots__ = ("_bus", "_federation", "_federation_repo", "_user_repo")
+    __slots__ = (
+        "_bus",
+        "_federation",
+        "_federation_repo",
+        "_user_repo",
+        "_relay_policy",
+    )
 
     def __init__(
         self,
@@ -59,11 +66,13 @@ class MomentFederationOutbound:
         federation_service: "FederationService",
         federation_repo: "AbstractFederationRepo",
         user_repo: "AbstractUserRepo",
+        relay_policy: "RelayPolicy | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
         self._federation_repo = federation_repo
         self._user_repo = user_repo
+        self._relay_policy = relay_policy
 
     def wire(self) -> None:
         self._bus.subscribe(MomentCreated, self._on_created)
@@ -74,6 +83,16 @@ class MomentFederationOutbound:
 
     async def _on_created(self, event: MomentCreated) -> None:
         if not await self._is_local_user(event.author_user_id):
+            return
+        # §Momentum-relay-policy: skip outbound fan-out while the
+        # author or this moment has an open report. Local writes still
+        # fire on the bus before we get here, so the author sees their
+        # own row; peers don't until moderation resolves.
+        if not await self._policy_allows(
+            source_instance_id=event.origin_instance_id,
+            author_user_id=event.author_user_id,
+            target_id=event.moment_id,
+        ):
             return
         await self._fan_to_peers(
             event_type=FederationEventType.MOMENT_CREATED,
@@ -96,6 +115,12 @@ class MomentFederationOutbound:
 
     async def _on_deleted(self, event: MomentDeleted) -> None:
         if not await self._is_local_user(event.author_user_id):
+            return
+        if not await self._policy_allows(
+            source_instance_id=event.origin_instance_id,
+            author_user_id=event.author_user_id,
+            target_id=event.moment_id,
+        ):
             return
         await self._fan_to_peers(
             event_type=FederationEventType.MOMENT_DELETED,
@@ -166,6 +191,16 @@ class MomentFederationOutbound:
         if hop <= 0 or hop >= MOMENT_MAX_HOPS:
             return
         origin = str(payload.get("origin_instance_id") or "")
+        # §Momentum-relay-policy: don't relay a moment whose source
+        # is on the household ban list, or whose author / moment is
+        # under an open report. Layered on top of the no-redistribute
+        # guard above.
+        if not await self._policy_allows(
+            source_instance_id=origin or from_instance,
+            author_user_id=str(payload.get("author_user_id") or "") or None,
+            target_id=str(payload.get("moment_id") or "") or None,
+        ):
+            return
         next_payload = dict(payload)
         next_payload["hop_count"] = hop + 1
         await self._fan_to_peers(
@@ -232,3 +267,20 @@ class MomentFederationOutbound:
         except Exception as exc:  # pragma: no cover — defensive
             log.debug("moment-outbound: user lookup failed: %s", exc)
             return None
+
+    async def _policy_allows(
+        self,
+        *,
+        source_instance_id: str | None,
+        author_user_id: str | None,
+        target_id: str | None,
+    ) -> bool:
+        """Defer to :class:`RelayPolicy` when one is wired; default
+        allow when no policy is attached (legacy callers / tests)."""
+        if self._relay_policy is None:
+            return True
+        return await self._relay_policy.allow_relay(
+            source_instance_id=source_instance_id or "",
+            author_user_id=author_user_id,
+            target_id=target_id,
+        )

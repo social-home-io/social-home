@@ -51,6 +51,12 @@ class Moment:
     origin_instance_id: str
     created_at: str
     expires_at: str
+    #: Hop the row landed on this instance. ``1`` for the origin
+    #: author; ``2``/``3`` for relayed arrivals. Compared against
+    #: each viewer's :data:`MomentPreferences.max_hops` to gate
+    #: visibility (relay decisions stay bounded by
+    #: :data:`MOMENT_MAX_HOPS`, the global wire cap).
+    hop_count: int = 1
     #: Author chose to fan out via at least one GFS (§Momentum-public).
     is_public: bool = False
     #: How this row landed locally — ``self``/``household``/``gfs``.

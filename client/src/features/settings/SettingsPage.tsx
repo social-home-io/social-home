@@ -13,6 +13,7 @@ import { locale, setLocale } from '@/i18n/i18n'
 import localeMeta from '@/i18n/locales/_meta.json'
 import {
   getLandingPath,
+  getPreferences,
   setPreference,
   type LandingPath,
 } from '@/utils/preferences'
@@ -336,6 +337,7 @@ function PrivacyTab() {
         Show online status to other household members
       </label>
       <HighlightsPreferencesPanel />
+      <MomentumPanel />
       <BlockedAccountsPanel />
       <FollowingPanel />
     </section>
@@ -539,6 +541,48 @@ function HighlightsPreferencesPanel() {
           <option value="all_paired">All connected households</option>
           <option value="households">Pick households per highlight</option>
           <option value="users">Pick people per highlight (advanced)</option>
+        </select>
+      </label>
+      <div class="sh-form-actions">
+        <Button onClick={save}>Save</Button>
+      </div>
+    </div>
+  )
+}
+
+function MomentumPanel() {
+  const prefs = (getPreferences().moments ?? {}) as { max_hops?: 1 | 2 | 3 }
+  const maxHops = signal<1 | 2 | 3>((prefs.max_hops ?? 3) as 1 | 2 | 3)
+  const save = async () => {
+    try {
+      await setPreference('moments', { max_hops: maxHops.value })
+      showToast('Momentum visibility saved', 'success')
+    } catch {
+      showToast('Failed to save Momentum settings', 'error')
+    }
+  }
+  return (
+    <div id="momentum" class="sh-settings-momentum-panel">
+      <h3>Momentum visibility</h3>
+      <p class="sh-muted">
+        Federated moments hop up to 3 instances. Pick how many hops
+        deep you want your inbox to surface — your instance still
+        relays farther so other households can see them.
+      </p>
+      <label class="sh-form-row">
+        Show moments up to
+        <select
+          value={String(maxHops.value)}
+          onChange={e => {
+            const v = Number(
+              (e.target as HTMLSelectElement).value,
+            ) as 1 | 2 | 3
+            maxHops.value = v
+          }}
+        >
+          <option value="1">1 hop (only direct peers)</option>
+          <option value="2">2 hops</option>
+          <option value="3">3 hops (default — every relayed moment)</option>
         </select>
       </label>
       <div class="sh-form-actions">

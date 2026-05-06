@@ -32,6 +32,7 @@ from ..domain.moment import (
     MOMENT_MAX_VIDEO_MS,
     Moment,
 )
+from .user_preferences import parse_moment_preferences
 
 if TYPE_CHECKING:
     from ..infrastructure.event_bus import EventBus
@@ -251,11 +252,20 @@ class MomentService:
         limit: int = 50,
         tag: str | None = None,
     ) -> list[Moment]:
+        # Per-user max-hops visibility (§Momentum-relay-policy):
+        # parse the viewer's preferences once and forward the cap to
+        # the repo so the inbox query hides moments that arrived at
+        # a higher hop than the user wants to see.
+        viewer = await self._users.get_by_user_id(viewer_user_id)
+        prefs = parse_moment_preferences(
+            viewer.preferences_json if viewer is not None else None
+        )
         return await self._moments.list_visible_to(
             viewer_user_id,
             before=before,
             limit=limit,
             tag=tag,
+            max_hops=prefs.max_hops,
         )
 
     async def list_replies(self, moment_id: str) -> list[Moment]:

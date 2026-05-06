@@ -288,6 +288,10 @@ from .moments_public import (
     MomentPublicRegistrationCollectionView,
     MomentPublicRegistrationDetailView,
 )
+from .admin_instance_bans import (
+    InstanceBanCollectionView,
+    InstanceBanDetailView,
+)
 from .ha_users import HaUserProvisionView, HaUsersCollectionView
 from .reports import (
     AdminReportCollectionView,
@@ -375,6 +379,14 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/admin/users/{username}/issue-password-reset",
         IssuePasswordResetView,
+    )
+    app.router.add_view(
+        "/api/admin/instance-bans",
+        InstanceBanCollectionView,
+    )
+    app.router.add_view(
+        "/api/admin/instance-bans/{instance_id}",
+        InstanceBanDetailView,
     )
     app.router.add_view("/api/me/export", MeExportView)
     app.router.add_view("/api/users", UserCollectionView)

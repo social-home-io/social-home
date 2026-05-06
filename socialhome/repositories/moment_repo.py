@@ -37,6 +37,7 @@ class AbstractMomentRepo(Protocol):
         before: str | None = None,
         limit: int = 50,
         tag: str | None = None,
+        max_hops: int = 3,
     ) -> list[Moment]: ...
     async def list_replies(self, parent_moment_id: str) -> list[Moment]: ...
     async def count_recent_for_author(
@@ -45,6 +46,12 @@ class AbstractMomentRepo(Protocol):
         *,
         since_iso: str,
     ) -> int: ...
+    async def has_visible_recipient(
+        self,
+        *,
+        author_user_id: str,
+        hop_count: int,
+    ) -> bool: ...
 
     # Reactions -----------------------------------------------------------
     async def set_reaction(
@@ -100,15 +107,16 @@ class SqliteMomentRepo:
             INSERT INTO moments(
                 id, author_user_id, content, media_url, media_type,
                 duration_ms, parent_moment_id, origin_instance_id,
-                created_at, expires_at, is_public, received_via,
-                received_via_gfs_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                created_at, expires_at, hop_count, is_public,
+                received_via, received_via_gfs_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content,
                 media_url=excluded.media_url,
                 media_type=excluded.media_type,
                 duration_ms=excluded.duration_ms,
                 expires_at=excluded.expires_at,
+                hop_count=excluded.hop_count,
                 is_public=excluded.is_public,
                 received_via=excluded.received_via,
                 received_via_gfs_id=excluded.received_via_gfs_id
@@ -124,6 +132,7 @@ class SqliteMomentRepo:
                 moment.origin_instance_id,
                 moment.created_at,
                 moment.expires_at,
+                int(moment.hop_count),
                 int(moment.is_public),
                 moment.received_via,
                 moment.received_via_gfs_id,
@@ -164,13 +173,17 @@ class SqliteMomentRepo:
         before: str | None = None,
         limit: int = 50,
         tag: str | None = None,
+        max_hops: int = 3,
     ) -> list[Moment]:
-        """One query covers blocks, retention, and the cursor.
+        """One query covers blocks, retention, hop visibility, and
+        the cursor.
 
         Visibility:
         * Author is not on the viewer's :table:`user_blocks`.
         * EITHER the moment is < 24 h old, OR the viewer follows the
           author (then up to 7 d, the absolute ``expires_at``).
+        * The row's ``hop_count`` is ≤ the viewer's ``max_hops``
+          preference (default 3 = the wire cap, so all rows pass).
         * ``before`` is an ISO-8601 ``created_at`` cursor; ``NULL``
           fetches from newest.
         * ``tag`` (lowercase) restricts the result to moments tagged
@@ -178,6 +191,10 @@ class SqliteMomentRepo:
         """
         limit = max(1, min(int(limit), 100))
         normalised_tag = tag.strip().lower().lstrip("#") if tag else None
+        # Clamp ``max_hops`` to [1, 3]: the wire cap is 3 and a
+        # value below 1 would hide every row including the user's
+        # own moments.
+        capped_hops = max(1, min(int(max_hops), 3))
         rows = await self._db.fetchall(
             """
             SELECT m.* FROM moments AS m
@@ -194,6 +211,7 @@ class SqliteMomentRepo:
                  )
                )
                AND m.expires_at > datetime('now')
+               AND m.hop_count <= ?
                AND (? IS NULL OR m.created_at < ?)
                AND (
                  ? IS NULL OR EXISTS (
@@ -207,6 +225,7 @@ class SqliteMomentRepo:
             (
                 viewer_user_id,
                 viewer_user_id,
+                capped_hops,
                 before,
                 before,
                 normalised_tag,
@@ -215,6 +234,45 @@ class SqliteMomentRepo:
             ),
         )
         return [m for m in (_row_to_moment(d) for d in rows_to_dicts(rows)) if m]
+
+    async def has_visible_recipient(
+        self,
+        *,
+        author_user_id: str,
+        hop_count: int,
+    ) -> bool:
+        """True iff at least one local user can see this moment under
+        their preferences and block list. Used by the inbound
+        federation handler to skip the local persist when no one
+        wants the row (pure pass-through — relay continues).
+
+        A user "can see" iff:
+        * The author is NOT on their :table:`user_blocks` row.
+        * Their ``moments.max_hops`` preference (read from
+          ``users.preferences_json``) is ≥ ``hop_count``.
+
+        The preference is parsed inline via SQLite's ``json_extract``
+        so we don't have to load every user just to compute the
+        gate. Rows without a ``moments.max_hops`` key default to the
+        wire cap of 3 (most-permissive — matches new accounts).
+        """
+        row = await self._db.fetchone(
+            """
+            SELECT 1 FROM users AS u
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM user_blocks
+                  WHERE blocker_user_id = u.user_id
+                    AND blocked_user_id = ?
+             )
+               AND COALESCE(
+                   json_extract(u.preferences_json, '$.moments.max_hops'),
+                   3
+               ) >= ?
+             LIMIT 1
+            """,
+            (author_user_id, int(hop_count)),
+        )
+        return row is not None
 
     async def list_replies(self, parent_moment_id: str) -> list[Moment]:
         """Replies in chronological order so the thread reads top-down."""
@@ -411,6 +469,7 @@ def _row_to_moment(row: dict | None) -> Moment | None:
         origin_instance_id=row["origin_instance_id"],
         created_at=row["created_at"],
         expires_at=row["expires_at"],
+        hop_count=int(row.get("hop_count") or 1),
         is_public=bool(row.get("is_public") or 0),
         received_via=row.get("received_via") or "self",
         received_via_gfs_id=row.get("received_via_gfs_id"),
