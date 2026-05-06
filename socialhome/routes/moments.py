@@ -59,6 +59,11 @@ def _moment_dict(
         "expires_at": m.expires_at,
         "reaction_count": 0,
         "reply_count": 0,
+        # §Momentum-public provenance — the inbox uses these to render
+        # a "via {gfs}" chip and to suppress the relay path locally.
+        "is_public": m.is_public,
+        "received_via": m.received_via,
+        "received_via_gfs_id": m.received_via_gfs_id,
     }
     if counts is not None:
         base["reaction_count"] = counts.get("reaction_count", 0)
@@ -115,6 +120,7 @@ class MomentCollectionView(BaseView):
             media_type=body.get("media_type"),
             duration_ms=body.get("duration_ms"),
             parent_moment_id=body.get("parent_moment_id"),
+            is_public=bool(body.get("is_public", False)),
         )
         return self._json(_moment_dict(moment), status=201)
 
