@@ -241,3 +241,59 @@ async def test_revoke_token_failure_maps_to_502(
         headers=_auth(client._tok),
     )
     assert r.status == 502
+
+
+# ── OG thumbnail upload route ────────────────────────────────────────────
+
+
+import base64 as _b64
+
+
+async def test_og_upload_calls_service_and_returns_url(
+    client, seeded_story, stub_service,
+):
+    """Add the upload method on the stub at fixture time."""
+    captured: list[tuple] = []
+
+    async def upload_og_thumbnail(story_id, user_id, *, jpeg_bytes):
+        captured.append((story_id, user_id, jpeg_bytes))
+        return "https://gfs.example/og.jpg"
+
+    stub_service.upload_og_thumbnail = upload_og_thumbnail  # type: ignore[attr-defined]
+    r = await client.post(
+        f"/api/stories/{seeded_story}/publish/og",
+        json={"image_b64": _b64.b64encode(b"\xff\xd8\xff" + b"\x00" * 16).decode("ascii")},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["url"] == "https://gfs.example/og.jpg"
+    assert captured[0][0] == seeded_story
+    assert captured[0][1] == client._uid
+    assert captured[0][2][:3] == b"\xff\xd8\xff"
+
+
+async def test_og_upload_missing_image_returns_422(client, seeded_story):
+    r = await client.post(
+        f"/api/stories/{seeded_story}/publish/og",
+        json={},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_og_upload_bad_b64_returns_422(client, seeded_story):
+    r = await client.post(
+        f"/api/stories/{seeded_story}/publish/og",
+        json={"image_b64": "not!!!base64!!!"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_og_upload_unauthenticated_returns_401(client, seeded_story):
+    r = await client.post(
+        f"/api/stories/{seeded_story}/publish/og",
+        json={"image_b64": "Zm9v"},
+    )
+    assert r.status == 401

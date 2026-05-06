@@ -211,6 +211,12 @@ CREATE TABLE IF NOT EXISTS gfs_story_publications (
     -- empty string is acceptable when the route doesn't capture the
     -- signature header (PR1 — re-verification is PR2 territory).
     publish_signature TEXT NOT NULL DEFAULT '',
+    -- Filename of the cached OG-card thumbnail (under
+    -- ``GfsConfig.og_thumbnail_dir``). NULL when the author opted
+    -- out of social previews, or before the first upload lands.
+    -- Lives on the GFS so anonymous OG crawlers (Twitter, iMessage,
+    -- Slack, …) can fetch the image without needing the share token.
+    og_thumbnail_filename TEXT,
     PRIMARY KEY (story_id, instance_id)
 );
 CREATE INDEX IF NOT EXISTS idx_gfs_story_pub_expires

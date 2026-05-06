@@ -176,11 +176,13 @@ class GfsApp:
             enabled=config.cluster_enabled,
         )
         admin.attach_cluster(cluster)
+        og_dir = Path(config.data_dir) / "og_thumbnails"
         story_pubs = StoryPublicationRegistry(
             repos.story_pubs,
             repos.story_tokens,
             ws_registry,
             base_url=config.base_url,
+            og_thumbnail_dir=og_dir,
         )
         return SimpleNamespace(
             federation=federation,

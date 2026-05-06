@@ -276,6 +276,79 @@ async def test_expires_to_unix_handles_iso(repos):
     assert _expires_to_unix("2026-05-03T12:00:00Z") == expected
 
 
+# ── OG thumbnail upload ─────────────────────────────────────────────────
+
+
+async def test_upload_og_thumbnail_signs_and_returns_url(repos, seeded_story):
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+    sess = _StubSession(
+        status=200,
+        body={"status": "ok", "url": "https://gfs/example/og.jpg"},
+    )
+    svc = _make_service(repos, session=sess)
+    url = await svc.upload_og_thumbnail(
+        seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff" + b"\x00" * 32,
+    )
+    assert url == "https://gfs/example/og.jpg"
+    assert sess.posts[0][0].endswith(f"/gfs/stories/{seeded_story.id}/og")
+    assert "image_b64" in sess.posts[0][1]
+    assert "signature" in sess.posts[0][1]
+
+
+async def test_upload_og_thumbnail_when_not_published_raises(repos, seeded_story):
+    sess = _StubSession()
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryPublicationError):
+        await svc.upload_og_thumbnail(
+            seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff",
+        )
+
+
+async def test_upload_og_thumbnail_other_user_raises_not_found(
+    repos, seeded_story,
+):
+    sess = _StubSession()
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryNotFoundError):
+        await svc.upload_og_thumbnail(
+            seeded_story.id, "someone-else", jpeg_bytes=b"\xff\xd8\xff",
+        )
+
+
+async def test_upload_og_thumbnail_gfs_failure_raises(repos, seeded_story):
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+    sess = _StubSession(status=500, body={"error": "server"})
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryPublicationError):
+        await svc.upload_og_thumbnail(
+            seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff",
+        )
+
+
+async def test_upload_og_thumbnail_missing_url_in_response_raises(
+    repos, seeded_story,
+):
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+    sess = _StubSession(status=200, body={"status": "ok"})  # no url
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryPublicationError):
+        await svc.upload_og_thumbnail(
+            seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff",
+        )
+
+
 # ── Story type sanity (read-only) ────────────────────────────────────────
 
 
