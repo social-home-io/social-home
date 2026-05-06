@@ -140,6 +140,37 @@ pass `--no-verify`**: when a hook fails, fix the underlying issue —
 fixtures, factories, and shared utilities are designed so the gate
 is achievable.
 
+## Slow files
+
+A handful of test files take 15–40 s to run. They share one cause:
+each test spins up a fresh ``aiohttp.test_utils.TestServer`` plus a
+new ``GfsApp`` (DB migration, route registration, service factory).
+At ~600 ms × N tests the cost dominates whatever the test itself
+measures. Worst offenders:
+
+```
+tests/global_server/test_admin_endpoints.py
+tests/global_server/test_cluster_fanout.py
+tests/global_server/test_cluster_integration.py
+tests/global_server/test_server_error_branches.py
+tests/global_server/test_story_public_routes.py
+tests/global_server/test_story_rtc_routes.py
+tests/routes/test_error_paths_coverage.py
+```
+
+The obvious fix — share the ``TestServer`` across the whole module
+via ``pytest_asyncio.fixture(scope="module", loop_scope="module")``
+— breaks the locally-installed
+``pytest_homeassistant_custom_component`` plugin's ``verify_cleanup``
+(it runs ``shutdown_default_executor()`` after every test, which
+kills the executor the shared server needs). CI doesn't ship that
+plugin and would benefit, but the environment mismatch makes the
+optimisation risky to land.
+
+If a future contributor adds a conditional bypass for the HA plugin
+(or a project-level ``-p no:`` opt-out), pulling these files down to
+<5 s each is the single largest wall-time win available in the suite.
+
 ## Spec references
 
 - §27 — test strategy (this page)

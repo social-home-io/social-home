@@ -119,6 +119,21 @@ async def test_publish_unauthenticated_returns_401(client, seeded_story):
     assert r.status == 401
 
 
+async def test_get_publish_unauthenticated_returns_401(client, seeded_story):
+    r = await client.get(f"/api/stories/{seeded_story}/publish")
+    assert r.status == 401
+
+
+async def test_delete_publish_unauthenticated_returns_401(client, seeded_story):
+    r = await client.delete(f"/api/stories/{seeded_story}/publish")
+    assert r.status == 401
+
+
+async def test_revoke_token_unauthenticated_returns_401(client, seeded_story):
+    r = await client.delete(f"/api/stories/{seeded_story}/publish/tok-A")
+    assert r.status == 401
+
+
 async def test_publish_other_users_story_returns_404(
     client,
     seeded_story,

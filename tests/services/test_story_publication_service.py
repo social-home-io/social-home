@@ -361,6 +361,78 @@ async def test_upload_og_thumbnail_missing_url_in_response_raises(
         )
 
 
+# ── Other error paths that were untested ────────────────────────────────
+
+
+async def test_publish_with_no_expires_at_raises(repos):
+    """Defensive guard — if a story somehow has no ``expires_at``
+    (shouldn't happen — every story is created with one) the service
+    refuses publish rather than POSTing an unbounded cap."""
+    await repos["stories"]._db.enqueue(
+        "INSERT INTO stories(id, author_user_id, story_date, audience_kind, "
+        "audience_json, created_at, expires_at) "
+        "VALUES('s-no-exp', 'u1', '2026-05-03', 'all_paired', '[]', "
+        "datetime('now'), '')",
+    )
+    sess = _StubSession()
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryPublicationError):
+        await svc.publish("s-no-exp", "u1", gfs_id="gfs-abc")
+    assert sess.posts == []  # didn't reach GFS
+
+
+async def test_publish_aiohttp_client_error_wraps_as_service_error(
+    repos,
+    seeded_story,
+):
+    """Network errors during publish are translated to service-level
+    ``StoryPublicationError`` so route handlers can map them
+    uniformly to HTTP 502."""
+    import aiohttp as _aiohttp
+
+    class _BoomSession(_StubSession):
+        def post(self, url, *, json=None, **_kw):
+            self.posts.append((url, json or {}))
+            raise _aiohttp.ClientError("network down")
+
+    svc = _make_service(repos, session=_BoomSession())
+    with pytest.raises(StoryPublicationError):
+        await svc.publish(seeded_story.id, "u1", gfs_id="gfs-abc")
+
+
+async def test_revoke_token_aiohttp_client_error_wraps(repos, seeded_story):
+    import aiohttp as _aiohttp
+
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    class _BoomSession(_StubSession):
+        def post(self, url, *, json=None, **_kw):
+            self.posts.append((url, json or {}))
+            raise _aiohttp.ClientError("network down")
+
+    svc = _make_service(repos, session=_BoomSession())
+    with pytest.raises(StoryPublicationError):
+        await svc.revoke_token(seeded_story.id, "u1", token="tok-A")
+
+
+async def test_revoke_token_http_error_wraps(repos, seeded_story):
+    """A non-2xx revoke response is logged + re-raised as a service
+    error so the SPA gets a 502."""
+    await repos["stories"].mark_published(
+        seeded_story.id,
+        gfs_id="gfs-abc",
+        published_at=datetime.now(timezone.utc).isoformat(),
+    )
+    sess = _StubSession(status=500, body={"error": "server"})
+    svc = _make_service(repos, session=sess)
+    with pytest.raises(StoryPublicationError):
+        await svc.revoke_token(seeded_story.id, "u1", token="tok-A")
+
+
 # ── Story type sanity (read-only) ────────────────────────────────────────
 
 
