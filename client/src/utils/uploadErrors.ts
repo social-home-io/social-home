@@ -1,7 +1,7 @@
 /**
  * uploadErrors — friendlier message for upload failures.
  *
- * Composer / DM / gallery / story / bazaar all surface raw exception
+ * Composer / DM / gallery / highlight / bazaar all surface raw exception
  * text on upload failures today (e.g. ``"Upload failed: TypeError:
  * Failed to fetch"``). That reads as "the app is broken" rather than
  * "your file is too big" or "we lost the network". Map the common

@@ -14,8 +14,8 @@ describe('router', () => {
     //   /spaces/:id/zones — per-space zones admin (§23.8.7)
     //   /setup           — first-boot wizard (platform/v2)
     //   /friends         — connected-people dashboard under Browse
-    //   /stories, /stories/new, /stories/:storyId — Stories pillar (§Stories)
-    //   /stories/archive — month-grid history browser (§Stories)
+    //   /highlights, /highlights/new, /highlights/:highlightId — Highlights pillar (§Highlights)
+    //   /highlights/archive — month-grid history browser (§Highlights)
     //   /momentum, /momentum/new, /momentum/:id, /momentum/:id/reply,
     //     /momentum/archive — Momentum pillar (§Momentum)
     expect(Object.keys(routes).length).toBe(40)

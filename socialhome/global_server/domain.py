@@ -122,20 +122,20 @@ class RtcConnection:
 
 
 @dataclass(slots=True, frozen=True)
-class GfsStoryPublication:
-    """A SH instance's opt-in to share a single story via this GFS.
+class GfsHighlightPublication:
+    """A SH instance's opt-in to share a single highlight via this GFS.
 
-    GFS holds zero story bytes — only the routing metadata + a cached
+    GFS holds zero highlight bytes — only the routing metadata + a cached
     Ed25519 signature so the publish can be re-verified during audits
-    or signalling. The story itself streams over WebRTC author →
+    or signalling. The highlight itself streams over WebRTC author →
     viewer once the public landing page bootstraps a peer connection.
 
     ``expires_at`` is unix epoch and mirrors the author's
-    ``stories.expires_at`` so a publication can never outlive the
-    story it advertises.
+    ``highlights.expires_at`` so a publication can never outlive the
+    highlight it advertises.
     """
 
-    story_id: str
+    highlight_id: str
     instance_id: str
     expires_at: int
     published_at: int
@@ -150,8 +150,8 @@ class GfsStoryPublication:
 
 
 @dataclass(slots=True, frozen=True)
-class GfsStoryToken:
-    """One revocable share link under a :class:`GfsStoryPublication`.
+class GfsHighlightToken:
+    """One revocable share link under a :class:`GfsHighlightPublication`.
 
     Authors mint multiple tokens per publication — one per platform
     or recipient — so they can revoke a single audience without
@@ -161,7 +161,7 @@ class GfsStoryToken:
     """
 
     token: str
-    story_id: str
+    highlight_id: str
     instance_id: str
     label: str | None
     created_at: int

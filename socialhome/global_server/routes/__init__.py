@@ -67,22 +67,22 @@ from .rtc import (
     RtcPingView,
     RtcSessionView,
 )
-from .stories import (
-    StoryOgImageView,
-    StoryOgUploadView,
-    StoryPublicLandingView,
-    StoryPublishView,
-    StoryTokenMintView,
-    StoryTokenRevokeView,
-    StoryUnpublishView,
+from .highlights import (
+    HighlightOgImageView,
+    HighlightOgUploadView,
+    HighlightPublicLandingView,
+    HighlightPublishView,
+    HighlightTokenMintView,
+    HighlightTokenRevokeView,
+    HighlightUnpublishView,
 )
-from .story_rtc import (
-    StoryIceServersView,
-    StoryRtcAnswerView,
-    StoryRtcAuthorIceView,
-    StoryRtcOfferView,
-    StoryRtcSessionView,
-    StoryRtcViewerIceView,
+from .highlight_rtc import (
+    HighlightIceServersView,
+    HighlightRtcAnswerView,
+    HighlightRtcAuthorIceView,
+    HighlightRtcOfferView,
+    HighlightRtcSessionView,
+    HighlightRtcViewerIceView,
 )
 from .ws import GfsWebSocketView
 
@@ -98,7 +98,7 @@ def register_routes(
 
     Accepts ``admin_ui_dir`` for the admin-static mount, ``media_dir``
     (absolute) for the public ``/media/`` file mount, and the optional
-    ``public_static_dir`` that holds the §stories_public viewer
+    ``public_static_dir`` that holds the §highlights_public viewer
     bundle. Tests pass ``None`` for the static dir when they don't
     care about the public landing JS.
     """
@@ -147,54 +147,54 @@ def register_routes(
     app.router.add_view("/gfs/rtc/ping", RtcPingView)
     app.router.add_view("/gfs/rtc/session/{session_id}", RtcSessionView)
 
-    # Public story publications (§stories_public). Signed wire endpoints
+    # Public highlight publications (§highlights_public). Signed wire endpoints
     # for author SH instances; the public landing is anonymous.
     app.router.add_view(
-        "/gfs/stories/{story_id}/publish",
-        StoryPublishView,
+        "/gfs/highlights/{highlight_id}/publish",
+        HighlightPublishView,
     )
     app.router.add_view(
-        "/gfs/stories/{story_id}/tokens",
-        StoryTokenMintView,
+        "/gfs/highlights/{highlight_id}/tokens",
+        HighlightTokenMintView,
     )
     app.router.add_view(
-        "/gfs/story_tokens/{token}/revoke",
-        StoryTokenRevokeView,
+        "/gfs/highlight_tokens/{token}/revoke",
+        HighlightTokenRevokeView,
     )
     app.router.add_view(
-        "/gfs/stories/{story_id}/unpublish",
-        StoryUnpublishView,
+        "/gfs/highlights/{highlight_id}/unpublish",
+        HighlightUnpublishView,
     )
     app.router.add_view(
-        "/gfs/stories/{story_id}/og",
-        StoryOgUploadView,
+        "/gfs/highlights/{highlight_id}/og",
+        HighlightOgUploadView,
     )
     # Public OG image — fetched by anonymous social-card crawlers.
-    # Path is stable per (instance, story) so a token rotation
+    # Path is stable per (instance, highlight) so a token rotation
     # doesn't invalidate the cached preview on Twitter / Slack /
     # iMessage. Mounted before the ``{token}`` route so aiohttp's
     # routing table picks the literal ``og.jpg`` first.
     app.router.add_view(
-        "/story/{instance_id}/{story_id}/og.jpg",
-        StoryOgImageView,
+        "/highlight/{instance_id}/{highlight_id}/og.jpg",
+        HighlightOgImageView,
     )
     app.router.add_view(
-        "/story/{instance_id}/{story_id}/{token}",
-        StoryPublicLandingView,
+        "/highlight/{instance_id}/{highlight_id}/{token}",
+        HighlightPublicLandingView,
     )
 
-    # Public-viewer signalling for the public-story flow. The offer
+    # Public-viewer signalling for the public-highlight flow. The offer
     # endpoint is anonymous (token-gated); the answer endpoints are
     # Ed25519-signed by the author SH like the rest of /gfs/rtc/*.
-    app.router.add_view("/gfs/stories/ice-servers", StoryIceServersView)
-    app.router.add_view("/gfs/story_rtc/offer", StoryRtcOfferView)
+    app.router.add_view("/gfs/highlights/ice-servers", HighlightIceServersView)
+    app.router.add_view("/gfs/highlight_rtc/offer", HighlightRtcOfferView)
     app.router.add_view(
-        "/gfs/story_rtc/session/{session_id}",
-        StoryRtcSessionView,
+        "/gfs/highlight_rtc/session/{session_id}",
+        HighlightRtcSessionView,
     )
-    app.router.add_view("/gfs/story_rtc/ice/viewer", StoryRtcViewerIceView)
-    app.router.add_view("/gfs/story_rtc/answer", StoryRtcAnswerView)
-    app.router.add_view("/gfs/story_rtc/ice/author", StoryRtcAuthorIceView)
+    app.router.add_view("/gfs/highlight_rtc/ice/viewer", HighlightRtcViewerIceView)
+    app.router.add_view("/gfs/highlight_rtc/answer", HighlightRtcAnswerView)
+    app.router.add_view("/gfs/highlight_rtc/ice/author", HighlightRtcAuthorIceView)
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.
@@ -208,8 +208,8 @@ def register_routes(
     if Path(media_dir).is_dir():
         app.router.add_static("/media/", media_dir)
     if public_static_dir is not None and public_static_dir.is_dir():
-        # Hosts the vanilla-JS public-viewer bundle for §stories_public.
-        # The landing page references ``/static/story_public_viewer.js``.
+        # Hosts the vanilla-JS public-viewer bundle for §highlights_public.
+        # The landing page references ``/static/highlight_public_viewer.js``.
         app.router.add_static("/static/", str(public_static_dir))
 
     # Admin JSON API (all behind admin_auth_middleware).

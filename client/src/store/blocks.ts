@@ -1,7 +1,7 @@
 /**
  * Personal block list — viewer-private (§Privacy).
  *
- * Mirrors ``GET /api/blocks`` so UI surfaces (Stories ring, Story
+ * Mirrors ``GET /api/blocks`` so UI surfaces (Highlights ring, Highlight
  * viewer header, Settings → Privacy) can hide rows without waiting on
  * a fetch round-trip. The server enforces visibility — this store is
  * an optimistic cache.

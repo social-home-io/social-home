@@ -11,7 +11,7 @@ import type { JSX } from 'preact'
 export type SideNavIconName =
   | 'feed' | 'calendar' | 'tasks' | 'shopping' | 'presence'
   | 'gallery' | 'pages' | 'stickies'
-  | 'messages' | 'calls' | 'stories' | 'momentum'
+  | 'messages' | 'calls' | 'highlights' | 'momentum'
   | 'spaces' | 'bazaar' | 'corner'
   | 'parent-control' | 'settings' | 'connections' | 'admin'
 
@@ -109,7 +109,7 @@ const GLYPHS: Record<SideNavIconName, JSX.Element> = {
       <path d="M5 4h3l2 5-2.5 1.5a12 12 0 0 0 6 6L15 14l5 2v3a1 1 0 0 1-1 1A15 15 0 0 1 4 5a1 1 0 0 1 1-1z" />
     </svg>
   ),
-  stories: (
+  highlights: (
     <svg {...COMMON}>
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="4" />

@@ -127,7 +127,7 @@ export function UserActionsMenu() {
         open={showConfirmBlock.value}
         title={`Block ${targetDisplayName.value}?`}
         message={
-          `You won't see their stories, posts, presence, or friends-list `
+          `You won't see their highlights, posts, presence, or friends-list `
           + `entry, and neither of you can DM the other. You can unblock `
           + `anytime in Settings → Privacy → Blocked accounts.`
         }

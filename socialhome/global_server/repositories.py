@@ -27,8 +27,8 @@ from .domain import (
     ClusterNode,
     GfsAppeal,
     GfsFraudReport,
-    GfsStoryPublication,
-    GfsStoryToken,
+    GfsHighlightPublication,
+    GfsHighlightToken,
     GfsSubscriber,
     GlobalSpace,
     RtcConnection,
@@ -974,60 +974,60 @@ def _row_to_report(row: dict | None) -> GfsFraudReport | None:
     )
 
 
-# ─── Story publication repos (§stories_public) ───────────────────────────
+# ─── Highlight publication repos (§highlights_public) ───────────────────────────
 
 
 @runtime_checkable
-class AbstractGfsStoryPublicationRepo(Protocol):
-    async def upsert(self, pub: GfsStoryPublication) -> None: ...
+class AbstractGfsHighlightPublicationRepo(Protocol):
+    async def upsert(self, pub: GfsHighlightPublication) -> None: ...
     async def get(
         self,
-        story_id: str,
+        highlight_id: str,
         instance_id: str,
-    ) -> GfsStoryPublication | None: ...
-    async def delete(self, story_id: str, instance_id: str) -> int: ...
+    ) -> GfsHighlightPublication | None: ...
+    async def delete(self, highlight_id: str, instance_id: str) -> int: ...
     async def prune_expired(self, now: int) -> int: ...
     async def list_for_instance(
         self,
         instance_id: str,
-    ) -> list[GfsStoryPublication]: ...
+    ) -> list[GfsHighlightPublication]: ...
     async def set_og_thumbnail(
         self,
-        story_id: str,
+        highlight_id: str,
         instance_id: str,
         filename: str | None,
     ) -> int: ...
 
 
-class SqliteGfsStoryPublicationRepo:
-    """SQLite-backed :class:`AbstractGfsStoryPublicationRepo`."""
+class SqliteGfsHighlightPublicationRepo:
+    """SQLite-backed :class:`AbstractGfsHighlightPublicationRepo`."""
 
     __slots__ = ("_db",)
 
     def __init__(self, db: AsyncDatabase) -> None:
         self._db = db
 
-    async def upsert(self, pub: GfsStoryPublication) -> None:
+    async def upsert(self, pub: GfsHighlightPublication) -> None:
         # Re-publishing keeps the existing OG thumbnail filename if the
         # caller didn't include one — operators can swap GFSes (or
         # republish to bump expires_at) without losing the cached
         # social-preview image.
         await self._db.enqueue(
             """
-            INSERT INTO gfs_story_publications(
-                story_id, instance_id, expires_at, published_at,
+            INSERT INTO gfs_highlight_publications(
+                highlight_id, instance_id, expires_at, published_at,
                 publish_signature, og_thumbnail_filename
             ) VALUES(?,?,?,?,?,?)
-            ON CONFLICT(story_id, instance_id) DO UPDATE SET
+            ON CONFLICT(highlight_id, instance_id) DO UPDATE SET
                 expires_at            = excluded.expires_at,
                 published_at          = excluded.published_at,
                 publish_signature     = excluded.publish_signature,
                 og_thumbnail_filename =
                     COALESCE(excluded.og_thumbnail_filename,
-                             gfs_story_publications.og_thumbnail_filename)
+                             gfs_highlight_publications.og_thumbnail_filename)
             """,
             (
-                pub.story_id,
+                pub.highlight_id,
                 pub.instance_id,
                 pub.expires_at,
                 pub.published_at,
@@ -1038,25 +1038,25 @@ class SqliteGfsStoryPublicationRepo:
 
     async def get(
         self,
-        story_id: str,
+        highlight_id: str,
         instance_id: str,
-    ) -> GfsStoryPublication | None:
+    ) -> GfsHighlightPublication | None:
         row = await self._db.fetchone(
-            "SELECT story_id, instance_id, expires_at, published_at, "
+            "SELECT highlight_id, instance_id, expires_at, published_at, "
             "publish_signature, og_thumbnail_filename "
-            "FROM gfs_story_publications "
-            "WHERE story_id=? AND instance_id=?",
-            (story_id, instance_id),
+            "FROM gfs_highlight_publications "
+            "WHERE highlight_id=? AND instance_id=?",
+            (highlight_id, instance_id),
         )
-        return _row_to_story_pub(_as_dict(row))
+        return _row_to_highlight_pub(_as_dict(row))
 
-    async def delete(self, story_id: str, instance_id: str) -> int:
+    async def delete(self, highlight_id: str, instance_id: str) -> int:
         # ``rowcount`` lets the caller distinguish "no-op" from "deleted"
         # so the unpublish route can return 404 on stale tokens.
         def _run(conn) -> int:
             cur = conn.execute(
-                "DELETE FROM gfs_story_publications WHERE story_id=? AND instance_id=?",
-                (story_id, instance_id),
+                "DELETE FROM gfs_highlight_publications WHERE highlight_id=? AND instance_id=?",
+                (highlight_id, instance_id),
             )
             return int(cur.rowcount or 0)
 
@@ -1065,7 +1065,7 @@ class SqliteGfsStoryPublicationRepo:
     async def prune_expired(self, now: int) -> int:
         def _run(conn) -> int:
             cur = conn.execute(
-                "DELETE FROM gfs_story_publications WHERE expires_at < ?",
+                "DELETE FROM gfs_highlight_publications WHERE expires_at < ?",
                 (now,),
             )
             return int(cur.rowcount or 0)
@@ -1074,7 +1074,7 @@ class SqliteGfsStoryPublicationRepo:
 
     async def set_og_thumbnail(
         self,
-        story_id: str,
+        highlight_id: str,
         instance_id: str,
         filename: str | None,
     ) -> int:
@@ -1088,10 +1088,10 @@ class SqliteGfsStoryPublicationRepo:
 
         def _run(conn) -> int:
             cur = conn.execute(
-                "UPDATE gfs_story_publications "
+                "UPDATE gfs_highlight_publications "
                 "SET og_thumbnail_filename=? "
-                "WHERE story_id=? AND instance_id=?",
-                (filename, story_id, instance_id),
+                "WHERE highlight_id=? AND instance_id=?",
+                (filename, highlight_id, instance_id),
             )
             return int(cur.rowcount or 0)
 
@@ -1100,36 +1100,36 @@ class SqliteGfsStoryPublicationRepo:
     async def list_for_instance(
         self,
         instance_id: str,
-    ) -> list[GfsStoryPublication]:
+    ) -> list[GfsHighlightPublication]:
         rows = await self._db.fetchall(
-            "SELECT story_id, instance_id, expires_at, published_at, "
+            "SELECT highlight_id, instance_id, expires_at, published_at, "
             "publish_signature, og_thumbnail_filename "
-            "FROM gfs_story_publications "
+            "FROM gfs_highlight_publications "
             "WHERE instance_id=? ORDER BY published_at DESC",
             (instance_id,),
         )
-        out: list[GfsStoryPublication] = []
+        out: list[GfsHighlightPublication] = []
         for r in rows:
-            pub = _row_to_story_pub(_as_dict(r))
+            pub = _row_to_highlight_pub(_as_dict(r))
             if pub is not None:
                 out.append(pub)
         return out
 
 
 @runtime_checkable
-class AbstractGfsStoryTokenRepo(Protocol):
-    async def insert(self, token: GfsStoryToken) -> None: ...
+class AbstractGfsHighlightTokenRepo(Protocol):
+    async def insert(self, token: GfsHighlightToken) -> None: ...
     async def lookup_active(
         self,
         token: str,
         *,
         now: int,
-    ) -> tuple[GfsStoryToken, GfsStoryPublication] | None: ...
+    ) -> tuple[GfsHighlightToken, GfsHighlightPublication] | None: ...
     async def list_for(
         self,
-        story_id: str,
+        highlight_id: str,
         instance_id: str,
-    ) -> list[GfsStoryToken]: ...
+    ) -> list[GfsHighlightToken]: ...
     async def revoke(
         self,
         token: str,
@@ -1139,10 +1139,10 @@ class AbstractGfsStoryTokenRepo(Protocol):
     ) -> int: ...
 
 
-class SqliteGfsStoryTokenRepo:
-    """SQLite-backed :class:`AbstractGfsStoryTokenRepo`.
+class SqliteGfsHighlightTokenRepo:
+    """SQLite-backed :class:`AbstractGfsHighlightTokenRepo`.
 
-    ``lookup_active`` joins against ``gfs_story_publications`` so the
+    ``lookup_active`` joins against ``gfs_highlight_publications`` so the
     public landing page can resolve a token in one round-trip and
     apply the parent's ``expires_at`` cap server-side.
     """
@@ -1152,16 +1152,16 @@ class SqliteGfsStoryTokenRepo:
     def __init__(self, db: AsyncDatabase) -> None:
         self._db = db
 
-    async def insert(self, token: GfsStoryToken) -> None:
+    async def insert(self, token: GfsHighlightToken) -> None:
         await self._db.enqueue(
             """
-            INSERT INTO gfs_story_tokens(
-                token, story_id, instance_id, label, created_at, revoked_at
+            INSERT INTO gfs_highlight_tokens(
+                token, highlight_id, instance_id, label, created_at, revoked_at
             ) VALUES(?,?,?,?,?,?)
             """,
             (
                 token.token,
-                token.story_id,
+                token.highlight_id,
                 token.instance_id,
                 token.label,
                 token.created_at,
@@ -1174,16 +1174,16 @@ class SqliteGfsStoryTokenRepo:
         token: str,
         *,
         now: int,
-    ) -> tuple[GfsStoryToken, GfsStoryPublication] | None:
+    ) -> tuple[GfsHighlightToken, GfsHighlightPublication] | None:
         row = await self._db.fetchone(
             """
-            SELECT t.token, t.story_id, t.instance_id, t.label,
+            SELECT t.token, t.highlight_id, t.instance_id, t.label,
                    t.created_at AS t_created_at, t.revoked_at AS t_revoked_at,
                    p.expires_at, p.published_at, p.publish_signature,
                    p.og_thumbnail_filename
-              FROM gfs_story_tokens AS t
-              JOIN gfs_story_publications AS p
-                ON p.story_id = t.story_id AND p.instance_id = t.instance_id
+              FROM gfs_highlight_tokens AS t
+              JOIN gfs_highlight_publications AS p
+                ON p.highlight_id = t.highlight_id AND p.instance_id = t.instance_id
              WHERE t.token = ?
                AND t.revoked_at IS NULL
                AND p.expires_at > ?
@@ -1193,9 +1193,9 @@ class SqliteGfsStoryTokenRepo:
         if row is None:
             return None
         d = _as_dict(row)
-        tok = GfsStoryToken(
+        tok = GfsHighlightToken(
             token=d["token"],
-            story_id=d["story_id"],
+            highlight_id=d["highlight_id"],
             instance_id=d["instance_id"],
             label=d.get("label"),
             created_at=int(d["t_created_at"]),
@@ -1203,8 +1203,8 @@ class SqliteGfsStoryTokenRepo:
                 int(d["t_revoked_at"]) if d.get("t_revoked_at") is not None else None
             ),
         )
-        pub = GfsStoryPublication(
-            story_id=d["story_id"],
+        pub = GfsHighlightPublication(
+            highlight_id=d["highlight_id"],
             instance_id=d["instance_id"],
             expires_at=int(d["expires_at"]),
             published_at=int(d["published_at"]),
@@ -1215,22 +1215,22 @@ class SqliteGfsStoryTokenRepo:
 
     async def list_for(
         self,
-        story_id: str,
+        highlight_id: str,
         instance_id: str,
-    ) -> list[GfsStoryToken]:
+    ) -> list[GfsHighlightToken]:
         rows = await self._db.fetchall(
-            "SELECT token, story_id, instance_id, label, created_at, revoked_at "
-            "FROM gfs_story_tokens "
-            "WHERE story_id=? AND instance_id=? ORDER BY created_at DESC",
-            (story_id, instance_id),
+            "SELECT token, highlight_id, instance_id, label, created_at, revoked_at "
+            "FROM gfs_highlight_tokens "
+            "WHERE highlight_id=? AND instance_id=? ORDER BY created_at DESC",
+            (highlight_id, instance_id),
         )
-        out: list[GfsStoryToken] = []
+        out: list[GfsHighlightToken] = []
         for r in rows:
             d = _as_dict(r)
             out.append(
-                GfsStoryToken(
+                GfsHighlightToken(
                     token=d["token"],
-                    story_id=d["story_id"],
+                    highlight_id=d["highlight_id"],
                     instance_id=d["instance_id"],
                     label=d.get("label"),
                     created_at=int(d["created_at"]),
@@ -1254,7 +1254,7 @@ class SqliteGfsStoryTokenRepo:
         # own tokens, not whoever happens to know the token string.
         def _run(conn) -> int:
             cur = conn.execute(
-                "UPDATE gfs_story_tokens SET revoked_at=? "
+                "UPDATE gfs_highlight_tokens SET revoked_at=? "
                 "WHERE token=? AND instance_id=? AND revoked_at IS NULL",
                 (now, token, instance_id),
             )
@@ -1275,11 +1275,11 @@ def _as_dict(row: Any) -> dict:
         return dict(row)
 
 
-def _row_to_story_pub(row: dict) -> GfsStoryPublication | None:
+def _row_to_highlight_pub(row: dict) -> GfsHighlightPublication | None:
     if not row:
         return None
-    return GfsStoryPublication(
-        story_id=row["story_id"],
+    return GfsHighlightPublication(
+        highlight_id=row["highlight_id"],
         instance_id=row["instance_id"],
         expires_at=int(row["expires_at"]),
         published_at=int(row["published_at"]),

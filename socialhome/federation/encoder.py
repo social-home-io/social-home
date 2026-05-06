@@ -15,7 +15,7 @@ every algorithm in the suite, not just one.
 
 Payload layer: the encrypted payload stays AES-256-GCM regardless of
 suite. AES-256 is Grover-resistant (effective ~128-bit security post-
-quantum); the PQ story is purely about the signature layer.
+quantum); the PQ highlight is purely about the signature layer.
 """
 
 from __future__ import annotations

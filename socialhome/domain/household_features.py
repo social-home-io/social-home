@@ -33,7 +33,7 @@ SECTIONS: tuple[str, ...] = (
     "tasks",
     "stickies",
     "calendar",
-    "stories",
+    "highlights",
     "momentum",
 )
 
@@ -48,7 +48,7 @@ POST_TYPE_ALLOW: dict[str, str] = {
     "poll": "allow_poll",
     "schedule": "allow_schedule",
     "location": "allow_location",
-    "story_share": "allow_story_share",
+    "highlight_share": "allow_highlight_share",
 }
 
 
@@ -62,11 +62,11 @@ class HouseholdFeatures:
     feat_tasks: bool = True
     feat_stickies: bool = True
     feat_calendar: bool = True
-    #: Personal "stories" pillar in the Talk sidebar group. Default on
+    #: Personal "highlights" pillar in the Talk sidebar group. Default on
     #: so the user discovers the feature without an admin step.
-    feat_stories: bool = True
+    feat_highlights: bool = True
     #: Momentum — household-broadcast posts pillar (§Momentum). Same
-    #: discovery default as Stories; admin can disable in household
+    #: discovery default as Highlights; admin can disable in household
     #: settings.
     feat_momentum: bool = True
     allow_text: bool = True
@@ -76,7 +76,7 @@ class HouseholdFeatures:
     allow_poll: bool = True
     allow_schedule: bool = True
     allow_location: bool = True
-    allow_story_share: bool = True
+    allow_highlight_share: bool = True
 
     def is_enabled(self, section: str) -> bool:
         """``True`` if the ``feat_{section}`` toggle is on."""

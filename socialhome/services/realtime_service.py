@@ -65,11 +65,11 @@ from ..domain.events import (
     StickyCreated,
     StickyDeleted,
     StickyUpdated,
-    StoryFrameAdded,
-    StoryFrameReactionChanged,
-    StoryFrameRemoved,
-    StoryFrameViewed,
-    StoryRemoved,
+    HighlightFrameAdded,
+    HighlightFrameReactionChanged,
+    HighlightFrameRemoved,
+    HighlightFrameViewed,
+    HighlightRemoved,
     MomentCreated,
     MomentDeleted,
     MomentReactionChanged,
@@ -313,20 +313,20 @@ class RealtimeService:
         self._bus.subscribe(StickyUpdated, self._on_sticky_updated)
         self._bus.subscribe(StickyDeleted, self._on_sticky_deleted)
         self._bus.subscribe(CpSpaceAgeGateChanged, self._on_cp_age_gate_changed)
-        # Stories — both local-write and inbound-federation paths publish
+        # Highlights — both local-write and inbound-federation paths publish
         # these on the bus, so the same handler covers "I posted a frame"
         # and "a paired peer's frame just landed". The SPA fetches
-        # ``/api/stories`` on receipt to pull the audience-filtered list,
+        # ``/api/highlights`` on receipt to pull the audience-filtered list,
         # so the WS frames stay narrow.
-        self._bus.subscribe(StoryFrameAdded, self._on_story_frame_added)
-        self._bus.subscribe(StoryFrameRemoved, self._on_story_frame_removed)
-        self._bus.subscribe(StoryRemoved, self._on_story_removed)
-        # Story view / reaction back-channel — only the author needs
+        self._bus.subscribe(HighlightFrameAdded, self._on_highlight_frame_added)
+        self._bus.subscribe(HighlightFrameRemoved, self._on_highlight_frame_removed)
+        self._bus.subscribe(HighlightRemoved, self._on_highlight_removed)
+        # Highlight view / reaction back-channel — only the author needs
         # the update so we narrow the broadcast to their WS sessions.
-        self._bus.subscribe(StoryFrameViewed, self._on_story_frame_viewed)
+        self._bus.subscribe(HighlightFrameViewed, self._on_highlight_frame_viewed)
         self._bus.subscribe(
-            StoryFrameReactionChanged,
-            self._on_story_frame_reaction_changed,
+            HighlightFrameReactionChanged,
+            self._on_highlight_frame_reaction_changed,
         )
         # Momentum — broadcast new moments / deletions to the whole
         # household; reaction-changed unicasts to the author.
@@ -1123,64 +1123,64 @@ class RealtimeService:
         else:
             await self._broadcast_space(event.space_id, payload)
 
-    # ─── Stories (§Stories) ───────────────────────────────────────────────
+    # ─── Highlights (§Highlights) ───────────────────────────────────────────────
 
-    async def _on_story_frame_added(self, event: StoryFrameAdded) -> None:
+    async def _on_highlight_frame_added(self, event: HighlightFrameAdded) -> None:
         await self._broadcast_household(
             {
-                "type": "story.frame_added",
-                "story_id": event.story_id,
+                "type": "highlight.frame_added",
+                "highlight_id": event.highlight_id,
                 "frame_id": event.frame_id,
                 "author_user_id": event.author_user_id,
-                "story_date": event.story_date,
+                "highlight_date": event.highlight_date,
                 "is_first_frame": event.is_first_frame,
             }
         )
 
-    async def _on_story_frame_removed(self, event: StoryFrameRemoved) -> None:
+    async def _on_highlight_frame_removed(self, event: HighlightFrameRemoved) -> None:
         await self._broadcast_household(
             {
-                "type": "story.frame_removed",
-                "story_id": event.story_id,
+                "type": "highlight.frame_removed",
+                "highlight_id": event.highlight_id,
                 "frame_id": event.frame_id,
                 "author_user_id": event.author_user_id,
             }
         )
 
-    async def _on_story_removed(self, event: StoryRemoved) -> None:
+    async def _on_highlight_removed(self, event: HighlightRemoved) -> None:
         await self._broadcast_household(
             {
-                "type": "story.removed",
-                "story_id": event.story_id,
+                "type": "highlight.removed",
+                "highlight_id": event.highlight_id,
                 "author_user_id": event.author_user_id,
             }
         )
 
-    # ─── Story view / reaction back-channel ──────────────────────────────
+    # ─── Highlight view / reaction back-channel ──────────────────────────────
 
-    async def _on_story_frame_viewed(self, event: StoryFrameViewed) -> None:
+    async def _on_highlight_frame_viewed(self, event: HighlightFrameViewed) -> None:
         # Only the author cares about a view receipt — narrow the WS
         # frame to their sessions so unrelated household members don't
         # see the noise.
         await self._ws.broadcast_to_users(
             [event.author_user_id],
             {
-                "type": "story.frame_viewed",
-                "story_id": event.story_id,
+                "type": "highlight.frame_viewed",
+                "highlight_id": event.highlight_id,
                 "frame_id": event.frame_id,
                 "viewer_user_id": event.viewer_user_id,
             },
         )
 
-    async def _on_story_frame_reaction_changed(
+    async def _on_highlight_frame_reaction_changed(
         self,
-        event: StoryFrameReactionChanged,
+        event: HighlightFrameReactionChanged,
     ) -> None:
         await self._ws.broadcast_to_users(
             [event.author_user_id],
             {
-                "type": "story.frame_reaction_changed",
-                "story_id": event.story_id,
+                "type": "highlight.frame_reaction_changed",
+                "highlight_id": event.highlight_id,
                 "frame_id": event.frame_id,
                 "reactor_user_id": event.reactor_user_id,
                 "emoji": event.emoji,  # None when cleared

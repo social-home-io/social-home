@@ -52,11 +52,14 @@ from ..services.space_zone_service import (
 )
 from ..services.storage_quota_service import StorageQuotaExceeded
 from ..services.moment_service import MomentNotFoundError, MomentRateLimitError
-from ..services.story_publication_service import (
-    StoryNotFoundError as StoryPublicationNotFoundError,
+from ..services.highlight_publication_service import (
+    HighlightNotFoundError as HighlightPublicationNotFoundError,
 )
-from ..services.story_publication_service import StoryPublicationError
-from ..services.story_service import StoryFrameLimitError, StoryNotFoundError
+from ..services.highlight_publication_service import HighlightPublicationError
+from ..services.highlight_service import (
+    HighlightFrameLimitError,
+    HighlightNotFoundError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -140,15 +143,15 @@ class BaseView(web.View):
             ListingNotFoundError,
             GalleryNotFoundError,
             SpaceZoneNotFoundError,
-            StoryNotFoundError,
-            StoryPublicationNotFoundError,
+            HighlightNotFoundError,
+            HighlightPublicationNotFoundError,
             MomentNotFoundError,
         ) as exc:
             return error_response(404, "NOT_FOUND", str(exc))
-        except StoryPublicationError as exc:
+        except HighlightPublicationError as exc:
             return error_response(502, "GFS_UNAVAILABLE", str(exc))
-        except StoryFrameLimitError as exc:
-            return error_response(429, "STORY_FRAME_LIMIT", str(exc))
+        except HighlightFrameLimitError as exc:
+            return error_response(429, "HIGHLIGHT_FRAME_LIMIT", str(exc))
         except MomentRateLimitError as exc:
             return error_response(429, "MOMENT_RATE_LIMIT", str(exc))
         except SpaceZoneLimitError as exc:

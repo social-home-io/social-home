@@ -261,8 +261,8 @@ class DmService:
         type: str = "text",
         media_url: str | None = None,
         reply_to_id: str | None = None,
-        reply_to_story_frame_id: str | None = None,
-        reply_to_story_frame_snapshot: str | None = None,
+        reply_to_highlight_frame_id: str | None = None,
+        reply_to_highlight_frame_snapshot: str | None = None,
     ) -> ConversationMessage:
         """Send a message. ``sender_username`` must be a member.
 
@@ -299,8 +299,8 @@ class DmService:
             type=type,
             media_url=media_url,
             reply_to_id=reply_to_id,
-            reply_to_story_frame_id=reply_to_story_frame_id,
-            reply_to_story_frame_snapshot=reply_to_story_frame_snapshot,
+            reply_to_highlight_frame_id=reply_to_highlight_frame_id,
+            reply_to_highlight_frame_snapshot=reply_to_highlight_frame_snapshot,
             created_at=datetime.now(timezone.utc),
         )
         await self._convos.save_message(msg)

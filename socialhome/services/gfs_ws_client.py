@@ -64,7 +64,7 @@ class GfsWebSocketClient:
         "_signing_key",
         "_session_factory",
         "_on_relay",
-        "_on_story_signal",
+        "_on_highlight_signal",
         "_reconnect_delays",
         "_stop",
         "_task",
@@ -79,7 +79,7 @@ class GfsWebSocketClient:
         signing_key: bytes,
         session_factory: Callable[[], aiohttp.ClientSession],
         on_relay: Callable[[dict], Awaitable[None]],
-        on_story_signal: Callable[[dict], Awaitable[None]] | None = None,
+        on_highlight_signal: Callable[[dict], Awaitable[None]] | None = None,
         reconnect_delays: tuple[float, ...] = RECONNECT_DELAYS,
     ) -> None:
         self._gfs_url = gfs_url
@@ -87,25 +87,25 @@ class GfsWebSocketClient:
         self._signing_key = signing_key
         self._session_factory = session_factory
         self._on_relay = on_relay
-        self._on_story_signal = on_story_signal
+        self._on_highlight_signal = on_highlight_signal
         self._reconnect_delays = reconnect_delays
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._connected_event = asyncio.Event()
 
-    def attach_story_signal_handler(
+    def attach_highlight_signal_handler(
         self,
         handler: Callable[[dict], Awaitable[None]],
     ) -> None:
-        """Late-bound wiring for the §stories_public answerer.
+        """Late-bound wiring for the §highlights_public answerer.
 
-        The :class:`StorySignalingHandler` is constructed after the WS
+        The :class:`HighlightSignalingHandler` is constructed after the WS
         client (it depends on the federation signing key + an
         ``aiohttp`` session that come online during ``app._on_startup``);
         this lets startup attach the handler without re-creating the
         client.
         """
-        self._on_story_signal = handler
+        self._on_highlight_signal = handler
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -213,18 +213,18 @@ class GfsWebSocketClient:
         if not isinstance(frame, dict):
             return
         frame_type = frame.get("type")
-        if frame_type == "story_signal":
-            if self._on_story_signal is None:
+        if frame_type == "highlight_signal":
+            if self._on_highlight_signal is None:
                 log.debug(
-                    "gfs.ws.client: dropping story_signal — no handler attached on %s",
+                    "gfs.ws.client: dropping highlight_signal — no handler attached on %s",
                     self._gfs_url,
                 )
                 return
             try:
-                await self._on_story_signal(frame)
+                await self._on_highlight_signal(frame)
             except Exception as exc:  # defensive
                 log.warning(
-                    "gfs.ws.client: on_story_signal handler raised for %s: %s",
+                    "gfs.ws.client: on_highlight_signal handler raised for %s: %s",
                     self._gfs_url,
                     exc,
                 )

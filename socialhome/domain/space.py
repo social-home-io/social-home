@@ -70,11 +70,11 @@ _ALL_POST_TYPES: tuple[str, ...] = (
     "bazaar",
     "event",
     "file",
+    "highlight_share",
     "image",
     "location",
     "poll",
     "schedule",
-    "story_share",
     "text",
     "transcript",
     "video",
@@ -159,7 +159,7 @@ class SpaceFeatures:
                     ("bazaar", "allow_post_bazaar"),
                     ("event", "allow_post_event"),
                     ("location", "allow_post_location"),
-                    ("story_share", "allow_post_story_share"),
+                    ("highlight_share", "allow_post_highlight_share"),
                 )
                 if row.get(col, 1)
             )
@@ -206,7 +206,9 @@ class SpaceFeatures:
             "allow_post_bazaar": int("bazaar" in self.allowed_post_types),
             "allow_post_event": int("event" in self.allowed_post_types),
             "allow_post_location": int("location" in self.allowed_post_types),
-            "allow_post_story_share": int("story_share" in self.allowed_post_types),
+            "allow_post_highlight_share": int(
+                "highlight_share" in self.allowed_post_types
+            ),
         }
 
     def to_wire_dict(self) -> dict:

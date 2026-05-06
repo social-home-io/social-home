@@ -121,7 +121,7 @@ class MomentFederationOutbound:
         # Reactions are unicast to the author's home instance —
         # everyone else's view of the reaction is hydrated from the
         # author's instance via the next list refresh. (Same shape as
-        # the Stories back-channel.)
+        # the Highlights back-channel.)
         target = await self._home_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
             return

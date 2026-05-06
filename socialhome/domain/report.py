@@ -32,7 +32,7 @@ class ReportTargetType(StrEnum):
     COMMENT = "comment"
     USER = "user"
     SPACE = "space"
-    STORY = "story"
+    HIGHLIGHT = "highlight"
     MOMENT = "moment"
 
 

@@ -23,7 +23,7 @@ import { MarkdownToolbar } from './MarkdownToolbar'
 import { PollBuilder, type PollDraft } from './PollUI'
 import { ScheduleBuilder, type ScheduleDraft } from './ScheduleBuilder'
 import { SttButton } from './SttButton'
-import { openStoryPicker } from './StoryPickerDialog'
+import { openHighlightPicker } from './HighlightPickerDialog'
 import { showToast } from './Toast'
 import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
 import { describeUploadError } from '@/utils/uploadErrors'
@@ -404,12 +404,12 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
           <button
             type="button"
             class="sh-type-btn"
-            onClick={() => openStoryPicker({
+            onClick={() => openHighlightPicker({
               scope: spaceId ? 'space' : 'household',
               spaceId: spaceId ?? null,
             })}
-            aria-label="Share a story"
-            title="Share a story"
+            aria-label="Share a highlight"
+            title="Share a highlight"
           >
             ⭕
           </button>

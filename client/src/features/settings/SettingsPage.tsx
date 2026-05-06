@@ -37,7 +37,7 @@ const pushEnabled = signal(
  *  GET'd a non-existent ``/api/me/privacy`` endpoint, hard-failed
  *  the route after PR #126's load-error chip surfaced the 404, and
  *  showed every user a "Couldn't load your privacy settings" panel.
- *  Privacy is just a user preference (same store as Stories prefs);
+ *  Privacy is just a user preference (same store as Highlights prefs);
  *  read it inline from the user we already loaded on cold start. */
 function syncOnlineStatusFromUser(): void {
   const raw = (currentUser.value as unknown as { preferences_json?: string } | null)
@@ -302,7 +302,7 @@ function PrivacyTab() {
     onlineStatusVisible.value = !onlineStatusVisible.value
     try {
       // Privacy preferences ride on the existing
-      // ``users.preferences_json`` blob — same store ``StoriesPrefs``
+      // ``users.preferences_json`` blob — same store ``HighlightsPrefs``
       // uses. PATCH /api/me with a ``preferences`` patch shallow-merges
       // the keys, so unrelated prefs are untouched.
       const updated = await api.patch('/api/me', {
@@ -335,7 +335,7 @@ function PrivacyTab() {
         />
         Show online status to other household members
       </label>
-      <StoriesPreferencesPanel />
+      <HighlightsPreferencesPanel />
       <BlockedAccountsPanel />
       <FollowingPanel />
     </section>
@@ -410,7 +410,7 @@ function BlockedAccountsPanel() {
 
   const onUnblock = async (userId: string) => {
     if (!await confirmDialog(
-      `Unblock ${userId}? Their stories, posts, presence and DMs will be `
+      `Unblock ${userId}? Their highlights, posts, presence and DMs will be `
       + `visible to you again.`,
       { confirmLabel: 'Unblock' },
     )) return
@@ -427,7 +427,7 @@ function BlockedAccountsPanel() {
       <h3 style={{ marginBottom: 0 }}>Blocked accounts</h3>
       {rows.length === 0 && (
         <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
-          You haven't blocked anyone. Open a story or profile and tap
+          You haven't blocked anyone. Open a highlight or profile and tap
           the ⋯ menu to block someone.
         </p>
       )}
@@ -456,13 +456,13 @@ function BlockedAccountsPanel() {
   )
 }
 
-interface StoriesPrefs {
+interface HighlightsPrefs {
   retention_days?: number
   max_count?: number
   default_audience?: { kind: 'all_paired' | 'households' | 'users' }
 }
 
-function StoriesPreferencesPanel() {
+function HighlightsPreferencesPanel() {
   // Read straight from the cached preferences each render — the
   // `setPreference` helper updates the cache in place, so the form
   // re-renders with the latest values when the user saves.
@@ -470,10 +470,10 @@ function StoriesPreferencesPanel() {
     try {
       const raw = (currentUser.value as unknown as { preferences_json?: string } | null)
         ?.preferences_json
-      if (!raw) return {} as StoriesPrefs
-      const parsed = JSON.parse(raw) as { stories?: StoriesPrefs }
-      return parsed.stories ?? {}
-    } catch { return {} as StoriesPrefs }
+      if (!raw) return {} as HighlightsPrefs
+      const parsed = JSON.parse(raw) as { highlights?: HighlightsPrefs }
+      return parsed.highlights ?? {}
+    } catch { return {} as HighlightsPrefs }
   })()
   const retentionDays = signal<number>(prefs.retention_days ?? 30)
   const maxCount = signal<number>(prefs.max_count ?? 100)
@@ -483,22 +483,22 @@ function StoriesPreferencesPanel() {
 
   const save = async () => {
     try {
-      await setPreference('stories', {
+      await setPreference('highlights', {
         retention_days: retentionDays.value,
         max_count: maxCount.value,
         default_audience: { kind: audienceKind.value },
       })
-      showToast('Stories settings saved', 'success')
+      showToast('Highlights settings saved', 'success')
     } catch {
-      showToast('Failed to save stories settings', 'error')
+      showToast('Failed to save highlights settings', 'error')
     }
   }
 
   return (
-    <div id="stories" class="sh-settings-stories-panel">
-      <h3>Stories</h3>
+    <div id="highlights" class="sh-settings-highlights-panel">
+      <h3>Highlights</h3>
       <p class="sh-muted">
-        Control how long your stories stay listed and who sees them by default.
+        Control how long your highlights stay listed and who sees them by default.
       </p>
       <label class="sh-form-row">
         Retention (days)
@@ -514,7 +514,7 @@ function StoriesPreferencesPanel() {
         />
       </label>
       <label class="sh-form-row">
-        Max stories to keep
+        Max highlights to keep
         <input
           type="number"
           min={10}
@@ -537,8 +537,8 @@ function StoriesPreferencesPanel() {
           }}
         >
           <option value="all_paired">All connected households</option>
-          <option value="households">Pick households per story</option>
-          <option value="users">Pick people per story (advanced)</option>
+          <option value="households">Pick households per highlight</option>
+          <option value="users">Pick people per highlight (advanced)</option>
         </select>
       </label>
       <div class="sh-form-actions">

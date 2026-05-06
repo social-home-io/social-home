@@ -153,8 +153,8 @@ tests/global_server/test_admin_endpoints.py
 tests/global_server/test_cluster_fanout.py
 tests/global_server/test_cluster_integration.py
 tests/global_server/test_server_error_branches.py
-tests/global_server/test_story_public_routes.py
-tests/global_server/test_story_rtc_routes.py
+tests/global_server/test_highlight_public_routes.py
+tests/global_server/test_highlight_rtc_routes.py
 tests/routes/test_error_paths_coverage.py
 ```
 

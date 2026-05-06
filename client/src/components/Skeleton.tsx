@@ -123,16 +123,16 @@ export function DmInboxSkeleton() {
 }
 
 
-/** Stand-in for the Stories inbox: + tile + 5 rings. */
-export function StoriesRingSkeleton() {
+/** Stand-in for the Highlights inbox: + tile + 5 rings. */
+export function HighlightsRingSkeleton() {
   return (
-    <div class="sh-stories-page sh-stories-page--skeleton" aria-busy="true">
-      <header class="sh-stories-header">
+    <div class="sh-highlights-page sh-highlights-page--skeleton" aria-busy="true">
+      <header class="sh-highlights-header">
         <Skeleton shape="line" width={120} height={20} />
       </header>
-      <div class="sh-story-rings">
+      <div class="sh-highlight-rings">
         {[0, 1, 2, 3, 4].map(i => (
-          <div key={i} class="sh-story-ring">
+          <div key={i} class="sh-highlight-ring">
             <Skeleton shape="circle" width={64} height={64} />
             <Skeleton shape="line" width={56} height={10} class="sh-skeleton-spaced" />
           </div>

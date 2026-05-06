@@ -2,9 +2,9 @@
  *
  * Two entry points today:
  *
- * - ``story_public_viewer`` — the §stories_public landing-page
+ * - ``highlight_public_viewer`` — the §highlights_public landing-page
  *   bootstrap mounted into ``<div id="root">`` on
- *   ``GET /story/{instance}/{story}/{token}``.
+ *   ``GET /highlight/{instance}/{highlight}/{token}``.
  * - ``admin`` — the GFS admin portal mounted on ``GET /admin``.
  *
  * Future GFS surfaces (e.g. public global-space pages) plug in as
@@ -33,13 +33,13 @@ export default defineConfig({
       // root; entry filenames are referenced verbatim by the SSR
       // pages that ship them.
       input: {
-        story_public_viewer: resolve(__dirname, 'gfs/public_story.tsx'),
+        highlight_public_viewer: resolve(__dirname, 'gfs/public_highlight.tsx'),
         admin:               resolve(__dirname, 'gfs/admin/main.tsx'),
       },
       output: {
         format: 'es',
         // Keep filenames stable so the SSR page tags stay literal —
-        // emit ``story_public_viewer.js`` + ``admin.js`` in
+        // emit ``highlight_public_viewer.js`` + ``admin.js`` in
         // ``socialhome/global_server/static/``. ES modules need
         // ``type="module"`` on the page ``<script>`` tag, which
         // every browser the public viewer + admin portal target

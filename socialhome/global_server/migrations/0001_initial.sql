@@ -189,21 +189,21 @@ CREATE TABLE IF NOT EXISTS cluster_nodes (
     active_sync_sessions INTEGER NOT NULL DEFAULT 0
 );
 
--- ── Public story publications (§stories_public) ──────────────────────────
+-- ── Public highlight publications (§highlights_public) ──────────────────────────
 --
--- A SH instance opts in to share a single story via this GFS. The row
--- holds zero story bytes — only enough metadata to (a) verify the
+-- A SH instance opts in to share a single highlight via this GFS. The row
+-- holds zero highlight bytes — only enough metadata to (a) verify the
 -- author signed the publish, (b) gate the public landing page on the
--- story's absolute ``expires_at``, and (c) give the WebRTC signalling
--- relay a key it can match against incoming offers. Story content
+-- highlight's absolute ``expires_at``, and (c) give the WebRTC signalling
+-- relay a key it can match against incoming offers. Highlight content
 -- never transits GFS; it streams over WebRTC author → viewer.
 --
--- One publication per (story, instance). Tokens for individual share
--- links live in ``gfs_story_tokens`` below.
-CREATE TABLE IF NOT EXISTS gfs_story_publications (
-    story_id          TEXT NOT NULL,
+-- One publication per (highlight, instance). Tokens for individual share
+-- links live in ``gfs_highlight_tokens`` below.
+CREATE TABLE IF NOT EXISTS gfs_highlight_publications (
+    highlight_id          TEXT NOT NULL,
     instance_id       TEXT NOT NULL REFERENCES client_instances(instance_id) ON DELETE CASCADE,
-    -- Unix epoch — mirrors the author's ``stories.expires_at`` and is
+    -- Unix epoch — mirrors the author's ``highlights.expires_at`` and is
     -- the absolute lifetime for every token under this publication.
     expires_at        INTEGER NOT NULL,
     published_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
@@ -217,24 +217,24 @@ CREATE TABLE IF NOT EXISTS gfs_story_publications (
     -- Lives on the GFS so anonymous OG crawlers (Twitter, iMessage,
     -- Slack, …) can fetch the image without needing the share token.
     og_thumbnail_filename TEXT,
-    PRIMARY KEY (story_id, instance_id)
+    PRIMARY KEY (highlight_id, instance_id)
 );
-CREATE INDEX IF NOT EXISTS idx_gfs_story_pub_expires
-    ON gfs_story_publications(expires_at);
+CREATE INDEX IF NOT EXISTS idx_gfs_highlight_pub_expires
+    ON gfs_highlight_publications(expires_at);
 
 -- Per-link revocable tokens. The author can mint multiple — one per
 -- platform / recipient — and revoke any of them independently. Token
 -- lookup is the entry point for the public landing page; ``revoked_at``
 -- and the parent's ``expires_at`` together gate visibility.
-CREATE TABLE IF NOT EXISTS gfs_story_tokens (
+CREATE TABLE IF NOT EXISTS gfs_highlight_tokens (
     token         TEXT PRIMARY KEY,
-    story_id      TEXT NOT NULL,
+    highlight_id      TEXT NOT NULL,
     instance_id   TEXT NOT NULL,
     label         TEXT,
     created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     revoked_at    INTEGER,
-    FOREIGN KEY (story_id, instance_id)
-        REFERENCES gfs_story_publications(story_id, instance_id) ON DELETE CASCADE
+    FOREIGN KEY (highlight_id, instance_id)
+        REFERENCES gfs_highlight_publications(highlight_id, instance_id) ON DELETE CASCADE
 );
-CREATE INDEX IF NOT EXISTS idx_gfs_story_tokens_pub
-    ON gfs_story_tokens(story_id, instance_id);
+CREATE INDEX IF NOT EXISTS idx_gfs_highlight_tokens_pub
+    ON gfs_highlight_tokens(highlight_id, instance_id);
