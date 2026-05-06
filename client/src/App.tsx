@@ -6,6 +6,7 @@ import { api } from '@/api'
 import { isAuthed, currentUser, loadCurrentUser, setToken, token } from '@/store/auth'
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { isGuardian, loadGuardian } from '@/store/guardian'
+import { loadDmUnread } from '@/store/dms'
 import { pageTitle } from '@/store/pageTitle'
 import { toggles, loadToggles } from '@/components/HouseholdToggles'
 import { SetupPage } from '@/features/setup/SetupPage'
@@ -184,6 +185,10 @@ export function App() {
     if (token.value === null) return
     if (toggles.value === null) void loadToggles()
     if (isGuardian.value === null) void loadGuardian()
+    // Seed the sidebar Chats badge so the count is correct on cold
+    // load — without this it stays at 0 until the user opens /dms or
+    // the first ``dm.message`` WS frame triggers a refetch.
+    void loadDmUnread()
   }, [authed.value])
 
   // While the config is loading, render nothing (avoids a flash of

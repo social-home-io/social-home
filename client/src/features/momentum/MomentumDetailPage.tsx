@@ -126,7 +126,7 @@ export default function MomentumDetailPage() {
             {renderHashtagged(mm.content, (t, ev) => {
               ev.preventDefault()
               ev.stopPropagation()
-              loc.route(`/momentum/archive?tag=${encodeURIComponent(t)}`)
+              loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)
             })}
           </p>
         )}
@@ -172,7 +172,7 @@ export default function MomentumDetailPage() {
           {renderHashtagged(m.content, (t, ev) => {
             ev.preventDefault()
             ev.stopPropagation()
-            loc.route(`/momentum/archive?tag=${encodeURIComponent(t)}`)
+            loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)
           })}
         </p>
       )}

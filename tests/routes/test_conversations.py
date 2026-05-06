@@ -85,6 +85,9 @@ async def test_list_conversations_includes_member_preview(client):
     assert "members" in row
     assert "member_count" in row
     assert row["member_count"] == 2
+    # Per-row unread count powers the sidebar Chats badge + per-row
+    # chips. Empty conversation: starts at 0.
+    assert row["unread"] == 0
     # The preview filters out *me* (the caller); only the peer should
     # appear so the inbox can render "Bob" without manual filtering.
     assert {m["username"] for m in row["members"]} == {"bob"}

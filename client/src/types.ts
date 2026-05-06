@@ -269,6 +269,10 @@ export interface Conversation {
    *  + a peer-name fallback when ``name`` is null. */
   members?: ConversationMemberPreview[]
   member_count?: number
+  /** Unread message count for the caller. Populated by
+   *  ``GET /api/conversations`` so the inbox can render per-row
+   *  chips and the sidebar can sum across rows for the Chats badge. */
+  unread?: number
 }
 
 export interface Message {
