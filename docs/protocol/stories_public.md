@@ -34,6 +34,27 @@ https://{gfs_host}/story/{instance_id}/{story_id}/{token}
   ``gfs_story_tokens`` and rejects mismatched ``(instance_id, story_id)``
   tuples in the URL.
 
+## OG card (optional)
+
+Authors can opt a published story into a social-card preview image
+so links pasted into Twitter / iMessage / Slack render with a real
+thumbnail rather than a generic OG card. The thumbnail is cached on
+the GFS as a JPEG (≤200 KB) and served at a stable URL so social-
+card crawlers can fetch it without the share token:
+
+```
+https://{gfs_host}/story/{instance_id}/{story_id}/og.jpg
+```
+
+Author SH uploads via `POST /api/stories/{id}/publish/og` with a
+``{image_b64}`` body; the SH service forwards a signed envelope to
+the GFS at `POST /gfs/stories/{story_id}/og`. Re-uploads overwrite
+in place (deterministic filename `{instance_id}_{story_id}.jpg`),
+and unpublishing wipes the cached file. The story bytes still stream
+author → viewer over WebRTC — only the thumbnail lives on GFS, only
+because OG crawlers can't pass query parameters when fetching the
+image.
+
 ## Wire endpoints
 
 Author SH → GFS (Ed25519-signed body, same `_rtc_authenticate`

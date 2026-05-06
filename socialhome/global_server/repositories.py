@@ -991,6 +991,12 @@ class AbstractGfsStoryPublicationRepo(Protocol):
         self,
         instance_id: str,
     ) -> list[GfsStoryPublication]: ...
+    async def set_og_thumbnail(
+        self,
+        story_id: str,
+        instance_id: str,
+        filename: str | None,
+    ) -> int: ...
 
 
 class SqliteGfsStoryPublicationRepo:
@@ -1002,15 +1008,23 @@ class SqliteGfsStoryPublicationRepo:
         self._db = db
 
     async def upsert(self, pub: GfsStoryPublication) -> None:
+        # Re-publishing keeps the existing OG thumbnail filename if the
+        # caller didn't include one — operators can swap GFSes (or
+        # republish to bump expires_at) without losing the cached
+        # social-preview image.
         await self._db.enqueue(
             """
             INSERT INTO gfs_story_publications(
-                story_id, instance_id, expires_at, published_at, publish_signature
-            ) VALUES(?,?,?,?,?)
+                story_id, instance_id, expires_at, published_at,
+                publish_signature, og_thumbnail_filename
+            ) VALUES(?,?,?,?,?,?)
             ON CONFLICT(story_id, instance_id) DO UPDATE SET
-                expires_at        = excluded.expires_at,
-                published_at      = excluded.published_at,
-                publish_signature = excluded.publish_signature
+                expires_at            = excluded.expires_at,
+                published_at          = excluded.published_at,
+                publish_signature     = excluded.publish_signature,
+                og_thumbnail_filename =
+                    COALESCE(excluded.og_thumbnail_filename,
+                             gfs_story_publications.og_thumbnail_filename)
             """,
             (
                 pub.story_id,
@@ -1018,6 +1032,7 @@ class SqliteGfsStoryPublicationRepo:
                 pub.expires_at,
                 pub.published_at,
                 pub.publish_signature,
+                pub.og_thumbnail_filename,
             ),
         )
 
@@ -1028,7 +1043,8 @@ class SqliteGfsStoryPublicationRepo:
     ) -> GfsStoryPublication | None:
         row = await self._db.fetchone(
             "SELECT story_id, instance_id, expires_at, published_at, "
-            "publish_signature FROM gfs_story_publications "
+            "publish_signature, og_thumbnail_filename "
+            "FROM gfs_story_publications "
             "WHERE story_id=? AND instance_id=?",
             (story_id, instance_id),
         )
@@ -1056,13 +1072,39 @@ class SqliteGfsStoryPublicationRepo:
 
         return await self._db.transact(_run)
 
+    async def set_og_thumbnail(
+        self,
+        story_id: str,
+        instance_id: str,
+        filename: str | None,
+    ) -> int:
+        """Stamp the cached OG thumbnail filename onto a publication.
+
+        Returns the rowcount so the caller can return 404 if the
+        publication has already been removed (e.g. unpublish + re-
+        upload race). ``filename`` may be ``None`` to clear the
+        cache.
+        """
+
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "UPDATE gfs_story_publications "
+                "SET og_thumbnail_filename=? "
+                "WHERE story_id=? AND instance_id=?",
+                (filename, story_id, instance_id),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
+
     async def list_for_instance(
         self,
         instance_id: str,
     ) -> list[GfsStoryPublication]:
         rows = await self._db.fetchall(
             "SELECT story_id, instance_id, expires_at, published_at, "
-            "publish_signature FROM gfs_story_publications "
+            "publish_signature, og_thumbnail_filename "
+            "FROM gfs_story_publications "
             "WHERE instance_id=? ORDER BY published_at DESC",
             (instance_id,),
         )
@@ -1137,7 +1179,8 @@ class SqliteGfsStoryTokenRepo:
             """
             SELECT t.token, t.story_id, t.instance_id, t.label,
                    t.created_at AS t_created_at, t.revoked_at AS t_revoked_at,
-                   p.expires_at, p.published_at, p.publish_signature
+                   p.expires_at, p.published_at, p.publish_signature,
+                   p.og_thumbnail_filename
               FROM gfs_story_tokens AS t
               JOIN gfs_story_publications AS p
                 ON p.story_id = t.story_id AND p.instance_id = t.instance_id
@@ -1166,6 +1209,7 @@ class SqliteGfsStoryTokenRepo:
             expires_at=int(d["expires_at"]),
             published_at=int(d["published_at"]),
             publish_signature=d["publish_signature"],
+            og_thumbnail_filename=d.get("og_thumbnail_filename"),
         )
         return tok, pub
 
@@ -1240,4 +1284,5 @@ def _row_to_story_pub(row: dict) -> GfsStoryPublication | None:
         expires_at=int(row["expires_at"]),
         published_at=int(row["published_at"]),
         publish_signature=row["publish_signature"],
+        og_thumbnail_filename=row.get("og_thumbnail_filename"),
     )

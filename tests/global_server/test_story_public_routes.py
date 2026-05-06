@@ -331,3 +331,152 @@ async def test_unpublish_unknown_returns_404(client):
         json=unpublish,
     )
     assert resp.status == 404
+
+
+# ─── OG card (§stories_public OG image) ─────────────────────────────────
+
+
+_JPEG = b"\xff\xd8\xff" + b"\x00" * 32  # smallest valid-looking JPEG
+
+
+async def _publish(client, story_id="s-1") -> None:
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": story_id,
+            "expires_at": 10_000_000_000,
+        },
+    )
+    await client.post(f"/gfs/stories/{story_id}/publish", json=body)
+
+
+async def test_og_upload_stores_thumbnail(client):
+    await _publish(client)
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "image_b64": base64.b64encode(_JPEG).decode("ascii"),
+        },
+    )
+    resp = await client.post("/gfs/stories/s-1/og", json=body)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["url"].endswith("/story/inst-author/s-1/og.jpg")
+
+
+async def test_og_upload_without_publication_returns_404(client):
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-missing",
+            "image_b64": base64.b64encode(_JPEG).decode("ascii"),
+        },
+    )
+    resp = await client.post("/gfs/stories/s-missing/og", json=body)
+    assert resp.status == 404
+
+
+async def test_og_upload_rejects_non_jpeg(client):
+    await _publish(client)
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "image_b64": base64.b64encode(b"\x00\x00\x00\x00").decode("ascii"),
+        },
+    )
+    resp = await client.post("/gfs/stories/s-1/og", json=body)
+    assert resp.status == 422
+
+
+async def test_og_upload_rejects_invalid_b64(client):
+    await _publish(client)
+    body = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "image_b64": "this is not base64!",
+        },
+    )
+    resp = await client.post("/gfs/stories/s-1/og", json=body)
+    assert resp.status == 422
+
+
+async def test_og_upload_rejects_missing_field(client):
+    body = _sign(
+        client._seed,
+        {"instance_id": "inst-author", "story_id": "s-1", "image_b64": ""},
+    )
+    resp = await client.post("/gfs/stories/s-1/og", json=body)
+    assert resp.status == 422
+
+
+async def test_og_image_serves_after_upload(client):
+    await _publish(client)
+    upload = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "image_b64": base64.b64encode(_JPEG).decode("ascii"),
+        },
+    )
+    await client.post("/gfs/stories/s-1/og", json=upload)
+    resp = await client.get("/story/inst-author/s-1/og.jpg")
+    assert resp.status == 200
+    body = await resp.read()
+    assert body == _JPEG
+
+
+async def test_og_image_404_when_not_uploaded(client):
+    await _publish(client)
+    resp = await client.get("/story/inst-author/s-1/og.jpg")
+    assert resp.status == 404
+
+
+async def test_og_image_404_when_publication_missing(client):
+    resp = await client.get("/story/inst-author/s-missing/og.jpg")
+    assert resp.status == 404
+
+
+async def test_landing_emits_og_meta_when_thumbnail_uploaded(client):
+    await _publish(client)
+    upload = _sign(
+        client._seed,
+        {
+            "instance_id": "inst-author",
+            "story_id": "s-1",
+            "image_b64": base64.b64encode(_JPEG).decode("ascii"),
+        },
+    )
+    await client.post("/gfs/stories/s-1/og", json=upload)
+    _mark_author_online(client._app)
+
+    # Find an active token to land on the page.
+    registry = client._app[gfs_story_pub_service_key]
+    tokens = await registry._tokens.list_for("s-1", "inst-author")
+    token = tokens[0].token
+
+    resp = await client.get(f"/story/inst-author/s-1/{token}")
+    assert resp.status == 200
+    text = await resp.text()
+    assert "og:image" in text
+    assert "og.jpg" in text
+    assert "twitter:card" in text
+
+
+async def test_landing_omits_og_image_when_no_thumbnail(client):
+    await _publish(client)
+    _mark_author_online(client._app)
+    registry = client._app[gfs_story_pub_service_key]
+    tokens = await registry._tokens.list_for("s-1", "inst-author")
+    token = tokens[0].token
+    resp = await client.get(f"/story/inst-author/s-1/{token}")
+    text = await resp.text()
+    assert "og:image" not in text  # no thumbnail uploaded yet

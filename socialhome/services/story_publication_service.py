@@ -184,6 +184,57 @@ class StoryPublicationService:
         except aiohttp.ClientError as exc:
             raise StoryPublicationError(f"GFS revoke request failed: {exc}") from exc
 
+    async def upload_og_thumbnail(
+        self,
+        story_id: str,
+        author_user_id: str,
+        *,
+        jpeg_bytes: bytes,
+    ) -> str:
+        """Cache a JPEG thumbnail on the GFS for OG-card previews.
+
+        The thumbnail is intentionally public — anonymous social-card
+        crawlers (Twitter, Slack, iMessage) need to fetch it without
+        the share token. Author opts in per-story by uploading; the
+        absence of a thumbnail keeps the share link rendering as a
+        generic OG card.
+
+        Returns the public OG URL on success.
+        """
+        import base64
+
+        story = await self._require_owned(story_id, author_user_id)
+        gfs_id = story.public_gfs_id
+        if gfs_id is None:
+            raise StoryPublicationError("Story is not currently published.")
+        conn = await self._require_active_gfs(gfs_id)
+        body = self._sign_body(
+            {
+                "instance_id": self._require_instance_id(),
+                "story_id": story.id,
+                "image_b64": base64.b64encode(jpeg_bytes).decode("ascii"),
+            }
+        )
+        try:
+            async with self._client().post(
+                f"{conn.inbox_url}/gfs/stories/{story.id}/og",
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                payload = await resp.json()
+                if resp.status >= 300:
+                    raise StoryPublicationError(
+                        f"GFS rejected OG upload: HTTP {resp.status} {payload}"
+                    )
+        except aiohttp.ClientError as exc:
+            raise StoryPublicationError(
+                f"GFS OG upload request failed: {exc}",
+            ) from exc
+        url = str(payload.get("url") or "")
+        if not url:
+            raise StoryPublicationError("GFS OG response missing url.")
+        return url
+
     async def unpublish(self, story_id: str, author_user_id: str) -> None:
         """Pull the publication entirely. CASCADE on the GFS side wipes
         every token under it; the local flag clears regardless of GFS

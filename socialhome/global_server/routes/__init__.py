@@ -68,6 +68,8 @@ from .rtc import (
     RtcSessionView,
 )
 from .stories import (
+    StoryOgImageView,
+    StoryOgUploadView,
     StoryPublicLandingView,
     StoryPublishView,
     StoryTokenMintView,
@@ -162,6 +164,19 @@ def register_routes(
     app.router.add_view(
         "/gfs/stories/{story_id}/unpublish",
         StoryUnpublishView,
+    )
+    app.router.add_view(
+        "/gfs/stories/{story_id}/og",
+        StoryOgUploadView,
+    )
+    # Public OG image — fetched by anonymous social-card crawlers.
+    # Path is stable per (instance, story) so a token rotation
+    # doesn't invalidate the cached preview on Twitter / Slack /
+    # iMessage. Mounted before the ``{token}`` route so aiohttp's
+    # routing table picks the literal ``og.jpg`` first.
+    app.router.add_view(
+        "/story/{instance_id}/{story_id}/og.jpg",
+        StoryOgImageView,
     )
     app.router.add_view(
         "/story/{instance_id}/{story_id}/{token}",
