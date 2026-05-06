@@ -192,18 +192,18 @@ class FederationEventType(str, enum.Enum):
     CALL_ICE_CANDIDATE = "call_ice_candidate"
     CALL_QUALITY = "call_quality"
 
-    # ── Stories (§Stories) ──
-    # Personal "stories" pillar — per-author per-day frame bag, federated
-    # to peers per the author's audience kind. See ``story_service`` for
-    # outbound fan-out and ``federation/sync/story_inbound.py`` for the
+    # ── Highlights (§Highlights) ──
+    # Personal "highlights" pillar — per-author per-day frame bag, federated
+    # to peers per the author's audience kind. See ``highlight_service`` for
+    # outbound fan-out and ``federation/sync/highlight_inbound.py`` for the
     # inbound handlers (registered via ``_event_registry``).
-    STORY_CREATED = "story_created"
-    STORY_FRAME_APPENDED = "story_frame_appended"
-    STORY_FRAME_DELETED = "story_frame_deleted"
-    STORY_DELETED = "story_deleted"
-    STORY_FRAME_VIEWED = "story_frame_viewed"
-    STORY_FRAME_REACTED = "story_frame_reacted"
-    STORY_FRAME_REACTION_REMOVED = "story_frame_reaction_removed"
+    HIGHLIGHT_CREATED = "highlight_created"
+    HIGHLIGHT_FRAME_APPENDED = "highlight_frame_appended"
+    HIGHLIGHT_FRAME_DELETED = "highlight_frame_deleted"
+    HIGHLIGHT_DELETED = "highlight_deleted"
+    HIGHLIGHT_FRAME_VIEWED = "highlight_frame_viewed"
+    HIGHLIGHT_FRAME_REACTED = "highlight_frame_reacted"
+    HIGHLIGHT_FRAME_REACTION_REMOVED = "highlight_frame_reaction_removed"
 
     # ── Momentum (§Momentum) — household-broadcast posts with 3-hop relay ──
     MOMENT_CREATED = "moment_created"

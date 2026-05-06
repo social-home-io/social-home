@@ -52,12 +52,12 @@ from .repositories import (
     SqliteClusterRepo,
     SqliteGfsAdminRepo,
     SqliteGfsFederationRepo,
-    SqliteGfsStoryPublicationRepo,
-    SqliteGfsStoryTokenRepo,
+    SqliteGfsHighlightPublicationRepo,
+    SqliteGfsHighlightTokenRepo,
 )
 from .routes import register_routes
 from .rtc_transport import GfsRtcSession
-from .story_publications import StoryPublicationRegistry
+from .highlight_publications import HighlightPublicationRegistry
 from .ws_registry import GfsWebSocketRegistry
 
 log = logging.getLogger(__name__)
@@ -129,8 +129,8 @@ class GfsApp:
             federation=SqliteGfsFederationRepo(db),
             admin=SqliteGfsAdminRepo(db),
             cluster=SqliteClusterRepo(db),
-            story_pubs=SqliteGfsStoryPublicationRepo(db),
-            story_tokens=SqliteGfsStoryTokenRepo(db),
+            highlight_pubs=SqliteGfsHighlightPublicationRepo(db),
+            highlight_tokens=SqliteGfsHighlightTokenRepo(db),
         )
 
     def _build_services(
@@ -177,9 +177,9 @@ class GfsApp:
         )
         admin.attach_cluster(cluster)
         og_dir = Path(config.data_dir) / "og_thumbnails"
-        story_pubs = StoryPublicationRegistry(
-            repos.story_pubs,
-            repos.story_tokens,
+        highlight_pubs = HighlightPublicationRegistry(
+            repos.highlight_pubs,
+            repos.highlight_tokens,
             ws_registry,
             base_url=config.base_url,
             og_thumbnail_dir=og_dir,
@@ -192,7 +192,7 @@ class GfsApp:
             tokens=PairingTokenService(repos.admin),
             rtc=GfsRtcSession(),
             ws_registry=ws_registry,
-            story_pubs=story_pubs,
+            highlight_pubs=highlight_pubs,
         )
 
     def _build_app(self) -> web.Application:
@@ -217,9 +217,9 @@ class GfsApp:
         a[K.gfs_admin_service_key] = self.services.admin
         a[K.gfs_rtc_key] = self.services.rtc
         a[K.gfs_ws_registry_key] = self.services.ws_registry
-        a[K.gfs_story_pub_repo_key] = self.repos.story_pubs
-        a[K.gfs_story_token_repo_key] = self.repos.story_tokens
-        a[K.gfs_story_pub_service_key] = self.services.story_pubs
+        a[K.gfs_highlight_pub_repo_key] = self.repos.highlight_pubs
+        a[K.gfs_highlight_token_repo_key] = self.repos.highlight_tokens
+        a[K.gfs_highlight_pub_service_key] = self.services.highlight_pubs
         # Non-typed helpers the admin module reads directly.
         a["admin_auth"] = self.services.admin_auth
         a["gfs_token_service"] = self.services.tokens

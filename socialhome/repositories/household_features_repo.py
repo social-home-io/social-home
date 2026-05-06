@@ -21,7 +21,7 @@ _FEATURE_KEYS: tuple[str, ...] = (
     "feat_tasks",
     "feat_stickies",
     "feat_calendar",
-    "feat_stories",
+    "feat_highlights",
     "feat_momentum",
 )
 _ALLOW_KEYS: tuple[str, ...] = (
@@ -32,7 +32,7 @@ _ALLOW_KEYS: tuple[str, ...] = (
     "allow_poll",
     "allow_schedule",
     "allow_location",
-    "allow_story_share",
+    "allow_highlight_share",
 )
 ALL_KEYS: frozenset[str] = frozenset(_FEATURE_KEYS + _ALLOW_KEYS)
 

@@ -12,7 +12,7 @@ A household has a single global byte budget. The service:
 
 The check is best-effort — it's a guard rail, not a security boundary.
 A user racing two simultaneous uploads can technically exceed the cap
-by a single file's size; that's acceptable for the v1 quota story.
+by a single file's size; that's acceptable for the v1 quota model.
 """
 
 from __future__ import annotations

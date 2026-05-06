@@ -23,11 +23,11 @@ import { SpaceCreateDialog } from '@/components/SpaceCreateDialog'
 import { NewDmDialog } from '@/components/NewDmDialog'
 import { CommentOverlay } from '@/components/CommentOverlay'
 import { StickyDialog } from '@/components/StickyDialog'
-import { StoryPickerDialog } from '@/components/StoryPickerDialog'
+import { HighlightPickerDialog } from '@/components/HighlightPickerDialog'
 import { CallTypePickerDialog } from '@/components/CallTypePickerDialog'
 import { ConfirmDialogHost } from '@/components/confirm'
 import { UserActionsMenu } from '@/components/UserActionsMenu'
-import { StoryPublishMenu } from '@/features/stories/StoryPublishMenu'
+import { HighlightPublishMenu } from '@/features/highlights/HighlightPublishMenu'
 import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
@@ -263,11 +263,11 @@ export function App() {
           <RejectReasonDialog />
           <ReportDialog />
           <IncomingCallDialog />
-          <StoryPickerDialog />
+          <HighlightPickerDialog />
           <CallTypePickerDialog />
           <ConfirmDialogHost />
           <UserActionsMenu />
-          <StoryPublishMenu />
+          <HighlightPublishMenu />
         </div>
       </LocationProvider>
     </ErrorBoundary>

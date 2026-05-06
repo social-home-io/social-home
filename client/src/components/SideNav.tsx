@@ -57,7 +57,7 @@ interface SideNavState {
   feat_tasks: boolean
   feat_pages: boolean
   feat_stickies: boolean
-  feat_stories: boolean
+  feat_highlights: boolean
   feat_momentum: boolean
 }
 
@@ -67,7 +67,7 @@ const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall' | 'd
   feat_tasks: true,
   feat_pages: true,
   feat_stickies: true,
-  feat_stories: true,
+  feat_highlights: true,
   feat_momentum: true,
 }
 
@@ -102,9 +102,9 @@ const TALK_GROUP: SideNavGroup = {
     // tab stays the canonical surface (history, hang-up controls).
     { key: 'calls',    label: 'Calls',    href: '/dms?tab=calls', icon: 'calls',
       gate: s => s.hasActiveCall },
-    // Stories + Momentum are user-level features — not gated by the
+    // Highlights + Momentum are user-level features — not gated by the
     // household feature toggles. They always render in the sidebar.
-    { key: 'stories',  label: 'Stories',  href: '/stories', icon: 'stories' },
+    { key: 'highlights',  label: 'Highlights',  href: '/highlights', icon: 'highlights' },
     { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum' },
   ],
 }
@@ -161,7 +161,7 @@ export function SideNav() {
             feat_tasks: t.feat_tasks,
             feat_pages: t.feat_pages,
             feat_stickies: t.feat_stickies,
-            feat_stories: t.feat_stories,
+            feat_highlights: t.feat_highlights,
             feat_momentum: t.feat_momentum ?? true,
           }
         : ALL_ON),

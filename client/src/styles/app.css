@@ -34,7 +34,7 @@
    still override specific animations to ``none`` (the spinner pulses
    to a steady 0.7 opacity, the skeleton shimmer freezes), but this
    global gate catches every ``animation`` / ``transition`` we ship —
-   including the chat-bubble entrance, story slide-up, sheet
+   including the chat-bubble entrance, highlight slide-up, sheet
    presentation, fade-ins, message highlight flash, typing-dot pulse,
    and event-row expand — without having to enumerate them by name.
    Without this gate, future animations slip past the a11y filter the
@@ -1507,7 +1507,7 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   flex: 1;
   min-width: 0;
 }
-.sh-stories-page--skeleton .sh-story-rings {
+.sh-highlights-page--skeleton .sh-highlight-rings {
   pointer-events: none;
 }
 
@@ -11153,28 +11153,28 @@ a.sh-btn--ghost:hover {
   }
 }
 
-/* ─── Stories (§Stories) ──────────────────────────────────────────── */
+/* ─── Highlights (§Highlights) ──────────────────────────────────────────── */
 
-.sh-stories-page {
+.sh-highlights-page {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-md);
 }
-.sh-stories-header {
+.sh-highlights-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sh-space-md);
 }
-.sh-stories-empty { padding: var(--sh-space-lg) 0; }
+.sh-highlights-empty { padding: var(--sh-space-lg) 0; }
 
-.sh-story-rings {
+.sh-highlight-rings {
   display: flex;
   gap: var(--sh-space-md);
   overflow-x: auto;
   padding: var(--sh-space-sm);
 }
-.sh-story-ring {
+.sh-highlight-ring {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -11186,7 +11186,7 @@ a.sh-btn--ghost:hover {
   color: inherit;
   min-width: 72px;
 }
-.sh-story-ring-avatar {
+.sh-highlight-ring-avatar {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11196,29 +11196,29 @@ a.sh-btn--ghost:hover {
   padding: 2px;
   transition: transform 80ms ease, border-color 80ms ease;
 }
-.sh-story-ring--unseen .sh-story-ring-avatar {
+.sh-highlight-ring--unseen .sh-highlight-ring-avatar {
   border-color: var(--sh-primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sh-primary) 35%, transparent);
 }
-.sh-story-ring:hover .sh-story-ring-avatar { transform: translateY(-1px); }
-.sh-story-ring-label {
+.sh-highlight-ring:hover .sh-highlight-ring-avatar { transform: translateY(-1px); }
+.sh-highlight-ring-label {
   font-size: 0.8rem;
   max-width: 80px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sh-story-ring--new .sh-story-ring-avatar {
+.sh-highlight-ring--new .sh-highlight-ring-avatar {
   border-style: dashed;
   background: var(--sh-bg-secondary);
 }
-.sh-story-ring-plus {
+.sh-highlight-ring-plus {
   font-size: 1.6rem;
   color: var(--sh-primary);
   line-height: 1;
 }
-.sh-story-ring-wrap { position: relative; }
-.sh-story-ring-overflow {
+.sh-highlight-ring-wrap { position: relative; }
+.sh-highlight-ring-overflow {
   position: absolute;
   top: 0;
   right: 0;
@@ -11233,10 +11233,10 @@ a.sh-btn--ghost:hover {
   cursor: pointer;
   color: inherit;
 }
-.sh-story-ring-overflow:hover {
+.sh-highlight-ring-overflow:hover {
   background: var(--sh-bg-secondary);
 }
-.sh-story-viewer-overflow {
+.sh-highlight-viewer-overflow {
   background: none;
   border: 1px solid var(--sh-border-muted, var(--sh-border));
   border-radius: var(--sh-radius-full);
@@ -11248,7 +11248,7 @@ a.sh-btn--ghost:hover {
   cursor: pointer;
   color: inherit;
 }
-.sh-story-viewer-overflow:hover {
+.sh-highlight-viewer-overflow:hover {
   background: var(--sh-bg-secondary);
 }
 
@@ -11292,12 +11292,12 @@ a.sh-btn--ghost:hover {
   text-overflow: ellipsis;
 }
 
-.sh-story-list {
+.sh-highlight-list {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-sm);
 }
-.sh-story-row {
+.sh-highlight-row {
   display: flex;
   align-items: center;
   gap: var(--sh-space-md);
@@ -11308,10 +11308,10 @@ a.sh-btn--ghost:hover {
   color: inherit;
   position: relative;
 }
-.sh-story-row:hover {
+.sh-highlight-row:hover {
   background: color-mix(in srgb, var(--sh-bg-secondary) 80%, var(--sh-primary) 20%);
 }
-.sh-story-row-thumb {
+.sh-highlight-row-thumb {
   width: 56px; height: 56px;
   border-radius: var(--sh-radius-sm);
   object-fit: cover;
@@ -11321,11 +11321,11 @@ a.sh-btn--ghost:hover {
   background: var(--sh-bg-tertiary);
   font-size: 1.4rem;
 }
-.sh-story-row-meta {
+.sh-highlight-row-meta {
   display: flex;
   flex-direction: column;
 }
-.sh-story-row-unseen {
+.sh-highlight-row-unseen {
   margin-left: auto;
   background: var(--sh-primary);
   color: #fff;
@@ -11340,7 +11340,7 @@ a.sh-btn--ghost:hover {
 }
 
 /* Viewer chrome — full-screen, dark, tap-zoned. */
-.sh-story-viewer {
+.sh-highlight-viewer {
   position: fixed;
   inset: 0;
   background: #000;
@@ -11349,30 +11349,30 @@ a.sh-btn--ghost:hover {
   grid-template-rows: auto auto 1fr auto;
   z-index: 1000;
 }
-.sh-story-progress {
+.sh-highlight-progress {
   display: flex;
   gap: 4px;
   padding: 6px 12px;
 }
-.sh-story-progress-seg {
+.sh-highlight-progress-seg {
   flex: 1;
   height: 3px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.25);
 }
-.sh-story-progress-seg--done {
+.sh-highlight-progress-seg--done {
   background: rgba(255, 255, 255, 0.85);
 }
-.sh-story-progress-seg--active {
+.sh-highlight-progress-seg--active {
   background: var(--sh-primary);
 }
-.sh-story-viewer-header {
+.sh-highlight-viewer-header {
   display: flex;
   align-items: center;
   gap: var(--sh-space-md);
   padding: 0 var(--sh-space-md) var(--sh-space-sm);
 }
-.sh-story-frame {
+.sh-highlight-frame {
   position: relative;
   display: flex;
   align-items: center;
@@ -11380,12 +11380,12 @@ a.sh-btn--ghost:hover {
   overflow: hidden;
   min-height: 0;
 }
-.sh-story-frame-media {
+.sh-highlight-frame-media {
   max-height: 100%;
   max-width: 100%;
   object-fit: contain;
 }
-.sh-story-frame-caption {
+.sh-highlight-frame-caption {
   position: absolute;
   bottom: var(--sh-space-md);
   left: var(--sh-space-md);
@@ -11396,11 +11396,11 @@ a.sh-btn--ghost:hover {
   margin: 0;
   text-align: center;
 }
-.sh-story-frame-caption-emoji {
+.sh-highlight-frame-caption-emoji {
   margin-right: 6px;
   font-size: 1.2em;
 }
-.sh-story-tap-left, .sh-story-tap-right {
+.sh-highlight-tap-left, .sh-highlight-tap-right {
   position: absolute;
   top: 0; bottom: 0;
   width: 33%;
@@ -11409,9 +11409,9 @@ a.sh-btn--ghost:hover {
   cursor: pointer;
   z-index: 2;
 }
-.sh-story-tap-left  { left: 0; }
-.sh-story-tap-right { right: 0; width: 67%; }
-.sh-story-viewer-footer {
+.sh-highlight-tap-left  { left: 0; }
+.sh-highlight-tap-right { right: 0; width: 67%; }
+.sh-highlight-viewer-footer {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11419,9 +11419,9 @@ a.sh-btn--ghost:hover {
   padding: var(--sh-space-md);
   background: rgba(0, 0, 0, 0.45);
 }
-.sh-story-react-btn,
-.sh-story-reply-btn,
-.sh-story-report-btn {
+.sh-highlight-react-btn,
+.sh-highlight-reply-btn,
+.sh-highlight-report-btn {
   background: rgba(255, 255, 255, 0.15);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.3);
@@ -11429,18 +11429,18 @@ a.sh-btn--ghost:hover {
   padding: 6px 14px;
   cursor: pointer;
 }
-.sh-story-react-btn:focus-visible,
-.sh-story-reply-btn:focus-visible,
-.sh-story-report-btn:focus-visible {
+.sh-highlight-react-btn:focus-visible,
+.sh-highlight-reply-btn:focus-visible,
+.sh-highlight-report-btn:focus-visible {
   outline: 2px solid #fff;
   outline-offset: 2px;
 }
-.sh-story-author-meta {
+.sh-highlight-author-meta {
   flex: 1;
   text-align: center;
   opacity: 0.85;
 }
-.sh-story-react-tray {
+.sh-highlight-react-tray {
   position: absolute;
   bottom: 84px;
   left: 50%;
@@ -11452,7 +11452,7 @@ a.sh-btn--ghost:hover {
   padding: 8px 12px;
   z-index: 3;
 }
-.sh-story-react-tray-btn {
+.sh-highlight-react-tray-btn {
   background: none;
   border: none;
   font-size: 1.6rem;
@@ -11460,35 +11460,35 @@ a.sh-btn--ghost:hover {
   padding: 4px;
 }
 
-/* Story archive — month-grid browser at /stories/archive. Reuses
- * the same 5×7 layout as the calendar route: day cells with stories
+/* Highlight archive — month-grid browser at /highlights/archive. Reuses
+ * the same 5×7 layout as the calendar route: day cells with highlights
  * carry the most-recent first-frame thumbnail and a +N chip when
- * the day has more than one story. */
-.sh-story-archive {
+ * the day has more than one highlight. */
+.sh-highlight-archive {
   max-width: 920px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-md);
 }
-.sh-story-archive-header {
+.sh-highlight-archive-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sh-space-sm);
 }
-.sh-story-archive-grid {
+.sh-highlight-archive-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: var(--sh-space-xs);
 }
-.sh-story-archive-dow {
+.sh-highlight-archive-dow {
   font-size: var(--sh-font-size-xs);
   color: var(--sh-text-muted);
   text-align: center;
   padding: 2px 0;
 }
-.sh-story-archive-day {
+.sh-highlight-archive-day {
   position: relative;
   aspect-ratio: 1 / 1;
   background: var(--sh-bg-secondary);
@@ -11504,30 +11504,30 @@ a.sh-btn--ghost:hover {
   color: var(--sh-text);
   cursor: default;
 }
-.sh-story-archive-day--has {
+.sh-highlight-archive-day--has {
   cursor: pointer;
   background: var(--sh-bg);
 }
-.sh-story-archive-day--has:hover {
+.sh-highlight-archive-day--has:hover {
   border-color: var(--sh-primary);
 }
-.sh-story-archive-day:focus-visible {
+.sh-highlight-archive-day:focus-visible {
   outline: 2px solid var(--sh-primary);
   outline-offset: 2px;
 }
-.sh-story-archive-day--today {
+.sh-highlight-archive-day--today {
   outline: 2px solid var(--sh-primary);
   outline-offset: -2px;
 }
-.sh-story-archive-day--selected {
+.sh-highlight-archive-day--selected {
   border-color: var(--sh-primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sh-primary) 30%, transparent);
 }
-.sh-story-archive-day--pad {
+.sh-highlight-archive-day--pad {
   background: transparent;
   border: 1px dashed var(--sh-border);
 }
-.sh-story-archive-day-num {
+.sh-highlight-archive-day-num {
   position: absolute;
   top: 4px;
   left: 6px;
@@ -11539,24 +11539,24 @@ a.sh-btn--ghost:hover {
   padding: 0 4px;
   z-index: 1;
 }
-.sh-theme-dark .sh-story-archive-day-num {
+.sh-theme-dark .sh-highlight-archive-day-num {
   background: rgba(0, 0, 0, 0.55);
 }
-.sh-story-archive-day-thumb {
+.sh-highlight-archive-day-thumb {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-.sh-story-archive-day-thumb--video {
+.sh-highlight-archive-day-thumb--video {
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 1.25rem;
   background: var(--sh-bg-tertiary);
 }
-.sh-story-archive-day-more {
+.sh-highlight-archive-day-more {
   position: absolute;
   bottom: 4px;
   right: 6px;
@@ -11567,7 +11567,7 @@ a.sh-btn--ghost:hover {
   padding: 0 6px;
   z-index: 1;
 }
-.sh-story-archive-day-panel {
+.sh-highlight-archive-day-panel {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-sm);
@@ -11576,7 +11576,7 @@ a.sh-btn--ghost:hover {
   border-radius: var(--sh-radius-md);
   background: var(--sh-bg);
 }
-.sh-story-archive-day-list {
+.sh-highlight-archive-day-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -11584,7 +11584,7 @@ a.sh-btn--ghost:hover {
   flex-direction: column;
   gap: var(--sh-space-xs);
 }
-.sh-story-archive-tile {
+.sh-highlight-archive-tile {
   display: flex;
   align-items: center;
   gap: var(--sh-space-sm);
@@ -11594,10 +11594,10 @@ a.sh-btn--ghost:hover {
   color: inherit;
   transition: background var(--sh-transition-fast);
 }
-.sh-story-archive-tile:hover {
+.sh-highlight-archive-tile:hover {
   background: var(--sh-bg-secondary);
 }
-.sh-story-archive-tile-thumb {
+.sh-highlight-archive-tile-thumb {
   flex: 0 0 64px;
   width: 64px;
   height: 64px;
@@ -11605,13 +11605,13 @@ a.sh-btn--ghost:hover {
   object-fit: cover;
   background: var(--sh-bg-secondary);
 }
-.sh-story-archive-tile-thumb--video {
+.sh-highlight-archive-tile-thumb--video {
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 1.5rem;
 }
-.sh-story-archive-tile-meta {
+.sh-highlight-archive-tile-meta {
   display: flex;
   align-items: center;
   gap: var(--sh-space-sm);
@@ -11619,20 +11619,20 @@ a.sh-btn--ghost:hover {
 }
 
 /* Composer */
-.sh-story-composer {
+.sh-highlight-composer {
   max-width: 600px;
 }
-.sh-story-composer-preview {
+.sh-highlight-composer-preview {
   width: 100%;
   border-radius: var(--sh-radius-md);
   margin-bottom: var(--sh-space-sm);
 }
-.sh-story-composer-emoji-row {
+.sh-highlight-composer-emoji-row {
   display: flex;
   gap: var(--sh-space-xs);
   flex-wrap: wrap;
 }
-.sh-story-composer-emoji-btn {
+.sh-highlight-composer-emoji-btn {
   background: var(--sh-bg-secondary);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-full);
@@ -11640,14 +11640,14 @@ a.sh-btn--ghost:hover {
   font-size: 1.2rem;
   cursor: pointer;
 }
-.sh-story-composer-emoji-btn--active {
+.sh-highlight-composer-emoji-btn--active {
   border-color: var(--sh-primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sh-primary) 30%, transparent);
 }
 /* Per-frame staged-frame cards in the multi-pick composer. Each card
  * is a thumbnail + caption textarea + emoji-pick button row, stacked
- * vertically so a 30-frame story is still scannable on mobile. */
-.sh-story-frames {
+ * vertically so a 30-frame highlight is still scannable on mobile. */
+.sh-highlight-frames {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -11655,7 +11655,7 @@ a.sh-btn--ghost:hover {
   flex-direction: column;
   gap: var(--sh-space-sm);
 }
-.sh-story-frame {
+.sh-highlight-frame {
   display: flex;
   gap: var(--sh-space-sm);
   padding: var(--sh-space-sm);
@@ -11663,7 +11663,7 @@ a.sh-btn--ghost:hover {
   border-radius: var(--sh-radius-md);
   background: var(--sh-bg);
 }
-.sh-story-frame-thumb {
+.sh-highlight-frame-thumb {
   flex: 0 0 88px;
   width: 88px;
   height: 88px;
@@ -11671,43 +11671,43 @@ a.sh-btn--ghost:hover {
   overflow: hidden;
   background: var(--sh-bg-secondary);
 }
-.sh-story-frame-thumb img,
-.sh-story-frame-thumb video {
+.sh-highlight-frame-thumb img,
+.sh-highlight-frame-thumb video {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
-.sh-story-frame-body {
+.sh-highlight-frame-body {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-xs);
   min-width: 0;
 }
-.sh-story-frame-meta {
+.sh-highlight-frame-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-size: var(--sh-font-size-sm);
   color: var(--sh-text-muted);
 }
-.sh-story-frame-remove {
+.sh-highlight-frame-remove {
   font-size: 1rem;
   line-height: 1;
 }
-.sh-story-frame-caption-row {
+.sh-highlight-frame-caption-row {
   display: flex;
   align-items: flex-start;
   gap: var(--sh-space-xs);
 }
-.sh-story-frame-caption-row textarea {
+.sh-highlight-frame-caption-row textarea {
   flex: 1 1 auto;
   resize: vertical;
   min-height: 2.5rem;
 }
 
-.sh-story-composer-audience {
+.sh-highlight-composer-audience {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-xs);
@@ -11715,18 +11715,18 @@ a.sh-btn--ghost:hover {
   border-radius: var(--sh-radius-md);
   padding: var(--sh-space-md);
 }
-.sh-story-composer-audience-list {
+.sh-highlight-composer-audience-list {
   margin-left: var(--sh-space-md);
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-xs);
 }
-.sh-story-composer-audience-row {
+.sh-highlight-composer-audience-row {
   display: flex;
   align-items: center;
   gap: var(--sh-space-sm);
 }
-.sh-story-composer-advanced-toggle {
+.sh-highlight-composer-advanced-toggle {
   align-self: flex-start;
   background: none;
   border: none;
@@ -11736,7 +11736,7 @@ a.sh-btn--ghost:hover {
 }
 
 /* Share-card (feed) */
-.sh-story-share-card {
+.sh-highlight-share-card {
   display: flex;
   align-items: center;
   gap: var(--sh-space-md);
@@ -11750,10 +11750,10 @@ a.sh-btn--ghost:hover {
   color: inherit;
   width: 100%;
 }
-.sh-story-share-card:hover {
+.sh-highlight-share-card:hover {
   border-color: var(--sh-primary);
 }
-.sh-story-share-card-thumb {
+.sh-highlight-share-card-thumb {
   width: 80px; height: 80px;
   border-radius: var(--sh-radius-sm);
   object-fit: cover;
@@ -11764,37 +11764,37 @@ a.sh-btn--ghost:hover {
   font-size: 1.6rem;
   flex-shrink: 0;
 }
-.sh-story-share-card-thumb--ended,
-.sh-story-share-card-thumb--loading {
+.sh-highlight-share-card-thumb--ended,
+.sh-highlight-share-card-thumb--loading {
   background: var(--sh-bg-tertiary);
   opacity: 0.7;
 }
-.sh-story-share-card-body {
+.sh-highlight-share-card-body {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-xs);
   flex: 1;
   min-width: 0;
 }
-.sh-story-share-card-cta {
+.sh-highlight-share-card-cta {
   margin-top: var(--sh-space-xs);
   color: var(--sh-primary);
   font-size: 0.9rem;
 }
-.sh-story-share-card--ended .sh-story-share-card-cta { display: none; }
+.sh-highlight-share-card--ended .sh-highlight-share-card-cta { display: none; }
 
 /* Picker dialog */
-.sh-story-picker {
+.sh-highlight-picker {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-md);
 }
-.sh-story-picker-grid {
+.sh-highlight-picker-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: var(--sh-space-sm);
 }
-.sh-story-picker-tile {
+.sh-highlight-picker-tile {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-xs);
@@ -11807,14 +11807,14 @@ a.sh-btn--ghost:hover {
   font: inherit;
   color: inherit;
 }
-.sh-story-picker-tile:hover:not(:disabled) {
+.sh-highlight-picker-tile:hover:not(:disabled) {
   border-color: var(--sh-primary);
 }
-.sh-story-picker-tile:disabled {
+.sh-highlight-picker-tile:disabled {
   opacity: 0.55;
   cursor: progress;
 }
-.sh-story-picker-thumb {
+.sh-highlight-picker-thumb {
   width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: var(--sh-radius-sm);
@@ -11825,12 +11825,12 @@ a.sh-btn--ghost:hover {
   background: var(--sh-bg-tertiary);
   font-size: 1.5rem;
 }
-.sh-story-picker-meta {
+.sh-highlight-picker-meta {
   display: flex;
   flex-direction: column;
 }
 
-.sh-settings-stories-panel {
+.sh-settings-highlights-panel {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-sm);
@@ -12257,44 +12257,44 @@ a.sh-btn--ghost:hover {
   }
 }
 
-/* ── Mobile tightening — Stories ──────────────────────────────────── */
+/* ── Mobile tightening — Highlights ──────────────────────────────────── */
 @media (max-width: 640px) {
-  .sh-story-rings {
+  .sh-highlight-rings {
     gap: var(--sh-space-xs);
     overflow-x: auto;
     scrollbar-width: thin;
     -webkit-overflow-scrolling: touch;
     padding-bottom: var(--sh-space-xs);
   }
-  .sh-story-ring {
+  .sh-highlight-ring {
     flex: 0 0 auto;
   }
-  .sh-story-ring-label {
+  .sh-highlight-ring-label {
     max-width: 64px;
   }
-  .sh-story-archive-day-num {
+  .sh-highlight-archive-day-num {
     font-size: 0.75rem;
   }
-  .sh-story-viewer-footer {
+  .sh-highlight-viewer-footer {
     flex-wrap: wrap;
     gap: var(--sh-space-xs);
   }
 }
 
-/* Public-link publish modal — author-only (§stories_public). */
-.sh-story-publish-form {
+/* Public-link publish modal — author-only (§highlights_public). */
+.sh-highlight-publish-form {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-sm);
   margin-top: var(--sh-space-sm);
 }
-.sh-story-publish-issued {
+.sh-highlight-publish-issued {
   margin-top: var(--sh-space-sm);
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-xs);
 }
-.sh-story-publish-url {
+.sh-highlight-publish-url {
   display: block;
   padding: var(--sh-space-xs) var(--sh-space-sm);
   background: var(--sh-surface-2);

@@ -41,7 +41,7 @@ class GfsWebSocketSupervisor:
         "_signing_key",
         "_session_factory",
         "_on_relay",
-        "_on_story_signal",
+        "_on_highlight_signal",
         "_interval",
         "_clients",
         "_lock",
@@ -57,7 +57,7 @@ class GfsWebSocketSupervisor:
         signing_key: bytes,
         session_factory: Callable[[], aiohttp.ClientSession],
         on_relay: Callable[[dict], Awaitable[None]],
-        on_story_signal: Callable[[dict], Awaitable[None]] | None = None,
+        on_highlight_signal: Callable[[dict], Awaitable[None]] | None = None,
         reconcile_interval_seconds: float = DEFAULT_RECONCILE_INTERVAL_SECONDS,
     ) -> None:
         self._repo = repo
@@ -65,22 +65,22 @@ class GfsWebSocketSupervisor:
         self._signing_key = signing_key
         self._session_factory = session_factory
         self._on_relay = on_relay
-        self._on_story_signal = on_story_signal
+        self._on_highlight_signal = on_highlight_signal
         self._interval = reconcile_interval_seconds
         self._clients: dict[str, GfsWebSocketClient] = {}
         self._lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
 
-    def attach_story_signal_handler(
+    def attach_highlight_signal_handler(
         self,
         handler: Callable[[dict], Awaitable[None]],
     ) -> None:
-        """Late-bound — attaches the §stories_public answerer to every
+        """Late-bound — attaches the §highlights_public answerer to every
         running client and to clients started later by the reconciler."""
-        self._on_story_signal = handler
+        self._on_highlight_signal = handler
         for client in list(self._clients.values()):
-            client.attach_story_signal_handler(handler)
+            client.attach_highlight_signal_handler(handler)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ class GfsWebSocketSupervisor:
             signing_key=self._signing_key,
             session_factory=self._session_factory,
             on_relay=self._on_relay,
-            on_story_signal=self._on_story_signal,
+            on_highlight_signal=self._on_highlight_signal,
         )
         async with self._lock:
             existing = self._clients.get(conn.id)

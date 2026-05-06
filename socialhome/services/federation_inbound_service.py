@@ -34,16 +34,21 @@ from ..domain.events import (
     PostDeleted,
     SpaceMemberProfileUpdated,
     SpacePostCreated,
-    StoryFrameAdded,
-    StoryFrameReactionChanged,
-    StoryFrameRemoved,
-    StoryFrameViewed,
-    StoryRemoved,
+    HighlightFrameAdded,
+    HighlightFrameReactionChanged,
+    HighlightFrameRemoved,
+    HighlightFrameViewed,
+    HighlightRemoved,
     UserStatusChanged,
 )
 from ..domain.post import Comment, CommentType, LocationData, Post, PostType
 from ..domain.space import SpaceMember
-from ..domain.story import Story, StoryAudience, StoryFrame, StoryFrameType
+from ..domain.highlight import (
+    Highlight,
+    HighlightAudience,
+    HighlightFrame,
+    HighlightFrameType,
+)
 from ..domain.user import RemoteUser, UserStatus
 from ..infrastructure.event_bus import EventBus
 from ..media.image_processor import ImageProcessor
@@ -57,7 +62,7 @@ if TYPE_CHECKING:
     from ..repositories.moment_repo import AbstractMomentRepo
     from ..repositories.space_post_repo import AbstractSpacePostRepo
     from ..repositories.space_repo import AbstractSpaceRepo
-    from ..repositories.story_repo import AbstractStoryRepo
+    from ..repositories.highlight_repo import AbstractHighlightRepo
     from ..repositories.user_repo import AbstractUserRepo
     from .moment_federation_outbound import MomentFederationOutbound
 
@@ -83,7 +88,7 @@ class FederationInboundService:
         "_space_post_repo",
         "_space_repo",
         "_user_repo",
-        "_story_repo",
+        "_highlight_repo",
         "_moment_repo",
         "_moment_outbound",
         "_profile_picture_repo",
@@ -99,7 +104,7 @@ class FederationInboundService:
         space_post_repo: "AbstractSpacePostRepo",
         space_repo: "AbstractSpaceRepo",
         user_repo: "AbstractUserRepo",
-        story_repo: "AbstractStoryRepo | None" = None,
+        highlight_repo: "AbstractHighlightRepo | None" = None,
         moment_repo: "AbstractMomentRepo | None" = None,
         moment_outbound: "MomentFederationOutbound | None" = None,
         profile_picture_repo=None,
@@ -111,7 +116,7 @@ class FederationInboundService:
         self._space_post_repo = space_post_repo
         self._space_repo = space_repo
         self._user_repo = user_repo
-        self._story_repo = story_repo
+        self._highlight_repo = highlight_repo
         self._moment_repo = moment_repo
         self._moment_outbound = moment_outbound
         self._profile_picture_repo = profile_picture_repo
@@ -148,19 +153,27 @@ class FederationInboundService:
 
         registry.register(FET.SPACE_REPORT, self._on_space_report)
 
-        # Stories — only registered when a story repo is wired in. Tests
+        # Highlights — only registered when a highlight repo is wired in. Tests
         # that instantiate :class:`FederationInboundService` for non-
-        # story coverage don't need to plumb a story repo through.
-        if self._story_repo is not None:
-            registry.register(FET.STORY_CREATED, self._on_story_created)
-            registry.register(FET.STORY_FRAME_APPENDED, self._on_story_frame_appended)
-            registry.register(FET.STORY_FRAME_DELETED, self._on_story_frame_deleted)
-            registry.register(FET.STORY_DELETED, self._on_story_deleted)
-            registry.register(FET.STORY_FRAME_VIEWED, self._on_story_frame_viewed)
-            registry.register(FET.STORY_FRAME_REACTED, self._on_story_frame_reacted)
+        # highlight coverage don't need to plumb a highlight repo through.
+        if self._highlight_repo is not None:
+            registry.register(FET.HIGHLIGHT_CREATED, self._on_highlight_created)
             registry.register(
-                FET.STORY_FRAME_REACTION_REMOVED,
-                self._on_story_frame_reaction_removed,
+                FET.HIGHLIGHT_FRAME_APPENDED, self._on_highlight_frame_appended
+            )
+            registry.register(
+                FET.HIGHLIGHT_FRAME_DELETED, self._on_highlight_frame_deleted
+            )
+            registry.register(FET.HIGHLIGHT_DELETED, self._on_highlight_deleted)
+            registry.register(
+                FET.HIGHLIGHT_FRAME_VIEWED, self._on_highlight_frame_viewed
+            )
+            registry.register(
+                FET.HIGHLIGHT_FRAME_REACTED, self._on_highlight_frame_reacted
+            )
+            registry.register(
+                FET.HIGHLIGHT_FRAME_REACTION_REMOVED,
+                self._on_highlight_frame_reaction_removed,
             )
 
         # Moments — only registered when the moment repo is wired.
@@ -513,189 +526,201 @@ class FederationInboundService:
                 )
         await self._bus.publish(UserStatusChanged(user_id=user_id, status=status))
 
-    # ── Story handlers ─────────────────────────────────────────────────
+    # ── Highlight handlers ─────────────────────────────────────────────────
 
-    async def _on_story_created(self, event: "FederationEvent") -> None:
-        """Land a remote ``STORY_CREATED`` envelope.
+    async def _on_highlight_created(self, event: "FederationEvent") -> None:
+        """Land a remote ``HIGHLIGHT_CREATED`` envelope.
 
-        Persists the parent ``Story`` row (or upserts an existing one
+        Persists the parent ``Highlight`` row (or upserts an existing one
         with refreshed audience/expiry) plus the first frame, then
-        republishes :class:`StoryFrameAdded` so :class:`RealtimeService`
-        can fan a ``story.frame_added`` WS frame to local viewers.
+        republishes :class:`HighlightFrameAdded` so :class:`RealtimeService`
+        can fan a ``highlight.frame_added`` WS frame to local viewers.
 
         Authority check: the envelope's signed sender (``from_instance``)
         must equal the home instance of the payload's
-        ``author_user_id`` — peers can't impersonate stories from
+        ``author_user_id`` — peers can't impersonate highlights from
         someone else's instance.
         """
-        if self._story_repo is None:
+        if self._highlight_repo is None:
             return
         p = event.payload
-        story = self._story_from_payload(p)
-        if story is None:
-            log.debug("STORY_CREATED missing required field: %s", p)
+        highlight = self._highlight_from_payload(p)
+        if highlight is None:
+            log.debug("HIGHLIGHT_CREATED missing required field: %s", p)
             return
-        if not await self._authority_matches(event.from_instance, story.author_user_id):
+        if not await self._authority_matches(
+            event.from_instance, highlight.author_user_id
+        ):
             log.warning(
-                "STORY_CREATED authority mismatch: envelope from %s, "
+                "HIGHLIGHT_CREATED authority mismatch: envelope from %s, "
                 "author %s lives elsewhere — dropped",
                 event.from_instance,
-                story.author_user_id,
+                highlight.author_user_id,
             )
             return
-        await self._story_repo.save_story(story)
-        frame = self._frame_from_payload(story.id, p)
+        await self._highlight_repo.save_highlight(highlight)
+        frame = self._frame_from_payload(highlight.id, p)
         if frame is not None:
-            await self._story_repo.save_frame(frame)
-            await self._publish_frame_added(story, frame, is_first=True, p=p)
+            await self._highlight_repo.save_frame(frame)
+            await self._publish_frame_added(highlight, frame, is_first=True, p=p)
 
-    async def _on_story_frame_appended(self, event: "FederationEvent") -> None:
-        """Append a frame to an existing remote story.
+    async def _on_highlight_frame_appended(self, event: "FederationEvent") -> None:
+        """Append a frame to an existing remote highlight.
 
-        We expect the ``STORY_CREATED`` envelope to have arrived first —
-        if the parent story is missing locally (out-of-order delivery
+        We expect the ``HIGHLIGHT_CREATED`` envelope to have arrived first —
+        if the parent highlight is missing locally (out-of-order delivery
         or pruned by retention), we lazily upsert it from the same
         payload, since every frame envelope carries the routing fields
         the parent needs.
         """
-        if self._story_repo is None:
+        if self._highlight_repo is None:
             return
         p = event.payload
-        story_id = str(p.get("story_id") or "")
-        if not story_id:
-            log.debug("STORY_FRAME_APPENDED missing story_id: %s", p)
+        highlight_id = str(p.get("highlight_id") or "")
+        if not highlight_id:
+            log.debug("HIGHLIGHT_FRAME_APPENDED missing highlight_id: %s", p)
             return
-        story = await self._story_repo.get_story(story_id)
-        if story is None:
-            story = self._story_from_payload(p)
-            if story is None:
+        highlight = await self._highlight_repo.get_highlight(highlight_id)
+        if highlight is None:
+            highlight = self._highlight_from_payload(p)
+            if highlight is None:
                 log.debug(
-                    "STORY_FRAME_APPENDED for unknown story_id %s and no "
+                    "HIGHLIGHT_FRAME_APPENDED for unknown highlight_id %s and no "
                     "fallback metadata — dropped",
-                    story_id,
+                    highlight_id,
                 )
                 return
             if not await self._authority_matches(
-                event.from_instance, story.author_user_id
+                event.from_instance, highlight.author_user_id
             ):
                 log.warning(
-                    "STORY_FRAME_APPENDED authority mismatch (lazy parent): "
+                    "HIGHLIGHT_FRAME_APPENDED authority mismatch (lazy parent): "
                     "envelope from %s, author %s lives elsewhere — dropped",
                     event.from_instance,
-                    story.author_user_id,
+                    highlight.author_user_id,
                 )
                 return
-            await self._story_repo.save_story(story)
+            await self._highlight_repo.save_highlight(highlight)
         else:
             if not await self._authority_matches(
-                event.from_instance, story.author_user_id
+                event.from_instance, highlight.author_user_id
             ):
                 log.warning(
-                    "STORY_FRAME_APPENDED authority mismatch: envelope from "
-                    "%s, story author %s lives elsewhere — dropped",
+                    "HIGHLIGHT_FRAME_APPENDED authority mismatch: envelope from "
+                    "%s, highlight author %s lives elsewhere — dropped",
                     event.from_instance,
-                    story.author_user_id,
+                    highlight.author_user_id,
                 )
                 return
-        frame = self._frame_from_payload(story.id, p)
+        frame = self._frame_from_payload(highlight.id, p)
         if frame is None:
-            log.debug("STORY_FRAME_APPENDED missing frame fields: %s", p)
+            log.debug("HIGHLIGHT_FRAME_APPENDED missing frame fields: %s", p)
             return
-        await self._story_repo.save_frame(frame)
-        await self._publish_frame_added(story, frame, is_first=False, p=p)
+        await self._highlight_repo.save_frame(frame)
+        await self._publish_frame_added(highlight, frame, is_first=False, p=p)
 
-    async def _on_story_frame_deleted(self, event: "FederationEvent") -> None:
-        if self._story_repo is None:
+    async def _on_highlight_frame_deleted(self, event: "FederationEvent") -> None:
+        if self._highlight_repo is None:
             return
         p = event.payload
         frame_id = str(p.get("frame_id") or "")
         if not frame_id:
             return
-        frame = await self._story_repo.get_frame(frame_id)
-        story_id = frame.story_id if frame is not None else str(p.get("story_id") or "")
-        story = await self._story_repo.get_story(story_id) if story_id else None
-        if story is not None and not await self._authority_matches(
-            event.from_instance, story.author_user_id
+        frame = await self._highlight_repo.get_frame(frame_id)
+        highlight_id = (
+            frame.highlight_id
+            if frame is not None
+            else str(p.get("highlight_id") or "")
+        )
+        highlight = (
+            await self._highlight_repo.get_highlight(highlight_id)
+            if highlight_id
+            else None
+        )
+        if highlight is not None and not await self._authority_matches(
+            event.from_instance, highlight.author_user_id
         ):
             log.warning(
-                "STORY_FRAME_DELETED authority mismatch: dropped",
+                "HIGHLIGHT_FRAME_DELETED authority mismatch: dropped",
             )
             return
-        await self._story_repo.delete_frame(frame_id)
-        if story is not None:
+        await self._highlight_repo.delete_frame(frame_id)
+        if highlight is not None:
             await self._bus.publish(
-                StoryFrameRemoved(
-                    story_id=story.id,
+                HighlightFrameRemoved(
+                    highlight_id=highlight.id,
                     frame_id=frame_id,
-                    author_user_id=story.author_user_id,
-                    audience_kind=story.audience_kind.value,
-                    audience=story.audience,
+                    author_user_id=highlight.author_user_id,
+                    audience_kind=highlight.audience_kind.value,
+                    audience=highlight.audience,
                 )
             )
 
-    async def _on_story_deleted(self, event: "FederationEvent") -> None:
-        if self._story_repo is None:
+    async def _on_highlight_deleted(self, event: "FederationEvent") -> None:
+        if self._highlight_repo is None:
             return
         p = event.payload
-        story_id = str(p.get("story_id") or "")
-        if not story_id:
+        highlight_id = str(p.get("highlight_id") or "")
+        if not highlight_id:
             return
-        story = await self._story_repo.get_story(story_id)
-        if story is None:
+        highlight = await self._highlight_repo.get_highlight(highlight_id)
+        if highlight is None:
             return
-        if not await self._authority_matches(event.from_instance, story.author_user_id):
-            log.warning("STORY_DELETED authority mismatch: dropped")
+        if not await self._authority_matches(
+            event.from_instance, highlight.author_user_id
+        ):
+            log.warning("HIGHLIGHT_DELETED authority mismatch: dropped")
             return
-        await self._story_repo.delete_story(story_id)
+        await self._highlight_repo.delete_highlight(highlight_id)
         await self._bus.publish(
-            StoryRemoved(
-                story_id=story_id,
-                author_user_id=story.author_user_id,
-                audience_kind=story.audience_kind.value,
-                audience=story.audience,
+            HighlightRemoved(
+                highlight_id=highlight_id,
+                author_user_id=highlight.author_user_id,
+                audience_kind=highlight.audience_kind.value,
+                audience=highlight.audience,
             )
         )
 
-    # ── Story back-channel handlers ────────────────────────────────────
+    # ── Highlight back-channel handlers ────────────────────────────────────
 
-    async def _on_story_frame_viewed(self, event: "FederationEvent") -> None:
+    async def _on_highlight_frame_viewed(self, event: "FederationEvent") -> None:
         """A remote viewer marked one of *our* author's frames as seen.
 
-        Persists the row in ``story_frame_views`` and republishes
-        :class:`StoryFrameViewed` so the realtime layer pushes the
+        Persists the row in ``highlight_frame_views`` and republishes
+        :class:`HighlightFrameViewed` so the realtime layer pushes the
         view-count update to the author's WS sessions.
         """
-        if self._story_repo is None:
+        if self._highlight_repo is None:
             return
         p = event.payload
-        story_id = str(p.get("story_id") or "")
+        highlight_id = str(p.get("highlight_id") or "")
         frame_id = str(p.get("frame_id") or "")
         viewer_user_id = str(p.get("viewer_user_id") or "")
         author_user_id = str(p.get("author_user_id") or "")
-        if not (story_id and frame_id and viewer_user_id and author_user_id):
+        if not (highlight_id and frame_id and viewer_user_id and author_user_id):
             return
         # Authority check: the envelope's signed sender must be the
         # viewer's home instance — peers can't fabricate views from a
         # user that doesn't live on their household.
         if not await self._authority_matches(event.from_instance, viewer_user_id):
             log.warning(
-                "STORY_FRAME_VIEWED authority mismatch — dropped",
+                "HIGHLIGHT_FRAME_VIEWED authority mismatch — dropped",
             )
             return
-        await self._story_repo.mark_viewed(frame_id, viewer_user_id)
+        await self._highlight_repo.mark_viewed(frame_id, viewer_user_id)
         await self._bus.publish(
-            StoryFrameViewed(
-                story_id=story_id,
+            HighlightFrameViewed(
+                highlight_id=highlight_id,
                 frame_id=frame_id,
                 viewer_user_id=viewer_user_id,
                 author_user_id=author_user_id,
             )
         )
 
-    async def _on_story_frame_reacted(self, event: "FederationEvent") -> None:
+    async def _on_highlight_frame_reacted(self, event: "FederationEvent") -> None:
         await self._handle_reaction_envelope(event, removed=False)
 
-    async def _on_story_frame_reaction_removed(
+    async def _on_highlight_frame_reaction_removed(
         self,
         event: "FederationEvent",
     ) -> None:
@@ -707,30 +732,30 @@ class FederationInboundService:
         *,
         removed: bool,
     ) -> None:
-        if self._story_repo is None:
+        if self._highlight_repo is None:
             return
         p = event.payload
-        story_id = str(p.get("story_id") or "")
+        highlight_id = str(p.get("highlight_id") or "")
         frame_id = str(p.get("frame_id") or "")
         reactor_user_id = str(p.get("reactor_user_id") or "")
         author_user_id = str(p.get("author_user_id") or "")
         emoji = None if removed else (p.get("emoji") or None)
-        if not (story_id and frame_id and reactor_user_id and author_user_id):
+        if not (highlight_id and frame_id and reactor_user_id and author_user_id):
             return
         if not await self._authority_matches(event.from_instance, reactor_user_id):
             log.warning(
-                "STORY_FRAME_REACT* authority mismatch — dropped",
+                "HIGHLIGHT_FRAME_REACT* authority mismatch — dropped",
             )
             return
         if removed or emoji is None:
-            await self._story_repo.clear_reaction(frame_id, reactor_user_id)
+            await self._highlight_repo.clear_reaction(frame_id, reactor_user_id)
             published_emoji: str | None = None
         else:
-            await self._story_repo.set_reaction(frame_id, reactor_user_id, emoji)
+            await self._highlight_repo.set_reaction(frame_id, reactor_user_id, emoji)
             published_emoji = emoji
         await self._bus.publish(
-            StoryFrameReactionChanged(
-                story_id=story_id,
+            HighlightFrameReactionChanged(
+                highlight_id=highlight_id,
                 frame_id=frame_id,
                 reactor_user_id=reactor_user_id,
                 author_user_id=author_user_id,
@@ -945,61 +970,61 @@ class FederationInboundService:
 
     async def _publish_frame_added(
         self,
-        story: Story,
-        frame: StoryFrame,
+        highlight: Highlight,
+        frame: HighlightFrame,
         *,
         is_first: bool,
         p: dict,
     ) -> None:
         await self._bus.publish(
-            StoryFrameAdded(
-                story_id=story.id,
+            HighlightFrameAdded(
+                highlight_id=highlight.id,
                 frame_id=frame.id,
-                author_user_id=story.author_user_id,
-                story_date=story.story_date,
+                author_user_id=highlight.author_user_id,
+                highlight_date=highlight.highlight_date,
                 sequence=frame.sequence,
                 is_first_frame=is_first,
-                audience_kind=story.audience_kind.value,
-                audience=story.audience,
+                audience_kind=highlight.audience_kind.value,
+                audience=highlight.audience,
                 frame_type=frame.frame_type.value,
                 media_url=frame.media_url,
                 caption_text=frame.caption_text,
                 caption_emoji=frame.caption_emoji,
                 duration_ms=frame.duration_ms,
-                expires_at=story.expires_at or str(p.get("expires_at") or ""),
+                expires_at=highlight.expires_at or str(p.get("expires_at") or ""),
             )
         )
 
     @staticmethod
-    def _story_from_payload(payload: dict) -> Story | None:
-        story_id = str(payload.get("story_id") or "")
+    def _highlight_from_payload(payload: dict) -> Highlight | None:
+        highlight_id = str(payload.get("highlight_id") or "")
         author = str(payload.get("author_user_id") or "")
-        story_date = str(payload.get("story_date") or "")
-        if not story_id or not author or not story_date:
+        highlight_date = str(payload.get("highlight_date") or "")
+        if not highlight_id or not author or not highlight_date:
             return None
         try:
-            kind = StoryAudience(str(payload.get("audience_kind") or "all_paired"))
+            kind = HighlightAudience(str(payload.get("audience_kind") or "all_paired"))
         except ValueError:
-            kind = StoryAudience.ALL_PAIRED
+            kind = HighlightAudience.ALL_PAIRED
         audience = tuple(str(x) for x in (payload.get("audience") or ()))
-        return Story(
-            id=story_id,
+        return Highlight(
+            id=highlight_id,
             author_user_id=author,
-            story_date=story_date,
+            highlight_date=highlight_date,
             audience_kind=kind,
             audience=audience,
             expires_at=str(payload.get("expires_at") or "") or None,
         )
 
     @staticmethod
-    def _frame_from_payload(story_id: str, payload: dict) -> StoryFrame | None:
+    def _frame_from_payload(highlight_id: str, payload: dict) -> HighlightFrame | None:
         frame_id = str(payload.get("frame_id") or "")
         if not frame_id:
             return None
         try:
-            ftype = StoryFrameType(str(payload.get("frame_type") or "image"))
+            ftype = HighlightFrameType(str(payload.get("frame_type") or "image"))
         except ValueError:
-            ftype = StoryFrameType.IMAGE
+            ftype = HighlightFrameType.IMAGE
         try:
             sequence = int(payload.get("sequence") or 1)
         except TypeError, ValueError:
@@ -1015,9 +1040,9 @@ class FederationInboundService:
         media_url = str(payload.get("media_url") or "")
         if not media_url:
             return None
-        return StoryFrame(
+        return HighlightFrame(
             id=frame_id,
-            story_id=story_id,
+            highlight_id=highlight_id,
             sequence=sequence,
             frame_type=ftype,
             media_url=media_url,
@@ -1037,7 +1062,7 @@ class FederationInboundService:
         try:
             home = await self._user_repo.get_instance_for_user(author_user_id)
         except Exception as exc:  # pragma: no cover — defensive
-            log.debug("story authority lookup failed: %s", exc)
+            log.debug("highlight authority lookup failed: %s", exc)
             return False
         # If the author is unknown locally, accept on first sight — the
         # ``USER_UPDATED`` / ``USERS_SYNC`` envelope from the same peer

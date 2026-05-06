@@ -14,11 +14,11 @@ import { SideNav } from './SideNav'
 
 const ALL_FEATURES_ON = {
   feat_feed: true, feat_pages: true, feat_tasks: true,
-  feat_stickies: true, feat_calendar: true, feat_stories: true,
+  feat_stickies: true, feat_calendar: true, feat_highlights: true,
   feat_momentum: true,
   allow_text: true, allow_image: true, allow_video: true,
   allow_file: true, allow_poll: true, allow_schedule: true,
-  allow_story_share: true,
+  allow_highlight_share: true,
   household_name: 'Hearth',
 }
 
@@ -253,18 +253,18 @@ describe('SideNav', () => {
     expect(link?.getAttribute('href')).toBe('/connections')
   })
 
-  it('renders Stories and Momentum unconditionally — they are user-level, not household-toggled', () => {
+  it('renders Highlights and Momentum unconditionally — they are user-level, not household-toggled', () => {
     setUser({ is_admin: true })
-    toggles.value = { ...ALL_FEATURES_ON, feat_stories: false, feat_momentum: false }
+    toggles.value = { ...ALL_FEATURES_ON, feat_highlights: false, feat_momentum: false }
     const { getByText } = renderAt('/')
-    expect(getByText('Stories')).toBeTruthy()
+    expect(getByText('Highlights')).toBeTruthy()
     expect(getByText('Momentum')).toBeTruthy()
   })
 
-  it('drops the standalone Story archive / Moments archive entries — those live as tabs now', () => {
+  it('drops the standalone Highlight archive / Moments archive entries — those live as tabs now', () => {
     setUser({ is_admin: true })
     const { queryByText } = renderAt('/')
-    expect(queryByText('Story archive')).toBeNull()
+    expect(queryByText('Highlight archive')).toBeNull()
     expect(queryByText('Moments archive')).toBeNull()
   })
 })

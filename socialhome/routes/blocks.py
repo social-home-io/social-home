@@ -1,7 +1,7 @@
 """Personal user-block routes — ``/api/blocks`` (§Privacy).
 
 A user can voluntarily hide another user's content from their own view —
-their stories, posts, DMs, presence, notifications, and friends list all
+their highlights, posts, DMs, presence, notifications, and friends list all
 filter the blocked user out. Distinct from the parent-driven CP block
 (``/api/cp/minors/{id}/blocks``), which is guardian-managed.
 

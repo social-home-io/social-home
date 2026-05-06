@@ -1245,23 +1245,23 @@ class CpSpaceAgeGateChanged(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
-# ─── Stories (§Stories) ──────────────────────────────────────────────────
+# ─── Highlights (§Highlights) ──────────────────────────────────────────────────
 
 
 @dataclass(slots=True, frozen=True)
-class StoryFrameAdded(DomainEvent):
+class HighlightFrameAdded(DomainEvent):
     """A frame was created or appended on the author's instance.
 
     Carries enough for federation outbound to fan out the encrypted
     payload (audience, frame body) and for :class:`RealtimeService` to
-    push a ``story.frame_added`` WS event to local viewers in the
+    push a ``highlight.frame_added`` WS event to local viewers in the
     audience.
     """
 
-    story_id: str
+    highlight_id: str
     frame_id: str
     author_user_id: str
-    story_date: str
+    highlight_date: str
     sequence: int
     is_first_frame: bool
     audience_kind: str  # 'all_paired' | 'households' | 'users'
@@ -1276,8 +1276,8 @@ class StoryFrameAdded(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
-class StoryFrameRemoved(DomainEvent):
-    story_id: str
+class HighlightFrameRemoved(DomainEvent):
+    highlight_id: str
     frame_id: str
     author_user_id: str
     audience_kind: str
@@ -1286,8 +1286,8 @@ class StoryFrameRemoved(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
-class StoryRemoved(DomainEvent):
-    story_id: str
+class HighlightRemoved(DomainEvent):
+    highlight_id: str
     author_user_id: str
     audience_kind: str
     audience: tuple[str, ...]
@@ -1295,10 +1295,10 @@ class StoryRemoved(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
-class StoryFrameViewed(DomainEvent):
+class HighlightFrameViewed(DomainEvent):
     """A viewer marked a frame as seen — federates back to the author."""
 
-    story_id: str
+    highlight_id: str
     frame_id: str
     viewer_user_id: str
     author_user_id: str
@@ -1306,14 +1306,14 @@ class StoryFrameViewed(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
-class StoryFrameReactionChanged(DomainEvent):
+class HighlightFrameReactionChanged(DomainEvent):
     """Reaction set, changed, or cleared.
 
     ``emoji is None`` ⇒ cleared. Federates back to the author so they
     see the reaction-counter update.
     """
 
-    story_id: str
+    highlight_id: str
     frame_id: str
     reactor_user_id: str
     author_user_id: str
@@ -1346,7 +1346,7 @@ class UserBlocked(DomainEvent):
     """A local user added another user to their personal block list.
 
     Distinct from the parent-driven :class:`CpBlockAdded` (CP/§child-protection):
-    this is the adult-to-adult voluntary mute that hides stories, posts,
+    this is the adult-to-adult voluntary mute that hides highlights, posts,
     DMs, presence and notifications surfacing the blocked user.
     """
 

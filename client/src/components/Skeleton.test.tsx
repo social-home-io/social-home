@@ -6,7 +6,7 @@ import {
   PostCardSkeleton,
   FeedSkeleton,
   DmInboxSkeleton,
-  StoriesRingSkeleton,
+  HighlightsRingSkeleton,
   CalendarSkeleton,
   SpaceListSkeleton,
   BazaarSkeleton,
@@ -70,9 +70,9 @@ describe('Page-shaped skeletons', () => {
     expect(container.querySelectorAll('.sh-dm-inbox-row').length).toBe(5)
   })
 
-  it('StoriesRingSkeleton renders 5 ring placeholders', () => {
-    const { container } = render(<StoriesRingSkeleton />)
-    expect(container.querySelectorAll('.sh-story-ring').length).toBe(5)
+  it('HighlightsRingSkeleton renders 5 ring placeholders', () => {
+    const { container } = render(<HighlightsRingSkeleton />)
+    expect(container.querySelectorAll('.sh-highlight-ring').length).toBe(5)
   })
 
   it('CalendarSkeleton renders a 35-cell month grid', () => {

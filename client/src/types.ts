@@ -45,7 +45,7 @@ export interface LocationData {
 export interface FeedPost {
   id: string
   author: string
-  type: 'text' | 'image' | 'video' | 'transcript' | 'poll' | 'schedule' | 'file' | 'bazaar' | 'event' | 'location' | 'story_share'
+  type: 'text' | 'image' | 'video' | 'transcript' | 'poll' | 'schedule' | 'file' | 'bazaar' | 'event' | 'location' | 'highlight_share'
   content: string | null
   /** Single-URL slot for ``video`` and ``file`` posts. ``image`` posts
    *  leave this ``null`` and use :attr:`image_urls` instead. */
@@ -71,21 +71,21 @@ export interface FeedPost {
    *  the comment thread is the event's discussion. NULL on non-event
    *  posts and on posts whose calendar event was deleted. */
   linked_event_id?: string | null
-  /** When ``type === 'story_share'`` this points at the shared
-   *  ``stories.id``. Becomes ``null`` when the linked story is purged
+  /** When ``type === 'highlight_share'`` this points at the shared
+   *  ``highlights.id``. Becomes ``null`` when the linked highlight is purged
    *  by retention — the share-card renders an "ended" placeholder. */
-  linked_story_id?: string | null
+  linked_highlight_id?: string | null
 }
 
-// ─── Stories (§Stories) ─────────────────────────────────────────────
+// ─── Highlights (§Highlights) ─────────────────────────────────────────────
 
-/** Audience kind for a story (matches backend ``StoryAudience`` enum). */
-export type StoryAudienceKind = 'all_paired' | 'households' | 'users'
+/** Audience kind for a highlight (matches backend ``HighlightAudience`` enum). */
+export type HighlightAudienceKind = 'all_paired' | 'households' | 'users'
 
-/** Single image/video frame inside a :class:`Story`. */
-export interface StoryFrame {
+/** Single image/video frame inside a :class:`Highlight`. */
+export interface HighlightFrame {
   id: string
-  story_id: string
+  highlight_id: string
   sequence: number
   frame_type: 'image' | 'video'
   /** Canonical ``/api/media/{filename}`` path. The browser is expected
@@ -98,13 +98,13 @@ export interface StoryFrame {
   created_at: string
 }
 
-/** Per-author per-day story aggregate. */
-export interface Story {
+/** Per-author per-day highlight aggregate. */
+export interface Highlight {
   id: string
   author_user_id: string
   /** ``YYYY-MM-DD`` UTC. */
-  story_date: string
-  audience_kind: StoryAudienceKind
+  highlight_date: string
+  audience_kind: HighlightAudienceKind
   /** List of ``instance_id``s (for ``households``) or ``user_id``s
    *  (for ``users``). Empty for ``all_paired``. */
   audience: string[]
@@ -116,10 +116,10 @@ export interface Story {
   public_published_at?: string | null
 }
 
-/** Inbox item: story + frames + how many frames the viewer has not seen. */
-export interface StoryInboxItem {
-  story: Story
-  frames: StoryFrame[]
+/** Inbox item: highlight + frames + how many frames the viewer has not seen. */
+export interface HighlightInboxItem {
+  highlight: Highlight
+  frames: HighlightFrame[]
   unseen_count: number
 }
 

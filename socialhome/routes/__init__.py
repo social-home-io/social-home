@@ -255,21 +255,21 @@ from .stickies import (
     StickyCollectionView,
     StickyDetailView,
 )
-from .stories import (
-    StoriesCollectionView,
-    StoryDetailView,
-    StoryDmReplyView,
-    StoryFrameDetailView,
-    StoryFrameReactionView,
-    StoryFrameViewView,
-    StoryFramesCollectionView,
-    StoryReportView,
-    StoryShareView,
+from .highlights import (
+    HighlightsCollectionView,
+    HighlightDetailView,
+    HighlightDmReplyView,
+    HighlightFrameDetailView,
+    HighlightFrameReactionView,
+    HighlightFrameViewView,
+    HighlightFramesCollectionView,
+    HighlightReportView,
+    HighlightShareView,
 )
-from .story_publications import (
-    StoryPublishOgView,
-    StoryPublishTokenView,
-    StoryPublishView,
+from .highlight_publications import (
+    HighlightPublishOgView,
+    HighlightPublishTokenView,
+    HighlightPublishView,
 )
 from .moments import (
     MomentArchiveView,
@@ -695,36 +695,36 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         SpaceStickyDetailView,
     )
 
-    # ── Stories ────────────────────────────────────────────────────────
-    app.router.add_view("/api/stories", StoriesCollectionView)
-    app.router.add_view("/api/stories/frames", StoryFramesCollectionView)
-    app.router.add_view("/api/stories/{id}", StoryDetailView)
-    app.router.add_view("/api/stories/frames/{id}", StoryFrameDetailView)
+    # ── Highlights ────────────────────────────────────────────────────────
+    app.router.add_view("/api/highlights", HighlightsCollectionView)
+    app.router.add_view("/api/highlights/frames", HighlightFramesCollectionView)
+    app.router.add_view("/api/highlights/{id}", HighlightDetailView)
+    app.router.add_view("/api/highlights/frames/{id}", HighlightFrameDetailView)
     app.router.add_view(
-        "/api/stories/frames/{id}/view",
-        StoryFrameViewView,
+        "/api/highlights/frames/{id}/view",
+        HighlightFrameViewView,
     )
     app.router.add_view(
-        "/api/stories/frames/{id}/reaction",
-        StoryFrameReactionView,
+        "/api/highlights/frames/{id}/reaction",
+        HighlightFrameReactionView,
     )
-    app.router.add_view("/api/stories/{id}/share", StoryShareView)
+    app.router.add_view("/api/highlights/{id}/share", HighlightShareView)
     app.router.add_view(
-        "/api/stories/frames/{id}/dm-reply",
-        StoryDmReplyView,
+        "/api/highlights/frames/{id}/dm-reply",
+        HighlightDmReplyView,
     )
-    app.router.add_view("/api/stories/{id}/report", StoryReportView)
+    app.router.add_view("/api/highlights/{id}/report", HighlightReportView)
     # Public-publish surface — author-only; the GFS holds the tokens.
-    app.router.add_view("/api/stories/{id}/publish", StoryPublishView)
+    app.router.add_view("/api/highlights/{id}/publish", HighlightPublishView)
     # OG-thumbnail upload — declared before ``{token}`` so aiohttp's
     # literal-prefix matcher doesn't capture ``og`` as a token id.
     app.router.add_view(
-        "/api/stories/{id}/publish/og",
-        StoryPublishOgView,
+        "/api/highlights/{id}/publish/og",
+        HighlightPublishOgView,
     )
     app.router.add_view(
-        "/api/stories/{id}/publish/{token}",
-        StoryPublishTokenView,
+        "/api/highlights/{id}/publish/{token}",
+        HighlightPublishTokenView,
     )
 
     # ── Moments (§Momentum) ─────────────────────────────────────────────

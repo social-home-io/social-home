@@ -91,7 +91,7 @@ Viewer-private renames of other users (local or remote). Aliases never federate 
 
 ### Personal user blocks (§Privacy)
 
-Voluntary adult-to-adult block list — the viewer hides another user's stories, household-feed posts, presence, notifications, friends-list entry and DMs. Distinct from the parent-driven CP block (`/api/cp/minors/{minor_id}/blocks`). The block stays local to the viewer's instance — the inbound DM gate runs on the receive side, so a remote sender is also rejected without exporting the block list.
+Voluntary adult-to-adult block list — the viewer hides another user's highlights, household-feed posts, presence, notifications, friends-list entry and DMs. Distinct from the parent-driven CP block (`/api/cp/minors/{minor_id}/blocks`). The block stays local to the viewer's instance — the inbound DM gate runs on the receive side, so a remote sender is also rejected without exporting the block list.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -117,7 +117,7 @@ Household-broadcast posts that fan to a 3-hop peer mesh. Replies are themselves 
 | GET | `/api/moments/follows` | List who I follow. |
 | POST | `/api/moments/follows` | Follow a user. Body: `{user_id}`. |
 | DELETE | `/api/moments/follows/{user_id}` | Unfollow. |
-| POST | `/api/stories/{id}/report` | Report a story (same `content_reports` queue). |
+| POST | `/api/highlights/{id}/report` | Report a highlight (same `content_reports` queue). |
 
 ## HFS — Household feed
 
@@ -308,30 +308,30 @@ Same CRUD shape:
 /api/gallery/albums[/{id}]    /{id}/items[/{iid}]
 ```
 
-### Stories (§Stories)
+### Highlights (§Highlights)
 
-Personal "stories" pillar — per-author per-day frame bag, federated to
+Personal "highlights" pillar — per-author per-day frame bag, federated to
 peers based on the author's audience kind. Retention is per-user
-(`preferences_json.stories.retention_days` and `.max_count`); the
+(`preferences_json.highlights.retention_days` and `.max_count`); the
 in-process retention scheduler prunes expired and over-quota rows.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST   | `/api/stories/frames` | Create or append today's frame. Body: `{frame_type, media_url, caption_text?, caption_emoji?, duration_ms?, audience_kind?, audience?[]}`. Returns `{story, frame}`. |
-| GET    | `/api/stories` | List stories visible to the caller (mine + peers'). Returns `[{story, frames, unseen_count}]`. |
-| GET    | `/api/stories/{id}` | Story detail with frames. Authors get per-frame `views` and `reactions` keyed by frame id inline. |
-| DELETE | `/api/stories/{id}` | Author removes the whole story. Cascades to frames / views / reactions. |
-| DELETE | `/api/stories/frames/{id}` | Author removes one frame. |
-| POST   | `/api/stories/frames/{id}/view` | Mark frame seen. Authors' own views are silently ignored. |
-| PUT    | `/api/stories/frames/{id}/reaction` | Body: `{emoji}`. Upsert — one reaction per viewer per frame. |
-| DELETE | `/api/stories/frames/{id}/reaction` | Clear the caller's reaction on this frame. |
-| POST   | `/api/stories/{id}/share` | Author shares the story into a feed. Body: `{scope: 'household' \| 'space', space_id?, note?}`. Creates a `story_share` post; returns 201 `{post_id, story_id}` or 202 `{queued: true}` for moderated spaces. |
-| POST   | `/api/stories/frames/{id}/dm-reply` | Send a DM that quotes a frame. Body: `{conversation_id, content}`. The frame snapshot is frozen on the message so the reply survives retention. |
-| POST   | `/api/stories/{id}/publish` | Author mints a public share token via a paired GFS. Body: `{gfs_id, label?}`. Returns 201 `{token, url, label}` — the URL is `https://{gfs}/story/{instance}/{story}/{token}`. Mint additional tokens with repeat calls. |
-| GET    | `/api/stories/{id}/publish` | Local publication snapshot: `{published, gfs_id, published_at}`. Token list lives on the GFS. |
-| DELETE | `/api/stories/{id}/publish` | Drop the publication; CASCADE on the GFS revokes every token. |
-| DELETE | `/api/stories/{id}/publish/{token}` | Revoke a single share token; other tokens under the same publication keep working. |
-| POST   | `/api/stories/{id}/publish/og` | Upload an optional preview thumbnail for the OG card. Body: `{image_b64}`. Forwarded to the publishing GFS; cached at the stable URL `https://{gfs}/story/{i}/{s}/og.jpg` for anonymous social-card crawlers. ≤200 KB JPEG. |
+| POST   | `/api/highlights/frames` | Create or append today's frame. Body: `{frame_type, media_url, caption_text?, caption_emoji?, duration_ms?, audience_kind?, audience?[]}`. Returns `{highlight, frame}`. |
+| GET    | `/api/highlights` | List highlights visible to the caller (mine + peers'). Returns `[{highlight, frames, unseen_count}]`. |
+| GET    | `/api/highlights/{id}` | Highlight detail with frames. Authors get per-frame `views` and `reactions` keyed by frame id inline. |
+| DELETE | `/api/highlights/{id}` | Author removes the whole highlight. Cascades to frames / views / reactions. |
+| DELETE | `/api/highlights/frames/{id}` | Author removes one frame. |
+| POST   | `/api/highlights/frames/{id}/view` | Mark frame seen. Authors' own views are silently ignored. |
+| PUT    | `/api/highlights/frames/{id}/reaction` | Body: `{emoji}`. Upsert — one reaction per viewer per frame. |
+| DELETE | `/api/highlights/frames/{id}/reaction` | Clear the caller's reaction on this frame. |
+| POST   | `/api/highlights/{id}/share` | Author shares the highlight into a feed. Body: `{scope: 'household' \| 'space', space_id?, note?}`. Creates a `highlight_share` post; returns 201 `{post_id, highlight_id}` or 202 `{queued: true}` for moderated spaces. |
+| POST   | `/api/highlights/frames/{id}/dm-reply` | Send a DM that quotes a frame. Body: `{conversation_id, content}`. The frame snapshot is frozen on the message so the reply survives retention. |
+| POST   | `/api/highlights/{id}/publish` | Author mints a public share token via a paired GFS. Body: `{gfs_id, label?}`. Returns 201 `{token, url, label}` — the URL is `https://{gfs}/highlight/{instance}/{highlight}/{token}`. Mint additional tokens with repeat calls. |
+| GET    | `/api/highlights/{id}/publish` | Local publication snapshot: `{published, gfs_id, published_at}`. Token list lives on the GFS. |
+| DELETE | `/api/highlights/{id}/publish` | Drop the publication; CASCADE on the GFS revokes every token. |
+| DELETE | `/api/highlights/{id}/publish/{token}` | Revoke a single share token; other tokens under the same publication keep working. |
+| POST   | `/api/highlights/{id}/publish/og` | Upload an optional preview thumbnail for the OG card. Body: `{image_b64}`. Forwarded to the publishing GFS; cached at the stable URL `https://{gfs}/highlight/{i}/{s}/og.jpg` for anonymous social-card crawlers. ≤200 KB JPEG. |
 
 Audience kinds:
 

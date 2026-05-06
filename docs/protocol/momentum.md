@@ -138,11 +138,11 @@ instance.
 
 * **Block.** The viewer's personal block list (``user_blocks``) is
   consulted by ``moment_repo.list_visible_to`` so a blocked author's
-  moments never surface — same plumbing the Stories pillar uses.
+  moments never surface — same plumbing the Highlights pillar uses.
 * **Report.** ``POST /api/moments/{id}/report`` files a
   ``content_reports`` row with ``target_type='moment'``. The same
-  table also accepts ``target_type='story'`` (filed via
-  ``POST /api/stories/{id}/report``) so admin triage runs through one
+  table also accepts ``target_type='highlight'`` (filed via
+  ``POST /api/highlights/{id}/report``) so admin triage runs through one
   queue at ``/api/admin/reports?status=pending``.
 
 ## Implementation pointers

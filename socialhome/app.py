@@ -74,7 +74,7 @@ from .infrastructure.password_reset_cleanup_scheduler import (
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
 from .infrastructure.moment_retention_scheduler import MomentRetentionScheduler
-from .infrastructure.story_retention_scheduler import StoryRetentionScheduler
+from .infrastructure.highlight_retention_scheduler import HighlightRetentionScheduler
 from .platform import build_platform_adapter
 from .platform.adapter import Capability
 from .rate_limiter import RateLimiter, build_rate_limit_middleware
@@ -115,7 +115,7 @@ from .repositories.space_bot_repo import SqliteSpaceBotRepo
 from .repositories.space_cover_repo import SqliteSpaceCoverRepo
 from .repositories.space_zone_repo import SqliteSpaceZoneRepo
 from .repositories.moment_repo import SqliteMomentRepo
-from .repositories.story_repo import SqliteStoryRepo
+from .repositories.highlight_repo import SqliteHighlightRepo
 from .repositories.presence_repo import SqlitePresenceRepo
 from .repositories.peer_space_directory_repo import SqlitePeerSpaceDirectoryRepo
 from .repositories.public_space_repo import SqlitePublicSpaceRepo
@@ -137,9 +137,9 @@ from .services import (
 from .services.backup_service import BackupService
 from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
 from .services.moment_service import MomentService
-from .services.story_publication_service import StoryPublicationService
-from .services.story_service import StoryService
-from .services.story_signaling_handler import StorySignalingHandler
+from .services.highlight_publication_service import HighlightPublicationService
+from .services.highlight_service import HighlightService
+from .services.highlight_signaling_handler import HighlightSignalingHandler
 from .services.bot_bridge_service import BotBridgeService
 from .services.space_bot_service import SpaceBotService
 from .services.calendar_import_service import CalendarImportService
@@ -168,7 +168,7 @@ from .services.space_member_profile_federation_outbound import (
 from .services.gallery_federation_outbound import GalleryFederationOutbound
 from .services.sticky_federation_outbound import StickyFederationOutbound
 from .services.moment_federation_outbound import MomentFederationOutbound
-from .services.story_federation_outbound import StoryFederationOutbound
+from .services.highlight_federation_outbound import HighlightFederationOutbound
 from .services.space_location_outbound import SpaceLocationOutbound
 from .services.space_zone_outbound import SpaceZoneOutbound
 from .services.space_zone_service import SpaceZoneService
@@ -321,7 +321,7 @@ def _build_repos(db: AsyncDatabase):
         federation=SqliteFederationRepo(db),
         page=SqlitePageRepo(db),
         sticky=SqliteStickyRepo(db),
-        story=SqliteStoryRepo(db),
+        highlight=SqliteHighlightRepo(db),
         moment=SqliteMomentRepo(db),
         bazaar=SqliteBazaarRepo(db),
         push_sub=SqlitePushSubscriptionRepo(db),
@@ -373,7 +373,7 @@ def _wire_federation_stack(
     profile_picture_repo,
     page_repo,
     sticky_repo,
-    story_repo,
+    highlight_repo,
     moment_repo,
     space_task_repo,
     space_calendar_repo,
@@ -491,7 +491,7 @@ def _wire_federation_stack(
         space_post_repo=space_post_repo,
         space_repo=space_repo,
         user_repo=user_repo,
-        story_repo=story_repo,
+        highlight_repo=highlight_repo,
         moment_repo=moment_repo,
         moment_outbound=moment_federation_outbound,
         profile_picture_repo=profile_picture_repo,
@@ -681,17 +681,17 @@ def _wire_federation_stack(
     )
     profile_federation_outbound.wire()
 
-    # §Stories — fan StoryFrameAdded / StoryRemoved / StoryFrameRemoved
-    # to peer instances based on the story's audience. The subscriber
+    # §Highlights — fan HighlightFrameAdded / HighlightRemoved / HighlightFrameRemoved
+    # to peer instances based on the highlight's audience. The subscriber
     # gates on "is the author local?" so it doesn't re-fan inbound
     # republished events.
-    story_federation_outbound = StoryFederationOutbound(
+    highlight_federation_outbound = HighlightFederationOutbound(
         bus=bus,
         federation_service=federation_service,
         federation_repo=federation_repo,
         user_repo=user_repo,
     )
-    story_federation_outbound.wire()
+    highlight_federation_outbound.wire()
 
     # §11 URL rotation fan-out. Triggered by
     # PATCH /api/ha/integration/federation-base when the HA integration
@@ -917,7 +917,7 @@ def create_app(config: Config | None = None) -> web.Application:
     federation_repo = repos.federation
     page_repo = repos.page
     sticky_repo = repos.sticky
-    story_repo = repos.story
+    highlight_repo = repos.highlight
     moment_repo = repos.moment
     dm_contact_repo = repos.dm_contact
     bazaar_repo = repos.bazaar
@@ -1166,23 +1166,23 @@ def create_app(config: Config | None = None) -> web.Application:
     bazaar_service.attach_spaces(space_service)
     bazaar_expiry_scheduler = BazaarExpiryScheduler(bazaar_service)
 
-    # ── Stories (§Stories) ────────────────────────────────────────────
-    story_service = StoryService(story_repo, user_repo, bus)
-    story_retention_scheduler = StoryRetentionScheduler(story_service)
+    # ── Highlights (§Highlights) ────────────────────────────────────────────
+    highlight_service = HighlightService(highlight_repo, user_repo, bus)
+    highlight_retention_scheduler = HighlightRetentionScheduler(highlight_service)
     # Public-publish service. ``attach_session`` + ``attach_identity``
     # are called from the startup hook once the shared aiohttp client
     # and federation signing key are available — same lifecycle as
     # ``ReportService``.
-    story_publication_service = StoryPublicationService(
-        story_repo,
+    highlight_publication_service = HighlightPublicationService(
+        highlight_repo,
         repos.gfs_connection,
     )
-    # Author-side signalling answerer for the public-story flow.
+    # Author-side signalling answerer for the public-highlight flow.
     # ``attach_session`` + ``attach_identity`` happen in the startup
-    # hook (mirrors ``StoryPublicationService``); the WS supervisor
-    # forwards every ``story_signal`` frame here.
-    story_signaling_handler = StorySignalingHandler(
-        story_repo,
+    # hook (mirrors ``HighlightPublicationService``); the WS supervisor
+    # forwards every ``highlight_signal`` frame here.
+    highlight_signaling_handler = HighlightSignalingHandler(
+        highlight_repo,
         repos.gfs_connection,
         media_dir=str(config.media_path),
     )
@@ -1394,10 +1394,10 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.sticky_repo_key] = sticky_repo
     app[K.bazaar_repo_key] = bazaar_repo
     app[K.shopping_repo_key] = shopping_repo
-    app[K.story_repo_key] = story_repo
-    app[K.story_service_key] = story_service
-    app[K.story_retention_scheduler_key] = story_retention_scheduler
-    app[K.story_publication_service_key] = story_publication_service
+    app[K.highlight_repo_key] = highlight_repo
+    app[K.highlight_service_key] = highlight_service
+    app[K.highlight_retention_scheduler_key] = highlight_retention_scheduler
+    app[K.highlight_publication_service_key] = highlight_publication_service
     app[K.moment_repo_key] = moment_repo
     app[K.moment_service_key] = moment_service
     app[K.moment_retention_scheduler_key] = moment_retention_scheduler
@@ -1464,20 +1464,20 @@ def create_app(config: Config | None = None) -> web.Application:
             gfs_connection_service,
             signing_key=identity_seed,
         )
-        # Same identity binding for the public-story publish service —
+        # Same identity binding for the public-highlight publish service —
         # needs the signing key for the GFS publish/revoke envelopes
         # plus the shared aiohttp client for the round-trip itself.
-        story_publication_service.attach_session(http_session)
-        story_publication_service.attach_identity(
+        highlight_publication_service.attach_session(http_session)
+        highlight_publication_service.attach_identity(
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
         # And the matching wiring for the answerer side. The handler
-        # will receive ``story_signal`` frames once the supervisor
-        # gets ``attach_story_signal_handler`` — see below where the
+        # will receive ``highlight_signal`` frames once the supervisor
+        # gets ``attach_highlight_signal_handler`` — see below where the
         # supervisor is constructed.
-        story_signaling_handler.attach_session(http_session)
-        story_signaling_handler.attach_identity(
+        highlight_signaling_handler.attach_session(http_session)
+        highlight_signaling_handler.attach_identity(
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
@@ -1536,7 +1536,7 @@ def create_app(config: Config | None = None) -> web.Application:
             profile_picture_repo=profile_picture_repo,
             page_repo=page_repo,
             sticky_repo=sticky_repo,
-            story_repo=story_repo,
+            highlight_repo=highlight_repo,
             moment_repo=moment_repo,
             space_task_repo=space_task_repo,
             space_calendar_repo=space_cal_repo,
@@ -1639,7 +1639,7 @@ def create_app(config: Config | None = None) -> web.Application:
             signing_key=identity_seed,
             session_factory=lambda: http_session,
             on_relay=_on_gfs_relay,
-            on_story_signal=story_signaling_handler.handle_signal,
+            on_highlight_signal=highlight_signaling_handler.handle_signal,
         )
         await gfs_ws_supervisor.start()
         app[K.gfs_ws_supervisor_key] = gfs_ws_supervisor
@@ -1703,8 +1703,8 @@ def create_app(config: Config | None = None) -> web.Application:
         # Bazaar auction expiry — closes due auctions on a 60-s cadence.
         await bazaar_expiry_scheduler.start()
 
-        # Stories retention — drops expired + over-max stories per author.
-        await story_retention_scheduler.start()
+        # Highlights retention — drops expired + over-max highlights per author.
+        await highlight_retention_scheduler.start()
 
         # Momentum retention — drops moments past the absolute 7-day cap.
         await moment_retention_scheduler.start()
@@ -1780,7 +1780,7 @@ def create_app(config: Config | None = None) -> web.Application:
             await gfs_ws_supervisor.stop()
         # Wind down any in-flight public-viewer sessions before
         # closing the shared aiohttp client below.
-        await story_signaling_handler.stop()
+        await highlight_signaling_handler.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
         if password_reset_cleanup_scheduler is not None:
@@ -1807,7 +1807,7 @@ def create_app(config: Config | None = None) -> web.Application:
         if sync_sched is not None:
             await sync_sched.stop()
         await bazaar_expiry_scheduler.stop()
-        await story_retention_scheduler.stop()
+        await highlight_retention_scheduler.stop()
         await moment_retention_scheduler.stop()
         # Close all RTC DataChannels so the peers see a clean EOF.
         fed_svc = app.get(K.federation_service_key)
