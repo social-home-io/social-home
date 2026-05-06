@@ -1334,10 +1334,14 @@ class SqliteGfsUserRegistrationRepo:
         )
 
     async def delete(self, user_id: str) -> int:
-        return await self._db.enqueue(
-            "DELETE FROM gfs_user_registrations WHERE user_id=?",
-            (user_id,),
-        )
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "DELETE FROM gfs_user_registrations WHERE user_id=?",
+                (user_id,),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
 
     async def get(self, user_id: str) -> GfsUserRegistration | None:
         row = await self._db.fetchone(
@@ -1420,11 +1424,15 @@ class SqliteGfsMomentFollowRepo:
         )
 
     async def delete(self, *, follower_user_id: str, followed_user_id: str) -> int:
-        return await self._db.enqueue(
-            "DELETE FROM gfs_moment_follows "
-            "WHERE follower_user_id=? AND followed_user_id=?",
-            (follower_user_id, followed_user_id),
-        )
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "DELETE FROM gfs_moment_follows "
+                "WHERE follower_user_id=? AND followed_user_id=?",
+                (follower_user_id, followed_user_id),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
 
     async def followers_of(self, followed_user_id: str) -> list[GfsMomentFollow]:
         rows = await self._db.fetchall(
