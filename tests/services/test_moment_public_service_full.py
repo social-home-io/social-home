@@ -248,3 +248,91 @@ async def test_service_used_before_attach_raises(repos):
     # No attach_session/attach_identity → calls should fail noisily.
     with pytest.raises(MomentPublicError):
         await svc.register(user_id="u1", gfs_id="g1")
+
+
+# ── ``aiohttp.ClientError`` paths ───────────────────────────────────────
+
+
+class _RaisingSession:
+    """Session whose POSTs raise ``aiohttp.ClientError`` synchronously."""
+
+    def __init__(self) -> None:
+        self.posts: list[str] = []
+
+    def post(self, url, *, json=None, **_kw):
+        import aiohttp
+
+        self.posts.append(url)
+        raise aiohttp.ClientError("connection refused")
+
+    def get(self, url, **_kw):
+        import aiohttp
+
+        raise aiohttp.ClientError("connection refused")
+
+
+async def test_register_raises_on_client_error(repos):
+    svc = MomentPublicService(
+        repos["regs"], repos["follows"], repos["users"], repos["gfs"]
+    )
+    svc.attach_session(_RaisingSession())  # type: ignore[arg-type]
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    with pytest.raises(MomentPublicError):
+        await svc.register(user_id="u1", gfs_id="g1")
+
+
+async def test_follow_raises_on_client_error(repos):
+    svc = MomentPublicService(
+        repos["regs"], repos["follows"], repos["users"], repos["gfs"]
+    )
+    svc.attach_session(_RaisingSession())  # type: ignore[arg-type]
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    with pytest.raises(MomentPublicError):
+        await svc.follow(
+            follower_user_id="u1", gfs_id="g1", followed_user_id="u-remote"
+        )
+
+
+async def test_fetch_directory_raises_on_client_error(repos):
+    svc = MomentPublicService(
+        repos["regs"], repos["follows"], repos["users"], repos["gfs"]
+    )
+    svc.attach_session(_RaisingSession())  # type: ignore[arg-type]
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    with pytest.raises(MomentPublicError):
+        await svc.fetch_directory("g1")
+
+
+async def test_deregister_swallows_client_error_but_clears_local(repos):
+    svc = MomentPublicService(
+        repos["regs"], repos["follows"], repos["users"], repos["gfs"]
+    )
+    # Register first via a successful session.
+    svc.attach_session(_StubSession(body={}))
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    await svc.register(user_id="u1", gfs_id="g1")
+    # Now swap in a session that raises and call deregister.
+    svc._http_client = _RaisingSession()  # type: ignore[assignment]
+    await svc.deregister(user_id="u1", gfs_id="g1")
+    # Local row dropped despite the GFS being unreachable.
+    assert await svc.is_registered(user_id="u1", gfs_id="g1") is False
+
+
+async def test_unfollow_swallows_client_error_but_clears_local(repos):
+    # Seed a follow row.
+    await repos["follows"].upsert(
+        follower_user_id="u1",
+        followed_user_id="u-remote",
+        gfs_id="g1",
+        followed_instance_pk="ab" * 32,
+        followed_username="bob",
+        followed_display_name="Bob",
+    )
+    svc = MomentPublicService(
+        repos["regs"], repos["follows"], repos["users"], repos["gfs"]
+    )
+    svc.attach_session(_RaisingSession())  # type: ignore[arg-type]
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    await svc.unfollow(follower_user_id="u1", gfs_id="g1", followed_user_id="u-remote")
+    rows = await repos["follows"].list_for_follower("u1")
+    assert rows == []

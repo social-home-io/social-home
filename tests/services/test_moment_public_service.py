@@ -228,3 +228,147 @@ async def test_outbound_wire_subscribes_to_bus():
         gfs_repo=MagicMock(),
     )
     sub.wire()  # should not raise; subscribers are just stored
+
+
+# ── Inbound delete-path coverage ────────────────────────────────────────
+
+
+async def test_inbound_delete_removes_local_row_on_valid_signature(db):
+    from socialhome.repositories.moment_public_repo import (
+        SqliteMomentPublicFollowRepo,
+    )
+    from socialhome.repositories.moment_repo import SqliteMomentRepo
+    from socialhome.domain.events import MomentDeleted
+    from socialhome.domain.moment import Moment
+
+    bus = EventBus()
+    deletes: list[MomentDeleted] = []
+    bus.subscribe(MomentDeleted, lambda e: deletes.append(e))
+    follow_repo = SqliteMomentPublicFollowRepo(db)
+    moment_repo = SqliteMomentRepo(db)
+
+    await db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, state) "
+        "VALUES('u1','alice','Alice','active')"
+    )
+    await db.enqueue(
+        "INSERT INTO gfs_connections("
+        "id, gfs_instance_id, display_name, public_key, inbox_url, "
+        "status, paired_at) "
+        "VALUES('g1','gfs-1','GFS One','ff'*32,'https://gfs1.example','active', datetime('now'))"
+    )
+    await follow_repo.upsert(
+        follower_user_id="u1",
+        followed_user_id="u-remote",
+        gfs_id="g1",
+        followed_instance_pk=_author_pk_hex(),
+        followed_username="bob",
+        followed_display_name="Bob",
+    )
+    await moment_repo.save(
+        Moment(
+            id="m-9",
+            author_user_id="u-remote",
+            content="seed",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id=None,
+            origin_instance_id="inst-remote",
+            created_at="2026-05-06T12:00:00Z",
+            expires_at="2026-05-07T12:00:00Z",
+            is_public=True,
+            received_via="gfs",
+            received_via_gfs_id="g1",
+        )
+    )
+    inbound = MomentPublicInbound(
+        bus=bus, moment_repo=moment_repo, follow_repo=follow_repo
+    )
+    envelope = _signed_envelope({"moment_id": "m-9", "author_user_id": "u-remote"})
+    await inbound.handle(
+        {"type": "incoming_public_moment_delete", "payload": envelope},
+        gfs_id="g1",
+    )
+    assert len(deletes) == 1
+    assert await moment_repo.get("m-9") is None
+
+
+async def test_inbound_delete_rejects_bad_signature(db):
+    from socialhome.repositories.moment_public_repo import (
+        SqliteMomentPublicFollowRepo,
+    )
+    from socialhome.repositories.moment_repo import SqliteMomentRepo
+    from socialhome.domain.events import MomentDeleted
+    from socialhome.domain.moment import Moment
+
+    bus = EventBus()
+    deletes: list[MomentDeleted] = []
+    bus.subscribe(MomentDeleted, lambda e: deletes.append(e))
+    follow_repo = SqliteMomentPublicFollowRepo(db)
+    moment_repo = SqliteMomentRepo(db)
+
+    await db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, state) "
+        "VALUES('u1','alice','Alice','active')"
+    )
+    await db.enqueue(
+        "INSERT INTO gfs_connections("
+        "id, gfs_instance_id, display_name, public_key, inbox_url, "
+        "status, paired_at) "
+        "VALUES('g1','gfs-1','GFS One','ff'*32,'https://gfs1.example','active', datetime('now'))"
+    )
+    await follow_repo.upsert(
+        follower_user_id="u1",
+        followed_user_id="u-remote",
+        gfs_id="g1",
+        followed_instance_pk=_author_pk_hex(),
+        followed_username="bob",
+        followed_display_name="Bob",
+    )
+    await moment_repo.save(
+        Moment(
+            id="m-9",
+            author_user_id="u-remote",
+            content="seed",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id=None,
+            origin_instance_id="inst-remote",
+            created_at="2026-05-06T12:00:00Z",
+            expires_at="2026-05-07T12:00:00Z",
+            is_public=True,
+            received_via="gfs",
+            received_via_gfs_id="g1",
+        )
+    )
+    inbound = MomentPublicInbound(
+        bus=bus, moment_repo=moment_repo, follow_repo=follow_repo
+    )
+    forged = _signed_envelope(
+        {"moment_id": "m-9", "author_user_id": "u-remote"},
+        seed=b"\x42" * 32,
+    )
+    await inbound.handle(
+        {"type": "incoming_public_moment_delete", "payload": forged},
+        gfs_id="g1",
+    )
+    assert deletes == []
+    assert await moment_repo.get("m-9") is not None
+
+
+async def test_inbound_ignores_unknown_frame_type(db):
+    from socialhome.repositories.moment_public_repo import (
+        SqliteMomentPublicFollowRepo,
+    )
+    from socialhome.repositories.moment_repo import SqliteMomentRepo
+
+    bus = EventBus()
+    inbound = MomentPublicInbound(
+        bus=bus,
+        moment_repo=SqliteMomentRepo(db),
+        follow_repo=SqliteMomentPublicFollowRepo(db),
+    )
+    # Should be a no-op (no exception).
+    await inbound.handle({"type": "irrelevant", "payload": {}}, gfs_id="g1")
