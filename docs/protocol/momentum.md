@@ -80,6 +80,46 @@ A (author)  ────►  B (paired)  ────►  C (B's paired)  ──
 The receive-side dedupe and the explicit exclusion list together
 prevent fan-out loops that could form in a fully-connected mesh.
 
+## Per-user max-hops visibility (§Momentum-relay-policy)
+
+The wire cap (3) governs how far a moment is *relayed*. **What each
+user sees** is a separate, per-user knob: ``moments.max_hops`` in
+``users.preferences_json`` (default 3, clamped to 1..3).
+
+* ``max_hops = 1`` — only moments authored by direct paired peers.
+* ``max_hops = 2`` — direct peers plus their peers.
+* ``max_hops = 3`` — every relayed moment (default).
+
+The recipient instance writes the inbound ``hop_count`` onto the
+``moments`` row; ``list_visible_to`` adds ``AND m.hop_count <= ?``
+against the viewer's preference so the inbox respects it.
+
+### Pure pass-through
+
+If **no local user** can see an inbound moment under their
+``max_hops`` and per-viewer ``user_blocks``, the recipient instance
+**skips the local persist** but **still relays** onward. This
+keeps the household acting as a transparent forwarder when no one
+locally subscribes — saves disk + retention work without breaking
+the mesh. The check is ``moment_repo.has_visible_recipient(...)``.
+
+### Flagged-relay block
+
+The relay path is gated by :class:`RelayPolicy`. Two negative
+signals stop both ingress and onward fan-out:
+
+* The source instance is on the household's
+  ``household_instance_bans`` table (set by the operator from the
+  Settings → Federation page).
+* There is at least one ``status='pending'`` row in
+  ``content_reports`` against the moment id OR the author user id.
+  Local moderation overrides federation fan-out — neither persist
+  nor relay run while a report is open.
+
+Per-user ``user_blocks`` are intentionally NOT consulted here.
+Personal block lists stay private; tying them to the relay would
+couple two trust models and leak block-list shape to peers.
+
 ## Authority
 
 * **1-hop direct** (``from_instance == origin_instance_id``): the

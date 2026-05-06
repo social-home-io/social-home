@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from ..repositories.highlight_repo import AbstractHighlightRepo
     from ..repositories.user_repo import AbstractUserRepo
     from .moment_federation_outbound import MomentFederationOutbound
+    from .relay_policy import RelayPolicy
 
 log = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class FederationInboundService:
         "_profile_picture_repo",
         "_report_service",
         "_dm_routing_repo",
+        "_relay_policy",
     )
 
     def __init__(
@@ -110,6 +112,7 @@ class FederationInboundService:
         profile_picture_repo=None,
         report_service=None,
         dm_routing_repo=None,
+        relay_policy: "RelayPolicy | None" = None,
     ) -> None:
         self._bus = bus
         self._conversation_repo = conversation_repo
@@ -122,6 +125,7 @@ class FederationInboundService:
         self._profile_picture_repo = profile_picture_repo
         self._report_service = report_service
         self._dm_routing_repo = dm_routing_repo
+        self._relay_policy = relay_policy
 
     def attach_to(self, federation_service) -> None:
         """Register inbound handlers on the federation event registry."""
@@ -793,9 +797,26 @@ class FederationInboundService:
         ):
             log.warning("MOMENT_CREATED authority mismatch — dropped")
             return
+        # §Momentum-relay-policy: drop banned-source / open-report
+        # envelopes before either persist or relay.
+        if self._relay_policy is not None and not await self._relay_policy.allow_relay(
+            source_instance_id=event.from_instance,
+            author_user_id=author_user_id,
+            target_id=moment_id,
+        ):
+            log.info(
+                "MOMENT_CREATED dropped by relay policy: from=%s moment=%s",
+                event.from_instance,
+                moment_id,
+            )
+            return
         media_type = p.get("media_type")
         if media_type not in ("image", "video", None):
             media_type = None
+        try:
+            hop_count = int(p.get("hop_count") or 1)
+        except TypeError, ValueError:
+            hop_count = 1
         moment = Moment(
             id=moment_id,
             author_user_id=author_user_id,
@@ -809,34 +830,48 @@ class FederationInboundService:
             origin_instance_id=origin_instance_id,
             created_at=str(p.get("occurred_at") or _now_iso()),
             expires_at=str(p.get("expires_at") or _now_iso()),
+            hop_count=hop_count,
+            received_via="household",
         )
-        await self._moment_repo.save(moment)
-        # Look up the parent's author so the local notification handler
-        # can ping them when the inbound moment is a reply.
+        # §Momentum-relay-policy pure-pass-through: skip the local
+        # persist when no local user can see the row (under their
+        # max_hops + block list). The relay still runs below — this
+        # instance acts as a transparent forwarder.
+        wants_local = await self._moment_repo.has_visible_recipient(
+            author_user_id=author_user_id,
+            hop_count=hop_count,
+        )
         parent_author_user_id: str | None = None
-        if moment.parent_moment_id is not None:
-            parent = await self._moment_repo.get(moment.parent_moment_id)
-            if parent is not None:
-                parent_author_user_id = parent.author_user_id
-        # Bus republish so the realtime layer + downstream listeners
-        # see the same shape they'd see on a local write.
-        await self._bus.publish(
-            MomentCreated(
-                moment_id=moment.id,
-                author_user_id=moment.author_user_id,
-                content=moment.content,
-                media_url=moment.media_url,
-                media_type=moment.media_type,
-                duration_ms=moment.duration_ms,
-                parent_moment_id=moment.parent_moment_id,
-                parent_author_user_id=parent_author_user_id,
-                origin_instance_id=moment.origin_instance_id,
-                expires_at=moment.expires_at,
+        if wants_local:
+            await self._moment_repo.save(moment)
+            # Look up the parent's author so the local notification
+            # handler can ping them when the inbound moment is a reply.
+            if moment.parent_moment_id is not None:
+                parent = await self._moment_repo.get(moment.parent_moment_id)
+                if parent is not None:
+                    parent_author_user_id = parent.author_user_id
+            # Bus republish so the realtime layer + downstream
+            # listeners see the same shape they'd see on a local
+            # write.
+            await self._bus.publish(
+                MomentCreated(
+                    moment_id=moment.id,
+                    author_user_id=moment.author_user_id,
+                    content=moment.content,
+                    media_url=moment.media_url,
+                    media_type=moment.media_type,
+                    duration_ms=moment.duration_ms,
+                    parent_moment_id=moment.parent_moment_id,
+                    parent_author_user_id=parent_author_user_id,
+                    origin_instance_id=moment.origin_instance_id,
+                    expires_at=moment.expires_at,
+                )
             )
-        )
         # 3-hop relay: forward to the rest of *our* paired peers. The
         # outbound's bus subscriber would skip this event (author isn't
-        # local), so the relay must be triggered explicitly here.
+        # local), so the relay must be triggered explicitly here. Runs
+        # whether or not we persisted locally — the no-redistribute
+        # guard inside ``relay_inbound`` is layered on top.
         await self._maybe_relay(
             event_type=event.event_type,
             payload=p,

@@ -155,6 +155,8 @@ from .services.child_protection_service import ChildProtectionService
 from .services.data_export_service import DataExportService
 from .services.dm_routing_service import DmRoutingService
 from .services.federation_inbound_service import FederationInboundService
+from .services.relay_policy import RelayPolicy
+from .repositories.instance_ban_repo import SqliteHouseholdInstanceBanRepo
 from .services.poll_federation_outbound import PollFederationOutbound
 from .services.calendar_feed_bridge import CalendarFeedBridge
 from .services.schedule_calendar_bridge import ScheduleCalendarBridge
@@ -397,6 +399,7 @@ def _wire_federation_stack(
     presence_service,
     online_status_service,
     report_service,
+    report_repo,
     pairing_relay_repo,
     space_zone_repo,
     presence_repo,
@@ -484,11 +487,21 @@ def _wire_federation_stack(
     # §Momentum outbound is constructed first so the inbound handler
     # can hand it off as the relay bridge — the inbound calls
     # ``relay_inbound`` to forward an envelope another hop.
+    # §Momentum-relay-policy gate — instance ban + open-report
+    # short-circuit. Wired into both the inbound persist path and
+    # every outbound fan-out / relay path.
+    household_instance_ban_repo = SqliteHouseholdInstanceBanRepo(db)
+    relay_policy = RelayPolicy(
+        ban_repo=household_instance_ban_repo,
+        report_repo=report_repo,
+    )
+
     moment_federation_outbound = MomentFederationOutbound(
         bus=bus,
         federation_service=federation_service,
         federation_repo=federation_repo,
         user_repo=user_repo,
+        relay_policy=relay_policy,
     )
     moment_federation_outbound.wire()
 
@@ -504,6 +517,7 @@ def _wire_federation_stack(
         profile_picture_repo=profile_picture_repo,
         report_service=report_service,
         dm_routing_repo=dm_routing_repo,
+        relay_policy=relay_policy,
     )
     inbound_service.attach_to(federation_service)
 
@@ -824,12 +838,16 @@ def _wire_federation_stack(
     app[K.dm_routing_service_key] = dm_routing_service
     app[K.federation_inbound_service_key] = inbound_service
     app[K.pairing_relay_queue_key] = pairing_relay_queue
+    app[K.household_instance_ban_repo_key] = household_instance_ban_repo
+    app[K.relay_policy_key] = relay_policy
 
     return SimpleNamespace(
         federation_service=federation_service,
         sync_manager=sync_manager,
         inbound_service=inbound_service,
         pairing_relay_queue=pairing_relay_queue,
+        household_instance_ban_repo=household_instance_ban_repo,
+        relay_policy=relay_policy,
     )
 
 
@@ -1601,6 +1619,7 @@ def create_app(config: Config | None = None) -> web.Application:
             presence_service=presence_service,
             online_status_service=online_status_service,
             report_service=report_service,
+            report_repo=report_repo,
             pairing_relay_repo=repos.pairing_relay,
             space_zone_repo=repos.space_zone,
             presence_repo=repos.presence,

@@ -38,6 +38,12 @@ class AbstractReportRepo(Protocol):
         resolved_by: str,
         status: ReportStatus = ReportStatus.RESOLVED,
     ) -> None: ...
+    async def has_open_for_target(
+        self,
+        *,
+        target_type: ReportTargetType,
+        target_id: str,
+    ) -> bool: ...
 
 
 class SqliteReportRepo:
@@ -117,6 +123,27 @@ class SqliteReportRepo:
             "resolved_at=datetime('now') WHERE id=?",
             (status.value, resolved_by, report_id),
         )
+
+    async def has_open_for_target(
+        self,
+        *,
+        target_type: ReportTargetType,
+        target_id: str,
+    ) -> bool:
+        """True iff at least one ``status='pending'`` report is open
+        against ``(target_type, target_id)``. The §Momentum-relay-policy
+        check uses this to short-circuit fan-out for moments / authors
+        currently under moderation review.
+        """
+        if not target_id:
+            return False
+        row = await self._db.fetchone(
+            "SELECT 1 FROM content_reports "
+            "WHERE target_type=? AND target_id=? AND status='pending' "
+            "LIMIT 1",
+            (target_type.value, target_id),
+        )
+        return row is not None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────

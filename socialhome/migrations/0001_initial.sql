@@ -205,6 +205,19 @@ CREATE TABLE IF NOT EXISTS remote_instances (
 );
 CREATE INDEX IF NOT EXISTS idx_remote_instances_status ON remote_instances(status);
 
+-- ── Household instance bans (§Momentum-relay-policy) ─────────────────────────
+-- Coarse-grained block list: any envelope whose
+-- ``from_instance`` (or hop-bearing ``origin_instance_id``) matches
+-- a row here is dropped at the §24.11 inbound pipeline before persist
+-- AND skipped by the relay-out path. Distinct from the per-user
+-- ``user_blocks`` table — this acts at the federation transport
+-- layer, where the household admin overrides social signals.
+CREATE TABLE IF NOT EXISTS household_instance_bans (
+    instance_id   TEXT PRIMARY KEY,
+    banned_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    reason        TEXT
+);
+
 CREATE TABLE IF NOT EXISTS pending_pairings (
     token               TEXT PRIMARY KEY,
     own_identity_pk     TEXT NOT NULL,
@@ -1534,6 +1547,12 @@ CREATE TABLE IF NOT EXISTS moments (
     parent_moment_id   TEXT REFERENCES moments(id) ON DELETE SET NULL,
     -- Origin instance for the 3-hop relay echo-loop guard.
     origin_instance_id TEXT NOT NULL,
+    -- Hop count at which the row landed locally. ``1`` = local
+    -- author (origin); ``2`` / ``3`` for relayed arrivals. The
+    -- per-viewer ``moments.max_hops`` preference compares against
+    -- this column to gate visibility (relay decisions stay bounded
+    -- by the global wire cap, MOMENT_MAX_HOPS=3).
+    hop_count          INTEGER NOT NULL DEFAULT 1,
     created_at         TEXT NOT NULL DEFAULT (datetime('now')),
     -- Absolute retention cap (created_at + 7 days). The list query
     -- collapses this to 24h for non-followers.

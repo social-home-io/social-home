@@ -10,9 +10,17 @@ import { currentUser } from '@/store/auth'
 
 export type LandingPath = '/' | '/dashboard'
 
+export interface MomentsPreferences {
+  /** Per-user max-hops visibility (§Momentum-relay-policy). 1 = only
+   *  moments authored by direct peers; 3 (default) = the wire cap, so
+   *  every relayed moment is visible. */
+  max_hops?: 1 | 2 | 3
+}
+
 interface Preferences {
   landing_path?: LandingPath
   followed_space_ids?: string[]
+  moments?: MomentsPreferences
   [key: string]: unknown
 }
 

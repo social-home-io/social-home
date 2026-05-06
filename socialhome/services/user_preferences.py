@@ -110,9 +110,49 @@ def _coerce_int(value: Any, default: int, lo: int, hi: int) -> int:
     return n
 
 
+# ─── Momentum visibility prefs (§Momentum-relay-policy) ─────────────────────
+
+
+#: Default per-user max-hops visibility — matches the global wire cap so
+#: new accounts see every moment that reached this instance.
+DEFAULT_MOMENT_MAX_HOPS: int = 3
+
+
+@dataclass(slots=True, frozen=True)
+class MomentPreferences:
+    """Per-user knobs for the Momentum pillar's visibility filter."""
+
+    max_hops: int
+
+
+def parse_moment_preferences(preferences_json: str | None) -> MomentPreferences:
+    """Pull the ``moments`` block out of a user's preferences blob.
+
+    Returns a well-formed :class:`MomentPreferences` for any input.
+    Out-of-range integers clamp to ``[1, 3]`` since the wire cap is 3
+    and a value < 1 would hide every moment including the user's own.
+    """
+    blob: dict[str, Any] = {}
+    try:
+        blob = json.loads(preferences_json or "{}") if preferences_json else {}
+    except json.JSONDecodeError:
+        log.debug("preferences_json is not valid JSON; using defaults")
+        blob = {}
+    if not isinstance(blob, dict):
+        blob = {}
+    raw = blob.get("moments")
+    if not isinstance(raw, dict):
+        raw = {}
+    max_hops = _coerce_int(raw.get("max_hops"), DEFAULT_MOMENT_MAX_HOPS, 1, 3)
+    return MomentPreferences(max_hops=max_hops)
+
+
 __all__ = [
     "DEFAULT_HIGHLIGHTS_MAX_COUNT",
     "DEFAULT_HIGHLIGHTS_RETENTION_DAYS",
+    "DEFAULT_MOMENT_MAX_HOPS",
     "HighlightsPreferences",
+    "MomentPreferences",
     "parse_highlights_preferences",
+    "parse_moment_preferences",
 ]

@@ -157,10 +157,11 @@ themselves moments and link to the conversation root via
 
 | Table | Purpose |
 |---|---|
-| `moments` | One row per moment. `author_user_id` is plaintext (no FK) so federated remote-author rows live alongside local rows. `expires_at` is the absolute 7-day cap; `list_visible_to` collapses to 24 h for non-followers. |
+| `moments` | One row per moment. `author_user_id` is plaintext (no FK) so federated remote-author rows live alongside local rows. `expires_at` is the absolute 7-day cap; `list_visible_to` collapses to 24 h for non-followers. `hop_count` (default 1) records the federation hop the row landed on locally — viewers' per-user ``max_hops`` preference (§Momentum-relay-policy) compares against this column. `is_public` / `received_via` / `received_via_gfs_id` carry the §Momentum-public provenance. |
 | `moment_reactions` | Per-`(moment, reactor)` emoji. PK on `(moment_id, reactor_user_id)`, UPSERT to change. Cascades on moment delete. |
 | `moment_hashtags` | Per-`(moment, tag)` index of ASCII `#tag` tokens extracted from `moments.content` at save time. PK on `(moment_id, tag)`; secondary index on `(tag, moment_id)` powers the trending and tag-filter queries. Cascades on moment delete. |
 | `user_follows` | Voluntary adult-to-adult follow. PK on `(follower_user_id, followed_user_id)`. Used by `list_visible_to` to extend the visibility window from 24 h to 7 d for the followed author's moments. |
+| `household_instance_bans` | Operator-managed list of remote instances banned at the household level (§Momentum-relay-policy). Inbound envelopes from a banned instance are dropped at ingress; the relay-out path also skips banned sources. Distinct from per-user `user_blocks`, which stay private to the social layer. |
 
 ## Notifications and push
 
