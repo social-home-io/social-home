@@ -16,6 +16,7 @@ import { useComputed } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
 import { active as activeCalls } from '@/store/calls'
+import { dmUnreadTotal } from '@/store/dms'
 import { toggles } from '@/components/HouseholdToggles'
 import { Avatar } from '@/components/Avatar'
 import { Wordmark } from '@/components/Wordmark'
@@ -32,6 +33,12 @@ interface SideNavItem {
    * should render. Default = always visible.
    */
   gate?: (s: SideNavState) => boolean
+  /**
+   * Optional unread badge — rendered as a count chip on the link
+   * when the resolved value is positive. Cap rendering at 99+ is
+   * applied at the badge component, not here.
+   */
+  badge?: (s: SideNavState) => number
 }
 
 interface SideNavGroup {
@@ -44,6 +51,7 @@ interface SideNavState {
   isAdmin: boolean
   isGuardian: boolean
   hasActiveCall: boolean
+  dmUnread: number
   feat_feed: boolean
   feat_calendar: boolean
   feat_tasks: boolean
@@ -53,7 +61,7 @@ interface SideNavState {
   feat_momentum: boolean
 }
 
-const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall'> = {
+const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall' | 'dmUnread'> = {
   feat_feed: true,
   feat_calendar: true,
   feat_tasks: true,
@@ -87,16 +95,17 @@ const TALK_GROUP: SideNavGroup = {
   key: 'talk',
   label: 'Talk',
   items: [
-    { key: 'messages', label: 'Chats',    href: '/dms',     icon: 'messages' },
+    { key: 'messages', label: 'Chats',    href: '/dms',     icon: 'messages',
+      badge: s => s.dmUnread },
     // Time-critical fast lane: only renders while a call is live so
     // the user can hop back in one click. The Chats panel's Calls
     // tab stays the canonical surface (history, hang-up controls).
     { key: 'calls',    label: 'Calls',    href: '/dms?tab=calls', icon: 'calls',
       gate: s => s.hasActiveCall },
-    { key: 'stories',  label: 'Stories',  href: '/stories', icon: 'stories',
-      gate: s => s.feat_stories },
-    { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum',
-      gate: s => s.feat_momentum },
+    // Stories + Momentum are user-level features — not gated by the
+    // household feature toggles. They always render in the sidebar.
+    { key: 'stories',  label: 'Stories',  href: '/stories', icon: 'stories' },
+    { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum' },
   ],
 }
 
@@ -104,14 +113,10 @@ const BROWSE_GROUP: SideNavGroup = {
   key: 'browse',
   label: 'Browse',
   items: [
-    { key: 'spaces',         label: 'Spaces',        href: '/spaces',           icon: 'spaces' },
-    { key: 'friends',        label: 'Friends',       href: '/friends',          icon: 'connections' },
-    { key: 'bazaar',         label: 'Bazaar',        href: '/bazaar',           icon: 'bazaar' },
-    { key: 'corner',         label: 'Corner',        href: '/dashboard',        icon: 'corner' },
-    { key: 'story-archive',  label: 'Story archive', href: '/stories/archive',  icon: 'stories',
-      gate: s => s.feat_stories },
-    { key: 'moments-archive', label: 'Moments archive', href: '/momentum/archive', icon: 'momentum',
-      gate: s => s.feat_momentum },
+    { key: 'spaces',  label: 'Spaces', href: '/spaces',  icon: 'spaces' },
+    { key: 'friends', label: 'Friends', href: '/friends', icon: 'connections' },
+    { key: 'bazaar',  label: 'Bazaar', href: '/bazaar',  icon: 'bazaar' },
+    { key: 'corner',  label: 'Corner', href: '/corner',  icon: 'corner' },
   ],
 }
 
@@ -122,7 +127,11 @@ const YOU_GROUP: SideNavGroup = {
     { key: 'parent-control', label: 'Parent Control', href: '/parent', icon: 'parent-control',
       gate: s => s.isGuardian },
     { key: 'settings',    label: 'Settings',    href: '/settings',    icon: 'settings' },
-    { key: 'connections', label: 'Connections', href: '/connections', icon: 'connections',
+    // Labelled "Federation" in the sidebar to disambiguate from the
+    // Browse-group "Friends" link (people-you-know vs federated
+    // households). Route + key stay ``/connections`` so URL bookmarks
+    // and i18n keys keep working.
+    { key: 'connections', label: 'Federation', href: '/connections', icon: 'connections',
       gate: s => s.isAdmin },
     { key: 'admin',       label: 'Admin',       href: '/admin',       icon: 'admin',
       gate: s => s.isAdmin },
@@ -142,6 +151,7 @@ export function SideNav() {
       // doesn't flash on then off if loadGuardian resolves false.
       isGuardian: isGuardian.value === true,
       hasActiveCall: activeCalls.value.length > 0,
+      dmUnread: dmUnreadTotal.value,
       // Toggles haven't loaded yet → assume everything visible. Avoids
       // a "feature appears" flash once the API responds.
       ...(t
@@ -163,12 +173,14 @@ export function SideNav() {
         .filter(({ items }) => items.length > 0),
       you: { group: YOU_GROUP, items: filter(YOU_GROUP) },
       user,
+      state,
     }
   })
 
   const { main, you, user } = view.value
   const currentPath = loc.path
 
+  const state = view.value.state
   const renderGroup = (group: SideNavGroup, items: SideNavItem[]) => {
     const isActive = items.some(i => i.href === currentPath)
     const headerId = `sidenav-group-${group.key}`
@@ -179,16 +191,24 @@ export function SideNav() {
         aria-labelledby={headerId}
       >
         <h2 id={headerId} class="sh-sidenav-group-header">{group.label}</h2>
-        {items.map(i => (
-          <a
-            key={i.key}
-            href={i.href}
-            aria-current={i.href === currentPath ? 'page' : undefined}
-          >
-            <SideNavIcon name={i.icon} />
-            <span class="sh-sidenav-link-label">{i.label}</span>
-          </a>
-        ))}
+        {items.map(i => {
+          const count = i.badge ? i.badge(state) : 0
+          return (
+            <a
+              key={i.key}
+              href={i.href}
+              aria-current={i.href === currentPath ? 'page' : undefined}
+            >
+              <SideNavIcon name={i.icon} />
+              <span class="sh-sidenav-link-label">{i.label}</span>
+              {count > 0 && (
+                <span class="sh-sidenav-badge" aria-label={`${count} unread`}>
+                  {count > 99 ? '99+' : count}
+                </span>
+              )}
+            </a>
+          )
+        })}
       </nav>
     )
   }

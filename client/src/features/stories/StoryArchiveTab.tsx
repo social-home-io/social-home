@@ -1,13 +1,13 @@
 /**
- * StoryArchivePage — month-grid browser for retention-window stories.
+ * StoryArchiveTab — month-grid browser for retention-window stories.
  *
- * The household feed of stories at ``/stories`` shows today's rings
- * + recent items, but stories live up to the author's retention
- * setting (default 30 days) — there's a wide window of past posts
- * the inbox never surfaces. This page renders a calendar where each
- * day with a visible story is clickable; the day panel below the
- * grid lists every author + first-frame thumb for that date so the
- * user can replay it via the existing viewer.
+ * The Stories inbox tab shows today's rings + recent items, but
+ * stories live up to the author's retention setting (default 30
+ * days) — there's a wide window of past posts the inbox never
+ * surfaces. This tab renders a calendar where each day with a
+ * visible story is clickable; the day panel below the grid lists
+ * every author + first-frame thumb for that date so the user can
+ * replay it via the existing viewer.
  *
  * Data path — reuse the existing ``GET /api/stories`` endpoint. The
  * server's ``list_visible_to`` already returns every story whose
@@ -18,7 +18,6 @@ import { useEffect, useMemo, useState } from 'preact/hooks'
 import { signal, computed } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
-import { useTitle } from '@/store/pageTitle'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
 import { CalendarSkeleton } from '@/components/Skeleton'
@@ -56,8 +55,7 @@ function startOfMonth(year: number, month0: number): Date {
 }
 
 
-export default function StoryArchivePage() {
-  useTitle('Story archive')
+export default function StoryArchiveTab() {
   const loc = useLocation()
   const today = useMemo(() => new Date(), [])
   const [year, setYear] = useState(today.getUTCFullYear())

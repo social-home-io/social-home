@@ -1,7 +1,7 @@
 /**
  * Hashtag rendering helpers — shared between the inbox row and the
  * archive row so a ``#tag`` substring inside a moment's content
- * becomes a clickable link to ``/momentum/archive?tag=<tag>``.
+ * becomes a clickable link to ``/momentum?tab=archive&tag=<tag>``.
  *
  * The regex mirrors the server-side extractor in
  * ``socialhome/domain/moment.py`` (negative lookbehind on word
@@ -34,7 +34,7 @@ export function renderHashtagged(
     out.push(
       <a
         key={`${match.index}-${tag}`}
-        href={`/momentum/archive?tag=${encodeURIComponent(tag)}`}
+        href={`/momentum?tab=archive&tag=${encodeURIComponent(tag)}`}
         class="sh-hashtag"
         onClick={onClickHandler}
       >#{raw}</a>,

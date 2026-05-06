@@ -8,6 +8,7 @@ vi.mock('@/ws', () => ({ ws: { on: vi.fn(() => () => {}) } }))
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
 import { active as activeCalls } from '@/store/calls'
+import { dmUnreadTotal } from '@/store/dms'
 import { toggles } from '@/components/HouseholdToggles'
 import { SideNav } from './SideNav'
 
@@ -47,6 +48,7 @@ beforeEach(() => {
   currentUser.value = null
   isGuardian.value = false
   activeCalls.value = []
+  dmUnreadTotal.value = 0
   toggles.value = { ...ALL_FEATURES_ON }
 })
 
@@ -110,7 +112,7 @@ describe('SideNav', () => {
     // YOU still has Settings (always-on), so YOU header should show.
     expect(queryByText('You')).toBeTruthy()
     expect(queryByText('Admin')).toBeNull()
-    expect(queryByText('Connections')).toBeNull()
+    expect(queryByText('Federation')).toBeNull()
     expect(queryByText('Parent Control')).toBeNull()
     // AT HOME header still renders because Shopping/Presence/Gallery
     // are unconditionally visible.
@@ -119,19 +121,19 @@ describe('SideNav', () => {
     expect(headers).toContain('At home')
   })
 
-  it('hides Admin and Connections for non-admin users', () => {
+  it('hides Admin and Federation for non-admin users', () => {
     setUser({ is_admin: false })
     const { queryByText } = renderAt('/')
     expect(queryByText('Admin')).toBeNull()
-    expect(queryByText('Connections')).toBeNull()
+    expect(queryByText('Federation')).toBeNull()
     expect(queryByText('Settings')).toBeTruthy()
   })
 
-  it('shows Admin and Connections for admin users', () => {
+  it('shows Admin and Federation for admin users', () => {
     setUser({ is_admin: true })
     const { queryByText } = renderAt('/')
     expect(queryByText('Admin')).toBeTruthy()
-    expect(queryByText('Connections')).toBeTruthy()
+    expect(queryByText('Federation')).toBeTruthy()
   })
 
   it('hides Parent Control when the caller is not a guardian', () => {
@@ -179,7 +181,7 @@ describe('SideNav', () => {
     expect(tasksLink?.getAttribute('aria-current')).toBeNull()
   })
 
-  it('Corner sits in BROWSE pointing at /dashboard, not in YOU', () => {
+  it('Corner sits in BROWSE pointing at /corner, not in YOU', () => {
     setUser({ is_admin: true })
     const { container, getByText } = renderAt('/')
     const browseNav = container.querySelector('nav[aria-labelledby="sidenav-group-browse"]')!
@@ -188,7 +190,7 @@ describe('SideNav', () => {
     expect(youNav.textContent).not.toContain('Corner')
     expect(youNav.textContent).not.toContain('Dashboard')
     const cornerLink = getByText('Corner').closest('a')
-    expect(cornerLink?.getAttribute('href')).toBe('/dashboard')
+    expect(cornerLink?.getAttribute('href')).toBe('/corner')
   })
 
   it('does not render Notifications or Search links — those live in the top bar only', () => {
@@ -216,5 +218,53 @@ describe('SideNav', () => {
     const link = getByText('Calls').closest('a')
     expect(link).toBeTruthy()
     expect(link?.getAttribute('href')).toBe('/dms?tab=calls')
+  })
+
+  it('renders an unread badge on Chats when dmUnreadTotal > 0', () => {
+    setUser({ is_admin: true })
+    dmUnreadTotal.value = 4
+    const { getByText } = renderAt('/')
+    const link = getByText('Chats').closest('a')!
+    const badge = link.querySelector('.sh-sidenav-badge')
+    expect(badge?.textContent).toBe('4')
+  })
+
+  it('caps the Chats unread badge at 99+', () => {
+    setUser({ is_admin: true })
+    dmUnreadTotal.value = 250
+    const { getByText } = renderAt('/')
+    const badge = getByText('Chats').closest('a')!.querySelector('.sh-sidenav-badge')
+    expect(badge?.textContent).toBe('99+')
+  })
+
+  it('hides the Chats badge when there are no unread DMs', () => {
+    setUser({ is_admin: true })
+    dmUnreadTotal.value = 0
+    const { getByText } = renderAt('/')
+    const link = getByText('Chats').closest('a')!
+    expect(link.querySelector('.sh-sidenav-badge')).toBeNull()
+  })
+
+  it('renders the federation link as Federation, not Connections', () => {
+    setUser({ is_admin: true })
+    const { queryByText, getByText } = renderAt('/')
+    expect(queryByText('Connections')).toBeNull()
+    const link = getByText('Federation').closest('a')
+    expect(link?.getAttribute('href')).toBe('/connections')
+  })
+
+  it('renders Stories and Momentum unconditionally — they are user-level, not household-toggled', () => {
+    setUser({ is_admin: true })
+    toggles.value = { ...ALL_FEATURES_ON, feat_stories: false, feat_momentum: false }
+    const { getByText } = renderAt('/')
+    expect(getByText('Stories')).toBeTruthy()
+    expect(getByText('Momentum')).toBeTruthy()
+  })
+
+  it('drops the standalone Story archive / Moments archive entries — those live as tabs now', () => {
+    setUser({ is_admin: true })
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Story archive')).toBeNull()
+    expect(queryByText('Moments archive')).toBeNull()
   })
 })

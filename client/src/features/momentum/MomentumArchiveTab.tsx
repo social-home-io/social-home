@@ -1,9 +1,11 @@
 /**
- * MomentumArchivePage — full retention-window list of moments
+ * MomentumArchiveTab — full retention-window list of moments
  * (§Momentum). Same API shape as the inbox but renders with date
  * headers so the calendar-style scroll works. Optional ``?tag``
  * URL filter narrows to a single hashtag; the chip row at the top
  * shows the trending tags inside the viewer's visibility window.
+ *
+ * Mounted by :class:`MomentumPage` when ``?tab=archive`` is set.
  */
 import { useEffect } from 'preact/hooks'
 import { signal, computed } from '@preact/signals'
@@ -12,7 +14,6 @@ import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { MomentumArchiveSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
-import { useTitle } from '@/store/pageTitle'
 import { ws } from '@/ws'
 import type { Moment } from '@/types'
 import { renderHashtagged } from './hashtags'
@@ -33,8 +34,7 @@ const grouped = computed<Map<string, Moment[]>>(() => {
 })
 
 
-export default function MomentumArchivePage() {
-  useTitle('Moments archive')
+export default function MomentumArchiveTab() {
   const loc = useLocation()
 
   useEffect(() => {
@@ -78,11 +78,11 @@ export default function MomentumArchivePage() {
       {trending.value.map(t => (
         <a
           key={t.tag}
-          href={`/momentum/archive?tag=${encodeURIComponent(t.tag)}`}
+          href={`/momentum?tab=archive&tag=${encodeURIComponent(t.tag)}`}
           class={`sh-momentum-chip${tag === t.tag ? ' sh-momentum-chip--active' : ''}`}
           onClick={(ev) => {
             ev.preventDefault()
-            loc.route(`/momentum/archive?tag=${encodeURIComponent(t.tag)}`)
+            loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t.tag)}`)
           }}
         >
           #{t.tag}
@@ -95,8 +95,8 @@ export default function MomentumArchivePage() {
     <div class="sh-momentum-filter-banner" role="status">
       <span>Filtering by <strong>#{tag}</strong></span>
       <a
-        href="/momentum/archive"
-        onClick={(ev) => { ev.preventDefault(); loc.route('/momentum/archive') }}
+        href="/momentum?tab=archive"
+        onClick={(ev) => { ev.preventDefault(); loc.route('/momentum?tab=archive') }}
       >Clear</a>
     </div>
   )
@@ -151,7 +151,7 @@ export default function MomentumArchivePage() {
                         {renderHashtagged(m.content, (t, ev) => {
                           ev.preventDefault()
                           ev.stopPropagation()
-                          loc.route(`/momentum/archive?tag=${encodeURIComponent(t)}`)
+                          loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)
                         })}
                       </p>
                     )}

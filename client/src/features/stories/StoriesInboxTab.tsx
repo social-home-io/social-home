@@ -1,0 +1,215 @@
+/**
+ * StoriesInboxTab — recent rings + per-author list (§Stories).
+ *
+ * Renders a horizontal "rings" row at the top (avatars circled with a
+ * terracotta glow when the viewer has unseen frames) plus a per-author
+ * grouped list below. Tapping a ring or row entry routes to
+ * :class:`StoryViewerPage` with that story id.
+ *
+ * Authors get a "+ New" tile leading to :class:`StoryComposerPage`.
+ *
+ * Audience filtering happens server-side; this tab just renders the
+ * inbox the API returns. The host :class:`StoriesPage` switches
+ * between this and :class:`StoryArchiveTab`.
+ */
+import { useEffect } from 'preact/hooks'
+import { signal } from '@preact/signals'
+import { useLocation } from 'preact-iso'
+import { api } from '@/api'
+import { StoriesRingSkeleton } from '@/components/Skeleton'
+import { Avatar } from '@/components/Avatar'
+import { Button } from '@/components/Button'
+import { showToast } from '@/components/Toast'
+import { currentUser } from '@/store/auth'
+import { openUserActions } from '@/components/UserActionsMenu'
+import { blockedUserIds, loadBlocks } from '@/store/blocks'
+import { ws } from '@/ws'
+import type { StoryInboxItem } from '@/types'
+
+const inbox = signal<StoryInboxItem[]>([])
+const loading = signal<boolean>(true)
+
+
+function humaniseDate(iso: string): string {
+  // Stories list groups by ``story_date`` (YYYY-MM-DD UTC). For a
+  // friendlier inbox we surface "Today" / "Yesterday" / weekday for
+  // the recent past, and a fully spelled-out date otherwise.
+  const today = new Date()
+  const todayStr = today.toISOString().slice(0, 10)
+  if (iso === todayStr) return 'Today'
+  const yest = new Date(today)
+  yest.setUTCDate(yest.getUTCDate() - 1)
+  if (iso === yest.toISOString().slice(0, 10)) return 'Yesterday'
+  const dt = new Date(iso + 'T00:00:00Z')
+  if (Number.isNaN(dt.getTime())) return iso
+  return dt.toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+
+export default function StoriesInboxTab() {
+  const loc = useLocation()
+  const me = currentUser.value?.user_id
+
+  useEffect(() => {
+    loading.value = true
+    void loadBlocks()  // populate the optimistic block-id set
+    const fetchInbox = (initial: boolean) =>
+      api.get('/api/stories')
+        .then((rows: StoryInboxItem[]) => {
+          inbox.value = rows ?? []
+          if (initial) loading.value = false
+        })
+        .catch((err: unknown) => {
+          if (initial) loading.value = false
+          showToast(`Failed to load stories: ${(err as Error)?.message ?? err}`,
+            'error')
+        })
+    void fetchInbox(true)
+    // Live updates — both local writes and federated arrivals fan a
+    // narrow ``story.*`` frame; we just refetch so the audience filter
+    // and unseen counts stay server-authoritative.
+    const dispose = [
+      ws.on('story.frame_added',   () => { void fetchInbox(false) }),
+      ws.on('story.frame_removed', () => { void fetchInbox(false) }),
+      ws.on('story.removed',       () => { void fetchInbox(false) }),
+    ]
+    return () => { dispose.forEach(d => d()) }
+  }, [])
+
+  if (loading.value) return <StoriesRingSkeleton />
+
+  // Belt + braces: the server already strips blocked authors. The
+  // local hide makes a same-tab "Block @bob" land in the rings list
+  // without a refresh — the next /api/stories fetch confirms it.
+  const blocked = blockedUserIds.value
+  const items = inbox.value.filter(i => !blocked.has(i.story.author_user_id))
+
+  // Build a "rings" row: my own + everyone else's, grouped by author.
+  const myItems = items.filter(i => i.story.author_user_id === me)
+  const peerItems = items.filter(i => i.story.author_user_id !== me)
+
+  const ring = (item: StoryInboxItem) => {
+    const cls = item.unseen_count > 0
+      ? 'sh-story-ring sh-story-ring--unseen'
+      : 'sh-story-ring'
+    const onClick = () => loc.route(`/stories/${item.story.id}`)
+    const isMine = item.story.author_user_id === me
+    return (
+      <div key={item.story.id} class="sh-story-ring-wrap">
+        <button
+          type="button"
+          class={cls}
+          onClick={onClick}
+          aria-label={`Open ${item.story.author_user_id}'s story`}
+        >
+          <span class="sh-story-ring-avatar">
+            <Avatar name={item.story.author_user_id} size={56} />
+          </span>
+          <span class="sh-story-ring-label">
+            {isMine ? 'Your story' : item.story.author_user_id}
+          </span>
+        </button>
+        {!isMine && (
+          <button
+            type="button"
+            class="sh-story-ring-overflow"
+            aria-label={`More actions for ${item.story.author_user_id}`}
+            onClick={(ev) => {
+              ev.stopPropagation()
+              openUserActions(item.story.author_user_id)
+            }}
+          >
+            ⋯
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div class="sh-stories-page">
+      <section class="sh-story-rings" aria-label="Recent stories">
+        <button
+          type="button"
+          class="sh-story-ring sh-story-ring--new"
+          onClick={() => loc.route('/stories/new')}
+          aria-label="Post a new story"
+        >
+          <span class="sh-story-ring-avatar">
+            <span class="sh-story-ring-plus" aria-hidden="true">+</span>
+          </span>
+          <span class="sh-story-ring-label">New</span>
+        </button>
+        {myItems.map(ring)}
+        {peerItems.map(ring)}
+      </section>
+
+      {items.length === 0 && (
+        <div class="sh-empty-state">
+          <div style={{ fontSize: '2rem' }} aria-hidden="true">🌅</div>
+          <h3 style={{ margin: 0 }}>No stories yet</h3>
+          <p>
+            Stories are short photo or video moments that disappear
+            after the day is over. Share one with your household and
+            connected peers.
+          </p>
+          <div style={{ marginTop: '0.75rem' }}>
+            <Button onClick={() => loc.route('/stories/new')}>
+              + Share your first story
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <section class="sh-story-list" aria-label="All stories">
+          {items.map(item => {
+            const first = item.frames[0]
+            return (
+              <a
+                key={item.story.id}
+                href={`/stories/${item.story.id}`}
+                class="sh-story-row"
+              >
+                {first && first.frame_type === 'image' && (
+                  <img
+                    src={first.media_url}
+                    alt=""
+                    loading="lazy"
+                    class="sh-story-row-thumb"
+                  />
+                )}
+                {first && first.frame_type === 'video' && (
+                  <span class="sh-story-row-thumb sh-story-row-thumb--video">
+                    🎬
+                  </span>
+                )}
+                {!first && (
+                  <span class="sh-story-row-thumb sh-story-row-thumb--empty" />
+                )}
+                <span class="sh-story-row-meta">
+                  <strong>
+                    {item.story.author_user_id === me
+                      ? 'You'
+                      : item.story.author_user_id}
+                  </strong>
+                  <span class="sh-muted">
+                    {humaniseDate(item.story.story_date)} ·{' '}
+                    {item.frames.length} frame{item.frames.length === 1 ? '' : 's'}
+                  </span>
+                </span>
+                {item.unseen_count > 0 && (
+                  <span class="sh-story-row-unseen">{item.unseen_count}</span>
+                )}
+              </a>
+            )
+          })}
+        </section>
+      )}
+    </div>
+  )
+}

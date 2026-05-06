@@ -13,6 +13,7 @@ import { signal, computed } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { ws } from '@/ws'
+import { dmUnreadTotal } from '@/store/dms'
 import type { Conversation } from '@/types'
 import { DmInboxSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
@@ -180,6 +181,11 @@ export default function DmInboxPage() {
                   {new Date(c.last_message_at).toLocaleString()}
                 </time>
               )}
+              {c.unread && c.unread > 0 ? (
+                <span class="sh-dm-unread" aria-label={`${c.unread} unread`}>
+                  {c.unread > 99 ? '99+' : c.unread}
+                </span>
+              ) : null}
             </a>
           )
         })}
@@ -192,8 +198,13 @@ export default function DmInboxPage() {
 const reload = () =>
   api
     .get('/api/conversations')
-    .then((data) => {
+    .then((data: Conversation[]) => {
       conversations.value = data
+      // Re-sum the sidebar badge from the just-fetched payload so the
+      // inbox and the badge can never drift while this page is open.
+      let sum = 0
+      for (const c of data ?? []) sum += Math.max(0, c.unread ?? 0)
+      dmUnreadTotal.value = sum
     })
     .catch(() => {
       /* noop — keep current list on transient failures */

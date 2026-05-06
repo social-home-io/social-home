@@ -53,6 +53,7 @@ class ConversationCollectionView(BaseView):
                         ),
                     }
                 )
+            unread = await svc.count_unread(c.id, username=ctx.username)
             rows.append(
                 {
                     "id": c.id,
@@ -63,6 +64,7 @@ class ConversationCollectionView(BaseView):
                     else None,
                     "members": preview,
                     "member_count": len(members),
+                    "unread": unread,
                 }
             )
         return web.json_response(rows)
