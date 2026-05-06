@@ -91,6 +91,24 @@ verifies the author's signature directly.
 | DELETE | `/api/moments/public/follows/{gfs_id}/{user_id}` | Unfollow. |
 | GET    | `/api/gfs/{gfs_id}/users` | Proxy the GFS directory. |
 
+## Sequence: discover + follow
+
+```mermaid
+sequenceDiagram
+  participant B as Follower SH
+  participant G as GFS
+  participant A as Author SH
+
+  B->>G: GET /gfs/users (anonymous)
+  G-->>B: directory listing (incl. home_instance_pk per user)
+  B->>G: POST /gfs/users/{user_id}/follow (signed by B's instance)
+  G->>G: persist gfs_moment_follows row
+  G->>B: response carries the author's directory entry
+  B->>B: cache row in moment_public_follows (with home_instance_pk)
+  G->>A: WS push follow_changed (action="add")
+  A->>A: composer follower count ticks up
+```
+
 ## Sequence: publish + fan-out
 
 ```mermaid
@@ -98,18 +116,65 @@ sequenceDiagram
   participant A as Author SH
   participant G as GFS
   participant B as Follower SH
+  participant P as A's paired peer
 
   A->>A: User posts moment (is_public=1)
-  A->>G: POST /gfs/moments/publish (signed envelope)
-  G->>G: lookup followers_of(author)
-  loop per follower instance
-    G->>B: WS push incoming_public_moment
+  par Household path (existing federation)
+    A->>P: MOMENT_CREATED via paired-instance relay
+  and GFS path (new)
+    A->>G: POST /gfs/moments/publish (signed envelope)
+    G->>G: lookup followers_of(author)
+    loop per unique follower_instance_id
+      G->>B: WS push incoming_public_moment
+    end
+    B->>B: verify Ed25519 signature against cached followed_instance_pk
+    B->>B: persist moment (received_via='gfs', received_via_gfs_id={gfs})
+    B->>B: re-publish MomentCreated on bus → realtime + notifications
+    Note right of B: relay_inbound() short-circuits on received_via=='gfs'
   end
-  B->>B: verify signature (cached follow.followed_instance_pk)
-  B->>B: persist moment (received_via='gfs', received_via_gfs_id={gfs})
-  B->>B: re-publish MomentCreated on bus → realtime + notifications
-  Note right of B: relay_inbound() returns early — no re-fan
 ```
+
+If A's paired-household mesh and B's mesh overlap (same household
+pair), B receives the same ``moment_id`` twice — once via federation,
+once via GFS. The recipient dedupes on the row's PRIMARY KEY; the
+second save is a no-op.
+
+## Signature canonicalisation
+
+Every signed wire body — register, follow, unfollow, publish, delete
+— uses the same canonical-JSON shape:
+
+```python
+canonical = json.dumps(
+    body, separators=(",", ":"), sort_keys=True
+).encode("utf-8")
+```
+
+The Ed25519 signature is computed over those bytes, base64url-encoded
+(no padding), and appended to the body under the ``signature`` key.
+The ``signature`` field is **excluded** from the canonical bytes —
+the verifier strips it back out before re-running ``json.dumps`` to
+compare.
+
+* **Algorithm**: Ed25519 (per §25.8 instance-key suite).
+* **Key**: the sending instance's federation identity key (32-byte
+  Ed25519 seed). For follower-side calls (``follow`` / ``unfollow``)
+  the follower's *own* instance signs; for publish / delete the
+  author's instance signs.
+* **Public key encoding**: 64-character lowercase hex on every
+  GFS-stored or wire-carried form (``client_instances.public_key``,
+  ``gfs_user_registrations.home_instance_pk``,
+  ``moment_public_follows.followed_instance_pk``). The choice of hex
+  for keys + base64url for signatures matches the existing
+  Highlights flow.
+* **Nonce**: none. Replay protection is provided at the transport
+  layer (the GFS only routes within an active WS), and the moment
+  envelope's ``moment_id`` is unique per author.
+
+The recipient's verification is in
+``socialhome/services/moment_public_inbound.py:_verify`` — single
+``json.dumps(..., separators=(",",":"), sort_keys=True)`` call,
+identical bytes-for-bytes to the sender's canonical encoding.
 
 ## DB schema (this PR ships into `0001_initial.sql`)
 
