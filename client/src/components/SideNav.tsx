@@ -15,6 +15,7 @@ import { useLocation } from 'preact-iso'
 import { useComputed } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
+import { active as activeCalls } from '@/store/calls'
 import { toggles } from '@/components/HouseholdToggles'
 import { Avatar } from '@/components/Avatar'
 import { Wordmark } from '@/components/Wordmark'
@@ -42,6 +43,7 @@ interface SideNavGroup {
 interface SideNavState {
   isAdmin: boolean
   isGuardian: boolean
+  hasActiveCall: boolean
   feat_feed: boolean
   feat_calendar: boolean
   feat_tasks: boolean
@@ -51,7 +53,7 @@ interface SideNavState {
   feat_momentum: boolean
 }
 
-const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian'> = {
+const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall'> = {
   feat_feed: true,
   feat_calendar: true,
   feat_tasks: true,
@@ -85,8 +87,12 @@ const TALK_GROUP: SideNavGroup = {
   key: 'talk',
   label: 'Talk',
   items: [
-    { key: 'messages', label: 'Messages', href: '/dms',     icon: 'messages' },
-    { key: 'calls',    label: 'Calls',    href: '/calls',   icon: 'calls' },
+    { key: 'messages', label: 'Chats',    href: '/dms',     icon: 'messages' },
+    // Time-critical fast lane: only renders while a call is live so
+    // the user can hop back in one click. The Chats panel's Calls
+    // tab stays the canonical surface (history, hang-up controls).
+    { key: 'calls',    label: 'Calls',    href: '/dms?tab=calls', icon: 'calls',
+      gate: s => s.hasActiveCall },
     { key: 'stories',  label: 'Stories',  href: '/stories', icon: 'stories',
       gate: s => s.feat_stories },
     { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum',
@@ -135,6 +141,7 @@ export function SideNav() {
       // null = still loading; treat as "not a guardian" so the link
       // doesn't flash on then off if loadGuardian resolves false.
       isGuardian: isGuardian.value === true,
+      hasActiveCall: activeCalls.value.length > 0,
       // Toggles haven't loaded yet → assume everything visible. Avoids
       // a "feature appears" flash once the API responds.
       ...(t
