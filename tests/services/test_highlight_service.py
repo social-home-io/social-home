@@ -373,3 +373,40 @@ async def test_expire_due_drops_expired(db, svc):
     expired, over_max = await service.expire_due()
     assert expired == 1
     assert over_max == 0  # max_count default (100) is well above one row
+
+
+async def test_expire_due_runs_over_max_pass_per_author(db, svc):
+    """``expire_due`` walks every author with live rows so per-author
+    ``max_count`` retention prunes too — covers the per-author lookup +
+    prefs parse + prune_over_max call inside :meth:`expire_due`."""
+    service, _ = svc
+    # Seed a user with the lowest-allowed ``max_count`` (10 — clamped by
+    # ``parse_highlights_preferences``) so 11 rows trigger one prune.
+    await _seed_user(
+        db, "u1", "pascal", prefs_json='{"highlights": {"max_count": 10}}'
+    )
+    repo = service._highlights
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    for i in range(11):
+        await repo.find_or_create_today(
+            author_user_id="u1",
+            audience_kind=HighlightAudience.ALL_PAIRED,
+            audience=(),
+            highlight_date=f"2026-01-{i + 1:02d}",
+            expires_at=future,
+        )
+    expired, over_max = await service.expire_due()
+    assert expired == 0
+    assert over_max == 1
+
+
+async def test_create_or_append_frame_unknown_author_raises_lookup(db, svc):
+    """The author existence check must raise ``LookupError`` when the
+    user row is missing — covers the early-return branch."""
+    service, _ = svc
+    with pytest.raises(LookupError):
+        await service.create_or_append_frame(
+            author_user_id="ghost",
+            frame_type=HighlightFrameType.IMAGE,
+            media_url="/api/media/x.webp",
+        )
