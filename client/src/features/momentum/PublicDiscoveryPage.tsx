@@ -6,7 +6,7 @@
  * ``/momentum/public/discover``.
  */
 import { useEffect } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { computed, signal } from '@preact/signals'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
@@ -25,6 +25,18 @@ const gfses = signal<GfsConnection[]>([])
 const selectedGfs = signal<string | null>(null)
 const directory = signal<MomentPublicDirectoryUser[]>([])
 const loading = signal(true)
+const searchQuery = signal('')
+
+const filtered = computed<MomentPublicDirectoryUser[]>(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return directory.value
+  return directory.value.filter(
+    (u) =>
+      (u.display_name ?? '').toLowerCase().includes(q) ||
+      (u.username ?? '').toLowerCase().includes(q) ||
+      (u.bio ?? '').toLowerCase().includes(q),
+  )
+})
 
 async function loadDirectory(gfsId: string): Promise<void> {
   loading.value = true
@@ -126,22 +138,37 @@ export default function PublicDiscoveryPage() {
         )}
       </header>
 
+      <input
+        type="search"
+        class="sh-momentum-discover-search"
+        placeholder="Search by name, handle, or bio…"
+        value={searchQuery.value}
+        onInput={(ev) =>
+          (searchQuery.value = (ev.currentTarget as HTMLInputElement).value)
+        }
+      />
+
       {loading.value && <p>Loading…</p>}
-      {!loading.value && directory.value.length === 0 && (
-        <p class="sh-muted">No registered users on this GFS yet.</p>
+      {!loading.value && filtered.value.length === 0 && (
+        <p class="sh-muted">
+          {searchQuery.value
+            ? 'No users match your search.'
+            : 'No registered users on this GFS yet.'}
+        </p>
       )}
 
       <ul class="sh-momentum-discover-list">
-        {directory.value.map((u) => (
+        {filtered.value.map((u) => (
           <li key={u.user_id} class="sh-momentum-discover-row">
             <Avatar
-              src={u.picture_url}
+              src={discoveryAvatarUrl(u)}
               name={u.display_name || u.username}
-              size={40}
+              size={48}
             />
             <div class="sh-momentum-discover-meta">
               <strong>{u.display_name}</strong>
               <span class="sh-muted">@{u.username}</span>
+              {u.bio && <p class="sh-momentum-discover-bio">{u.bio}</p>}
             </div>
             {isFollowing(u.user_id) ? (
               <Button variant="secondary" onClick={() => void onUnfollow(u)}>
@@ -155,4 +182,19 @@ export default function PublicDiscoveryPage() {
       </ul>
     </div>
   )
+}
+
+function discoveryAvatarUrl(u: MomentPublicDirectoryUser): string | null {
+  // Prefer the GFS-mirrored avatar when we have a digest; falls back
+  // to the per-instance picture_url (only reachable when the home
+  // instance is publicly addressable).
+  if (u.picture_digest) {
+    const gfs = selectedGfs.value
+    if (gfs) {
+      return `/api/gfs/${encodeURIComponent(gfs)}/users/${encodeURIComponent(
+        u.user_id,
+      )}/picture?v=${encodeURIComponent(u.picture_digest)}`
+    }
+  }
+  return u.picture_url
 }

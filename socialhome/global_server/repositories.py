@@ -31,6 +31,7 @@ from .domain import (
     GfsHighlightToken,
     GfsMomentFollow,
     GfsSubscriber,
+    GfsUserPicture,
     GfsUserRegistration,
     GlobalSpace,
     RtcConnection,
@@ -1298,10 +1299,21 @@ class AbstractGfsUserRegistrationRepo(Protocol):
     async def upsert(self, reg: GfsUserRegistration) -> None: ...
     async def delete(self, user_id: str) -> int: ...
     async def get(self, user_id: str) -> GfsUserRegistration | None: ...
-    async def list_active(self) -> list[GfsUserRegistration]: ...
+    async def list_active(
+        self, *, q: str | None = None, limit: int = 200
+    ) -> list[GfsUserRegistration]: ...
     async def list_for_instance(
         self, instance_id: str
     ) -> list[GfsUserRegistration]: ...
+    async def set_picture_digest(
+        self, *, user_id: str, picture_digest: str | None
+    ) -> int: ...
+
+
+_USER_REG_COLS = (
+    "user_id, instance_id, username, display_name, picture_url, bio, "
+    "picture_digest, home_instance_pk, registered_at, status"
+)
 
 
 class SqliteGfsUserRegistrationRepo:
@@ -1311,14 +1323,16 @@ class SqliteGfsUserRegistrationRepo:
     async def upsert(self, reg: GfsUserRegistration) -> None:
         await self._db.enqueue(
             "INSERT INTO gfs_user_registrations("
-            "user_id, instance_id, username, display_name, picture_url, "
-            "home_instance_pk, registered_at, status) "
-            "VALUES(?,?,?,?,?,?,?,?) "
+            "user_id, instance_id, username, display_name, picture_url, bio, "
+            "picture_digest, home_instance_pk, registered_at, status) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(user_id) DO UPDATE SET "
             "instance_id=excluded.instance_id, "
             "username=excluded.username, "
             "display_name=excluded.display_name, "
             "picture_url=excluded.picture_url, "
+            "bio=excluded.bio, "
+            "picture_digest=excluded.picture_digest, "
             "home_instance_pk=excluded.home_instance_pk, "
             "status=excluded.status",
             (
@@ -1327,6 +1341,8 @@ class SqliteGfsUserRegistrationRepo:
                 reg.username,
                 reg.display_name,
                 reg.picture_url,
+                reg.bio,
+                reg.picture_digest,
                 reg.home_instance_pk,
                 reg.registered_at,
                 reg.status,
@@ -1345,33 +1361,52 @@ class SqliteGfsUserRegistrationRepo:
 
     async def get(self, user_id: str) -> GfsUserRegistration | None:
         row = await self._db.fetchone(
-            "SELECT user_id, instance_id, username, display_name, picture_url, "
-            "home_instance_pk, registered_at, status "
-            "FROM gfs_user_registrations WHERE user_id=?",
+            f"SELECT {_USER_REG_COLS} FROM gfs_user_registrations WHERE user_id=?",
             (user_id,),
         )
         return _row_to_user_reg(_dict(row))
 
-    async def list_active(self) -> list[GfsUserRegistration]:
-        rows = await self._db.fetchall(
-            "SELECT user_id, instance_id, username, display_name, picture_url, "
-            "home_instance_pk, registered_at, status "
-            "FROM gfs_user_registrations WHERE status='active' "
-            "ORDER BY registered_at DESC",
-            (),
-        )
+    async def list_active(
+        self, *, q: str | None = None, limit: int = 200
+    ) -> list[GfsUserRegistration]:
+        # ``q`` is a substring match across display_name + username.
+        # Caller-supplied; ``LIKE '%…%'`` is safe because the parameter
+        # is bound, not interpolated.
+        clamped = max(1, min(int(limit), 200))
+        if q:
+            like = f"%{q.strip()}%"
+            rows = await self._db.fetchall(
+                f"SELECT {_USER_REG_COLS} "
+                "FROM gfs_user_registrations "
+                "WHERE status='active' AND (display_name LIKE ? OR username LIKE ?) "
+                "ORDER BY registered_at DESC LIMIT ?",
+                (like, like, clamped),
+            )
+        else:
+            rows = await self._db.fetchall(
+                f"SELECT {_USER_REG_COLS} "
+                "FROM gfs_user_registrations WHERE status='active' "
+                "ORDER BY registered_at DESC LIMIT ?",
+                (clamped,),
+            )
         out = [_row_to_user_reg(_dict(r)) for r in rows]
         return [r for r in out if r is not None]
 
     async def list_for_instance(self, instance_id: str) -> list[GfsUserRegistration]:
         rows = await self._db.fetchall(
-            "SELECT user_id, instance_id, username, display_name, picture_url, "
-            "home_instance_pk, registered_at, status "
-            "FROM gfs_user_registrations WHERE instance_id=?",
+            f"SELECT {_USER_REG_COLS} FROM gfs_user_registrations WHERE instance_id=?",
             (instance_id,),
         )
         out = [_row_to_user_reg(_dict(r)) for r in rows]
         return [r for r in out if r is not None]
+
+    async def set_picture_digest(
+        self, *, user_id: str, picture_digest: str | None
+    ) -> int:
+        return await self._db.enqueue(
+            "UPDATE gfs_user_registrations SET picture_digest=? WHERE user_id=?",
+            (picture_digest, user_id),
+        )
 
 
 def _dict(row: Any) -> dict | None:
@@ -1392,6 +1427,8 @@ def _row_to_user_reg(row: dict | None) -> GfsUserRegistration | None:
         home_instance_pk=row["home_instance_pk"],
         registered_at=int(row["registered_at"]),
         status=row.get("status") or "active",
+        bio=row.get("bio"),
+        picture_digest=row.get("picture_digest"),
     )
 
 
@@ -1472,3 +1509,50 @@ def _row_to_follow(row: dict | None) -> GfsMomentFollow | None:
         followed_user_id=row["followed_user_id"],
         created_at=int(row["created_at"]),
     )
+
+
+# ─── Public-directory avatar mirror (§Momentum-public) ───────────────────
+
+
+@runtime_checkable
+class AbstractGfsUserPictureRepo(Protocol):
+    async def upsert(self, picture: GfsUserPicture) -> None: ...
+    async def get(self, user_id: str) -> GfsUserPicture | None: ...
+
+
+class SqliteGfsUserPictureRepo:
+    def __init__(self, db: AsyncDatabase) -> None:
+        self._db = db
+
+    async def upsert(self, picture: GfsUserPicture) -> None:
+        await self._db.enqueue(
+            "INSERT INTO gfs_user_pictures(user_id, bytes, mime, digest, updated_at) "
+            "VALUES(?,?,?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "bytes=excluded.bytes, mime=excluded.mime, "
+            "digest=excluded.digest, updated_at=excluded.updated_at",
+            (
+                picture.user_id,
+                picture.bytes_,
+                picture.mime,
+                picture.digest,
+                picture.updated_at,
+            ),
+        )
+
+    async def get(self, user_id: str) -> GfsUserPicture | None:
+        row = await self._db.fetchone(
+            "SELECT user_id, bytes, mime, digest, updated_at "
+            "FROM gfs_user_pictures WHERE user_id=?",
+            (user_id,),
+        )
+        d = _dict(row)
+        if d is None:
+            return None
+        return GfsUserPicture(
+            user_id=d["user_id"],
+            bytes_=bytes(d["bytes"]),
+            mime=d["mime"],
+            digest=d["digest"],
+            updated_at=int(d["updated_at"]),
+        )

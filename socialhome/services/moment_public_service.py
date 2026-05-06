@@ -12,11 +12,14 @@ The fan-out itself rides the persistent WS — see
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from datetime import datetime, timezone
 
 import aiohttp
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from ..crypto import b64url_encode, sign_ed25519
 from ..domain.moment_public import MomentPublicFollow, MomentPublicRegistration
@@ -25,6 +28,7 @@ from ..repositories.moment_public_repo import (
     AbstractMomentPublicFollowRepo,
     AbstractMomentPublicRegistrationRepo,
 )
+from ..repositories.profile_picture_repo import AbstractProfilePictureRepo
 from ..repositories.user_repo import AbstractUserRepo
 
 log = logging.getLogger(__name__)
@@ -44,6 +48,7 @@ class MomentPublicService:
         "_follows",
         "_users",
         "_gfs",
+        "_pictures",
         "_http_client",
         "_signing_key",
         "_own_instance_id",
@@ -56,12 +61,14 @@ class MomentPublicService:
         user_repo: AbstractUserRepo,
         gfs_repo: AbstractGfsConnectionRepo,
         *,
+        profile_picture_repo: AbstractProfilePictureRepo | None = None,
         http_client: aiohttp.ClientSession | None = None,
     ) -> None:
         self._regs = registration_repo
         self._follows = follow_repo
         self._users = user_repo
         self._gfs = gfs_repo
+        self._pictures = profile_picture_repo
         self._http_client = http_client
         self._signing_key: bytes | None = None
         self._own_instance_id: str = ""
@@ -93,6 +100,7 @@ class MomentPublicService:
             "username": user.username,
             "display_name": user.display_name,
             "picture_url": _picture_url(user),
+            "bio": user.bio,
             "home_instance_pk": _hex_signing_pubkey(self._require_signing_key()),
         }
         signed = self._sign_body(body)
@@ -108,9 +116,27 @@ class MomentPublicService:
                     )
         except aiohttp.ClientError as exc:
             raise MomentPublicError(f"GFS register failed: {exc}") from exc
-        return await self._regs.upsert(
+        reg = await self._regs.upsert(
             user_id=user_id, gfs_id=gfs_id, default_share=default_share
         )
+        # Push the avatar bytes when (a) the user has one and (b) we
+        # haven't pushed this exact hash to this GFS yet. Best-effort —
+        # a failure here doesn't roll back the registration.
+        if user.picture_hash and user.picture_hash != reg.last_picture_digest:
+            try:
+                await self._push_picture(user_id=user_id, gfs_id=gfs_id, conn=conn)
+            except MomentPublicError as exc:
+                log.warning("moment_public picture push failed: %s", exc)
+        return reg
+
+    async def push_profile_to_gfs(self, *, user_id: str, gfs_id: str) -> None:
+        """Re-register + (maybe) re-push avatar for an already-active reg.
+
+        Used by :class:`ProfileSyncService` when a household profile
+        changes. Errors propagate as :class:`MomentPublicError` so the
+        sync scheduler can decide whether to retry.
+        """
+        await self.register(user_id=user_id, gfs_id=gfs_id)
 
     async def deregister(self, *, user_id: str, gfs_id: str) -> None:
         conn = await self._require_active_gfs(gfs_id)
@@ -224,12 +250,20 @@ class MomentPublicService:
     async def list_follows(self, follower_user_id: str) -> list[MomentPublicFollow]:
         return await self._follows.list_for_follower(follower_user_id)
 
-    async def fetch_directory(self, gfs_id: str) -> list[dict]:
-        """Fetch the GFS public-user directory (signed GET)."""
+    async def fetch_directory(self, gfs_id: str, *, q: str | None = None) -> list[dict]:
+        """Fetch the GFS public-user directory (anon GET).
+
+        Optional ``q`` substring filter on display_name + username; the
+        server-side filter is delegated to the GFS so big directories
+        don't ship in full.
+        """
         conn = await self._require_active_gfs(gfs_id)
+        url = f"{conn.inbox_url}/gfs/users"
+        if q:
+            url = f"{url}?q={q}"
         try:
             async with self._client().get(
-                f"{conn.inbox_url}/gfs/users",
+                url,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status >= 300:
@@ -244,7 +278,64 @@ class MomentPublicService:
             return []
         return users
 
+    async def fetch_picture(
+        self, gfs_id: str, user_id: str
+    ) -> tuple[bytes, str, str] | None:
+        """Fetch GFS-mirrored avatar bytes for *user_id* on *gfs_id*.
+
+        Returns ``(bytes, mime, digest)`` or ``None`` when the GFS
+        replies 404. Used by the SH-side picture-proxy route to serve
+        avatars in the Discover UI without the browser needing to know
+        the GFS host.
+        """
+        conn = await self._require_active_gfs(gfs_id)
+        try:
+            async with self._client().get(
+                f"{conn.inbox_url}/gfs/users/{user_id}/picture",
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status == 404:
+                    return None
+                if resp.status >= 300:
+                    raise MomentPublicError(
+                        f"GFS picture fetch failed: HTTP {resp.status}"
+                    )
+                raw = await resp.read()
+                mime = resp.headers.get("Content-Type", "application/octet-stream")
+                etag = resp.headers.get("ETag", '""').strip('"')
+        except aiohttp.ClientError as exc:
+            raise MomentPublicError(f"GFS picture request failed: {exc}") from exc
+        return raw, mime, etag
+
     # ── Internal ────────────────────────────────────────────────────────
+
+    async def _push_picture(self, *, user_id: str, gfs_id: str, conn) -> None:
+        if self._pictures is None:
+            return
+        got = await self._pictures.get_user_picture(user_id)
+        if got is None:
+            return
+        bytes_webp, picture_hash = got
+        body = {
+            "user_id": user_id,
+            "instance_id": self._require_instance_id(),
+            "mime": "image/webp",
+            "bytes_b64": base64.b64encode(bytes_webp).decode("ascii"),
+        }
+        signed = self._sign_body(body)
+        try:
+            async with self._client().post(
+                f"{conn.inbox_url}/gfs/users/{user_id}/picture",
+                json=signed,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status >= 300:
+                    raise MomentPublicError(f"GFS picture upload: HTTP {resp.status}")
+        except aiohttp.ClientError as exc:
+            raise MomentPublicError(f"GFS picture request failed: {exc}") from exc
+        await self._regs.set_last_picture_digest(
+            user_id=user_id, gfs_id=gfs_id, digest=picture_hash
+        )
 
     async def _require_active_gfs(self, gfs_id: str):
         conn = await self._gfs.get(gfs_id)
@@ -296,14 +387,6 @@ def _hex_signing_pubkey(signing_key: bytes) -> str:
     pull a second dependency just to advertise the verifier key in the
     register payload.
     """
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-        Ed25519PrivateKey,
-    )
-    from cryptography.hazmat.primitives.serialization import (
-        Encoding,
-        PublicFormat,
-    )
-
     sk = Ed25519PrivateKey.from_private_bytes(signing_key[:32])
     pub_bytes = sk.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     return pub_bytes.hex()

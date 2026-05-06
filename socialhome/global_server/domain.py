@@ -186,6 +186,25 @@ class GfsUserRegistration:
     home_instance_pk: str
     registered_at: int
     status: str = "active"  # 'active' | 'suspended'
+    bio: str | None = None
+    picture_digest: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class GfsUserPicture:
+    """Avatar bytes mirrored onto the GFS for the public directory.
+
+    Households running public Momentum may sit behind home-network
+    NAT, so a public browser can't always hit the home instance's
+    ``/api/users/{id}/picture`` endpoint. Mirroring the bytes onto
+    the GFS makes the directory standalone-renderable.
+    """
+
+    user_id: str
+    bytes_: bytes
+    mime: str
+    digest: str
+    updated_at: int
 
 
 @dataclass(slots=True, frozen=True)

@@ -41,6 +41,10 @@ class MomentPublicRegistration:
     gfs_id: str
     registered_at: str
     default_share: bool = True
+    #: Avatar digest last successfully pushed to this GFS. The
+    #: profile-sync flow compares against ``users.picture_hash`` and
+    #: skips the picture upload when they match.
+    last_picture_digest: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

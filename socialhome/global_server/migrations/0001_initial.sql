@@ -256,6 +256,13 @@ CREATE TABLE IF NOT EXISTS gfs_user_registrations (
     username           TEXT NOT NULL,
     display_name       TEXT NOT NULL,
     picture_url        TEXT,
+    -- Free-form bio shown on the public directory landing page. Capped
+    -- at 280 characters by the register endpoint.
+    bio                TEXT,
+    -- Hex digest of the picture bytes uploaded to ``gfs_user_pictures``.
+    -- Lets the directory list ``<img>`` tags emit a stable
+    -- ``?v=<digest>`` cache buster without joining.
+    picture_digest     TEXT,
     -- 64-hex Ed25519 of the author's home instance, denormalised from
     -- ``client_instances.public_key`` so the public ``/gfs/users``
     -- directory can be served without a join.
@@ -268,6 +275,19 @@ CREATE TABLE IF NOT EXISTS gfs_user_registrations (
 );
 CREATE INDEX IF NOT EXISTS idx_gfs_user_reg_instance
     ON gfs_user_registrations(instance_id);
+
+-- Avatar bytes mirrored onto the GFS so the public directory can
+-- serve ``/gfs/users/{id}/picture`` without round-tripping to the
+-- (often NAT-shielded) home instance. ``digest`` matches the
+-- ``picture_digest`` column on ``gfs_user_registrations`` so the
+-- upload path is idempotent on resync.
+CREATE TABLE IF NOT EXISTS gfs_user_pictures (
+    user_id     TEXT PRIMARY KEY REFERENCES gfs_user_registrations(user_id) ON DELETE CASCADE,
+    bytes       BLOB NOT NULL,
+    mime        TEXT NOT NULL,
+    digest      TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
 
 -- Follower graph. ``follower_user_id`` is the calling user; the
 -- ``follower_instance_id`` is the home instance their follow notice

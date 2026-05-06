@@ -179,16 +179,51 @@ identical bytes-for-bytes to the sender's canonical encoding.
 ## DB schema (this PR ships into `0001_initial.sql`)
 
 * `gfs_user_registrations` (GFS) — directory of opted-in users.
+  Carries `bio` (≤280 chars) and `picture_digest` so the public
+  directory landing renders cards without joining
+  `gfs_user_pictures`.
+* `gfs_user_pictures` (GFS) — avatar bytes mirrored from the home
+  instance so the anon `/users` SPA + `/users/{id}` detail page
+  can serve `<img src="…/picture?v=<digest>">` without round-
+  tripping to the (often NAT-shielded) household.
 * `gfs_moment_follows` (GFS) — follower graph keyed by
   `(follower_user_id, followed_user_id)`.
 * `moment_public_registrations` (SH) — author-side opt-in per
-  `(user_id, gfs_id)`, plus the `default_share` flag.
+  `(user_id, gfs_id)`, plus the `default_share` flag and
+  `last_picture_digest` so the profile-sync flow skips redundant
+  avatar uploads.
 * `moment_public_follows` (SH) — follower-side cache, including the
   followed user's `home_instance_pk` for signature verification.
 * `moments.is_public` / `moments.received_via` /
   `moments.received_via_gfs_id` — provenance on every row so the
   inbox UI can render a "via {gfs}" chip and so the federation
   outbound can enforce the no-redistribute rule.
+
+## Public directory + profile sync
+
+* **Anon landing** at `/users` (SPA shell) and `/users/{user_id}`
+  (per-user detail) — both rendered by the GFS itself; the JS at
+  `/static/users_directory.js` fetches `GET /gfs/users` and renders
+  cards with avatar + name + bio + handle.
+* **Per-user detail JSON** at `GET /gfs/users/{user_id}` — adds
+  `follower_count` to the registration shape so the detail page
+  can show social proof.
+* **Server-side filter** `GET /gfs/users?q=<substr>` matches
+  `display_name` and `username` (`LIKE '%q%'`). Capped at 200
+  rows; the SH-side proxy passes `q` through.
+* **In-app Discover** at `/momentum/public/discover` — fetches
+  `GET /api/gfs/{gfs_id}/users` (SH proxy), rendering avatar via
+  `GET /api/gfs/{gfs_id}/users/{user_id}/picture` so the UI
+  renders even when the home instance is NAT-shielded.
+* **Profile sync** — `UserProfileUpdated` (published from
+  `UserService.patch_profile` and `set_picture`) is consumed by
+  `ProfileSyncService`, which calls
+  `MomentPublicService.push_profile_to_gfs` once per active
+  registration. Failures log + drop; reconcile happens on the
+  next save.
+* **Single identity** — there is no per-Momentum profile override
+  in v1. What's in `users.{display_name, bio, picture_hash}` is
+  what every paired GFS sees.
 
 ## Implementation pointers
 

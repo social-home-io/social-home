@@ -55,6 +55,7 @@ from .repositories import (
     SqliteGfsHighlightPublicationRepo,
     SqliteGfsHighlightTokenRepo,
     SqliteGfsMomentFollowRepo,
+    SqliteGfsUserPictureRepo,
     SqliteGfsUserRegistrationRepo,
 )
 from .routes import register_routes
@@ -136,6 +137,7 @@ class GfsApp:
             highlight_tokens=SqliteGfsHighlightTokenRepo(db),
             moment_public_users=SqliteGfsUserRegistrationRepo(db),
             moment_public_follows=SqliteGfsMomentFollowRepo(db),
+            moment_public_pictures=SqliteGfsUserPictureRepo(db),
         )
 
     def _build_services(
@@ -234,6 +236,7 @@ class GfsApp:
         a[K.gfs_moment_public_user_repo_key] = self.repos.moment_public_users
         a[K.gfs_moment_public_follow_repo_key] = self.repos.moment_public_follows
         a[K.gfs_moment_public_registry_key] = self.services.moment_public
+        a[K.gfs_user_picture_repo_key] = self.repos.moment_public_pictures
         # Non-typed helpers the admin module reads directly.
         a["admin_auth"] = self.services.admin_auth
         a["gfs_token_service"] = self.services.tokens

@@ -22,13 +22,20 @@ class _StubService:
         self.deregister_calls: list[tuple[str, str]] = []
         self.unfollow_calls: list[tuple[str, str, str]] = []
         self.set_default_calls: list[tuple[str, str, bool]] = []
-        self.directory_calls: list[str] = []
+        self.directory_calls: list = []
         self.directory_users: list[dict] = [
             {"user_id": "u-remote", "display_name": "Bob"}
         ]
+        self.picture_calls: list[tuple[str, str]] = []
+        self.picture_response: tuple[bytes, str, str] | None = (
+            b"\x00",
+            "image/webp",
+            "abc",
+        )
         self.register_raises: Exception | None = None
         self.follow_raises: Exception | None = None
         self.directory_raises: Exception | None = None
+        self.picture_raises: Exception | None = None
 
     async def list_registrations(self, user_id):
         return [r for r in self.regs if r.user_id == user_id]
@@ -75,11 +82,17 @@ class _StubService:
     async def unfollow(self, *, follower_user_id, gfs_id, followed_user_id):
         self.unfollow_calls.append((follower_user_id, gfs_id, followed_user_id))
 
-    async def fetch_directory(self, gfs_id):
-        self.directory_calls.append(gfs_id)
+    async def fetch_directory(self, gfs_id, *, q=None):
+        self.directory_calls.append((gfs_id, q) if q else gfs_id)
         if self.directory_raises:
             raise self.directory_raises
         return self.directory_users
+
+    async def fetch_picture(self, gfs_id, user_id):
+        self.picture_calls.append((gfs_id, user_id))
+        if self.picture_raises:
+            raise self.picture_raises
+        return self.picture_response
 
 
 @pytest.fixture
@@ -239,4 +252,39 @@ async def test_directory_proxy_returns_users(client, stub):
 async def test_directory_proxy_failure_maps_to_502(client, stub):
     stub.directory_raises = MomentPublicError("GFS down")
     r = await client.get("/api/gfs/g1/users", headers=_auth(client._tok))
+    assert r.status == 502
+
+
+async def test_directory_proxy_passes_search_query(client, stub):
+    r = await client.get("/api/gfs/g1/users?q=bern", headers=_auth(client._tok))
+    assert r.status == 200
+    assert stub.directory_calls == [("g1", "bern")]
+
+
+# ── Picture proxy ────────────────────────────────────────────────────────
+
+
+async def test_picture_proxy_returns_bytes(client, stub):
+    r = await client.get(
+        "/api/gfs/g1/users/u-remote/picture", headers=_auth(client._tok)
+    )
+    assert r.status == 200
+    assert r.headers["ETag"] == '"abc"'
+    assert r.headers["Cache-Control"].startswith("public")
+    assert r.content_type == "image/webp"
+    assert (await r.read()) == b"\x00"
+    assert stub.picture_calls == [("g1", "u-remote")]
+
+
+async def test_picture_proxy_404_when_unknown(client, stub):
+    stub.picture_response = None
+    r = await client.get("/api/gfs/g1/users/u-nope/picture", headers=_auth(client._tok))
+    assert r.status == 404
+
+
+async def test_picture_proxy_failure_maps_to_502(client, stub):
+    stub.picture_raises = MomentPublicError("GFS down")
+    r = await client.get(
+        "/api/gfs/g1/users/u-remote/picture", headers=_auth(client._tok)
+    )
     assert r.status == 502
