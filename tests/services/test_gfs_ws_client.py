@@ -235,6 +235,105 @@ async def test_client_ignores_non_relay_frames(fake_gfs, http_session):
         await client.stop()
 
 
+async def test_client_dispatches_moment_public_frames(fake_gfs, http_session):
+    """``incoming_public_moment`` + ``incoming_public_moment_delete``
+    frames go to the dedicated handler."""
+    seed, _pub = _gen_keypair()
+    moments: list[dict] = []
+    follows: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    async def on_moment(frame: dict) -> None:
+        moments.append(frame)
+
+    async def on_follow(frame: dict) -> None:
+        follows.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-mp",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        on_moment_public=on_moment,
+        on_follow_changed=on_follow,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {"type": "incoming_public_moment", "payload": {"moment_id": "m-1"}},
+        )
+        await fake_gfs.outbound.put(
+            {
+                "type": "incoming_public_moment_delete",
+                "payload": {"moment_id": "m-1"},
+            },
+        )
+        await fake_gfs.outbound.put(
+            {
+                "type": "follow_changed",
+                "action": "add",
+                "follower_user_id": "u-2",
+                "follower_instance_id": "inst-2",
+                "followed_user_id": "u-1",
+            },
+        )
+        for _ in range(100):
+            if len(moments) >= 2 and follows:
+                break
+            await asyncio.sleep(0.02)
+        assert len(moments) == 2
+        assert moments[0]["type"] == "incoming_public_moment"
+        assert moments[1]["type"] == "incoming_public_moment_delete"
+        assert len(follows) == 1
+        assert follows[0]["action"] == "add"
+    finally:
+        await client.stop()
+
+
+async def test_client_drops_moment_public_when_no_handler(fake_gfs, http_session):
+    """No-handler path is a debug log, not a crash."""
+    seed, _pub = _gen_keypair()
+    relays: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        relays.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-noop",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {"type": "incoming_public_moment", "payload": {"moment_id": "m-1"}},
+        )
+        await fake_gfs.outbound.put(
+            {"type": "relay", "space_id": "s", "payload": {}},
+        )
+        for _ in range(100):
+            if relays:
+                break
+            await asyncio.sleep(0.02)
+        # Relay still got dispatched, moment_public dropped silently.
+        assert len(relays) == 1
+    finally:
+        await client.stop()
+
+
 async def test_client_reconnects_with_backoff(fake_gfs, http_session):
     """When the GFS rejects the first connect, the client retries."""
     seed, _pub = _gen_keypair()

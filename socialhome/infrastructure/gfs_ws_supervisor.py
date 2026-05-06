@@ -42,6 +42,8 @@ class GfsWebSocketSupervisor:
         "_session_factory",
         "_on_relay",
         "_on_highlight_signal",
+        "_on_moment_public",
+        "_on_follow_changed",
         "_interval",
         "_clients",
         "_lock",
@@ -58,6 +60,8 @@ class GfsWebSocketSupervisor:
         session_factory: Callable[[], aiohttp.ClientSession],
         on_relay: Callable[[dict], Awaitable[None]],
         on_highlight_signal: Callable[[dict], Awaitable[None]] | None = None,
+        on_moment_public: Callable[..., Awaitable[None]] | None = None,
+        on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
         reconcile_interval_seconds: float = DEFAULT_RECONCILE_INTERVAL_SECONDS,
     ) -> None:
         self._repo = repo
@@ -66,6 +70,8 @@ class GfsWebSocketSupervisor:
         self._session_factory = session_factory
         self._on_relay = on_relay
         self._on_highlight_signal = on_highlight_signal
+        self._on_moment_public = on_moment_public
+        self._on_follow_changed = on_follow_changed
         self._interval = reconcile_interval_seconds
         self._clients: dict[str, GfsWebSocketClient] = {}
         self._lock = asyncio.Lock()
@@ -81,6 +87,28 @@ class GfsWebSocketSupervisor:
         self._on_highlight_signal = handler
         for client in list(self._clients.values()):
             client.attach_highlight_signal_handler(handler)
+
+    def attach_moment_public_handler(
+        self,
+        handler: Callable[..., Awaitable[None]],
+    ) -> None:
+        """Late-bound — attaches the §Momentum-public inbound dispatcher
+        to every running client and to clients started later. The
+        handler must accept ``(frame, *, gfs_id)``; this method wraps
+        it per-client so the right ``gfs_id`` is bound for each
+        connection.
+        """
+        self._on_moment_public = handler
+        for gfs_id, client in list(self._clients.items()):
+            client.attach_moment_public_handler(_bind_gfs_id(handler, gfs_id))
+
+    def attach_follow_changed_handler(
+        self,
+        handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        self._on_follow_changed = handler
+        for client in list(self._clients.values()):
+            client.attach_follow_changed_handler(handler)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -147,6 +175,15 @@ class GfsWebSocketSupervisor:
             await self._stop_client(gfs_id)
 
     async def _start_client(self, conn: GfsConnection) -> None:
+        # The §Momentum-public inbound handler needs to know *which*
+        # GFS pushed the frame so it can look up the right verifier
+        # key. Wrap the supervisor-level handler in a per-client
+        # closure that injects ``conn.id``.
+        wrapped_moment_public = (
+            _bind_gfs_id(self._on_moment_public, conn.id)
+            if self._on_moment_public is not None
+            else None
+        )
         client = GfsWebSocketClient(
             gfs_url=conn.inbox_url,
             instance_id=self._instance_id,
@@ -154,6 +191,8 @@ class GfsWebSocketSupervisor:
             session_factory=self._session_factory,
             on_relay=self._on_relay,
             on_highlight_signal=self._on_highlight_signal,
+            on_moment_public=wrapped_moment_public,
+            on_follow_changed=self._on_follow_changed,
         )
         async with self._lock:
             existing = self._clients.get(conn.id)
@@ -173,3 +212,22 @@ class GfsWebSocketSupervisor:
         if client is not None:
             await client.stop()
             log.info("gfs.ws.supervisor: stopped client gfs_id=%s", gfs_id)
+
+
+def _bind_gfs_id(
+    handler: Callable[..., Awaitable[None]],
+    gfs_id: str,
+) -> Callable[[dict], Awaitable[None]]:
+    """Return a per-frame wrapper that injects ``gfs_id`` into the call.
+
+    The §Momentum-public inbound handler needs to know which GFS
+    pushed each frame so it can look up the right verifier key. Each
+    WS client is bound to one GFS pairing, so we wrap the handler
+    once at client-construction time and pass the wrapped version to
+    the underlying :class:`GfsWebSocketClient`.
+    """
+
+    async def _wrapped(frame: dict) -> None:
+        await handler(frame, gfs_id=gfs_id)
+
+    return _wrapped
