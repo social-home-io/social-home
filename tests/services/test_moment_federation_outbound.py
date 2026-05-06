@@ -214,6 +214,53 @@ async def test_relay_inbound_skips_with_invalid_hop(stack):
     fed.send_event.assert_not_called()
 
 
+# ── §Momentum-public no-redistribute rule ───────────────────────────────
+
+
+async def test_relay_inbound_skips_when_received_via_gfs(stack):
+    """The §Momentum-public no-redistribute rule: a moment that
+    arrived through a GFS public-share fan-out must NOT bleed back
+    into the household federation mesh, even when ``hop_count`` is
+    still under the 3-hop cap."""
+    out, fed, fed_repo, _user_repo = stack
+    fed_repo.list_instances = AsyncMock(return_value=[_peer("peer-onward")])
+    payload = {
+        "moment_id": "m-1",
+        "author_user_id": "uid-remote",
+        "origin_instance_id": "peer-origin",
+        "hop_count": 1,  # well under MOMENT_MAX_HOPS
+        "received_via": "gfs",  # the no-redistribute marker
+    }
+    await out.relay_inbound(
+        event_type=FederationEventType.MOMENT_CREATED,
+        payload=payload,
+        from_instance="peer-sender",
+    )
+    fed.send_event.assert_not_called()
+
+
+async def test_relay_inbound_still_relays_household_arrival(stack):
+    """Sanity: the guard only short-circuits ``received_via='gfs'``;
+    the standard ``household`` arrival path still relays."""
+    out, fed, fed_repo, _user_repo = stack
+    fed_repo.list_instances = AsyncMock(return_value=[_peer("peer-onward")])
+    payload = {
+        "moment_id": "m-1",
+        "author_user_id": "uid-remote",
+        "origin_instance_id": "peer-origin",
+        "hop_count": 1,
+        "received_via": "household",
+    }
+    await out.relay_inbound(
+        event_type=FederationEventType.MOMENT_CREATED,
+        payload=payload,
+        from_instance="peer-sender",
+    )
+    sent = [c.kwargs for c in fed.send_event.call_args_list]
+    assert {c["to_instance_id"] for c in sent} == {"peer-onward"}
+    assert all(c["payload"]["hop_count"] == 2 for c in sent)
+
+
 async def test_send_failure_swallowed_per_peer(stack):
     """A misbehaving peer doesn't break the relay loop."""
     out, fed, fed_repo, user_repo = stack
