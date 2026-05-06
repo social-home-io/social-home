@@ -7,7 +7,40 @@ add-on or a standalone Docker container.
 
 ## Develop
 
-One-time setup:
+### VS Code + Dev Container (recommended)
+
+The repo ships a Dev Container (`.devcontainer/devcontainer.json`)
+that installs everything for you on first open: the Python project
+in editable mode (`pip install -e .[dev]`), the pre-commit hooks,
+pnpm, and the frontend deps under `client/`.
+
+1. Open the repo in VS Code with the **Dev Containers** extension
+   installed; pick **Reopen in Container** when prompted.
+2. Wait for the container to build (a few minutes the first time).
+3. Press **Ctrl+Shift+B** (or **Terminal → Run Build Task…**) to
+   launch **Dev: backend + frontend** — the backend boots in
+   standalone mode against `/tmp/sh-dev`, and Vite starts at
+   <http://localhost:5173> with `/api` + `/ws` proxied to the
+   backend on `:8099`. Both ports are auto-forwarded.
+4. The first request lands on `/setup`, where you pick the admin
+   username + password.
+
+The other tasks under **Terminal → Run Task…**:
+
+- **Run backend (standalone)** — backend only.
+- **Run frontend dev** — Vite only.
+- **Clean test data (/tmp/sh-dev)** — wipe the throwaway data
+  dir so the next backend launch drops you back at the wizard.
+  Stop the backend first.
+
+`.vscode/launch.json` includes a **Debug backend (standalone)**
+config and a **Debug current pytest file** config (uses
+`debugpy`).
+
+### Manual setup
+
+If you're not using the Dev Container, do the same one-time
+setup:
 
 ```sh
 pip install -e .[dev] && pre-commit install

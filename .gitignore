@@ -37,8 +37,13 @@ socialhome/static/*
 !socialhome/static/.gitkeep
 *.tsbuildinfo
 
-# IDE
-.vscode/
+# IDE — track shared tasks + launch configs + recommended
+# extensions so every contributor gets the same dev-container UX,
+# but ignore individual ``settings.json`` and other per-user state.
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 *.swp
 .DS_Store
