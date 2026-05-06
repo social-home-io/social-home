@@ -303,8 +303,10 @@ async def test_users_html_directory_renders(client, author):
     assert resp.status == 200
     assert resp.content_type == "text/html"
     text = await resp.text()
-    assert "Public Momentum users" in text
-    assert "Alice" in text
+    # SPA shell: actual rendering happens client-side via the
+    # static JS bundle, not in the HTML response.
+    assert "Public Momentum" in text
+    assert "/static/users_directory.js" in text
 
 
 async def test_users_html_directory_empty_state(client):
@@ -318,4 +320,5 @@ async def test_users_json_directory_empty(client):
     resp = await client.get("/gfs/users")
     assert resp.status == 200
     out = await resp.json()
-    assert out == {"users": []}
+    assert out["users"] == []
+    assert out["count"] == 0

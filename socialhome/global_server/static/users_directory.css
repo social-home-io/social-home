@@ -1,0 +1,195 @@
+/* Public Momentum directory landing — minimal, mobile-first. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf7;
+  --fg: #1a1a1a;
+  --muted: #5a5a5a;
+  --card: #ffffff;
+  --border: #e6e3dd;
+  --hearth: #c9624b;
+  --hearth-fg: #ffffff;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161513;
+    --fg: #f0ece5;
+    --muted: #9a958b;
+    --card: #21201d;
+    --border: #2e2c28;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 24px 16px 64px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  line-height: 1.5;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+header h1 {
+  font-size: 1.75rem;
+  margin: 0 0 4px;
+}
+
+header p {
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+
+#dir-search {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--fg);
+  margin-bottom: 24px;
+}
+
+ul.cards {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.card a {
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+  text-decoration: none;
+  color: inherit;
+  align-items: flex-start;
+}
+
+.card a:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+  background: var(--border);
+}
+
+.who {
+  min-width: 0;
+  flex: 1;
+}
+
+.who strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.who small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.who .bio {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  color: var(--fg);
+  word-break: break-word;
+}
+
+#dir-empty {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 32px;
+}
+
+/* Per-user detail */
+
+.card.detail {
+  display: block;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.card.detail .avatar {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 12px;
+}
+
+.card.detail h1 {
+  font-size: 1.5rem;
+  margin: 0;
+}
+
+.card.detail .handle {
+  color: var(--muted);
+  margin: 4px 0 12px;
+  font-size: 0.95rem;
+}
+
+.card.detail .bio {
+  margin: 0 0 16px;
+  white-space: pre-wrap;
+}
+
+.card.detail .followers {
+  color: var(--muted);
+  margin: 0 0 24px;
+}
+
+.btn-primary {
+  display: inline-block;
+  padding: 10px 20px;
+  background: var(--hearth);
+  color: var(--hearth-fg);
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: 16px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.back:hover {
+  color: var(--fg);
+}

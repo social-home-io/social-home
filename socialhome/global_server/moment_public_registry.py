@@ -61,6 +61,8 @@ class MomentPublicRegistry:
         display_name: str,
         home_instance_pk: str,
         picture_url: str | None = None,
+        bio: str | None = None,
+        picture_digest: str | None = None,
     ) -> GfsUserRegistration:
         reg = GfsUserRegistration(
             user_id=user_id,
@@ -71,6 +73,8 @@ class MomentPublicRegistry:
             home_instance_pk=home_instance_pk,
             registered_at=int(time.time()),
             status="active",
+            bio=bio,
+            picture_digest=picture_digest,
         )
         await self._users.upsert(reg)
         return reg
@@ -82,8 +86,17 @@ class MomentPublicRegistry:
     async def get_registration(self, user_id: str) -> GfsUserRegistration | None:
         return await self._users.get(user_id)
 
-    async def list_directory(self) -> list[GfsUserRegistration]:
-        return await self._users.list_active()
+    async def list_directory(
+        self, *, q: str | None = None, limit: int = 200
+    ) -> list[GfsUserRegistration]:
+        return await self._users.list_active(q=q, limit=limit)
+
+    async def set_picture_digest(
+        self, *, user_id: str, picture_digest: str | None
+    ) -> None:
+        await self._users.set_picture_digest(
+            user_id=user_id, picture_digest=picture_digest
+        )
 
     # ── Follow graph ────────────────────────────────────────────────────
 

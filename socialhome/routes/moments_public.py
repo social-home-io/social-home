@@ -153,8 +153,37 @@ class MomentPublicFollowDetailView(BaseView):
 class GfsUserDirectoryProxyView(BaseView):
     async def get(self) -> web.Response:
         svc = self.svc(moment_public_service_key)
+        q = self.request.query.get("q") or None
         try:
-            users = await svc.fetch_directory(self.match("gfs_id"))
+            users = await svc.fetch_directory(self.match("gfs_id"), q=q)
         except MomentPublicError as exc:
             raise web.HTTPBadGateway(text=f'{{"error":"{exc!s}"}}') from exc
         return self._json({"users": users})
+
+
+class GfsUserPictureProxyView(BaseView):
+    """Proxy GFS-mirrored avatar bytes to the local SH UI.
+
+    The Discover tab can't fetch directly from the GFS host (cross-
+    origin + may not be addressable). The SH proxies the bytes from
+    its persistent connection and applies the GFS's strong-cache
+    headers.
+    """
+
+    async def get(self) -> web.Response:
+        svc = self.svc(moment_public_service_key)
+        try:
+            got = await svc.fetch_picture(self.match("gfs_id"), self.match("user_id"))
+        except MomentPublicError as exc:
+            raise web.HTTPBadGateway(text=f'{{"error":"{exc!s}"}}') from exc
+        if got is None:
+            return web.Response(status=404)
+        raw, mime, digest = got
+        return web.Response(
+            body=raw,
+            content_type=mime,
+            headers={
+                "Cache-Control": "public, max-age=86400, immutable",
+                "ETag": f'"{digest}"',
+            },
+        )

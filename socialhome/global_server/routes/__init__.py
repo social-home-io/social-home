@@ -88,9 +88,12 @@ from .moments_public import (
     GfsMomentPublicDeleteView,
     GfsMomentPublicPublishView,
     GfsUserDeregisterView,
+    GfsUserDetailHtmlView,
+    GfsUserDetailView,
     GfsUserDirectoryHtmlView,
     GfsUserDirectoryView,
     GfsUserFollowView,
+    GfsUserPictureView,
     GfsUserRegisterView,
     GfsUserUnfollowView,
 )
@@ -214,8 +217,11 @@ def register_routes(
     app.router.add_view("/gfs/users/{user_id}/unfollow", GfsUserUnfollowView)
     app.router.add_view("/gfs/moments/publish", GfsMomentPublicPublishView)
     app.router.add_view("/gfs/moments/delete", GfsMomentPublicDeleteView)
+    app.router.add_view("/gfs/users/{user_id}/picture", GfsUserPictureView)
     app.router.add_view("/gfs/users", GfsUserDirectoryView)
+    app.router.add_view("/gfs/users/{user_id}", GfsUserDetailView)
     app.router.add_view("/users", GfsUserDirectoryHtmlView)
+    app.router.add_view("/users/{user_id}", GfsUserDetailHtmlView)
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.

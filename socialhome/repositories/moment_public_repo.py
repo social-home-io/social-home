@@ -29,6 +29,9 @@ from .base import rows_to_dicts
 # ── Registrations ────────────────────────────────────────────────────────
 
 
+_REG_COLS = "user_id, gfs_id, registered_at, default_share, last_picture_digest"
+
+
 @runtime_checkable
 class AbstractMomentPublicRegistrationRepo(Protocol):
     async def upsert(
@@ -50,6 +53,9 @@ class AbstractMomentPublicRegistrationRepo(Protocol):
     ) -> MomentPublicRegistration | None: ...
     async def set_default_share(
         self, *, user_id: str, gfs_id: str, default_share: bool
+    ) -> int: ...
+    async def set_last_picture_digest(
+        self, *, user_id: str, gfs_id: str, digest: str | None
     ) -> int: ...
 
 
@@ -84,8 +90,7 @@ class SqliteMomentPublicRegistrationRepo:
         self, user_id: str
     ) -> builtins.list[MomentPublicRegistration]:
         rows = await self._db.fetchall(
-            "SELECT user_id, gfs_id, registered_at, default_share "
-            "FROM moment_public_registrations WHERE user_id=?",
+            f"SELECT {_REG_COLS} FROM moment_public_registrations WHERE user_id=?",
             (user_id,),
         )
         return [_to_reg(r) for r in rows_to_dicts(rows)]
@@ -94,8 +99,7 @@ class SqliteMomentPublicRegistrationRepo:
         self, gfs_id: str
     ) -> builtins.list[MomentPublicRegistration]:
         rows = await self._db.fetchall(
-            "SELECT user_id, gfs_id, registered_at, default_share "
-            "FROM moment_public_registrations WHERE gfs_id=?",
+            f"SELECT {_REG_COLS} FROM moment_public_registrations WHERE gfs_id=?",
             (gfs_id,),
         )
         return [_to_reg(r) for r in rows_to_dicts(rows)]
@@ -104,7 +108,7 @@ class SqliteMomentPublicRegistrationRepo:
         self, *, user_id: str, gfs_id: str
     ) -> MomentPublicRegistration | None:
         rows = await self._db.fetchall(
-            "SELECT user_id, gfs_id, registered_at, default_share "
+            f"SELECT {_REG_COLS} "
             "FROM moment_public_registrations WHERE user_id=? AND gfs_id=?",
             (user_id, gfs_id),
         )
@@ -120,6 +124,15 @@ class SqliteMomentPublicRegistrationRepo:
             (int(default_share), user_id, gfs_id),
         )
 
+    async def set_last_picture_digest(
+        self, *, user_id: str, gfs_id: str, digest: str | None
+    ) -> int:
+        return await self._db.enqueue(
+            "UPDATE moment_public_registrations SET last_picture_digest=? "
+            "WHERE user_id=? AND gfs_id=?",
+            (digest, user_id, gfs_id),
+        )
+
 
 def _to_reg(row: dict) -> MomentPublicRegistration:
     return MomentPublicRegistration(
@@ -127,6 +140,7 @@ def _to_reg(row: dict) -> MomentPublicRegistration:
         gfs_id=row["gfs_id"],
         registered_at=row["registered_at"],
         default_share=bool(row["default_share"]),
+        last_picture_digest=row.get("last_picture_digest"),
     )
 
 

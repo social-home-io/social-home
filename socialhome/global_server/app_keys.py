@@ -18,6 +18,7 @@ from .repositories import (
     AbstractGfsHighlightPublicationRepo,
     AbstractGfsHighlightTokenRepo,
     AbstractGfsMomentFollowRepo,
+    AbstractGfsUserPictureRepo,
     AbstractGfsUserRegistrationRepo,
 )
 from .rtc_transport import GfsRtcSession
@@ -54,4 +55,7 @@ gfs_moment_public_follow_repo_key: AppKey[AbstractGfsMomentFollowRepo] = AppKey(
 )
 gfs_moment_public_registry_key: AppKey[MomentPublicRegistry] = AppKey(
     "gfs_moment_public_registry"
+)
+gfs_user_picture_repo_key: AppKey[AbstractGfsUserPictureRepo] = AppKey(
+    "gfs_user_picture_repo"
 )

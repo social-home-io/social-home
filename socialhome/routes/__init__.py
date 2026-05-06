@@ -283,6 +283,7 @@ from .moments import (
 )
 from .moments_public import (
     GfsUserDirectoryProxyView,
+    GfsUserPictureProxyView,
     MomentPublicFollowCollectionView,
     MomentPublicFollowDetailView,
     MomentPublicRegistrationCollectionView,
@@ -791,6 +792,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         MomentPublicFollowDetailView,
     )
     app.router.add_view("/api/gfs/{gfs_id}/users", GfsUserDirectoryProxyView)
+    app.router.add_view(
+        "/api/gfs/{gfs_id}/users/{user_id}/picture",
+        GfsUserPictureProxyView,
+    )
 
     # ── Bazaar ──────────────────────────────────────────────────────────
     app.router.add_view("/api/bazaar", BazaarCollectionView)

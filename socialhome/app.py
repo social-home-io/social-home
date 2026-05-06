@@ -139,6 +139,7 @@ from .services.bazaar_service import BazaarExpiryScheduler, BazaarService
 from .services.moment_service import MomentService
 from .services.highlight_publication_service import HighlightPublicationService
 from .services.moment_public_service import MomentPublicService
+from .services.profile_sync_service import ProfileSyncService
 from .services.moment_public_outbound import MomentPublicOutbound
 from .services.moment_public_inbound import MomentPublicInbound
 from .repositories.moment_public_repo import (
@@ -1228,6 +1229,7 @@ def create_app(config: Config | None = None) -> web.Application:
         moment_public_follow_repo,
         user_repo,
         repos.gfs_connection,
+        profile_picture_repo=profile_picture_repo,
     )
     moment_public_outbound = MomentPublicOutbound(
         bus=bus,
@@ -1242,6 +1244,12 @@ def create_app(config: Config | None = None) -> web.Application:
         moment_repo=moment_repo,
         follow_repo=moment_public_follow_repo,
     )
+    profile_sync_service = ProfileSyncService(
+        bus=bus,
+        registration_repo=moment_public_registration_repo,
+        public_service=moment_public_service,
+    )
+    profile_sync_service.wire()
 
     # ── My Corner aggregator (§23) ─────────────────────────────────────
     corner_service = CornerService(

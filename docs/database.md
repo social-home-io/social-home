@@ -162,6 +162,7 @@ themselves moments and link to the conversation root via
 | `moment_hashtags` | Per-`(moment, tag)` index of ASCII `#tag` tokens extracted from `moments.content` at save time. PK on `(moment_id, tag)`; secondary index on `(tag, moment_id)` powers the trending and tag-filter queries. Cascades on moment delete. |
 | `user_follows` | Voluntary adult-to-adult follow. PK on `(follower_user_id, followed_user_id)`. Used by `list_visible_to` to extend the visibility window from 24 h to 7 d for the followed author's moments. |
 | `household_instance_bans` | Operator-managed list of remote instances banned at the household level (§Momentum-relay-policy). Inbound envelopes from a banned instance are dropped at ingress; the relay-out path also skips banned sources. Distinct from per-user `user_blocks`, which stay private to the social layer. |
+| `moment_public_registrations` | Per-`(user_id, gfs_id)` opt-in to fan moments through a GFS (§Momentum-public). `default_share` flips whether the composer pre-checks "Public via GFS"; `last_picture_digest` is the avatar hash last successfully pushed to that GFS so the profile-sync flow can skip redundant uploads. |
 
 ## Notifications and push
 

@@ -1610,6 +1610,11 @@ CREATE TABLE IF NOT EXISTS moment_public_registrations (
     -- 1 = compose defaults to "Public via GFS"; 0 = the user must
     -- explicitly tick the public chip per moment.
     default_share  INTEGER NOT NULL DEFAULT 1,
+    -- Last avatar digest pushed to this GFS. The profile-sync flow
+    -- compares against ``users.picture_hash`` and skips the picture
+    -- upload when they match (re-register still runs on every save
+    -- so display_name + bio land cheaply).
+    last_picture_digest TEXT,
     PRIMARY KEY (user_id, gfs_id)
 );
 

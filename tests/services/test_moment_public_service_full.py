@@ -336,3 +336,113 @@ async def test_unfollow_swallows_client_error_but_clears_local(repos):
     await svc.unfollow(follower_user_id="u1", gfs_id="g1", followed_user_id="u-remote")
     rows = await repos["follows"].list_for_follower("u1")
     assert rows == []
+
+
+# ── bio + picture push (§Momentum-public directory) ──────────────────────
+
+
+async def test_register_carries_bio(repos, db):
+    """``users.bio`` rides the register envelope to the GFS."""
+    await db.enqueue("UPDATE users SET bio='Hello' WHERE user_id='u1'")
+    sess = _StubSession(body={"user_id": "u1"})
+    svc = _make_service(repos, session=sess)
+    await svc.register(user_id="u1", gfs_id="g1")
+    body = sess.posts[0][1]
+    assert body["bio"] == "Hello"
+
+
+async def test_register_pushes_picture_when_hash_changed(repos, db):
+    """First register with a fresh ``picture_hash`` triggers picture upload."""
+    from socialhome.repositories.profile_picture_repo import (
+        SqliteProfilePictureRepo,
+    )
+
+    pic_repo = SqliteProfilePictureRepo(db)
+    await pic_repo.set_user_picture(
+        "u1",
+        bytes_webp=b"webp-bytes",
+        hash="hashv1",
+        width=128,
+        height=128,
+    )
+    await db.enqueue("UPDATE users SET picture_hash='hashv1' WHERE user_id='u1'")
+
+    sess = _StubSession(body={"digest": "irrelevant"})
+    svc = MomentPublicService(
+        repos["regs"],
+        repos["follows"],
+        repos["users"],
+        repos["gfs"],
+        profile_picture_repo=pic_repo,
+    )
+    svc.attach_session(sess)
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+
+    await svc.register(user_id="u1", gfs_id="g1")
+    upload_paths = [u for u, _ in sess.posts if u.endswith("/picture")]
+    assert len(upload_paths) == 1
+
+
+async def test_register_skips_picture_when_hash_matches(repos, db):
+    """Second register with the same hash should NOT re-upload the picture."""
+    from socialhome.repositories.profile_picture_repo import (
+        SqliteProfilePictureRepo,
+    )
+
+    pic_repo = SqliteProfilePictureRepo(db)
+    await pic_repo.set_user_picture(
+        "u1",
+        bytes_webp=b"webp-bytes",
+        hash="hashv1",
+        width=128,
+        height=128,
+    )
+    await db.enqueue("UPDATE users SET picture_hash='hashv1' WHERE user_id='u1'")
+
+    sess = _StubSession(body={})
+    svc = MomentPublicService(
+        repos["regs"],
+        repos["follows"],
+        repos["users"],
+        repos["gfs"],
+        profile_picture_repo=pic_repo,
+    )
+    svc.attach_session(sess)
+    svc.attach_identity(own_instance_id="inst-self", signing_key=b"\x01" * 32)
+    # First register → picture uploaded + ``last_picture_digest`` stamped.
+    await svc.register(user_id="u1", gfs_id="g1")
+    # Second register with the SAME picture_hash — picture upload skipped.
+    await svc.register(user_id="u1", gfs_id="g1")
+    upload_paths = [u for u, _ in sess.posts if u.endswith("/picture")]
+    assert len(upload_paths) == 1
+
+
+async def test_fetch_picture_proxies_bytes(repos):
+    """``fetch_picture`` returns the (bytes, mime, etag) tuple."""
+
+    class _BytesResp(_StubResp):
+        def __init__(self):
+            super().__init__(status=200)
+            self.headers = {"Content-Type": "image/webp", "ETag": '"abc"'}
+
+        async def read(self):
+            return b"webp-payload"
+
+    class _BytesSession(_StubSession):
+        def get(self, url, **_kw):
+            self.gets.append(url)
+            return _BytesResp()
+
+    svc = _make_service(repos, session=_BytesSession())
+    out = await svc.fetch_picture("g1", "u-remote")
+    assert out is not None
+    raw, mime, digest = out
+    assert raw == b"webp-payload"
+    assert mime == "image/webp"
+    assert digest == "abc"
+
+
+async def test_fetch_picture_returns_none_on_404(repos):
+    svc = _make_service(repos, session=_StubSession(status=404))
+    out = await svc.fetch_picture("g1", "u-remote")
+    assert out is None

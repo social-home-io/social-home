@@ -181,8 +181,11 @@ export interface MomentPublicDirectoryUser {
   username:          string
   display_name:      string
   picture_url:       string | null
+  picture_digest:    string | null
+  bio:               string | null
   home_instance_pk:  string
   registered_at:     number
+  follower_count?:   number
 }
 
 export interface MomentReaction {
