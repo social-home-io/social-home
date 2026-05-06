@@ -1,0 +1,124 @@
+/* GFS admin portal styling. Ported from the inline ``<style>`` in
+   the previous ``admin_ui/index.html``. Future GFS UI work
+   (global-space landing pages) can reuse the tokens here. */
+
+* { box-sizing: border-box; }
+
+body {
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  margin: 0;
+  color: #1f2937;
+  background: #f9fafb;
+}
+
+header {
+  background: #111827;
+  color: #fff;
+  padding: 14px 22px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+header .right { margin-left: auto; font-size: 13px; }
+
+nav {
+  display: flex;
+  gap: 2px;
+  background: #fff;
+  padding: 8px 22px;
+  border-bottom: 1px solid #e5e7eb;
+}
+nav a {
+  padding: 8px 14px;
+  border-radius: 6px;
+  color: #374151;
+  text-decoration: none;
+  font-weight: 500;
+}
+nav a.active { background: #1f2937; color: #fff; }
+
+main { padding: 22px; max-width: 1100px; margin: 0 auto; }
+
+section {
+  background: #fff;
+  padding: 18px 22px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  margin-bottom: 18px;
+}
+h2 { margin: 0 0 14px 0; font-size: 16px; }
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.card { background: #f3f4f6; padding: 16px; border-radius: 6px; }
+.card .val { font-size: 28px; font-weight: 700; margin-top: 6px; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #eef2f7;
+}
+th { background: #f3f4f6; font-weight: 600; font-size: 13px; color: #374151; }
+
+button, input, select, textarea {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+}
+button { cursor: pointer; }
+button.primary   { background: #6366f1; color: #fff; border-color: #6366f1; }
+button.danger    { background: #ef4444; color: #fff; border-color: #ef4444; }
+button.secondary { background: #f3f4f6; }
+button.secondary.is-active { background: #1f2937; color: #fff; border-color: #1f2937; }
+button[disabled] { opacity: 0.6; cursor: not-allowed; }
+
+.row-actions button { margin-left: 6px; }
+.muted { color: #6b7280; font-size: 13px; }
+.error { color: #b91c1c; }
+
+.login {
+  max-width: 380px;
+  margin: 80px auto;
+  padding: 22px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+.login h2 { margin-bottom: 16px; }
+.login label { display: block; margin-bottom: 12px; font-weight: 500; }
+.login input { display: block; width: 100%; margin-top: 4px; }
+
+.field { display: block; margin-bottom: 12px; }
+.field label { display: block; margin-bottom: 4px; font-weight: 500; }
+.field input, .field textarea, .field select { width: 100%; }
+textarea { min-height: 110px; font-family: inherit; }
+
+.pill {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #e5e7eb;
+  color: #374151;
+}
+.pill.banned  { background: #fee2e2; color: #991b1b; }
+.pill.pending { background: #fef3c7; color: #92400e; }
+.pill.active  { background: #dcfce7; color: #166534; }
+
+.audit-row {
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid #eef2f7;
+}
+.audit-row time { color: #6b7280; font-size: 12px; }

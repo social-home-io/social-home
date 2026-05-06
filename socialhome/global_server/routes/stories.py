@@ -205,7 +205,7 @@ class StoryPublicLandingView(GfsBaseView):
             "</head><body>"
             "<div id='root'></div>"
             f"<script id='boot' type='application/json'>{boot}</script>"
-            "<script src='/static/story_public_viewer.js' defer></script>"
+            "<script type='module' src='/static/story_public_viewer.js'></script>"
             "</body></html>"
         )
         return web.Response(text=body, content_type="text/html", status=200)

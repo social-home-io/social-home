@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "lint": "eslint src --ext ts,tsx",
+    "lint": "eslint src gfs --ext ts,tsx",
     "typecheck": "tsc --noEmit",
     "i18n:check": "node scripts/i18n-check.js",
     "i18n:status": "curl -sf \"$WEBLATE_URL/api/components/socialhome/ui/statistics/\" -H \"Authorization: Token $WEBLATE_TOKEN\""

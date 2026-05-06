@@ -222,7 +222,6 @@ function PublicStoryViewer({ boot }: { boot: BootPayload }) {
       // Release all blob URLs.
       Object.values(state.frameUrls).forEach((u) => URL.revokeObjectURL(u))
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boot.instanceId, boot.storyId, boot.token])
 
   // Auto-advance once we have a renderable frame.
