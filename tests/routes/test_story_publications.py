@@ -7,6 +7,7 @@ GFS round-trip. The auth + match-info wiring is what's under test.
 
 from __future__ import annotations
 
+import base64 as _b64
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -246,11 +247,10 @@ async def test_revoke_token_failure_maps_to_502(
 # ── OG thumbnail upload route ────────────────────────────────────────────
 
 
-import base64 as _b64
-
-
 async def test_og_upload_calls_service_and_returns_url(
-    client, seeded_story, stub_service,
+    client,
+    seeded_story,
+    stub_service,
 ):
     """Add the upload method on the stub at fixture time."""
     captured: list[tuple] = []
@@ -262,7 +262,9 @@ async def test_og_upload_calls_service_and_returns_url(
     stub_service.upload_og_thumbnail = upload_og_thumbnail  # type: ignore[attr-defined]
     r = await client.post(
         f"/api/stories/{seeded_story}/publish/og",
-        json={"image_b64": _b64.b64encode(b"\xff\xd8\xff" + b"\x00" * 16).decode("ascii")},
+        json={
+            "image_b64": _b64.b64encode(b"\xff\xd8\xff" + b"\x00" * 16).decode("ascii")
+        },
         headers=_auth(client._tok),
     )
     assert r.status == 200

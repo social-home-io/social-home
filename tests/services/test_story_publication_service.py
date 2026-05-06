@@ -291,7 +291,9 @@ async def test_upload_og_thumbnail_signs_and_returns_url(repos, seeded_story):
     )
     svc = _make_service(repos, session=sess)
     url = await svc.upload_og_thumbnail(
-        seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff" + b"\x00" * 32,
+        seeded_story.id,
+        "u1",
+        jpeg_bytes=b"\xff\xd8\xff" + b"\x00" * 32,
     )
     assert url == "https://gfs/example/og.jpg"
     assert sess.posts[0][0].endswith(f"/gfs/stories/{seeded_story.id}/og")
@@ -304,18 +306,23 @@ async def test_upload_og_thumbnail_when_not_published_raises(repos, seeded_story
     svc = _make_service(repos, session=sess)
     with pytest.raises(StoryPublicationError):
         await svc.upload_og_thumbnail(
-            seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff",
+            seeded_story.id,
+            "u1",
+            jpeg_bytes=b"\xff\xd8\xff",
         )
 
 
 async def test_upload_og_thumbnail_other_user_raises_not_found(
-    repos, seeded_story,
+    repos,
+    seeded_story,
 ):
     sess = _StubSession()
     svc = _make_service(repos, session=sess)
     with pytest.raises(StoryNotFoundError):
         await svc.upload_og_thumbnail(
-            seeded_story.id, "someone-else", jpeg_bytes=b"\xff\xd8\xff",
+            seeded_story.id,
+            "someone-else",
+            jpeg_bytes=b"\xff\xd8\xff",
         )
 
 
@@ -329,12 +336,15 @@ async def test_upload_og_thumbnail_gfs_failure_raises(repos, seeded_story):
     svc = _make_service(repos, session=sess)
     with pytest.raises(StoryPublicationError):
         await svc.upload_og_thumbnail(
-            seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff",
+            seeded_story.id,
+            "u1",
+            jpeg_bytes=b"\xff\xd8\xff",
         )
 
 
 async def test_upload_og_thumbnail_missing_url_in_response_raises(
-    repos, seeded_story,
+    repos,
+    seeded_story,
 ):
     await repos["stories"].mark_published(
         seeded_story.id,
@@ -345,7 +355,9 @@ async def test_upload_og_thumbnail_missing_url_in_response_raises(
     svc = _make_service(repos, session=sess)
     with pytest.raises(StoryPublicationError):
         await svc.upload_og_thumbnail(
-            seeded_story.id, "u1", jpeg_bytes=b"\xff\xd8\xff",
+            seeded_story.id,
+            "u1",
+            jpeg_bytes=b"\xff\xd8\xff",
         )
 
 

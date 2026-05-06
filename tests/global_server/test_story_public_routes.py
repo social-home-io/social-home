@@ -336,8 +336,6 @@ async def test_unpublish_unknown_returns_404(client):
 # ─── OG card (§stories_public OG image) ─────────────────────────────────
 
 
-import base64
-
 _JPEG = b"\xff\xd8\xff" + b"\x00" * 32  # smallest valid-looking JPEG
 
 
