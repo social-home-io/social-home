@@ -111,6 +111,11 @@ class MomentPublicOutbound:
             "duration_ms": moment.duration_ms,
             "parent_moment_id": moment.parent_moment_id,
             "origin_instance_id": moment.origin_instance_id,
+            # ``instance_id`` is the field the GFS-side
+            # ``_rtc_authenticate`` middleware reads to look up the
+            # sender's pubkey. Carries the same value as
+            # ``origin_instance_id`` for outbound author posts.
+            "instance_id": self._own_instance_id,
             "created_at": moment.created_at,
             "expires_at": moment.expires_at,
         }
@@ -127,6 +132,7 @@ class MomentPublicOutbound:
         envelope = {
             "moment_id": event.moment_id,
             "author_user_id": event.author_user_id,
+            "instance_id": self._own_instance_id,
         }
         signed = self._sign_envelope(envelope)
         for reg in regs:
