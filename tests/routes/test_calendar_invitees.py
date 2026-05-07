@@ -75,9 +75,7 @@ async def test_invitees_empty_when_no_paired_instances(client):
 
 async def test_invitees_lists_confirmed_instance_members(client):
     """Confirmed peer + member → one group with that member."""
-    await _seed_paired_instance(
-        client._db, instance_id="i1", display_name="Smith Home"
-    )
+    await _seed_paired_instance(client._db, instance_id="i1", display_name="Smith Home")
     await _seed_remote_user(
         client._db,
         instance_id="i1",
@@ -100,7 +98,9 @@ async def test_invitees_lists_confirmed_instance_members(client):
 async def test_invitees_excludes_pending_and_unpairing_instances(client):
     """Only ``status='confirmed'`` instances surface."""
     await _seed_paired_instance(
-        client._db, instance_id="i_pending", display_name="Pending Home",
+        client._db,
+        instance_id="i_pending",
+        display_name="Pending Home",
         status="pending_sent",
     )
     await _seed_remote_user(
@@ -118,9 +118,7 @@ async def test_invitees_excludes_pending_and_unpairing_instances(client):
 
 async def test_invitees_excludes_deprovisioned_remote_users(client):
     """Members soft-deleted on the peer side don't appear."""
-    await _seed_paired_instance(
-        client._db, instance_id="i1", display_name="Smith Home"
-    )
+    await _seed_paired_instance(client._db, instance_id="i1", display_name="Smith Home")
     await _seed_remote_user(
         client._db,
         instance_id="i1",
@@ -152,9 +150,7 @@ async def test_invitees_does_not_include_local_household_members(client):
         "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
         ("lina", "u-lina-local", "Lina"),
     )
-    await _seed_paired_instance(
-        client._db, instance_id="i1", display_name="Smith Home"
-    )
+    await _seed_paired_instance(client._db, instance_id="i1", display_name="Smith Home")
     await _seed_remote_user(
         client._db,
         instance_id="i1",
@@ -164,11 +160,7 @@ async def test_invitees_does_not_include_local_household_members(client):
     )
     r = await client.get("/api/calendars/invitees", headers=_auth(client._tok))
     body = await r.json()
-    all_user_ids = [
-        m["user_id"]
-        for inst in body["instances"]
-        for m in inst["members"]
-    ]
+    all_user_ids = [m["user_id"] for inst in body["instances"] for m in inst["members"]]
     assert all_user_ids == ["u-bob"]
     assert "u-lina-local" not in all_user_ids
 

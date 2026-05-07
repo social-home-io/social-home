@@ -342,8 +342,7 @@ class SqliteCalendarRepo:
     ) -> None:
         if occurrence_at is None:
             await self._db.enqueue(
-                "DELETE FROM calendar_event_rsvps "
-                "WHERE event_id=? AND user_id=?",
+                "DELETE FROM calendar_event_rsvps WHERE event_id=? AND user_id=?",
                 (event_id, user_id),
             )
         else:

@@ -824,7 +824,7 @@ class CalendarEventRemindersView(BaseView):
         body = await self.body()
         try:
             minutes_before = int(body.get("minutes_before", -1))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return error_response(
                 422,
                 "UNPROCESSABLE",
@@ -860,7 +860,7 @@ class CalendarEventRemindersView(BaseView):
         _space_id, user_id = gate
         try:
             minutes_before = int(self.request.query.get("minutes_before", -1))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return error_response(
                 422,
                 "UNPROCESSABLE",

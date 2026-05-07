@@ -623,7 +623,9 @@ async def test_personal_calendar_rsvp_remove(env):
     )
     # Remove with explicit occurrence_at.
     await env.cal_repo.remove_rsvp(
-        "evt-1", "u-bob", occurrence_at=now.isoformat(),
+        "evt-1",
+        "u-bob",
+        occurrence_at=now.isoformat(),
     )
     assert await env.cal_repo.list_rsvps("evt-1") == []
     # Re-add then remove without occurrence_at — the "all rows for this

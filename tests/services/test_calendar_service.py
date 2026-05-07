@@ -307,7 +307,10 @@ async def test_create_event_accepts_paired_remote_attendee(federated_cal_env):
     cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
     await _seed_paired(e.db, instance_id="i_smith")
     await _seed_remote(
-        e.db, instance_id="i_smith", user_id="u-bob", username="bob",
+        e.db,
+        instance_id="i_smith",
+        user_id="u-bob",
+        username="bob",
         display_name="Bob",
     )
     now = datetime.now(timezone.utc)
@@ -337,13 +340,25 @@ async def test_create_event_groups_envelopes_per_instance(federated_cal_env):
     await _seed_paired(e.db, instance_id="i_a", display_name="A Home")
     await _seed_paired(e.db, instance_id="i_b", display_name="B Home")
     await _seed_remote(
-        e.db, instance_id="i_a", user_id="u-a1", username="a1", display_name="A1",
+        e.db,
+        instance_id="i_a",
+        user_id="u-a1",
+        username="a1",
+        display_name="A1",
     )
     await _seed_remote(
-        e.db, instance_id="i_a", user_id="u-a2", username="a2", display_name="A2",
+        e.db,
+        instance_id="i_a",
+        user_id="u-a2",
+        username="a2",
+        display_name="A2",
     )
     await _seed_remote(
-        e.db, instance_id="i_b", user_id="u-b1", username="b1", display_name="B1",
+        e.db,
+        instance_id="i_b",
+        user_id="u-b1",
+        username="b1",
+        display_name="B1",
     )
     now = datetime.now(timezone.utc)
     await e.cal_svc.create_event(
@@ -538,7 +553,10 @@ async def test_update_event_without_attendees_keeps_existing(federated_cal_env):
     cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
     await _seed_paired(e.db, instance_id="i_smith")
     await _seed_remote(
-        e.db, instance_id="i_smith", user_id="u-bob", username="bob",
+        e.db,
+        instance_id="i_smith",
+        user_id="u-bob",
+        username="bob",
         display_name="Bob",
     )
     now = datetime.now(timezone.utc)
@@ -554,8 +572,7 @@ async def test_update_event_without_attendees_keeps_existing(federated_cal_env):
     await e.cal_svc.update_event(ev.id, summary="Picnic — moved to 4pm")
     # Update envelope went to the same paired instance.
     assert any(
-        row[0] == "i_smith"
-        and "PERSONAL_CALENDAR_EVENT_UPDATED" in str(row[1]).upper()
+        row[0] == "i_smith" and "PERSONAL_CALENDAR_EVENT_UPDATED" in str(row[1]).upper()
         for row in e.sent
     )
 
@@ -611,7 +628,10 @@ async def test_publish_federation_event_swallows_outbound_error(federated_cal_en
     cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
     await _seed_paired(e.db, instance_id="i_smith")
     await _seed_remote(
-        e.db, instance_id="i_smith", user_id="u-bob", username="bob",
+        e.db,
+        instance_id="i_smith",
+        user_id="u-bob",
+        username="bob",
         display_name="Bob",
     )
 
@@ -649,8 +669,7 @@ async def test_remote_invite_event_does_not_re_federate(federated_cal_env):
     # would, in production. Here we just verify no envelope is sent.)
     await e.cal_svc.update_event(invite.id, summary="Renamed locally")
     assert not any(
-        "PERSONAL_CALENDAR_EVENT_UPDATED" in str(row[1]).upper()
-        for row in e.sent
+        "PERSONAL_CALENDAR_EVENT_UPDATED" in str(row[1]).upper() for row in e.sent
     )
     # Sanity: cal still resolves.
     assert (await e.cal_svc.get_calendar(cal.id)) is not None
@@ -713,7 +732,10 @@ async def test_delete_event_with_attendees_fans_envelope(federated_cal_env):
     cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
     await _seed_paired(e.db, instance_id="i_smith")
     await _seed_remote(
-        e.db, instance_id="i_smith", user_id="u-bob", username="bob",
+        e.db,
+        instance_id="i_smith",
+        user_id="u-bob",
+        username="bob",
         display_name="Bob",
     )
     now = datetime.now(timezone.utc)
@@ -728,8 +750,7 @@ async def test_delete_event_with_attendees_fans_envelope(federated_cal_env):
     e.sent.clear()
     await e.cal_svc.delete_event(ev.id)
     assert any(
-        row[0] == "i_smith"
-        and "PERSONAL_CALENDAR_EVENT_DELETED" in str(row[1]).upper()
+        row[0] == "i_smith" and "PERSONAL_CALENDAR_EVENT_DELETED" in str(row[1]).upper()
         for row in e.sent
     )
 

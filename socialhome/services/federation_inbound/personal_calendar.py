@@ -99,9 +99,7 @@ class PersonalCalendarInboundHandlers:
         summary = str(p.get("summary") or "")
         start = parse_iso8601_optional(p.get("start"))
         end = parse_iso8601_optional(p.get("end"))
-        attendee_ids = [
-            str(uid) for uid in (p.get("attendee_user_ids") or []) if uid
-        ]
+        attendee_ids = [str(uid) for uid in (p.get("attendee_user_ids") or []) if uid]
         organizer_user_id = str(p.get("organizer_user_id") or "")
         if (
             not remote_event_id
@@ -186,9 +184,7 @@ class PersonalCalendarInboundHandlers:
     async def _on_event_deleted(self, event: "FederationEvent") -> None:
         p = event.payload
         remote_event_id = str(p.get("event_id") or p.get("id") or "")
-        attendee_ids = [
-            str(uid) for uid in (p.get("attendee_user_ids") or []) if uid
-        ]
+        attendee_ids = [str(uid) for uid in (p.get("attendee_user_ids") or []) if uid]
         if not remote_event_id:
             return
         if attendee_ids:
@@ -280,4 +276,6 @@ def _mint_event_id(
     unique even when the same event invites multiple users on this
     instance — each gets their own mirror row on their own calendar.
     """
-    return f"ri_{remote_instance_id[:12]}_{remote_event_id[:24]}_{recipient_user_id[:16]}"
+    return (
+        f"ri_{remote_instance_id[:12]}_{remote_event_id[:24]}_{recipient_user_id[:16]}"
+    )

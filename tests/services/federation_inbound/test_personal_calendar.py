@@ -166,12 +166,12 @@ async def test_inbound_invite_idempotent_under_redelivery(env):
         "organizer_user_id": "u-bob",
         "attendee_user_ids": ["u-anna"],
     }
-    await handler(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload
-    ))
-    await handler(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload
-    ))
+    await handler(
+        _envelope(FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload)
+    )
+    await handler(
+        _envelope(FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload)
+    )
     assert len(cal_repo.events) == 1
 
 
@@ -191,14 +191,18 @@ async def test_inbound_update_overwrites_in_place(env):
         "organizer_user_id": "u-bob",
         "attendee_user_ids": ["u-anna"],
     }
-    await create(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
-        {**base, "summary": "Original"},
-    ))
-    await update(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_UPDATED,
-        {**base, "summary": "Renamed"},
-    ))
+    await create(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {**base, "summary": "Original"},
+        )
+    )
+    await update(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_UPDATED,
+            {**base, "summary": "Renamed"},
+        )
+    )
     assert len(cal_repo.events) == 1
     ev = next(iter(cal_repo.events.values()))
     assert ev.summary == "Renamed"
@@ -213,21 +217,25 @@ async def test_inbound_delete_removes_mirror(env):
         FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED
     ]
     now = datetime.now(timezone.utc)
-    await create(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
-        {
-            "event_id": "remote-evt-1",
-            "summary": "BBQ",
-            "start": now.isoformat(),
-            "end": (now + timedelta(hours=1)).isoformat(),
-            "organizer_user_id": "u-bob",
-            "attendee_user_ids": ["u-anna"],
-        },
-    ))
-    await delete(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
-        {"event_id": "remote-evt-1"},
-    ))
+    await create(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {
+                "event_id": "remote-evt-1",
+                "summary": "BBQ",
+                "start": now.isoformat(),
+                "end": (now + timedelta(hours=1)).isoformat(),
+                "organizer_user_id": "u-bob",
+                "attendee_user_ids": ["u-anna"],
+            },
+        )
+    )
+    await delete(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+            {"event_id": "remote-evt-1"},
+        )
+    )
     assert cal_repo.events == {}
 
 
@@ -248,16 +256,18 @@ async def test_inbound_rsvp_writes_to_local_event(env):
         end=now + timedelta(hours=1),
         created_by="u-anna",
     )
-    await rsvp(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
-        {
-            "event_id": "local-evt",
-            "user_id": "u-bob-remote",
-            "status": "accepted",
-            "occurrence_at": now.isoformat(),
-            "updated_at": now.isoformat(),
-        },
-    ))
+    await rsvp(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+            {
+                "event_id": "local-evt",
+                "user_id": "u-bob-remote",
+                "status": "accepted",
+                "occurrence_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            },
+        )
+    )
     assert any(
         r.user_id == "u-bob-remote" and r.status == "accepted"
         for r in cal_repo.rsvps.values()
@@ -273,15 +283,17 @@ async def test_inbound_rsvp_for_unknown_event_dropped(env):
         FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
     ]
     now = datetime.now(timezone.utc)
-    await rsvp(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
-        {
-            "event_id": "ghost-evt",
-            "user_id": "u-bob",
-            "status": "accepted",
-            "occurrence_at": now.isoformat(),
-        },
-    ))
+    await rsvp(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+            {
+                "event_id": "ghost-evt",
+                "user_id": "u-bob",
+                "status": "accepted",
+                "occurrence_at": now.isoformat(),
+            },
+        )
+    )
     assert cal_repo.rsvps == {}
 
 
@@ -299,15 +311,17 @@ async def test_inbound_rsvp_rejects_bad_status(env):
         end=now + timedelta(hours=1),
         created_by="u-anna",
     )
-    await rsvp(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
-        {
-            "event_id": "local-evt",
-            "user_id": "u-bob",
-            "status": "going",  # space-RSVP word, not a valid one here
-            "occurrence_at": now.isoformat(),
-        },
-    ))
+    await rsvp(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+            {
+                "event_id": "local-evt",
+                "user_id": "u-bob",
+                "status": "going",  # space-RSVP word, not a valid one here
+                "occurrence_at": now.isoformat(),
+            },
+        )
+    )
     assert cal_repo.rsvps == {}
 
 
@@ -328,24 +342,28 @@ async def test_inbound_rsvp_deleted_clears_row(env):
         end=now + timedelta(hours=1),
         created_by="u-anna",
     )
-    await rsvp_upd(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
-        {
-            "event_id": "local-evt",
-            "user_id": "u-bob",
-            "status": "accepted",
-            "occurrence_at": now.isoformat(),
-        },
-    ))
+    await rsvp_upd(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+            {
+                "event_id": "local-evt",
+                "user_id": "u-bob",
+                "status": "accepted",
+                "occurrence_at": now.isoformat(),
+            },
+        )
+    )
     assert len(cal_repo.rsvps) == 1
-    await rsvp_del(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
-        {
-            "event_id": "local-evt",
-            "user_id": "u-bob",
-            "occurrence_at": now.isoformat(),
-        },
-    ))
+    await rsvp_del(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
+            {
+                "event_id": "local-evt",
+                "user_id": "u-bob",
+                "occurrence_at": now.isoformat(),
+            },
+        )
+    )
     assert cal_repo.rsvps == {}
 
 
@@ -355,10 +373,12 @@ async def test_inbound_rsvp_deleted_for_unknown_event_noop(env):
     rsvp_del = fed._event_registry.handlers[
         FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED
     ]
-    await rsvp_del(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
-        {"event_id": "ghost", "user_id": "u-bob"},
-    ))
+    await rsvp_del(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
+            {"event_id": "ghost", "user_id": "u-bob"},
+        )
+    )
     assert cal_repo.rsvps == {}
 
 
@@ -371,23 +391,26 @@ async def test_inbound_invite_dropped_when_user_has_no_calendar(env):
     ]
     # Seed a recipient user that has no calendar.
     from socialhome.domain.user import User
+
     user_repo.by_uid["u-ben"] = User(
         username="ben",
         user_id="u-ben",
         display_name="Ben",
     )
     now = datetime.now(timezone.utc)
-    await handler(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
-        {
-            "event_id": "remote-evt-2",
-            "summary": "BBQ",
-            "start": now.isoformat(),
-            "end": (now + timedelta(hours=1)).isoformat(),
-            "organizer_user_id": "u-org",
-            "attendee_user_ids": ["u-ben"],
-        },
-    ))
+    await handler(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {
+                "event_id": "remote-evt-2",
+                "summary": "BBQ",
+                "start": now.isoformat(),
+                "end": (now + timedelta(hours=1)).isoformat(),
+                "organizer_user_id": "u-org",
+                "attendee_user_ids": ["u-ben"],
+            },
+        )
+    )
     # No mirror written for ben — but the existing one for anna is
     # still empty (we didn't include her in the attendee list).
     assert cal_repo.events == {}
@@ -401,17 +424,19 @@ async def test_inbound_invite_dropped_when_user_unknown(env):
         FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
     ]
     now = datetime.now(timezone.utc)
-    await handler(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
-        {
-            "event_id": "remote-evt-3",
-            "summary": "BBQ",
-            "start": now.isoformat(),
-            "end": (now + timedelta(hours=1)).isoformat(),
-            "organizer_user_id": "u-org",
-            "attendee_user_ids": ["u-totally-unknown"],
-        },
-    ))
+    await handler(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {
+                "event_id": "remote-evt-3",
+                "summary": "BBQ",
+                "start": now.isoformat(),
+                "end": (now + timedelta(hours=1)).isoformat(),
+                "organizer_user_id": "u-org",
+                "attendee_user_ids": ["u-totally-unknown"],
+            },
+        )
+    )
     assert cal_repo.events == {}
 
 
@@ -422,10 +447,12 @@ async def test_inbound_invite_missing_required_fields_dropped(env):
     handler = fed._event_registry.handlers[
         FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
     ]
-    await handler(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
-        {"event_id": "x"},  # missing summary, start, end, attendees, organiser
-    ))
+    await handler(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {"event_id": "x"},  # missing summary, start, end, attendees, organiser
+        )
+    )
     assert cal_repo.events == {}
 
 
@@ -449,14 +476,16 @@ async def test_inbound_delete_with_attendee_list_drops_per_recipient(env):
         "organizer_user_id": "u-bob",
         "attendee_user_ids": ["u-anna"],
     }
-    await create(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload
-    ))
+    await create(
+        _envelope(FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload)
+    )
     assert len(cal_repo.events) == 1
-    await delete(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
-        {"event_id": "remote-evt-1", "attendee_user_ids": ["u-anna"]},
-    ))
+    await delete(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+            {"event_id": "remote-evt-1", "attendee_user_ids": ["u-anna"]},
+        )
+    )
     assert cal_repo.events == {}
 
 
@@ -465,10 +494,12 @@ async def test_inbound_delete_unknown_event_noop(env):
     delete = fed._event_registry.handlers[
         FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED
     ]
-    await delete(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
-        {"event_id": "ghost"},
-    ))
+    await delete(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+            {"event_id": "ghost"},
+        )
+    )
     assert cal_repo.events == {}
 
 
@@ -478,10 +509,12 @@ async def test_inbound_delete_with_no_event_id_noop(env):
     delete = fed._event_registry.handlers[
         FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED
     ]
-    await delete(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
-        {},  # no event_id at all
-    ))
+    await delete(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+            {},  # no event_id at all
+        )
+    )
     assert cal_repo.events == {}
 
 
@@ -491,10 +524,12 @@ async def test_inbound_rsvp_updated_missing_fields_noop(env):
     rsvp = fed._event_registry.handlers[
         FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
     ]
-    await rsvp(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
-        {"event_id": "x"},  # missing user_id, status
-    ))
+    await rsvp(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+            {"event_id": "x"},  # missing user_id, status
+        )
+    )
     assert cal_repo.rsvps == {}
 
 
@@ -515,15 +550,17 @@ async def test_inbound_rsvp_updated_defaults_occurrence_to_event_start(env):
         end=now + timedelta(hours=1),
         created_by="u-anna",
     )
-    await rsvp(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
-        {
-            "event_id": "evt",
-            "user_id": "u-bob",
-            "status": "accepted",
-            # NB: no occurrence_at
-        },
-    ))
+    await rsvp(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+            {
+                "event_id": "evt",
+                "user_id": "u-bob",
+                "status": "accepted",
+                # NB: no occurrence_at
+            },
+        )
+    )
     keys = list(cal_repo.rsvps.keys())
     assert len(keys) == 1
     assert keys[0][2] == now.isoformat()
@@ -534,8 +571,10 @@ async def test_inbound_rsvp_deleted_missing_fields_noop(env):
     rsvp_del = fed._event_registry.handlers[
         FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED
     ]
-    await rsvp_del(_envelope(
-        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
-        {"event_id": "x"},  # no user_id
-    ))
+    await rsvp_del(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
+            {"event_id": "x"},  # no user_id
+        )
+    )
     assert cal_repo.rsvps == {}
