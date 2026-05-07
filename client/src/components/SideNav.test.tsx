@@ -96,21 +96,14 @@ describe('SideNav', () => {
   })
 
   it('suppresses a group header entirely when every item is gated off', () => {
+    // Verify the suppression rule via the YOU group: every item
+    // (Parent Control, Federation, Admin) is gated, so a non-admin
+    // non-guardian user has nothing left in YOU and the header
+    // disappears.
     setUser({ is_admin: false })
-    toggles.value = {
-      ...ALL_FEATURES_ON,
-      feat_feed: false, feat_calendar: false, feat_tasks: false,
-      feat_pages: false, feat_stickies: false,
-    }
-    // Force the AT HOME group fully empty by also pretending Shopping/
-    // Presence/Gallery don't render. Those three are unconditional in
-    // the data array, so the group is genuinely never empty in
-    // practice — but we can verify the suppression rule by hiding YOU
-    // entirely instead: make the user a non-admin and not a guardian.
     isGuardian.value = false
     const { queryByText, container } = renderAt('/')
-    // YOU still has Settings (always-on), so YOU header should show.
-    expect(queryByText('You')).toBeTruthy()
+    expect(queryByText('You')).toBeNull()
     expect(queryByText('Admin')).toBeNull()
     expect(queryByText('Federation')).toBeNull()
     expect(queryByText('Parent Control')).toBeNull()
@@ -126,7 +119,13 @@ describe('SideNav', () => {
     const { queryByText } = renderAt('/')
     expect(queryByText('Admin')).toBeNull()
     expect(queryByText('Federation')).toBeNull()
-    expect(queryByText('Settings')).toBeTruthy()
+  })
+
+  it('does not render a Settings link in the sidebar — the identity strip is the entry point', () => {
+    setUser({ is_admin: true })
+    isGuardian.value = true
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Settings')).toBeNull()
   })
 
   it('shows Admin and Federation for admin users', () => {
@@ -152,14 +151,16 @@ describe('SideNav', () => {
     expect(link?.getAttribute('href')).toBe('/parent')
   })
 
-  it('renders the identity strip with the user avatar and display name', () => {
+  it('renders the identity strip as the link to /settings with the user avatar and display name', () => {
     setUser({ display_name: 'Pascal Vizeli', picture_url: '/pic.jpg' })
     const { container } = renderAt('/')
     const strip = container.querySelector('.sh-sidenav-identity')
     expect(strip).toBeTruthy()
+    expect(strip?.tagName.toLowerCase()).toBe('a')
+    expect(strip?.getAttribute('href')).toBe('/settings')
     expect(strip?.textContent).toContain('Pascal Vizeli')
-    // No buttons or extra links inside the identity strip — pure
-    // identity cue. Settings + logout live elsewhere.
+    // The strip itself is the settings entry point — no nested
+    // action surfaces inside it.
     expect(strip?.querySelector('a, button')).toBeNull()
   })
 

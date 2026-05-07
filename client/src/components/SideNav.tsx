@@ -2,10 +2,12 @@
  * SideNav — left sidebar navigation, organised into four IA groups:
  * **At home** (the household's own surfaces — feed, plan, share),
  * **Talk** (synchronous human comms), **Browse** (cross-cutting
- * context-switchers — Spaces / Bazaar / Corner) and **You** (personal
- * settings / admin / Parent Control). Empty groups (after feature-flag
- * gating) suppress their header entirely so a minimal household
- * configuration doesn't show empty section labels.
+ * context-switchers — Spaces / Bazaar / Corner) and **You** (admin /
+ * Federation / Parent Control). Personal settings are reached by
+ * clicking the user identity strip at the bottom of the sidebar.
+ * Empty groups (after feature-flag gating) suppress their header
+ * entirely so a minimal household configuration doesn't show empty
+ * section labels.
  *
  * The data lives in the GROUPS arrays below — purely declarative; the
  * render path filters items through the live state snapshot pulled
@@ -126,7 +128,6 @@ const YOU_GROUP: SideNavGroup = {
   items: [
     { key: 'parent-control', label: 'Parent Control', href: '/parent', icon: 'parent-control',
       gate: s => s.isGuardian },
-    { key: 'settings',    label: 'Settings',    href: '/settings',    icon: 'settings' },
     // Labelled "Federation" in the sidebar to disambiguate from the
     // Browse-group "Friends" link (people-you-know vs federated
     // households). Route + key stay ``/connections`` so URL bookmarks
