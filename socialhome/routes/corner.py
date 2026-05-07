@@ -13,7 +13,8 @@ import dataclasses
 
 from aiohttp import web
 
-from ..app_keys import corner_service_key
+from ..app_keys import corner_service_key, media_signer_key
+from ..media_signer import sign_media_urls_in
 from ..security import sanitise_for_api
 from .base import BaseView
 
@@ -28,7 +29,13 @@ class CornerView(BaseView):
             user_id=ctx.user_id,
             username=ctx.username,
         )
-        return web.json_response(_bundle_to_dict(bundle))
+        payload = _bundle_to_dict(bundle)
+        # Sign nested ``picture_url`` so the dashboard's avatars load
+        # in plain ``<img src>`` without a Bearer token attached.
+        signer = self.request.app.get(media_signer_key)
+        if signer is not None:
+            sign_media_urls_in(payload, signer)
+        return web.json_response(payload)
 
 
 def _bundle_to_dict(bundle) -> dict:

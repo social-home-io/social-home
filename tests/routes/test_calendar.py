@@ -65,7 +65,11 @@ async def test_event_cover_round_trips_create_edit_clear(client):
     )
     assert r.status == 201
     body = await r.json()
-    assert body["cover_url"] == "/api/media/picnic.webp"
+    # Responses now carry a signed ``cover_url`` so the SPA can drop
+    # the URL into ``<img src>`` without a Bearer token. The canonical
+    # path under the signature is what we asserted on before signing
+    # was wired in.
+    assert body["cover_url"].split("?", 1)[0] == "/api/media/picnic.webp"
     eid = body["id"]
 
     # 2. Edit the summary only — cover stays.
@@ -75,7 +79,7 @@ async def test_event_cover_round_trips_create_edit_clear(client):
         headers=_auth(client._tok),
     )
     assert r2.status == 200
-    assert (await r2.json())["cover_url"] == "/api/media/picnic.webp"
+    assert (await r2.json())["cover_url"].split("?", 1)[0] == "/api/media/picnic.webp"
 
     # 3. Replace the cover.
     r3 = await client.patch(
@@ -83,7 +87,7 @@ async def test_event_cover_round_trips_create_edit_clear(client):
         json={"cover_url": "/api/media/picnic-2.webp"},
         headers=_auth(client._tok),
     )
-    assert (await r3.json())["cover_url"] == "/api/media/picnic-2.webp"
+    assert (await r3.json())["cover_url"].split("?", 1)[0] == "/api/media/picnic-2.webp"
 
     # 4. Clear the cover with explicit null.
     r4 = await client.patch(
