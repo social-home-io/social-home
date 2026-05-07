@@ -9,41 +9,48 @@
 		"ghcr.io/devcontainers/features/node:1": {
 			"version": "lts"
 		},
-		// uv is the Python package manager — an order of magnitude
-		// faster than pip with stricter defaults. The feature drops
-		// the static binary into a system path and puts it on PATH
-		// for every user, so ``uv pip install --system`` works in
-		// the postCreateCommand below + in any new shell.
-		"ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 
 	// One-time setup after the container is created.
 	//
-	// ``--system`` tells uv to install into the image's Python
-	// (``/usr/local/python/.../site-packages``) instead of
-	// requiring a virtualenv; that's the right behaviour inside a
-	// throwaway dev container.
+	// We pin uv to the python-feature's interpreter at
+	// ``/usr/local/python/current/bin/python``. The base image
+	// (``mcr.microsoft.com/devcontainers/python:3.14``) sets up
+	// **two** Python installs:
+	//   - ``/usr/local/python/3.14.4/...`` — the python-feature
+	//     install, owned by ``root:python`` and group-writable
+	//     so ``vscode`` can ``pip install`` into it.
+	//   - ``/usr/local/lib/python3.14/...`` — Debian's Python,
+	//     root-owned and not writable by ``vscode``.
+	// Without ``--python``, uv discovers the latter first and
+	// fails with ``Permission denied`` halfway through the
+	// install.
 	//
-	// ``PIP_USER=false`` + ``UV_SYSTEM_PYTHON=1`` (containerEnv
-	// below) keep ad-hoc ``pip install`` / ``uv pip install``
-	// calls in the system site-packages too. Without them, plain
-	// pip occasionally chooses ``--user`` and the resulting
-	// ``~/.local/lib/.../aiolibdatachannel/`` shadows the working
-	// system install (its compiled ``_native.so`` is missing).
+	// ``UV_PYTHON`` (containerEnv) makes the same pin apply to
+	// any ad-hoc ``uv pip install`` calls inside the running
+	// container. ``PIP_USER=false`` + ``UV_SYSTEM_PYTHON=1``
+	// keep them in system site-packages instead of falling back
+	// to ``~/.local`` (which produces partial installs that
+	// shadow the real ones — see the original ``aiolibdatachannel``
+	// ``_native.so`` bug).
 	//
-	// 1. Install the Python project in editable mode + dev extras
+	// 1. Install ``uv`` via its official static-binary installer
+	//    (drops the binary into ``~/.local/bin``; no Python
+	//    dependency).
+	// 2. Install the Python project in editable mode + dev extras
 	//    (pytest, mypy, ruff, pre-commit, ...).
-	// 2. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
 	//    mypy + frontend ESLint + tsc on staged files.
-	// 3. Install pnpm globally (Node feature ships npm; we use pnpm
+	// 4. Install pnpm globally (Node feature ships npm; we use pnpm
 	//    for the frontend per ``client/package.json``).
-	// 4. Install the frontend deps so ``pnpm run dev`` works on
+	// 5. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "uv pip install --system -e '.[dev]' && pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv pip install --system -e '.[dev]' && pre-commit install && npm install -g pnpm && cd client && pnpm install",
 	"containerEnv": {
 		"PIP_USER": "false",
-		"UV_SYSTEM_PYTHON": "1"
+		"UV_SYSTEM_PYTHON": "1",
+		"UV_PYTHON": "/usr/local/python/current/bin/python"
 	},
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
