@@ -133,6 +133,14 @@ class AbstractCalendarRepo(Protocol):
         remote_instance_id: str,
         remote_event_id: str,
     ) -> CalendarEvent | None: ...
+    # Find personal-calendar rows that mirror a given source event
+    # (e.g. a space calendar event whose RSVP was accepted by the
+    # owner). Used by :class:`SpaceRsvpMirrorBridge` to refresh /
+    # delete mirrors when the source changes.
+    async def list_mirrors_of(
+        self,
+        source_event_id: str,
+    ) -> list[CalendarEvent]: ...
 
 
 class SqliteCalendarRepo:
@@ -394,6 +402,22 @@ class SqliteCalendarRepo:
             (remote_instance_id, remote_event_id),
         )
         return _row_to_event(row_to_dict(row))
+
+    async def list_mirrors_of(
+        self,
+        source_event_id: str,
+    ) -> list[CalendarEvent]:
+        """List personal-calendar rows mirroring a given source event.
+
+        Used by :class:`SpaceRsvpMirrorBridge` when a space event is
+        edited or deleted — every personal mirror with
+        ``mirrored_from = source_event_id`` is refreshed or dropped.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM calendar_events WHERE mirrored_from=?",
+            (source_event_id,),
+        )
+        return [e for e in (_row_to_event(d) for d in rows_to_dicts(rows)) if e]
 
 
 # ─── Space calendars ──────────────────────────────────────────────────────

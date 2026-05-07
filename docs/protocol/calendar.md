@@ -158,6 +158,51 @@ The push handler skips cosmetic-only updates (description, attendees,
 rrule, all_day, capacity_up) so members don't get notification spam
 from incidental edits.
 
+## Personal-calendar mirror for "going" RSVPs
+
+Accepting "going" on a space calendar event drops a mirror onto the
+member's personal calendar so their own calendar reads as a single
+view of "everything I'm committed to" — household events plus space
+commitments — without flipping back to the space surface to check.
+Switching the RSVP back to maybe / declined / waitlist (or removing
+it entirely) drops the mirror; deleting the source event drops every
+mirror; editing the source flows through to every mirror.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant S as SpaceCalendarService
+    participant Bus as EventBus
+    participant Bridge as SpaceRsvpMirrorBridge
+    participant Cal as CalendarRepo (personal)
+    U->>S: rsvp(event_id, status="going")
+    S->>S: upsert_rsvp
+    S->>Bus: SpaceRsvpChanged(status="going")
+    Bus->>Bridge: dispatch
+    Bridge->>Cal: save_event(mirror, mirrored_from=source_id)
+```
+
+The mirror id is deterministic (`sm_<user>_<source>`), so a
+re-delivered RSVP collapses onto the same row instead of duplicating.
+``requested`` (capped-event request-to-join) also produces a mirror —
+otherwise a member's pending request would be invisible on their own
+calendar. ``waitlist`` does not.
+
+Recurring events are mirrored as the seed row (rrule preserved) — v1
+limitation: per-occurrence partial attendance isn't reflected on the
+personal calendar, the list expansion shows the whole series. The
+authoritative per-occurrence RSVP state stays on the space side.
+
+Local-only — the mirror exists on the RSVP-er's home instance.
+Remote users RSVPing on our hosted spaces do NOT get a mirror written
+locally; their own instance handles the mirror when it processes the
+matching `SPACE_RSVP_UPDATED`.
+
+Implementation: `socialhome/services/space_rsvp_mirror_bridge.py` —
+subscribes to `SpaceRsvpChanged`, `CalendarEventUpdated`,
+`CalendarEventDeleted` on the in-process event bus.
+
 ## Recurring events
 
 Events carry an optional RRULE. The authoritative event row lives on

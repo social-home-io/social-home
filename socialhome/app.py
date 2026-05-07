@@ -160,6 +160,7 @@ from .services.relay_policy import RelayPolicy
 from .repositories.instance_ban_repo import SqliteHouseholdInstanceBanRepo
 from .services.poll_federation_outbound import PollFederationOutbound
 from .services.calendar_feed_bridge import CalendarFeedBridge
+from .services.space_rsvp_mirror_bridge import SpaceRsvpMirrorBridge
 from .services.schedule_calendar_bridge import ScheduleCalendarBridge
 from .services.space_calendar_reminder_scheduler import (
     SpaceCalendarReminderScheduler,
@@ -1144,6 +1145,19 @@ def create_app(config: Config | None = None) -> web.Application:
         calendar_repo=space_cal_repo,
     )
     calendar_feed_bridge.wire()
+
+    # Personal-calendar mirror for space RSVPs (§23.7 follow-up):
+    # accepting "going" on a space event drops a mirror onto the
+    # member's personal calendar so they see their commitments
+    # alongside household events. Subscribes to SpaceRsvpChanged +
+    # CalendarEventUpdated/Deleted on the bus.
+    space_rsvp_mirror_bridge = SpaceRsvpMirrorBridge(
+        bus=bus,
+        calendar_repo=calendar_repo,
+        space_calendar_repo=space_cal_repo,
+        user_repo=user_repo,
+    )
+    space_rsvp_mirror_bridge.wire()
 
     # Phase D: per-user space-event reminder scheduler. Polls fire_at
     # on a 30 s cadence and emits EventReminderDue events that the

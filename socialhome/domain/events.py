@@ -413,6 +413,25 @@ class CalendarEventDeleted(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SpaceRsvpChanged(DomainEvent):
+    """A user's RSVP on a space calendar event was set, changed, or
+    cleared (§23.7). Carries the new effective status; ``None`` means
+    "RSVP removed". Used by :class:`SpaceRsvpMirrorBridge` to keep a
+    mirror of going-events on the user's personal calendar in sync —
+    accepting an RSVP drops the event onto your own calendar so it
+    shows up alongside household events without flipping back to the
+    space surface.
+    """
+
+    event_id: str
+    space_id: str
+    user_id: str
+    occurrence_at: str
+    status: str | None  # None ⇒ removed
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class EventReminderDue(DomainEvent):
     """Phase D: scheduler emits this when a reminder window comes due.
 
