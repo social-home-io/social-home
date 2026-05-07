@@ -20,16 +20,12 @@ import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { EmojiPickButton } from '@/components/EmojiPickButton'
+import { MediaDropzone } from '@/components/MediaDropzone'
 import { showToast } from '@/components/Toast'
+import { UploadProgressBar, uploadWithProgress } from '@/components/UploadProgress'
 import { describeUploadError } from '@/utils/uploadErrors'
 import { currentUser } from '@/store/auth'
 import type { HighlightAudienceKind, HighlightInboxItem } from '@/types'
-
-interface MediaUploadResponse {
-  url: string
-  signed_url: string
-  filename: string
-}
 
 interface RemoteHousehold {
   instance_id: string
@@ -119,20 +115,12 @@ export default function HighlightComposerPage() {
   )
 
   const uploadOne = async (file: File): Promise<StagedFrame | null> => {
-    const fd = new FormData()
-    fd.append('file', file)
     try {
-      const r = await fetch('/api/media/upload', {
-        method:      'POST',
-        body:        fd,
-        credentials: 'include',
-      })
-      if (!r.ok) throw new Error(await r.text())
-      const data = await r.json() as MediaUploadResponse
+      const result = await uploadWithProgress(file)
       return {
         id:      crypto.randomUUID(),
-        url:     data.url,
-        preview: data.signed_url,
+        url:     result.url,
+        preview: result.signed_url,
         type:    file.type.startsWith('video/') ? 'video' : 'image',
         name:    file.name,
         caption: '',
@@ -166,13 +154,6 @@ export default function HighlightComposerPage() {
         stagedFrames.value = [...stagedFrames.value, staged]
       }
     }
-  }
-
-  const onPickMedia = async (e: Event) => {
-    const input = e.target as HTMLInputElement
-    await acceptFiles(Array.from(input.files ?? []))
-    // Reset so re-picking the same file fires onchange again.
-    input.value = ''
   }
 
   const removeFrame = (id: string) => {
@@ -263,16 +244,16 @@ export default function HighlightComposerPage() {
         <a href="/highlights" class="sh-link">Cancel</a>
       </header>
 
-      <label>
-        Media
-        <input
-          type="file"
-          accept="image/*,video/*"
-          multiple
-          disabled={!canPickMore}
-          onChange={onPickMedia}
-        />
-      </label>
+      <MediaDropzone
+        multiple
+        accept="image/*,video/*"
+        disabled={!canPickMore}
+        hint="Drag photos or videos here, or"
+        pickLabel="choose media…"
+        draggingHint="Drop to add frames"
+        onFiles={acceptFiles}
+      />
+      <UploadProgressBar />
       <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-xs)' }}>
         {canPickMore
           ? `You can add up to ${left} more frame${left === 1 ? '' : 's'} to today's highlight.`
@@ -283,11 +264,11 @@ export default function HighlightComposerPage() {
         <ol class="sh-highlight-frames">
           {stagedFrames.value.map((f, i) => (
             <li key={f.id} class="sh-highlight-frame">
-              <div class="sh-highlight-frame-thumb">
+              <div class={`sh-highlight-frame-thumb${f.type === 'video' ? ' sh-highlight-frame-thumb--video' : ''}`}>
                 {f.type === 'image' ? (
                   <img src={f.preview} alt="" />
                 ) : (
-                  <video src={f.preview} muted preload="metadata" />
+                  <video src={f.preview} controls muted preload="metadata" />
                 )}
               </div>
               <div class="sh-highlight-frame-body">
