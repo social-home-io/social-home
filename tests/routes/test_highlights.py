@@ -32,6 +32,59 @@ async def test_create_frame_then_list(client):
     assert len(rows[0]["frames"]) == 1
 
 
+async def test_frame_media_url_is_signed_in_responses(client):
+    """The browser drops the Authorization header on ``<img src>`` /
+    ``<video src>`` requests, so highlight frames returned to the SPA
+    need to carry a signed ``?exp=&sig=`` query — otherwise the canonical
+    ``/api/media/...`` URL 401s the moment the viewer opens."""
+    create = await client.post(
+        "/api/highlights/frames",
+        json={"frame_type": "image", "media_url": "/api/media/x.webp"},
+        headers=_auth(client),
+    )
+    assert create.status == 201
+    create_body = await create.json()
+    created_url = create_body["frame"]["media_url"]
+    highlight_id = create_body["highlight"]["id"]
+    assert created_url.startswith("/api/media/x.webp?"), created_url
+    assert "exp=" in created_url and "sig=" in created_url
+
+    rows = await (await client.get("/api/highlights", headers=_auth(client))).json()
+    list_url = rows[0]["frames"][0]["media_url"]
+    assert list_url.startswith("/api/media/x.webp?"), list_url
+    assert "exp=" in list_url and "sig=" in list_url
+
+    detail = await (await client.get(
+        f"/api/highlights/{highlight_id}", headers=_auth(client),
+    )).json()
+    detail_url = detail["frames"][0]["media_url"]
+    assert detail_url.startswith("/api/media/x.webp?"), detail_url
+    assert "exp=" in detail_url and "sig=" in detail_url
+
+
+async def test_frame_create_strips_inbound_signature_query(client):
+    """If the SPA echoes a signed upload URL back into ``media_url`` on
+    create, the route must drop ``?exp=&sig=`` before persisting so the
+    frame row carries the canonical URL only — the server signs fresh
+    on every read."""
+    resp = await client.post(
+        "/api/highlights/frames",
+        json={
+            "frame_type": "image",
+            "media_url": "/api/media/x.webp?exp=99999999999&sig=stale",
+        },
+        headers=_auth(client),
+    )
+    assert resp.status == 201, await resp.text()
+    # The response is signed fresh; assert the file path under the
+    # signature stayed canonical (no double-quoted ``?exp=...?exp=...``).
+    out_url = (await resp.json())["frame"]["media_url"]
+    base = out_url.split("?", 1)[0]
+    assert base == "/api/media/x.webp"
+    # Exactly one ``?`` — sig was minted afresh, not concatenated.
+    assert out_url.count("?") == 1
+
+
 async def test_react_and_clear(client):
     """PUT /reaction sets, DELETE /reaction clears."""
     resp = await client.post(
