@@ -33,7 +33,7 @@
 			"detail": "Start the Vite dev server at http://localhost:5173 (proxies /api and /ws to the backend on :8099).",
 			"type": "shell",
 			"command": "pnpm",
-			"args": ["run", "dev", "--host"],
+			"args": ["run", "dev"],
 			"options": {
 				"cwd": "${workspaceFolder}/client"
 			},
