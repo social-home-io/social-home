@@ -15,6 +15,7 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.uv-cache/
 venv/
 env/
 
