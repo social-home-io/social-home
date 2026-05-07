@@ -51,15 +51,21 @@ repos:
         pass_filenames: false
 
   # ── Python type-check via mypy ─────────────────────────────────────────
-  # Run mypy from the developer's own venv (``language: system``) so it
-  # sees the real runtime deps installed by ``pip install -e .[dev]`` —
-  # no need to mirror the project's dependency list into an isolated
+  # Run mypy from the project venv at ``.venv/`` so it sees the real
+  # runtime deps installed by ``uv pip install -e .[dev]`` — no need
+  # to mirror the project's dependency list into an isolated
   # pre-commit env. Scope matches CI's ``mypy socialhome/``.
+  #
+  # The entry hardcodes ``.venv/bin/mypy`` because ``language: system``
+  # invokes the binary against whatever ``PATH`` ``git commit``
+  # inherits, and that PATH usually doesn't include the venv. The
+  # absolute path makes the hook robust to whether the venv is
+  # activated in the current shell.
   - repo: local
     hooks:
       - id: mypy
         name: mypy (socialhome, repo-wide)
-        entry: mypy --config-file=pyproject.toml socialhome/
+        entry: .venv/bin/mypy --config-file=pyproject.toml socialhome/
         language: system
         pass_filenames: false
         always_run: true
