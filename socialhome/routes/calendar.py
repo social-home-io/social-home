@@ -7,7 +7,8 @@ import base64
 from aiohttp import web
 
 from .. import app_keys as K
-from ..app_keys import calendar_service_key
+from ..app_keys import calendar_service_key, media_signer_key
+from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from ..services.calendar_import_service import (
     AICalendarImportError,
@@ -15,6 +16,15 @@ from ..services.calendar_import_service import (
 )
 from ..services.calendar_service import UNSET_COVER
 from .base import BaseView
+
+
+def _sign_payload(request: web.Request, payload):
+    """Sign nested ``cover_url`` so the SPA can render the event banner
+    via ``<img src>`` without a Bearer token attached."""
+    signer = request.app.get(media_signer_key)
+    if signer is not None:
+        sign_media_urls_in(payload, signer)
+    return payload
 
 
 def _cal_dict(cal) -> dict:
@@ -93,7 +103,9 @@ class CalendarEventsView(BaseView):
             )
         svc = self.svc(calendar_service_key)
         events = await svc.list_events_in_range(calendar_id, start=start, end=end)
-        return web.json_response([_event_dict(e) for e in events])
+        return web.json_response(
+            _sign_payload(self.request, [_event_dict(e) for e in events])
+        )
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -111,9 +123,13 @@ class CalendarEventsView(BaseView):
             attendees=body.get("attendees"),
             rrule=body.get("rrule"),
             rsvp_enabled=bool(body.get("rsvp_enabled", False)),
-            cover_url=body.get("cover_url"),
+            # See ``strip_signature_query`` — drops any ``?exp=&sig=``
+            # the SPA echoed back from a signed upload preview.
+            cover_url=strip_signature_query(body.get("cover_url")),
         )
-        return web.json_response(_event_dict(event), status=201)
+        return web.json_response(
+            _sign_payload(self.request, _event_dict(event)), status=201
+        )
 
 
 class CalendarEventDeleteView(BaseView):
@@ -136,7 +152,11 @@ class CalendarEventDeleteView(BaseView):
         # ``null`` = clear; string = set. Pass the sentinel through
         # when the field isn't in the body so ``update_event`` keeps
         # the existing value.
-        cover = body["cover_url"] if "cover_url" in body else UNSET_COVER
+        cover = (
+            strip_signature_query(body["cover_url"])
+            if "cover_url" in body
+            else UNSET_COVER
+        )
         event = await svc.update_event(
             event_id,
             summary=body.get("summary"),
@@ -149,7 +169,7 @@ class CalendarEventDeleteView(BaseView):
             rsvp_enabled=body.get("rsvp_enabled"),
             cover_url=cover,
         )
-        return web.json_response(_event_dict(event))
+        return web.json_response(_sign_payload(self.request, _event_dict(event)))
 
 
 async def _persist_imported_events(view, calendar_id, created_by, events):
@@ -169,7 +189,7 @@ async def _persist_imported_events(view, calendar_id, created_by, events):
             )
         )
     return web.json_response(
-        {"events": [_event_dict(e) for e in persisted]},
+        _sign_payload(view.request, {"events": [_event_dict(e) for e in persisted]}),
         status=201,
     )
 
@@ -336,7 +356,9 @@ class SpaceCalendarEventsView(BaseView):
             start=start,
             end=end,
         )
-        return web.json_response([_event_dict(e) for e in events])
+        return web.json_response(
+            _sign_payload(self.request, [_event_dict(e) for e in events])
+        )
 
     async def _require_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(K.space_repo_key)
@@ -361,14 +383,16 @@ class SpaceCalendarEventsView(BaseView):
                 attendees=tuple(body.get("attendees") or ()),
                 rrule=body.get("rrule"),
                 capacity=body.get("capacity"),
-                cover_url=body.get("cover_url"),
+                cover_url=strip_signature_query(body.get("cover_url")),
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
         # Service publishes CalendarEventCreated internally — don't
         # double-publish (previous route called bus.publish again,
         # double-firing HA bridge + WS).
-        return web.json_response(_event_dict(event), status=201)
+        return web.json_response(
+            _sign_payload(self.request, _event_dict(event)), status=201
+        )
 
 
 class SpaceCalendarEventDetailView(BaseView):
@@ -387,7 +411,11 @@ class SpaceCalendarEventDetailView(BaseView):
         space_cal_svc = self.svc(K.space_cal_service_key)
         body = await self.body()
         try:
-            cover = body["cover_url"] if "cover_url" in body else UNSET_COVER
+            cover = (
+                strip_signature_query(body["cover_url"])
+                if "cover_url" in body
+                else UNSET_COVER
+            )
             event = await space_cal_svc.update_event(
                 event_id,
                 summary=body.get("summary") or body.get("title"),
@@ -409,7 +437,7 @@ class SpaceCalendarEventDetailView(BaseView):
             return error_response(404, "NOT_FOUND", "Event not found.")
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
-        return web.json_response(_event_dict(event))
+        return web.json_response(_sign_payload(self.request, _event_dict(event)))
 
     async def delete(self) -> web.Response:
         ctx = self.user

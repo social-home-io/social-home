@@ -26,6 +26,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from ..app_keys import (
+    media_signer_key,
     moment_repo_key,
     moment_service_key,
     report_service_key,
@@ -37,8 +38,24 @@ from ..domain.report import (
     ReportRateLimitedError,
     ReportTargetType,
 )
+from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from .base import BaseView
+
+
+def _sign_payload(request: web.Request, payload):
+    """Sign every ``media_url`` field nested in ``payload`` so the SPA
+    can drop them straight into ``<img src>`` / ``<video src>`` without
+    a Bearer token attached. The browser doesn't propagate the
+    Authorization header to plain media-element requests, so the
+    canonical ``/api/media/{file}`` URL would 401 — the signed form
+    carries its own ``?exp=&sig=`` query that the media route
+    accepts in lieu of auth.
+    """
+    signer = request.app.get(media_signer_key)
+    if signer is not None:
+        sign_media_urls_in(payload, signer)
+    return payload
 
 
 def _moment_dict(
@@ -104,7 +121,12 @@ class MomentCollectionView(BaseView):
         )
         repo = self.svc(moment_repo_key)
         counts = await repo.count_engagement_for([m.id for m in moments])
-        return self._json([_moment_dict(m, counts=counts.get(m.id)) for m in moments])
+        return self._json(
+            _sign_payload(
+                self.request,
+                [_moment_dict(m, counts=counts.get(m.id)) for m in moments],
+            )
+        )
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -116,13 +138,18 @@ class MomentCollectionView(BaseView):
         moment = await svc.create_moment(
             author_user_id=ctx.user_id,
             content=str(body.get("content") or ""),
-            media_url=body.get("media_url"),
+            # The composer's preview consumes a signed URL minted at
+            # upload time. If the SPA echoes that signed form back
+            # here, drop the ``?exp=&sig=`` so we don't persist a
+            # short-lived auth fragment on the moment row — the server
+            # signs fresh on every read.
+            media_url=strip_signature_query(body.get("media_url")),
             media_type=body.get("media_type"),
             duration_ms=body.get("duration_ms"),
             parent_moment_id=body.get("parent_moment_id"),
             is_public=bool(body.get("is_public", False)),
         )
-        return self._json(_moment_dict(moment), status=201)
+        return self._json(_sign_payload(self.request, _moment_dict(moment)), status=201)
 
 
 class MomentArchiveView(BaseView):
@@ -151,7 +178,12 @@ class MomentArchiveView(BaseView):
         )
         repo = self.svc(moment_repo_key)
         counts = await repo.count_engagement_for([m.id for m in moments])
-        return self._json([_moment_dict(m, counts=counts.get(m.id)) for m in moments])
+        return self._json(
+            _sign_payload(
+                self.request,
+                [_moment_dict(m, counts=counts.get(m.id)) for m in moments],
+            )
+        )
 
 
 class MomentHashtagsView(BaseView):
@@ -196,11 +228,16 @@ class MomentDetailView(BaseView):
         ids = [moment.id, *[r.id for r in replies]]
         counts = await repo.count_engagement_for(ids)
         return self._json(
-            {
-                "moment": _moment_dict(moment, counts=counts.get(moment.id)),
-                "replies": [_moment_dict(r, counts=counts.get(r.id)) for r in replies],
-                "reactions": [_reaction_dict(r) for r in reactions],
-            }
+            _sign_payload(
+                self.request,
+                {
+                    "moment": _moment_dict(moment, counts=counts.get(moment.id)),
+                    "replies": [
+                        _moment_dict(r, counts=counts.get(r.id)) for r in replies
+                    ],
+                    "reactions": [_reaction_dict(r) for r in reactions],
+                },
+            )
         )
 
     async def delete(self) -> web.Response:

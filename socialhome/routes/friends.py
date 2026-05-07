@@ -25,10 +25,12 @@ from aiohttp import web
 
 from ..app_keys import (
     federation_repo_key,
+    media_signer_key,
     online_status_service_key,
     user_repo_key,
 )
 from ..domain.federation import PairingStatus
+from ..media_signer import sign_media_urls_in
 from .base import BaseView
 
 
@@ -165,13 +167,17 @@ class FriendsView(BaseView):
         people = local_block["member_count"] + sum(
             h["member_count"] for h in households
         )
-        return self._json(
-            {
-                "instance": local_block,
-                "households": households,
-                "totals": {
-                    "households": 1 + len(households),
-                    "people": people,
-                },
-            }
-        )
+        payload = {
+            "instance": local_block,
+            "households": households,
+            "totals": {
+                "households": 1 + len(households),
+                "people": people,
+            },
+        }
+        # Sign nested ``picture_url`` so the Friends grid avatars load
+        # in plain ``<img src>`` without a Bearer token attached.
+        signer = self.request.app.get(media_signer_key)
+        if signer is not None:
+            sign_media_urls_in(payload, signer)
+        return self._json(payload)

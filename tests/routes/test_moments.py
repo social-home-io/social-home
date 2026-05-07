@@ -101,6 +101,61 @@ async def test_video_over_15s_rejected(client):
     assert r.status == 422
 
 
+async def test_moment_media_url_is_signed_in_responses(client):
+    """The browser drops the Authorization header on ``<img src>`` /
+    ``<video src>`` requests, so moments returned to the SPA need to
+    carry a signed ``?exp=&sig=`` query — otherwise the canonical
+    ``/api/media/...`` URL 401s the moment the inbox renders."""
+    create = await client.post(
+        "/api/moments",
+        json={
+            "content": "look",
+            "media_url": "/api/media/sunset.webp",
+            "media_type": "image",
+        },
+        headers=_auth(client._tok),
+    )
+    assert create.status == 201
+    create_body = await create.json()
+    moment_id = create_body["id"]
+    assert create_body["media_url"].startswith("/api/media/sunset.webp?"), create_body[
+        "media_url"
+    ]
+    assert "exp=" in create_body["media_url"]
+    assert "sig=" in create_body["media_url"]
+
+    inbox = await (await client.get("/api/moments", headers=_auth(client._tok))).json()
+    found = next(m for m in inbox if m["id"] == moment_id)
+    assert found["media_url"].startswith("/api/media/sunset.webp?"), found["media_url"]
+
+    detail = await (
+        await client.get(f"/api/moments/{moment_id}", headers=_auth(client._tok))
+    ).json()
+    assert detail["moment"]["media_url"].startswith("/api/media/sunset.webp?")
+
+
+async def test_moment_create_strips_inbound_signature_query(client):
+    """If the SPA echoes a signed upload URL back into ``media_url`` on
+    create, the route must drop ``?exp=&sig=`` before persisting so the
+    moment row carries the canonical URL only — the server signs fresh
+    on every read."""
+    resp = await client.post(
+        "/api/moments",
+        json={
+            "content": "ok",
+            "media_url": "/api/media/sunset.webp?exp=99999999999&sig=stale",
+            "media_type": "image",
+        },
+        headers=_auth(client._tok),
+    )
+    assert resp.status == 201
+    out_url = (await resp.json())["media_url"]
+    base = out_url.split("?", 1)[0]
+    assert base == "/api/media/sunset.webp"
+    # Exactly one ``?`` — the server signed afresh, didn't concatenate.
+    assert out_url.count("?") == 1
+
+
 # ── Replies ──────────────────────────────────────────────────────────────
 
 

@@ -195,6 +195,30 @@ async def test_friends_local_instance_carries_identity_metadata(client):
     assert inst["instance_id"]  # non-empty string
 
 
+async def test_friends_signs_picture_url_for_remote_members(client):
+    """Avatars on the Friends grid render via plain ``<img src>``, so
+    each ``picture_url`` returned must carry a signed ``?exp=&sig=``
+    query — the canonical ``/api/users/{id}/picture`` URL would 401
+    because the browser drops the Authorization header on media-element
+    requests."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-pic"))
+    await client._db.enqueue(
+        "INSERT INTO remote_users("
+        "  user_id, instance_id, remote_username, display_name, picture_hash"
+        ") VALUES(?,?,?,?,?)",
+        ("ru-with-pic", "peer-pic", "gus", "Gus", "deadbeef"),
+    )
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    h = next(h for h in body["households"] if h["instance_id"] == "peer-pic")
+    member = next(m for m in h["members"] if m["user_id"] == "ru-with-pic")
+    pic = member["picture_url"]
+    assert pic.startswith("/api/users/ru-with-pic/picture?"), pic
+    assert "exp=" in pic
+    assert "sig=" in pic
+
+
 async def test_friends_drops_blocked_local_and_remote_users(client):
     """A blocked household member is filtered from the local block; a
     blocked remote user is filtered from their household's member list."""
