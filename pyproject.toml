@@ -20,7 +20,9 @@ dependencies = [
     # open a direct peer connection. Also mandatory for GFS relay
     # (§24). The PyPI distribution and import name are both
     # ``aiolibdatachannel`` — async-native bindings over libdatachannel.
-    "aiolibdatachannel>=2026.4.22.2",
+    # 2026.5.7 ships ``_native.abi3.so`` (was ``_native.cpython-312-…so``),
+    # so the abi3 wheel finally loads on Python 3.13+ as advertised.
+    "aiolibdatachannel>=2026.5.7",
 ]
 
 [project.optional-dependencies]
