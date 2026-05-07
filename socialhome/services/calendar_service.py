@@ -29,6 +29,7 @@ from ..domain.events import (
     CalendarEventDeleted,
     CalendarEventUpdated,
     SpaceMemberLeft,
+    SpaceRsvpChanged,
 )
 from ..domain.federation import FederationEventType, PairingStatus
 from ..infrastructure.event_bus import EventBus
@@ -682,6 +683,13 @@ class SpaceCalendarService:
                     event.user_id,
                     occurrence_at=r.occurrence_at,
                 )
+                await self._publish_rsvp_changed(
+                    space_id=event.space_id,
+                    event_id=base_id,
+                    user_id=event.user_id,
+                    occurrence_at=r.occurrence_at,
+                    status=None,
+                )
 
     async def list_events_in_range(
         self,
@@ -755,7 +763,9 @@ class SpaceCalendarService:
             await self._bus.publish(CalendarEventCreated(event=saved))
         # Phase C: auto-RSVP the creator as going for the first
         # occurrence — they're implicitly going, even on a capped event
-        # (skips the approval flow for self).
+        # (skips the approval flow for self). Publish SpaceRsvpChanged
+        # too so the personal-calendar mirror appears for the creator
+        # without them having to RSVP again.
         await self._repo.upsert_rsvp(
             CalendarRSVP(
                 event_id=saved.id,
@@ -764,6 +774,13 @@ class SpaceCalendarService:
                 updated_at=datetime.now(timezone.utc).isoformat(),
                 occurrence_at=start_dt.isoformat(),
             )
+        )
+        await self._publish_rsvp_changed(
+            space_id=space_id,
+            event_id=saved.id,
+            user_id=created_by,
+            occurrence_at=start_dt.isoformat(),
+            status=RSVPStatus.GOING,
         )
         return saved
 
@@ -989,6 +1006,13 @@ class SpaceCalendarService:
             status=effective_status,
             updated_at=now_iso,
         )
+        await self._publish_rsvp_changed(
+            space_id=space_id,
+            event_id=event_id,
+            user_id=user_id,
+            occurrence_at=occ_iso,
+            status=effective_status,
+        )
         # If this RSVP frees a seat (declined / maybe replacing a
         # previous "going"), promote the oldest waitlist row.
         if status != RSVPStatus.GOING and event.capacity is not None:
@@ -1024,6 +1048,13 @@ class SpaceCalendarService:
             occurrence_at=occ_iso,
             status=None,  # signals delete
             updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        await self._publish_rsvp_changed(
+            space_id=space_id,
+            event_id=event_id,
+            user_id=user_id,
+            occurrence_at=occ_iso,
+            status=None,
         )
         # Removing a "going" RSVP frees a seat — promote from waitlist.
         if event.capacity is not None:
@@ -1201,6 +1232,13 @@ class SpaceCalendarService:
             status=new_status,
             updated_at=now_iso,
         )
+        await self._publish_rsvp_changed(
+            space_id=space_id,
+            event_id=event_id,
+            user_id=user_id,
+            occurrence_at=occ_iso,
+            status=new_status,
+        )
         return new_status
 
     async def deny_rsvp(
@@ -1305,6 +1343,13 @@ class SpaceCalendarService:
             status=RSVPStatus.GOING,
             updated_at=now_iso,
         )
+        await self._publish_rsvp_changed(
+            space_id=space_id,
+            event_id=promoted.event_id,
+            user_id=promoted.user_id,
+            occurrence_at=occ_iso,
+            status=RSVPStatus.GOING,
+        )
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1394,6 +1439,30 @@ class SpaceCalendarService:
             space_id,
             evt_type,
             payload,
+        )
+
+    async def _publish_rsvp_changed(
+        self,
+        *,
+        space_id: str,
+        event_id: str,
+        user_id: str,
+        occurrence_at: str,
+        status: str | None,
+    ) -> None:
+        """Publish a :class:`SpaceRsvpChanged` domain event so the
+        personal-mirror bridge (and any future subscriber) can react.
+        No-op when the bus isn't wired."""
+        if self._bus is None:
+            return
+        await self._bus.publish(
+            SpaceRsvpChanged(
+                event_id=event_id,
+                space_id=space_id,
+                user_id=user_id,
+                occurrence_at=occurrence_at,
+                status=status,
+            )
         )
 
 
