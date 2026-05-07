@@ -32,6 +32,7 @@ from aiohttp import web
 from ..app_keys import (
     dm_service_key,
     feed_service_key,
+    media_signer_key,
     report_service_key,
     space_service_key,
     highlight_service_key,
@@ -47,11 +48,27 @@ from ..domain.highlight import (
     HighlightFrame,
     HighlightFrameType,
 )
+from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from .base import BaseView
 
 
 # ─── Serialisation helpers ────────────────────────────────────────────────
+
+
+def _sign_payload(request: web.Request, payload):
+    """Sign every ``media_url`` field nested in ``payload`` so the SPA
+    can drop them straight into ``<img src>`` / ``<video src>`` without
+    a Bearer token attached. The browser doesn't propagate the
+    Authorization header to plain media-element requests, so the
+    canonical ``/api/media/{file}`` URL would 401 — the signed form
+    carries its own ``?exp=&sig=`` query that the media route
+    accepts in lieu of auth.
+    """
+    signer = request.app.get(media_signer_key)
+    if signer is not None:
+        sign_media_urls_in(payload, signer)
+    return payload
 
 
 def _highlight_dict(highlight: Highlight) -> dict:
@@ -124,7 +141,12 @@ class HighlightFramesCollectionView(BaseView):
         highlight, frame = await svc.create_or_append_frame(
             author_user_id=ctx.user_id,
             frame_type=frame_type,
-            media_url=media_url,
+            # The composer's preview consumes a signed URL minted at
+            # upload time. If the SPA echoes that signed form back
+            # here, drop the ``?exp=&sig=`` so we don't persist a
+            # short-lived auth fragment on the frame row — the server
+            # signs fresh on every read.
+            media_url=strip_signature_query(media_url),
             caption_text=body.get("caption_text"),
             caption_emoji=body.get("caption_emoji"),
             duration_ms=body.get("duration_ms"),
@@ -132,7 +154,13 @@ class HighlightFramesCollectionView(BaseView):
             audience=audience_ids,
         )
         return self._json(
-            {"highlight": _highlight_dict(highlight), "frame": _frame_dict(frame)},
+            _sign_payload(
+                self.request,
+                {
+                    "highlight": _highlight_dict(highlight),
+                    "frame": _frame_dict(frame),
+                },
+            ),
             status=201,
         )
 
@@ -156,7 +184,7 @@ class HighlightsCollectionView(BaseView):
                     "unseen_count": row["unseen_count"],
                 }
             )
-        return self._json(out)
+        return self._json(_sign_payload(self.request, out))
 
 
 class HighlightDetailView(BaseView):
@@ -199,7 +227,7 @@ class HighlightDetailView(BaseView):
                 ]
             body["views"] = views_by_frame
             body["reactions"] = reactions_by_frame
-        return self._json(body)
+        return self._json(_sign_payload(self.request, body))
 
     async def delete(self) -> web.Response:
         ctx = self.user
