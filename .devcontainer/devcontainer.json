@@ -12,16 +12,36 @@
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 
-	// One-time setup after the container is created:
-	// 1. Install the Python project in editable mode + dev extras
+	// One-time setup after the container is created.
+	//
+	// We use **uv** as the Python package manager — it's an order
+	// of magnitude faster than pip and has stricter defaults. The
+	// ``--system`` flag tells uv to install into the image's
+	// Python (``/usr/local/python/.../site-packages``) instead of
+	// requiring a virtualenv; that's the right behaviour inside a
+	// throwaway dev container.
+	//
+	// ``PIP_USER=false`` + ``UV_SYSTEM_PYTHON=1`` keep ad-hoc
+	// ``pip install`` / ``uv pip install`` calls in the system
+	// site-packages too. Without them, plain pip occasionally
+	// chooses ``--user`` and the resulting
+	// ``~/.local/lib/.../aiolibdatachannel/`` shadows the working
+	// system install (its compiled ``_native.so`` is missing).
+	//
+	// 1. Install ``uv`` itself (one-time, into system site).
+	// 2. Install the Python project in editable mode + dev extras
 	//    (pytest, mypy, ruff, pre-commit, ...).
-	// 2. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
 	//    mypy + frontend ESLint + tsc on staged files.
-	// 3. Install pnpm globally (Node feature ships npm; we use pnpm
+	// 4. Install pnpm globally (Node feature ships npm; we use pnpm
 	//    for the frontend per ``client/package.json``).
-	// 4. Install the frontend deps so ``pnpm run dev`` works on
+	// 5. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "pip install -e .[dev] && pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"postCreateCommand": "pip install --upgrade uv && uv pip install --system -e '.[dev]' && pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"containerEnv": {
+		"PIP_USER": "false",
+		"UV_SYSTEM_PYTHON": "1"
+	},
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
 	// 5173 = Vite dev server (``pnpm run dev`` in ``client/``).
