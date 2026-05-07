@@ -9,6 +9,12 @@
 		"ghcr.io/devcontainers/features/node:1": {
 			"version": "lts"
 		},
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		// uv is the Python package manager — an order of magnitude
+		// faster than pip with stricter defaults. The feature drops
+		// the static binary on PATH at container build time so the
+		// postCreate flow below can use ``uv`` directly.
+		"ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 
@@ -23,19 +29,17 @@
 	// interpreter, and the run/debug tasks invoke that interpreter
 	// explicitly.
 	//
-	// 1. Install ``uv`` via its official static-binary installer
-	//    (drops the binary into ``~/.local/bin``; no Python
-	//    dependency).
-	// 2. Create the project venv at ``.venv/`` from the system
+	// 1. Create the project venv at ``.venv/`` from the system
 	//    Python on PATH (whichever 3.14 the image ships).
-	// 3. Install the Python project in editable mode + dev extras.
-	// 4. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	// 2. Install the Python project in editable mode + dev extras.
+	//    uv auto-detects the in-tree venv and installs there.
+	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
 	//    mypy + frontend ESLint + tsc on staged files.
-	// 5. Install pnpm globally (Node feature ships npm; we use pnpm
+	// 4. Install pnpm globally (Node feature ships npm; we use pnpm
 	//    for the frontend per ``client/package.json``).
-	// 6. Install the frontend deps so ``pnpm run dev`` works on
+	// 5. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv venv .venv --seed && $HOME/.local/bin/uv pip install -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"postCreateCommand": "uv venv .venv --seed && uv pip install -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
 	// 5173 = Vite dev server (``pnpm run dev`` in ``client/``).
