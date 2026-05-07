@@ -29,8 +29,15 @@
 	// interpreter, and the run/debug tasks invoke that interpreter
 	// explicitly.
 	//
-	// 1. Create the project venv at ``.venv/`` from the system
-	//    Python on PATH (whichever 3.14 the image ships).
+	// ``--clear`` recreates the venv from scratch on every rebuild
+	// so a stale dev container can never linger with a half-broken
+	// interpreter. ``--refresh`` on ``uv pip install`` re-checks
+	// PyPI for the latest matching version (defeats uv's package
+	// metadata cache, which can hold a stale view of versions
+	// across container rebuilds).
+	//
+	// 1. Create / recreate the project venv at ``.venv/`` from the
+	//    system Python on PATH (whichever 3.14 the image ships).
 	// 2. Install the Python project in editable mode + dev extras.
 	//    uv auto-detects the in-tree venv and installs there.
 	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
@@ -39,7 +46,19 @@
 	//    for the frontend per ``client/package.json``).
 	// 5. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "uv venv .venv --seed && uv pip install -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"postCreateCommand": "uv venv .venv --seed --clear && uv pip install --refresh -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"containerEnv": {
+		// Hardlink mode for ``uv pip install`` is ~2-3× faster than
+		// copy mode but only works when the cache and the target
+		// venv live on the **same filesystem**. The default cache
+		// at ``~/.cache/uv`` sits on the container's overlay FS,
+		// while ``.venv/`` lives on the bind-mounted workspace
+		// volume → hardlinks fail and uv warns. Pinning the cache
+		// inside the workspace puts both on the same FS, so
+		// hardlinks work and the warning goes away.
+		"UV_LINK_MODE": "hardlink",
+		"UV_CACHE_DIR": "${containerWorkspaceFolder}/.uv-cache"
+	},
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
 	// 5173 = Vite dev server (``pnpm run dev`` in ``client/``).
