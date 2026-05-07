@@ -92,6 +92,16 @@ class FederationEventType(str, enum.Enum):
     # and flush on event arrival.
     SPACE_RSVP_UPDATED = "space_rsvp_updated"
     SPACE_RSVP_DELETED = "space_rsvp_deleted"
+    # Personal calendar federation (§23.60). Cross-household invites
+    # land on the recipient's personal calendar with origin='remote_invite'.
+    # Local household members are NOT invited — coordinating with a
+    # household member is done by writing directly to their calendar.
+    # Only confirmed paired-instance users appear in the invite picker.
+    PERSONAL_CALENDAR_EVENT_CREATED = "personal_calendar_event_created"
+    PERSONAL_CALENDAR_EVENT_UPDATED = "personal_calendar_event_updated"
+    PERSONAL_CALENDAR_EVENT_DELETED = "personal_calendar_event_deleted"
+    PERSONAL_CALENDAR_RSVP_UPDATED = "personal_calendar_rsvp_updated"
+    PERSONAL_CALENDAR_RSVP_DELETED = "personal_calendar_rsvp_deleted"
     SPACE_SCHEDULE_RESPONSE_UPDATED = "space_schedule_response_updated"
     SPACE_SCHEDULE_FINALIZED = "space_schedule_finalized"
     SPACE_LOCATION_UPDATED = "space_location_updated"

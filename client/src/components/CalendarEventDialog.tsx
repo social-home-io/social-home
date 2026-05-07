@@ -15,6 +15,10 @@ import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import { currentUser } from '@/store/auth'
 import { householdUsers } from '@/store/householdUsers'
+import {
+  calendarInvitees,
+  loadCalendarInvitees,
+} from '@/store/calendarInvitees'
 
 interface DialogCalendarSummary {
   id: string
@@ -50,16 +54,17 @@ const coverUrl = signal('')
  *  preview ``<img>``; never sent on submit. */
 const coverPreview = signal('')
 const coverUploading = signal(false)
-/** Selected attendee user_ids for household events. Spaces invite all
+/** Cross-household invitees (paired-instance user_ids). Local
+ *  household members never appear here — coordinating with a household
+ *  member is done via the "For:" calendar selector. Spaces invite all
  *  members implicitly via the ``capacity`` / RSVP flow, so this stays
  *  empty for the space-event variant of the dialog. */
 const attendees = signal<Set<string>>(new Set())
-/** Whether this household event invites a yes/no/maybe response from
- *  the attendees. Default off — the common case is "put this on
- *  Maria's calendar so she sees it", not "Maria must confirm". The
- *  toggle is only surfaced when there's at least one *other* attendee
- *  selected; an event with only the creator never shows RSVP. */
-const rsvpEnabled = signal(false)
+/** Whether to ask invitees to RSVP. Auto-derives from the attendee
+ *  list (RSVP makes sense iff there's at least one cross-household
+ *  invitee), but the user can still flip it off — e.g. an FYI invite
+ *  that doesn't need a yes/no. */
+const rsvpEnabled = signal(true)
 const submitting = signal(false)
 
 /** Open the dialog for a personal calendar.
@@ -84,6 +89,7 @@ export function openEventDialog(
   householdCalendars.value = available
   spaceId.value = null
   open.value = true
+  void loadCalendarInvitees()
 }
 
 /** Open the dialog for a space calendar (Phase C). When ``spaceIdValue``
@@ -142,6 +148,7 @@ export function openEditEventDialog(
   // directly via ``<img src>``.
   coverPreview.value = ev.cover_url ?? ''
   open.value = true
+  void loadCalendarInvitees()
 }
 
 function reset() {
@@ -269,9 +276,22 @@ export function CalendarEventDialog({ onCreated }: {
             ownerCount.set(c.owner_username,
               (ownerCount.get(c.owner_username) ?? 0) + 1)
           }
+          const selected = householdCalendars.value
+            .find(c => c.id === calendarId.value)
+          const targetIsMine = selected?.owner_username === me
+          let targetLabel: string | null = null
+          if (selected && !targetIsMine) {
+            targetLabel = selected.owner_username
+            for (const u of householdUsers.value.values()) {
+              if (u.username === selected.owner_username) {
+                targetLabel = u.display_name || u.username
+                break
+              }
+            }
+          }
           return (
             <label>
-              For
+              Add to calendar
               <select
                 value={calendarId.value}
                 onChange={(ev) => {
@@ -288,7 +308,9 @@ export function CalendarEventDialog({ onCreated }: {
                     }
                   }
                   const ambiguous = (ownerCount.get(c.owner_username) ?? 1) > 1
-                  const base = mine ? 'Me' : ownerLabel
+                  const base = mine
+                    ? 'My calendar'
+                    : `${ownerLabel}'s calendar`
                   return (
                     <option key={c.id} value={c.id}>
                       {ambiguous ? `${base} · ${c.name}` : base}
@@ -296,10 +318,19 @@ export function CalendarEventDialog({ onCreated }: {
                   )
                 })}
               </select>
-              <small class="sh-form-help">
-                Lands directly on this person's calendar. Others can be
-                added below as additional invitees.
-              </small>
+              {targetLabel ? (
+                <small class="sh-form-help">
+                  This event lands directly on {targetLabel}'s calendar —
+                  no invite, no RSVP. Use the picker below to invite
+                  someone from another household.
+                </small>
+              ) : (
+                <small class="sh-form-help">
+                  Pick another household member to drop the event on
+                  their calendar instead. Cross-household friends are
+                  invited via the picker below.
+                </small>
+              )}
             </label>
           )
         })()}
@@ -378,20 +409,7 @@ export function CalendarEventDialog({ onCreated }: {
         <CoverPicker />
 
         {!isSpace && (() => {
-          const me = currentUser.value?.user_id
-          // The "For:" target is the calendar's owner — they're
-          // implicitly the event's primary recipient, so don't show
-          // them in the additional-invitees list.
-          const targetOwner = householdCalendars.value
-            .find(c => c.id === calendarId.value)?.owner_username ?? null
-          const others = Array.from(householdUsers.value.values())
-            .filter(u => u.user_id !== me && u.username !== targetOwner)
-            .sort((a, b) =>
-              (a.display_name || a.username).localeCompare(
-                b.display_name || b.username,
-              ),
-            )
-          if (others.length === 0) return null
+          const instances = calendarInvitees.value
           const toggle = (uid: string) => {
             const next = new Set(attendees.value)
             if (next.has(uid)) next.delete(uid)
@@ -399,31 +417,47 @@ export function CalendarEventDialog({ onCreated }: {
             attendees.value = next
           }
           return (
-            <div>
-              <span class="sh-form-label">Invite</span>
-              <div class="sh-attendee-picker">
-                {others.map(u => {
-                  const picked = attendees.value.has(u.user_id)
-                  return (
-                    <button
-                      key={u.user_id}
-                      type="button"
-                      class={
-                        picked
-                          ? 'sh-attendee-chip sh-attendee-chip--picked'
-                          : 'sh-attendee-chip'
-                      }
-                      aria-pressed={picked}
-                      onClick={() => toggle(u.user_id)}
-                    >
-                      <Avatar src={u.picture_url ?? null}
-                              name={u.display_name || u.username}
-                              size={20} />
-                      <span>{u.display_name || u.username}</span>
-                    </button>
-                  )
-                })}
-              </div>
+            <div class="sh-attendee-block">
+              <span class="sh-form-label">Invite from connected households</span>
+              {instances.length === 0 ? (
+                <p class="sh-form-help">
+                  No paired households yet. Pair a household from{' '}
+                  <a href="/settings/connections">Settings → Connections</a>{' '}
+                  to invite friends from another home. (Household members
+                  don't need invites — pick their calendar in the "For:"
+                  selector above.)
+                </p>
+              ) : (
+                instances.map(inst => (
+                  <fieldset key={inst.instance_id} class="sh-attendee-group">
+                    <legend>{inst.instance_name}</legend>
+                    <div class="sh-attendee-picker">
+                      {inst.members.map(m => {
+                        const picked = attendees.value.has(m.user_id)
+                        const label = m.display_name || m.remote_username
+                        return (
+                          <button
+                            key={m.user_id}
+                            type="button"
+                            class={
+                              picked
+                                ? 'sh-attendee-chip sh-attendee-chip--picked'
+                                : 'sh-attendee-chip'
+                            }
+                            aria-pressed={picked}
+                            onClick={() => toggle(m.user_id)}
+                          >
+                            <Avatar src={m.picture_url ?? null}
+                                    name={label}
+                                    size={20} />
+                            <span>{label}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </fieldset>
+                ))
+              )}
               {attendees.value.size > 0 && (
                 <label class="sh-form-row-cap" style={{ marginTop: 'var(--sh-space-xs)' }}>
                   <input
@@ -431,10 +465,10 @@ export function CalendarEventDialog({ onCreated }: {
                     checked={rsvpEnabled.value}
                     onChange={() => (rsvpEnabled.value = !rsvpEnabled.value)}
                   />{' '}
-                  Ask invitees to respond (RSVP)
+                  Ask invitees to RSVP
                   <small class="sh-form-help" style={{ display: 'block', marginLeft: 24 }}>
-                    Off by default — the event just appears on their
-                    calendar. Turn on if you need a yes/no.
+                    On by default for cross-household invites. Turn off to
+                    send the event without asking for a yes/no.
                   </small>
                 </label>
               )}

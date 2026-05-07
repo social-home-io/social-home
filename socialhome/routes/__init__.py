@@ -45,6 +45,7 @@ from .calendar import (
     CalendarImportIcsView,
     CalendarImportImageView,
     CalendarImportPromptView,
+    CalendarInviteesView,
     SpaceCalendarEventDetailView,
     SpaceCalendarEventsView,
 )
@@ -636,6 +637,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     )
 
     # ── Calendar ────────────────────────────────────────────────────────
+    # ``invitees`` registers BEFORE the ``{id}`` collection so aiohttp
+    # matches the literal segment first — otherwise ``invitees`` would
+    # be eaten as a calendar id.
+    app.router.add_view("/api/calendars/invitees", CalendarInviteesView)
     app.router.add_view("/api/calendars", CalendarCollectionView)
     app.router.add_view("/api/calendars/{id}/events", CalendarEventsView)
     app.router.add_view("/api/calendars/{id}/import_ics", CalendarImportIcsView)

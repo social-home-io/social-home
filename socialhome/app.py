@@ -185,6 +185,7 @@ from .services.space_zone_service import SpaceZoneService
 from .services.task_federation_outbound import TaskFederationOutbound
 from .services.federation_inbound import (
     PairingInboundHandlers,
+    PersonalCalendarInboundHandlers,
     SpaceContentInboundHandlers,
     SpaceInviteInboundHandlers,
     SpaceMembershipInboundHandlers,
@@ -387,6 +388,7 @@ def _wire_federation_stack(
     moment_repo,
     space_task_repo,
     space_calendar_repo,
+    calendar_repo,
     dm_contact_repo,
     space_poll_repo,
     gallery_repo,
@@ -577,6 +579,11 @@ def _wire_federation_stack(
         poll_repo=space_poll_repo,
         gallery_repo=gallery_repo,
         zone_repo=space_zone_repo,
+    ).attach_to(federation_service)
+    PersonalCalendarInboundHandlers(
+        bus=bus,
+        calendar_repo=calendar_repo,
+        user_repo=user_repo,
     ).attach_to(federation_service)
 
     # §25.6 Direct Space Sync — content transfer over DataChannel.
@@ -1614,6 +1621,7 @@ def create_app(config: Config | None = None) -> web.Application:
             moment_repo=moment_repo,
             space_task_repo=space_task_repo,
             space_calendar_repo=space_cal_repo,
+            calendar_repo=calendar_repo,
             dm_contact_repo=dm_contact_repo,
             space_poll_repo=repos.space_poll,
             gallery_repo=repos.gallery,
@@ -1639,6 +1647,15 @@ def create_app(config: Config | None = None) -> web.Application:
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).
         space_cal_service.attach_federation(federation_service)
+        # Personal calendar federation (§23.60). Cross-household invites
+        # ride on regular send_event envelopes; attendee → instance
+        # routing happens inside the service via the user/federation
+        # repos.
+        calendar_service.attach_federation(
+            federation_service,
+            federation_repo=federation_repo,
+            user_repo=user_repo,
+        )
         # Spec §24.10.7 — provider asks the paired GFS for a least-loaded
         # signaling node before generating SPACE_SYNC_OFFER, releases on
         # DIRECT_READY / DIRECT_FAILED.

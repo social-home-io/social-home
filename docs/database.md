@@ -208,7 +208,8 @@ themselves moments and link to the conversation root via
 | Table | Purpose |
 |---|---|
 | `calendars` | Personal + space calendars. Personal calendars are owned by a username; space calendars share lifecycle with their space. |
-| `calendar_events` | Personal calendar events with `rrule`, attendees, `mirrored_from` (when a space event is mirrored into a personal calendar). |
+| `calendar_events` | Personal calendar events with `rrule`, attendees, `mirrored_from` (when a space event is mirrored into a personal calendar). New columns: `origin` ∈ `{local, remote_invite}` distinguishes locally-authored rows from cross-household invite mirrors; `remote_event_id` + `remote_instance_id` link a mirror back to the organiser's row so RSVP responses propagate via `PERSONAL_CALENDAR_RSVP_UPDATED`. |
+| `calendar_event_rsvps` | Personal-calendar RSVPs — cross-household invites only. PK `(event_id, user_id, occurrence_at)`. Status ∈ `{accepted, declined, tentative}`. Local household members never RSVP — the household is the unit of trust and members coordinate by writing directly to each other's calendars via the dialog's calendar selector. |
 
 ## Pages (household)
 

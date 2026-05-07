@@ -276,9 +276,10 @@ unnecessary.
 
 | Method | Path | Purpose |
 |---|---|---|
+| GET | `/api/calendars/invitees` | List cross-household invitees for the calendar event dialog (§23.60). Returns members of confirmed paired peer instances grouped by instance: `{"instances": [{"instance_id", "instance_name", "members": [{user_id, instance_id, remote_username, display_name, picture_hash, picture_url}]}]}`. **Local household members are never returned** — coordinating with a household member is done via the calendar selector, not the invite picker. Empty list when no instances are paired. |
 | GET / POST | `/api/calendars` | List / create calendars. |
 | GET / PATCH / DELETE | `/api/calendars/{id}` | CRUD. |
-| GET / POST | `/api/calendars/{id}/events` | List / create events. Body fields: `summary`, `start`, `end`, `all_day`, `description`, `attendees`, `rrule`, `rsvp_enabled`, `cover_url` (optional `/api/media/{filename}` reference — surfaces on `EventPostCard` and the calendar list thumbnail). |
+| GET / POST | `/api/calendars/{id}/events` | List / create events. Body fields: `summary`, `start`, `end`, `all_day`, `description`, `attendees`, `rrule`, `rsvp_enabled`, `cover_url`. `attendees` accepts only confirmed-paired-instance user_ids — local household member user_ids are rejected with 422 (coordinate via the calendar selector instead). Authorization: any active household member can create / edit events on any household member's personal calendar. |
 | GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. PATCH treats `cover_url` as tri-state: omitted = leave unchanged, explicit `null` = clear, string = set. |
 | GET | `/api/calendars/events/{id}/rsvps` | List RSVPs. `?occurrence_at=<iso>` (URL-encoded) scopes to one occurrence of a recurring event. |
 | POST | `/api/calendars/events/{id}/rsvp` | Set own RSVP. Body: `{"status": "going\|maybe\|declined", "occurrence_at": "<iso>"}`. `occurrence_at` required for recurring events; defaults to `event.start` for non-recurring. |

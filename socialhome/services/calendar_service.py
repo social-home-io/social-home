@@ -11,9 +11,11 @@ Raises the usual domain exceptions:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from ..domain.calendar import (
     Calendar,
@@ -28,11 +30,17 @@ from ..domain.events import (
     CalendarEventUpdated,
     SpaceMemberLeft,
 )
-from ..domain.federation import FederationEventType
+from ..domain.federation import FederationEventType, PairingStatus
 from ..infrastructure.event_bus import EventBus
 from ..media_signer import strip_signature_query
 from ..repositories.calendar_repo import AbstractCalendarRepo, AbstractSpaceCalendarRepo
 from ..utils.rrule import expand_rrule
+
+if TYPE_CHECKING:
+    from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.user_repo import AbstractUserRepo
+
+log = logging.getLogger(__name__)
 
 
 # Sentinel used by ``update_event(... cover_url=...)`` to distinguish
@@ -66,7 +74,14 @@ def _clean_cover_url(value: str | None) -> str | None:
 class CalendarService:
     """Personal calendar operations."""
 
-    __slots__ = ("_repo", "_bus", "_household")
+    __slots__ = (
+        "_repo",
+        "_bus",
+        "_household",
+        "_federation",
+        "_fed_repo",
+        "_user_repo",
+    )
 
     def __init__(
         self,
@@ -76,14 +91,92 @@ class CalendarService:
         self._repo = calendar_repo
         self._bus = bus
         self._household = None
+        self._federation = None
+        self._fed_repo: AbstractFederationRepo | None = None
+        self._user_repo: AbstractUserRepo | None = None
 
     def attach_household_features(self, svc) -> None:
         """Wire :class:`HouseholdFeaturesService` for toggle enforcement (§18)."""
         self._household = svc
 
+    def attach_federation(
+        self,
+        federation_service,
+        *,
+        federation_repo: AbstractFederationRepo,
+        user_repo: AbstractUserRepo,
+    ) -> None:
+        """Wire cross-household invite delivery.
+
+        Personal calendar events that name remote attendees fan out to
+        each attendee's home instance via
+        :meth:`FederationService.send_event`. Local-only events
+        (no attendees, or attendees that resolve to the local instance —
+        rejected at validate-time) never produce envelopes. The
+        ``federation_repo`` is needed to confirm the peer is paired
+        before we route to it; ``user_repo`` resolves user → instance.
+        """
+        self._federation = federation_service
+        self._fed_repo = federation_repo
+        self._user_repo = user_repo
+
     async def _require_calendar_enabled(self) -> None:
         if self._household is not None:
             await self._household.require_enabled("calendar")
+
+    async def _validate_attendees(
+        self,
+        attendees: list[str] | tuple[str, ...] | None,
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
+        """Reject local user_ids; return (cleaned, instance_for_user).
+
+        Personal-calendar invites are reserved for confirmed paired-
+        instance users. Coordinating with a household member is done by
+        writing directly to that member's calendar (handled via the
+        dialog's calendar selector), not via the invite list — so a
+        local user_id appearing here is a mis-wired client and we
+        reject it with 422 rather than silently accept.
+
+        ``instance_for_user`` maps each accepted attendee user_id to its
+        home instance so the federation outbound knows where to send
+        the envelope without re-querying.
+        """
+        items = tuple(attendees or ())
+        if not items:
+            return (), {}
+        if self._user_repo is None or self._fed_repo is None:
+            # Standalone / unit-test mode: skip federation routing but
+            # still reject obvious garbage. Tests that exercise the
+            # federation path attach the repos.
+            return items, {}
+        local_id = await self._fed_repo.get_local_identity()
+        local_instance_id = (local_id or {}).get("instance_id")
+        confirmed_ids = {
+            inst.id
+            for inst in await self._fed_repo.list_instances(
+                status=PairingStatus.CONFIRMED.value,
+            )
+        }
+        instance_for_user: dict[str, str] = {}
+        for uid in items:
+            home = await self._user_repo.get_instance_for_user(uid)
+            if home is None:
+                raise ValueError(
+                    f"unknown attendee {uid!r} — not a household member or "
+                    "paired-instance user",
+                )
+            if home == local_instance_id:
+                raise ValueError(
+                    f"attendee {uid!r} is a household member; add the event "
+                    "to their personal calendar directly instead of inviting "
+                    "them",
+                )
+            if home not in confirmed_ids:
+                raise ValueError(
+                    f"attendee {uid!r} is not on a confirmed paired instance",
+                )
+            instance_for_user[uid] = home
+        return items, instance_for_user
 
     # ── Calendars ────────────────────────────────────────────────────────
 
@@ -173,6 +266,8 @@ class CalendarService:
         if end_dt < start_dt:
             raise ValueError("event end must not be before start")
 
+        attendee_tuple, instance_for_user = await self._validate_attendees(attendees)
+
         event = CalendarEvent(
             id=uuid.uuid4().hex,
             calendar_id=calendar_id,
@@ -182,7 +277,7 @@ class CalendarService:
             created_by=created_by,
             all_day=all_day,
             description=description,
-            attendees=tuple(attendees or []),
+            attendees=attendee_tuple,
             rrule=rrule,
             rsvp_enabled=rsvp_enabled,
             cover_url=_clean_cover_url(cover_url),
@@ -190,6 +285,12 @@ class CalendarService:
         saved = await self._repo.save_event(event)
         if self._bus is not None:
             await self._bus.publish(CalendarEventCreated(event=saved))
+        await self._publish_federation_event(
+            event=saved,
+            calendar=cal,
+            instance_for_user=instance_for_user,
+            event_type=FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+        )
         return saved
 
     async def get_event(self, event_id: str) -> CalendarEvent:
@@ -218,12 +319,27 @@ class CalendarService:
         )
 
     async def delete_event(self, event_id: str) -> None:
-        result = await self._repo.get_event(event_id)
-        if result is None:
+        existing = await self._repo.get_event(event_id)
+        if existing is None:
             raise KeyError(f"calendar event {event_id!r} not found")
+        cal = await self._repo.get_calendar(existing.calendar_id)
         await self._repo.delete_event(event_id)
         if self._bus is not None:
             await self._bus.publish(CalendarEventDeleted(event_id=event_id))
+        # Federate a deletion to peers that previously received the
+        # event. Re-resolves attendee → instance because the event row
+        # is gone now; we tolerate stragglers (a user removed from the
+        # paired-instance side mid-flight is just a no-op).
+        if existing.attendees and cal is not None:
+            instance_for_user = await self._resolve_attendee_instances(
+                existing.attendees,
+            )
+            await self._publish_federation_event(
+                event=existing,
+                calendar=cal,
+                instance_for_user=instance_for_user,
+                event_type=FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+            )
 
     async def update_event(
         self,
@@ -265,6 +381,15 @@ class CalendarService:
             # the field is present in the body — assert + cast here.
             assert cover_url is None or isinstance(cover_url, str)
             new_cover = _clean_cover_url(cover_url)
+        if attendees is not None:
+            attendee_tuple, instance_for_user = await self._validate_attendees(
+                attendees,
+            )
+        else:
+            attendee_tuple = existing.attendees
+            instance_for_user = await self._resolve_attendee_instances(
+                existing.attendees,
+            )
         updated = replace(
             existing,
             summary=new_summary,
@@ -274,7 +399,7 @@ class CalendarService:
             description=description
             if description is not None
             else existing.description,
-            attendees=tuple(attendees) if attendees is not None else existing.attendees,
+            attendees=attendee_tuple,
             rrule=rrule if rrule is not None else existing.rrule,
             rsvp_enabled=(
                 rsvp_enabled if rsvp_enabled is not None else existing.rsvp_enabled
@@ -284,7 +409,207 @@ class CalendarService:
         await self._repo.save_event(updated)
         if self._bus is not None:
             await self._bus.publish(CalendarEventUpdated(event=updated))
+        cal = await self._repo.get_calendar(updated.calendar_id)
+        if cal is not None:
+            await self._publish_federation_event(
+                event=updated,
+                calendar=cal,
+                instance_for_user=instance_for_user,
+                event_type=FederationEventType.PERSONAL_CALENDAR_EVENT_UPDATED,
+            )
         return updated
+
+    # ── RSVP (cross-household personal calendar invites) ────────────────
+
+    async def set_rsvp(
+        self,
+        *,
+        event_id: str,
+        user_id: str,
+        status: str,
+    ) -> None:
+        """Set the local user's RSVP on an inbound invite.
+
+        Only valid for events with ``origin='remote_invite'`` — events
+        authored on this instance don't carry RSVPs (organisers know
+        they're attending). The status propagates back to the
+        organising instance via PERSONAL_CALENDAR_RSVP_UPDATED so the
+        organiser's UI reflects the response.
+        """
+        if status not in ("accepted", "declined", "tentative"):
+            raise ValueError(
+                "RSVP status must be one of accepted/declined/tentative",
+            )
+        existing = await self._repo.get_event(event_id)
+        if existing is None:
+            raise KeyError(f"calendar event {event_id!r} not found")
+        if existing.origin != "remote_invite":
+            raise ValueError(
+                "RSVPs only apply to inbound invites — local events have "
+                "no organiser to reply to",
+            )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await self._repo.upsert_rsvp(
+            CalendarRSVP(
+                event_id=event_id,
+                user_id=user_id,
+                status=status,
+                updated_at=now_iso,
+                occurrence_at=existing.start.isoformat(),
+            )
+        )
+        await self._publish_rsvp(
+            event=existing,
+            user_id=user_id,
+            status=status,
+            updated_at=now_iso,
+        )
+
+    async def clear_rsvp(self, *, event_id: str, user_id: str) -> None:
+        existing = await self._repo.get_event(event_id)
+        if existing is None:
+            return
+        if existing.origin != "remote_invite":
+            raise ValueError(
+                "RSVPs only apply to inbound invites",
+            )
+        await self._repo.remove_rsvp(
+            event_id,
+            user_id,
+            occurrence_at=existing.start.isoformat(),
+        )
+        await self._publish_rsvp(
+            event=existing,
+            user_id=user_id,
+            status=None,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+    # ── Federation helpers ──────────────────────────────────────────────
+
+    async def _resolve_attendee_instances(
+        self,
+        attendees: tuple[str, ...] | list[str],
+    ) -> dict[str, str]:
+        """Best-effort lookup user_id → home instance_id.
+
+        Used on update / delete where the attendees were already
+        validated at create-time. Missing rows (user moved off the
+        peer between create and now) silently drop out — the outbound
+        becomes a no-op for that user.
+        """
+        if not attendees or self._user_repo is None:
+            return {}
+        out: dict[str, str] = {}
+        for uid in attendees:
+            home = await self._user_repo.get_instance_for_user(uid)
+            if home is not None:
+                out[uid] = home
+        return out
+
+    async def _publish_federation_event(
+        self,
+        *,
+        event: CalendarEvent,
+        calendar: Calendar,
+        instance_for_user: dict[str, str],
+        event_type: FederationEventType,
+    ) -> None:
+        """Send a personal-calendar envelope to each attendee's instance.
+
+        No-op when:
+        * federation isn't wired (unit tests, standalone mode); or
+        * the event has no attendees (purely-local rows never federate); or
+        * the event is itself an inbound mirror (``origin='remote_invite'``)
+          — the organiser's instance already knows; we don't echo back.
+        """
+        if self._federation is None or not instance_for_user:
+            return
+        if event.origin == "remote_invite":
+            return
+        # One envelope per receiving instance — multiple attendees on
+        # the same peer share a single delivery.
+        targets: dict[str, list[str]] = {}
+        for uid, inst_id in instance_for_user.items():
+            targets.setdefault(inst_id, []).append(uid)
+        payload_base = _personal_event_payload(event, calendar)
+        for inst_id, uids in targets.items():
+            payload = dict(payload_base)
+            payload["attendee_user_ids"] = sorted(uids)
+            try:
+                await self._federation.send_event(
+                    to_instance_id=inst_id,
+                    event_type=event_type,
+                    payload=payload,
+                )
+            except Exception:  # noqa: BLE001
+                # Don't fail the whole create on a transient peer
+                # outage — the outbox retry loop will redeliver.
+                log.exception(
+                    "personal calendar federation outbound failed: %s → %s",
+                    event_type,
+                    inst_id,
+                )
+
+    async def _publish_rsvp(
+        self,
+        *,
+        event: CalendarEvent,
+        user_id: str,
+        status: str | None,
+        updated_at: str,
+    ) -> None:
+        if self._federation is None:
+            return
+        if not event.remote_instance_id or not event.remote_event_id:
+            return
+        evt_type = (
+            FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
+            if status is not None
+            else FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED
+        )
+        payload: dict = {
+            "event_id": event.remote_event_id,
+            "user_id": user_id,
+            "occurrence_at": event.start.isoformat(),
+            "updated_at": updated_at,
+        }
+        if status is not None:
+            payload["status"] = status
+        try:
+            await self._federation.send_event(
+                to_instance_id=event.remote_instance_id,
+                event_type=evt_type,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "personal calendar RSVP outbound failed: %s → %s",
+                evt_type,
+                event.remote_instance_id,
+            )
+
+
+def _personal_event_payload(event: CalendarEvent, calendar: Calendar) -> dict:
+    """Wire-shape for PERSONAL_CALENDAR_EVENT_*. Encryption-first
+    (§25.8.21): every field rides inside the encrypted payload — only
+    the envelope's routing fields stay plaintext."""
+    return {
+        "event_id": event.id,
+        "calendar_id": event.calendar_id,
+        "calendar_name": calendar.name,
+        "calendar_color": calendar.color,
+        "organizer_user_id": event.created_by,
+        "organizer_username": calendar.owner_username,
+        "summary": event.summary,
+        "description": event.description,
+        "start": event.start.isoformat(),
+        "end": event.end.isoformat(),
+        "all_day": event.all_day,
+        "rrule": event.rrule,
+        "rsvp_enabled": event.rsvp_enabled,
+        "cover_url": event.cover_url,
+    }
 
 
 class SpaceCalendarService:

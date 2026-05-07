@@ -59,6 +59,20 @@ class CalendarEvent:
     #: the post + list-row fall back to the icon placeholder.
     cover_url: str | None = None
 
+    #: Origin of this event row. ``"local"`` = authored on this
+    #: instance. ``"remote_invite"`` = mirror of an event on a paired
+    #: peer instance, materialised in our DB so the recipient can see
+    #: it on their personal calendar and RSVP. RSVP responses on
+    #: remote_invite rows propagate back to the organiser's instance.
+    origin: str = "local"
+    #: For ``remote_invite`` rows: the original event id on the
+    #: organiser's instance. RSVP outbound carries this so the organiser
+    #: can match the response to their local event row.
+    remote_event_id: str | None = None
+    #: For ``remote_invite`` rows: the organiser's instance_id (a
+    #: confirmed peer).
+    remote_instance_id: str | None = None
+
 
 @dataclass(slots=True, frozen=True)
 class CalendarEventCreate:
