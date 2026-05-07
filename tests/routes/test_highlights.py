@@ -54,9 +54,12 @@ async def test_frame_media_url_is_signed_in_responses(client):
     assert list_url.startswith("/api/media/x.webp?"), list_url
     assert "exp=" in list_url and "sig=" in list_url
 
-    detail = await (await client.get(
-        f"/api/highlights/{highlight_id}", headers=_auth(client),
-    )).json()
+    detail = await (
+        await client.get(
+            f"/api/highlights/{highlight_id}",
+            headers=_auth(client),
+        )
+    ).json()
     detail_url = detail["frames"][0]["media_url"]
     assert detail_url.startswith("/api/media/x.webp?"), detail_url
     assert "exp=" in detail_url and "sig=" in detail_url
