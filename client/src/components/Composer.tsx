@@ -20,6 +20,7 @@ import {
 import { EmojiPickButton } from './EmojiPickButton'
 import { LocationPicker, type LocationDraft } from './LocationPicker'
 import { MarkdownToolbar } from './MarkdownToolbar'
+import { MediaDropzone } from './MediaDropzone'
 import { PollBuilder, type PollDraft } from './PollUI'
 import { ScheduleBuilder, type ScheduleDraft } from './ScheduleBuilder'
 import { SttButton } from './SttButton'
@@ -491,34 +492,27 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
         </div>
       )}
       {/* Empty-state dropzone: shown when no images yet (image post) or
-          no media yet (video/file post). The ``<input>`` carries
-          ``multiple`` for image posts, single for the rest. */}
+          no media yet (video/file post). The dropzone owns its own
+          drag-and-drop visuals; the form-level handlers above keep the
+          ``sh-composer--dragging`` glow for drop-anywhere on the form. */}
       {showMediaAttach
         && (postType.value === 'image' ? images.length === 0 : !mediaUrl) && (
-        <div class="sh-composer-dropzone">
-          <span>
-            {dragActive
-              ? `Drop to attach ${postType.value}`
-              : postType.value === 'image'
-                ? 'Drag photos here, or'
-                : `Drag a ${postType.value} here, or`}
-          </span>
-          <button type="button" class="sh-link"
-                  onClick={() => fileInputRef.current?.click()}>
-            {postType.value === 'image' ? 'choose photos…' : 'choose a file…'}
-          </button>
-          <input ref={fileInputRef} type="file"
-                 multiple={postType.value === 'image'}
-                 accept={postType.value === 'image' ? 'image/*'
-                       : postType.value === 'video' ? 'video/*' : ''}
-                 style={{ display: 'none' }}
-                 onChange={onFilePicked} />
-        </div>
+        <MediaDropzone
+          multiple={postType.value === 'image'}
+          accept={postType.value === 'image' ? 'image/*'
+                : postType.value === 'video' ? 'video/*' : undefined}
+          hint={postType.value === 'image'
+            ? 'Drag photos here, or'
+            : `Drag a ${postType.value} here, or`}
+          pickLabel={postType.value === 'image' ? 'choose photos…' : 'choose a file…'}
+          draggingHint={`Drop to attach ${postType.value}`}
+          onFiles={acceptFiles}
+        />
       )}
       {/* Hidden picker reused by the "Add photo" tile so a user can
           extend an existing image post without re-rendering the
-          dropzone path. The ``<input>`` above only renders in the
-          empty state, so we mount a second one here for the
+          dropzone path. The MediaDropzone above only renders in the
+          empty state, so we mount this raw input for the
           fill-with-more case. */}
       {postType.value === 'image' && images.length > 0
         && images.length < MAX_IMAGES && (

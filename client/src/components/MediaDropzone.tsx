@@ -55,6 +55,10 @@ export function MediaDropzone({
 
   const onDrop = async (e: DragEvent) => {
     e.preventDefault()
+    // Stop bubbling so a parent that also wires drop-anywhere handlers
+    // (e.g. the post Composer's form-level drop) doesn't fire a second
+    // time and double-process the same files.
+    e.stopPropagation()
     setDragActive(false)
     if (disabled) return
     const dropped = Array.from(e.dataTransfer?.files ?? [])
