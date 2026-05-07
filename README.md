@@ -37,10 +37,14 @@ The other tasks under **Terminal → Run Task…**:
 config and a **Debug current pytest file** config (uses
 `debugpy`).
 
-The container uses [`uv`](https://github.com/astral-sh/uv)
-as the Python package manager. Reinstall deps with
-`uv pip install --system -e .[dev]`; pin a single package with
-`uv pip install --system <pkg>`.
+The container uses [`uv`](https://github.com/astral-sh/uv) as
+the Python package manager and provisions a project venv at
+`.venv/` (the system Python's site-packages is root-owned, so a
+local venv keeps installs writable). VS Code is wired to use
+`${workspaceFolder}/.venv/bin/python` as the default
+interpreter. Reinstall deps with
+`uv pip install -e .[dev]` (uv auto-detects the in-tree venv);
+pin a single package with `uv pip install <pkg>`.
 
 ### Manual setup
 

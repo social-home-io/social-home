@@ -10,7 +10,7 @@
 			"label": "Run backend (standalone)",
 			"detail": "Start the aiohttp backend in standalone mode with a throwaway data dir under /tmp/sh-dev. First request lands on /setup.",
 			"type": "shell",
-			"command": "python",
+			"command": "${workspaceFolder}/.venv/bin/python",
 			"args": ["-m", "socialhome"],
 			"options": {
 				"env": {
