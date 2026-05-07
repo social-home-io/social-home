@@ -53,12 +53,12 @@ beforeEach(() => {
 })
 
 describe('SideNav', () => {
-  it('renders the four groups in IA order: At home → Talk → Browse → You', () => {
+  it('renders the four groups in IA order: At home → Talk → Browse → Local', () => {
     setUser({ is_admin: true })
     const { container } = renderAt('/')
     const headers = Array.from(container.querySelectorAll('.sh-sidenav-group-header'))
       .map((el) => el.textContent?.trim())
-    expect(headers).toEqual(['At home', 'Talk', 'Browse', 'You'])
+    expect(headers).toEqual(['At home', 'Talk', 'Browse', 'Local'])
   })
 
   it('exposes each group as a labelled <nav> landmark', () => {
@@ -96,14 +96,14 @@ describe('SideNav', () => {
   })
 
   it('suppresses a group header entirely when every item is gated off', () => {
-    // Verify the suppression rule via the YOU group: every item
+    // Verify the suppression rule via the LOCAL group: every item
     // (Parent Control, Federation, Admin) is gated, so a non-admin
-    // non-guardian user has nothing left in YOU and the header
+    // non-guardian user has nothing left in LOCAL and the header
     // disappears.
     setUser({ is_admin: false })
     isGuardian.value = false
     const { queryByText, container } = renderAt('/')
-    expect(queryByText('You')).toBeNull()
+    expect(queryByText('Local')).toBeNull()
     expect(queryByText('Admin')).toBeNull()
     expect(queryByText('Federation')).toBeNull()
     expect(queryByText('Parent Control')).toBeNull()
@@ -182,14 +182,14 @@ describe('SideNav', () => {
     expect(tasksLink?.getAttribute('aria-current')).toBeNull()
   })
 
-  it('Corner sits in BROWSE pointing at /corner, not in YOU', () => {
+  it('Corner sits in BROWSE pointing at /corner, not in LOCAL', () => {
     setUser({ is_admin: true })
     const { container, getByText } = renderAt('/')
     const browseNav = container.querySelector('nav[aria-labelledby="sidenav-group-browse"]')!
     expect(browseNav.textContent).toContain('Corner')
-    const youNav = container.querySelector('nav[aria-labelledby="sidenav-group-you"]')!
-    expect(youNav.textContent).not.toContain('Corner')
-    expect(youNav.textContent).not.toContain('Dashboard')
+    const localNav = container.querySelector('nav[aria-labelledby="sidenav-group-local"]')!
+    expect(localNav.textContent).not.toContain('Corner')
+    expect(localNav.textContent).not.toContain('Dashboard')
     const cornerLink = getByText('Corner').closest('a')
     expect(cornerLink?.getAttribute('href')).toBe('/corner')
   })
