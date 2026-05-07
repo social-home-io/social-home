@@ -2651,6 +2651,36 @@ a.sh-friends-member-chip:hover {
   color: var(--sh-primary);
   font-weight: 600;
 }
+/* MediaDropzone — same look as the composer dropzone, but scoped to a
+ * standalone component so the highlight / momentum composers can drop
+ * it in without inheriting the form-level ``sh-composer`` shell. */
+.sh-mediadrop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-md);
+  border: 1.5px dashed var(--sh-border-strong);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg-secondary);
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-sm);
+  text-align: center;
+  transition:
+    background var(--sh-transition-fast),
+    border-color var(--sh-transition-fast);
+}
+.sh-mediadrop--dragging {
+  border-color: var(--sh-primary);
+  border-style: solid;
+  background: var(--sh-bg);
+  color: var(--sh-primary);
+  font-weight: 600;
+}
+.sh-mediadrop--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .sh-composer-attachment {
   position: relative;
   display: flex;
@@ -11670,6 +11700,13 @@ a.sh-btn--ghost:hover {
   border-radius: var(--sh-radius-sm);
   overflow: hidden;
   background: var(--sh-bg-secondary);
+}
+/* Video frames need room for the native ``controls`` overlay so the
+ * user can actually play the staged clip — bump to a 16:9 strip. */
+.sh-highlight-frame-thumb--video {
+  flex: 0 0 200px;
+  width: 200px;
+  height: 112px;
 }
 .sh-highlight-frame-thumb img,
 .sh-highlight-frame-thumb video {

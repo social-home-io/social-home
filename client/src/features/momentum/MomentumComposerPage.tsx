@@ -10,12 +10,15 @@
  *   - Video duration capped at 15 s (read on `loadedmetadata` before
  *     the upload form-data is constructed).
  */
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useLocation, useRoute } from 'preact-iso'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
+import { MediaDropzone } from '@/components/MediaDropzone'
 import { showToast } from '@/components/Toast'
+import { UploadProgressBar, uploadWithProgress } from '@/components/UploadProgress'
+import { describeUploadError } from '@/utils/uploadErrors'
 import { useTitle } from '@/store/pageTitle'
 import {
   loadRegistrations,
@@ -29,6 +32,10 @@ const MAX_VIDEO_MS = 15_000
 const submitting = signal<boolean>(false)
 const content = signal<string>('')
 const mediaUrl = signal<string | null>(null)
+//: Short-lived signed URL used only for the local ``<img>`` / ``<video>``
+//: preview. ``mediaUrl`` (the canonical, unsigned URL) is what we send
+//: to the server on submit.
+const mediaPreviewUrl = signal<string | null>(null)
 const mediaType = signal<'image' | 'video' | null>(null)
 const durationMs = signal<number | null>(null)
 //: Per-moment override for the §Momentum-public public-share toggle.
@@ -42,13 +49,13 @@ export default function MomentumComposerPage() {
   const loc = useLocation()
   const parentId = params.momentId ?? null
   useTitle(parentId ? 'Reply' : 'New moment')
-  const fileRef = useRef<HTMLInputElement>(null)
 
   // Reset state on mount so navigating from one composer to another
   // (top-level → reply → top-level) doesn't carry stale fields.
   useEffect(() => {
     content.value = ''
     mediaUrl.value = null
+    mediaPreviewUrl.value = null
     mediaType.value = null
     durationMs.value = null
     submitting.value = false
@@ -60,8 +67,8 @@ export default function MomentumComposerPage() {
     })
   }, [parentId])
 
-  const onPick = async () => {
-    const f = fileRef.current?.files?.[0]
+  const acceptFiles = async (files: File[]) => {
+    const f = files[0]
     if (!f) return
     const isVideo = f.type.startsWith('video/')
     const isImage = f.type.startsWith('image/')
@@ -89,18 +96,24 @@ export default function MomentumComposerPage() {
       durationMs.value = Math.round(dur)
     }
     try {
-      const fd = new FormData()
-      fd.append('file', f, f.name)
-      const r = await api.upload('/api/media/upload', fd) as { url?: string }
-      if (!r.url) throw new Error('Upload returned no url')
-      mediaUrl.value = r.url
+      const result = await uploadWithProgress(f)
+      mediaUrl.value = result.url
+      mediaPreviewUrl.value = result.signed_url
       mediaType.value = isVideo ? 'video' : 'image'
     } catch (err: unknown) {
-      showToast(`Upload failed: ${(err as Error)?.message ?? err}`, 'error')
+      showToast(describeUploadError(err, { file: f }), 'error')
       mediaUrl.value = null
+      mediaPreviewUrl.value = null
       mediaType.value = null
       durationMs.value = null
     }
+  }
+
+  const clearMedia = () => {
+    mediaUrl.value = null
+    mediaPreviewUrl.value = null
+    mediaType.value = null
+    durationMs.value = null
   }
 
   const submit = async () => {
@@ -163,24 +176,48 @@ export default function MomentumComposerPage() {
       </div>
 
       <div class="sh-momentum-composer-media">
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*,video/*"
-          onChange={() => void onPick()}
-        />
         {mediaUrl.value && mediaType.value === 'image' && (
-          <img src={mediaUrl.value} alt="" class="sh-momentum-composer-preview" />
+          <div class="sh-composer-attachment">
+            <img
+              src={mediaPreviewUrl.value ?? mediaUrl.value}
+              alt=""
+              class="sh-momentum-composer-preview"
+            />
+            <button
+              type="button"
+              class="sh-composer-remove-attach"
+              aria-label="Remove attachment"
+              onClick={clearMedia}
+            >✕</button>
+          </div>
         )}
         {mediaUrl.value && mediaType.value === 'video' && (
-          <video
-            src={mediaUrl.value}
-            class="sh-momentum-composer-preview"
-            controls
-            muted
-            preload="metadata"
+          <div class="sh-composer-attachment">
+            <video
+              src={mediaPreviewUrl.value ?? mediaUrl.value}
+              class="sh-momentum-composer-preview"
+              controls
+              muted
+              preload="metadata"
+            />
+            <button
+              type="button"
+              class="sh-composer-remove-attach"
+              aria-label="Remove attachment"
+              onClick={clearMedia}
+            >✕</button>
+          </div>
+        )}
+        {!mediaUrl.value && (
+          <MediaDropzone
+            accept="image/*,video/*"
+            hint="Drag a photo or video here, or"
+            pickLabel="choose media…"
+            draggingHint="Drop to attach"
+            onFiles={acceptFiles}
           />
         )}
+        <UploadProgressBar />
       </div>
 
       {registrations.value.length > 0 && (
