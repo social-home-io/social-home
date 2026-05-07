@@ -37,6 +37,11 @@ The other tasks under **Terminal → Run Task…**:
 config and a **Debug current pytest file** config (uses
 `debugpy`).
 
+The container uses [`uv`](https://github.com/astral-sh/uv)
+as the Python package manager. Reinstall deps with
+`uv pip install --system -e .[dev]`; pin a single package with
+`uv pip install --system <pkg>`.
+
 ### Manual setup
 
 If you're not using the Dev Container, do the same one-time
