@@ -8,12 +8,14 @@ than a 600-line monolith.
 """
 
 from .pairing import PairingInboundHandlers
+from .personal_calendar import PersonalCalendarInboundHandlers
 from .space_membership import SpaceMembershipInboundHandlers
 from .space_invites import SpaceInviteInboundHandlers
 from .space_content import SpaceContentInboundHandlers
 
 __all__ = [
     "PairingInboundHandlers",
+    "PersonalCalendarInboundHandlers",
     "SpaceMembershipInboundHandlers",
     "SpaceInviteInboundHandlers",
     "SpaceContentInboundHandlers",

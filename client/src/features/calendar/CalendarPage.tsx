@@ -28,6 +28,35 @@ interface CalendarSummary {
   id: string
   name: string
   owner_username: string
+  color?: string
+}
+
+/** localStorage key for "which calendars does this user want visible
+ *  by default". Scoped per user_id so two members on the same browser
+ *  (rare, but possible) don't trample each other. */
+function visibilityKey(userId: string): string {
+  return `sh-cal-visible:${userId}`
+}
+
+function loadVisibilityPrefs(userId: string): Set<string> | null {
+  try {
+    const raw = localStorage.getItem(visibilityKey(userId))
+    if (!raw) return null
+    const ids = JSON.parse(raw) as string[]
+    if (!Array.isArray(ids)) return null
+    return new Set(ids.filter(s => typeof s === 'string'))
+  } catch {
+    return null
+  }
+}
+
+function saveVisibilityPrefs(userId: string, ids: Set<string>): void {
+  try {
+    localStorage.setItem(visibilityKey(userId), JSON.stringify(Array.from(ids)))
+  } catch {
+    // localStorage unavailable / full — silently degrade. The session
+    // still works; defaults just re-apply on the next reload.
+  }
 }
 
 const loading = signal(true)
@@ -74,6 +103,16 @@ function calendarHue(calId: string): string {
     h = ((h << 5) + h + calId.charCodeAt(i)) | 0
   }
   return _CAL_HUES[Math.abs(h) % _CAL_HUES.length]
+}
+
+/** Resolve the chip dot colour. The DB column wins when the owner has
+ *  picked one (default ``#4A90E2`` is treated as "unset" so the
+ *  hash-derived palette stays the de-facto default until someone
+ *  explicitly customises). Otherwise fall back to the deterministic
+ *  16-hue palette. */
+function resolveCalendarColor(c: CalendarSummary): string {
+  if (c.color && c.color.toLowerCase() !== '#4a90e2') return c.color
+  return calendarHue(c.id)
 }
 
 async function loadEvents() {
@@ -133,6 +172,34 @@ function toggleCalendarVisible(calId: string) {
   }
   visibleCalendarIds.value = next
   activeCalendarScope.value = next
+  const uid = currentUser.value?.user_id
+  if (uid) saveVisibilityPrefs(uid, next)
+  void loadEvents()
+}
+
+function showAllCalendars() {
+  const next = new Set(calendars.value.map(c => c.id))
+  visibleCalendarIds.value = next
+  activeCalendarScope.value = next
+  const uid = currentUser.value?.user_id
+  if (uid) saveVisibilityPrefs(uid, next)
+  void loadEvents()
+}
+
+function showOnlyMine() {
+  const me = currentUser.value?.username
+  const next = new Set(
+    me
+      ? calendars.value.filter(c => c.owner_username === me).map(c => c.id)
+      : [],
+  )
+  if (next.size === 0 && calendars.value.length > 0) {
+    next.add(calendars.value[0].id)
+  }
+  visibleCalendarIds.value = next
+  activeCalendarScope.value = next
+  const uid = currentUser.value?.user_id
+  if (uid) saveVisibilityPrefs(uid, next)
   void loadEvents()
 }
 
@@ -152,12 +219,28 @@ export default function CalendarPage() {
         }
         // Default visibility: the caller's own calendar(s) only.
         // Other members' calendars start hidden — the user opts in
-        // by clicking their picker chip.
+        // by clicking their picker chip. Previously-saved preferences
+        // (per-user, in localStorage) override the default so an
+        // overlay choice survives reloads.
         const me = currentUser.value?.username
+        const uid = currentUser.value?.user_id
         const myCals = me ? cals.filter(c => c.owner_username === me) : []
-        const initial = new Set(
-          myCals.length > 0 ? myCals.map(c => c.id) : [cals[0].id],
-        )
+        const calIdSet = new Set(cals.map(c => c.id))
+        const saved = uid ? loadVisibilityPrefs(uid) : null
+        let initial: Set<string>
+        if (saved) {
+          // Filter out stale ids (calendars that disappeared since the
+          // pref was saved). Fall back to defaults if filtering left
+          // nothing.
+          const kept = new Set([...saved].filter(id => calIdSet.has(id)))
+          initial = kept.size > 0
+            ? kept
+            : new Set(myCals.length > 0 ? myCals.map(c => c.id) : [cals[0].id])
+        } else {
+          initial = new Set(
+            myCals.length > 0 ? myCals.map(c => c.id) : [cals[0].id],
+          )
+        }
         // First own-calendar (alphabetical by name from the server)
         // is the write target for + New event.
         const writeTarget = myCals[0] ?? cals[0]
@@ -289,6 +372,20 @@ export default function CalendarPage() {
           <div class="sh-calendar-picker"
                role="group"
                aria-label="Visible calendars">
+            <button
+              type="button"
+              class="sh-calendar-picker__quick"
+              onClick={showOnlyMine}
+            >
+              Just me
+            </button>
+            <button
+              type="button"
+              class="sh-calendar-picker__quick"
+              onClick={showAllCalendars}
+            >
+              Show all
+            </button>
             {calendars.value.map(c => {
               // householdUsers is keyed by user_id; the calendar
               // carries the owner's username, so iterate to map back.
@@ -301,7 +398,8 @@ export default function CalendarPage() {
               }
               const mine = c.owner_username === currentUser.value?.username
               const checked = visibleCalendarIds.value.has(c.id)
-              const hue = calendarHue(c.id)
+              const hue = resolveCalendarColor(c)
+              const chipLabel = mine ? 'My calendar' : `${ownerLabel}'s`
               return (
                 <button
                   key={c.id}
@@ -312,12 +410,12 @@ export default function CalendarPage() {
                       : 'sh-calendar-picker__chip'
                   }
                   aria-pressed={checked}
-                  aria-label={`${mine ? c.name : `${ownerLabel} · ${c.name}`}: ${checked ? 'visible' : 'hidden'}`}
+                  aria-label={`${chipLabel} (${c.name}): ${checked ? 'visible' : 'hidden'}`}
                   style={{ '--cal-hue': hue } as Record<string, string>}
                   onClick={() => toggleCalendarVisible(c.id)}
                 >
                   <span class="sh-calendar-picker__dot" aria-hidden="true" />
-                  <span>{mine ? 'You' : ownerLabel}</span>
+                  <span>{chipLabel}</span>
                 </button>
               )
             })}
@@ -385,7 +483,10 @@ export default function CalendarPage() {
             }
             return (
             <div key={e.id} class="sh-event"
-                 style={{ '--cal-hue': calendarHue(e.calendar_id) } as Record<string, string>}
+                 style={{ '--cal-hue': (() => {
+                   const cal = calendars.value.find(c => c.id === e.calendar_id)
+                   return cal ? resolveCalendarColor(cal) : calendarHue(e.calendar_id)
+                 })() } as Record<string, string>}
                  onClick={() => { selectedEvent.value = selectedEvent.value?.id === e.id ? null : e }}>
               <div class="sh-event-header">
                 {e.cover_url && (

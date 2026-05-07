@@ -7,7 +7,13 @@ import base64
 from aiohttp import web
 
 from .. import app_keys as K
-from ..app_keys import calendar_service_key, media_signer_key
+from ..app_keys import (
+    calendar_service_key,
+    federation_repo_key,
+    media_signer_key,
+    user_repo_key,
+)
+from ..domain.federation import PairingStatus
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from ..services.calendar_import_service import (
@@ -55,6 +61,56 @@ def _event_dict(event) -> dict:
     }
 
 
+class CalendarInviteesView(BaseView):
+    """``GET /api/calendars/invitees`` — list cross-household invitees.
+
+    Returns members of confirmed paired peer instances grouped by
+    instance. Local household members are intentionally NOT included:
+    coordinating an event with a household member is done by writing
+    directly to that member's personal calendar (any active household
+    member can write to any other member's personal calendar — no
+    invite, no RSVP). The "Invite + RSVP" surface is reserved for
+    cross-household friends, where it actually carries new information.
+
+    Empty list → the SPA renders an "no paired households yet" CTA
+    pointing at the pairing flow.
+    """
+
+    async def get(self) -> web.Response:
+        self.user  # auth check
+        fed_repo = self.svc(federation_repo_key)
+        user_repo = self.svc(user_repo_key)
+        instances = await fed_repo.list_instances(
+            status=PairingStatus.CONFIRMED.value,
+        )
+        groups: list[dict] = []
+        for inst in instances:
+            members = await user_repo.list_remote_for_instance(inst.id)
+            groups.append(
+                {
+                    "instance_id": inst.id,
+                    "instance_name": inst.display_name,
+                    "members": [
+                        {
+                            "user_id": m.user_id,
+                            "instance_id": m.instance_id,
+                            "remote_username": m.remote_username,
+                            "display_name": m.display_name,
+                            "picture_hash": m.picture_hash,
+                            "picture_url": (
+                                f"/api/users/{m.user_id}/picture?v={m.picture_hash}"
+                                if m.picture_hash
+                                else None
+                            ),
+                        }
+                        for m in members
+                    ],
+                },
+            )
+        payload: dict = {"instances": groups}
+        return web.json_response(_sign_payload(self.request, payload))
+
+
 class CalendarCollectionView(BaseView):
     """``GET /api/calendars`` — list calendars.
 
@@ -90,6 +146,15 @@ class CalendarEventsView(BaseView):
     """``GET /api/calendars/{id}/events`` — list events in a calendar.
 
     ``POST /api/calendars/{id}/events`` — create an event in a calendar.
+
+    Authorization: any active household member may create / edit
+    events on any household member's personal calendar. The household
+    is the unit of trust for personal calendars (§23.60) — coordinating
+    "an event on Lina's calendar" is just writing to Lina's calendar
+    directly. Owner-only gating would force users to "invite" each
+    other, which is precisely the friction we removed by separating
+    invites (cross-household, RSVP-bearing) from direct writes
+    (intra-household, no RSVP).
     """
 
     async def get(self) -> web.Response:
@@ -759,7 +824,7 @@ class CalendarEventRemindersView(BaseView):
         body = await self.body()
         try:
             minutes_before = int(body.get("minutes_before", -1))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return error_response(
                 422,
                 "UNPROCESSABLE",
@@ -795,7 +860,7 @@ class CalendarEventRemindersView(BaseView):
         _space_id, user_id = gate
         try:
             minutes_before = int(self.request.query.get("minutes_before", -1))
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             return error_response(
                 422,
                 "UNPROCESSABLE",

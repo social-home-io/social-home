@@ -1225,6 +1225,18 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     -- URL). Renders at the top of EventPostCard on the feed and as a
     -- thumbnail in the calendar list view. NULL = no cover.
     cover_url       TEXT,
+    -- Origin of the row. ``local`` = authored on this instance (default).
+    -- ``remote_invite`` = federated in via PERSONAL_CALENDAR_EVENT_CREATED;
+    -- the row mirrors an event hosted on a paired peer instance. The
+    -- recipient may RSVP but cannot edit the event itself — the master
+    -- copy lives on the organiser's instance.
+    origin          TEXT NOT NULL DEFAULT 'local'
+                    CHECK(origin IN ('local','remote_invite')),
+    -- For ``remote_invite`` rows: the organiser instance + event id on
+    -- that instance, so the RSVP outbound knows where to send the
+    -- response. NULL on local rows.
+    remote_event_id TEXT,
+    remote_instance_id TEXT,
     created_by      TEXT NOT NULL,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1274,6 +1286,30 @@ CREATE TABLE IF NOT EXISTS space_calendar_rsvps (
 );
 CREATE INDEX IF NOT EXISTS idx_space_calendar_rsvps_event_occ
     ON space_calendar_rsvps(event_id, occurrence_at);
+
+-- Personal-calendar RSVPs (cross-household invites only). Local
+-- household members never RSVP — they coordinate by writing directly
+-- to each other's calendars. The three states mirror standard iCalendar
+-- replies; ``tentative`` is the default on receipt of an inbound
+-- invite (PERSONAL_CALENDAR_EVENT_CREATED) until the recipient picks.
+-- ``occurrence_at`` is the per-occurrence anchor (matches the start
+-- of the specific instance for a recurring event, or event.start_dt
+-- for one-off events). NOT NULL keeps the PK happy and matches the
+-- shape used by ``space_calendar_rsvps``.
+CREATE TABLE IF NOT EXISTS calendar_event_rsvps (
+    event_id      TEXT NOT NULL REFERENCES calendar_events(id) ON DELETE CASCADE,
+    user_id       TEXT NOT NULL,
+    occurrence_at TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK(
+        status IN ('accepted','declined','tentative')
+    ),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (event_id, user_id, occurrence_at)
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_event_rsvps_event
+    ON calendar_event_rsvps(event_id);
+CREATE INDEX IF NOT EXISTS idx_calendar_event_rsvps_user
+    ON calendar_event_rsvps(user_id);
 
 -- Phase D: per-user, per-occurrence reminders. The
 -- :class:`CalendarReminderScheduler` polls fire_at on a 30 s tick and

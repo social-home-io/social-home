@@ -110,6 +110,29 @@ class AbstractCalendarRepo(Protocol):
         end: datetime,
     ) -> list[CalendarEvent]: ...
     async def delete_event(self, event_id: str) -> None: ...
+    # Personal-calendar RSVPs (cross-household invites only). Local
+    # household members never RSVP — invitee scope is enforced at the
+    # service layer.
+    async def upsert_rsvp(self, rsvp: CalendarRSVP) -> None: ...
+    async def remove_rsvp(
+        self,
+        event_id: str,
+        user_id: str,
+        *,
+        occurrence_at: str | None = None,
+    ) -> None: ...
+    async def list_rsvps(
+        self,
+        event_id: str,
+        *,
+        occurrence_at: str | None = None,
+    ) -> list[CalendarRSVP]: ...
+    async def get_event_by_remote(
+        self,
+        *,
+        remote_instance_id: str,
+        remote_event_id: str,
+    ) -> CalendarEvent | None: ...
 
 
 class SqliteCalendarRepo:
@@ -181,8 +204,9 @@ class SqliteCalendarRepo:
             INSERT INTO calendar_events(
                 id, calendar_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, mirrored_from, rrule,
-                rsvp_enabled, cover_url, created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,
+                rsvp_enabled, cover_url, origin, remote_event_id,
+                remote_instance_id, created_by, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -196,6 +220,9 @@ class SqliteCalendarRepo:
                 rrule=excluded.rrule,
                 rsvp_enabled=excluded.rsvp_enabled,
                 cover_url=excluded.cover_url,
+                origin=excluded.origin,
+                remote_event_id=excluded.remote_event_id,
+                remote_instance_id=excluded.remote_instance_id,
                 updated_at=datetime('now')
             """,
             (
@@ -211,6 +238,9 @@ class SqliteCalendarRepo:
                 event.rrule,
                 int(event.rsvp_enabled),
                 event.cover_url,
+                event.origin,
+                event.remote_event_id,
+                event.remote_instance_id,
                 event.created_by,
                 None,
                 None,
@@ -279,6 +309,92 @@ class SqliteCalendarRepo:
             "DELETE FROM calendar_events WHERE id=?",
             (event_id,),
         )
+
+    # ── Personal-calendar RSVPs ───────────────────────────────────────
+
+    async def upsert_rsvp(self, rsvp: CalendarRSVP) -> None:
+        if not rsvp.occurrence_at:
+            raise ValueError("CalendarRSVP.occurrence_at must be set")
+        await self._db.enqueue(
+            """
+            INSERT INTO calendar_event_rsvps(
+                event_id, user_id, occurrence_at, status, updated_at
+            ) VALUES(?,?,?,?,?)
+            ON CONFLICT(event_id, user_id, occurrence_at) DO UPDATE SET
+                status=excluded.status,
+                updated_at=excluded.updated_at
+            """,
+            (
+                rsvp.event_id,
+                rsvp.user_id,
+                rsvp.occurrence_at,
+                rsvp.status,
+                rsvp.updated_at,
+            ),
+        )
+
+    async def remove_rsvp(
+        self,
+        event_id: str,
+        user_id: str,
+        *,
+        occurrence_at: str | None = None,
+    ) -> None:
+        if occurrence_at is None:
+            await self._db.enqueue(
+                "DELETE FROM calendar_event_rsvps "
+                "WHERE event_id=? AND user_id=?",
+                (event_id, user_id),
+            )
+        else:
+            await self._db.enqueue(
+                "DELETE FROM calendar_event_rsvps "
+                "WHERE event_id=? AND user_id=? AND occurrence_at=?",
+                (event_id, user_id, occurrence_at),
+            )
+
+    async def list_rsvps(
+        self,
+        event_id: str,
+        *,
+        occurrence_at: str | None = None,
+    ) -> list[CalendarRSVP]:
+        if occurrence_at is None:
+            rows = await self._db.fetchall(
+                "SELECT * FROM calendar_event_rsvps WHERE event_id=?",
+                (event_id,),
+            )
+        else:
+            rows = await self._db.fetchall(
+                "SELECT * FROM calendar_event_rsvps "
+                "WHERE event_id=? AND occurrence_at=?",
+                (event_id, occurrence_at),
+            )
+        return [
+            CalendarRSVP(
+                event_id=r["event_id"],
+                user_id=r["user_id"],
+                status=r["status"],
+                updated_at=r["updated_at"],
+                occurrence_at=r["occurrence_at"] or "",
+            )
+            for r in rows_to_dicts(rows)
+        ]
+
+    async def get_event_by_remote(
+        self,
+        *,
+        remote_instance_id: str,
+        remote_event_id: str,
+    ) -> CalendarEvent | None:
+        """Find a previously-mirrored remote invite. Used by inbound
+        federation to apply UPDATED / DELETED to the existing row."""
+        row = await self._db.fetchone(
+            "SELECT * FROM calendar_events "
+            "WHERE remote_instance_id=? AND remote_event_id=?",
+            (remote_instance_id, remote_event_id),
+        )
+        return _row_to_event(row_to_dict(row))
 
 
 # ─── Space calendars ──────────────────────────────────────────────────────
@@ -897,6 +1013,9 @@ def _row_to_event(row: dict | None) -> CalendarEvent | None:
         rrule=row.get("rrule"),
         rsvp_enabled=bool_col(row.get("rsvp_enabled", 0)),
         cover_url=row.get("cover_url"),
+        origin=row.get("origin") or "local",
+        remote_event_id=row.get("remote_event_id"),
+        remote_instance_id=row.get("remote_instance_id"),
     )
 
 

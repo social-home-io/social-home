@@ -11,9 +11,17 @@ household events — plus per-user RSVPs that federate back.
 
 ## Event types
 
+Space-scoped:
 `SPACE_CALENDAR_EVENT_CREATED`, `SPACE_CALENDAR_EVENT_UPDATED`,
 `SPACE_CALENDAR_EVENT_DELETED`, `SPACE_RSVP_UPDATED`,
 `SPACE_RSVP_DELETED`.
+
+Personal-calendar (cross-household invites — §23.60):
+`PERSONAL_CALENDAR_EVENT_CREATED`,
+`PERSONAL_CALENDAR_EVENT_UPDATED`,
+`PERSONAL_CALENDAR_EVENT_DELETED`,
+`PERSONAL_CALENDAR_RSVP_UPDATED`,
+`PERSONAL_CALENDAR_RSVP_DELETED`.
 
 `SPACE_SCHEDULE_RESPONSE_UPDATED` is unrelated — it's for schedule-poll
 votes (Doodle-style availability), not calendar event RSVPs.
@@ -169,12 +177,56 @@ event data from an uploaded poster or a free-text prompt. The
 resulting events are created via the same code path as manual events,
 so they federate identically.
 
+## Personal calendar invites (§23.60)
+
+Personal calendars are per-household-member. Events authored on a
+member's calendar stay local unless the organiser invites a
+**cross-household** friend — i.e. a member of a confirmed paired
+peer instance. Local household members never appear in the invite
+picker; coordinating with a household member is done by switching
+the dialog's "Add to calendar" target to that member's personal
+calendar (any active household member may write to any other
+member's personal calendar — the household is the unit of trust).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Organiser (HFS A)
+    participant A as HFS A (organiser instance)
+    participant B as HFS B (recipient instance)
+    participant V as Recipient (HFS B)
+    U->>A: POST /api/calendars/{id}/events (attendees=[u-bob@B])
+    A->>A: validate — attendee must be on a confirmed pair
+    A->>A: persist event (origin='local')
+    A->>B: PERSONAL_CALENDAR_EVENT_CREATED<br/>(payload: summary/start/end/.../attendee_user_ids)
+    B->>B: mirror into u-bob's calendar (origin='remote_invite')
+    V->>B: POST /api/calendars/events/{id}/rsvp (status='accepted')
+    B->>A: PERSONAL_CALENDAR_RSVP_UPDATED<br/>(event_id=organiser's id, user_id, status)
+    A->>A: upsert calendar_event_rsvps
+```
+
+Inbound mirrors materialise as `calendar_events` rows with:
+- `origin = 'remote_invite'` (default is `'local'`)
+- `remote_event_id` = the organiser's local id (for RSVP routing back)
+- `remote_instance_id` = the organiser's instance id
+
+Row id is deterministic — `_mint_event_id(remote_instance,
+remote_event, recipient_user_id)` — so a redelivered envelope
+collapses onto the same row.
+
+Validation rejects local user_ids (422 — household members
+coordinate via the calendar selector, not the invite picker), unknown
+user_ids, and remote user_ids whose home instance isn't a confirmed
+pair.
+
 ## Implementation
 
 - `socialhome/services/calendar_service.py`,
   `schedule_poll_service.py`.
 - `socialhome/services/federation_inbound/space_content.py` —
   `SPACE_CALENDAR_EVENT_*` and `SPACE_SCHEDULE_RESPONSE_UPDATED`.
+- `socialhome/services/federation_inbound/personal_calendar.py` —
+  `PERSONAL_CALENDAR_EVENT_*` and `PERSONAL_CALENDAR_RSVP_*`.
 - `socialhome/repositories/calendar_repo.py`.
 - `socialhome/routes/calendar_routes.py`.
 

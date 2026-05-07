@@ -189,6 +189,193 @@ async def test_delete_nonexistent_calendar(env):
         await env.cal_svc.delete_calendar("nonexistent")
 
 
+# ── Personal-calendar invite scope (§23.60) ─────────────────────────────────
+
+
+@pytest.fixture
+async def federated_cal_env(env):
+    """Add federation + user repos to ``env`` so ``CalendarService``
+    can validate / route attendees. Wires a fake federation service
+    that records outbound calls."""
+    from socialhome.repositories.federation_repo import SqliteFederationRepo
+    from socialhome.repositories.user_repo import SqliteUserRepo
+
+    env.fed_repo = SqliteFederationRepo(env.db)
+    env.user_repo = SqliteUserRepo(env.db)
+
+    sent: list[tuple] = []
+
+    class FakeFederation:
+        async def send_event(self, *, to_instance_id, event_type, payload):
+            sent.append((to_instance_id, event_type, dict(payload)))
+
+            class _R:
+                ok = True
+                status_code = 200
+
+            return _R()
+
+    env.fed = FakeFederation()
+    env.sent = sent
+    env.cal_svc.attach_federation(
+        env.fed,
+        federation_repo=env.fed_repo,
+        user_repo=env.user_repo,
+    )
+    # Calendar owner — local household member.
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("anna", "uid-anna", "Anna"),
+    )
+    return env
+
+
+async def _seed_paired(db, *, instance_id, display_name="Smith Home"):
+    await db.enqueue(
+        """
+        INSERT INTO remote_instances(
+            id, display_name, remote_identity_pk,
+            key_self_to_remote, key_remote_to_self,
+            remote_inbox_url, local_inbox_id, status, source
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            instance_id,
+            display_name,
+            "ab" * 32,
+            "00",
+            "00",
+            f"https://{instance_id}.example/inbox/x",
+            instance_id + "_local",
+            "confirmed",
+            "manual",
+        ),
+    )
+
+
+async def _seed_remote(db, *, instance_id, user_id, username, display_name):
+    await db.enqueue(
+        "INSERT INTO remote_users(user_id, instance_id, remote_username,"
+        " display_name) VALUES(?,?,?,?)",
+        (user_id, instance_id, username, display_name),
+    )
+
+
+async def test_create_event_rejects_local_attendee(federated_cal_env):
+    """Inviting a local household member is the wrong shape — should
+    write to their calendar directly. Returns ValueError → 422."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    await e.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("lina", "uid-lina-local", "Lina"),
+    )
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValueError, match="household member"):
+        await e.cal_svc.create_event(
+            calendar_id=cal.id,
+            summary="Lunch",
+            start=now.isoformat(),
+            end=(now + timedelta(hours=1)).isoformat(),
+            created_by="uid-anna",
+            attendees=["uid-lina-local"],
+        )
+
+
+async def test_create_event_rejects_unknown_user(federated_cal_env):
+    """user_id that resolves to neither a local nor a remote row is
+    rejected — peer drift from a stale invite list shouldn't quietly
+    drop the event."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    now = datetime.now(timezone.utc)
+    with pytest.raises(ValueError, match="unknown attendee"):
+        await e.cal_svc.create_event(
+            calendar_id=cal.id,
+            summary="Lunch",
+            start=now.isoformat(),
+            end=(now + timedelta(hours=1)).isoformat(),
+            created_by="uid-anna",
+            attendees=["uid-stranger"],
+        )
+
+
+async def test_create_event_accepts_paired_remote_attendee(federated_cal_env):
+    """Confirmed paired-instance user → event saves AND outbound
+    envelope is emitted to that user's home instance."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    await _seed_paired(e.db, instance_id="i_smith")
+    await _seed_remote(
+        e.db, instance_id="i_smith", user_id="u-bob", username="bob",
+        display_name="Bob",
+    )
+    now = datetime.now(timezone.utc)
+    ev = await e.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="BBQ",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=2)).isoformat(),
+        created_by="uid-anna",
+        attendees=["u-bob"],
+    )
+    assert ev.attendees == ("u-bob",)
+    # One envelope to one peer — payload includes attendee_user_ids.
+    assert len(e.sent) == 1
+    inst_id, evt_type, payload = e.sent[0]
+    assert inst_id == "i_smith"
+    assert "PERSONAL_CALENDAR_EVENT_CREATED" in str(evt_type).upper()
+    assert payload["summary"] == "BBQ"
+    assert payload["attendee_user_ids"] == ["u-bob"]
+
+
+async def test_create_event_groups_envelopes_per_instance(federated_cal_env):
+    """Two attendees on the same peer get one envelope; two attendees
+    on different peers get two."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    await _seed_paired(e.db, instance_id="i_a", display_name="A Home")
+    await _seed_paired(e.db, instance_id="i_b", display_name="B Home")
+    await _seed_remote(
+        e.db, instance_id="i_a", user_id="u-a1", username="a1", display_name="A1",
+    )
+    await _seed_remote(
+        e.db, instance_id="i_a", user_id="u-a2", username="a2", display_name="A2",
+    )
+    await _seed_remote(
+        e.db, instance_id="i_b", user_id="u-b1", username="b1", display_name="B1",
+    )
+    now = datetime.now(timezone.utc)
+    await e.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="Mixer",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="uid-anna",
+        attendees=["u-a1", "u-a2", "u-b1"],
+    )
+    by_instance = {row[0]: row[2] for row in e.sent}
+    assert set(by_instance) == {"i_a", "i_b"}
+    assert by_instance["i_a"]["attendee_user_ids"] == ["u-a1", "u-a2"]
+    assert by_instance["i_b"]["attendee_user_ids"] == ["u-b1"]
+
+
+async def test_create_event_no_attendees_no_envelope(federated_cal_env):
+    """Pure-local event (no attendees) doesn't federate — even with
+    federation wired."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    now = datetime.now(timezone.utc)
+    await e.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="Solo",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="uid-anna",
+    )
+    assert e.sent == []
+
+
 # ── SpaceCalendarService — per-occurrence + federation (Phase A) ────────────
 
 
