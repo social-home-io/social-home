@@ -2,12 +2,12 @@
  * SideNav — left sidebar navigation, organised into four IA groups:
  * **At home** (the household's own surfaces — feed, plan, share),
  * **Talk** (synchronous human comms), **Browse** (cross-cutting
- * context-switchers — Spaces / Bazaar / Corner) and **You** (admin /
- * Federation / Parent Control). Personal settings are reached by
- * clicking the user identity strip at the bottom of the sidebar.
- * Empty groups (after feature-flag gating) suppress their header
- * entirely so a minimal household configuration doesn't show empty
- * section labels.
+ * context-switchers — Spaces / Bazaar / Corner) and **Local** (admin /
+ * Federation / Parent Control — gated entry points for the people
+ * who run this household). Personal settings are reached by clicking
+ * the user identity strip at the bottom of the sidebar. Empty groups
+ * (after feature-flag gating) suppress their header entirely so a
+ * minimal household configuration doesn't show empty section labels.
  *
  * The data lives in the GROUPS arrays below — purely declarative; the
  * render path filters items through the live state snapshot pulled
@@ -122,9 +122,9 @@ const BROWSE_GROUP: SideNavGroup = {
   ],
 }
 
-const YOU_GROUP: SideNavGroup = {
-  key: 'you',
-  label: 'You',
+const LOCAL_GROUP: SideNavGroup = {
+  key: 'local',
+  label: 'Local',
   items: [
     { key: 'parent-control', label: 'Parent Control', href: '/parent', icon: 'parent-control',
       gate: s => s.isGuardian },
@@ -172,13 +172,13 @@ export function SideNav() {
       main: MAIN_GROUPS
         .map(g => ({ group: g, items: filter(g) }))
         .filter(({ items }) => items.length > 0),
-      you: { group: YOU_GROUP, items: filter(YOU_GROUP) },
+      local: { group: LOCAL_GROUP, items: filter(LOCAL_GROUP) },
       user,
       state,
     }
   })
 
-  const { main, you, user } = view.value
+  const { main, local, user } = view.value
   const currentPath = loc.path
 
   const state = view.value.state
@@ -218,10 +218,10 @@ export function SideNav() {
     <aside class="sh-sidenav" aria-label="Sidebar">
       <Wordmark as="a" href="/" size={28} className="sh-sidenav-brand" />
       {main.map(({ group, items }) => renderGroup(group, items))}
-      {you.items.length > 0 && (
+      {local.items.length > 0 && (
         <>
           <hr class="sh-sidenav-divider" />
-          {renderGroup(you.group, you.items)}
+          {renderGroup(local.group, local.items)}
         </>
       )}
       {user && (
