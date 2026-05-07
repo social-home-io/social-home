@@ -37,15 +37,21 @@ The other tasks under **Terminal → Run Task…**:
 config and a **Debug current pytest file** config (uses
 `debugpy`).
 
-If you re-ran `pip install -e .[dev]` _outside_ the container's
-post-create step and saw `ImportError: cannot import name
-'_native' from partially initialized module
-'aiolibdatachannel'`, pip routed the install to `~/.local/`
-and shadowed the working system copy. Wipe the bad install:
+The container uses [`uv`](https://github.com/astral-sh/uv)
+as the Python package manager. Reinstall deps with
+`uv pip install --system -e .[dev]`; pin a single package with
+`uv pip install --system <pkg>`.
+
+If you re-ran `pip install -e .[dev]` (the slow legacy pip)
+_outside_ the container's post-create step and saw
+`ImportError: cannot import name '_native' from partially
+initialized module 'aiolibdatachannel'`, pip routed the install
+to `~/.local/` and shadowed the working system copy. Wipe the
+bad install:
 
 ```sh
 rm -rf ~/.local/lib/python*/site-packages/aiolibdatachannel*
-PIP_USER=false pip install --force-reinstall --no-deps aiolibdatachannel
+uv pip install --system --reinstall aiolibdatachannel
 ```
 
 ### Manual setup
