@@ -549,3 +549,167 @@ async def test_rsvp_buffer_gc_drops_old_rows(env):
         older_than_iso="2025-01-01T00:00:00",
     )
     assert n == 1
+
+
+# ── Personal-calendar RSVPs + remote-invite columns (§23.60) ───────────────
+
+
+async def test_personal_calendar_rsvp_upsert_and_list(env):
+    """Sqlite path for upsert_rsvp + list_rsvps. Mirrors the
+    space_calendar_rsvps shape but on the personal table."""
+    cal = Calendar(id="c1", name="Anna", color="#abc", owner_username="alice")
+    await env.cal_repo.save_calendar(cal)
+    now = datetime.now(timezone.utc)
+    ev = CalendarEvent(
+        id="evt-1",
+        calendar_id="c1",
+        summary="Garden party",
+        start=now,
+        end=now,
+        created_by="uid-alice",
+    )
+    await env.cal_repo.save_event(ev)
+    await env.cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="evt-1",
+            user_id="u-bob",
+            status="accepted",
+            updated_at=now.isoformat(),
+            occurrence_at=now.isoformat(),
+        )
+    )
+    rsvps = await env.cal_repo.list_rsvps("evt-1")
+    assert len(rsvps) == 1
+    assert rsvps[0].status == "accepted"
+    # Per-occurrence query also works.
+    by_occ = await env.cal_repo.list_rsvps("evt-1", occurrence_at=now.isoformat())
+    assert len(by_occ) == 1
+    # Re-upsert with a new status overwrites in place.
+    await env.cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="evt-1",
+            user_id="u-bob",
+            status="declined",
+            updated_at=now.isoformat(),
+            occurrence_at=now.isoformat(),
+        )
+    )
+    rsvps = await env.cal_repo.list_rsvps("evt-1")
+    assert len(rsvps) == 1
+    assert rsvps[0].status == "declined"
+
+
+async def test_personal_calendar_rsvp_remove(env):
+    cal = Calendar(id="c1", name="Anna", color="#abc", owner_username="alice")
+    await env.cal_repo.save_calendar(cal)
+    now = datetime.now(timezone.utc)
+    ev = CalendarEvent(
+        id="evt-1",
+        calendar_id="c1",
+        summary="P",
+        start=now,
+        end=now,
+        created_by="uid-alice",
+    )
+    await env.cal_repo.save_event(ev)
+    await env.cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="evt-1",
+            user_id="u-bob",
+            status="accepted",
+            updated_at=now.isoformat(),
+            occurrence_at=now.isoformat(),
+        )
+    )
+    # Remove with explicit occurrence_at.
+    await env.cal_repo.remove_rsvp(
+        "evt-1", "u-bob", occurrence_at=now.isoformat(),
+    )
+    assert await env.cal_repo.list_rsvps("evt-1") == []
+    # Re-add then remove without occurrence_at — the "all rows for this
+    # (event, user)" path.
+    await env.cal_repo.upsert_rsvp(
+        CalendarRSVP(
+            event_id="evt-1",
+            user_id="u-bob",
+            status="accepted",
+            updated_at=now.isoformat(),
+            occurrence_at=now.isoformat(),
+        )
+    )
+    await env.cal_repo.remove_rsvp("evt-1", "u-bob")
+    assert await env.cal_repo.list_rsvps("evt-1") == []
+
+
+async def test_personal_calendar_rsvp_upsert_rejects_empty_occurrence(env):
+    """Service guarantees a non-empty occurrence_at — repo enforces
+    so a buggy caller can't sneak past the PK constraint."""
+    with pytest.raises(ValueError, match="occurrence_at"):
+        await env.cal_repo.upsert_rsvp(
+            CalendarRSVP(
+                event_id="evt-1",
+                user_id="u-bob",
+                status="accepted",
+                updated_at="2026-01-01T00:00:00",
+                occurrence_at="",
+            )
+        )
+
+
+async def test_get_event_by_remote_finds_remote_invite(env):
+    """Sqlite path for get_event_by_remote — used by
+    PersonalCalendarInboundHandlers to dedupe re-delivered envelopes.
+    Also covers the round-trip of the new origin / remote_event_id /
+    remote_instance_id columns through save_event."""
+    cal = Calendar(id="c1", name="Anna", color="#abc", owner_username="alice")
+    await env.cal_repo.save_calendar(cal)
+    now = datetime.now(timezone.utc)
+    invite = CalendarEvent(
+        id="ri_local",
+        calendar_id="c1",
+        summary="Cross-household party",
+        start=now,
+        end=now,
+        created_by="u-bob-remote",
+        origin="remote_invite",
+        remote_event_id="org-evt-1",
+        remote_instance_id="i_org",
+    )
+    await env.cal_repo.save_event(invite)
+    found = await env.cal_repo.get_event_by_remote(
+        remote_instance_id="i_org",
+        remote_event_id="org-evt-1",
+    )
+    assert found is not None
+    assert found.id == "ri_local"
+    assert found.origin == "remote_invite"
+    assert found.remote_event_id == "org-evt-1"
+    assert found.remote_instance_id == "i_org"
+    # Miss returns None.
+    miss = await env.cal_repo.get_event_by_remote(
+        remote_instance_id="i_other",
+        remote_event_id="ghost",
+    )
+    assert miss is None
+
+
+async def test_save_event_origin_defaults_to_local(env):
+    """Round-trip of a default-origin event still surfaces
+    origin='local' (the schema default) without the caller setting it."""
+    cal = Calendar(id="c1", name="Anna", color="#abc", owner_username="alice")
+    await env.cal_repo.save_calendar(cal)
+    now = datetime.now(timezone.utc)
+    ev = CalendarEvent(
+        id="evt-default",
+        calendar_id="c1",
+        summary="Local",
+        start=now,
+        end=now,
+        created_by="uid-alice",
+    )
+    await env.cal_repo.save_event(ev)
+    fetched = await env.cal_repo.get_event("evt-default")
+    assert fetched is not None
+    assert fetched.origin == "local"
+    assert fetched.remote_event_id is None
+    assert fetched.remote_instance_id is None

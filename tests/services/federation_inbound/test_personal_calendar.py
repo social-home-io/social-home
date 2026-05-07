@@ -7,7 +7,6 @@ RSVP responses propagate back to the organiser's local row.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -282,5 +281,261 @@ async def test_inbound_rsvp_for_unknown_event_dropped(env):
             "status": "accepted",
             "occurrence_at": now.isoformat(),
         },
+    ))
+    assert cal_repo.rsvps == {}
+
+
+async def test_inbound_rsvp_rejects_bad_status(env):
+    fed, cal_repo, _ = env
+    rsvp = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
+    ]
+    now = datetime.now(timezone.utc)
+    cal_repo.events["local-evt"] = CalendarEvent(
+        id="local-evt",
+        calendar_id="cal-anna",
+        summary="Picnic",
+        start=now,
+        end=now + timedelta(hours=1),
+        created_by="u-anna",
+    )
+    await rsvp(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+        {
+            "event_id": "local-evt",
+            "user_id": "u-bob",
+            "status": "going",  # space-RSVP word, not a valid one here
+            "occurrence_at": now.isoformat(),
+        },
+    ))
+    assert cal_repo.rsvps == {}
+
+
+async def test_inbound_rsvp_deleted_clears_row(env):
+    fed, cal_repo, _ = env
+    rsvp_upd = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
+    ]
+    rsvp_del = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED
+    ]
+    now = datetime.now(timezone.utc)
+    cal_repo.events["local-evt"] = CalendarEvent(
+        id="local-evt",
+        calendar_id="cal-anna",
+        summary="Picnic",
+        start=now,
+        end=now + timedelta(hours=1),
+        created_by="u-anna",
+    )
+    await rsvp_upd(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+        {
+            "event_id": "local-evt",
+            "user_id": "u-bob",
+            "status": "accepted",
+            "occurrence_at": now.isoformat(),
+        },
+    ))
+    assert len(cal_repo.rsvps) == 1
+    await rsvp_del(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
+        {
+            "event_id": "local-evt",
+            "user_id": "u-bob",
+            "occurrence_at": now.isoformat(),
+        },
+    ))
+    assert cal_repo.rsvps == {}
+
+
+async def test_inbound_rsvp_deleted_for_unknown_event_noop(env):
+    """RSVP-delete for an event we don't own → noop, never raises."""
+    fed, cal_repo, _ = env
+    rsvp_del = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED
+    ]
+    await rsvp_del(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
+        {"event_id": "ghost", "user_id": "u-bob"},
+    ))
+    assert cal_repo.rsvps == {}
+
+
+async def test_inbound_invite_dropped_when_user_has_no_calendar(env):
+    """If the recipient hasn't got a personal calendar yet, the invite
+    is logged + skipped (never raises)."""
+    fed, cal_repo, user_repo = env
+    handler = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    # Seed a recipient user that has no calendar.
+    from socialhome.domain.user import User
+    user_repo.by_uid["u-ben"] = User(
+        username="ben",
+        user_id="u-ben",
+        display_name="Ben",
+    )
+    now = datetime.now(timezone.utc)
+    await handler(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+        {
+            "event_id": "remote-evt-2",
+            "summary": "BBQ",
+            "start": now.isoformat(),
+            "end": (now + timedelta(hours=1)).isoformat(),
+            "organizer_user_id": "u-org",
+            "attendee_user_ids": ["u-ben"],
+        },
+    ))
+    # No mirror written for ben — but the existing one for anna is
+    # still empty (we didn't include her in the attendee list).
+    assert cal_repo.events == {}
+
+
+async def test_inbound_invite_dropped_when_user_unknown(env):
+    """A user_id not in the local users table → no calendar lookup
+    is even attempted; handler logs + skips."""
+    fed, cal_repo, _ = env
+    handler = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    now = datetime.now(timezone.utc)
+    await handler(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+        {
+            "event_id": "remote-evt-3",
+            "summary": "BBQ",
+            "start": now.isoformat(),
+            "end": (now + timedelta(hours=1)).isoformat(),
+            "organizer_user_id": "u-org",
+            "attendee_user_ids": ["u-totally-unknown"],
+        },
+    ))
+    assert cal_repo.events == {}
+
+
+async def test_inbound_invite_missing_required_fields_dropped(env):
+    """Lenient handler: malformed payload (no summary, etc.) just logs
+    and returns — never raises into the inbound pipeline."""
+    fed, cal_repo, _ = env
+    handler = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    await handler(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+        {"event_id": "x"},  # missing summary, start, end, attendees, organiser
+    ))
+    assert cal_repo.events == {}
+
+
+async def test_inbound_delete_with_attendee_list_drops_per_recipient(env):
+    """When the DELETE envelope carries the attendee list (typical
+    case), the handler drops the per-recipient rows directly via the
+    minted id."""
+    fed, cal_repo, _ = env
+    create = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    delete = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED
+    ]
+    now = datetime.now(timezone.utc)
+    payload = {
+        "event_id": "remote-evt-1",
+        "summary": "BBQ",
+        "start": now.isoformat(),
+        "end": (now + timedelta(hours=1)).isoformat(),
+        "organizer_user_id": "u-bob",
+        "attendee_user_ids": ["u-anna"],
+    }
+    await create(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED, payload
+    ))
+    assert len(cal_repo.events) == 1
+    await delete(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+        {"event_id": "remote-evt-1", "attendee_user_ids": ["u-anna"]},
+    ))
+    assert cal_repo.events == {}
+
+
+async def test_inbound_delete_unknown_event_noop(env):
+    fed, cal_repo, _ = env
+    delete = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED
+    ]
+    await delete(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+        {"event_id": "ghost"},
+    ))
+    assert cal_repo.events == {}
+
+
+async def test_inbound_delete_with_no_event_id_noop(env):
+    """Lenient guard — empty/missing event_id just returns."""
+    fed, cal_repo, _ = env
+    delete = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED
+    ]
+    await delete(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_EVENT_DELETED,
+        {},  # no event_id at all
+    ))
+    assert cal_repo.events == {}
+
+
+async def test_inbound_rsvp_updated_missing_fields_noop(env):
+    """Empty user_id / status → handler returns without touching db."""
+    fed, cal_repo, _ = env
+    rsvp = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
+    ]
+    await rsvp(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+        {"event_id": "x"},  # missing user_id, status
+    ))
+    assert cal_repo.rsvps == {}
+
+
+async def test_inbound_rsvp_updated_defaults_occurrence_to_event_start(env):
+    """When the envelope omits occurrence_at, the handler falls back
+    to the local event's ``start.isoformat()`` — covers the default
+    branch."""
+    fed, cal_repo, _ = env
+    rsvp = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED
+    ]
+    now = datetime.now(timezone.utc)
+    cal_repo.events["evt"] = CalendarEvent(
+        id="evt",
+        calendar_id="cal-anna",
+        summary="P",
+        start=now,
+        end=now + timedelta(hours=1),
+        created_by="u-anna",
+    )
+    await rsvp(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_UPDATED,
+        {
+            "event_id": "evt",
+            "user_id": "u-bob",
+            "status": "accepted",
+            # NB: no occurrence_at
+        },
+    ))
+    keys = list(cal_repo.rsvps.keys())
+    assert len(keys) == 1
+    assert keys[0][2] == now.isoformat()
+
+
+async def test_inbound_rsvp_deleted_missing_fields_noop(env):
+    fed, cal_repo, _ = env
+    rsvp_del = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED
+    ]
+    await rsvp_del(_envelope(
+        FederationEventType.PERSONAL_CALENDAR_RSVP_DELETED,
+        {"event_id": "x"},  # no user_id
     ))
     assert cal_repo.rsvps == {}
