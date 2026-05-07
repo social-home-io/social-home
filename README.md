@@ -37,6 +37,17 @@ The other tasks under **Terminal → Run Task…**:
 config and a **Debug current pytest file** config (uses
 `debugpy`).
 
+If you re-ran `pip install -e .[dev]` _outside_ the container's
+post-create step and saw `ImportError: cannot import name
+'_native' from partially initialized module
+'aiolibdatachannel'`, pip routed the install to `~/.local/`
+and shadowed the working system copy. Wipe the bad install:
+
+```sh
+rm -rf ~/.local/lib/python*/site-packages/aiolibdatachannel*
+PIP_USER=false pip install --force-reinstall --no-deps aiolibdatachannel
+```
+
 ### Manual setup
 
 If you're not using the Dev Container, do the same one-time
