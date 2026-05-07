@@ -14,44 +14,28 @@
 
 	// One-time setup after the container is created.
 	//
-	// We pin uv to the python-feature's interpreter at
-	// ``/usr/local/python/current/bin/python``. The base image
-	// (``mcr.microsoft.com/devcontainers/python:3.14``) sets up
-	// **two** Python installs:
-	//   - ``/usr/local/python/3.14.4/...`` — the python-feature
-	//     install, owned by ``root:python`` and group-writable
-	//     so ``vscode`` can ``pip install`` into it.
-	//   - ``/usr/local/lib/python3.14/...`` — Debian's Python,
-	//     root-owned and not writable by ``vscode``.
-	// Without ``--python``, uv discovers the latter first and
-	// fails with ``Permission denied`` halfway through the
-	// install.
-	//
-	// ``UV_PYTHON`` (containerEnv) makes the same pin apply to
-	// any ad-hoc ``uv pip install`` calls inside the running
-	// container. ``PIP_USER=false`` + ``UV_SYSTEM_PYTHON=1``
-	// keep them in system site-packages instead of falling back
-	// to ``~/.local`` (which produces partial installs that
-	// shadow the real ones — see the original ``aiolibdatachannel``
-	// ``_native.so`` bug).
+	// The base image ships Python at a root-owned site-packages
+	// path that the ``vscode`` user can't write to, so we use a
+	// project-local virtualenv at ``.venv/``. uv creates the venv
+	// from the system Python on PATH and installs the editable
+	// project + dev extras into it; VS Code points at
+	// ``${workspaceFolder}/.venv/bin/python`` as the default
+	// interpreter, and the run/debug tasks invoke that interpreter
+	// explicitly.
 	//
 	// 1. Install ``uv`` via its official static-binary installer
 	//    (drops the binary into ``~/.local/bin``; no Python
 	//    dependency).
-	// 2. Install the Python project in editable mode + dev extras
-	//    (pytest, mypy, ruff, pre-commit, ...).
-	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	// 2. Create the project venv at ``.venv/`` from the system
+	//    Python on PATH (whichever 3.14 the image ships).
+	// 3. Install the Python project in editable mode + dev extras.
+	// 4. Wire up the pre-commit hooks so ``git commit`` runs ruff +
 	//    mypy + frontend ESLint + tsc on staged files.
-	// 4. Install pnpm globally (Node feature ships npm; we use pnpm
+	// 5. Install pnpm globally (Node feature ships npm; we use pnpm
 	//    for the frontend per ``client/package.json``).
-	// 5. Install the frontend deps so ``pnpm run dev`` works on
+	// 6. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv pip install --system -e '.[dev]' && pre-commit install && npm install -g pnpm && cd client && pnpm install",
-	"containerEnv": {
-		"PIP_USER": "false",
-		"UV_SYSTEM_PYTHON": "1",
-		"UV_PYTHON": "/usr/local/python/current/bin/python"
-	},
+	"postCreateCommand": "curl -LsSf https://astral.sh/uv/install.sh | sh && $HOME/.local/bin/uv venv .venv --seed && $HOME/.local/bin/uv pip install -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
 	// 5173 = Vite dev server (``pnpm run dev`` in ``client/``).
@@ -70,9 +54,10 @@
 	"customizations": {
 		"vscode": {
 			"settings": {
-				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
 				"python.testing.pytestEnabled": true,
 				"python.testing.pytestArgs": ["tests"],
+				"python.terminal.activateEnvironment": true,
 				"editor.formatOnSave": true,
 				"[python]": {
 					"editor.defaultFormatter": "charliermarsh.ruff",

@@ -8,6 +8,7 @@
 			"type": "debugpy",
 			"request": "launch",
 			"module": "socialhome",
+			"python": "${workspaceFolder}/.venv/bin/python",
 			"console": "integratedTerminal",
 			"cwd": "${workspaceFolder}",
 			"env": {
@@ -22,6 +23,7 @@
 			"request": "launch",
 			"module": "pytest",
 			"args": ["-x", "${file}"],
+			"python": "${workspaceFolder}/.venv/bin/python",
 			"console": "integratedTerminal",
 			"cwd": "${workspaceFolder}"
 		}
