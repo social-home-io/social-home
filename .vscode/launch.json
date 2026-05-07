@@ -1,0 +1,29 @@
+{
+	// Debug Configurations Reference:
+	// https://code.visualstudio.com/docs/editor/debugging
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Debug backend (standalone)",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "socialhome",
+			"console": "integratedTerminal",
+			"cwd": "${workspaceFolder}",
+			"env": {
+				"SH_MODE": "standalone",
+				"SH_DATA_DIR": "/tmp/sh-dev"
+			},
+			"justMyCode": false
+		},
+		{
+			"name": "Debug current pytest file",
+			"type": "debugpy",
+			"request": "launch",
+			"module": "pytest",
+			"args": ["-x", "${file}"],
+			"console": "integratedTerminal",
+			"cwd": "${workspaceFolder}"
+		}
+	]
+}

@@ -9,17 +9,69 @@
 		"ghcr.io/devcontainers/features/node:1": {
 			"version": "lts"
 		},
-		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0":{}
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
 	},
 
-	"postCreateCommand": "pip install -e .[dev]",
+	// One-time setup after the container is created:
+	// 1. Install the Python project in editable mode + dev extras
+	//    (pytest, mypy, ruff, pre-commit, ...).
+	// 2. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	//    mypy + frontend ESLint + tsc on staged files.
+	// 3. Install pnpm globally (Node feature ships npm; we use pnpm
+	//    for the frontend per ``client/package.json``).
+	// 4. Install the frontend deps so ``pnpm run dev`` works on
+	//    first launch without manual steps.
+	"postCreateCommand": "pip install -e .[dev] && pre-commit install && npm install -g pnpm && cd client && pnpm install",
+
+	// 8099 = aiohttp backend (``python -m socialhome``).
+	// 5173 = Vite dev server (``pnpm run dev`` in ``client/``).
+	"forwardPorts": [8099, 5173],
+	"portsAttributes": {
+		"8099": {
+			"label": "socialhome backend",
+			"onAutoForward": "silent"
+		},
+		"5173": {
+			"label": "vite dev",
+			"onAutoForward": "openBrowser"
+		}
+	},
 
 	"customizations": {
 		"vscode": {
-			"settings": {},
+			"settings": {
+				"python.defaultInterpreterPath": "/usr/local/bin/python",
+				"python.testing.pytestEnabled": true,
+				"python.testing.pytestArgs": ["tests"],
+				"editor.formatOnSave": true,
+				"[python]": {
+					"editor.defaultFormatter": "charliermarsh.ruff",
+					"editor.codeActionsOnSave": {
+						"source.fixAll.ruff": "explicit",
+						"source.organizeImports.ruff": "explicit"
+					}
+				},
+				"[typescript]": {
+					"editor.defaultFormatter": "dbaeumer.vscode-eslint"
+				},
+				"[typescriptreact]": {
+					"editor.defaultFormatter": "dbaeumer.vscode-eslint"
+				},
+				"files.exclude": {
+					"**/__pycache__": true,
+					"**/.pytest_cache": true,
+					"**/.ruff_cache": true,
+					"**/.mypy_cache": true,
+					"**/node_modules": true
+				}
+			},
 			"extensions": [
 				"ms-python.python",
 				"ms-python.vscode-pylance",
+				"charliermarsh.ruff",
+				"dbaeumer.vscode-eslint",
+				"vitest.explorer",
+				"esbenp.prettier-vscode"
 			]
 		}
 	}

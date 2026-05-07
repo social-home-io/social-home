@@ -1,0 +1,75 @@
+{
+	// Tasks Reference: https://code.visualstudio.com/docs/editor/tasks
+	//
+	// Run with **Terminal → Run Task...** or `Ctrl+Shift+P → Tasks: Run Task`.
+	// The default build task (Ctrl+Shift+B) launches both the backend and the
+	// frontend dev server in parallel.
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run backend (standalone)",
+			"detail": "Start the aiohttp backend in standalone mode with a throwaway data dir under /tmp/sh-dev. First request lands on /setup.",
+			"type": "shell",
+			"command": "python",
+			"args": ["-m", "socialhome"],
+			"options": {
+				"env": {
+					"SH_MODE": "standalone",
+					"SH_DATA_DIR": "/tmp/sh-dev"
+				},
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"group": "dev",
+				"panel": "dedicated",
+				"reveal": "always",
+				"clear": true
+			},
+			"problemMatcher": [],
+			"isBackground": true
+		},
+		{
+			"label": "Run frontend dev",
+			"detail": "Start the Vite dev server at http://localhost:5173 (proxies /api and /ws to the backend on :8099).",
+			"type": "shell",
+			"command": "pnpm",
+			"args": ["run", "dev", "--host"],
+			"options": {
+				"cwd": "${workspaceFolder}/client"
+			},
+			"presentation": {
+				"group": "dev",
+				"panel": "dedicated",
+				"reveal": "always",
+				"clear": true
+			},
+			"problemMatcher": [],
+			"isBackground": true
+		},
+		{
+			"label": "Clean test data (/tmp/sh-dev)",
+			"detail": "Wipe the throwaway data dir so the next backend launch returns to the /setup wizard. Stop the backend first.",
+			"type": "shell",
+			"command": "rm",
+			"args": ["-rf", "/tmp/sh-dev"],
+			"presentation": {
+				"group": "dev",
+				"panel": "shared",
+				"reveal": "always",
+				"clear": false
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Dev: backend + frontend",
+			"detail": "Run both the backend and the Vite dev server at the same time.",
+			"dependsOn": ["Run backend (standalone)", "Run frontend dev"],
+			"dependsOrder": "parallel",
+			"problemMatcher": [],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			}
+		}
+	]
+}
