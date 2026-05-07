@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from socialhome.domain.moment import Moment
@@ -9,6 +11,12 @@ from socialhome.repositories.moment_repo import SqliteMomentRepo
 
 
 def _moment(*, moment_id: str, hop_count: int, author_id: str = "u-author") -> Moment:
+    # ``list_visible_to`` filters non-followed authors' moments to the
+    # last 24 h. Hardcoding ``created_at`` made the suite go red exactly
+    # 24 h after whichever date was committed, so build the timestamp
+    # relative to ``now`` instead. ``expires_at`` stays comfortably in
+    # the future on the same relative footing.
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     return Moment(
         id=moment_id,
         author_user_id=author_id,
@@ -18,8 +26,8 @@ def _moment(*, moment_id: str, hop_count: int, author_id: str = "u-author") -> M
         duration_ms=None,
         parent_moment_id=None,
         origin_instance_id="peer-x",
-        created_at="2026-05-06T12:00:00",
-        expires_at="2026-12-31T00:00:00",
+        created_at=(now - timedelta(hours=1)).isoformat(timespec="seconds"),
+        expires_at=(now + timedelta(days=30)).isoformat(timespec="seconds"),
         hop_count=hop_count,
     )
 
