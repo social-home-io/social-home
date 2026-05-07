@@ -25,6 +25,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { CapacityStrip } from '@/components/CapacityStrip'
+import { EventOverflowMenu } from '@/components/EventOverflowMenu'
 import { showToast } from '@/components/Toast'
 import { t } from '@/i18n/i18n'
 import { currentUser } from '@/store/auth'
@@ -160,16 +161,7 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
             mine={myStatus}
           />
         ))}
-        <a
-          class="sh-event-card-ics-btn"
-          href={`/api/calendars/events/${event.id}/export.ics`}
-          download
-          aria-label={t('event.add_to_calendar')}
-          title={t('event.add_to_calendar')}
-        >
-          <span aria-hidden="true">📥</span>
-          <span class="sh-vh">{t('event.add_to_calendar')}</span>
-        </a>
+        <EventOverflowMenu eventId={event.id} />
       </div>
 
       {isCapped && isCreator && (

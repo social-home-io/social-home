@@ -11,6 +11,7 @@ import {
   openEditEventDialog,
 } from '@/components/CalendarEventDialog'
 import { CapacityStrip } from '@/components/CapacityStrip'
+import { EventOverflowMenu } from '@/components/EventOverflowMenu'
 import { HostApprovalQueue } from '@/components/HostApprovalQueue'
 import { ReminderPicker } from '@/components/ReminderPicker'
 import { showToast } from '@/components/Toast'
@@ -580,19 +581,13 @@ export default function CalendarPage() {
                   )}
 
                   <div class="sh-event-admin sh-row">
-                    <a
-                      class="sh-btn sh-btn--ghost"
-                      href={`/api/calendars/events/${e.id}/export.ics`}
-                      download
-                    >
-                      📥 {t('event.add_to_calendar')}
-                    </a>
                     <Button variant="secondary" onClick={() => handleEdit(e)}>
                       {t('event.edit')}
                     </Button>
                     <Button variant="danger" onClick={() => handleDelete(e.id)}>
                       {t('event.delete')}
                     </Button>
+                    <EventOverflowMenu eventId={e.id} />
                   </div>
                 </div>
                 )

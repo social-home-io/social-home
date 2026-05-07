@@ -10828,27 +10828,12 @@ hr {
   color: rgb(157, 23, 77);
 }
 
-/* RSVP row in feed card — wraps on mobile, the .ics button trails. */
+/* RSVP row in feed card — wraps on mobile; the kebab overflow menu
+ * (``EventOverflowMenu``) trails after the RSVP buttons. */
 .sh-event-card-rsvp {
   display: flex;
   flex-wrap: wrap;
   gap: var(--sh-space-xs);
-}
-.sh-event-card-ics-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.5rem;
-  text-decoration: none;
-  color: var(--sh-text-muted);
-  border: 1px solid var(--sh-border);
-  border-radius: var(--sh-radius-sm);
-  background: transparent;
-  transition: background 0.12s ease;
-}
-.sh-event-card-ics-btn:hover {
-  background: var(--sh-bg-subtle, #f0f1f3);
-  color: var(--sh-text);
 }
 
 .sh-event-card-host-hint {
