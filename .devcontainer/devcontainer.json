@@ -33,13 +33,19 @@
 	//    Python on PATH (whichever 3.14 the image ships).
 	// 2. Install the Python project in editable mode + dev extras.
 	//    uv auto-detects the in-tree venv and installs there.
-	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	// 3. Symlink ``aiolibdatachannel/_native.abi3.so`` →
+	//    ``_native.cpython-312-x86_64-linux-gnu.so``. The wheel is
+	//    tagged ``cp312-abi3`` (stable ABI, forward-compatible)
+	//    but ships only the cpython-312-named ``.so``, so Python
+	//    3.14's import machinery can't find it. The symlink hands
+	//    Python the abi3-named file it expects.
+	// 4. Wire up the pre-commit hooks so ``git commit`` runs ruff +
 	//    mypy + frontend ESLint + tsc on staged files.
-	// 4. Install pnpm globally (Node feature ships npm; we use pnpm
+	// 5. Install pnpm globally (Node feature ships npm; we use pnpm
 	//    for the frontend per ``client/package.json``).
-	// 5. Install the frontend deps so ``pnpm run dev`` works on
+	// 6. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "uv venv .venv --seed && uv pip install -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"postCreateCommand": "uv venv .venv --seed && uv pip install -e '.[dev]' && ln -sf _native.cpython-312-x86_64-linux-gnu.so .venv/lib/python3.14/site-packages/aiolibdatachannel/_native.abi3.so && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
 	// 5173 = Vite dev server (``pnpm run dev`` in ``client/``).
