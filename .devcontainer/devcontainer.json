@@ -76,9 +76,12 @@
 		},
 		"5173": {
 			"label": "vite dev",
-			"onAutoForward": "openBrowser"
+			"onAutoForward": "silent"
 		}
 	},
+	// Vite's HMR / probe ports get forwarded too; keep them out of
+	// the Ports view so they don't spawn browser tabs of their own.
+	"otherPortsAttributes": { "onAutoForward": "ignore" },
 
 	"customizations": {
 		"vscode": {
