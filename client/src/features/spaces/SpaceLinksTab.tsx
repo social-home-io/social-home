@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
+import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { confirmDialog } from '@/components/confirm'
 
@@ -118,7 +119,7 @@ export function SpaceLinksTab({ spaceId }: Props) {
         household wiki, the shared grocery board, a shared calendar link, etc.
       </p>
 
-      {loading && <p class="sh-muted">Loading…</p>}
+      {loading && <Spinner />}
 
       {!loading && links.length === 0 && (
         <p class="sh-muted">No links yet. Add one below.</p>

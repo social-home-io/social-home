@@ -14,6 +14,7 @@ import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
+import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
 import {
@@ -50,12 +51,13 @@ export default function PublicSharingSettings() {
     void reload()
   }, [])
 
-  if (loading.value) return <p>Loading…</p>
+  if (loading.value) return <Spinner />
 
   if (gfses.value.length === 0) {
     return (
       <div class="sh-empty-state">
-        <h3 style={{ margin: 0 }}>No GFS pairings yet</h3>
+        <div aria-hidden="true">🌐</div>
+        <h3>No GFS pairings yet</h3>
         <p>
           Pair a Global Federation Server first — then come back here to
           choose which ones can fan your Moments to a wider audience.

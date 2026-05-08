@@ -10,6 +10,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
+import { Spinner } from './Spinner'
 import { showToast } from './Toast'
 
 interface Version {
@@ -77,7 +78,7 @@ export function PageVersionHistory({ pageId, onRevert }: {
   return (
     <div class="sh-versions">
       <h3>Version History</h3>
-      {loading.value && <p class="sh-muted">Loading…</p>}
+      {loading.value && <Spinner />}
       {!loading.value && versions.value.length === 0 && (
         <p class="sh-muted">No previous versions — edits will appear here.</p>
       )}
