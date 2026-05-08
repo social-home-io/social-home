@@ -9,8 +9,10 @@ from dataclasses import dataclass
 class HouseholdTheme:
     """Household-wide visual preferences."""
 
-    primary_color: str = "#4A90E2"
-    accent_color: str = "#F5A623"
+    # Brand-aligned defaults — hearth terracotta + honey, matching
+    # ``tokens.css``'s ``--sh-primary`` / ``--sh-warning``.
+    primary_color: str = "#D2542A"
+    accent_color: str = "#C8902F"
     surface_color: str | None = None
     surface_dark: str | None = None
     mode: str = "auto"
@@ -25,8 +27,10 @@ class SpaceTheme:
     """Per-space overrides (§23.123)."""
 
     space_id: str
-    primary_color: str = "#4A90E2"
-    accent_color: str = "#F5A623"
+    # Brand-aligned defaults — hearth terracotta + honey, matching
+    # ``tokens.css``'s ``--sh-primary`` / ``--sh-warning``.
+    primary_color: str = "#D2542A"
+    accent_color: str = "#C8902F"
     header_image_file: str | None = None
     background_tint: str | None = None
     mode_override: str | None = None

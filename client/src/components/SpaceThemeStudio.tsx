@@ -30,7 +30,8 @@ interface Preset {
 }
 
 const PRESETS: Preset[] = [
-  { label: 'Default',     primary: '#4A90E2', accent: '#F5A623', tint: null },
+  // "Default" matches the brand palette in tokens.css — hearth + honey.
+  { label: 'Default',     primary: '#D2542A', accent: '#C8902F', tint: null },
   { label: 'Calm',        primary: '#5D7CBB', accent: '#70B3A4', tint: '#F0F4F8' },
   { label: 'Bold',        primary: '#E94E77', accent: '#FFB400', tint: '#1F1E26' },
   { label: 'Playful',     primary: '#B14AED', accent: '#FFD447', tint: '#FDF4FF' },

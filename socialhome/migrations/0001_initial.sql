@@ -1690,8 +1690,13 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
 
 CREATE TABLE IF NOT EXISTS household_theme (
     id              TEXT PRIMARY KEY DEFAULT 'default' CHECK(id = 'default'),
-    primary_color   TEXT NOT NULL DEFAULT '#4A90E2',
-    accent_color    TEXT NOT NULL DEFAULT '#F5A623',
+    -- Defaults align with the SPA token palette in ``tokens.css`` —
+    -- hearth terracotta + honey — so a household that opens the
+    -- HouseholdThemeStudio and hits Save without changing colours
+    -- doesn't accidentally flip the SPA's runtime ``--sh-primary`` /
+    -- ``--sh-warning`` to legacy cold-blue + amber.
+    primary_color   TEXT NOT NULL DEFAULT '#D2542A',
+    accent_color    TEXT NOT NULL DEFAULT '#C8902F',
     -- §23.125 Household Theme Studio extensions.
     surface_color   TEXT,                                   -- optional light surface
     surface_dark    TEXT,                                   -- optional dark surface
@@ -1708,8 +1713,10 @@ CREATE TABLE IF NOT EXISTS household_theme (
 
 CREATE TABLE IF NOT EXISTS space_themes (
     space_id          TEXT PRIMARY KEY REFERENCES spaces(id) ON DELETE CASCADE,
-    primary_color     TEXT NOT NULL DEFAULT '#4A90E2',
-    accent_color      TEXT NOT NULL DEFAULT '#F5A623',
+    -- Brand-aligned defaults (see ``household_theme``). Per-space
+    -- themes can still override the household for a specific room.
+    primary_color     TEXT NOT NULL DEFAULT '#D2542A',
+    accent_color      TEXT NOT NULL DEFAULT '#C8902F',
     -- §23.123 per-space override fields.
     header_image_file TEXT,
     background_tint   TEXT,

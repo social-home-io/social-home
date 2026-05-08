@@ -197,6 +197,11 @@ function ProfileTab() {
                title="Click or drop an image to change your avatar">
           <Avatar name={displayName.value || '?'} src={avatarUrl.value}
                   size={112} />
+          {/* Persistent corner badge — the avatar is clickable, but
+           *  on touch devices the previous hover-only overlay never
+           *  appeared, so users had no cue the photo could be changed.
+           *  The hover overlay below remains for quick desktop tap. */}
+          <span class="sh-profile-avatar-badge" aria-hidden="true">📷</span>
           <span class="sh-profile-avatar-hint" aria-hidden="true">
             📷 Change
           </span>
@@ -210,8 +215,12 @@ function ProfileTab() {
             </strong>
             <span class="sh-muted">@{currentUser.value?.username}</span>
           </div>
+          {/* Source badge — informational only ("where this profile is
+           *  edited from"), not a button. The previous copy "✏️ Set
+           *  manually" parsed as an imperative call-to-action; "Edited
+           *  here" makes it clear this is just describing the source. */}
           <span class={`sh-profile-source sh-profile-source--${isHaUser ? 'ha' : 'manual'}`}>
-            {isHaUser ? '🏠 Synced from Home Assistant' : '✏️ Set manually'}
+            {isHaUser ? '🏠 Synced from Home Assistant' : '✏️ Edited here'}
           </span>
           <div class="sh-row" style={{ gap: 'var(--sh-space-xs)', flexWrap: 'wrap' }}>
             {avatarUrl.value && (
@@ -374,7 +383,7 @@ function FollowingPanel() {
   }
 
   return (
-    <div class="sh-following">
+    <div class="sh-following sh-settings-subcard">
       <h3 class="sh-settings-panel-heading">Following</h3>
       <p class="sh-muted sh-settings-panel-blurb">
         Following someone extends the moments retention window from 24
@@ -448,7 +457,7 @@ function BlockedAccountsPanel() {
   }
 
   return (
-    <div class="sh-blocked-accounts">
+    <div class="sh-blocked-accounts sh-settings-subcard">
       <h3 class="sh-settings-panel-heading">Blocked accounts</h3>
       {rows.length === 0 && (
         <p class="sh-muted sh-settings-panel-blurb">
@@ -533,7 +542,7 @@ function HighlightsPreferencesPanel() {
   }
 
   return (
-    <div id="highlights" class="sh-settings-highlights-panel">
+    <div id="highlights" class="sh-settings-highlights-panel sh-settings-subcard">
       <h3>Highlights</h3>
       <p class="sh-muted">
         Control how long your highlights stay listed and who sees them by default.
@@ -598,7 +607,7 @@ function MomentumPanel() {
     }
   }
   return (
-    <div id="momentum" class="sh-settings-momentum-panel">
+    <div id="momentum" class="sh-settings-momentum-panel sh-settings-subcard">
       <h3>Momentum visibility</h3>
       <p class="sh-muted">
         Federated moments hop up to 3 instances. Pick how many hops

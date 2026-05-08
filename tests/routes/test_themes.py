@@ -13,7 +13,7 @@ async def test_get_household_theme_returns_defaults_first_call(client):
     r = await client.get("/api/theme", headers=_auth(client._tok))
     assert r.status == 200
     body = await r.json()
-    assert body["primary_color"] == "#4A90E2"
+    assert body["primary_color"] == "#D2542A"
 
 
 async def test_update_household_theme_admin_succeeds(client):
