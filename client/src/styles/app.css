@@ -52,6 +52,11 @@ html, body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
+  /* Belt-and-braces against rotated cards / tab-strips that can let
+   * a child's bounding box poke past the viewport. ``clip`` instead
+   * of ``hidden`` so position:sticky still works inside descendant
+   * scroll containers (the topbar, the space-subheader). */
+  overflow-x: clip;
   font-family: var(--sh-font-family);
   font-size: var(--sh-font-size-base);
   line-height: 1.5;
@@ -109,11 +114,23 @@ a:focus:not(:focus-visible) { outline: none; }
 
 .sh-layout {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 260px minmax(0, 1fr);
   grid-template-rows: auto 1fr;
   grid-template-areas: "nav topbar" "nav main";
   min-height: 100vh;
   background: var(--sh-bg-secondary);
+  /* Without minmax(0, 1fr) the grid track's auto-minimum was larger
+   * than the viewport on space pages — the search bar's intrinsic
+   * min-content propagated up through the topbar flex row and
+   * pushed the column to ~800px, which the body's overflow-x:clip
+   * masked but didn't actually fix. minmax(0, 1fr) cuts that off
+   * so the column never exceeds its parent. */
+}
+.sh-content {
+  /* Same minmax-0 trick at the inner flex chain: without min-width:0
+   * a flex child can push its parent past the viewport when its
+   * own children have unbreakable min-content. */
+  min-width: 0;
 }
 
 .sh-topbar {
@@ -452,7 +469,7 @@ a:focus:not(:focus-visible) { outline: none; }
 .sh-mobile-drawer-scrim { display: none; }
 @media (max-width: 768px) {
   .sh-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "topbar" "main";
   }
   .sh-sidenav { display: none; }
@@ -2192,6 +2209,21 @@ a.sh-friends-member-chip:hover {
   .sh-feed-item {
     transform: none;
   }
+}
+/* Mobile cap — at narrow widths a 1.4° rotation makes the card's
+ * rotated bounding-box overflow the viewport's right edge, which the
+ * browser materialises as a page-level horizontal scroll bar. Cut the
+ * amplitude in half on mobile so the tilt still reads but the layout
+ * stays inside the column. The page-level overflow-x: clip below is
+ * the belt-and-braces safety net for any other rotated element. */
+@media (max-width: 640px) {
+  .sh-feed-item:nth-child(4n+1) { --sh-feed-rot: -0.8deg; }
+  .sh-feed-item:nth-child(4n+2) { --sh-feed-rot:  0.6deg; }
+  .sh-feed-item:nth-child(4n+3) { --sh-feed-rot: -0.5deg; }
+  .sh-feed-item:nth-child(4n)   { --sh-feed-rot:  0.7deg; }
+  .sh-calendar-day-group:nth-child(3n+1) { --sh-day-rot: -0.4deg; }
+  .sh-calendar-day-group:nth-child(3n+2) { --sh-day-rot:  0.3deg; }
+  .sh-calendar-day-group:nth-child(3n)   { --sh-day-rot: -0.2deg; }
 }
 .sh-post--pinned {
   background:
@@ -6051,10 +6083,16 @@ hr {
 .sh-space-card:nth-child(even)::before {
   background: color-mix(in srgb, var(--sh-success) 45%, transparent);
 }
-.sh-space-card:nth-child(4n+1) { --sh-space-rot: -0.4deg; }
-.sh-space-card:nth-child(4n+2) { --sh-space-rot:  0.3deg; }
-.sh-space-card:nth-child(4n+3) { --sh-space-rot: -0.2deg; }
-.sh-space-card:nth-child(4n)   { --sh-space-rot:  0.5deg; }
+.sh-space-card:nth-child(4n+1) { --sh-space-rot: -1.2deg; }
+.sh-space-card:nth-child(4n+2) { --sh-space-rot:  0.9deg; }
+.sh-space-card:nth-child(4n+3) { --sh-space-rot: -0.6deg; }
+.sh-space-card:nth-child(4n)   { --sh-space-rot:  0.8deg; }
+@media (max-width: 640px) {
+  .sh-space-card:nth-child(4n+1) { --sh-space-rot: -0.7deg; }
+  .sh-space-card:nth-child(4n+2) { --sh-space-rot:  0.5deg; }
+  .sh-space-card:nth-child(4n+3) { --sh-space-rot: -0.3deg; }
+  .sh-space-card:nth-child(4n)   { --sh-space-rot:  0.5deg; }
+}
 .sh-space-card:hover {
   transform: rotate(0deg) translateY(-2px);
   box-shadow:
@@ -6064,6 +6102,22 @@ hr {
   border-left-color: var(--sh-primary);
   text-decoration: none;
   z-index: 2;
+}
+/* Settle-in on first paint — stagger so the cards "pin themselves
+ * one after another". Same mechanic the feed uses, but keyframed to
+ * the space-rot var so each card lands at its assigned tilt. */
+.sh-space-card { animation: sh-space-settle 460ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sh-space-card:nth-child(1) { animation-delay: 60ms; }
+.sh-space-card:nth-child(2) { animation-delay: 130ms; }
+.sh-space-card:nth-child(3) { animation-delay: 200ms; }
+.sh-space-card:nth-child(4) { animation-delay: 270ms; }
+.sh-space-card:nth-child(n+5) { animation-delay: 320ms; }
+@keyframes sh-space-settle {
+  from { opacity: 0; transform: rotate(0deg) translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: rotate(var(--sh-space-rot, 0deg)) translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sh-space-card { animation: none; transform: none; }
 }
 /* Scope-colored left edge — communicates the space's reach at a glance
  * (mirrors the website's tile__edge--private / --group / --global). */
@@ -7412,10 +7466,24 @@ hr {
   border-bottom: none;
   margin-bottom: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  /* Hide the native scrollbar — it lands as a thick grey strip
+   * underneath the tabs at mobile width and reads as broken layout
+   * even though scroll behaviour is intentional. The fade-mask below
+   * is a much better affordance for "there's more here". */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   flex: 1;
   min-width: 0;
+  -webkit-overflow-scrolling: touch;
+  /* Soft fade on the right edge so the user notices the row is
+   * scrollable without a scrollbar. The mask spans 16px on each
+   * side — shorter than the calendar picker because the tab text
+   * already provides a strong horizontal rhythm. */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 16px), transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 16px), transparent 100%);
 }
+.sh-space-subheader .sh-space-tabs::-webkit-scrollbar { display: none; }
+.sh-space-subheader .sh-space-tabs > * { flex-shrink: 0; }
 .sh-space-subheader .sh-tab {
   border-radius: var(--sh-radius-md);
   border: 1px solid transparent;
