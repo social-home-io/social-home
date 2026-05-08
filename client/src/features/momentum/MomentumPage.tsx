@@ -12,6 +12,7 @@ import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { TabHeader } from '@/components/TabHeader'
+import { MomentumComposerDialog } from '@/components/MomentumComposerDialog'
 import { useTitle } from '@/store/pageTitle'
 import MomentumInboxTab from './MomentumInboxTab'
 import MomentumArchiveTab from './MomentumArchiveTab'
@@ -70,6 +71,7 @@ export default function MomentumPage() {
         onSelectTab={onSelectTab}
       />
       {activeTab.value === 'archive' ? <MomentumArchiveTab /> : <MomentumInboxTab />}
+      <MomentumComposerDialog />
     </div>
   )
 }
