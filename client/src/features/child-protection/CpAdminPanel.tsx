@@ -114,7 +114,7 @@ export default function CpAdminPanel() {
   if (loading.value) return <Spinner />
 
   return (
-    <div class="sh-cp-admin">
+    <section class="sh-cp-admin sh-admin-section">
       <h2>Child protection</h2>
       <p class="sh-muted">
         Mark household members as protected minors, assign guardians, and
@@ -192,7 +192,7 @@ export default function CpAdminPanel() {
         onConfirm={() => pendingDisable.value && disableProtection(pendingDisable.value)}
         onCancel={() => pendingDisable.value = null}
       />
-    </div>
+    </section>
   )
 }
 
