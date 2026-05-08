@@ -11,6 +11,7 @@
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { token } from '@/store/auth'
+import { hasCapability } from '@/store/instance'
 import { Button } from './Button'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
@@ -105,12 +106,21 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
             <Button onClick={handleIcsPick} loading={busy.value}>
               Upload .ics / .vcs file
             </Button>
-            <Button onClick={() => { mode.value = 'image' }} loading={busy.value}>
-              From a photo
-            </Button>
-            <Button onClick={() => { mode.value = 'prompt' }} loading={busy.value}>
-              From a description
-            </Button>
+            {/* AI-backed import only renders when the adapter exposes an
+             *  ``ai`` capability. On standalone the endpoints 501 and
+             *  the buttons opened a dead path — quieter to hide them.
+             *  HA / HAOS surface the AI options once an ai_task backend
+             *  is configured. */}
+            {hasCapability('ai') && (
+              <>
+                <Button onClick={() => { mode.value = 'image' }} loading={busy.value}>
+                  From a photo
+                </Button>
+                <Button onClick={() => { mode.value = 'prompt' }} loading={busy.value}>
+                  From a description
+                </Button>
+              </>
+            )}
             <Button variant="secondary" onClick={close}>{t('common.cancel')}</Button>
           </div>
         </div>

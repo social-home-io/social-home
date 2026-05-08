@@ -72,15 +72,30 @@ export default function AdminPage() {
 
   if (loading.value) return <Spinner />
 
+  // HA Users tab only makes sense when the platform adapter exposes
+  // an HA person directory (``ha`` / ``haos`` modes). On standalone
+  // the endpoint 501s and the tab opens to a "Not available" panel —
+  // hiding it entirely is friendlier than offering a dead link. If
+  // the active tab IS ha-users when the capability flips off (e.g.
+  // adapter swap mid-session), fall back to Members so the admin
+  // doesn't land on a hidden tab.
+  const hasHaPersonDirectory = instanceConfig.value
+    ?.capabilities.includes('ha_person_directory') ?? false
+  const visibleTabs: TabId[] = [
+    'members',
+    ...(hasHaPersonDirectory ? (['ha-users'] as const) : []),
+    'spaces', 'moderation', 'sessions', 'child-protection',
+    'storage', 'backup', 'settings',
+  ]
+  if (tab.value === 'ha-users' && !hasHaPersonDirectory) {
+    tab.value = 'members'
+  }
+
   return (
     <div class="sh-admin">
 
       <nav class="sh-admin-tabs" role="tablist">
-        {([
-          'members', 'ha-users', 'spaces', 'moderation',
-          'sessions', 'child-protection', 'storage', 'backup',
-          'settings',
-        ] as TabId[]).map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t}
             type="button"
@@ -95,7 +110,7 @@ export default function AdminPage() {
       </nav>
 
       {tab.value === 'members' && <MembersTab />}
-      {tab.value === 'ha-users' && <HaUsersPanel />}
+      {tab.value === 'ha-users' && hasHaPersonDirectory && <HaUsersPanel />}
       {tab.value === 'spaces' && <SpacesTab />}
       {tab.value === 'moderation' && <ModerationTab />}
       {tab.value === 'sessions' && <SessionsTab />}

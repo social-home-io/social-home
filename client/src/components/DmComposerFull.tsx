@@ -12,6 +12,7 @@ import {
 } from './EmojiAutocomplete'
 import { EmojiPickButton } from './EmojiPickButton'
 import { SttButton } from './SttButton'
+import { hasCapability } from '@/store/instance'
 import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
 import { showToast } from './Toast'
 import { sendTyping } from './TypingIndicator'
@@ -123,10 +124,12 @@ export function DmComposerFull({ conversationId, onSend }: {
           openKey="dm-composer"
           onInsert={(emoji) => { content.value = content.value + emoji }}
         />
-        <SttButton onText={(t) => {
-          const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
-          content.value = content.value + sep + t
-        }} />
+        {hasCapability('stt') && (
+          <SttButton onText={(t) => {
+            const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
+            content.value = content.value + sep + t
+          }} />
+        )}
         <Button onClick={handleSend} loading={sending.value}
           disabled={!content.value.trim() && !mediaUrl.value}>Send</Button>
       </div>
