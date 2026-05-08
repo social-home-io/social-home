@@ -22,6 +22,7 @@ import { openNewDm } from '@/components/NewDmDialog'
 import { Avatar } from '@/components/Avatar'
 import { PullToRefresh } from '@/components/PullToRefresh'
 import { useTitle } from '@/store/pageTitle'
+import { relativeChatTime } from '@/utils/relativeTime'
 import CallsTab from './CallsTab'
 
 type ChatsTab = 'dms' | 'groups' | 'calls'
@@ -52,39 +53,6 @@ function tabFromUrl(url: string): ChatsTab {
   const t = new URLSearchParams(q).get('tab')
   if (t === 'dms' || t === 'groups' || t === 'calls') return t
   return 'dms'
-}
-
-
-/** Chat-style relative timestamp for inbox rows. Mirrors WhatsApp /
- *  Signal: short "now / 5m / 14h" for the same day, "Yesterday" for
- *  yesterday, weekday for last 6 days, and ``MMM d`` past that.
- *  ``toLocaleString()`` (the previous shape, "5/8/2026, 1:30:00 PM") was
- *  too dense for an at-a-glance scan. */
-function relativeInboxTime(iso: string): string {
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return iso
-  const now = Date.now()
-  const diff = now - t
-  const min = Math.floor(diff / 60_000)
-  if (min < 1) return 'now'
-  if (min < 60) return `${min}m`
-  const hr = Math.floor(min / 60)
-  // Same calendar day → just show hours since.
-  const sameDay = new Date(t).toDateString() === new Date(now).toDateString()
-  if (sameDay) return `${hr}h`
-  // Yesterday → spell it out.
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  if (new Date(t).toDateString() === yesterday.toDateString()) return 'Yesterday'
-  // Last 6 days → weekday name (Mon / Tue / …).
-  if (diff < 6 * 86_400_000) {
-    return new Date(t).toLocaleDateString(undefined, { weekday: 'short' })
-  }
-  // Older → "Apr 23" style.
-  return new Date(t).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  })
 }
 
 
@@ -213,7 +181,7 @@ export default function DmInboxPage() {
                   dateTime={c.last_message_at}
                   title={new Date(c.last_message_at).toLocaleString()}
                 >
-                  {relativeInboxTime(c.last_message_at)}
+                  {relativeChatTime(c.last_message_at)}
                 </time>
               )}
               {c.unread && c.unread > 0 ? (
