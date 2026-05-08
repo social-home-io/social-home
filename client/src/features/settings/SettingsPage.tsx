@@ -269,7 +269,9 @@ function LandingPicker() {
       showToast(
         choice === '/dashboard'
           ? 'Landing page set to My Corner'
-          : 'Landing page set to the feed',
+          : choice === '/feed'
+            ? 'Landing page set to the feed'
+            : 'Landing page set to Welcome',
         'success',
       )
     } catch (err: unknown) {
@@ -292,6 +294,16 @@ function LandingPicker() {
           <input type="radio" name="landing" value="/"
                  checked={landingPath.value === '/'}
                  onChange={() => void handleChange('/')} />
+          <span class="sh-landing-option-icon">☀️</span>
+          <span class="sh-landing-option-body">
+            <strong>Welcome</strong>
+            <span class="sh-muted">Today's events, pending tasks, catch-up</span>
+          </span>
+        </label>
+        <label class={`sh-landing-option ${landingPath.value === '/feed' ? 'sh-landing-option--active' : ''}`}>
+          <input type="radio" name="landing" value="/feed"
+                 checked={landingPath.value === '/feed'}
+                 onChange={() => void handleChange('/feed')} />
           <span class="sh-landing-option-icon">📰</span>
           <span class="sh-landing-option-body">
             <strong>Household feed</strong>
@@ -305,7 +317,7 @@ function LandingPicker() {
           <span class="sh-landing-option-icon">🏠</span>
           <span class="sh-landing-option-body">
             <strong>My Corner</strong>
-            <span class="sh-muted">Tasks, events, notifications at a glance</span>
+            <span class="sh-muted">Full dashboard with bazaar, presence map, more</span>
           </span>
         </label>
       </div>

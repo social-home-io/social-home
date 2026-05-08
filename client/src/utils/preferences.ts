@@ -8,7 +8,7 @@
 import { api } from '@/api'
 import { currentUser } from '@/store/auth'
 
-export type LandingPath = '/' | '/dashboard'
+export type LandingPath = '/' | '/feed' | '/dashboard'
 
 export interface MomentsPreferences {
   /** Per-user max-hops visibility (§Momentum-relay-policy). 1 = only

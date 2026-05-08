@@ -7385,6 +7385,295 @@ hr {
 }
 .sh-widget--networkmap { grid-column: 1 / -1; }
 
+/* ── Welcome / corner-light landing ─────────────────────────────────
+ *
+ * Mounted at ``/`` for any user who hasn't picked a different home
+ * page in Settings.  Optimised for the first-3-seconds glance:
+ *  - Generous hero with a serif greeting and a short status line.
+ *  - Single column of paper-card "stripes" that collapse when their
+ *    section is empty (a card without rows is *not* rendered, on
+ *    purpose — the welcome should never show "no events today" nag
+ *    placeholders).
+ *  - A "ll clear" mode that turns the whole page into a calming
+ *    "nothing on your plate today" card when every section is empty. */
+.sh-welcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-lg);
+  /* Constrain the width — the welcome reads as a single, focused
+   * column even on widescreen so the eye lands on the hero rather
+   * than scanning a busy grid. */
+  max-width: 720px;
+  margin: 0 auto;
+  padding-block: var(--sh-space-md);
+}
+.sh-welcome-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  text-align: left;
+  padding-inline: var(--sh-space-xs);
+}
+.sh-welcome-hero__greeting {
+  margin: 0;
+  font: 500 clamp(2.2rem, 5vw + 1rem, 3.4rem) / 1.05 var(--sh-font-family-display);
+  font-feature-settings: var(--sh-display-feat, "ss01", "case");
+  font-variation-settings: var(--sh-display-axes, "opsz" 36);
+  letter-spacing: -0.02em;
+  color: var(--sh-text);
+}
+.sh-welcome-hero__sub {
+  margin: 0;
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-md);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.sh-welcome-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+.sh-welcome-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+
+/* Card — paper stripe with a subtle terracotta accent on the icon.
+ * Reuses the pinned-paper aesthetic used elsewhere (washi-tape feel)
+ * via ::before; lighter weight than the feed card so the welcome
+ * reads as a tray, not a grid of full posts. */
+.sh-welcome-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-md) var(--sh-space-lg);
+  background: var(--sh-bg-elev-1, var(--sh-bg-secondary));
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 6px 18px -10px rgba(0, 0, 0, 0.06);
+  text-decoration: none;
+  color: inherit;
+  transition: transform var(--sh-transition-fast), box-shadow var(--sh-transition-fast);
+}
+a.sh-welcome-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02), 0 12px 24px -12px rgba(210, 84, 42, 0.15);
+}
+.sh-welcome-card::before {
+  /* Washi-tape strip — small terracotta brushstroke top-left, signals
+   * the pinned-paper aesthetic without the visual weight of the feed
+   * card variant. */
+  content: '';
+  position: absolute;
+  top: -6px; left: var(--sh-space-md);
+  width: 56px; height: 14px;
+  background: linear-gradient(
+    100deg,
+    rgba(210, 84, 42, 0.55) 0%,
+    rgba(200, 144, 47, 0.45) 100%
+  );
+  border-radius: 2px;
+  transform: rotate(-3deg);
+  opacity: 0.85;
+}
+.sh-welcome-card__title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  font: 600 var(--sh-font-size-lg) / 1.2 var(--sh-font-family-display);
+  font-feature-settings: var(--sh-display-feat, "ss01", "case");
+  letter-spacing: -0.005em;
+}
+.sh-welcome-card__title > span[aria-hidden] {
+  font-size: 1.4em;
+  line-height: 1;
+}
+.sh-welcome-card__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sh-welcome-card__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: 6px 0;
+  font-size: var(--sh-font-size-md);
+  border-bottom: 1px dashed transparent;
+}
+.sh-welcome-card__row + .sh-welcome-card__row {
+  border-top: 1px dashed var(--sh-border);
+  padding-top: 8px;
+}
+.sh-welcome-card__time {
+  flex: 0 0 64px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-primary, var(--sh-text));
+}
+.sh-welcome-card__time--day {
+  flex-basis: auto;
+  min-width: 64px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.sh-welcome-card__when {
+  font-weight: 400;
+  font-size: var(--sh-font-size-sm);
+}
+.sh-welcome-card__bullet {
+  flex: 0 0 auto;
+  font-size: 0.9em;
+  opacity: 0.55;
+}
+.sh-welcome-card__line {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sh-welcome-card__chip {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--sh-radius-full);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: var(--sh-bg-tertiary, rgba(0, 0, 0, 0.04));
+  color: var(--sh-text-muted);
+}
+.sh-welcome-card__chip--today {
+  background: rgba(200, 144, 47, 0.15);
+  color: rgba(132, 95, 30, 1);
+}
+.sh-welcome-card__chip--overdue {
+  background: rgba(210, 84, 42, 0.18);
+  color: rgba(170, 56, 22, 1);
+}
+.sh-welcome-card__row--more {
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text-muted);
+  font-style: italic;
+}
+.sh-welcome-card__more {
+  align-self: flex-end;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-primary, var(--sh-text));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Catch-up card — a non-link host because each row links separately. */
+.sh-welcome-card--catchup {
+  cursor: default;
+}
+.sh-welcome-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+}
+.sh-welcome-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--sh-bg-tertiary, rgba(0, 0, 0, 0.04));
+  border-radius: var(--sh-radius-full);
+  text-decoration: none;
+  color: inherit;
+  font-size: var(--sh-font-size-sm);
+  font-weight: 500;
+  transition: background var(--sh-transition-fast);
+}
+.sh-welcome-chip:hover {
+  background: rgba(210, 84, 42, 0.10);
+}
+.sh-welcome-chip strong {
+  color: var(--sh-primary, var(--sh-text));
+}
+.sh-welcome-catchup-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sh-space-sm);
+  padding: 8px 0;
+  text-decoration: none;
+  color: inherit;
+  border-top: 1px dashed var(--sh-border);
+}
+.sh-welcome-card__list > li:first-child > .sh-welcome-catchup-row {
+  border-top: none;
+}
+.sh-welcome-catchup-emoji {
+  flex: 0 0 auto;
+  font-size: 1.4em;
+  line-height: 1;
+  margin-top: 2px;
+}
+.sh-welcome-catchup-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sh-welcome-catchup-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sh-font-size-sm);
+}
+.sh-welcome-catchup-snippet {
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sh-welcome-catchup-when {
+  flex: 0 0 auto;
+  font-size: var(--sh-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* All-clear — the page when nothing is waiting.  Calming, not empty. */
+.sh-welcome-allclear {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-2xl) var(--sh-space-lg);
+  background: linear-gradient(
+    180deg,
+    rgba(200, 144, 47, 0.06),
+    rgba(210, 84, 42, 0.02)
+  );
+  border: 1px dashed var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+}
+.sh-welcome-allclear__sun {
+  font-size: 3rem;
+  line-height: 1;
+}
+.sh-welcome-allclear__title {
+  margin: 0;
+  font: 500 clamp(1.6rem, 3vw + 1rem, 2.2rem) / 1.1 var(--sh-font-family-display);
+  letter-spacing: -0.01em;
+}
+.sh-welcome-allclear__sub {
+  margin: 0;
+  font-size: var(--sh-font-size-md);
+}
+
 /* Compact stat widget (single value + icon + label) */
 .sh-stat-widget {
   flex-direction: row;
