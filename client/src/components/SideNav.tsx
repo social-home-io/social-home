@@ -13,12 +13,14 @@
  * render path filters items through the live state snapshot pulled
  * from auth / household-features / guardian signals.
  */
+import { useEffect } from 'preact/hooks'
 import { useLocation } from 'preact-iso'
 import { useComputed } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
 import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
+import { spaces, loadSpaces } from '@/store/spaces'
 import { toggles } from '@/components/HouseholdToggles'
 import { Avatar } from '@/components/Avatar'
 import { Wordmark } from '@/components/Wordmark'
@@ -143,6 +145,31 @@ const MAIN_GROUPS: readonly SideNavGroup[] = [HOME_GROUP, TALK_GROUP, BROWSE_GRO
 
 export function SideNav() {
   const loc = useLocation()
+
+  // Lazy-load the spaces list so a deep-link into a space (or any
+  // first-render that doesn't pass through ``/spaces``) can still
+  // resolve the active space's name + emoji for the sidebar
+  // sub-row. Guard against an undefined signal value (test mocks of
+  // ``@/api`` resolve ``api.get`` to ``undefined``, which the store
+  // assigns straight through).
+  useEffect(() => {
+    if (!spaces.value || spaces.value.length === 0) void loadSpaces()
+  }, [])
+
+  // Resolve the active space when the URL points at a specific space
+  // page (``/spaces/{id}`` and its sub-routes), excluding ``/spaces``
+  // (the listing page) and ``/spaces/browse`` (the public catalogue).
+  const activeSpaceFromUrl = useComputed(() => {
+    const path = loc.path ?? ''
+    const m = path.match(/^\/spaces\/([^/]+)/)
+    if (!m) return null
+    const id = m[1]
+    if (id === 'browse') return null
+    const list = spaces.value
+    if (!Array.isArray(list)) return null
+    return list.find(s => s.id === id) ?? null
+  })
+
   const view = useComputed(() => {
     const user = currentUser.value
     const t = toggles.value
@@ -182,8 +209,10 @@ export function SideNav() {
   const currentPath = loc.path
 
   const state = view.value.state
+  const activeSpace = activeSpaceFromUrl.value
   const renderGroup = (group: SideNavGroup, items: SideNavItem[]) => {
     const isActive = items.some(i => i.href === currentPath)
+      || (group.key === 'browse' && activeSpace !== null)
     const headerId = `sidenav-group-${group.key}`
     return (
       <nav
@@ -194,20 +223,50 @@ export function SideNav() {
         <h2 id={headerId} class="sh-sidenav-group-header">{group.label}</h2>
         {items.map(i => {
           const count = i.badge ? i.badge(state) : 0
+          // The "Spaces" link is the parent of the active-space row;
+          // it lights up when the URL is ``/spaces*`` (any sub-route)
+          // even though the deep URL doesn't equal ``/spaces`` exactly.
+          const ariaCurrent =
+            i.href === currentPath ||
+            (i.key === 'spaces' && activeSpace !== null)
+              ? 'page'
+              : undefined
           return (
-            <a
-              key={i.key}
-              href={i.href}
-              aria-current={i.href === currentPath ? 'page' : undefined}
-            >
-              <SideNavIcon name={i.icon} />
-              <span class="sh-sidenav-link-label">{i.label}</span>
-              {count > 0 && (
-                <span class="sh-sidenav-badge" aria-label={`${count} unread`}>
-                  {count > 99 ? '99+' : count}
-                </span>
+            <>
+              <a
+                key={i.key}
+                href={i.href}
+                aria-current={ariaCurrent}
+              >
+                <SideNavIcon name={i.icon} />
+                <span class="sh-sidenav-link-label">{i.label}</span>
+                {count > 0 && (
+                  <span class="sh-sidenav-badge" aria-label={`${count} unread`}>
+                    {count > 99 ? '99+' : count}
+                  </span>
+                )}
+              </a>
+              {/* Active-space sub-row anchors "you are here" inside
+               *  Spaces. Renders right under the parent "Spaces" link,
+               *  one indent deeper, and only when the URL points at a
+               *  specific space (so the sub-row doesn't ghost in on
+               *  the ``/spaces`` listing page). */}
+              {i.key === 'spaces' && activeSpace && (
+                <a
+                  key={`spaces-active-${activeSpace.id}`}
+                  href={`/spaces/${activeSpace.id}`}
+                  class="sh-sidenav-subitem sh-sidenav-subitem--active"
+                  aria-current="page"
+                >
+                  <span class="sh-sidenav-subitem__emoji" aria-hidden="true">
+                    {activeSpace.emoji || '🌐'}
+                  </span>
+                  <span class="sh-sidenav-link-label">
+                    {activeSpace.name}
+                  </span>
+                </a>
               )}
-            </a>
+            </>
           )
         })}
       </nav>

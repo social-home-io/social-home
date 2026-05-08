@@ -305,6 +305,40 @@ a:focus:not(:focus-visible) { outline: none; }
   color: var(--sh-primary);
 }
 
+/* Active-space sub-row under the "Spaces" nav item — anchors "you
+ * are here" inside the household sidebar without forcing a full
+ * Discord-style rail swap. Indented one notch deeper than the parent
+ * link, leading emoji from ``space.emoji`` (or globe fallback), the
+ * same hearth-tinted active treatment as ``aria-current=page``. */
+.sh-sidenav .sh-sidenav-subitem {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  /* Aligns the emoji column with the parent link's icon column —
+   * the parent has 16px icon + 12px gap = 28px lead, so this row
+   * indents the same amount and the labels stack flush. */
+  padding-left: calc(var(--sh-space-md) + 28px);
+  margin-top: 1px;
+  font-size: var(--sh-font-size-sm);
+  border-radius: var(--sh-radius-md);
+  text-decoration: none;
+}
+.sh-sidenav .sh-sidenav-subitem--active {
+  background: color-mix(in srgb, var(--sh-primary) 14%, transparent);
+  color: var(--sh-primary);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--sh-primary);
+}
+.sh-sidenav-subitem__emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
 .sh-sidenav-group {
   display: flex;
   flex-direction: column;
