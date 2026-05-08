@@ -23,7 +23,11 @@ import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { blockedUserIds, loadBlocks } from '@/store/blocks'
-import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
+import {
+  householdDisplayName,
+  householdPictureUrl,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 import { ws } from '@/ws'
 import type { HighlightInboxItem } from '@/types'
 
@@ -90,14 +94,6 @@ export default function HighlightsInboxTab() {
   const blocked = blockedUserIds.value
   const items = inbox.value.filter(i => !blocked.has(i.highlight.author_user_id))
 
-  const userMap = householdUsers.value
-  const displayName = (userId: string): string => {
-    const u = userMap.get(userId)
-    return u?.display_name || u?.username || userId
-  }
-  const pictureFor = (userId: string): string | null =>
-    userMap.get(userId)?.picture_url ?? null
-
   // Build a "rings" row: my own + everyone else's, grouped by author.
   const myItems = items.filter(i => i.highlight.author_user_id === me)
   const peerItems = items.filter(i => i.highlight.author_user_id !== me)
@@ -108,8 +104,8 @@ export default function HighlightsInboxTab() {
       : 'sh-highlight-ring'
     const onClick = () => loc.route(`/highlights/${item.highlight.id}`)
     const isMine = item.highlight.author_user_id === me
-    const name = displayName(item.highlight.author_user_id)
-    const picture = pictureFor(item.highlight.author_user_id)
+    const name = householdDisplayName(item.highlight.author_user_id)
+    const picture = householdPictureUrl(item.highlight.author_user_id)
     return (
       <div key={item.highlight.id} class="sh-highlight-ring-wrap">
         <button
@@ -182,7 +178,7 @@ export default function HighlightsInboxTab() {
             const isMine = item.highlight.author_user_id === me
             const name = isMine
               ? 'You'
-              : displayName(item.highlight.author_user_id)
+              : householdDisplayName(item.highlight.author_user_id)
             return (
               <a
                 key={item.highlight.id}

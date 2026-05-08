@@ -20,7 +20,11 @@ import { MomentumInboxSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { blockedUserIds, loadBlocks } from '@/store/blocks'
-import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
+import {
+  householdDisplayName,
+  householdPictureUrl,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 import { currentUser } from '@/store/auth'
 import { ws } from '@/ws'
 import type { Moment } from '@/types'
@@ -82,10 +86,8 @@ export default function MomentumInboxTab() {
   const visible = moments.value.filter(m => !blocked.has(m.author_user_id))
   const topLevel = visible.filter(m => !m.parent_moment_id)
 
-  const userMap = householdUsers.value
-  const myEntry = me ? userMap.get(me) : undefined
-  const myDisplayName = myEntry?.display_name || myEntry?.username || me || '?'
-  const myPicture = myEntry?.picture_url ?? null
+  const myDisplayName = me ? householdDisplayName(me) : '?'
+  const myPicture = householdPictureUrl(me)
 
   const quickReact = async (m: Moment, ev: Event) => {
     ev.preventDefault()
@@ -139,21 +141,18 @@ export default function MomentumInboxTab() {
       )}
 
       <ul class="sh-momentum-list" aria-label="Moments">
-        {topLevel.map(m => {
-          const author = userMap.get(m.author_user_id)
-          return (
-            <MomentRow
-              key={m.id}
-              m={m}
-              mine={m.author_user_id === me}
-              authorName={author?.display_name || author?.username || m.author_user_id}
-              authorPicture={author?.picture_url ?? null}
-              onOpen={() => loc.route(`/momentum/${m.id}`)}
-              onReact={(ev) => void quickReact(m, ev)}
-              onTagClick={(t) => loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)}
-            />
-          )
-        })}
+        {topLevel.map(m => (
+          <MomentRow
+            key={m.id}
+            m={m}
+            mine={m.author_user_id === me}
+            authorName={householdDisplayName(m.author_user_id)}
+            authorPicture={householdPictureUrl(m.author_user_id)}
+            onOpen={() => loc.route(`/momentum/${m.id}`)}
+            onReact={(ev) => void quickReact(m, ev)}
+            onTagClick={(t) => loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)}
+          />
+        ))}
       </ul>
     </div>
   )

@@ -42,7 +42,10 @@ import { showToast } from '@/components/Toast'
 import { extractHeadings } from '@/utils/markdown'
 import type { EditLock, Page } from '@/types'
 import { confirmDialog } from '@/components/confirm'
-import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 
 interface ConflictData {
   mine: string
@@ -465,9 +468,7 @@ export default function PagesPage() {
     const page = viewing.value
     const headings = extractHeadings(page.content)
     const editorUid = page.last_editor_user_id || page.created_by
-    const userMap = householdUsers.value
-    const editorRow = userMap.get(editorUid)
-    const editorLabel = editorRow?.display_name || editorRow?.username || editorUid
+    const editorLabel = householdDisplayName(editorUid)
     const editedAt = page.last_edited_at || page.updated_at
     return (
       <>
@@ -503,10 +504,8 @@ export default function PagesPage() {
           </div>
           {editLock.value && (
             <div class="sh-edit-lock-banner" role="alert">
-              🔒 <strong>{(() => {
-                const u = userMap.get(editLock.value.locked_by)
-                return u?.display_name || u?.username || editLock.value.locked_by
-              })()}</strong> is currently editing this page.
+              🔒 <strong>{householdDisplayName(editLock.value.locked_by)}</strong>{' '}
+              is currently editing this page.
             </div>
           )}
           <div class="sh-page-viewer-layout">
@@ -547,12 +546,6 @@ export default function PagesPage() {
   }
 
   // 4. Index.
-  const userMap = householdUsers.value
-  const editorName = (uid: string | null | undefined): string => {
-    if (!uid) return ''
-    const u = userMap.get(uid)
-    return u?.display_name || u?.username || uid
-  }
   return (
     <div class="sh-pages">
       <div class="sh-page-header">
@@ -588,7 +581,7 @@ export default function PagesPage() {
             <strong>{p.title}</strong>
             {p.last_editor_user_id && (
               <div class="sh-page-card-byline">
-                Edited by {editorName(p.last_editor_user_id)}
+                Edited by {householdDisplayName(p.last_editor_user_id)}
               </div>
             )}
           </div>
