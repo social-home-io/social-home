@@ -13,15 +13,15 @@ export const routes: Record<string, ReturnType<typeof lazy>> = {
   '/dms/:id':        lazy(() => import('@/features/dms/DmThreadPage')),
   '/dms/:id/calls':  lazy(() => import('@/features/dms/CallHistoryPane')),
   '/calendar':       lazy(() => import('@/features/calendar/CalendarPage')),
-  '/shopping':       lazy(() => import('@/features/shopping/ShoppingPage')),
+  // Tasks · Shopping · Stickies share a single Organize hub now —
+  // each was its own routed page that crowded the AT-HOME sidebar.
+  '/organize':       lazy(() => import('@/features/organize/OrganizePage')),
   '/presence':       lazy(() => import('@/features/presence/PresencePage')),
   '/settings':       lazy(() => import('@/features/settings/SettingsPage')),
   '/corner':         lazy(() => import('@/features/dashboard/DashboardPage')),
   '/dashboard':      lazy(() => import('@/features/dashboard/DashboardRedirect')),
   '/notifications':  lazy(() => import('@/features/notifications/NotificationsPage')),
-  '/tasks':          lazy(() => import('@/features/tasks/TaskPage')),
   '/pages':          lazy(() => import('@/features/pages/PagesPage')),
-  '/stickies':       lazy(() => import('@/features/stickies/StickyBoardPage')),
   '/bazaar':         lazy(() => import('@/features/bazaar/BazaarPage')),
   '/admin':          lazy(() => import('@/features/admin/AdminPage')),
   '/connections':    lazy(() => import('@/features/connections/ConnectionsPage')),

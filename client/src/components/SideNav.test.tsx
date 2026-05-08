@@ -74,12 +74,19 @@ describe('SideNav', () => {
     }
   })
 
-  it('hides Pages and Stickies when their feature toggles are off', () => {
+  it('hides Pages and Organize when their feature toggles are off', () => {
     setUser({ is_admin: true })
-    toggles.value = { ...ALL_FEATURES_ON, feat_pages: false, feat_stickies: false }
+    toggles.value = {
+      ...ALL_FEATURES_ON,
+      feat_pages: false,
+      feat_tasks: false,
+      feat_stickies: false,
+    }
     const { queryByText } = renderAt('/')
     expect(queryByText('Pages')).toBeNull()
-    expect(queryByText('Stickies')).toBeNull()
+    // Organize covers Tasks + Shopping + Stickies; the row hides when
+    // both ``feat_tasks`` and ``feat_stickies`` are off.
+    expect(queryByText('Organize')).toBeNull()
     // Other items in the same group still render.
     expect(queryByText('Feed')).toBeTruthy()
     expect(queryByText('Gallery')).toBeTruthy()
@@ -178,8 +185,8 @@ describe('SideNav', () => {
     const { getByText } = renderAt('/calendar')
     const calendarLink = getByText('Calendar').closest('a')
     expect(calendarLink?.getAttribute('aria-current')).toBe('page')
-    const tasksLink = getByText('Tasks').closest('a')
-    expect(tasksLink?.getAttribute('aria-current')).toBeNull()
+    const organizeLink = getByText('Organize').closest('a')
+    expect(organizeLink?.getAttribute('aria-current')).toBeNull()
   })
 
   it('Corner sits in BROWSE pointing at /corner, not in LOCAL', () => {
