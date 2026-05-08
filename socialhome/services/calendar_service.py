@@ -196,7 +196,11 @@ class CalendarService:
             id=uuid.uuid4().hex,
             name=name,
             owner_username=owner_username,
-            color=color or "#2196F3",
+            # Default left as the schema sentinel ('#4A90E2') so the SPA's
+            # ``resolveCalendarColor`` falls through to the warm hash-derived
+            # palette — having every fresh calendar paint a cold-blue chip
+            # was a recurring "feels generic" complaint.
+            color=color or "#4A90E2",
         )
         return await self._repo.save_calendar(calendar)
 

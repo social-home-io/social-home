@@ -107,12 +107,14 @@ function calendarHue(calId: string): string {
 }
 
 /** Resolve the chip dot colour. The DB column wins when the owner has
- *  picked one (default ``#4A90E2`` is treated as "unset" so the
- *  hash-derived palette stays the de-facto default until someone
- *  explicitly customises). Otherwise fall back to the deterministic
- *  16-hue palette. */
+ *  picked one. Both legacy "default-blue" sentinels (``#4A90E2`` from the
+ *  schema, ``#2196F3`` from an earlier service default) are treated as
+ *  "unset" so the warm hash-derived palette takes over — leaving every
+ *  fresh calendar a cold-blue chip read as generic and stale against
+ *  the hearth surface. */
+const _UNSET_CAL_COLORS = new Set(['#4a90e2', '#2196f3'])
 function resolveCalendarColor(c: CalendarSummary): string {
-  if (c.color && c.color.toLowerCase() !== '#4a90e2') return c.color
+  if (c.color && !_UNSET_CAL_COLORS.has(c.color.toLowerCase())) return c.color
   return calendarHue(c.id)
 }
 

@@ -9875,6 +9875,55 @@ hr {
   .sh-tasks { grid-template-columns: 1fr; }
 }
 
+/* Tasks page header — active-list name as a Fraunces title with the
+ * open/done count line trailing in mono. Mirrors the calendar day
+ * heading shape so the two surfaces feel like cousins.
+ *
+ * The header sits above the quick-add input, so a tight bottom margin
+ * keeps the input within thumb-reach instead of pushed below the fold. */
+.sh-tasks-page-header {
+  margin-bottom: var(--sh-space-sm);
+  align-items: baseline;
+}
+.sh-tasks-page-title {
+  font: 600 var(--sh-font-size-2xl) / 1.05 var(--sh-font-family-display);
+  font-feature-settings: var(--sh-display-feat, "ss01", "case");
+  font-variation-settings: var(--sh-display-axes, "opsz" 32);
+  letter-spacing: -0.005em;
+  margin: 0;
+}
+.sh-tasks-page-counts {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font: 500 calc(var(--sh-font-size-xs) - 1px) / 1
+        ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sh-text-muted);
+}
+.sh-tasks-page-counts__open { color: var(--sh-primary); font-weight: 600; }
+.sh-tasks-page-counts__done { color: var(--sh-success); }
+.sh-tasks-page-counts__sep { color: var(--sh-border-strong); }
+
+/* Inline-rename input — replaces the disruptive ``window.prompt`` so
+ * renaming a list happens in place. Echoes the active-row treatment
+ * (subtle paper background, hearth focus ring) so the transition from
+ * "row" to "editing" reads obvious without a layout jump. */
+.sh-task-list-row--editing input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sh-space-sm);
+  font-size: var(--sh-font-size-sm);
+  font-weight: 600;
+  color: var(--sh-text);
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-primary);
+  border-radius: var(--sh-radius-md);
+  box-shadow: 0 0 0 3px var(--sh-primary-soft);
+  outline: none;
+}
+
 /* Skeleton variants */
 .sh-skeleton-post {
   padding: var(--sh-space-md);
@@ -11353,7 +11402,7 @@ hr {
 }
 .sh-capacity-segment--mine {
   background: var(--sh-primary-soft, rgba(33, 150, 243, 0.12));
-  color: var(--sh-primary, #2196f3);
+  color: var(--sh-primary, #D2542A);
   border-radius: var(--sh-radius-sm);
   padding: 0 0.4em;
   font-weight: 600;
@@ -11534,7 +11583,7 @@ hr {
   gap: 0.3em;
   padding: 0.25em 0.6em;
   background: var(--sh-primary-soft, rgba(33, 150, 243, 0.12));
-  color: var(--sh-primary, #2196f3);
+  color: var(--sh-primary, #D2542A);
   border-radius: 999px;
   font-size: 0.9em;
 }
@@ -11569,8 +11618,8 @@ hr {
 }
 .sh-reminder-chip--active {
   background: var(--sh-primary-soft, rgba(33, 150, 243, 0.12));
-  border-color: var(--sh-primary, #2196f3);
-  color: var(--sh-primary, #2196f3);
+  border-color: var(--sh-primary, #D2542A);
+  color: var(--sh-primary, #D2542A);
   font-weight: 500;
 }
 .sh-reminder-chip--custom {
@@ -11658,8 +11707,8 @@ hr {
 }
 .sh-subscribe-app-tab--active {
   background: var(--sh-primary-soft, rgba(33, 150, 243, 0.12));
-  border-color: var(--sh-primary, #2196f3);
-  color: var(--sh-primary, #2196f3);
+  border-color: var(--sh-primary, #D2542A);
+  color: var(--sh-primary, #D2542A);
 }
 .sh-subscribe-steps {
   margin-top: var(--sh-space-sm);
