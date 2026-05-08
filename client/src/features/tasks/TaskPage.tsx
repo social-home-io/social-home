@@ -7,10 +7,11 @@
  * dialog, and status changes via the central store so WS frames from
  * other tabs merge automatically.
  */
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
+import { Modal } from '@/components/Modal'
 import { TasksSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
@@ -108,10 +109,8 @@ export default function TaskPage() {
     }
   }
 
-  const renameList = async (list: TaskListEntry) => {
-    const next = prompt('New name for this list:', list.name)
-    if (next == null) return
-    const trimmed = next.trim()
+  const renameList = async (list: TaskListEntry, nextName: string) => {
+    const trimmed = nextName.trim()
     if (!trimmed || trimmed === list.name) return
     try {
       const updated = await api.patch(
@@ -207,7 +206,7 @@ export default function TaskPage() {
             key={l.id} list={l}
             active={activeList.value === l.id}
             onSelect={() => void loadTasks(l.id)}
-            onRename={() => void renameList(l)}
+            onRename={(name) => void renameList(l, name)}
             onDelete={() => void deleteList(l)}
           />
         ))}
@@ -224,14 +223,20 @@ export default function TaskPage() {
       </aside>
 
       <div class="sh-tasks-content">
-        <div class="sh-page-header">
-          {activeListEntry && (
-            <span class="sh-muted">
-              {visibleTasks.filter(t => t.status !== 'done').length} open ·{' '}
-              {visibleTasks.filter(t => t.status === 'done').length} done
+        {activeListEntry && (
+          <div class="sh-page-header sh-tasks-page-header">
+            <h2 class="sh-tasks-page-title">{activeListEntry.name}</h2>
+            <span class="sh-tasks-page-counts">
+              <span class="sh-tasks-page-counts__open">
+                {visibleTasks.filter(t => t.status !== 'done').length} open
+              </span>
+              <span class="sh-tasks-page-counts__sep" aria-hidden="true">·</span>
+              <span class="sh-tasks-page-counts__done">
+                {visibleTasks.filter(t => t.status === 'done').length} done
+              </span>
             </span>
-          )}
-        </div>
+          </div>
+        )}
 
         {activeList.value && (
           <form class="sh-form-row sh-composer" onSubmit={submitTask}
@@ -349,15 +354,62 @@ function ListRow({
   list: TaskListEntry
   active: boolean
   onSelect: () => void
-  onRename: () => void
+  onRename: (next: string) => void
   onDelete: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(list.name)
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
+  // Auto-focus + select-all when entering edit mode so the existing name
+  // is immediately replaceable.
+  useEffect(() => {
+    if (editing) {
+      const el = inputRef.current
+      if (el) {
+        el.focus()
+        el.select()
+      }
+    }
+  }, [editing])
+
+  const commit = () => {
+    onRename(draft)
+    setEditing(false)
+  }
+  const cancel = () => {
+    setDraft(list.name)
+    setEditing(false)
+  }
+
+  if (editing) {
+    return (
+      <div class="sh-task-list-row sh-task-list-row--editing">
+        <input
+          ref={inputRef}
+          type="text"
+          value={draft}
+          maxLength={120}
+          aria-label={`Rename ${list.name}`}
+          onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit() }
+            if (e.key === 'Escape') { e.preventDefault(); cancel() }
+          }}
+          onBlur={commit}
+        />
+      </div>
+    )
+  }
+
   return (
     <div class="sh-task-list-row">
       <button
         class={`sh-task-list-btn ${active ? 'sh-task-list-btn--active' : ''}`}
         onClick={onSelect}
+        onDblClick={() => setEditing(true)}
+        title="Click to open · double-click to rename"
       >
         {list.name}
       </button>
@@ -371,7 +423,7 @@ function ListRow({
         <div class="sh-post-menu" role="menu">
           <button role="menuitem"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => { setMenuOpen(false); onRename() }}>
+                  onClick={() => { setMenuOpen(false); setDraft(list.name); setEditing(true) }}>
             Rename
           </button>
           <button role="menuitem" class="sh-post-menu-danger"
@@ -425,11 +477,8 @@ function TaskEditDialog({
   }
 
   return (
-    <div class="sh-dialog-backdrop" onClick={onClose}>
-      <form class="sh-dialog sh-card"
-            onClick={(e) => e.stopPropagation()}
-            onSubmit={save}>
-        <h3>Edit task</h3>
+    <Modal open={true} onClose={onClose} title="Edit task">
+      <form onSubmit={save}>
         <label>
           Title
           <input type="text" value={title.value} maxLength={200}
@@ -463,11 +512,11 @@ function TaskEditDialog({
             ))}
           </div>
         </label>
-        <div class="sh-row sh-justify-end">
+        <div class="sh-form-actions">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button type="submit" loading={saving.value}>Save</Button>
         </div>
       </form>
-    </div>
+    </Modal>
   )
 }
