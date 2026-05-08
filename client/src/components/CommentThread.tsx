@@ -163,6 +163,7 @@ export function CommentThread(
             <div class="sh-comment-reply-form">
               <input placeholder={`Reply to ${c.author}…`}
                 value={replyContent.value} autoFocus
+                aria-label={`Reply to ${c.author}`}
                 onInput={(e) => {
                   bindEmojiAwareInput(replyContent)(e)
                   fireTyping()

@@ -92,12 +92,20 @@ export function DmComposerFull({ conversationId, onSend }: {
       </div>
       {mediaUrl.value && (
         <div class="sh-dm-media-preview">
-          <img src={mediaPreviewUrl.value ?? mediaUrl.value} class="sh-dm-thumb" />
-          <button onClick={() => {
-            mediaUrl.value = null
-            mediaPreviewUrl.value = null
-            msgType.value = 'text'
-          }}>✕</button>
+          <img
+            src={mediaPreviewUrl.value ?? mediaUrl.value}
+            alt=""
+            class="sh-dm-thumb"
+          />
+          <button
+            type="button"
+            aria-label="Remove attachment"
+            onClick={() => {
+              mediaUrl.value = null
+              mediaPreviewUrl.value = null
+              msgType.value = 'text'
+            }}
+          >✕</button>
         </div>
       )}
       <div class="sh-dm-input-row">
