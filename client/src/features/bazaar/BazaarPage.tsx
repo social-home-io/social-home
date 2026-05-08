@@ -231,12 +231,10 @@ function EmptyState({ tab }: { tab: BazaarTab }) {
            "Be the first — something you don't need anymore?"]
   return (
     <div class="sh-empty-state">
-      <div style={{ fontSize: '2rem' }}>{icon}</div>
+      <div aria-hidden="true">{icon}</div>
       <h3>{heading}</h3>
       <p>{body}</p>
-      <div style={{ marginTop: '0.75rem' }}>
-        <Button onClick={openBazaarCreate}>+ Create a listing</Button>
-      </div>
+      <Button onClick={openBazaarCreate}>+ Create a listing</Button>
     </div>
   )
 }
