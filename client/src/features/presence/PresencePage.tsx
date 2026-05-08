@@ -199,6 +199,7 @@ export default function PresencePage() {
           </p>
         </div>
       )}
+      <div class="sh-presence-list">
       {presenceList.value.map(p => {
         const online = p.is_online ? (p.is_idle ? 'idle' : 'online') : null
         const lastSeen = humanizeAgo(p.last_seen_at)
@@ -227,6 +228,7 @@ export default function PresencePage() {
           </div>
         )
       })}
+      </div>
     </div>
   )
 }

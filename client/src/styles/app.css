@@ -5532,8 +5532,18 @@ a.sh-friends-member-chip:hover {
   overflow-x: auto;
 }
 
-/* Presence */
-.sh-presence, .sh-presence-list {
+/* Presence — outer page container is a vertical stack (controls + map +
+ * "Members" heading + the cards grid). The grid layout that wraps
+ * member cards into auto-fill columns lives on ``.sh-presence-list``
+ * specifically — the previous shared rule put the controls, map, and
+ * heading into the same grid as the cards, leaving the right column
+ * blank with just a "Members" heading floating in space. */
+.sh-presence {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+.sh-presence-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: var(--sh-space-md);

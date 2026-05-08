@@ -111,7 +111,7 @@ export function SpaceNotifPrefsMenu({ spaceId }: Props) {
               title={`Notifications: ${LEVEL_LABELS[level]}`}
               onClick={() => setOpen(!open)}>
         <span aria-hidden="true">{LEVEL_ICONS[level]}</span>
-        <span class="sh-visually-hidden">
+        <span class="sr-only">
           Notifications: {LEVEL_LABELS[level]}
         </span>
       </button>
