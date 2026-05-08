@@ -20,7 +20,7 @@
 import { signal } from '@preact/signals'
 import { useEffect, useRef, useState } from 'preact/hooks'
 import QRCode from 'qrcode'
-import { api } from '@/api'
+import { api, ApiError } from '@/api'
 import { ws } from '@/ws'
 import { Modal } from './Modal'
 import { Button } from './Button'
@@ -54,6 +54,50 @@ const open = signal(false)
 const onGfsConnectedCb = signal<(() => void) | null>(null)
 const peerHint = signal<string | null>(null)
 const scanError = signal<string | null>(null)
+
+/**
+ * Translate an API failure into a human-friendly hint shown under the
+ * "Pairing failed" headline. The previous behaviour dumped the raw
+ * ``Error.message`` string ("API 422: /api/pairing/initiate") which
+ * tells a household admin nothing useful — they just see the verb and
+ * the path with no clue what to do next.
+ *
+ * The ``stage`` argument lets us tailor the hint to where the failure
+ * happened (only ``'initiate'`` carries a 422 today — the inviter side
+ * needs an external URL configured before the server will mint a
+ * pairing token).
+ */
+function friendlyPairError(err: unknown, stage?: 'initiate'): string {
+  if (err instanceof ApiError) {
+    if (stage === 'initiate' && err.status === 422) {
+      return (
+        "Set this Social Home's external URL in Settings → Connections "
+        + 'before pairing — the other household needs a reachable inbox URL.'
+      )
+    }
+    if (err.status === 401 || err.status === 403) {
+      return 'Only household admins can pair. Ask an admin to retry.'
+    }
+    if (err.status === 404) {
+      return (
+        "That pairing token wasn't found — it may have expired or been "
+        + 'used already. Generate a fresh one and try again.'
+      )
+    }
+    if (err.status === 409) {
+      return 'You’re already paired with this household.'
+    }
+    if (err.status >= 500) {
+      return 'The server hit an error. Wait a moment and retry.'
+    }
+    return `Couldn’t pair (${err.status}). Retry, or check your network.`
+  }
+  if (err instanceof Error && err.message) {
+    // Network / parse failure — keep the message but trim the prefix.
+    return err.message.replace(/^Error:\s*/, '')
+  }
+  return 'Couldn’t pair. Retry, or check your network.'
+}
 
 export function openPairing(pairingMode: PairingMode = 'household') {
   mode.value = pairingMode
@@ -568,7 +612,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
       step.value = 'waiting'
     } catch (err: unknown) {
       step.value = 'failed'
-      peerHint.value = (err as Error).message ?? null
+      peerHint.value = friendlyPairError(err, 'initiate')
     }
   }
 
@@ -584,7 +628,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
       if (step.value === 'verifying') step.value = 'success'
     } catch (err: unknown) {
       step.value = 'failed'
-      peerHint.value = (err as Error).message ?? null
+      peerHint.value = friendlyPairError(err)
     }
   }
 
@@ -629,7 +673,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
       step.value = 'sas-display'
     } catch (err: unknown) {
       step.value = 'failed'
-      peerHint.value = (err as Error).message ?? null
+      peerHint.value = friendlyPairError(err)
     }
   }
 
@@ -662,7 +706,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
       if (onGfsConnectedCb.value) onGfsConnectedCb.value()
     } catch (err: unknown) {
       step.value = 'failed'
-      peerHint.value = (err as Error).message ?? null
+      peerHint.value = friendlyPairError(err)
     }
   }
 
@@ -682,7 +726,9 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
             {step.value === 'idle' && (
               <div class="sh-pairing-start">
                 <div class="sh-pairing-hero" aria-hidden="true">🔗</div>
-                <h3 style={{ margin: 0 }}>{t('pairing.title')}</h3>
+                {/* The Modal already shows "Pair with Household" in its
+                 *  header — the body just needs an action prompt, not a
+                 *  duplicate title. */}
                 <p class="sh-muted">{t('pairing.intro')}</p>
                 <div class="sh-pairing-role-grid">
                   <button
