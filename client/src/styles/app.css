@@ -2006,6 +2006,14 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   margin-top: 4px;
   font-size: var(--sh-font-size-sm);
 }
+/* Inline pairing CTA row inside the hero — admin-only. Sits below
+ * the headline + sub-line with a comfortable gap so the stat reads
+ * as a stat first, the CTA as a "you can grow this" follow-up. */
+.sh-friends-hero-actions {
+  display: flex;
+  gap: var(--sh-space-sm);
+  margin-top: var(--sh-space-sm);
+}
 
 .sh-friends-map {
   border-radius: var(--sh-radius-lg);
