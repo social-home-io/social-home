@@ -19,6 +19,7 @@ import { api } from '@/api'
 import { HighlightsRingSkeleton } from '@/components/Skeleton'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
+import { openHighlightQuickShare } from '@/components/HighlightQuickShareDialog'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import { openUserActions } from '@/components/UserActionsMenu'
@@ -144,7 +145,7 @@ export default function HighlightsInboxTab() {
         <button
           type="button"
           class="sh-highlight-ring sh-highlight-ring--new"
-          onClick={() => loc.route('/highlights/new')}
+          onClick={() => openHighlightQuickShare()}
           aria-label="Post a new highlight"
         >
           <span class="sh-highlight-ring-avatar">
@@ -165,7 +166,7 @@ export default function HighlightsInboxTab() {
             after the day is over. Share one with your household and
             connected peers.
           </p>
-          <Button onClick={() => loc.route('/highlights/new')}>
+          <Button onClick={() => openHighlightQuickShare()}>
             + Share your first highlight
           </Button>
         </div>

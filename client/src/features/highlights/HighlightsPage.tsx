@@ -10,6 +10,7 @@
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
+import { HighlightQuickShareDialog } from '@/components/HighlightQuickShareDialog'
 import { TabHeader } from '@/components/TabHeader'
 import { useTitle } from '@/store/pageTitle'
 import HighlightsInboxTab from './HighlightsInboxTab'
@@ -68,6 +69,9 @@ export default function HighlightsPage() {
         }
       />
       {activeTab.value === 'archive' ? <HighlightArchiveTab /> : <HighlightsInboxTab />}
+      <HighlightQuickShareDialog
+        onShared={(id) => loc.route(`/highlights/${id}`)}
+      />
     </div>
   )
 }

@@ -12720,6 +12720,47 @@ a.sh-btn--ghost:hover {
   gap: var(--sh-space-sm);
 }
 
+/* HighlightQuickShareDialog — single-frame composer, streamlined.
+ * Form layout matches the moments dialog so the two surfaces feel
+ * cousins. The preview cap is the same as the multi-frame storyboard
+ * thumbnail (360px tall) so a user dropping a portrait orientation
+ * doesn't blow the dialog up. */
+.sh-highlight-quick-share {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+.sh-highlight-quick-preview {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: var(--sh-radius-sm);
+}
+.sh-highlight-quick-caption {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-highlight-quick-caption textarea {
+  width: 100%;
+  font: inherit;
+  padding: var(--sh-space-sm);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  resize: vertical;
+}
+.sh-highlight-quick-audience-note {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
+}
+/* Escalation link in the actions row — sits left of the Cancel /
+ * Share buttons (the ``.sh-form-actions`` ``justify-content:
+ * flex-end`` would otherwise push it tight against them). ``mr: auto``
+ * shoves it to the leading edge. */
+.sh-highlight-quick-escalate {
+  margin-right: auto;
+  font-size: var(--sh-font-size-sm);
+}
+
 /* Detail */
 .sh-momentum-detail-meta {
   display: flex;
