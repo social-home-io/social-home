@@ -2077,19 +2077,22 @@ a.sh-friends-member-chip:hover {
   content: "";
   position: absolute;
   top: -10px;
-  left: 18px;
-  width: 64px;
-  height: 16px;
+  left: 24px;
+  width: 76px;
+  height: 18px;
   border-radius: 2px;
   background: color-mix(in srgb, var(--sh-warning) 55%, transparent);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   transform: rotate(-6deg);
   pointer-events: none;
   z-index: 1;
 }
 .sh-feed-item:hover {
-  transform: rotate(0deg) translateY(-2px);
+  transform: rotate(0deg) translateY(-3px);
   z-index: 2;
+  box-shadow:
+    0 1px 0 var(--sh-border),
+    0 32px 70px -28px rgba(26, 24, 20, 0.55);
 }
 /* The ``.sh-post`` inside a feed item now uses the wrapper's chrome
  * (background, border, shadow, radius) — strip its own so post +
@@ -2134,11 +2137,36 @@ a.sh-friends-member-chip:hover {
 
 /* Stagger rotations so the feed reads as taped rather than tilted in
  * a single direction. Four-step cycle keeps the pattern from feeling
- * mechanical even in a long scroll. */
-.sh-feed-item:nth-child(4n+1) { --sh-feed-rot: -0.5deg; }
-.sh-feed-item:nth-child(4n+2) { --sh-feed-rot:  0.4deg; }
-.sh-feed-item:nth-child(4n+3) { --sh-feed-rot: -0.3deg; }
-.sh-feed-item:nth-child(4n)   { --sh-feed-rot:  0.6deg; }
+ * mechanical even in a long scroll. Amplitudes match the marketing
+ * site's ``FamilyWall`` cards (-1.6deg / 1.2deg / -0.8deg / 1deg)
+ * — the previous 0.3-0.6° was so subtle the cards still read as
+ * a flat column. */
+.sh-feed-item:nth-child(4n+1) { --sh-feed-rot: -1.4deg; }
+.sh-feed-item:nth-child(4n+2) { --sh-feed-rot:  1.2deg; }
+.sh-feed-item:nth-child(4n+3) { --sh-feed-rot: -0.8deg; }
+.sh-feed-item:nth-child(4n)   { --sh-feed-rot:  1deg; }
+/* Settle-in animation borrowed from the marketing site so the feed
+ * "lands" on first paint rather than appearing flat-out. The stagger
+ * delay reads as the cards being pinned one after another. */
+.sh-feed-item {
+  animation: sh-card-settle 460ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.sh-feed-item:nth-child(1) { animation-delay: 60ms; }
+.sh-feed-item:nth-child(2) { animation-delay: 130ms; }
+.sh-feed-item:nth-child(3) { animation-delay: 200ms; }
+.sh-feed-item:nth-child(4) { animation-delay: 270ms; }
+.sh-feed-item:nth-child(5) { animation-delay: 320ms; }
+.sh-feed-item:nth-child(n+6) { animation-delay: 360ms; }
+@keyframes sh-card-settle {
+  from {
+    opacity: 0;
+    transform: rotate(0deg) translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(var(--sh-feed-rot, 0deg)) translateY(0) scale(1);
+  }
+}
 
 /* Tape strip alternates terracotta / moss to feel hand-placed.
  * Positioning matches ``.sh-onboard-tape`` and ``FamilyWall.card__tape``
@@ -3023,6 +3051,37 @@ a.sh-friends-member-chip:hover {
   justify-content: flex-end;
   flex-wrap: wrap;
 }
+/* Aa formatting toggle — pill button matching the emoji + STT
+ * neighbours so the row reads as a coherent toolbar. Active state
+ * tints with primary so the user can see the strip is open. */
+.sh-composer-format {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 var(--sh-space-sm);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-full);
+  background: var(--sh-bg);
+  color: var(--sh-text-muted);
+  font: 600 var(--sh-font-size-sm) / 1 var(--sh-font-family-display);
+  font-style: italic;
+  cursor: pointer;
+  transition: background var(--sh-transition-fast),
+              color var(--sh-transition-fast),
+              border-color var(--sh-transition-fast);
+}
+.sh-composer-format:hover {
+  background: var(--sh-bg-secondary);
+  color: var(--sh-text);
+  border-color: var(--sh-border-strong);
+}
+.sh-composer-format--active {
+  background: color-mix(in srgb, var(--sh-primary) 12%, transparent);
+  border-color: var(--sh-primary);
+  color: var(--sh-primary);
+}
 .sh-context-badge {
   display: inline-flex;
   align-items: center;
@@ -3801,29 +3860,85 @@ a.sh-friends-member-chip:hover {
   color: var(--sh-primary);
   font-weight: 600;
 }
+/* Day group — paper-card with washi tape, mirrors the marketing
+ * site's ``.card`` shell so the calendar stops reading as a
+ * spreadsheet and starts reading as pinned-paper notes-for-the-day.
+ * Stagger rotation kicks in via ``nth-child`` below so successive
+ * day groups feel hand-pinned rather than algorithmic. */
 .sh-calendar-day-group {
-  background: var(--sh-bg);
+  position: relative;
+  background: var(--sh-bg-tertiary);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-lg);
-  padding: var(--sh-space-md);
-  box-shadow: var(--sh-shadow-xs);
+  padding: clamp(var(--sh-space-md), 2vw, var(--sh-space-lg));
+  box-shadow:
+    0 1px 0 var(--sh-border),
+    0 22px 50px -32px rgba(26, 24, 20, 0.45);
+  transform: rotate(var(--sh-day-rot, 0deg));
   transition:
     box-shadow var(--sh-transition-fast),
-    border-color var(--sh-transition-fast);
+    border-color var(--sh-transition-fast),
+    transform var(--sh-transition-normal);
 }
 .sh-calendar-day-group:hover {
-  box-shadow: var(--sh-shadow-sm);
+  transform: rotate(0deg) translateY(-2px);
+  box-shadow:
+    0 1px 0 var(--sh-border),
+    0 28px 60px -28px rgba(26, 24, 20, 0.55);
   border-color: var(--sh-border-strong);
+  z-index: 2;
+}
+.sh-calendar-day-group::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  left: 24px;
+  width: 76px;
+  height: 18px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sh-success) 45%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transform: rotate(-5deg);
+  pointer-events: none;
+  z-index: 1;
+}
+/* Stagger rotations + tape side so the day list reads as a stack of
+ * notes pinned to the wall. Three-step cycle keeps long lists from
+ * feeling mechanical. */
+.sh-calendar-day-group:nth-child(3n+1) { --sh-day-rot: -0.6deg; }
+.sh-calendar-day-group:nth-child(3n+2) { --sh-day-rot:  0.5deg; }
+.sh-calendar-day-group:nth-child(3n+2)::before {
+  background: color-mix(in srgb, var(--sh-primary) 35%, transparent);
+  left: auto;
+  right: 24px;
+  transform: rotate(6deg);
+}
+.sh-calendar-day-group:nth-child(3n)   { --sh-day-rot: -0.3deg; }
+.sh-calendar-day-group:nth-child(3n)::before {
+  background: color-mix(in srgb, var(--sh-warning) 45%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .sh-calendar-day-group { transform: none; }
+  .sh-calendar-day-group:hover { transform: translateY(-2px); }
 }
 .sh-calendar-day-heading {
-  font-size: var(--sh-font-size-xs);
-  font-weight: 700;
+  /* Friendly Fraunces serif — was an all-caps utilitarian label.
+   * Pairs with the `formatDayLabel` helper that emits e.g. "Today
+   * · Friday 8 May" instead of `5/8/2026`. */
+  font: 600 var(--sh-font-size-base) / 1.2 var(--sh-font-family-display);
+  letter-spacing: -0.005em;
+  color: var(--sh-text);
+  margin: 0 0 var(--sh-space-sm);
+  padding-bottom: var(--sh-space-xs);
+  border-bottom: 1px dashed var(--sh-border);
+}
+.sh-calendar-day-heading--today { color: var(--sh-primary); }
+.sh-calendar-day-heading__rel {
+  font: 500 var(--sh-font-size-xs) / 1 var(--sh-font-family-mono);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--sh-text-muted);
-  margin: 0 0 var(--sh-space-sm);
-  padding-bottom: var(--sh-space-xs);
-  border-bottom: 1px solid var(--sh-border);
+  margin-left: var(--sh-space-xs);
 }
 .sh-event {
   position: relative;

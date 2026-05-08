@@ -134,6 +134,12 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
   const [pendingPoll, setPendingPoll] = useState<PollDraft | null>(null)
   const [locationOpen, setLocationOpen] = useState(false)
   const [pendingLocation, setPendingLocation] = useState<LocationDraft | null>(null)
+  // Markdown toolbar collapses by default — was always-visible and
+  // dominated the composer's first impression with a CMS-editor strip
+  // before the user had typed anything. The "Aa" button reveals it
+  // on demand; once revealed inside a draft it stays open until the
+  // composer resets after submit.
+  const [formatOpen, setFormatOpen] = useState(false)
   // Single-URL slot used by ``video`` / ``file`` posts.
   const [mediaUrl, setMediaUrl] = useState<string | null>(null)
   // Short-lived signed URL used only for the video-preview ``<video>``.
@@ -416,7 +422,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
           </button>
         </div>
       </div>
-      {postType.value === 'text' && (
+      {postType.value === 'text' && formatOpen && (
         <MarkdownToolbar
           textareaRef={textareaRef}
           onUpdate={(newText) => { content.value = newText.slice(0, MAX_LENGTH) }}
@@ -561,6 +567,22 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
             openKey="composer"
             onInsert={insertEmojiAtCursor}
           />
+        )}
+        {postType.value === 'text' && (
+          <button
+            type="button"
+            class={
+              formatOpen
+                ? 'sh-composer-format sh-composer-format--active'
+                : 'sh-composer-format'
+            }
+            aria-pressed={formatOpen}
+            aria-label="Toggle Markdown formatting bar"
+            title="Toggle Markdown formatting bar"
+            onClick={() => setFormatOpen((v) => !v)}
+          >
+            Aa
+          </button>
         )}
         {postType.value === 'text' && (
           <SttButton onText={(t) => {
