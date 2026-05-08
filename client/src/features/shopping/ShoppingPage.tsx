@@ -14,20 +14,14 @@ import { Spinner } from '@/components/Spinner'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
-import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 import { confirmDialog } from '@/components/confirm'
+import { relativeDocsTime } from '@/utils/relativeTime'
 
 const loading = signal(true)
-
-function _relativeTime(iso: string | null | undefined): string {
-  if (!iso) return ''
-  const ms = Date.now() - new Date(iso).getTime()
-  const s = Math.max(0, Math.floor(ms / 1000))
-  if (s < 60)    return 'just now'
-  if (s < 3600)  return `${Math.floor(s / 60)} min ago`
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`
-  return `${Math.floor(s / 86400)} d ago`
-}
 
 export default function ShoppingPage() {
   useTitle('Shopping')
@@ -142,11 +136,8 @@ export default function ShoppingPage() {
   const completed = items.value.filter(i =>  i.completed)
   const me        = currentUser.value
 
-  const userNameById = (uid: string): string => {
-    if (me?.user_id === uid) return 'you'
-    const found = householdUsers.value.get(uid)
-    return found?.display_name || found?.username || uid.slice(0, 6)
-  }
+  const userNameById = (uid: string): string =>
+    me?.user_id === uid ? 'you' : householdDisplayName(uid)
 
   return (
     <div class="sh-shopping">
@@ -199,7 +190,7 @@ export default function ShoppingPage() {
 
       {items.value.length === 0 ? (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }}>🛒</div>
+          <div aria-hidden="true">🛒</div>
           <h3>Your list is empty</h3>
           <p>Type an item above. Paste multiple, separated by commas.</p>
         </div>
@@ -221,7 +212,7 @@ export default function ShoppingPage() {
                   class="sh-shopping-item__meta"
                   title={
                     item.created_at
-                      ? `Added ${_relativeTime(item.created_at)}`
+                      ? `Added ${relativeDocsTime(item.created_at)}`
                       : undefined
                   }
                 >
