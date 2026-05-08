@@ -17,6 +17,11 @@ import { showToast } from '@/components/Toast'
 import type { User } from '@/types'
 import { GuardianAuditLog } from './GuardianAuditLog'
 import { confirmDialog } from '@/components/confirm'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
+import { relativeChatTime, relativeDocsTime } from '@/utils/relativeTime'
 
 interface BlockRow {
   blocked_user_id: string
@@ -198,6 +203,7 @@ async function kickFromSpace(minorUserId: string, spaceId: string, spaceName: st
 export default function ParentDashboard() {
   useEffect(() => {
     void loadMinors()
+    void loadHouseholdUsers()  // resolve display names for blocked-user rows
     const off1 = ws.on('cp.block_added',   () => { void loadMinors() })
     const off2 = ws.on('cp.block_removed', () => { void loadMinors() })
     const off3 = ws.on('cp.guardian_added',   () => { void loadMinors() })
@@ -243,9 +249,15 @@ export default function ParentDashboard() {
                   <ul>
                     {m.blocks.map(b => (
                       <li key={b.blocked_user_id} class="sh-row">
-                        <span>{b.blocked_user_id}</span>
+                        <span>{householdDisplayName(b.blocked_user_id)}</span>
                         <span class="sh-muted">
-                          since {new Date(b.blocked_at).toLocaleDateString()}
+                          since{' '}
+                          <time
+                            dateTime={b.blocked_at}
+                            title={new Date(b.blocked_at).toLocaleString()}
+                          >
+                            {relativeDocsTime(b.blocked_at)}
+                          </time>
                         </span>
                         <Button variant="secondary"
                                 onClick={() => unblock(m.user_id, b.blocked_user_id)}>
@@ -292,9 +304,14 @@ export default function ParentDashboard() {
                       <li key={c.id} class="sh-row">
                         <span>{c.name || (c.type === 'dm' ? 'Direct message' : 'Group')}</span>
                         <span class="sh-muted">
-                          {c.last_message_at
-                            ? new Date(c.last_message_at).toLocaleString()
-                            : '—'}
+                          {c.last_message_at ? (
+                            <time
+                              dateTime={c.last_message_at}
+                              title={new Date(c.last_message_at).toLocaleString()}
+                            >
+                              {relativeChatTime(c.last_message_at)}
+                            </time>
+                          ) : '—'}
                         </span>
                       </li>
                     ))}
