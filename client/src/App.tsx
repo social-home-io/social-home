@@ -38,6 +38,7 @@ import IncomingCallDialog from '@/features/calls/IncomingCallDialog'
 import { FormError } from '@/components/FormError'
 import { Wordmark } from '@/components/Wordmark'
 import { SideNav } from '@/components/SideNav'
+import { MobileNav } from '@/components/MobileNav'
 
 const showOnboarding = signal(false)
 
@@ -237,6 +238,7 @@ export function App() {
         <InstallPrompt />
         <div class="sh-layout">
           <SideNav />
+          <MobileNav />
           <div class="sh-content">
             <TopBar />
             <main class="sh-main" id="main" role="main" tabIndex={-1}>
