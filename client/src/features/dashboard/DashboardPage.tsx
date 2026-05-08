@@ -10,12 +10,35 @@ import { useTitle } from '@/store/pageTitle'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { ws } from '@/ws'
+import { currentUser } from '@/store/auth'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
 import { CardSkeleton } from '@/components/SkeletonScreen'
 import { FollowedSpacesPicker } from '@/components/FollowedSpacesPicker'
 import { LocationMap } from '@/components/LocationMap'
 import NetworkMap from './NetworkMap'
+
+
+/** Pick a time-of-day-aware greeting for the corner hero. Uses the
+ *  device's local hour (corner is always opened by the household
+ *  member, so wall-clock time is the right anchor — not server UTC). */
+function timeOfDayGreeting(): string {
+  const h = new Date().getHours()
+  if (h < 5)  return 'Good night'
+  if (h < 12) return 'Good morning'
+  if (h < 17) return 'Good afternoon'
+  if (h < 22) return 'Good evening'
+  return 'Good night'
+}
+
+/** First-name slice of the user's display name — "Pascal Vizeli" →
+ *  "Pascal". A single-word display name returns unchanged. */
+function firstName(displayName: string | undefined | null): string {
+  if (!displayName) return ''
+  const trimmed = displayName.trim()
+  const sp = trimmed.indexOf(' ')
+  return sp === -1 ? trimmed : trimmed.slice(0, sp)
+}
 
 interface CornerEvent {
   id: string
@@ -224,9 +247,23 @@ export default function DashboardPage() {
   }
 
   const b = bundle ?? EMPTY_BUNDLE
+  // Hero greeting — time-of-day + first name. The dashboard is the
+  // first surface a household member sees most days, so opening with
+  // a warm "Good morning, Pascal" sets the tone and answers the
+  // "this is for me" question that just "My Corner" doesn't.
+  const greetee = firstName(currentUser.value?.display_name)
+  const greeting = greetee
+    ? `${timeOfDayGreeting()}, ${greetee}`
+    : timeOfDayGreeting()
 
   return (
     <div class="sh-dashboard">
+      <header class="sh-corner-hero">
+        <h1 class="sh-corner-hero__greeting">{greeting}</h1>
+        <p class="sh-corner-hero__sub">
+          Here's what's on at home today.
+        </p>
+      </header>
       <div class="sh-dashboard-grid">
         <StatWidget
           icon="🔔" label="Notifications"
