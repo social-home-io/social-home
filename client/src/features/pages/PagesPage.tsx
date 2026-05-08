@@ -42,12 +42,44 @@ import { showToast } from '@/components/Toast'
 import { extractHeadings } from '@/utils/markdown'
 import type { EditLock, Page } from '@/types'
 import { confirmDialog } from '@/components/confirm'
+import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 
 interface ConflictData {
   mine: string
   theirs: string
   theirs_by: string
   base_updated_at: string
+}
+
+
+/** Friendly relative timestamp for the Pages index — same shape as the
+ *  DM inbox's chat-style stamp so the surfaces feel related. The full
+ *  timestamp lives on the ``time[title]`` attribute for hover-disclose. */
+function relativePageTime(iso: string): string {
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return iso
+  const now = Date.now()
+  const diff = now - t
+  const min = Math.floor(diff / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min} min ago`
+  const hr = Math.floor(min / 60)
+  const sameDay = new Date(t).toDateString() === new Date(now).toDateString()
+  if (sameDay) return `${hr}h ago`
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (new Date(t).toDateString() === yesterday.toDateString()) return 'yesterday'
+  if (diff < 7 * 86_400_000) {
+    return `${Math.floor(diff / 86_400_000)} days ago`
+  }
+  return new Date(t).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year:
+      new Date(t).getFullYear() === new Date(now).getFullYear()
+        ? undefined
+        : 'numeric',
+  })
 }
 
 const pages        = signal<Page[]>([])
@@ -76,6 +108,7 @@ export default function PagesPage() {
   const heartbeatTimer = useRef<number | null>(null)
 
   useEffect(() => {
+    void loadHouseholdUsers()  // resolve "Edited by" lines from raw user_ids
     void api.get('/api/pages').then((rows: Page[]) => {
       pages.value = rows
       loading.value = false
@@ -431,17 +464,25 @@ export default function PagesPage() {
   if (viewing.value) {
     const page = viewing.value
     const headings = extractHeadings(page.content)
-    const editorLabel = page.last_editor_user_id || page.created_by
+    const editorUid = page.last_editor_user_id || page.created_by
+    const userMap = householdUsers.value
+    const editorRow = userMap.get(editorUid)
+    const editorLabel = editorRow?.display_name || editorRow?.username || editorUid
     const editedAt = page.last_edited_at || page.updated_at
     return (
       <>
         <div class="sh-page-viewer">
           <div class="sh-page-header">
             <div>
-              <h1 style={{ margin: 0 }}>{page.title}</h1>
-              <div class="sh-muted" style={{ fontSize: '0.875rem' }}>
+              <h1 class="sh-page-viewer-title">{page.title}</h1>
+              <div class="sh-page-viewer-byline">
                 Edited by <strong>{editorLabel}</strong> ·{' '}
-                <time>{new Date(editedAt).toLocaleString()}</time>
+                <time
+                  dateTime={editedAt}
+                  title={new Date(editedAt).toLocaleString()}
+                >
+                  {relativePageTime(editedAt)}
+                </time>
               </div>
             </div>
             <div class="sh-row">
@@ -462,8 +503,10 @@ export default function PagesPage() {
           </div>
           {editLock.value && (
             <div class="sh-edit-lock-banner" role="alert">
-              🔒 <strong>{editLock.value.locked_by}</strong> is currently
-              editing this page.
+              🔒 <strong>{(() => {
+                const u = userMap.get(editLock.value.locked_by)
+                return u?.display_name || u?.username || editLock.value.locked_by
+              })()}</strong> is currently editing this page.
             </div>
           )}
           <div class="sh-page-viewer-layout">
@@ -504,6 +547,12 @@ export default function PagesPage() {
   }
 
   // 4. Index.
+  const userMap = householdUsers.value
+  const editorName = (uid: string | null | undefined): string => {
+    if (!uid) return ''
+    const u = userMap.get(uid)
+    return u?.display_name || u?.username || uid
+  }
   return (
     <div class="sh-pages">
       <div class="sh-page-header">
@@ -511,19 +560,18 @@ export default function PagesPage() {
       </div>
       {pages.value.length === 0 ? (
         <div class="sh-empty-state">
-          <h3 style={{ margin: 0 }}>No pages yet</h3>
+          <div aria-hidden="true">📝</div>
+          <h3>No pages yet</h3>
           <p>Pages are shared Markdown documents for your household —
              notes, plans, recipes, anything you want to keep in one place.</p>
-          <div style={{ marginTop: '0.75rem' }}>
-            <Button onClick={() => showNew.value = true}>
-              + Create your first page
-            </Button>
-          </div>
-          <details style={{ marginTop: '1rem', textAlign: 'left' }}>
+          <Button onClick={() => showNew.value = true}>
+            + Create your first page
+          </Button>
+          <details class="sh-pages-empty-help">
             <summary class="sh-muted">
               Markdown basics
             </summary>
-            <ul style={{ marginTop: '0.5rem', paddingLeft: '1.25rem' }}>
+            <ul>
               <li><code># Heading</code> → H1</li>
               <li><code>**bold**</code> → <strong>bold</strong></li>
               <li><code>*italic*</code> → <em>italic</em></li>
@@ -539,12 +587,17 @@ export default function PagesPage() {
           <div>
             <strong>{p.title}</strong>
             {p.last_editor_user_id && (
-              <div class="sh-muted" style={{ fontSize: '0.75rem' }}>
-                Edited by {p.last_editor_user_id}
+              <div class="sh-page-card-byline">
+                Edited by {editorName(p.last_editor_user_id)}
               </div>
             )}
           </div>
-          <time>{new Date(p.updated_at).toLocaleString()}</time>
+          <time
+            dateTime={p.updated_at}
+            title={new Date(p.updated_at).toLocaleString()}
+          >
+            {relativePageTime(p.updated_at)}
+          </time>
         </div>
       ))}
 
