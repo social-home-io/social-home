@@ -100,8 +100,8 @@ export default function FeedPage() {
       {feedLoading.value && posts.value.length > 0 && <PostCardSkeleton />}
       {!feedLoading.value && posts.value.length === 0 && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">📝</div>
-          <h3 style={{ margin: 0 }}>No posts yet</h3>
+          <div aria-hidden="true">📝</div>
+          <h3>No posts yet</h3>
           <p>
             Share what's on your mind with your household — text, photo,
             poll, location, anything that should land in the feed.

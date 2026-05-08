@@ -268,14 +268,14 @@ export function SpaceTasksTab({ spaceId }: Props) {
 
         {visible.length === 0 && activeList.value && (
           <div class="sh-empty-state">
-            <div style={{ fontSize: '2rem' }}>✅</div>
+            <div aria-hidden="true">✅</div>
             <h3>All caught up</h3>
             <p>No tasks in this list. Type above to add one.</p>
           </div>
         )}
         {!activeList.value && (
           <div class="sh-empty-state">
-            <div style={{ fontSize: '2rem' }}>📋</div>
+            <div aria-hidden="true">📋</div>
             <h3>No task lists yet</h3>
             <p>Create your first list in the sidebar to get started.</p>
           </div>

@@ -25,6 +25,7 @@ import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
 import { confirmDialog } from '@/components/confirm'
+import { relativeDocsTime } from '@/utils/relativeTime'
 
 interface Connection {
   instance_id: string
@@ -201,7 +202,12 @@ export default function ConnectionsPage() {
                      style={{ fontSize: 'var(--sh-font-size-xs)' }}>
                   Vouched for by <strong>{r.via_b_display}</strong>
                   {' · '}
-                  {new Date(r.received_at).toLocaleString()}
+                  <time
+                    dateTime={r.received_at}
+                    title={new Date(r.received_at).toLocaleString()}
+                  >
+                    {relativeDocsTime(r.received_at)}
+                  </time>
                 </div>
               </div>
               <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
@@ -245,7 +251,7 @@ export default function ConnectionsPage() {
           <Spinner />
         ) : connections.value.length === 0 ? (
           <div class="sh-empty-state">
-            <div style={{ fontSize: '2rem' }}>🔗</div>
+            <div aria-hidden="true">🔗</div>
             <h3>{t('connections.no_connections')}</h3>
             <p class="sh-muted">{t('connections.no_connections_hint')}</p>
             <Button onClick={() => openPairing('household')}>
@@ -302,7 +308,7 @@ export default function ConnectionsPage() {
           <Spinner />
         ) : gfsConnections.value.length === 0 ? (
           <div class="sh-empty-state">
-            <div style={{ fontSize: '2rem' }}>🌐</div>
+            <div aria-hidden="true">🌐</div>
             <h3>{t('gfs.no_servers')}</h3>
             <p class="sh-muted">{t('gfs.no_servers_hint')}</p>
             <Button onClick={() => openPairing('gfs')}>+ {t('gfs.add')}</Button>

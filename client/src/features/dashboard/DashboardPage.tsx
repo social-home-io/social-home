@@ -212,7 +212,7 @@ export default function DashboardPage() {
     return (
       <div class="sh-dashboard">
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }}>⚠️</div>
+          <div aria-hidden="true">⚠️</div>
           <h3>Couldn't load your corner</h3>
           <p class="sh-muted">{error}</p>
           <Button onClick={() => { setLoading(true); void refresh() }}>
