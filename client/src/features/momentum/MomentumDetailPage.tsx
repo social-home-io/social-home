@@ -17,6 +17,7 @@ import { confirmDialog } from '@/components/confirm'
 import { openReport } from '@/components/ReportDialog'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { currentUser } from '@/store/auth'
+import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { useTitle } from '@/store/pageTitle'
 import { ws } from '@/ws'
 import type { Moment, MomentDetail } from '@/types'
@@ -38,6 +39,7 @@ export default function MomentumDetailPage() {
   useEffect(() => {
     loading.value = true
     detail.value = null
+    void loadHouseholdUsers()  // resolve display names + avatars from raw user_ids
     const refetch = (initial: boolean) =>
       api.get(`/api/moments/${momentId}`)
         .then((d: MomentDetail) => {
@@ -72,6 +74,14 @@ export default function MomentumDetailPage() {
   if (!detail.value) return null
   const m = detail.value.moment
   const isAuthor = m.author_user_id === me
+
+  const userMap = householdUsers.value
+  const displayName = (userId: string): string => {
+    const u = userMap.get(userId)
+    return u?.display_name || u?.username || userId
+  }
+  const pictureFor = (userId: string): string | null =>
+    userMap.get(userId)?.picture_url ?? null
 
   const react = async (emoji: string) => {
     try {
@@ -113,11 +123,15 @@ export default function MomentumDetailPage() {
 
   const renderRow = (mm: Moment) => (
     <li key={mm.id} class="sh-momentum-row">
-      <Avatar name={mm.author_user_id} size={32} />
+      <Avatar
+        name={displayName(mm.author_user_id)}
+        src={pictureFor(mm.author_user_id)}
+        size={32}
+      />
       <div class="sh-momentum-row-body">
         <div class="sh-momentum-row-meta">
           <strong>
-            {mm.author_user_id === me ? 'You' : mm.author_user_id}
+            {mm.author_user_id === me ? 'You' : displayName(mm.author_user_id)}
           </strong>
           <span class="sh-muted">{mm.created_at.slice(11, 16)}</span>
         </div>
@@ -145,9 +159,13 @@ export default function MomentumDetailPage() {
   return (
     <div class="sh-momentum-detail">
       <header class="sh-momentum-detail-header">
-        <Avatar name={m.author_user_id} size={48} />
+        <Avatar
+          name={displayName(m.author_user_id)}
+          src={pictureFor(m.author_user_id)}
+          size={48}
+        />
         <div class="sh-momentum-detail-meta">
-          <strong>{isAuthor ? 'You' : m.author_user_id}</strong>
+          <strong>{isAuthor ? 'You' : displayName(m.author_user_id)}</strong>
           <span class="sh-muted">
             {new Date(m.created_at).toLocaleString()}
           </span>
@@ -156,7 +174,7 @@ export default function MomentumDetailPage() {
           <button
             type="button"
             class="sh-momentum-row-overflow"
-            aria-label={`More actions for ${m.author_user_id}`}
+            aria-label={`More actions for ${displayName(m.author_user_id)}`}
             onClick={() => openUserActions(m.author_user_id)}
           >
             ⋯
