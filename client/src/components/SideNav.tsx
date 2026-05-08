@@ -83,15 +83,18 @@ const HOME_GROUP: SideNavGroup = {
       gate: s => s.feat_feed },
     { key: 'calendar', label: 'Calendar', href: '/calendar', icon: 'calendar',
       gate: s => s.feat_calendar },
-    { key: 'tasks',    label: 'Tasks',    href: '/tasks',    icon: 'tasks',
-      gate: s => s.feat_tasks },
-    { key: 'shopping', label: 'Shopping', href: '/shopping', icon: 'shopping' },
+    // Tasks · Shopping · Stickies share a single hub at /organize —
+    // individually low-traffic, collectively crowded the sidebar; the
+    // hub renders them as tabs with live count chips ("Tasks · 3 ·
+    // Shopping · 4 · Stickies"). Hidden iff every underlying feature
+    // is disabled, which keeps minimal household configurations from
+    // showing a dead nav row.
+    { key: 'organize', label: 'Organize', href: '/organize', icon: 'tasks',
+      gate: s => s.feat_tasks || s.feat_stickies },
     { key: 'presence', label: 'Presence', href: '/presence', icon: 'presence' },
     { key: 'gallery',  label: 'Gallery',  href: '/gallery',  icon: 'gallery' },
     { key: 'pages',    label: 'Pages',    href: '/pages',    icon: 'pages',
       gate: s => s.feat_pages },
-    { key: 'stickies', label: 'Stickies', href: '/stickies', icon: 'stickies',
-      gate: s => s.feat_stickies },
   ],
 }
 

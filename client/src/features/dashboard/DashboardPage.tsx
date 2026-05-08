@@ -285,7 +285,7 @@ export default function DashboardPage() {
           ))}
         </Widget>
 
-        <Widget title="✅ Tasks due" href="/tasks"
+        <Widget title="✅ Tasks due" href="/organize"
                 empty={b.tasks_due_today.length === 0}
                 emptyIcon="🎉" emptyText="You're all caught up!">
           {b.tasks_due_today.map(t => (
@@ -378,8 +378,8 @@ export default function DashboardPage() {
             <a href="/feed" class="sh-btn sh-btn--secondary">Feed</a>
             <a href="/dms" class="sh-btn sh-btn--secondary">Messages</a>
             <a href="/calendar" class="sh-btn sh-btn--secondary">Calendar</a>
-            <a href="/shopping" class="sh-btn sh-btn--secondary">Shopping</a>
-            <a href="/tasks" class="sh-btn sh-btn--secondary">Tasks</a>
+            <a href="/organize" class="sh-btn sh-btn--secondary">Tasks</a>
+            <a href="/organize?tab=shopping" class="sh-btn sh-btn--secondary">Shopping</a>
             <a href="/bazaar" class="sh-btn sh-btn--secondary">Bazaar</a>
           </div>
         </Widget>
