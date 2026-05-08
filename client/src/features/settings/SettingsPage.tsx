@@ -20,6 +20,12 @@ import {
 import { confirmDialog } from '@/components/confirm'
 import { blockedUsers, loadBlocks, unblockUser } from '@/store/blocks'
 import { followedUsers, loadFollows, unfollowUser } from '@/store/follows'
+import {
+  householdDisplayName,
+  householdPictureUrl,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
+import { relativeDocsTime } from '@/utils/relativeTime'
 
 type SettingsTab = 'profile' | 'privacy' | 'notifications' | 'appearance'
 
@@ -348,12 +354,14 @@ function PrivacyTab() {
 function FollowingPanel() {
   useEffect(() => {
     void loadFollows(true)
+    void loadHouseholdUsers()
   }, [])
   const rows = followedUsers.value
 
   const onUnfollow = async (userId: string) => {
+    const name = householdDisplayName(userId)
     if (!await confirmDialog(
-      `Unfollow ${userId}? Their moments older than 24 hours will stop `
+      `Unfollow ${name}? Their moments older than 24 hours will stop `
       + `surfacing in your inbox.`,
       { confirmLabel: 'Unfollow' },
     )) return
@@ -367,36 +375,49 @@ function FollowingPanel() {
 
   return (
     <div class="sh-following">
-      <h3 style={{ marginBottom: 0 }}>Following</h3>
-      <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
+      <h3 class="sh-settings-panel-heading">Following</h3>
+      <p class="sh-muted sh-settings-panel-blurb">
         Following someone extends the moments retention window from 24
         hours to 7 days for their posts in your inbox.
       </p>
       {rows.length === 0 && (
-        <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
+        <p class="sh-muted sh-settings-panel-blurb">
           You aren't following anyone. Tap a moment author's name and
           choose Follow to start.
         </p>
       )}
       {rows.length > 0 && (
         <ul class="sh-following-list" aria-label="Following">
-          {rows.map(f => (
-            <li key={f.user_id} class="sh-following-row">
-              <Avatar name={f.user_id} size={32} />
-              <span class="sh-following-meta">
-                <strong>{f.user_id}</strong>
-                <span class="sh-muted">
-                  Following since {new Date(f.created_at).toLocaleDateString()}
+          {rows.map(f => {
+            const name = householdDisplayName(f.user_id)
+            return (
+              <li key={f.user_id} class="sh-following-row">
+                <Avatar
+                  name={name}
+                  src={householdPictureUrl(f.user_id)}
+                  size={32}
+                />
+                <span class="sh-following-meta">
+                  <strong>{name}</strong>
+                  <span class="sh-muted">
+                    Following since{' '}
+                    <time
+                      dateTime={f.created_at}
+                      title={new Date(f.created_at).toLocaleString()}
+                    >
+                      {relativeDocsTime(f.created_at)}
+                    </time>
+                  </span>
                 </span>
-              </span>
-              <Button
-                variant="secondary"
-                onClick={() => void onUnfollow(f.user_id)}
-              >
-                Unfollow
-              </Button>
-            </li>
-          ))}
+                <Button
+                  variant="secondary"
+                  onClick={() => void onUnfollow(f.user_id)}
+                >
+                  Unfollow
+                </Button>
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>
@@ -407,12 +428,14 @@ function FollowingPanel() {
 function BlockedAccountsPanel() {
   useEffect(() => {
     void loadBlocks(true)
+    void loadHouseholdUsers()
   }, [])
   const rows = blockedUsers.value
 
   const onUnblock = async (userId: string) => {
+    const name = householdDisplayName(userId)
     if (!await confirmDialog(
-      `Unblock ${userId}? Their highlights, posts, presence and DMs will be `
+      `Unblock ${name}? Their highlights, posts, presence and DMs will be `
       + `visible to you again.`,
       { confirmLabel: 'Unblock' },
     )) return
@@ -426,32 +449,45 @@ function BlockedAccountsPanel() {
 
   return (
     <div class="sh-blocked-accounts">
-      <h3 style={{ marginBottom: 0 }}>Blocked accounts</h3>
+      <h3 class="sh-settings-panel-heading">Blocked accounts</h3>
       {rows.length === 0 && (
-        <p class="sh-muted" style={{ marginTop: '0.25rem' }}>
+        <p class="sh-muted sh-settings-panel-blurb">
           You haven't blocked anyone. Open a highlight or profile and tap
           the ⋯ menu to block someone.
         </p>
       )}
       {rows.length > 0 && (
         <ul class="sh-blocked-accounts-list" aria-label="Blocked accounts">
-          {rows.map(b => (
-            <li key={b.user_id} class="sh-blocked-accounts-row">
-              <Avatar name={b.user_id} size={32} />
-              <span class="sh-blocked-accounts-meta">
-                <strong>{b.user_id}</strong>
-                <span class="sh-muted">
-                  Blocked {new Date(b.blocked_at).toLocaleDateString()}
+          {rows.map(b => {
+            const name = householdDisplayName(b.user_id)
+            return (
+              <li key={b.user_id} class="sh-blocked-accounts-row">
+                <Avatar
+                  name={name}
+                  src={householdPictureUrl(b.user_id)}
+                  size={32}
+                />
+                <span class="sh-blocked-accounts-meta">
+                  <strong>{name}</strong>
+                  <span class="sh-muted">
+                    Blocked{' '}
+                    <time
+                      dateTime={b.blocked_at}
+                      title={new Date(b.blocked_at).toLocaleString()}
+                    >
+                      {relativeDocsTime(b.blocked_at)}
+                    </time>
+                  </span>
                 </span>
-              </span>
-              <Button
-                variant="secondary"
-                onClick={() => void onUnblock(b.user_id)}
-              >
-                Unblock
-              </Button>
-            </li>
-          ))}
+                <Button
+                  variant="secondary"
+                  onClick={() => void onUnblock(b.user_id)}
+                >
+                  Unblock
+                </Button>
+              </li>
+            )
+          })}
         </ul>
       )}
     </div>

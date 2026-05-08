@@ -11938,6 +11938,16 @@ a.sh-btn--ghost:hover {
 .sh-blocked-accounts {
   margin-top: var(--sh-space-md);
 }
+/* Following / Blocked panel typography — inline ``style`` overrides
+ * (``marginBottom: 0`` on the heading, ``marginTop: '0.25rem'`` on the
+ * blurb) used to do this. The classes pin the same shape with no
+ * per-call hand-tuning. */
+.sh-settings-panel-heading {
+  margin-bottom: 0;
+}
+.sh-settings-panel-blurb {
+  margin-top: var(--sh-space-xs);
+}
 .sh-blocked-accounts-list {
   list-style: none;
   margin: var(--sh-space-sm) 0 0;
