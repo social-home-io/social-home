@@ -14,7 +14,11 @@ import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { MomentumArchiveSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
-import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
+import {
+  householdDisplayName,
+  householdPictureUrl,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 import { ws } from '@/ws'
 import type { Moment } from '@/types'
 import { renderHashtagged } from './hashtags'
@@ -72,14 +76,6 @@ export default function MomentumArchiveTab() {
   }, [loc.path, loc.url])
 
   if (loading.value) return <MomentumArchiveSkeleton />
-
-  const userMap = householdUsers.value
-  const displayName = (userId: string): string => {
-    const u = userMap.get(userId)
-    return u?.display_name || u?.username || userId
-  }
-  const pictureFor = (userId: string): string | null =>
-    userMap.get(userId)?.picture_url ?? null
 
   const days = [...grouped.value.keys()]  // already newest-first
   const tag = activeTag.value
@@ -151,13 +147,13 @@ export default function MomentumArchiveTab() {
                     loc.route(`/momentum/${m.id}`)
                   }}>
                   <Avatar
-                    name={displayName(m.author_user_id)}
-                    src={pictureFor(m.author_user_id)}
+                    name={householdDisplayName(m.author_user_id)}
+                    src={householdPictureUrl(m.author_user_id)}
                     size={32}
                   />
                   <div class="sh-momentum-row-body">
                     <div class="sh-momentum-row-meta">
-                      <strong>{displayName(m.author_user_id)}</strong>
+                      <strong>{householdDisplayName(m.author_user_id)}</strong>
                       <span class="sh-muted">{m.created_at.slice(11, 16)}</span>
                     </div>
                     {m.content && (

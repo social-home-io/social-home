@@ -35,6 +35,33 @@ export function invalidateHouseholdUsers(): void {
   loaded = false
 }
 
+/**
+ * Resolve a user_id to its best-available display label.
+ *
+ * Priority: ``display_name`` → ``username`` → the raw ``user_id``.
+ * Returns ``''`` for falsy input so callers can short-circuit. Use this
+ * everywhere a feed surface needs to render a human-readable name from
+ * the bare ``author_user_id`` / ``last_editor_user_id`` / ``locked_by``
+ * id strings the API hands back. Five surfaces previously inlined the
+ * same three-line resolver — this is the single source of truth.
+ */
+export function householdDisplayName(userId: string | null | undefined): string {
+  if (!userId) return ''
+  const u = householdUsers.value.get(userId)
+  return u?.display_name || u?.username || userId
+}
+
+/**
+ * Resolve a user_id to its server-synthesised ``picture_url`` if cached,
+ * else ``null``. Pair with :func:`householdDisplayName` when feeding an
+ * ``Avatar`` — the component renders a name-derived initial when the
+ * picture is missing.
+ */
+export function householdPictureUrl(userId: string | null | undefined): string | null {
+  if (!userId) return null
+  return householdUsers.value.get(userId)?.picture_url ?? null
+}
+
 ws.on('user.profile_updated', (e) => {
   const d = e.data as {
     user_id: string
