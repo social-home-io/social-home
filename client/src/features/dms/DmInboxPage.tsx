@@ -81,6 +81,15 @@ export default function DmInboxPage() {
     if (loc.url !== next) loc.route(next, true)
   }
 
+  // Action lives inside the sticky subheader (TabHeader's ``actions``
+  // slot) so the "+ New message" button doesn't collide with the
+  // sticky tabs on first render — the previous layout had a separate
+  // ``.sh-page-header`` row sitting at the same y-position as the
+  // sticky tabs, hiding the button behind the subheader's tinted
+  // background.
+  const newMessageBtn = (
+    <Button onClick={() => openNewDm()}>+ New message</Button>
+  )
   const tabHeader = (
     <TabHeader<ChatsTab>
       activeTab={activeTab.value}
@@ -88,6 +97,7 @@ export default function DmInboxPage() {
       labels={TAB_LABELS}
       ariaLabel="Chats sections"
       onSelectTab={onSelectTab}
+      actions={newMessageBtn}
     />
   )
 
@@ -118,9 +128,6 @@ export default function DmInboxPage() {
     <PullToRefresh onRefresh={reload}>
       <div class="sh-dms">
         {tabHeader}
-        <div class="sh-page-header">
-          <Button onClick={() => openNewDm()}>+ New message</Button>
-        </div>
         {list.length === 0 && (
           <div class="sh-empty-state">
             <div aria-hidden="true">💬</div>
