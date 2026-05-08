@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { groupEventsByDay, formatMonthHeading, monthRange } from './calendar'
+import {
+  formatDayLabel,
+  formatMonthHeading,
+  groupEventsByDay,
+  monthRange,
+} from './calendar'
 import type { CalendarEvent } from '@/types'
 
 function evt(id: string, startISO: string): CalendarEvent {
@@ -42,5 +47,39 @@ describe('calendar utils', () => {
     // Last day of April is the 30th.
     expect(new Date(end).getDate()).toBe(30)
     expect(new Date(end).getMonth()).toBe(3)
+  })
+})
+
+describe('formatDayLabel', () => {
+  it('marks the current day with the "Today" relative kicker', () => {
+    const today = new Date()
+    const key = today.toLocaleDateString()
+    const out = formatDayLabel(key)
+    expect(out.isToday).toBe(true)
+    expect(out.relative).toBe('Today')
+    // Long form contains the weekday — locale-agnostic existence check.
+    expect(out.long.length).toBeGreaterThan(5)
+  })
+
+  it('marks the day after as "Tomorrow"', () => {
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    const out = formatDayLabel(tomorrow.toLocaleDateString())
+    expect(out.isToday).toBe(false)
+    expect(out.relative).toBe('Tomorrow')
+  })
+
+  it('returns null relative for far-future / past days', () => {
+    const future = new Date()
+    future.setDate(future.getDate() + 7)
+    const out = formatDayLabel(future.toLocaleDateString())
+    expect(out.isToday).toBe(false)
+    expect(out.relative).toBe(null)
+  })
+
+  it('falls back to the original key on unparseable input', () => {
+    const out = formatDayLabel('not-a-date')
+    expect(out.long).toBe('not-a-date')
+    expect(out.relative).toBe(null)
   })
 })

@@ -19,8 +19,8 @@ import { currentUser } from '@/store/auth'
 import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { events, rsvpCounts, myRsvpStatus, activeCalendarScope } from '@/store/calendar'
 import {
-  advanceDate, dateRangeForMode, formatRangeHeading, groupEventsByDay,
-  type CalendarViewMode,
+  advanceDate, dateRangeForMode, formatDayLabel, formatRangeHeading,
+  groupEventsByDay, type CalendarViewMode,
 } from '@/utils/calendar'
 import { t } from '@/i18n/i18n'
 import { confirmDialog } from '@/components/confirm'
@@ -454,9 +454,22 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {dayKeys.map(dayKey => (
+      {dayKeys.map(dayKey => {
+        const friendly = formatDayLabel(dayKey)
+        return (
         <div key={dayKey} class="sh-calendar-day-group">
-          <h3 class="sh-calendar-day-heading">{dayKey}</h3>
+          <h3
+            class={
+              friendly.isToday
+                ? 'sh-calendar-day-heading sh-calendar-day-heading--today'
+                : 'sh-calendar-day-heading'
+            }
+          >
+            {friendly.long}
+            {friendly.relative && (
+              <span class="sh-calendar-day-heading__rel">{friendly.relative}</span>
+            )}
+          </h3>
           {grouped[dayKey].map(e => {
             // Owner byline — only meaningful when overlay is on; with
             // a single calendar visible the bylines are all the same
@@ -595,7 +608,8 @@ export default function CalendarPage() {
             </div>
           )})}
         </div>
-      ))}
+        )
+      })}
 
       <CalendarEventDialog onCreated={(targetId) => {
         // If the user created the event on a calendar that isn't
