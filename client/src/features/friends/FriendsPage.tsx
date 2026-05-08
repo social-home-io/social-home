@@ -18,10 +18,13 @@
  */
 import { useEffect, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
+import { currentUser } from '@/store/auth'
 import { Avatar } from '@/components/Avatar'
+import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { LocationMap, type LocationMarker } from '@/components/LocationMap'
 import { OnlinePill } from '@/components/OnlinePill'
+import { openPairing, PairingFlow } from '@/components/PairingFlow'
 import { api } from '@/api'
 
 interface LocalMember {
@@ -144,6 +147,8 @@ export default function FriendsPage() {
     })
   }
 
+  const isAdmin = !!currentUser.value?.is_admin
+
   return (
     <div class="sh-friends">
       <header class="sh-friends-hero">
@@ -163,6 +168,17 @@ export default function FriendsPage() {
               </>
             )}
         </div>
+        {/* Admin-only inline pairing CTA — turns the hero from a stat
+         *  card into an action card. Non-admins see the same hint copy
+         *  in the empty state below ("ask an admin"); putting the CTA
+         *  here saves admins a dig through the sidebar to ``/connections``. */}
+        {isAdmin && (
+          <div class="sh-friends-hero-actions">
+            <Button onClick={() => openPairing('household')}>
+              + Pair a household
+            </Button>
+          </div>
+        )}
       </header>
 
       {markers.length > 0 && (
@@ -206,10 +222,16 @@ export default function FriendsPage() {
           <div aria-hidden="true">🤝</div>
           <h3>No connected households yet</h3>
           <p>Pair with another household to see them here.</p>
-          <p class="sh-muted">
-            Ask an admin — they can pair from{' '}
-            <a href="/connections" class="sh-link">Connections</a>.
-          </p>
+          {isAdmin ? (
+            <Button onClick={() => openPairing('household')}>
+              + Pair a household
+            </Button>
+          ) : (
+            <p class="sh-muted">
+              Ask an admin — they can pair from{' '}
+              <a href="/connections" class="sh-link">Connections</a>.
+            </p>
+          )}
         </div>
       ) : (
         households.map(h => {
@@ -258,6 +280,9 @@ export default function FriendsPage() {
           )
         })
       )}
+      {/* Mount the pairing dialog so the hero / empty-state CTAs can
+       *  open it inline, rather than routing through ``/connections``. */}
+      <PairingFlow />
     </div>
   )
 }
