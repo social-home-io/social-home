@@ -506,15 +506,23 @@ export function CalendarEventDialog({ onCreated }: {
           </>
         )}
 
-        <Button
-          onClick={submit}
-          loading={submitting.value}
-          disabled={!summary.value.trim()}
-        >
-          {editingEventId.value
-            ? 'Save changes'
-            : t('event.dialog.create')}
-        </Button>
+        <div class="sh-form-actions">
+          <Button
+            variant="secondary"
+            onClick={() => (open.value = false)}
+          >
+            {t('common.cancel')}
+          </Button>
+          <Button
+            onClick={submit}
+            loading={submitting.value}
+            disabled={!summary.value.trim()}
+          >
+            {editingEventId.value
+              ? 'Save changes'
+              : t('event.dialog.create')}
+          </Button>
+        </div>
       </div>
     </Modal>
   )

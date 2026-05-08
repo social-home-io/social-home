@@ -44,9 +44,23 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
     // Remember the element that had focus pre-open so we can restore.
     const previouslyFocused = document.activeElement as HTMLElement | null
 
-    // Move focus into the dialog — first focusable element.
+    // Move focus into the dialog — first focusable element on
+    // pointer-precise devices. On touch devices we land on the
+    // dialog itself (tabindex=-1) so the soft keyboard doesn't pop up
+    // immediately — that covers half the bottom-sheet and obscures
+    // the form. The user reaches the first input with one Tab or a
+    // single tap; the trade-off is a calmer first impression. */
     const focusables = _focusable(dialog)
-    ;(focusables[0] ?? dialog).focus()
+    const isCoarsePointer =
+      typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches
+    if (isCoarsePointer) {
+      dialog.focus()
+    } else {
+      const target = focusables[0] ?? dialog
+      target.focus()
+    }
 
     function onKeyDown(ev: KeyboardEvent) {
       if (ev.key === 'Escape') {
@@ -87,6 +101,10 @@ export function Modal({ open, onClose, title, children }: ModalProps) {
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile drag-affordance — purely decorative on web (the modal
+         *  doesn't actually drag), but the visual cue tells touch users
+         *  this is a dismissible sheet. Hidden via CSS on ≥640px. */}
+        <div class="sh-modal-grabber" aria-hidden="true" />
         <div class="sh-modal-header">
           <h2 id={titleId.current}>{title}</h2>
           <button class="sh-modal-close" onClick={onClose} aria-label="Close dialog">
