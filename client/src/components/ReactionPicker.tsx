@@ -27,7 +27,12 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
         <input class="sh-reaction-search" placeholder="Search emoji..."
           value={search.value}
           onInput={(e) => search.value = (e.target as HTMLInputElement).value} />
-        <button class="sh-reaction-close" onClick={onClose}>✕</button>
+        <button
+          type="button"
+          class="sh-reaction-close"
+          aria-label="Close emoji picker"
+          onClick={onClose}
+        >✕</button>
       </div>
       <div class="sh-reaction-frequent">
         {FREQUENT_EMOJI.map(e => (

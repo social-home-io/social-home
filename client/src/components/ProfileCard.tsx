@@ -14,7 +14,12 @@ interface ProfileCardProps {
 export function ProfileCard({ user, onDm, onClose }: ProfileCardProps) {
   return (
     <div class="sh-profile-card" onClick={(e) => e.stopPropagation()}>
-      <button class="sh-profile-close" onClick={onClose}>✕</button>
+      <button
+        type="button"
+        class="sh-profile-close"
+        aria-label="Close profile"
+        onClick={onClose}
+      >✕</button>
       <div class="sh-profile-header">
         <Avatar name={user.display_name} src={user.picture_url} size={64} />
         <h3>{user.display_name}</h3>

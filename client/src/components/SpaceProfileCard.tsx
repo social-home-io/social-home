@@ -14,7 +14,12 @@ export function SpaceProfileCard({ space, onClose }: {
 }) {
   return (
     <div class="sh-space-profile" onClick={(e) => e.stopPropagation()}>
-      <button class="sh-profile-close" onClick={onClose}>✕</button>
+      <button
+        type="button"
+        class="sh-profile-close"
+        aria-label="Close space profile"
+        onClick={onClose}
+      >✕</button>
       <div class="sh-space-profile-header">
         <span class="sh-space-emoji-lg">{space.emoji || '🌐'}</span>
         <h3>{space.name}</h3>
