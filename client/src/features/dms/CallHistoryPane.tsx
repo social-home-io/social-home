@@ -12,6 +12,10 @@ import { useRoute, useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 
 interface CallRow {
   call_id: string
@@ -60,6 +64,7 @@ export default function CallHistoryPane() {
 
   useEffect(() => {
     loading.value = true
+    void loadHouseholdUsers()  // resolve initiator names from raw user_ids
     api.get(`/api/conversations/${convId}/calls`).then((r: { calls: CallRow[] }) => {
       calls.value = r.calls
       loading.value = false
@@ -99,7 +104,7 @@ export default function CallHistoryPane() {
               <span class="sh-call-icon" aria-hidden="true">
                 {statusIcon(c.status)} {c.call_type === 'video' ? '📹' : '📞'}
               </span>
-              <span class="sh-call-who">{c.initiator_user_id}</span>
+              <span class="sh-call-who">{householdDisplayName(c.initiator_user_id)}</span>
               <span class="sh-call-dur">{formatDuration(c.duration_seconds)}</span>
               <span class="sh-call-status">{c.status}</span>
               {c.avg_rtt_ms != null && (

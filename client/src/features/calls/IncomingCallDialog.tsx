@@ -18,6 +18,10 @@ import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { incoming } from '@/store/calls'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
 
 const RING_TTL_MS = 90_000
 
@@ -76,6 +80,7 @@ export default function IncomingCallDialog() {
 
   useEffect(() => {
     if (!incoming.value) return
+    void loadHouseholdUsers()  // resolve "from" line + missed-call toast
     _ringStop = (() => {
       const stopSnd = startRingtone()
       const stopVib = startVibration()
@@ -96,7 +101,8 @@ export default function IncomingCallDialog() {
 
     const timer = setTimeout(() => {
       if (incoming.value) {
-        showToast(`You missed a call from ${incoming.value.from_user}`, 'info')
+        const fromName = householdDisplayName(incoming.value.from_user)
+        showToast(`You missed a call from ${fromName}`, 'info')
         incoming.value = null
       }
     }, RING_TTL_MS)
@@ -129,6 +135,7 @@ export default function IncomingCallDialog() {
 
   if (!incoming.value) return null
   const call = incoming.value
+  const fromName = householdDisplayName(call.from_user)
 
   const accept = async () => {
     if (accepting || declining) return
@@ -164,12 +171,12 @@ export default function IncomingCallDialog() {
         <div class="sh-incoming-avatar" aria-hidden="true">
           {call.call_type === 'video' ? '📹' : '📞'}
         </div>
-        <strong class="sh-incoming-name">{call.from_user} is calling</strong>
+        <strong class="sh-incoming-name">{fromName} is calling</strong>
         <span class="sh-incoming-type">{call.call_type === 'video' ? 'Video call' : 'Audio call'}</span>
         <div class="sh-incoming-actions">
           <Button class="sh-accept" onClick={accept}
                   loading={accepting} disabled={declining}>Accept</Button>
-          <Button class="sh-decline" onClick={decline}
+          <Button class="sh-decline" variant="danger" onClick={decline}
                   loading={declining} disabled={accepting}>Decline</Button>
         </div>
       </div>
