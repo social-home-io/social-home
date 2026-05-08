@@ -40,7 +40,9 @@ const futureEvent = {
 describe('EventPostCard', () => {
   it('renders an orphan card when eventId is null', () => {
     const { container } = render(<EventPostCard eventId={null} />)
-    expect(container.textContent).toContain('Event removed')
+    // Copy softened from "Event removed" to "This event isn't here
+    // anymore" — the bare "removed" word read like an error state.
+    expect(container.textContent).toContain("isn't here")
   })
 
   it('renders the summary + RSVP buttons after fetching', async () => {

@@ -277,7 +277,8 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
                   reactionPickerFor.value =
                     reactionPickerFor.value === post.id ? null : post.id
                 }}>
-                +
+                <span class="sh-reaction-add__face" aria-hidden="true">🙂</span>
+                <span class="sh-reaction-add__plus" aria-hidden="true">+</span>
               </button>
               {reactionPickerFor.value === post.id && (
                 <ReactionPicker
