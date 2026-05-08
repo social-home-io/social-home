@@ -8084,6 +8084,25 @@ hr {
   flex-direction: column;
   gap: var(--sh-space-md);
 }
+/* GFS modal — the framing paragraphs sit above and below the URL
+ * field so a first-time admin gets context without leaving the
+ * dialog.  Tighter line-height than body copy because these blocks
+ * are help text, not narrative. */
+.sh-gfs-url-input {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+}
+.sh-gfs-url-intro {
+  margin: 0;
+  font-size: var(--sh-font-size-sm);
+  line-height: 1.5;
+}
+.sh-gfs-url-hint {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
+  line-height: 1.4;
+}
 .sh-pairing-steps {
   list-style: none;
   padding: 0;
