@@ -5289,6 +5289,41 @@ a.sh-friends-member-chip:hover {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--sh-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* "Edited by Anna" line under each row title — small muted byline so
+ * the page title stays the dominant ink. */
+.sh-page-card-byline {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  margin-top: 2px;
+}
+/* Viewer header — Fraunces title + matching small byline. Mirrors the
+ * tasks page-header treatment so the surfaces feel like cousins. */
+.sh-page-viewer-title {
+  font: 600 var(--sh-font-size-2xl) / 1.05 var(--sh-font-family-display);
+  font-feature-settings: var(--sh-display-feat, "ss01", "case");
+  font-variation-settings: var(--sh-display-axes, "opsz" 32);
+  letter-spacing: -0.005em;
+  margin: 0;
+}
+.sh-page-viewer-byline {
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text-muted);
+  margin-top: 2px;
+}
+/* Markdown-basics ``<details>`` inside the empty state — opt-in help,
+ * left-aligned bullet list with a muted summary. The list lives at
+ * normal indentation so users can read it; the disclosure toggle keeps
+ * the empty state itself short on first-load. */
+.sh-pages-empty-help {
+  margin-top: var(--sh-space-md);
+  text-align: left;
+}
+.sh-pages-empty-help ul {
+  margin: var(--sh-space-sm) 0 0;
+  padding-left: 1.25rem;
 }
 .sh-page-viewer, .sh-page-editor { display: flex; flex-direction: column; gap: var(--sh-space-md); }
 .sh-page-textarea { font-family: ui-monospace, 'SF Mono', Menlo, monospace; line-height: 1.6; min-height: 400px; }
