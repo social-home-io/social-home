@@ -389,7 +389,17 @@ export default function CalendarPage() {
             >
               Show all
             </button>
-            {calendars.value.map(c => {
+            {(() => {
+              // Count own-calendars to decide whether the "My calendar"
+              // chip label needs disambiguation. With one own-calendar
+              // the friendly "My calendar" reads cleanly; with two or
+              // more (e.g. Personal + Work) every chip would read "My
+              // calendar" identically — fall back to the calendar's
+              // name so the user can tell them apart.
+              const myCalendarCount = calendars.value.filter(
+                c => c.owner_username === currentUser.value?.username,
+              ).length
+              return calendars.value.map(c => {
               // householdUsers is keyed by user_id; the calendar
               // carries the owner's username, so iterate to map back.
               let ownerLabel = c.owner_username
@@ -402,7 +412,9 @@ export default function CalendarPage() {
               const mine = c.owner_username === currentUser.value?.username
               const checked = visibleCalendarIds.value.has(c.id)
               const hue = resolveCalendarColor(c)
-              const chipLabel = mine ? 'My calendar' : `${ownerLabel}'s`
+              const chipLabel = mine
+                ? (myCalendarCount > 1 ? c.name : 'My calendar')
+                : `${ownerLabel}'s`
               return (
                 <button
                   key={c.id}
@@ -421,7 +433,8 @@ export default function CalendarPage() {
                   <span>{chipLabel}</span>
                 </button>
               )
-            })}
+              })
+            })()}
           </div>
         )}
         <div class="sh-calendar-views" role="tablist">
