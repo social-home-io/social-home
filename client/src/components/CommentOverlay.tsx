@@ -61,15 +61,58 @@ function commentsUrl(state: OverlayState): string {
 }
 
 /** Compose a one-line preview of the post's content for the sticky
- *  header — strips newlines and truncates to keep the bar slim. */
+ *  header — strips newlines and truncates to keep the bar slim.
+ *
+ *  Each post type gets a small emoji prefix so the preview reads as
+ *  "this was a poll/location/photo" even when the body is short or
+ *  empty. The prefix replaces the previous fallback that only handled
+ *  empty-body image posts and showed nothing for polls, locations,
+ *  events, etc. — leaving the comment overlay header context-blind.
+ */
 function previewLine(post: FeedPost): string {
-  if (!post.content) {
-    if (post.media_url || (post.image_urls && post.image_urls.length > 0))
-      return '🖼️ Photo'
-    return ''
+  const truncate = (s: string) =>
+    s.length > 140 ? `${s.slice(0, 140)}…` : s
+  const flat = post.content ? post.content.replace(/\s+/g, ' ').trim() : ''
+
+  // Type-driven prefix — covers explicit kinds like polls, schedules,
+  // events, etc.  We fall through to a "text + attachment hint" path
+  // below since some demo / real-world posts are ``type: 'text'`` with
+  // an attached location or image (text + pin is a common pattern).
+  switch (post.type) {
+    case 'video':
+      return flat ? `🎥 ${truncate(flat)}` : '🎥 Video'
+    case 'file':
+      return post.file_meta?.original_name
+        ? `📎 ${truncate(post.file_meta.original_name)}`
+        : '📎 File'
+    case 'poll':
+      return flat ? `🗳 ${truncate(flat)}` : '🗳 Poll'
+    case 'event':
+      return flat ? `📅 ${truncate(flat)}` : '📅 Calendar event'
+    case 'highlight_share':
+      return flat ? `✨ ${truncate(flat)}` : '✨ Shared a highlight'
+    case 'transcript':
+      return flat ? `📝 ${truncate(flat)}` : '📝 Transcript'
+    case 'schedule':
+      return flat ? `🗓 ${truncate(flat)}` : '🗓 Schedule'
+    case 'bazaar':
+      return flat ? `🛒 ${truncate(flat)}` : '🛒 Bazaar listing'
   }
-  const flat = post.content.replace(/\s+/g, ' ').trim()
-  return flat.length > 140 ? `${flat.slice(0, 140)}…` : flat
+
+  // Fall-through for ``text``, ``image``, ``location`` and any future
+  // type — pick the most-informative prefix from whichever attachment
+  // is set.  Order: location label > image > plain text.
+  if (post.location) {
+    const where = post.location.label ?? ''
+    if (where && flat) return `📍 ${truncate(`${where} — ${flat}`)}`
+    if (where)         return `📍 ${truncate(where)}`
+    if (flat)          return `📍 ${truncate(flat)}`
+    return '📍 Location'
+  }
+  if (post.type === 'image' || (post.image_urls && post.image_urls.length > 0)) {
+    return flat ? `🖼️ ${truncate(flat)}` : '🖼️ Photo'
+  }
+  return flat ? truncate(flat) : ''
 }
 
 export function CommentOverlay() {
