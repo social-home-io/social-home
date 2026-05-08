@@ -6605,8 +6605,11 @@ hr {
 .sh-profile-avatar-slot {
   position: relative;
   cursor: pointer;
-  border-radius: 50%;
-  overflow: hidden;
+  /* Outer slot doesn't clip — the badge needs to sit in the bottom
+   * corner outside the avatar's circular mask. The inner ``.sh-avatar``
+   * keeps its own ``border-radius`` so the photo itself stays round. */
+  border-radius: 0;
+  overflow: visible;
   flex-shrink: 0;
   transition: transform var(--sh-transition-fast);
 }
@@ -6615,6 +6618,34 @@ hr {
   display: block;
   width: 112px;
   height: 112px;
+}
+/* Persistent camera badge in the bottom-right corner of the avatar.
+ * The previous treatment was a hover-only dark overlay; on touch
+ * devices the affordance was effectively invisible — users had no way
+ * to know the avatar was clickable. The badge is always visible,
+ * picks up the hearth ring on hover/focus, and the full-cover
+ * "Change" overlay still shows on hover for quick tap-to-confirm. */
+.sh-profile-avatar-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sh-primary);
+  color: var(--sh-bg);
+  border: 2px solid var(--sh-bg);
+  border-radius: var(--sh-radius-full);
+  box-shadow: var(--sh-shadow-sm);
+  font-size: 14px;
+  pointer-events: none;
+  transition: transform var(--sh-transition-fast);
+}
+.sh-profile-avatar-slot:hover .sh-profile-avatar-badge,
+.sh-profile-avatar-slot:focus-within .sh-profile-avatar-badge {
+  transform: scale(1.08);
 }
 .sh-profile-avatar-hint {
   position: absolute;
@@ -6627,6 +6658,7 @@ hr {
   font-size: var(--sh-font-size-sm);
   font-weight: 700;
   opacity: 0;
+  border-radius: 50%;
   transition: opacity var(--sh-transition-fast);
 }
 .sh-profile-avatar-slot:hover .sh-profile-avatar-hint,
@@ -11957,6 +11989,26 @@ a.sh-btn--ghost:hover {
 }
 .sh-settings-panel-blurb {
   margin-top: var(--sh-space-xs);
+}
+/* Each privacy / preferences sub-section gets its own paper-card so
+ * the two Save buttons (one per section) don't read as floating —
+ * the card boundary signals "this Save belongs to this section". The
+ * outer ``.sh-settings-section`` already provides the warm-paper
+ * outer card; ``.sh-settings-subcard`` is the inner divider treatment
+ * (subtle border + dashed top, no second tape strip). */
+.sh-settings-subcard {
+  padding: var(--sh-space-md) 0;
+  border-top: 1px dashed var(--sh-border);
+}
+.sh-settings-subcard:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+.sh-settings-subcard h3 {
+  margin-top: 0;
+  margin-bottom: var(--sh-space-xs);
+  font: 600 var(--sh-font-size-lg) / 1.2 var(--sh-font-family-display);
+  letter-spacing: -0.005em;
 }
 .sh-blocked-accounts-list {
   list-style: none;

@@ -70,8 +70,8 @@ def test_validate_color_rejects_non_string():
 async def test_get_household_returns_defaults_when_unset(env):
     theme = await env.get_household()
     assert isinstance(theme, HouseholdTheme)
-    assert theme.primary_color == "#4A90E2"
-    assert theme.accent_color == "#F5A623"
+    assert theme.primary_color == "#D2542A"
+    assert theme.accent_color == "#C8902F"
 
 
 async def test_update_household_persists(env):

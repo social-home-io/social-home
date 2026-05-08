@@ -28,8 +28,12 @@ interface HouseholdTheme {
   corner_radius: number
 }
 
-const primary       = signal('#4A90E2')
-const accent        = signal('#F5A623')
+// Initial signals match the brand defaults in ``tokens.css`` and the
+// ``household_theme`` schema row — opening the studio and saving
+// without changing the colours leaves the SPA on the warm hearth
+// palette instead of flipping ``--sh-primary`` to legacy cold blue.
+const primary       = signal('#D2542A')
+const accent        = signal('#C8902F')
 const surface       = signal<string>('')          // '' = unset
 const surfaceDark   = signal<string>('')
 const mode          = signal<Mode>('auto')
