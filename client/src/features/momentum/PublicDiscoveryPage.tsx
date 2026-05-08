@@ -10,6 +10,7 @@ import { computed, signal } from '@preact/signals'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
+import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
 import {
@@ -148,7 +149,7 @@ export default function PublicDiscoveryPage() {
         }
       />
 
-      {loading.value && <p>Loading…</p>}
+      {loading.value && <Spinner />}
       {!loading.value && filtered.value.length === 0 && (
         <p class="sh-muted">
           {searchQuery.value
