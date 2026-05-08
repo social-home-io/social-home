@@ -99,6 +99,45 @@ async def test_create_post_appears_in_feed(client):
     assert any(p["id"] == post_id for p in body)
 
 
+async def test_feed_payload_includes_latest_comment(client):
+    """``GET /api/feed`` carries the newest non-deleted comment per
+    post under a ``latest_comment`` key.  Posts with zero comments
+    expose ``latest_comment: null`` so the SPA can rely on the field
+    being present on every entry."""
+    r = await client.post(
+        "/api/feed/posts",
+        json={"type": "text", "content": "thread starter"},
+        headers=_auth(client._admin_token),
+    )
+    post_id = (await r.json())["id"]
+    # Post with no comments → latest_comment should be null.
+    body = await (
+        await client.get("/api/feed", headers=_auth(client._admin_token))
+    ).json()
+    me = next(p for p in body if p["id"] == post_id)
+    assert me["latest_comment"] is None
+    # Add two comments — newest one wins.
+    await client.post(
+        f"/api/feed/posts/{post_id}/comments",
+        json={"content": "first"},
+        headers=_auth(client._admin_token),
+    )
+    second = await (
+        await client.post(
+            f"/api/feed/posts/{post_id}/comments",
+            json={"content": "second"},
+            headers=_auth(client._admin_token),
+        )
+    ).json()
+    body = await (
+        await client.get("/api/feed", headers=_auth(client._admin_token))
+    ).json()
+    me = next(p for p in body if p["id"] == post_id)
+    assert me["latest_comment"] is not None
+    assert me["latest_comment"]["id"] == second["id"]
+    assert me["latest_comment"]["content"] == "second"
+
+
 async def test_post_image_urls_are_signed(client):
     """Each entry in ``image_urls`` comes back with ``?exp=&sig=`` so
     the SPA can drop it into ``<img src>`` without the bearer token.

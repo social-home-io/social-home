@@ -200,3 +200,62 @@ async def test_set_read_watermark_accepts_none(env):
     got = await env.post_repo.get_read_watermark(u.user_id)
     assert got is not None
     assert got["last_read_post_id"] is None
+
+
+async def test_latest_comment_per_post_empty_input(env):
+    """Empty ``post_ids`` short-circuits to an empty dict — never sends
+    a malformed ``IN ()`` clause to SQLite."""
+    out = await env.post_repo.latest_comment_per_post([])
+    assert out == {}
+
+
+async def test_latest_comment_per_post_picks_newest_skips_deleted(env):
+    """The window-function query returns one row per post (the newest
+    non-deleted comment).  Posts with zero or only-deleted comments
+    are omitted from the result dict."""
+    u = await env.user_svc.provision(username="alice", display_name="Alice")
+    p_silent = await env.feed_svc.create_post(
+        author_user_id=u.user_id,
+        type=PostType.TEXT,
+        content="silent",
+    )
+    p_loud = await env.feed_svc.create_post(
+        author_user_id=u.user_id,
+        type=PostType.TEXT,
+        content="loud",
+    )
+    await env.feed_svc.add_comment(
+        p_loud.id,
+        author_user_id=u.user_id,
+        content="first",
+    )
+    second = await env.feed_svc.add_comment(
+        p_loud.id,
+        author_user_id=u.user_id,
+        content="second",
+    )
+    third = await env.feed_svc.add_comment(
+        p_loud.id,
+        author_user_id=u.user_id,
+        content="third",
+    )
+
+    out = await env.post_repo.latest_comment_per_post(
+        [p_silent.id, p_loud.id],
+    )
+    assert p_silent.id not in out
+    assert out[p_loud.id].id == third.id
+
+    # Soft-delete the latest — preview should fall back to the prior
+    # comment, not to the (also deleted) row.
+    await env.feed_svc.delete_comment(third.id, actor_user_id=u.user_id)
+    out = await env.post_repo.latest_comment_per_post([p_loud.id])
+    assert out[p_loud.id].id == second.id
+
+    # Soft-delete every remaining comment → the post drops out of the
+    # result dict entirely.
+    await env.feed_svc.delete_comment(second.id, actor_user_id=u.user_id)
+    first_id = (await env.post_repo.latest_comment_per_post([p_loud.id]))[p_loud.id].id
+    await env.feed_svc.delete_comment(first_id, actor_user_id=u.user_id)
+    out = await env.post_repo.latest_comment_per_post([p_loud.id])
+    assert out == {}

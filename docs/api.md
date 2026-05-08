@@ -123,7 +123,7 @@ Household-broadcast posts that fan to a 3-hop peer mesh. Replies are themselves 
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/feed` | Summary with latest posts + highlights. |
+| GET | `/api/feed` | Newest-first list of household posts. Each entry carries the post fields (`id`, `author`, `type`, `content`, …) plus a `latest_comment` field — the most recent non-deleted comment on the post (or `null` when there are none). Used by the SPA to render an inline preview line under each card without an N+1 fetch. |
 | GET | `/api/feed/posts` | Paginated post list. |
 | POST | `/api/feed/posts` | Create a household post. Body: `{type, content?, media_url?, location?, pinned?, no_link_preview?}`. `type` ∈ `text\|image\|video\|file\|poll\|schedule\|location`. When `type='location'` the body **must** include `location: {lat, lon, label?}` — server truncates `lat`/`lon` to 4 decimal places (~11 m) at the boundary, `label` is optional and capped at 80 characters. `bazaar` posts are space-scoped; `event` posts are auto-created by the calendar bridge. |
 | GET / PATCH / DELETE | `/api/feed/posts/{id}` | Read / edit / delete one post. |

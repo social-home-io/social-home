@@ -238,6 +238,51 @@ async def test_list_feed_pagination(stack):
     assert len(page2) == 2
 
 
+async def test_list_feed_with_latest_comments(stack):
+    """``list_feed_with_latest_comments`` pairs each post with its
+    newest non-deleted comment; posts with zero comments map to
+    ``None``; deleted comments do not bubble up to the preview."""
+    u = await stack.provision_user("anna")
+    p_silent = await stack.feed_svc.create_post(
+        author_user_id=u.user_id,
+        type=PostType.TEXT,
+        content="silent",
+    )
+    p_chatted = await stack.feed_svc.create_post(
+        author_user_id=u.user_id,
+        type=PostType.TEXT,
+        content="chatted",
+    )
+    # Two comments — newest must win.
+    await stack.feed_svc.add_comment(
+        p_chatted.id,
+        author_user_id=u.user_id,
+        content="first",
+    )
+    second = await stack.feed_svc.add_comment(
+        p_chatted.id,
+        author_user_id=u.user_id,
+        content="second",
+    )
+    pairs = await stack.feed_svc.list_feed_with_latest_comments(limit=10)
+    by_id = {p.id: c for p, c in pairs}
+    assert by_id[p_silent.id] is None
+    assert by_id[p_chatted.id] is not None
+    assert by_id[p_chatted.id].id == second.id
+
+    # Deleting the newest comment must drop it from the preview and
+    # surface the prior comment instead — soft-deleted rows are
+    # excluded by the repo query.
+    await stack.feed_svc.delete_comment(
+        second.id,
+        actor_user_id=u.user_id,
+    )
+    pairs = await stack.feed_svc.list_feed_with_latest_comments(limit=10)
+    by_id = {p.id: c for p, c in pairs}
+    assert by_id[p_chatted.id] is not None
+    assert by_id[p_chatted.id].content == "first"
+
+
 async def test_list_feed_drops_blocked_authors(stack):
     """When ``viewer_user_id`` is set, posts by blocked authors are filtered."""
     a = await stack.provision_user("anna")

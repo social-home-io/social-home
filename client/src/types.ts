@@ -75,6 +75,13 @@ export interface FeedPost {
    *  ``highlights.id``. Becomes ``null`` when the linked highlight is purged
    *  by retention — the share-card renders an "ended" placeholder. */
   linked_highlight_id?: string | null
+  /** Newest non-deleted comment on this post, served by ``GET /api/feed``
+   *  so the SPA can render a "Lina: Yes please!" preview line under the
+   *  card without an N+1 fetch.  ``null`` means "no comments yet" (or
+   *  every comment was soft-deleted). Optional in the type because
+   *  space feed entries come from a separate route that doesn't carry
+   *  the field. */
+  latest_comment?: Comment | null
 }
 
 // ─── Highlights (§Highlights) ─────────────────────────────────────────────
