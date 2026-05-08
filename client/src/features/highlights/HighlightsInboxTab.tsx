@@ -23,6 +23,7 @@ import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { blockedUserIds, loadBlocks } from '@/store/blocks'
+import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { ws } from '@/ws'
 import type { HighlightInboxItem } from '@/types'
 
@@ -57,6 +58,7 @@ export default function HighlightsInboxTab() {
   useEffect(() => {
     loading.value = true
     void loadBlocks()  // populate the optimistic block-id set
+    void loadHouseholdUsers()  // resolve display names + avatars from raw user_ids
     const fetchInbox = (initial: boolean) =>
       api.get('/api/highlights')
         .then((rows: HighlightInboxItem[]) => {
@@ -88,6 +90,14 @@ export default function HighlightsInboxTab() {
   const blocked = blockedUserIds.value
   const items = inbox.value.filter(i => !blocked.has(i.highlight.author_user_id))
 
+  const userMap = householdUsers.value
+  const displayName = (userId: string): string => {
+    const u = userMap.get(userId)
+    return u?.display_name || u?.username || userId
+  }
+  const pictureFor = (userId: string): string | null =>
+    userMap.get(userId)?.picture_url ?? null
+
   // Build a "rings" row: my own + everyone else's, grouped by author.
   const myItems = items.filter(i => i.highlight.author_user_id === me)
   const peerItems = items.filter(i => i.highlight.author_user_id !== me)
@@ -98,26 +108,28 @@ export default function HighlightsInboxTab() {
       : 'sh-highlight-ring'
     const onClick = () => loc.route(`/highlights/${item.highlight.id}`)
     const isMine = item.highlight.author_user_id === me
+    const name = displayName(item.highlight.author_user_id)
+    const picture = pictureFor(item.highlight.author_user_id)
     return (
       <div key={item.highlight.id} class="sh-highlight-ring-wrap">
         <button
           type="button"
           class={cls}
           onClick={onClick}
-          aria-label={`Open ${item.highlight.author_user_id}'s highlight`}
+          aria-label={`Open ${name}'s highlight`}
         >
           <span class="sh-highlight-ring-avatar">
-            <Avatar name={item.highlight.author_user_id} size={56} />
+            <Avatar name={name} src={picture} size={56} />
           </span>
           <span class="sh-highlight-ring-label">
-            {isMine ? 'Your highlight' : item.highlight.author_user_id}
+            {isMine ? 'Your highlight' : name}
           </span>
         </button>
         {!isMine && (
           <button
             type="button"
             class="sh-highlight-ring-overflow"
-            aria-label={`More actions for ${item.highlight.author_user_id}`}
+            aria-label={`More actions for ${name}`}
             onClick={(ev) => {
               ev.stopPropagation()
               openUserActions(item.highlight.author_user_id)
@@ -150,18 +162,16 @@ export default function HighlightsInboxTab() {
 
       {items.length === 0 && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">🌅</div>
-          <h3 style={{ margin: 0 }}>No highlights yet</h3>
+          <div aria-hidden="true">🌅</div>
+          <h3>No highlights yet</h3>
           <p>
             Highlights are short photo or video moments that disappear
             after the day is over. Share one with your household and
             connected peers.
           </p>
-          <div style={{ marginTop: '0.75rem' }}>
-            <Button onClick={() => loc.route('/highlights/new')}>
-              + Share your first highlight
-            </Button>
-          </div>
+          <Button onClick={() => loc.route('/highlights/new')}>
+            + Share your first highlight
+          </Button>
         </div>
       )}
 
@@ -169,6 +179,10 @@ export default function HighlightsInboxTab() {
         <section class="sh-highlight-list" aria-label="All highlights">
           {items.map(item => {
             const first = item.frames[0]
+            const isMine = item.highlight.author_user_id === me
+            const name = isMine
+              ? 'You'
+              : displayName(item.highlight.author_user_id)
             return (
               <a
                 key={item.highlight.id}
@@ -192,11 +206,7 @@ export default function HighlightsInboxTab() {
                   <span class="sh-highlight-row-thumb sh-highlight-row-thumb--empty" />
                 )}
                 <span class="sh-highlight-row-meta">
-                  <strong>
-                    {item.highlight.author_user_id === me
-                      ? 'You'
-                      : item.highlight.author_user_id}
-                  </strong>
+                  <strong>{name}</strong>
                   <span class="sh-muted">
                     {humaniseDate(item.highlight.highlight_date)} ·{' '}
                     {item.frames.length} frame{item.frames.length === 1 ? '' : 's'}

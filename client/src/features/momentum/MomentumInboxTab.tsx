@@ -20,6 +20,7 @@ import { MomentumInboxSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openUserActions } from '@/components/UserActionsMenu'
 import { blockedUserIds, loadBlocks } from '@/store/blocks'
+import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { currentUser } from '@/store/auth'
 import { ws } from '@/ws'
 import type { Moment } from '@/types'
@@ -54,6 +55,7 @@ export default function MomentumInboxTab() {
   useEffect(() => {
     loading.value = true
     void loadBlocks()
+    void loadHouseholdUsers()  // resolve display names + avatars from raw user_ids
     const fetchInbox = (initial: boolean) =>
       api.get('/api/moments')
         .then((rows: Moment[]) => {
@@ -79,6 +81,11 @@ export default function MomentumInboxTab() {
   const blocked = blockedUserIds.value
   const visible = moments.value.filter(m => !blocked.has(m.author_user_id))
   const topLevel = visible.filter(m => !m.parent_moment_id)
+
+  const userMap = householdUsers.value
+  const myEntry = me ? userMap.get(me) : undefined
+  const myDisplayName = myEntry?.display_name || myEntry?.username || me || '?'
+  const myPicture = myEntry?.picture_url ?? null
 
   const quickReact = async (m: Moment, ev: Event) => {
     ev.preventDefault()
@@ -115,14 +122,14 @@ export default function MomentumInboxTab() {
         class="sh-momentum-compose-entry"
         onClick={() => loc.route('/momentum/new')}
       >
-        <Avatar name={me ?? '?'} size={32} />
+        <Avatar name={myDisplayName} src={myPicture} size={32} />
         <span class="sh-momentum-compose-prompt">What's on your mind?</span>
       </button>
 
       {topLevel.length === 0 && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">🌅</div>
-          <h3 style={{ margin: 0 }}>No moments yet</h3>
+          <div aria-hidden="true">🌅</div>
+          <h3>No moments yet</h3>
           <p>
             A moment is a one-shot post that fans out to your paired
             households and theirs. They live 24 h by default, or 7 d
@@ -132,16 +139,21 @@ export default function MomentumInboxTab() {
       )}
 
       <ul class="sh-momentum-list" aria-label="Moments">
-        {topLevel.map(m => (
-          <MomentRow
-            key={m.id}
-            m={m}
-            mine={m.author_user_id === me}
-            onOpen={() => loc.route(`/momentum/${m.id}`)}
-            onReact={(ev) => void quickReact(m, ev)}
-            onTagClick={(t) => loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)}
-          />
-        ))}
+        {topLevel.map(m => {
+          const author = userMap.get(m.author_user_id)
+          return (
+            <MomentRow
+              key={m.id}
+              m={m}
+              mine={m.author_user_id === me}
+              authorName={author?.display_name || author?.username || m.author_user_id}
+              authorPicture={author?.picture_url ?? null}
+              onOpen={() => loc.route(`/momentum/${m.id}`)}
+              onReact={(ev) => void quickReact(m, ev)}
+              onTagClick={(t) => loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)}
+            />
+          )
+        })}
       </ul>
     </div>
   )
@@ -151,12 +163,16 @@ export default function MomentumInboxTab() {
 function MomentRow({
   m,
   mine,
+  authorName,
+  authorPicture,
   onOpen,
   onReact,
   onTagClick,
 }: {
   m: Moment
   mine: boolean
+  authorName: string
+  authorPicture: string | null
   onOpen: () => void
   onReact: (ev: Event) => void
   onTagClick: (tag: string) => void
@@ -169,11 +185,11 @@ function MomentRow({
 
   return (
     <li class="sh-momentum-row" onClick={onOpen}>
-      <Avatar name={m.author_user_id} size={36} />
+      <Avatar name={authorName} src={authorPicture} size={36} />
       <div class="sh-momentum-row-body">
         <div class="sh-momentum-row-head">
           <strong class="sh-momentum-row-author">
-            {mine ? 'You' : m.author_user_id}
+            {mine ? 'You' : authorName}
           </strong>
           <span class="sh-muted">· {relativeTime(m.created_at)}</span>
           {m.received_via === 'gfs' && (
@@ -188,7 +204,7 @@ function MomentRow({
             <button
               type="button"
               class="sh-momentum-row-overflow"
-              aria-label={`More actions for ${m.author_user_id}`}
+              aria-label={`More actions for ${authorName}`}
               onClick={(ev) => {
                 ev.preventDefault()
                 ev.stopPropagation()
