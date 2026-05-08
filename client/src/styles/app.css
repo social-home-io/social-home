@@ -647,7 +647,37 @@ a:focus:not(:focus-visible) { outline: none; }
   display: flex;
   gap: var(--sh-space-sm);
   justify-content: flex-end;
-  margin-top: var(--sh-space-sm);
+  margin-top: var(--sh-space-md);
+  /* Stick to the bottom of a scrolling modal so the primary CTA stays
+   * in thumb-reach on tall forms. The dashed top border separates the
+   * action row from the last field cleanly; the inherit-background
+   * stops field text from showing through as the body scrolls behind
+   * it. Per-page non-modal forms get the same sticky behaviour for
+   * free since they live in a scroll container too — harmless on
+   * short forms (the rule activates only on overflow). */
+  position: sticky;
+  bottom: 0;
+  margin-left: calc(-1 * var(--sh-space-lg));
+  margin-right: calc(-1 * var(--sh-space-lg));
+  margin-bottom: calc(-1 * var(--sh-space-lg));
+  padding: var(--sh-space-md) var(--sh-space-lg);
+  background: var(--sh-bg-tertiary);
+  border-top: 1px dashed var(--sh-border);
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+@media (max-width: 640px) {
+  /* Mirror the modal-body padding adjustments so the negative margin
+   * still pulls the row flush with the sheet edge. */
+  .sh-form-actions {
+    margin-left: calc(-1 * var(--sh-space-md));
+    margin-right: calc(-1 * var(--sh-space-md));
+    margin-bottom: calc(-1 * var(--sh-space-md));
+    padding: var(--sh-space-sm) var(--sh-space-md);
+  }
+  /* Larger primary CTA on touch — the secondary stays compact so the
+   * hierarchy stays clear. */
+  .sh-form-actions > .sh-btn { min-height: 44px; }
 }
 .sh-form label {
   display: block;
@@ -906,6 +936,10 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
+  /* Tame the inner scroll on iOS so the sticky form-actions footer
+   * doesn't jitter when the keyboard slides in. */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   animation: sh-slide-up 280ms var(--sh-ease-spring);
 }
 .sh-modal::before, .sh-dialog::before {
@@ -925,12 +959,36 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   from { opacity: 0; transform: translateY(16px) scale(0.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
+/* Drag-grabber — only meaningful on the mobile bottom-sheet variant
+ * (see the @media block below). Hidden on desktop so the centred
+ * dialog stays clean. */
+.sh-modal-grabber { display: none; }
 .sh-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--sh-space-sm);
   padding: var(--sh-space-md) var(--sh-space-lg);
   border-bottom: 1px dashed var(--sh-border);
+  /* When the body scrolls the header pins so the title + close ✕ stay
+   * reachable on tall forms (event create dialog, space create, etc.). */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: inherit;
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+.sh-modal-header h2 {
+  margin: 0;
+  font-size: var(--sh-font-size-lg);
+  flex: 1;
+  min-width: 0;
+  /* Long titles ("Edit recurring household event for…") truncate
+   * gracefully instead of pushing the close ✕ off-card. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sh-modal-body { padding: var(--sh-space-lg); }
 .sh-modal-close {
@@ -940,9 +998,23 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   color: var(--sh-text-muted);
   cursor: pointer;
   line-height: 1;
-  padding: var(--sh-space-xs);
+  /* 44px tap target — the visible glyph is small but the hit area is
+   * thumb-friendly on touch. */
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--sh-radius-full);
+  flex-shrink: 0;
+  transition: background var(--sh-transition-fast),
+              color var(--sh-transition-fast);
 }
-.sh-modal-close:hover { color: var(--sh-text); }
+.sh-modal-close:hover { color: var(--sh-text); background: var(--sh-bg-secondary); }
+.sh-modal-close:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+}
 
 /* ───── Comment overlay (Facebook-style) ───────────────────────────────
  *
@@ -3702,6 +3774,68 @@ a.sh-friends-member-chip:hover {
   justify-content: flex-end;
   padding-top: var(--sh-space-sm);
   border-top: 1px dashed var(--sh-border);
+}
+
+/* Calendar — mobile pass.
+ *
+ * Below 640px the controls bar collapses to a single dense row: the
+ * ◀ heading ▶ tuple keeps centre stage, the Today button drops into
+ * the same row with a shrunk label, and the calendar-picker chip row
+ * scrolls horizontally instead of wrapping (a long household with 6+
+ * member calendars otherwise wraps to 3 ugly rows above the fold).
+ * The view-mode tabs stay in their own row beneath. */
+@media (max-width: 640px) {
+  .sh-calendar-controls {
+    padding: var(--sh-space-xs) var(--sh-space-sm);
+    gap: var(--sh-space-xs);
+  }
+  .sh-calendar-nav { flex: 1 1 auto; gap: var(--sh-space-xs); }
+  .sh-calendar-heading {
+    /* Drop the desktop's 220px lower-bound so a narrow phone (e.g.
+     * iPhone SE 1st-gen at 320px) doesn't push the next nav arrow
+     * off-screen. Reflow handles the rest. */
+    min-width: 0;
+    flex: 1 1 auto;
+    font-size: var(--sh-font-size-sm);
+  }
+  .sh-calendar-picker {
+    /* Horizontal-scroll chip row keeps long household-member lists on
+     * a single visual line — much more legible than wrapping to 3 rows
+     * of chips. The fade on the right is hand-rolled by the browser
+     * via overflow + the gradient mask below. */
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: var(--sh-space-xs) var(--sh-space-sm);
+    margin-left: calc(-1 * var(--sh-space-sm));
+    margin-right: calc(-1 * var(--sh-space-sm));
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+            mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+  }
+  .sh-calendar-picker::-webkit-scrollbar { display: none; }
+  .sh-calendar-picker__chip { flex-shrink: 0; }
+  .sh-calendar-day-group { padding: var(--sh-space-sm); }
+  .sh-event-header {
+    /* Owner chip wraps under the title on narrow viewports — keeps the
+     * title legible at glance. */
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .sh-event-header strong { font-size: var(--sh-font-size-sm); }
+  .sh-event-header time { font-size: var(--sh-font-size-xs); }
+  .sh-event-rsvp { gap: var(--sh-space-xs); }
+  .sh-event-admin {
+    /* Edit + Delete + ⋯ trio fits on one row on a 320-360px phone if
+     * we shrink button padding slightly. The kebab is anchored right
+     * via margin-left:auto in the JSX wrapper. */
+    gap: var(--sh-space-xs);
+  }
+  /* Page header: the "+ New event" button takes its own row above the
+   * controls bar — at narrow widths the desktop's wrap behaviour put
+   * the button under the controls in an unbalanced way. */
+  .sh-calendar > .sh-page-header { padding-bottom: 0; }
 }
 
 /* Tasks */
@@ -10285,9 +10419,67 @@ hr {
   .sh-page-header { flex-direction: column; align-items: flex-start; }
   .sh-admin-table { font-size: var(--sh-font-size-xs); }
   .sh-admin-table th, .sh-admin-table td { padding: var(--sh-space-xs); }
-  .sh-modal, .sh-dialog { max-width: 100%; border-radius: var(--sh-radius-md); }
   .sh-toast-container { top: var(--sh-space-sm); right: var(--sh-space-sm); left: var(--sh-space-sm); }
   .sh-toast { max-width: 100%; }
+
+  /* Bottom-sheet variant of every Modal / dialog on touch viewports.
+   * Anchors to the bottom of the screen, slides up, leaves a thin
+   * scrim of the page visible at the top so users register where they
+   * came from. Drag-grabber doubles as an affordance + a way to land
+   * focus that isn't a form field (the focus-trap normally drops the
+   * caret straight into the first input — fine on desktop, jarring on
+   * mobile because the keyboard immediately covers half the sheet).
+   * The washi-tape ::before is suppressed here — too noisy at the
+   * sheet's narrow visual budget. */
+  .sh-modal-overlay, .sh-dialog-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .sh-modal, .sh-dialog {
+    max-width: 100%;
+    width: 100%;
+    /* Slightly under-fill so a sliver of scrim peeks above the sheet —
+     * makes the bottom-sheet read as dismissible-by-tap-above. */
+    max-height: min(92vh, calc(100vh - 32px));
+    border-radius: var(--sh-radius-xl) var(--sh-radius-xl) 0 0;
+    /* Honour iPhone home-indicator inset so the action row never sits
+     * under the bar. */
+    padding-bottom: env(safe-area-inset-bottom, 0);
+    animation: sh-sheet-up 320ms var(--sh-ease-spring);
+  }
+  .sh-modal::before, .sh-dialog::before { display: none; }
+  .sh-modal-grabber {
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: var(--sh-radius-full);
+    background: var(--sh-border-strong);
+    margin: 8px auto 4px;
+    flex-shrink: 0;
+  }
+  @keyframes sh-sheet-up {
+    from { opacity: 0; transform: translateY(40px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .sh-modal-header { padding: var(--sh-space-sm) var(--sh-space-md); }
+  .sh-modal-body { padding: var(--sh-space-md); }
+}
+
+/* Coarse-pointer hint regardless of viewport: if the device is touch-
+ * primary (tablet, foldable, kiosk) honour the same affordances. The
+ * media-query above still wins for narrow viewports — this just
+ * upgrades touch tablets to the same touch targets.
+ *
+ * 44px is the floor recommended by Apple HIG (44pt) and within Google
+ * MD's 48dp target. Buttons in dialogs already get this via the
+ * form-actions rule; this lifts the per-page CTAs (RSVP, chips, the
+ * kebab overflow) to the same standard. */
+@media (pointer: coarse) {
+  .sh-modal-close { width: 44px; height: 44px; }
+  .sh-btn { min-height: 44px; }
+  .sh-attendee-chip,
+  .sh-calendar-picker__chip { min-height: 36px; }
+  .sh-post-overflow { width: 44px; height: 44px; }
 }
 
 /* ───── Space-zones admin (§23.8.7) + sharing chip (§23.8.8) ────────── */
@@ -10829,11 +11021,18 @@ hr {
 }
 
 /* RSVP row in feed card — wraps on mobile; the kebab overflow menu
- * (``EventOverflowMenu``) trails after the RSVP buttons. */
+ * (``EventOverflowMenu``) is anchored to the right via margin-left
+ * auto so it stays paired with the RSVP set even when the row wraps.
+ * On a 320px viewport this keeps Going / Maybe / Declined on one
+ * line and pushes the kebab to the same row's far right. */
 .sh-event-card-rsvp {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--sh-space-xs);
+}
+.sh-event-card-rsvp > .sh-post-overflow-wrap {
+  margin-left: auto;
 }
 
 .sh-event-card-host-hint {

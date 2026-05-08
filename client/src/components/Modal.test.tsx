@@ -61,6 +61,44 @@ describe('Modal', () => {
     expect(document.activeElement).toBe(trigger)
   })
 
+  it('renders the bottom-sheet drag-grabber affordance when open', () => {
+    const { container } = render(
+      <Modal open={true} title="T" onClose={() => {}}>C</Modal>,
+    )
+    // The grabber is purely decorative on desktop (hidden via CSS) but
+    // present in the DOM so mobile users see it without a JS check.
+    expect(container.querySelector('.sh-modal-grabber')).not.toBeNull()
+  })
+
+  it('keeps focus on the dialog itself on touch viewports', () => {
+    // Pretend we're on a coarse-pointer device (phone / tablet).
+    // The Modal then lands focus on the dialog (tabindex=-1) rather
+    // than the first input — keeps the soft keyboard from popping
+    // open and covering half the bottom-sheet.
+    const realMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('coarse'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      onchange: null,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia
+    try {
+      const { container } = render(
+        <Modal open={true} title="T" onClose={() => {}}>
+          <input data-testid="first-input" />
+        </Modal>,
+      )
+      const dialog = container.querySelector('[role=dialog]')
+      expect(document.activeElement).toBe(dialog)
+    } finally {
+      window.matchMedia = realMatchMedia
+    }
+  })
+
   it('does not steal focus from inputs when the parent re-renders', async () => {
     function Host() {
       const [n, setN] = useState('')
