@@ -3223,6 +3223,19 @@ a.sh-friends-member-chip:hover {
   margin-left: -8px;
 }
 
+/* Inbox row timestamp — chat-app style. Mono uppercase trailing pill
+ * (``5m`` / ``Yesterday`` / ``Mon`` / ``Apr 23``), tucked right.
+ * The full ISO + locale string lives on ``time[title]`` so a hover
+ * still reveals the precise stamp. */
+.sh-dm-time {
+  font: 500 calc(var(--sh-font-size-xs) - 1px) / 1
+        ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ───── New-DM dialog ──────────────────────────────────────────────────
  *
  * Multi-pick UX: search at the top, removable chips for the picked
