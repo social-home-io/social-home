@@ -1,6 +1,24 @@
 import { token } from '@/store/auth'
 import { showToast } from '@/components/Toast'
 
+/**
+ * Error thrown by ``ApiClient`` for non-2xx responses. Carries the HTTP
+ * status code so consumers can branch on it (``e.status === 501`` to
+ * detect a not-implemented endpoint, ``=== 404`` for missing data,
+ * etc.) — previously the bare ``Error`` only carried the formatted
+ * message string, forcing consumers to regex-match the message. The
+ * ``HaUsersPanel`` standalone-mode banner relies on this; without the
+ * status field its ``e?.status === 501`` check silently fell through
+ * and the raw ``"API 501: /api/admin/ha-users"`` message landed in the
+ * UI.
+ */
+export class ApiError extends Error {
+  constructor(public readonly status: number, public readonly path: string) {
+    super(`API ${status}: ${path}`)
+    this.name = 'ApiError'
+  }
+}
+
 class ApiClient {
   private base = ''
 
@@ -28,7 +46,7 @@ class ApiClient {
       }
       throw new Error('Unauthorized')
     }
-    if (!res.ok) throw new Error(`API ${res.status}: ${path}`)
+    if (!res.ok) throw new ApiError(res.status, path)
     return res
   }
 
