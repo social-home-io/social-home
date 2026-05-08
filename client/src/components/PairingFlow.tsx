@@ -218,6 +218,10 @@ function SasDisplay({ code }: { code: string }) {
 function GfsUrlInput({ onSubmit }: { onSubmit: () => void }) {
   return (
     <div class="sh-gfs-url-input">
+      {/* Privacy framing — first-time admins shouldn't have to leave
+       *  the dialog to understand what a GFS does or what gets shared.
+       *  Two sentences max so the field stays the focal point. */}
+      <p class="sh-gfs-url-intro sh-muted">{t('gfs.modal_intro')}</p>
       <label>{t('gfs.enter_url')}</label>
       <input
         type="url"
@@ -226,6 +230,7 @@ function GfsUrlInput({ onSubmit }: { onSubmit: () => void }) {
         value={gfsUrl.value}
         onInput={(e) => gfsUrl.value = (e.target as HTMLInputElement).value}
       />
+      <p class="sh-gfs-url-hint sh-muted">{t('gfs.url_hint')}</p>
       <div class="sh-pairing-actions">
         <Button onClick={onSubmit} disabled={!gfsUrl.value.trim()}>
           {t('gfs.add')}
@@ -710,7 +715,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     }
   }
 
-  const modalTitle = mode.value === 'gfs' ? t('gfs.title') : t('pairing.title')
+  const modalTitle = mode.value === 'gfs' ? t('gfs.modal_title') : t('pairing.title')
 
   return (
     <Modal open={open.value}
@@ -891,9 +896,22 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
                 </div>
                 <h3 style={{ margin: 0 }}>{t('gfs.connected')}</h3>
                 <p class="sh-muted">{t('gfs.pair_success')}</p>
-                <Button onClick={() => { open.value = false }}>
-                  {t('pairing.done')}
-                </Button>
+                {/* Wayfinding — once connected, the next thing an admin
+                 *  wants is to choose what to publish. Linking the
+                 *  public-sharing route here saves a sidebar dig. */}
+                <p class="sh-muted">{t('gfs.next_steps')}</p>
+                <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
+                  <Button variant="secondary"
+                          onClick={() => { open.value = false }}>
+                    {t('pairing.done')}
+                  </Button>
+                  <Button onClick={() => {
+                    open.value = false
+                    location.assign('/momentum/public/sharing')
+                  }}>
+                    {t('gfs.open_publishing')}
+                  </Button>
+                </div>
               </div>
             )}
             {step.value === 'failed' && (
