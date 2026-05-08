@@ -288,8 +288,26 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
               )}
             </div>
           </div>
-          <button class="sh-comment-btn" onClick={onComment}>
-            💬 {post.comment_count}
+          {/* Comment count chip — invites a click on cold posts
+           *  ("💬 Comment") and reads as a normal sentence on warm
+           *  ones ("💬 1 comment" / "💬 5 comments") rather than the
+           *  bare-number format that read like a count badge. */}
+          <button
+            class="sh-comment-btn"
+            onClick={onComment}
+            aria-label={
+              post.comment_count === 0
+                ? 'Comment on this post'
+                : post.comment_count === 1
+                  ? '1 comment — open thread'
+                  : `${post.comment_count} comments — open thread`
+            }
+          >
+            💬 {post.comment_count === 0
+              ? 'Comment'
+              : post.comment_count === 1
+                ? '1 comment'
+                : `${post.comment_count} comments`}
           </button>
         </div>
       )}
