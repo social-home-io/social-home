@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { routes } from './router'
 
 describe('router', () => {
-  it('defines 42 routes', () => {
-    // Routes added across recent passes:
+  it('defines 40 routes', () => {
+    // Routes added / removed across recent passes:
     //   /dms/:id/calls   — per-conversation call history
     //   /calls/:callId   — in-call page
     //   /join            — space invite deep link (§23.62)
@@ -18,7 +18,9 @@ describe('router', () => {
     //   /highlights/archive — month-grid history browser (§Highlights)
     //   /momentum, /momentum/new, /momentum/:id, /momentum/:id/reply,
     //     /momentum/archive — Momentum pillar (§Momentum)
-    expect(Object.keys(routes).length).toBe(42)
+    //   /organize        — replaces standalone /tasks /shopping /stickies
+    //                      (3 routes collapsed into 1 hub).
+    expect(Object.keys(routes).length).toBe(40)
   })
 
   it('has feed route at /', () => {
@@ -26,8 +28,8 @@ describe('router', () => {
   })
 
   it('has all main routes', () => {
-    for (const path of ['/spaces', '/dms', '/calendar', '/shopping',
-      '/notifications', '/tasks', '/pages', '/stickies', '/bazaar',
+    for (const path of ['/spaces', '/dms', '/calendar', '/organize',
+      '/notifications', '/pages', '/bazaar',
       '/settings', '/admin', '/connections',
       '/gallery', '/search', '/calls', '/parent', '/momentum',
       '/corner', '/dashboard',
