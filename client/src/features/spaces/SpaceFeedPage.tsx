@@ -8,7 +8,7 @@ import { loadHouseholdUsers } from '@/store/householdUsers'
 import { loadSpaceMembers } from '@/store/spaceMembers'
 import { useTitle } from '@/store/pageTitle'
 import {
-  advanceDate, dateRangeForMode, formatRangeHeading, groupEventsByDay,
+  advanceDate, dateRangeForMode, formatDayLabel, formatRangeHeading, groupEventsByDay,
   type CalendarViewMode,
 } from '@/utils/calendar'
 import type { FeedPost, CalendarEvent } from '@/types'
@@ -400,9 +400,22 @@ export default function SpaceFeedPage() {
               </div>
             )}
 
-            {dayKeys.map(dayKey => (
+            {dayKeys.map(dayKey => {
+              const friendly = formatDayLabel(dayKey)
+              return (
               <div key={dayKey} class="sh-calendar-day-group">
-                <h3 class="sh-calendar-day-heading">{dayKey}</h3>
+                <h3
+                  class={
+                    friendly.isToday
+                      ? 'sh-calendar-day-heading sh-calendar-day-heading--today'
+                      : 'sh-calendar-day-heading'
+                  }
+                >
+                  {friendly.long}
+                  {friendly.relative && (
+                    <span class="sh-calendar-day-heading__rel">{friendly.relative}</span>
+                  )}
+                </h3>
                 {grouped[dayKey].map(e => (
                   <div
                     key={e.id}
@@ -433,7 +446,8 @@ export default function SpaceFeedPage() {
                   </div>
                 ))}
               </div>
-            ))}
+              )
+            })}
 
             <CalendarEventDialog onCreated={() => loadTabData('calendar')} />
           </div>
