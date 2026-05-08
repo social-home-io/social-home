@@ -86,6 +86,12 @@ class SpaceCollectionView(BaseView):
                         "id": s.id,
                         "name": s.name,
                         "emoji": s.emoji,
+                        # The list-card is the SPA's first read of a
+                        # space — surfacing the description here avoids
+                        # the per-space ``GET /api/spaces/{id}`` round-
+                        # trip the SpaceList page would otherwise need
+                        # just to render the subtitle on each card.
+                        "description": s.description,
                         "space_type": s.space_type.value,
                         "join_mode": s.join_mode.value,
                     }
