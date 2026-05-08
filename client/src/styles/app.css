@@ -65,14 +65,19 @@ html, body {
 h1, h2, h3, h4, h5, h6 {
   margin: 0 0 var(--sh-space-sm);
   font-family: var(--sh-font-family-display);
-  font-weight: 700;
+  /* Fraunces is a serif display face — at weight 600 + the variable
+   * SOFT/WONK/opsz axes the marketing site uses, headings read
+   * editorial without going stiff. */
+  font-weight: 600;
+  font-feature-settings: var(--sh-display-feat);
+  font-variation-settings: var(--sh-display-axes);
   line-height: var(--sh-line-height-tight);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.012em;
   color: var(--sh-text);
 }
-h1 { font-size: var(--sh-font-size-2xl); letter-spacing: -0.025em; }
-h2 { font-size: var(--sh-font-size-xl); letter-spacing: -0.015em; }
-h3 { font-size: var(--sh-font-size-lg); font-weight: 600; }
+h1 { font-size: var(--sh-font-size-2xl); letter-spacing: -0.018em; }
+h2 { font-size: var(--sh-font-size-xl); letter-spacing: -0.012em; }
+h3 { font-size: var(--sh-font-size-lg); font-weight: 600; letter-spacing: -0.008em; }
 
 p { margin: 0 0 var(--sh-space-sm); }
 
@@ -382,6 +387,11 @@ a:focus:not(:focus-visible) { outline: none; }
   margin: 0 auto;
 }
 
+/* Mobile bottom tab bar — pinned to the viewport bottom on touch
+ * devices (paired with the drawer rules below). The icon + label
+ * stack reads as a "tab" instead of a generic link. The home-
+ * indicator inset keeps the bar above the iOS bar without manual
+ * spacing in JSX. */
 .sh-mobile-nav {
   position: fixed;
   bottom: 0;
@@ -390,20 +400,56 @@ a:focus:not(:focus-visible) { outline: none; }
   display: none;
   background: var(--sh-bg);
   border-top: 1px solid var(--sh-border);
-  padding: var(--sh-space-xs) var(--sh-space-sm);
+  padding: 6px var(--sh-space-xs)
+           calc(6px + env(safe-area-inset-bottom, 0));
   z-index: var(--sh-z-dropdown);
   justify-content: space-around;
+  box-shadow: 0 -1px 0 var(--sh-border),
+              0 -8px 24px -16px rgba(26, 24, 20, 0.25);
 }
-.sh-mobile-nav a {
+.sh-mobile-tab {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
   text-align: center;
-  padding: var(--sh-space-sm);
-  font-size: var(--sh-font-size-xs);
+  padding: 6px 4px;
+  min-height: 44px;
+  font-size: calc(var(--sh-font-size-xs) - 1px);
   color: var(--sh-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--sh-radius-md);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--sh-transition-fast),
+              background var(--sh-transition-fast);
 }
-.sh-mobile-nav a.sh-active { color: var(--sh-primary); background: var(--sh-bg-secondary); }
+.sh-mobile-tab:hover { color: var(--sh-text); }
+.sh-mobile-tab__icon {
+  font-size: 1.05rem;
+  line-height: 1;
+  /* Ensure emoji glyphs land on their own baseline — without this the
+   * bar's centred-on-text vertical alignment makes them sit too high
+   * when their cap-height is short (e.g. ✉️ vs 🔔). */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.1rem;
+}
+.sh-mobile-tab__label { letter-spacing: 0.02em; }
+.sh-mobile-tab.sh-active {
+  color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 12%, transparent);
+}
 
+/* Slide-in drawer that opens from the left when "More" is tapped.
+ * Houses the full ``SideNav`` so every surface the desktop sidebar
+ * reaches stays one tap away on mobile. The scrim and Esc both
+ * dismiss (handled by MobileNav.tsx). */
+.sh-mobile-drawer { display: none; }
+.sh-mobile-drawer-scrim { display: none; }
 @media (max-width: 768px) {
   .sh-layout {
     grid-template-columns: 1fr;
@@ -411,7 +457,51 @@ a:focus:not(:focus-visible) { outline: none; }
   }
   .sh-sidenav { display: none; }
   .sh-mobile-nav { display: flex; }
-  .sh-main { padding: var(--sh-space-md); padding-bottom: 72px; }
+  .sh-main { padding: var(--sh-space-md); padding-bottom: 84px; }
+
+  .sh-mobile-drawer {
+    display: block;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(280px, 86vw);
+    background: var(--sh-bg);
+    border-right: 1px solid var(--sh-border);
+    box-shadow: 12px 0 32px -16px rgba(26, 24, 20, 0.45);
+    z-index: calc(var(--sh-z-dropdown) + 1);
+    overflow-y: auto;
+    transform: translateX(-101%);
+    transition: transform 220ms cubic-bezier(.22,1,.36,1);
+  }
+  /* Override the SideNav's own sticky / 100vh behaviour inside the
+   * drawer so the drawer owns scroll, not the sidebar. */
+  .sh-mobile-drawer .sh-sidenav {
+    display: flex;
+    height: auto;
+    min-height: 0;
+    position: static;
+    border-right: none;
+    /* Clear the mobile-nav tab bar so the last item (Admin /
+     * Federation) doesn't sit under it. */
+    padding-bottom: calc(84px + env(safe-area-inset-bottom, 0));
+  }
+  .sh-mobile-drawer--open { transform: translateX(0); }
+  .sh-mobile-drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(26, 24, 20, 0.45);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: var(--sh-z-dropdown);
+    animation: sh-fade-in 160ms ease;
+  }
+  /* Lock background scroll while the drawer is open. */
+  html.sh-no-scroll, html.sh-no-scroll body {
+    overflow: hidden;
+    overscroll-behavior: contain;
+  }
 }
 
 /* ───── 3. Primitives ────────────────────────────────────────────────── */
@@ -887,18 +977,77 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 .sh-justify-end { display: flex; justify-content: flex-end; gap: var(--sh-space-sm); }
 .sh-justify-center { display: flex; justify-content: center; }
 
+/* Empty-state card — pinned-paper aesthetic so an empty surface
+ * still feels like part of the household, not like a blank dialog.
+ * Matches the marketing site's `.card` shell: cream paper, slim
+ * border, washi-tape strip on the upper-left, pinned-wall lift
+ * shadow. The illustration glyph (emoji or inline SVG passed as
+ * children) gets generous breathing room. Generous padding +
+ * Fraunces heading carry the editorial gravitas. */
 .sh-empty-state {
+  position: relative;
   text-align: center;
-  padding: var(--sh-space-2xl) var(--sh-space-lg);
+  padding: clamp(var(--sh-space-xl), 6vw, var(--sh-space-3xl))
+           clamp(var(--sh-space-lg), 5vw, var(--sh-space-2xl));
   color: var(--sh-text-muted);
-  background: linear-gradient(180deg, var(--sh-bg) 0%, var(--sh-bg-secondary) 100%);
+  background: var(--sh-bg-tertiary);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-xl);
-  box-shadow: var(--sh-shadow-xs);
+  box-shadow:
+    0 1px 0 var(--sh-border),
+    0 26px 60px -34px rgba(26, 24, 20, 0.45);
+  overflow: visible;
 }
-.sh-empty-state h3 { color: var(--sh-text); margin-bottom: var(--sh-space-sm); }
-.sh-empty-state p { margin: 0; }
+/* Washi-tape strip — soft hearth-tinted rectangle pinned to the
+ * upper-left, slight rotation. Mirrors the website's
+ * ``.card__tape``. ``::before`` keeps the JSX clean — no extra DOM
+ * required. */
+.sh-empty-state::before {
+  content: "";
+  position: absolute;
+  top: -9px;
+  left: 28px;
+  width: 72px;
+  height: 16px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--sh-primary) 32%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  transform: rotate(-5deg);
+  pointer-events: none;
+}
+.sh-empty-state h3 {
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-xl);
+  font-weight: 600;
+  margin: 0 0 var(--sh-space-sm);
+  letter-spacing: -0.01em;
+}
+.sh-empty-state p { margin: 0; line-height: var(--sh-line-height-base); }
 .sh-empty-state p + p { margin-top: var(--sh-space-xs); }
+/* Tighten the gap between the (often emoji or icon) lead and the
+ * heading so the card reads as one composition, not three loose
+ * blocks stacked. */
+.sh-empty-state > :first-child {
+  margin-bottom: var(--sh-space-md);
+  font-size: 2.2rem;
+  line-height: 1;
+  /* Gentle warm-tinted background disc behind a single-glyph icon —
+   * applied via ``::after`` so a multi-element first child (e.g. an
+   * SVG illustration) doesn't get the disc treatment. */
+}
+.sh-empty-state > div:first-child[aria-hidden="true"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--sh-radius-full);
+  background: color-mix(in srgb, var(--sh-primary) 14%, transparent);
+  color: var(--sh-primary);
+}
+.sh-empty-state .sh-btn {
+  margin-top: var(--sh-space-md);
+}
 
 /* ───── 5. Overlays ──────────────────────────────────────────────────── */
 
