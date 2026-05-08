@@ -139,13 +139,11 @@ export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
       </div>
       {stickies.value.length === 0 ? (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }}>📝</div>
+          <div aria-hidden="true">📝</div>
           <h3>The board is empty</h3>
           <p>Stickies are quick shared notes — reminders, lists, thoughts.
              Pin one for the whole household.</p>
-          <div style={{ marginTop: '0.75rem' }}>
-            <Button onClick={addSticky}>+ Add your first sticky</Button>
-          </div>
+          <Button onClick={addSticky}>+ Add your first sticky</Button>
         </div>
       ) : (
         <div

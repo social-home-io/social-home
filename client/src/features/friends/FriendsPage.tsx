@@ -203,7 +203,7 @@ export default function FriendsPage() {
 
       {households.length === 0 ? (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }}>🤝</div>
+          <div aria-hidden="true">🤝</div>
           <h3>No connected households yet</h3>
           <p>Pair with another household to see them here.</p>
           <p class="sh-muted">
