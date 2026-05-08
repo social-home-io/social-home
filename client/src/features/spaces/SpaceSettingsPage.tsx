@@ -89,7 +89,7 @@ export default function SpaceSettingsPage() {
   if (!isMember) {
     return (
       <div class="sh-empty-state">
-        <div style={{ fontSize: '2rem' }}>🔒</div>
+        <div aria-hidden="true">🔒</div>
         <h3>Space members only</h3>
         <p class="sh-muted">
           Only members of this space can open its settings.

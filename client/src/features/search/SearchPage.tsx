@@ -144,7 +144,7 @@ export default function SearchPage() {
 
       {!loading.value && !lastQuery.value && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }}>🔎</div>
+          <div aria-hidden="true">🔎</div>
           <h3>Find anything fast</h3>
           <p>Search across posts, people, spaces, pages, and direct messages.
              Use the filters above to narrow a search.</p>
@@ -153,7 +153,7 @@ export default function SearchPage() {
 
       {!loading.value && !tooShort && lastQuery.value && hits.value.length === 0 && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }}>🗂️</div>
+          <div aria-hidden="true">🗂️</div>
           <h3>{emptyMessage(activeType.value, lastQuery.value)}</h3>
           <p>Try a different word, remove the filter, or check the spelling.</p>
         </div>

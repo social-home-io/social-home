@@ -266,8 +266,8 @@ export default function HighlightArchiveTab() {
 
       {inbox.value.length === 0 && !loading.value && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">🌅</div>
-          <h3 style={{ margin: 0 }}>No highlights in the archive yet</h3>
+          <div aria-hidden="true">🌅</div>
+          <h3>No highlights in the archive yet</h3>
           <p>
             Once you or anyone in your household / connected peers post a
             highlight, it'll show up here for as long as the author's retention

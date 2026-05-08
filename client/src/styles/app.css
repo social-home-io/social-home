@@ -1065,6 +1065,17 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 .sh-empty-state .sh-btn {
   margin-top: var(--sh-space-md);
 }
+/* Two-or-more-CTA row inside the empty state — the primary stays first
+ * (left on LTR), secondaries trail. Centred to match the rest of the
+ * card. Used by surfaces with a "Create / Browse" pair (Spaces). */
+.sh-empty-state__cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-sm);
+  justify-content: center;
+  margin-top: var(--sh-space-md);
+}
+.sh-empty-state__cta-row .sh-btn { margin-top: 0; }
 
 /* ───── 5. Overlays ──────────────────────────────────────────────────── */
 

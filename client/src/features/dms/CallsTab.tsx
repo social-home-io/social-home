@@ -41,7 +41,7 @@ export default function CallsTab() {
     <div class="sh-calls-page">
       {nothingActive && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">📞</div>
+          <div aria-hidden="true">📞</div>
           <h3>No active calls</h3>
           <p>
             Start a call from a direct-message thread. Active + ringing

@@ -288,8 +288,8 @@ export default function SpaceFeedPage() {
           )}
           {posts.value.length === 0 && (
             <div class="sh-empty-state">
-              <div style={{ fontSize: '2rem' }} aria-hidden="true">💬</div>
-              <h3 style={{ margin: 0 }}>No posts in this space yet</h3>
+              <div aria-hidden="true">💬</div>
+              <h3>No posts in this space yet</h3>
               <p>
                 Be the first to share something with the rest of the space.
                 Members from connected households see what you post here.
@@ -391,7 +391,7 @@ export default function SpaceFeedPage() {
 
             {spaceCalEvents.value.length === 0 && (
               <div class="sh-empty-state">
-                <div style={{ fontSize: '2rem' }}>📅</div>
+                <div aria-hidden="true">📅</div>
                 <h3>No events in this {spaceCalView.value}</h3>
                 <p>
                   Click <strong>+ New event</strong> to schedule something

@@ -191,8 +191,8 @@ export default function PresencePage() {
       <h2>Members</h2>
       {presenceList.value.length === 0 && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">🏠</div>
-          <h3 style={{ margin: 0 }}>Just you here</h3>
+          <div aria-hidden="true">🏠</div>
+          <h3>Just you here</h3>
           <p>
             Once other household members sign in, you'll see them
             with their current state and zone.

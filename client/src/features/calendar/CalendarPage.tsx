@@ -442,17 +442,15 @@ export default function CalendarPage() {
 
       {events.value.length === 0 && (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2rem' }} aria-hidden="true">📅</div>
-          <h3 style={{ margin: 0 }}>No events in this {viewMode.value}</h3>
+          <div aria-hidden="true">📅</div>
+          <h3>No events in this {viewMode.value}</h3>
           <p>
             Birthdays, school runs, vet visits, the trip you're planning —
             anything the household needs to keep track of.
           </p>
-          <div style={{ marginTop: '0.75rem' }}>
-            <Button onClick={handleNewEvent}>
-              + Create your first event
-            </Button>
-          </div>
+          <Button onClick={handleNewEvent}>
+            + Create your first event
+          </Button>
         </div>
       )}
 

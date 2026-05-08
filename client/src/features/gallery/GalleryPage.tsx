@@ -102,15 +102,13 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
 
       {albums.value.length === 0 ? (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2.5rem' }}>📸</div>
+          <div aria-hidden="true">📸</div>
           <h3>No albums yet</h3>
           <p>Albums are shared photo collections — holidays, birthdays,
              pet updates, anything you want the household to see.</p>
-          <div style={{ marginTop: '0.75rem' }}>
-            <Button onClick={() => (showCreate.value = true)}>
-              + Create your first album
-            </Button>
-          </div>
+          <Button onClick={() => (showCreate.value = true)}>
+            + Create your first album
+          </Button>
         </div>
       ) : (
         <div class="sh-album-grid">
@@ -303,7 +301,7 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
 
       {items.value.length === 0 ? (
         <div class="sh-empty-state">
-          <div style={{ fontSize: '2.5rem' }}>🖼️</div>
+          <div aria-hidden="true">🖼️</div>
           {album.is_system ? (
             <>
               <h3>No posts with photos or videos yet</h3>
