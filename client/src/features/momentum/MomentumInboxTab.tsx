@@ -16,6 +16,7 @@ import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
+import { openMomentumComposer } from '@/components/MomentumComposerDialog'
 import { MomentumInboxSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openUserActions } from '@/components/UserActionsMenu'
@@ -122,7 +123,7 @@ export default function MomentumInboxTab() {
       <button
         type="button"
         class="sh-momentum-compose-entry"
-        onClick={() => loc.route('/momentum/new')}
+        onClick={() => openMomentumComposer()}
       >
         <Avatar name={myDisplayName} src={myPicture} size={32} />
         <span class="sh-momentum-compose-prompt">What's on your mind?</span>

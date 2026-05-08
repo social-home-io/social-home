@@ -36,11 +36,11 @@ export const routes: Record<string, ReturnType<typeof lazy>> = {
   '/highlights/:highlightId': lazy(() => import('@/features/highlights/HighlightViewerPage')),
   '/momentum':              lazy(() => import('@/features/momentum/MomentumPage')),
   '/momentum/archive':      lazy(() => import('@/features/momentum/MomentumArchiveRedirect')),
-  '/momentum/new':          lazy(() => import('@/features/momentum/MomentumComposerPage')),
+  '/momentum/new':          lazy(() => import('@/features/momentum/MomentumComposerRedirect')),
   '/momentum/public/discover': lazy(() => import('@/features/momentum/PublicDiscoveryPage')),
   '/momentum/public/sharing':  lazy(() => import('@/features/momentum/PublicSharingSettings')),
   '/momentum/:momentId':    lazy(() => import('@/features/momentum/MomentumDetailPage')),
-  '/momentum/:momentId/reply': lazy(() => import('@/features/momentum/MomentumComposerPage')),
+  '/momentum/:momentId/reply': lazy(() => import('@/features/momentum/MomentumComposerRedirect')),
   '/parent':         lazy(() => import('@/features/child-protection/ParentDashboard')),
   '/setup':          lazy(() => import('@/features/setup/SetupPage')),
 }

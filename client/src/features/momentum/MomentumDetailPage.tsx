@@ -11,6 +11,10 @@ import { useLocation, useRoute } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
+import {
+  MomentumComposerDialog,
+  openMomentumComposer,
+} from '@/components/MomentumComposerDialog'
 import { MomentumDetailSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { confirmDialog } from '@/components/confirm'
@@ -232,7 +236,7 @@ export default function MomentumDetailPage() {
       </section>
 
       <footer class="sh-momentum-detail-actions">
-        <Button onClick={() => loc.route(`/momentum/${m.id}/reply`)}>
+        <Button onClick={() => openMomentumComposer(m.id)}>
           💬 Reply
         </Button>
         {!isAuthor && (
@@ -255,6 +259,11 @@ export default function MomentumDetailPage() {
           </ul>
         </section>
       )}
+      {/* Mounted at the page tail so the Reply button can open the
+       *  shared dialog. The WS ``moment.created`` listener already
+       *  refetches the thread when the new reply lands, so no
+       *  ``onPosted`` callback is needed here. */}
+      <MomentumComposerDialog />
     </div>
   )
 }
