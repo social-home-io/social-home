@@ -2777,6 +2777,49 @@ a.sh-friends-member-chip:hover {
 }
 .sh-comment-btn:hover { background: var(--sh-bg-secondary); color: var(--sh-primary); }
 
+/* Latest-comment preview line — shown under the reactions row on
+ * posts that have at least one comment.  Renders the comment as a
+ * subtle, single-line strip: avatar (20 px) + bold author + the
+ * first ~120 chars of the body, all clickable to open the overlay. */
+.sh-post-latest-comment {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: var(--sh-space-xs) 0 0;
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  background: transparent;
+  border: none;
+  border-top: 1px dashed var(--sh-border);
+  border-radius: 0 0 var(--sh-radius-md) var(--sh-radius-md);
+  cursor: pointer;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text);
+  transition: background var(--sh-transition-fast);
+}
+.sh-post-latest-comment:hover {
+  background: var(--sh-bg-secondary);
+}
+.sh-post-latest-comment-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  width: 100%;
+  min-width: 0;
+}
+.sh-post-latest-comment-name {
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.sh-post-latest-comment-body {
+  color: var(--sh-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
 .sh-comments {
   margin-top: var(--sh-space-sm);
   padding-top: var(--sh-space-sm);

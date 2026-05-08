@@ -23,6 +23,7 @@ reused by that module.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
@@ -98,6 +99,20 @@ class AbstractPostRepo(Protocol):
     async def add_comment(self, comment: Comment) -> Comment: ...
     async def get_comment(self, comment_id: str) -> Comment | None: ...
     async def list_comments(self, post_id: str) -> list[Comment]: ...
+    async def latest_comment_per_post(
+        self,
+        post_ids: Sequence[str],
+    ) -> dict[str, Comment]:
+        """Return ``{post_id: latest non-deleted comment}`` for each id.
+
+        Used by the feed serializer so the household feed can render a
+        one-line "Lina: Yes please!" preview under each post that has
+        comments — without forcing the SPA into N follow-up requests.
+        Posts with zero (or only deleted) comments are simply absent
+        from the returned dict; callers treat absence as "no preview".
+        """
+        ...
+
     async def soft_delete_comment(self, comment_id: str) -> None: ...
     async def edit_comment(
         self,
@@ -381,6 +396,41 @@ class SqlitePostRepo:
             (post_id,),
         )
         return [c for c in (_row_to_comment(d) for d in rows_to_dicts(rows)) if c]
+
+    async def latest_comment_per_post(
+        self,
+        post_ids: Sequence[str],
+    ) -> dict[str, Comment]:
+        # Empty input → trivially empty.  Saves us building a SQL with no
+        # placeholders and a stray ``IN ()`` clause that SQLite rejects.
+        if not post_ids:
+            return {}
+        # Per-post newest non-deleted comment via a window function.  The
+        # outer ``WHERE rn = 1`` keeps the result set bounded to one row
+        # per post regardless of how many comments each post has.
+        placeholders = ",".join("?" for _ in post_ids)
+        rows = await self._db.fetchall(
+            f"""
+            WITH ranked AS (
+                SELECT *,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY post_id
+                           ORDER BY created_at DESC
+                       ) AS rn
+                  FROM post_comments
+                 WHERE post_id IN ({placeholders})
+                   AND deleted = 0
+            )
+            SELECT * FROM ranked WHERE rn = 1
+            """,
+            tuple(post_ids),
+        )
+        out: dict[str, Comment] = {}
+        for d in rows_to_dicts(rows):
+            comment = _row_to_comment(d)
+            if comment is not None:
+                out[comment.post_id] = comment
+        return out
 
     async def soft_delete_comment(self, comment_id: str) -> None:
         await self._db.enqueue(

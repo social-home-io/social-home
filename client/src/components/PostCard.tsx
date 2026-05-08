@@ -293,7 +293,55 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
           </button>
         </div>
       )}
+      {/* Latest-comment preview — a one-liner that surfaces engagement
+       *  on the card without forcing the reader into the comment
+       *  overlay just to see if there is anything to read. Hidden when
+       *  the server didn't carry the field (space feeds today) or when
+       *  the post has no comments yet. Tapping the line opens the
+       *  thread, same as the "💬 N comments" button. */}
+      {post.latest_comment && (
+        <button
+          type="button"
+          class="sh-post-latest-comment"
+          onClick={onComment}
+          aria-label="Open comment thread"
+        >
+          <LatestCommentPreview
+            scopedSpaceId={scopedSpaceId}
+            comment={post.latest_comment}
+          />
+        </button>
+      )}
     </>
+  )
+}
+
+/** One-line preview of the newest comment on a post.  Renders on the
+ *  card itself, below the reactions row, so engaged posts feel "alive"
+ *  without a click into the overlay. */
+function LatestCommentPreview({
+  scopedSpaceId,
+  comment,
+}: {
+  scopedSpaceId: string | null
+  comment: NonNullable<FeedPost['latest_comment']>
+}) {
+  const authorName = resolveDisplayName(scopedSpaceId, comment.author, comment.author)
+  const avatarUrl = resolveAvatar(scopedSpaceId, comment.author, null)
+  const body = comment.deleted
+    ? '(comment removed)'
+    : comment.content
+      ? comment.content.replace(/\s+/g, ' ').trim()
+      : comment.media_url
+        ? '🖼️ image'
+        : ''
+  const truncated = body.length > 120 ? `${body.slice(0, 120)}…` : body
+  return (
+    <span class="sh-post-latest-comment-row">
+      <Avatar name={authorName} src={avatarUrl} size={20} />
+      <span class="sh-post-latest-comment-name">{authorName}</span>
+      <span class="sh-post-latest-comment-body">{truncated}</span>
+    </span>
   )
 }
 

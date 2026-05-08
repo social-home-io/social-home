@@ -231,6 +231,34 @@ class FeedService:
             return posts
         return [p for p in posts if p.author not in blocked]
 
+    async def list_feed_with_latest_comments(
+        self,
+        *,
+        before: str | None = None,
+        limit: int = 20,
+        viewer_user_id: str | None = None,
+    ) -> list[tuple[Post, Comment | None]]:
+        """``list_feed`` + the newest non-deleted comment per post.
+
+        The route layer renders ``[Post.latest_comment]`` so the household
+        feed can show a one-line "Lina: yes please!" preview under each
+        card without N follow-up requests.  Pairs are returned in the
+        same order as :meth:`list_feed`; ``None`` second tuple element
+        means "no comments yet" (not "comments exist but were filtered").
+        """
+        posts = await self.list_feed(
+            before=before,
+            limit=limit,
+            viewer_user_id=viewer_user_id,
+        )
+        if not posts:
+            return []
+        # Only ask for previews on posts that the counter says have at
+        # least one comment.  Saves a query on cold pages.
+        with_comments = [p.id for p in posts if p.comment_count > 0]
+        latest = await self._posts.latest_comment_per_post(with_comments)
+        return [(p, latest.get(p.id)) for p in posts]
+
     # ── Reactions ──────────────────────────────────────────────────────
 
     async def add_reaction(

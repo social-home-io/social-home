@@ -101,14 +101,26 @@ class FeedCollectionView(BaseView):
             limit = int(self.request.query.get("limit", 20))
         except ValueError:
             limit = 20
-        posts = await svc.list_feed(
+        # Pull the latest comment alongside each post so the SPA can
+        # render an inline "Lina: yes please!" preview under cards
+        # without an N+1 follow-up roundtrip.  Service layer returns
+        # ``(post, latest_or_none)`` pairs in feed order.
+        pairs = await svc.list_feed_with_latest_comments(
             before=before,
             limit=limit,
             viewer_user_id=ctx.user_id if ctx else None,
         )
-        return web.json_response(
-            [_serialise_signed(self.request, p) for p in posts],
-        )
+        out: list[object] = []
+        for post, latest in pairs:
+            payload = _serialise_signed(self.request, post)
+            if isinstance(payload, dict):
+                payload["latest_comment"] = (
+                    _serialise_signed(self.request, latest)
+                    if latest is not None
+                    else None
+                )
+            out.append(payload)
+        return web.json_response(out)
 
 
 class PostCollectionView(BaseView):

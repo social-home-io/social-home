@@ -167,4 +167,53 @@ describe('PostCard', () => {
     expect(container.querySelector('.sh-reaction-add')).toBeNull()
     expect(container.querySelector('.sh-comment-btn')).toBeNull()
   })
+
+  it('renders the latest-comment preview when the field is populated', () => {
+    const post: FeedPost = {
+      ...mockPost,
+      latest_comment: {
+        id: 'c1',
+        post_id: 'p1',
+        parent_id: null,
+        author: 'lina',
+        type: 'text',
+        content: 'Yes please! What time?',
+        media_url: null,
+        edited_at: null,
+        created_at: new Date().toISOString(),
+      },
+    }
+    const { container } = render(<PostCard post={post} />)
+    const preview = container.querySelector('.sh-post-latest-comment')
+    expect(preview).not.toBeNull()
+    expect(preview?.textContent).toContain('Yes please!')
+  })
+
+  it('does not render the preview when latest_comment is null', () => {
+    const post: FeedPost = { ...mockPost, latest_comment: null }
+    const { container } = render(<PostCard post={post} />)
+    expect(container.querySelector('.sh-post-latest-comment')).toBeNull()
+  })
+
+  it('clicking the preview row triggers onComment', () => {
+    const fn = vi.fn()
+    const post: FeedPost = {
+      ...mockPost,
+      latest_comment: {
+        id: 'c1',
+        post_id: 'p1',
+        parent_id: null,
+        author: 'lina',
+        type: 'text',
+        content: 'Hi',
+        media_url: null,
+        edited_at: null,
+        created_at: new Date().toISOString(),
+      },
+    }
+    const { container } = render(<PostCard post={post} onComment={fn} />)
+    const row = container.querySelector('.sh-post-latest-comment') as HTMLElement
+    fireEvent.click(row)
+    expect(fn).toHaveBeenCalledOnce()
+  })
 })
