@@ -25,10 +25,10 @@ describe('MobileNav', () => {
     expect(container.querySelector('nav[role="navigation"]')).toBeTruthy()
   })
 
-  it('contains Feed and Spaces tabs', () => {
+  it('contains Home and Spaces tabs', () => {
     const { container } = render(wrap(<MobileNav />))
     const bar = container.querySelector('.sh-mobile-nav')!
-    expect(bar.textContent).toContain('Feed')
+    expect(bar.textContent).toContain('Home')
     expect(bar.textContent).toContain('Spaces')
   })
 

@@ -79,7 +79,11 @@ const HOME_GROUP: SideNavGroup = {
   key: 'home',
   label: 'At home',
   items: [
-    { key: 'feed',     label: 'Feed',     href: '/',         icon: 'feed',
+    // ``/`` belongs to the Welcome surface (corner-light) — clicking
+    // "Feed" should land on the actual feed, not the welcome card.
+    // Both routes already resolve to FeedPage; the welcome surface
+    // sits at ``/`` via LandingDispatch.
+    { key: 'feed',     label: 'Feed',     href: '/feed',     icon: 'feed',
       gate: s => s.feat_feed },
     { key: 'calendar', label: 'Calendar', href: '/calendar', icon: 'calendar',
       gate: s => s.feat_calendar },

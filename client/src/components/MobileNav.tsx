@@ -34,7 +34,11 @@ interface Tab {
 }
 
 const TABS: readonly Tab[] = [
-  { href: '/',              emoji: '🏠', label: 'Feed',
+  // First tab is the "Welcome" landing (corner-light) at ``/`` —
+  // that's the surface a returning user actually opens the app to.
+  // Power users who want the household feed instead can pick it from
+  // the drawer or change the landing-page preference in Settings.
+  { href: '/',              emoji: '🏠', label: 'Home',
     matches: (p) => p === '/' },
   { href: '/spaces',        emoji: '💬', label: 'Spaces',
     matches: (p) => p === '/spaces' || p.startsWith('/spaces/') },
