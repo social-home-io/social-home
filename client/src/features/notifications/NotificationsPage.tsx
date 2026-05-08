@@ -8,38 +8,8 @@ import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { NotificationListSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
+import { relativeDocsTime } from '@/utils/relativeTime'
 import type { Notification } from '@/types'
-
-
-/** Friendly relative timestamp for the notifications row. Mirrors the
- *  Pages-index formatter — same rungs, same shape — so a viewer scanning
- *  both surfaces never has to context-switch between two time languages. */
-function relativeNotifTime(iso: string): string {
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return iso
-  const now = Date.now()
-  const diff = now - t
-  const min = Math.floor(diff / 60_000)
-  if (min < 1) return 'just now'
-  if (min < 60) return `${min} min ago`
-  const hr = Math.floor(min / 60)
-  const sameDay = new Date(t).toDateString() === new Date(now).toDateString()
-  if (sameDay) return `${hr}h ago`
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  if (new Date(t).toDateString() === yesterday.toDateString()) return 'yesterday'
-  if (diff < 7 * 86_400_000) {
-    return `${Math.floor(diff / 86_400_000)} days ago`
-  }
-  return new Date(t).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year:
-      new Date(t).getFullYear() === new Date(now).getFullYear()
-        ? undefined
-        : 'numeric',
-  })
-}
 
 const notifications = signal<Notification[]>([])
 const loading = signal(true)
@@ -105,7 +75,7 @@ export default function NotificationsPage() {
               dateTime={n.created_at}
               title={new Date(n.created_at).toLocaleString()}
             >
-              {relativeNotifTime(n.created_at)}
+              {relativeDocsTime(n.created_at)}
             </time>
           </div>
           {n.link_url && <a href={n.link_url} class="sh-notif-link">→</a>}

@@ -46,6 +46,7 @@ import {
   householdDisplayName,
   loadHouseholdUsers,
 } from '@/store/householdUsers'
+import { relativeDocsTime } from '@/utils/relativeTime'
 
 interface ConflictData {
   mine: string
@@ -54,36 +55,6 @@ interface ConflictData {
   base_updated_at: string
 }
 
-
-/** Friendly relative timestamp for the Pages index — same shape as the
- *  DM inbox's chat-style stamp so the surfaces feel related. The full
- *  timestamp lives on the ``time[title]`` attribute for hover-disclose. */
-function relativePageTime(iso: string): string {
-  const t = Date.parse(iso)
-  if (Number.isNaN(t)) return iso
-  const now = Date.now()
-  const diff = now - t
-  const min = Math.floor(diff / 60_000)
-  if (min < 1) return 'just now'
-  if (min < 60) return `${min} min ago`
-  const hr = Math.floor(min / 60)
-  const sameDay = new Date(t).toDateString() === new Date(now).toDateString()
-  if (sameDay) return `${hr}h ago`
-  const yesterday = new Date(now)
-  yesterday.setDate(yesterday.getDate() - 1)
-  if (new Date(t).toDateString() === yesterday.toDateString()) return 'yesterday'
-  if (diff < 7 * 86_400_000) {
-    return `${Math.floor(diff / 86_400_000)} days ago`
-  }
-  return new Date(t).toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year:
-      new Date(t).getFullYear() === new Date(now).getFullYear()
-        ? undefined
-        : 'numeric',
-  })
-}
 
 const pages        = signal<Page[]>([])
 const viewing      = signal<Page | null>(null)
@@ -482,7 +453,7 @@ export default function PagesPage() {
                   dateTime={editedAt}
                   title={new Date(editedAt).toLocaleString()}
                 >
-                  {relativePageTime(editedAt)}
+                  {relativeDocsTime(editedAt)}
                 </time>
               </div>
             </div>
@@ -589,7 +560,7 @@ export default function PagesPage() {
             dateTime={p.updated_at}
             title={new Date(p.updated_at).toLocaleString()}
           >
-            {relativePageTime(p.updated_at)}
+            {relativeDocsTime(p.updated_at)}
           </time>
         </div>
       ))}
