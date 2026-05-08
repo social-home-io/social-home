@@ -10,7 +10,12 @@ export const activeSpace  = signal<Space | null>(null)
  *  create so the new row shows up without a manual reload. */
 export async function loadSpaces(): Promise<void> {
   try {
-    spaces.value = await api.get('/api/spaces') as Space[]
+    const rows = await api.get('/api/spaces') as Space[] | undefined | null
+    // Defend against test mocks of ``@/api`` that don't configure a
+    // resolved value — ``api.get(...)`` returns undefined, ``await
+    // undefined`` resolves to undefined, and assigning that to the
+    // signal would break consumers that call ``spaces.value.length``.
+    spaces.value = Array.isArray(rows) ? rows : []
   } catch {
     /* leave the cached list — the page renders an empty / stale state. */
   }
