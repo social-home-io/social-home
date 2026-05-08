@@ -403,7 +403,7 @@
   "time.hours_ago": "{n} h ago",
   "time.days_ago": "{n} d ago",
 
-  "event.removed": "Event removed",
+  "event.removed": "This event isn't here anymore",
   "event.has_ended": "This event has ended.",
   "event.has_ended_tooltip": "This event has already ended.",
   "event.starts": "Starts:",

@@ -22,6 +22,28 @@ import {
 } from './SpaceProfileDialog'
 import { currentUser } from '@/store/auth'
 
+/** Friendly relative duration for "joined …" — drops the
+ *  utilitarian ``5/8/2026`` for "joined today" / "joined 3 days ago"
+ *  / "joined last month" / "joined Apr 2026". Quick formatter; the
+ *  shared :mod:`@/utils/calendar` helper covers per-day labels but
+ *  member-joined wants weeks/months/years too. */
+function formatRelativeJoined(iso: string): string {
+  const then = new Date(iso)
+  if (Number.isNaN(then.getTime())) return iso
+  const now = new Date()
+  const days = Math.floor((now.getTime() - then.getTime()) / 86400000)
+  if (days <= 0) return 'today'
+  if (days === 1) return 'yesterday'
+  if (days < 7) return `${days} days ago`
+  if (days < 14) return 'last week'
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`
+  if (days < 60) return 'last month'
+  if (days < 365) return `${Math.floor(days / 30)} months ago`
+  // Older than a year — show the month + year so "joined Apr 2024"
+  // reads cleaner than "joined 19 months ago".
+  return then.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
+}
+
 interface Member {
   user_id: string
   display_name?: string | null
@@ -216,8 +238,8 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
                   <span class="sh-muted sh-member-me-chip">you</span>
                 )}
               </div>
-              <time class="sh-muted">
-                {new Date(m.joined_at).toLocaleDateString()}
+              <time class="sh-muted" dateTime={m.joined_at} title={new Date(m.joined_at).toLocaleString()}>
+                joined {formatRelativeJoined(m.joined_at)}
               </time>
               {!isMe && (
                 <button
