@@ -13616,6 +13616,33 @@ a.sh-btn--ghost:hover {
 .sh-momentum-replies h3 {
   margin: var(--sh-space-md) 0 var(--sh-space-sm);
 }
+.sh-momentum-replies-cta {
+  display: flex; justify-content: center;
+  margin-top: var(--sh-space-md);
+}
+/* Read-only chip variant — used on reply rows where the count is
+ * informational and tapping the chip should not toggle a reaction
+ * (replies don't expose the picker; tap the reply itself to open). */
+.sh-momentum-chip--readonly {
+  cursor: default;
+  background: transparent;
+  border: 1px dashed var(--sh-border);
+  color: var(--sh-text-muted);
+  font-size: 0.8rem;
+}
+.sh-momentum-chip--readonly:hover {
+  background: transparent;
+}
+.sh-momentum-trending-hint {
+  margin: var(--sh-space-sm) 0 var(--sh-space-md);
+  font-size: 0.875rem;
+}
+.sh-momentum-trending-hint code {
+  background: var(--sh-surface-2);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
 .sh-momentum-row-media--video {
   display: inline-block;
   padding: 4px 10px;

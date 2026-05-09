@@ -172,9 +172,9 @@ export function MomentumComposerDialog({ onPosted }: Props = {}) {
       title={isReply ? 'Reply' : 'New moment'}
     >
       <form class="sh-momentum-composer-form" onSubmit={submit}>
-        {isReply && parentId.value && (
-          <p class="sh-muted">
-            Replying to moment <code>{parentId.value.slice(0, 8)}…</code>
+        {isReply && (
+          <p class="sh-muted sh-momentum-composer-reply-hint">
+            ↪ Replying to this moment
           </p>
         )}
 

@@ -79,24 +79,35 @@ export default function MomentumArchiveTab() {
 
   const days = [...grouped.value.keys()]  // already newest-first
   const tag = activeTag.value
-  const renderTrendingRow = trending.value.length > 0 && (
-    <nav class="sh-momentum-trending" aria-label="Trending hashtags">
-      {trending.value.map(t => (
-        <a
-          key={t.tag}
-          href={`/momentum?tab=archive&tag=${encodeURIComponent(t.tag)}`}
-          class={`sh-momentum-chip${tag === t.tag ? ' sh-momentum-chip--active' : ''}`}
-          onClick={(ev) => {
-            ev.preventDefault()
-            loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t.tag)}`)
-          }}
-        >
-          #{t.tag}
-          <span class="sh-momentum-chip-count">{t.count}</span>
-        </a>
-      ))}
-    </nav>
-  )
+  const renderTrendingRow = trending.value.length > 0
+    ? (
+      <nav class="sh-momentum-trending" aria-label="Trending hashtags">
+        {trending.value.map(t => (
+          <a
+            key={t.tag}
+            href={`/momentum?tab=archive&tag=${encodeURIComponent(t.tag)}`}
+            class={`sh-momentum-chip${tag === t.tag ? ' sh-momentum-chip--active' : ''}`}
+            onClick={(ev) => {
+              ev.preventDefault()
+              loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t.tag)}`)
+            }}
+          >
+            #{t.tag}
+            <span class="sh-momentum-chip-count">{t.count}</span>
+          </a>
+        ))}
+      </nav>
+    )
+    // No tags yet — quietly invite users to start one. Stays visible
+    // when the archive itself isn't empty (i.e. only the *trending*
+    // list is empty), so the hint feels like a discoverability nudge
+    // rather than an empty state.
+    : days.length > 0 && (
+      <p class="sh-muted sh-momentum-trending-hint">
+        💡 Start a hashtag with <code>#yourtag</code> to make it easy to
+        find later.
+      </p>
+    )
   const renderActiveBanner = tag && (
     <div class="sh-momentum-filter-banner" role="status">
       <span>Filtering by <strong>#{tag}</strong></span>

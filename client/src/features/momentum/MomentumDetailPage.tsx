@@ -20,6 +20,7 @@ import { showToast } from '@/components/Toast'
 import { confirmDialog } from '@/components/confirm'
 import { openReport } from '@/components/ReportDialog'
 import { openUserActions } from '@/components/UserActionsMenu'
+import { blockedUserIds, loadBlocks } from '@/store/blocks'
 import { currentUser } from '@/store/auth'
 import {
   householdDisplayName,
@@ -27,6 +28,7 @@ import {
   loadHouseholdUsers,
 } from '@/store/householdUsers'
 import { useTitle } from '@/store/pageTitle'
+import { relativeChatTime } from '@/utils/relativeTime'
 import { ws } from '@/ws'
 import type { Moment, MomentDetail } from '@/types'
 import { renderHashtagged } from './hashtags'
@@ -47,6 +49,7 @@ export default function MomentumDetailPage() {
   useEffect(() => {
     loading.value = true
     detail.value = null
+    void loadBlocks()  // hide replies from blocked authors
     void loadHouseholdUsers()  // resolve display names + avatars from raw user_ids
     const refetch = (initial: boolean) =>
       api.get(`/api/moments/${momentId}`)
@@ -121,40 +124,65 @@ export default function MomentumDetailPage() {
     counts[r.emoji] = (counts[r.emoji] || 0) + 1
   }
 
-  const renderRow = (mm: Moment) => (
-    <li key={mm.id} class="sh-momentum-row">
-      <Avatar
-        name={householdDisplayName(mm.author_user_id)}
-        src={householdPictureUrl(mm.author_user_id)}
-        size={32}
-      />
-      <div class="sh-momentum-row-body">
-        <div class="sh-momentum-row-meta">
-          <strong>
-            {mm.author_user_id === me ? 'You' : householdDisplayName(mm.author_user_id)}
-          </strong>
-          <span class="sh-muted">{mm.created_at.slice(11, 16)}</span>
+  const renderRow = (mm: Moment) => {
+    const replyMine = mm.author_user_id === me
+    return (
+      <li key={mm.id} class="sh-momentum-row">
+        <Avatar
+          name={householdDisplayName(mm.author_user_id)}
+          src={householdPictureUrl(mm.author_user_id)}
+          size={32}
+        />
+        <div class="sh-momentum-row-body">
+          <div class="sh-momentum-row-head">
+            <strong class="sh-momentum-row-author">
+              {replyMine ? 'You' : householdDisplayName(mm.author_user_id)}
+            </strong>
+            <span class="sh-muted">· {relativeChatTime(mm.created_at)}</span>
+            {!replyMine && (
+              <button
+                type="button"
+                class="sh-momentum-row-overflow"
+                aria-label={`More actions for ${householdDisplayName(mm.author_user_id)}`}
+                onClick={(ev) => {
+                  ev.preventDefault()
+                  ev.stopPropagation()
+                  openUserActions(mm.author_user_id)
+                }}
+              >
+                ⋯
+              </button>
+            )}
+          </div>
+          {mm.content && (
+            <p class="sh-momentum-row-content">
+              {renderHashtagged(mm.content, (t, ev) => {
+                ev.preventDefault()
+                ev.stopPropagation()
+                loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)
+              })}
+            </p>
+          )}
+          {mm.media_type === 'image' && mm.media_url && (
+            <img src={mm.media_url} alt="" loading="lazy"
+              class="sh-momentum-row-media" />
+          )}
+          {mm.media_type === 'video' && mm.media_url && (
+            <video src={mm.media_url} controls muted preload="metadata"
+              class="sh-momentum-row-media" />
+          )}
+          {mm.reaction_count > 0 && (
+            <div class="sh-momentum-row-chips">
+              <span class="sh-momentum-chip sh-momentum-chip--readonly"
+                    aria-label={`${mm.reaction_count} reactions`}>
+                ❤️ {mm.reaction_count}
+              </span>
+            </div>
+          )}
         </div>
-        {mm.content && (
-          <p class="sh-momentum-row-content">
-            {renderHashtagged(mm.content, (t, ev) => {
-              ev.preventDefault()
-              ev.stopPropagation()
-              loc.route(`/momentum?tab=archive&tag=${encodeURIComponent(t)}`)
-            })}
-          </p>
-        )}
-        {mm.media_type === 'image' && mm.media_url && (
-          <img src={mm.media_url} alt="" loading="lazy"
-            class="sh-momentum-row-media" />
-        )}
-        {mm.media_type === 'video' && mm.media_url && (
-          <video src={mm.media_url} controls muted preload="metadata"
-            class="sh-momentum-row-media" />
-        )}
-      </div>
-    </li>
-  )
+      </li>
+    )
+  }
 
   return (
     <div class="sh-momentum-detail">
@@ -247,18 +275,32 @@ export default function MomentumDetailPage() {
         )}
       </footer>
 
-      {detail.value.replies.length > 0 && (
-        <section class="sh-momentum-replies" aria-label="Replies">
-          <h3>
-            {detail.value.replies.length === 1
-              ? '1 reply'
-              : `${detail.value.replies.length} replies`}
-          </h3>
-          <ul class="sh-momentum-list">
-            {detail.value.replies.map(renderRow)}
-          </ul>
-        </section>
-      )}
+      {(() => {
+        const blocked = blockedUserIds.value
+        const visibleReplies = detail.value!.replies.filter(
+          r => !blocked.has(r.author_user_id),
+        )
+        return visibleReplies.length > 0 && (
+          <section class="sh-momentum-replies" aria-label="Replies">
+            <h3>
+              {visibleReplies.length === 1
+                ? '1 reply'
+                : `${visibleReplies.length} replies`}
+            </h3>
+            <ul class="sh-momentum-list">
+              {visibleReplies.map(renderRow)}
+            </ul>
+            <div class="sh-momentum-replies-cta">
+              <Button
+                variant="secondary"
+                onClick={() => openMomentumComposer(m.id)}
+              >
+                💬 Add a reply
+              </Button>
+            </div>
+          </section>
+        )
+      })()}
       {/* Mounted at the page tail so the Reply button can open the
        *  shared dialog. The WS ``moment.created`` listener already
        *  refetches the thread when the new reply lands, so no
