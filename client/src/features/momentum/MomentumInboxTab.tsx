@@ -242,7 +242,7 @@ function MomentRow({
         {m.media_type === 'image' && m.media_url && (
           <img
             src={m.media_url}
-            alt=""
+            alt={m.content ? '' : `Photo from ${authorName}`}
             loading="lazy"
             class="sh-momentum-row-media"
             onClick={(ev) => ev.stopPropagation()}
