@@ -1,15 +1,21 @@
 /**
  * DashboardPage — "My Corner" (§23).
  *
- * One round-trip to ``GET /api/me/corner`` populates every widget.
+ * The corner reads as the corner-light :mod:`WelcomePage` plus more
+ * rooms — same warm hero, same paper-card stripes, just with the
+ * extra surfaces (Who's home, Bazaar, Spaces you follow, Quick
+ * actions, Network map) appended below.  Card components and the
+ * shared helpers live in :mod:`./../welcome/cards` so the two
+ * pages can never visually drift.
+ *
+ * One round-trip to ``GET /api/me/corner`` populates every section.
  * Live WS events debounce-refetch the whole bundle (cheap because the
  * server does 1 SQL query per slice — ~10 ms total on a warm cache).
  */
-import type { ComponentChildren } from 'preact'
-import { useTitle } from '@/store/pageTitle'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
 import { ws } from '@/ws'
+import { useTitle } from '@/store/pageTitle'
 import { currentUser } from '@/store/auth'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
@@ -17,36 +23,23 @@ import { CardSkeleton } from '@/components/SkeletonScreen'
 import { FollowedSpacesPicker } from '@/components/FollowedSpacesPicker'
 import { LocationMap } from '@/components/LocationMap'
 import NetworkMap from './NetworkMap'
-
-
-/** Pick a time-of-day-aware greeting for the corner hero. Uses the
- *  device's local hour (corner is always opened by the household
- *  member, so wall-clock time is the right anchor — not server UTC). */
-function timeOfDayGreeting(): string {
-  const h = new Date().getHours()
-  if (h < 5)  return 'Good night'
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  if (h < 22) return 'Good evening'
-  return 'Good night'
-}
-
-/** First-name slice of the user's display name — "Pascal Vizeli" →
- *  "Pascal". A single-word display name returns unchanged. */
-function firstName(displayName: string | undefined | null): string {
-  if (!displayName) return ''
-  const trimmed = displayName.trim()
-  const sp = trimmed.indexOf(' ')
-  return sp === -1 ? trimmed : trimmed.slice(0, sp)
-}
-
-interface CornerEvent {
-  id: string
-  summary: string
-  start: string
-  end: string
-  all_day: boolean
-}
+import {
+  AllClearCard,
+  CatchUpCard,
+  PendingCard,
+  TodayCard,
+  UpNextCard,
+  dayShape,
+  firstName,
+  longDate,
+  nextEvents,
+  postSnippet,
+  shortRelative,
+  timeOfDayGreeting,
+  todaysEvents,
+  type WelcomeBundle,
+  type WelcomeFollowedPost,
+} from '../welcome/cards'
 
 interface CornerPresence {
   user_id: string
@@ -60,43 +53,19 @@ interface CornerPresence {
   gps_accuracy_m?: number | null
 }
 
-interface CornerTask {
-  id: string
-  list_id: string
-  title: string
-  status: 'todo' | 'in_progress' | 'done'
-  due_date: string | null
-}
-
 interface BazaarCornerSummary {
   active_listings: number
   pending_offers: number
   ending_soon: number
 }
 
-interface FollowedSpacePost {
-  post_id: string
-  space_id: string
-  space_name: string
-  space_emoji: string | null
-  author: string
-  type: string
-  content: string | null
-  created_at: string
-}
-
-interface CornerBundle {
-  unread_notifications: number
-  unread_conversations: number
-  upcoming_events: CornerEvent[]
+interface CornerBundle extends WelcomeBundle {
   presence: CornerPresence[]
-  tasks_due_today: CornerTask[]
   bazaar: BazaarCornerSummary
   followed_space_ids: string[]
-  followed_spaces_feed: FollowedSpacePost[]
 }
 
-const EMPTY_BUNDLE: CornerBundle = {
+const EMPTY: CornerBundle = {
   unread_notifications: 0,
   unread_conversations: 0,
   upcoming_events: [],
@@ -105,74 +74,6 @@ const EMPTY_BUNDLE: CornerBundle = {
   bazaar: { active_listings: 0, pending_offers: 0, ending_soon: 0 },
   followed_space_ids: [],
   followed_spaces_feed: [],
-}
-
-function presenceDotClass(state: string): string {
-  switch (state) {
-    case 'home':     return 'sh-dot sh-dot--home'
-    case 'away':     return 'sh-dot sh-dot--away'
-    case 'zone':     return 'sh-dot sh-dot--home'
-    case 'not_home': return 'sh-dot sh-dot--not-home'
-    default:         return 'sh-dot sh-dot--unknown'
-  }
-}
-
-function formatEventWhen(e: CornerEvent): string {
-  const d = new Date(e.start)
-  const today = new Date()
-  const sameDay = d.toDateString() === today.toDateString()
-  const when = d.toLocaleDateString(undefined, {
-    weekday: 'short', month: 'short', day: 'numeric',
-  })
-  if (e.all_day) return `${when} · All day`
-  const time = d.toLocaleTimeString(undefined, {
-    hour: '2-digit', minute: '2-digit',
-  })
-  return sameDay ? `Today · ${time}` : `${when} · ${time}`
-}
-
-function formatRelativeShort(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime()
-  const mins = Math.floor(diff / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins}m`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 7) return `${days}d`
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: 'short', day: 'numeric',
-  })
-}
-
-function contentSnippet(content: string | null, type: string): string {
-  if (!content || !content.trim()) {
-    switch (type) {
-      case 'image':    return '📷 Image'
-      case 'video':    return '🎬 Video'
-      case 'file':     return '📄 File'
-      case 'poll':     return '📊 Poll'
-      case 'schedule': return '📅 Schedule'
-      case 'bazaar':   return '🛍 Listing'
-      default:         return '(no content)'
-    }
-  }
-  const clean = content.replace(/\s+/g, ' ').trim()
-  return clean.length > 120 ? `${clean.slice(0, 120)}…` : clean
-}
-
-function formatTaskDue(iso: string | null): string {
-  if (!iso) return ''
-  const due = new Date(`${iso}T00:00:00`)
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const diffDays = Math.floor(
-    (due.getTime() - today.getTime()) / 86_400_000,
-  )
-  if (diffDays < 0) return `Overdue by ${-diffDays}d`
-  if (diffDays === 0) return 'Due today'
-  if (diffDays === 1) return 'Due tomorrow'
-  return `Due in ${diffDays}d`
 }
 
 export default function DashboardPage() {
@@ -196,8 +97,6 @@ export default function DashboardPage() {
 
   useEffect(() => {
     void refresh()
-    // Debounced refetch — cluster bursts of events (e.g. five
-    // task.updated in a second) into one round-trip.
     let timer: ReturnType<typeof setTimeout> | null = null
     const debouncedRefresh = () => {
       if (timer) clearTimeout(timer)
@@ -223,9 +122,11 @@ export default function DashboardPage() {
 
   if (loading && !bundle) {
     return (
-      <div class="sh-dashboard">
-        <div class="sh-dashboard-grid">
-          {Array.from({ length: 4 }, (_, i) => <CardSkeleton key={i} />)}
+      <div class="sh-welcome">
+        <div class="sh-welcome-skeleton">
+          <CardSkeleton />
+          <CardSkeleton />
+          <CardSkeleton />
         </div>
       </div>
     )
@@ -233,11 +134,12 @@ export default function DashboardPage() {
 
   if (error && !bundle) {
     return (
-      <div class="sh-dashboard">
-        <div class="sh-empty-state">
-          <div aria-hidden="true">⚠️</div>
-          <h3>Couldn't load your corner</h3>
-          <p class="sh-muted">{error}</p>
+      <div class="sh-welcome">
+        <header class="sh-welcome-hero">
+          <h1 class="sh-welcome-hero__greeting">My Corner</h1>
+          <p class="sh-welcome-hero__sub">{error}</p>
+        </header>
+        <div class="sh-welcome-stack">
           <Button onClick={() => { setLoading(true); void refresh() }}>
             Retry
           </Button>
@@ -246,148 +148,74 @@ export default function DashboardPage() {
     )
   }
 
-  const b = bundle ?? EMPTY_BUNDLE
-  // Hero greeting — time-of-day + first name. The dashboard is the
-  // first surface a household member sees most days, so opening with
-  // a warm "Good morning, Pascal" sets the tone and answers the
-  // "this is for me" question that just "My Corner" doesn't.
+  const b = bundle ?? EMPTY
+  const today = todaysEvents(b.upcoming_events)
+  const upNext = today.length === 0 ? nextEvents(b.upcoming_events) : []
+  const tasks = b.tasks_due_today
+  const catchUp = b.followed_spaces_feed.slice(0, 3)
+  // Corner has more surfaces than Welcome, so "all clear" applies
+  // only when every section is empty (presence and bazaar included).
+  const cornerAllClear =
+    today.length === 0
+    && upNext.length === 0
+    && tasks.length === 0
+    && catchUp.length === 0
+    && b.presence.length === 0
+    && b.bazaar.active_listings === 0
+    && b.bazaar.pending_offers === 0
+    && b.unread_notifications === 0
+    && b.unread_conversations === 0
+
   const greetee = firstName(currentUser.value?.display_name)
-  const greeting = greetee
+  const heroGreeting = greetee
     ? `${timeOfDayGreeting()}, ${greetee}`
     : timeOfDayGreeting()
+  const heroSub = cornerAllClear
+    ? `${longDate(new Date())} · all clear`
+    : `${longDate(new Date())} · ${dayShape(today, tasks, upNext, b)}`
+
+  // Presence is "showing on the corner-only" — Welcome doesn't have
+  // it, so the card lives here even on otherwise-empty days.
+  const hasPresence = b.presence.length > 0
+  const hasBazaar = b.bazaar.active_listings > 0 || b.bazaar.pending_offers > 0
 
   return (
-    <div class="sh-dashboard">
-      <header class="sh-corner-hero">
-        <h1 class="sh-corner-hero__greeting">{greeting}</h1>
-        <p class="sh-corner-hero__sub">
-          Here's what's on at home today.
-        </p>
+    <div class="sh-welcome">
+      <header class="sh-welcome-hero">
+        <h1 class="sh-welcome-hero__greeting">{heroGreeting}</h1>
+        <p class="sh-welcome-hero__sub">{heroSub}</p>
       </header>
-      <div class="sh-dashboard-grid">
-        <StatWidget
-          icon="🔔" label="Notifications"
-          value={b.unread_notifications} unit="unread"
-          href="/notifications" />
-        <StatWidget
-          icon="💬" label="Messages"
-          value={b.unread_conversations} unit="unread"
-          href="/dms" />
 
-        <Widget title="📅 Upcoming events" href="/calendar"
-                empty={b.upcoming_events.length === 0}
-                emptyIcon="📅" emptyText="No upcoming events">
-          {b.upcoming_events.map(e => (
-            <div key={e.id} class="sh-widget-event">
-              <strong>{e.summary}</strong>
-              <time class="sh-muted">{formatEventWhen(e)}</time>
-            </div>
-          ))}
-        </Widget>
+      <div class="sh-welcome-stack">
+        {/* ── Welcome-shared cards ───────────────────────────────── */}
+        {today.length > 0 && <TodayCard events={today} />}
+        {today.length === 0 && upNext.length > 0 && (
+          <UpNextCard events={upNext} />
+        )}
+        {tasks.length > 0 && <PendingCard tasks={tasks} />}
+        <CatchUpCard
+          posts={catchUp}
+          unreadNotifications={b.unread_notifications}
+          unreadConversations={b.unread_conversations}
+        />
 
-        <Widget title="✅ Tasks due" href="/organize"
-                empty={b.tasks_due_today.length === 0}
-                emptyIcon="🎉" emptyText="You're all caught up!">
-          {b.tasks_due_today.map(t => (
-            <div key={t.id} class={`sh-widget-task sh-widget-task--${t.status}`}>
-              <span class="sh-widget-task-title">{t.title}</span>
-              <span class="sh-widget-task-due">
-                {formatTaskDue(t.due_date)}
-              </span>
-            </div>
-          ))}
-        </Widget>
-
-        <Widget title="🏠 Who's home" href="/presence"
-                empty={b.presence.length === 0}
-                emptyIcon="👋" emptyText="No presence data yet">
-          <div class="sh-presence-overview">
-            {b.presence.map(p => (
-              <div key={p.user_id} class="sh-presence-mini">
-                <span class={presenceDotClass(p.state)} />
-                <Avatar name={p.display_name} src={p.picture_url} size={28} />
-                <span>{p.display_name}</span>
-                <span class="sh-muted">{p.zone_name || p.state}</span>
-              </div>
-            ))}
-          </div>
-          {b.presence.some(
-            (p) => typeof p.latitude === 'number'
-              && typeof p.longitude === 'number',
-          ) && (
-            <LocationMap
-              markers={b.presence
-                .filter((p) =>
-                  typeof p.latitude === 'number'
-                  && typeof p.longitude === 'number',
-                )
-                .map((p) => ({
-                  id: p.user_id,
-                  lat: p.latitude as number,
-                  lon: p.longitude as number,
-                  accuracy_m: p.gps_accuracy_m ?? null,
-                  label: p.display_name,
-                  sub_label: p.zone_name,
-                  avatar_url: p.picture_url,
-                  state: p.state,
-                }))}
-              height={220}
-              emptyLabel="No one is sharing GPS."
-            />
-          )}
-        </Widget>
-
-        <Widget title="🛍 Bazaar" href="/bazaar"
-                empty={
-                  b.bazaar.active_listings === 0
-                  && b.bazaar.pending_offers === 0
-                }
-                emptyIcon="🛍️"
-                emptyText="You have no active listings.">
-          <div class="sh-corner-bazaar">
-            <div class="sh-corner-bazaar-stat">
-              <span class="sh-corner-bazaar-value">
-                {b.bazaar.active_listings}
-              </span>
-              <span class="sh-muted">Active</span>
-            </div>
-            <div class="sh-corner-bazaar-stat">
-              <span class="sh-corner-bazaar-value">
-                {b.bazaar.pending_offers}
-              </span>
-              <span class="sh-muted">Offers to review</span>
-            </div>
-            {b.bazaar.ending_soon > 0 && (
-              <div class="sh-corner-bazaar-stat sh-corner-bazaar-stat--warn">
-                <span class="sh-corner-bazaar-value">
-                  {b.bazaar.ending_soon}
-                </span>
-                <span class="sh-muted">Ending &lt; 24h</span>
-              </div>
-            )}
-          </div>
-        </Widget>
-
-        <FollowedSpacesWidget
+        {/* ── Corner-only cards ──────────────────────────────────── */}
+        {hasPresence && <PresenceCard presence={b.presence} />}
+        {hasBazaar && <BazaarCard bazaar={b.bazaar} />}
+        <SpacesCard
           posts={b.followed_spaces_feed}
           followedCount={b.followed_space_ids.length}
-          onManage={() => setPickerOpen(true)} />
+          onManage={() => setPickerOpen(true)}
+        />
+        <QuickActionsCard />
+        <NetworkCard />
 
-        <Widget title="⚡ Quick actions">
-          <div class="sh-quick-actions">
-            <a href="/feed" class="sh-btn sh-btn--secondary">Feed</a>
-            <a href="/dms" class="sh-btn sh-btn--secondary">Messages</a>
-            <a href="/calendar" class="sh-btn sh-btn--secondary">Calendar</a>
-            <a href="/organize" class="sh-btn sh-btn--secondary">Tasks</a>
-            <a href="/organize?tab=shopping" class="sh-btn sh-btn--secondary">Shopping</a>
-            <a href="/bazaar" class="sh-btn sh-btn--secondary">Bazaar</a>
-          </div>
-        </Widget>
-
-        <div class="sh-widget sh-widget--wide sh-widget--networkmap">
-          <NetworkMap />
-        </div>
+        {/* "All clear" — only when literally nothing landed in any
+         *  section.  Different from Welcome: presence + bazaar
+         *  contribute, since they always have surfaces to show. */}
+        {cornerAllClear && <AllClearCard />}
       </div>
+
       <FollowedSpacesPicker open={pickerOpen}
                             onClose={() => setPickerOpen(false)}
                             onChanged={() => { void refresh() }} />
@@ -395,122 +223,187 @@ export default function DashboardPage() {
   )
 }
 
-function FollowedSpacesWidget({
+// ─── Corner-only cards ───────────────────────────────────────────
+
+function presenceDotClass(state: string): string {
+  switch (state) {
+    case 'home':     return 'sh-dot sh-dot--home'
+    case 'away':     return 'sh-dot sh-dot--away'
+    case 'zone':     return 'sh-dot sh-dot--home'
+    case 'not_home': return 'sh-dot sh-dot--not-home'
+    default:         return 'sh-dot sh-dot--unknown'
+  }
+}
+
+/** "Who's home" — household member presence + the GPS map underneath
+ *  for members who opt in.  Wraps in the same paper-card chrome the
+ *  Welcome cards use so the corner reads as one stack. */
+function PresenceCard({ presence }: { presence: CornerPresence[] }) {
+  const withCoords = presence.filter(
+    (p) => typeof p.latitude === 'number' && typeof p.longitude === 'number',
+  )
+  return (
+    <a class="sh-welcome-card" href="/presence">
+      <h2 class="sh-welcome-card__title">
+        <span aria-hidden="true">🏠</span> Who's home
+      </h2>
+      <div class="sh-presence-overview">
+        {presence.map(p => (
+          <div key={p.user_id} class="sh-presence-mini">
+            <span class={presenceDotClass(p.state)} />
+            <Avatar name={p.display_name} src={p.picture_url} size={28} />
+            <span>{p.display_name}</span>
+            <span class="sh-muted">{p.zone_name || p.state}</span>
+          </div>
+        ))}
+      </div>
+      {withCoords.length > 0 && (
+        <LocationMap
+          markers={withCoords.map((p) => ({
+            id: p.user_id,
+            lat: p.latitude as number,
+            lon: p.longitude as number,
+            accuracy_m: p.gps_accuracy_m ?? null,
+            label: p.display_name,
+            sub_label: p.zone_name,
+            avatar_url: p.picture_url,
+            state: p.state,
+          }))}
+          height={220}
+          emptyLabel="No one is sharing GPS."
+        />
+      )}
+      <span class="sh-welcome-card__more">Open presence →</span>
+    </a>
+  )
+}
+
+/** Bazaar summary — active listings, pending offers, ending-soon
+ *  warning chip when applicable. */
+function BazaarCard({ bazaar }: { bazaar: BazaarCornerSummary }) {
+  return (
+    <a class="sh-welcome-card" href="/bazaar">
+      <h2 class="sh-welcome-card__title">
+        <span aria-hidden="true">🛍</span> Bazaar
+      </h2>
+      <div class="sh-corner-bazaar">
+        <div class="sh-corner-bazaar-stat">
+          <span class="sh-corner-bazaar-value">{bazaar.active_listings}</span>
+          <span class="sh-muted">Active</span>
+        </div>
+        <div class="sh-corner-bazaar-stat">
+          <span class="sh-corner-bazaar-value">{bazaar.pending_offers}</span>
+          <span class="sh-muted">Offers to review</span>
+        </div>
+        {bazaar.ending_soon > 0 && (
+          <div class="sh-corner-bazaar-stat sh-corner-bazaar-stat--warn">
+            <span class="sh-corner-bazaar-value">{bazaar.ending_soon}</span>
+            <span class="sh-muted">Ending &lt; 24h</span>
+          </div>
+        )}
+      </div>
+      <span class="sh-welcome-card__more">Open bazaar →</span>
+    </a>
+  )
+}
+
+/** Followed spaces — recent posts from spaces the user has pinned.
+ *  Renders the empty-state CTA that opens the picker via the
+ *  passed-in handler so the picker stays mounted at the page root. */
+function SpacesCard({
   posts, followedCount, onManage,
 }: {
-  posts: FollowedSpacePost[]
+  posts: WelcomeFollowedPost[]
   followedCount: number
   onManage: () => void
 }) {
   return (
-    <div class="sh-widget sh-widget--wide">
-      <div class="sh-widget-header">
-        <h3>🛰 Spaces you follow</h3>
-        <button type="button" class="sh-widget-link sh-link-button"
-                onClick={onManage}
-                aria-label="Manage followed spaces">
+    <section class="sh-welcome-card sh-welcome-card--catchup">
+      <div class="sh-welcome-card-header">
+        <h2 class="sh-welcome-card__title">
+          <span aria-hidden="true">🛰</span> Spaces you follow
+        </h2>
+        <button type="button" class="sh-link-button"
+                onClick={onManage} aria-label="Manage followed spaces">
           Manage →
         </button>
       </div>
       {followedCount === 0 ? (
-        <div class="sh-widget-empty">
-          <span class="sh-widget-empty-icon" aria-hidden="true">🛰</span>
-          <span class="sh-muted">Pick spaces to see their posts here.</span>
+        <div class="sh-welcome-card-empty">
+          <span class="sh-muted">
+            Pin spaces here to keep an eye on their posts without
+            opening each one.
+          </span>
           <Button onClick={onManage}>Choose spaces</Button>
         </div>
       ) : posts.length === 0 ? (
-        <div class="sh-widget-empty">
-          <span class="sh-widget-empty-icon" aria-hidden="true">✨</span>
+        <div class="sh-welcome-card-empty">
           <span class="sh-muted">
             No new posts in the spaces you follow.
           </span>
         </div>
       ) : (
-        <div class="sh-followed-feed">
+        <ul class="sh-welcome-card__list">
           {posts.map(p => (
-            <a key={p.post_id}
-               class="sh-followed-row"
-               href={`/spaces/${p.space_id}`}>
-              <span class="sh-space-chip"
-                    title={p.space_name}>
-                <span class="sh-space-chip-emoji" aria-hidden="true">
+            <li key={p.post_id}>
+              <a class="sh-welcome-catchup-row" href={`/spaces/${p.space_id}`}>
+                <span class="sh-welcome-catchup-emoji" aria-hidden="true">
                   {p.space_emoji || '🪐'}
                 </span>
-                <span class="sh-space-chip-name">{p.space_name}</span>
-              </span>
-              <div class="sh-followed-body">
-                <span class="sh-followed-author">{p.author}</span>
-                <span class="sh-followed-snippet">
-                  {contentSnippet(p.content, p.type)}
+                <span class="sh-welcome-catchup-body">
+                  <span class="sh-welcome-catchup-meta">
+                    <Avatar
+                      name={p.author}
+                      src={null}
+                      size={18}
+                    />
+                    <strong>{p.author}</strong>
+                    <span class="sh-muted">in {p.space_name}</span>
+                  </span>
+                  <span class="sh-welcome-catchup-snippet">
+                    {postSnippet(p.content, p.type)}
+                  </span>
                 </span>
-              </div>
-              <time class="sh-muted sh-followed-when"
-                    title={new Date(p.created_at).toLocaleString()}>
-                {formatRelativeShort(p.created_at)}
-              </time>
-            </a>
+                <time class="sh-welcome-catchup-when sh-muted">
+                  {shortRelative(p.created_at)}
+                </time>
+              </a>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
-    </div>
+    </section>
   )
 }
 
-function StatWidget({
-  icon, label, value, unit, href,
-}: {
-  icon: string
-  label: string
-  value: number
-  unit: string
-  href?: string
-}) {
-  const body = (
-    <>
-      <div class="sh-stat-widget-icon" aria-hidden="true">{icon}</div>
-      <div class="sh-stat-widget-body">
-        <span class="sh-widget-count">{value}</span>
-        <span class="sh-muted">{unit}</span>
-        <h3>{label}</h3>
-      </div>
-    </>
-  )
-  if (href) {
-    return (
-      <a class="sh-widget sh-stat-widget sh-widget--link" href={href}>
-        {body}
-      </a>
-    )
-  }
-  return <div class="sh-widget sh-stat-widget">{body}</div>
-}
-
-function Widget({
-  title, href, empty, emptyIcon, emptyText, children,
-}: {
-  title: string
-  href?: string
-  empty?: boolean
-  emptyIcon?: string
-  emptyText?: string
-  children?: ComponentChildren
-}) {
+/** Quick-actions card — same six links the previous corner shipped,
+ *  rewrapped in the welcome-card chrome for visual coherence. */
+function QuickActionsCard() {
   return (
-    <div class="sh-widget sh-widget--wide">
-      <div class="sh-widget-header">
-        <h3>{title}</h3>
-        {href && (
-          <a class="sh-widget-link sh-muted" href={href}>View all →</a>
-        )}
+    <section class="sh-welcome-card sh-welcome-card--quick">
+      <h2 class="sh-welcome-card__title">
+        <span aria-hidden="true">⚡</span> Quick actions
+      </h2>
+      <div class="sh-quick-actions">
+        <a href="/feed" class="sh-btn sh-btn--secondary">Feed</a>
+        <a href="/dms" class="sh-btn sh-btn--secondary">Messages</a>
+        <a href="/calendar" class="sh-btn sh-btn--secondary">Calendar</a>
+        <a href="/organize" class="sh-btn sh-btn--secondary">Tasks</a>
+        <a href="/organize?tab=shopping" class="sh-btn sh-btn--secondary">Shopping</a>
+        <a href="/bazaar" class="sh-btn sh-btn--secondary">Bazaar</a>
       </div>
-      {empty ? (
-        <div class="sh-widget-empty">
-          <span class="sh-widget-empty-icon" aria-hidden="true">
-            {emptyIcon ?? '—'}
-          </span>
-          <span class="sh-muted">{emptyText ?? 'Nothing here yet.'}</span>
-        </div>
-      ) : children}
-    </div>
+    </section>
+  )
+}
+
+/** Network map card — the federation network visualisation already
+ *  ships its own "Network · X paired" header line, so the welcome
+ *  card here is just the paper-card frame; we don't duplicate the
+ *  title at the top. */
+function NetworkCard() {
+  return (
+    <section class="sh-welcome-card sh-welcome-card--network">
+      <NetworkMap />
+    </section>
   )
 }
