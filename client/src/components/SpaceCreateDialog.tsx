@@ -51,7 +51,7 @@ export function SpaceCreateDialog() {
   }
 
   return (
-    <Modal open={open.value} onClose={() => open.value = false} title="Create Space">
+    <Modal open={open.value} onClose={() => open.value = false} title="Create a space">
       <div class="sh-form">
         <label>
           Name *
