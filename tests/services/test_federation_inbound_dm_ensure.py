@@ -12,7 +12,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from socialhome.crypto import derive_user_id
 from socialhome.domain.federation import FederationEvent, FederationEventType
 from socialhome.domain.user import RemoteUser, User
 from socialhome.repositories import (
@@ -95,7 +94,10 @@ async def test_dm_message_auto_creates_conversation_on_receiver(db, bus, inbound
     # Seed the local recipient (Carol) + the remote sender (Alice@peer-a).
     carol_user_id = "uid-carol-local"
     await _seed_local_user(
-        db, user_repo, username="carol", user_id=carol_user_id,
+        db,
+        user_repo,
+        username="carol",
+        user_id=carol_user_id,
     )
     alice_user_id = "uid-alice-remote"
     await _seed_remote_instance_and_user(
@@ -149,7 +151,10 @@ async def test_dm_message_idempotent_on_existing_conversation(db, bus, inbound):
     conv_repo = SqliteConversationRepo(db)
     carol_user_id = "uid-carol-local"
     await _seed_local_user(
-        db, user_repo, username="carol", user_id=carol_user_id,
+        db,
+        user_repo,
+        username="carol",
+        user_id=carol_user_id,
     )
     alice_user_id = "uid-alice-remote"
     await _seed_remote_instance_and_user(

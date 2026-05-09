@@ -150,10 +150,12 @@ async def test_create_dm_with_other_user_id_is_idempotent(stack):
     await stack.provision("anna")
     bob = await _seed_remote_user(stack, instance_id="peer-b", username="bob")
     a = await stack.dm_svc.create_dm(
-        creator_username="anna", other_user_id=bob.user_id,
+        creator_username="anna",
+        other_user_id=bob.user_id,
     )
     b = await stack.dm_svc.create_dm(
-        creator_username="anna", other_user_id=bob.user_id,
+        creator_username="anna",
+        other_user_id=bob.user_id,
     )
     assert a.id == b.id
 
@@ -174,7 +176,8 @@ async def test_create_dm_unknown_remote_user_raises(stack):
     await stack.provision("anna")
     with pytest.raises(KeyError, match="not found"):
         await stack.dm_svc.create_dm(
-            creator_username="anna", other_user_id="uid-nope",
+            creator_username="anna",
+            other_user_id="uid-nope",
         )
 
 
@@ -193,7 +196,9 @@ async def test_send_to_remote_member_includes_user_id_in_envelope(stack):
         other_user_id=bob.user_id,
     )
     await stack.dm_svc.send_message(
-        dm.id, sender_username="anna", content="hi bob",
+        dm.id,
+        sender_username="anna",
+        content="hi bob",
     )
 
     sent = [s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE]
