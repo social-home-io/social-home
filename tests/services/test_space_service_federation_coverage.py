@@ -135,6 +135,14 @@ async def test_invite_remote_user_happy(stack):
     )
     assert token
     stack.fed_svc.send_event.assert_awaited_once()
+    # The outbound payload must carry ``invitee_user_id`` so
+    # :meth:`PrivateSpaceInviteHandler._on_invite` doesn't early-
+    # return on the recipient. Regression guard for
+    # ``GET /api/remote_invites`` returning empty.
+    call = stack.fed_svc.send_event.call_args
+    payload = call.kwargs["payload"]
+    assert payload["invitee_user_id"] == "bob"
+    assert payload["invite_token"] == token
 
 
 async def test_invite_remote_user_requires_federation():
