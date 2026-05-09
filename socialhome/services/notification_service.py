@@ -213,7 +213,7 @@ class NotificationService:
         if self._i18n is None:
             try:
                 return fallback.format(**fmt)
-            except (KeyError, IndexError):
+            except KeyError, IndexError:
                 return fallback
         translated = self._i18n.gettext(key, locale=locale, **fmt)
         # ``Catalog.gettext`` returns the raw key when the locale catalog
@@ -225,7 +225,7 @@ class NotificationService:
         if translated == key:
             try:
                 return fallback.format(**fmt)
-            except (KeyError, IndexError):
+            except KeyError, IndexError:
                 return fallback
         return translated
 
