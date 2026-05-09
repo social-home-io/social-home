@@ -143,6 +143,19 @@ export default function SpaceSettingsPage() {
         ))}
       </nav>
 
+      {/* Member-only context line — non-admins see just two tabs
+       *  (Notifications / Bots) and might wonder why the rest are
+       *  missing.  Naming the scope explicitly makes the limited
+       *  surface read as "your settings for this space" rather than
+       *  as a permissions glitch. */}
+      {!canAdmin && (
+        <p class="sh-muted" style={{ marginTop: 0, fontSize: 'var(--sh-font-size-sm)' }}>
+          These are <strong>your</strong> settings for this space — alerts and the
+          personal automations you've connected. Space-wide admin controls
+          live with the owner.
+        </p>
+      )}
+
       {activeTab.value === 'general' && (
         <SpaceSettings space={space} onUpdate={() => void reload()} />
       )}
