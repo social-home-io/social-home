@@ -213,9 +213,21 @@ class NotificationService:
         if self._i18n is None:
             try:
                 return fallback.format(**fmt)
-            except KeyError, IndexError:
+            except (KeyError, IndexError):
                 return fallback
-        return self._i18n.gettext(key, locale=locale, **fmt)
+        translated = self._i18n.gettext(key, locale=locale, **fmt)
+        # ``Catalog.gettext`` returns the raw key when the locale catalog
+        # is missing the translation.  That looked like
+        # ``notification.calendar.updated`` in the inbox UI — clearly
+        # not the warm copy we wanted.  Detect the miss and fall back
+        # to the formatted fallback so the row reads naturally even
+        # before the catalog catches up.
+        if translated == key:
+            try:
+                return fallback.format(**fmt)
+            except (KeyError, IndexError):
+                return fallback
+        return translated
 
     @staticmethod
     def _locale(user) -> str | None:
