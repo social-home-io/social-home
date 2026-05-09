@@ -36,6 +36,31 @@ function isPublished(gfsId: string): boolean {
   return publications.value.some(p => p.gfs_connection_id === gfsId)
 }
 
+/**
+ * Build the GFS-side public URL for this space.
+ *
+ * The GFS exposes a server-rendered ``/spaces/{space_id}`` page (see
+ * ``socialhome/global_server/public.py``). ``inbox_url`` is stored on
+ * the connection as the GFS root (``https://gfs.example.com``) — the
+ * routes ``/gfs/...`` are concatenated onto it for federation calls,
+ * so stripping a trailing slash is enough to land on the public root
+ * for browser links.
+ */
+function publicSpaceUrl(inboxUrl: string, spaceId: string): string {
+  return `${inboxUrl.replace(/\/+$/, '')}/spaces/${spaceId}`
+}
+
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    showToast('Public link copied', 'success')
+  } catch {
+    // Older browsers / locked-down WebViews fall through to a manual
+    // selection prompt rather than silently failing.
+    showToast('Couldn\'t copy — long-press the link to copy manually', 'info')
+  }
+}
+
 async function togglePublish(spaceId: string, gfsId: string) {
   try {
     if (isPublished(gfsId)) {
@@ -312,6 +337,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
         <div class="sh-federation-list">
           {gfsServers.value.map(gfs => {
             const published = isPublished(gfs.id)
+            const publicUrl = publicSpaceUrl(gfs.inbox_url, space.id)
             return (
               <div key={gfs.id} class="sh-federation-row">
                 <div class="sh-connection-info">
@@ -319,6 +345,29 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
                   <strong>{gfs.display_name}</strong>
                   <span class="sh-muted">{gfs.inbox_url}</span>
                 </div>
+                {published && (
+                  <div class="sh-federation-public-url">
+                    <span class="sh-muted">🔗 Public link</span>
+                    <a
+                      href={publicUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="sh-federation-public-url__link"
+                      title={publicUrl}
+                    >
+                      {publicUrl}
+                    </a>
+                    <button
+                      type="button"
+                      class="sh-federation-public-url__copy"
+                      onClick={() => void copyToClipboard(publicUrl)}
+                      aria-label="Copy public link to clipboard"
+                      title="Copy"
+                    >
+                      📋
+                    </button>
+                  </div>
+                )}
                 <div class="sh-federation-actions">
                   <span class={published ? 'sh-text-success' : 'sh-muted'}>
                     {published ? t('space.published') : t('space.not_published')}

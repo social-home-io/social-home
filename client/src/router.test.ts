@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { routes } from './router'
 
 describe('router', () => {
-  it('defines 40 routes', () => {
+  it('defines 41 routes', () => {
     // Routes added / removed across recent passes:
     //   /dms/:id/calls   — per-conversation call history
     //   /calls/:callId   — in-call page
@@ -10,6 +10,7 @@ describe('router', () => {
     //   /parent          — parent dashboard (§CP)
     //   /feed            — explicit household-feed route (§23 dashboard)
     //   /spaces/:id/settings — admin space settings (§23 customization)
+    //   /spaces/:id/about — public-style space landing (parallel to GFS)
     //   /spaces/browse   — unified space browser (§D3)
     //   /spaces/:id/zones — per-space zones admin (§23.8.7)
     //   /setup           — first-boot wizard (platform/v2)
@@ -20,7 +21,7 @@ describe('router', () => {
     //     /momentum/archive — Momentum pillar (§Momentum)
     //   /organize        — replaces standalone /tasks /shopping /stickies
     //                      (3 routes collapsed into 1 hub).
-    expect(Object.keys(routes).length).toBe(40)
+    expect(Object.keys(routes).length).toBe(41)
   })
 
   it('has feed route at /', () => {

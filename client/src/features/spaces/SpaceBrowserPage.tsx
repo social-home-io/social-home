@@ -12,6 +12,7 @@
  * the pairing flow.
  */
 import { useEffect, useState } from 'preact/hooks'
+import { useLocation } from 'preact-iso'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
@@ -21,6 +22,7 @@ import { showToast } from '@/components/Toast'
 import { openPairing } from '@/components/PairingFlow'
 import { openSpaceCreate } from '@/components/SpaceCreateDialog'
 import { currentUser } from '@/store/auth'
+import { cacheDirectoryEntries } from '@/store/spaceDirectory'
 import type { DirectoryEntry, Space } from '@/types'
 import { SpaceCard } from './SpaceCard'
 import { JoinRequestModal } from './JoinRequestModal'
@@ -94,6 +96,12 @@ async function loadAll() {
       already_subscribed: subIds.has(e.space_id),
       already_member:     realMemberIds.has(e.space_id),
     }))
+    // Stash every directory entry so SpacePublicDetailPage can render
+    // immediately when the user taps a card — no second round-trip
+    // for data we just loaded.
+    cacheDirectoryEntries([
+      ...household.value, ...friends.value, ...global_.value,
+    ])
   } finally {
     loading.value = false
   }
@@ -110,6 +118,7 @@ function filterBy(entries: DirectoryEntry[], term: string): DirectoryEntry[] {
 
 export default function SpaceBrowserPage() {
   useTitle('Browse spaces')
+  const loc = useLocation()
   const [activeModal, setActiveModal] = useState<DirectoryEntry | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [subscribeBusyIds, setSubscribeBusyIds] = useState<Set<string>>(
@@ -415,6 +424,7 @@ export default function SpaceBrowserPage() {
             entry={e}
             onAction={onAction}
             subscribeBusy={subscribeBusyIds.has(e.space_id)}
+            onCardTap={(picked) => loc.route(`/spaces/${picked.space_id}/about`)}
           />
         ))}
       </section>

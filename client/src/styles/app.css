@@ -10980,11 +10980,53 @@ a.sh-welcome-card:hover {
   align-items: center;
   padding: var(--sh-space-sm) var(--sh-space-md);
   border-bottom: 1px solid var(--sh-border);
+  flex-wrap: wrap;
 }
 .sh-ha-user-row:last-child, .sh-federation-row:last-child, .sh-token-row:last-child { border-bottom: none; }
 .sh-ha-user-info, .sh-federation-actions { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .sh-ha-user-name { font-weight: 600; }
 .sh-federation-actions { display: flex; flex-direction: row; gap: var(--sh-space-xs); justify-content: flex-end; flex: 0 0 auto; }
+/* Public-link row — appears on a published GFS row so the admin can
+ * grab the URL of the SSR /spaces/{id} page. Wraps under the
+ * connection meta on narrow widths via the row's flex-wrap. */
+.sh-federation-public-url {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  flex: 1 1 100%;
+  margin-top: var(--sh-space-xs);
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  background: var(--sh-bg-secondary, var(--sh-bg));
+  border-radius: var(--sh-radius-sm);
+  font-size: 0.875rem;
+}
+.sh-federation-public-url__link {
+  color: var(--sh-text);
+  text-decoration: none;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.sh-federation-public-url__link:hover {
+  color: var(--sh-accent, var(--sh-text));
+  text-decoration: underline;
+}
+.sh-federation-public-url__copy {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--sh-radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  flex: 0 0 auto;
+}
+.sh-federation-public-url__copy:hover {
+  background: var(--sh-surface-hover, color-mix(in srgb, var(--sh-text) 8%, transparent));
+  border-color: var(--sh-border);
+}
 .sh-token-create {
   padding: var(--sh-space-md);
   background: var(--sh-bg-secondary);
@@ -11488,6 +11530,104 @@ a.sh-welcome-card:hover {
     0 1px 0 var(--sh-border),
     0 28px 60px -28px rgba(26, 24, 20, 0.55);
   border-color: var(--sh-border-strong);
+}
+.sh-browser-card--tappable {
+  cursor: pointer;
+}
+.sh-browser-card--tappable:focus-visible {
+  outline: 2px solid var(--sh-accent, var(--sh-primary));
+  outline-offset: 2px;
+}
+
+/* Public space detail page — sh-side analogue to GFS /spaces/{id}.
+ * Routed at /spaces/:id/about. Aims for the same warm pinned-paper
+ * vocabulary (cream surface, accent bar, soft shadows) as the rest
+ * of the app, but sized like a landing rather than a feed. */
+.sh-space-public {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--sh-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+.sh-space-public__back {
+  align-self: flex-start;
+  color: var(--sh-text-muted);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+.sh-space-public__back:hover {
+  color: var(--sh-text);
+  text-decoration: underline;
+}
+.sh-space-public__hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-md);
+  padding: var(--sh-space-lg) var(--sh-space-md);
+  border-radius: var(--sh-radius-lg);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-primary) 14%, transparent),
+    transparent
+  );
+}
+.sh-space-public__hero--household {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-success) 14%, transparent),
+    transparent
+  );
+}
+.sh-space-public__hero--public,
+.sh-space-public__hero--global {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-warning) 16%, transparent),
+    transparent
+  );
+}
+.sh-space-public__emoji {
+  font-size: 3rem;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.sh-space-public__title h1 {
+  margin: 0 0 var(--sh-space-xs);
+  font-size: 1.75rem;
+}
+.sh-space-public__title p {
+  margin: 0;
+}
+.sh-space-public__accent {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--sh-primary);
+}
+.sh-space-public__accent--household { background: var(--sh-success); }
+.sh-space-public__accent--public,
+.sh-space-public__accent--global    { background: var(--sh-warning); }
+.sh-space-public__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+}
+.sh-space-public__cta-row {
+  display: flex;
+  gap: var(--sh-space-sm);
+  flex-wrap: wrap;
+}
+.sh-space-public__section {
+  margin-top: var(--sh-space-sm);
+}
+.sh-space-public__section h2 {
+  font-size: 1.05rem;
+  margin: 0 0 var(--sh-space-xs);
+}
+.sh-space-public__section p {
+  margin: 0;
+  line-height: 1.55;
 }
 .sh-browser-card--private    { border-left-color: var(--sh-primary); }
 .sh-browser-card--household  { border-left-color: var(--sh-success); }

@@ -41,6 +41,11 @@ export interface SpaceCardProps {
    *  is disabled + shows a spinner. Keyed by space_id so the browser
    *  page can track multiple in-flight toggles. */
   subscribeBusy?: boolean
+  /** Tap the card body (anywhere outside the action buttons) to drill
+   *  into the public detail page.  The browser page wires this to
+   *  ``loc.route('/spaces/:id/about')``; passing ``undefined`` keeps
+   *  the legacy behaviour where only the action button is interactive. */
+  onCardTap?: (entry: DirectoryEntry) => void
 }
 
 function scopeChip(scope: DirectoryEntry['scope']) {
@@ -104,7 +109,9 @@ function primaryLabel(action: SpaceCardAction, entry: DirectoryEntry): string {
   }
 }
 
-export function SpaceCard({ entry, onAction, subscribeBusy = false }: SpaceCardProps) {
+export function SpaceCard({
+  entry, onAction, subscribeBusy = false, onCardTap,
+}: SpaceCardProps) {
   const scope = scopeChip(entry.scope)
   const jmode = joinModeChip(entry.join_mode)
   const primary = decidePrimary(entry)
@@ -116,9 +123,27 @@ export function SpaceCard({ entry, onAction, subscribeBusy = false }: SpaceCardP
       : canSubscribe
         ? { kind: 'subscribe' }
         : null
+  const tappable = !!onCardTap
+  const tap = (ev: MouseEvent | KeyboardEvent) => {
+    if (!onCardTap) return
+    ev.preventDefault()
+    onCardTap(entry)
+  }
 
   return (
-    <article class={`sh-browser-card sh-browser-card--${entry.scope}`}>
+    <article
+      class={
+        `sh-browser-card sh-browser-card--${entry.scope}`
+        + (tappable ? ' sh-browser-card--tappable' : '')
+      }
+      role={tappable ? 'link' : undefined}
+      tabIndex={tappable ? 0 : undefined}
+      onClick={tappable ? (e: MouseEvent) => tap(e) : undefined}
+      onKeyDown={tappable ? (e: KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') tap(e)
+      } : undefined}
+      aria-label={tappable ? `Open ${entry.name} details` : undefined}
+    >
       <div class="sh-browser-card__hd">
         <span class="sh-space-emoji" aria-hidden="true">{entry.emoji || '🗂'}</span>
         <div class="sh-browser-card__title">
@@ -161,7 +186,10 @@ export function SpaceCard({ entry, onAction, subscribeBusy = false }: SpaceCardP
           )}
         </p>
       )}
-      <div class="sh-browser-card__actions">
+      <div
+        class="sh-browser-card__actions"
+        onClick={(ev) => ev.stopPropagation()}
+      >
         <Button
           variant={primary.kind === 'open' ? 'primary' : 'secondary'}
           disabled={primaryDisabled}
