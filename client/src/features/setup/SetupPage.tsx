@@ -1,3 +1,4 @@
+import { type ComponentChildren } from 'preact'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
@@ -104,6 +105,8 @@ function SetupSpinner({ label }: { label: string }) {
   )
 }
 
+const STRENGTH_LABELS = ['', 'Too short', 'Fair', 'Good', 'Strong']
+
 function PasswordStrength({ value }: { value: string }) {
   const score = useMemo(() => {
     let s = 0
@@ -114,14 +117,71 @@ function PasswordStrength({ value }: { value: string }) {
     return s
   }, [value])
   const filled = value.length === 0 ? 0 : Math.max(score, 1)
+  const label = STRENGTH_LABELS[filled] ?? ''
   return (
     <div
-      class="sh-setup-strength"
-      aria-label={`Password strength ${filled} of 4`}
-      data-score={filled}
+      class="sh-setup-strength-wrap"
+      aria-label={`Password strength: ${label || 'empty'}`}
+      role="status"
+      aria-live="polite"
     >
-      <span /><span /><span /><span />
+      <div class="sh-setup-strength" data-score={filled}>
+        <span /><span /><span /><span />
+      </div>
+      {label && (
+        <span
+          class={`sh-setup-strength-label sh-setup-strength-label--${filled}`}
+        >
+          {label}
+        </span>
+      )}
     </div>
+  )
+}
+
+/**
+ * PasswordField — password input with a 👁 show/hide toggle.
+ *
+ * Keeps Setup's three password fields (standalone password, ha
+ * password, the matching ``password_confirm`` for both) consistent
+ * and lets the operator verify what they typed without the typical
+ * "type twice into a hidden box" dance.  ``autoComplete`` stays
+ * ``new-password`` so password managers offer to save / fill.
+ */
+function PasswordField({
+  label, value, onInput, autoComplete = 'new-password', children,
+}: {
+  label: string
+  value: string
+  onInput: (v: string) => void
+  autoComplete?: string
+  children?: ComponentChildren
+}) {
+  const [shown, setShown] = useState(false)
+  return (
+    <label class="sh-setup-field">
+      <span class="sh-setup-label">{label}</span>
+      <span class="sh-setup-pw">
+        <input
+          type={shown ? 'text' : 'password'}
+          autoComplete={autoComplete}
+          required
+          value={value}
+          onInput={(e) => onInput((e.target as HTMLInputElement).value)}
+        />
+        <button
+          type="button"
+          class="sh-setup-pw-toggle"
+          aria-pressed={shown}
+          aria-label={shown ? 'Hide password' : 'Show password'}
+          title={shown ? 'Hide password' : 'Show password'}
+          onClick={() => setShown(s => !s)}
+        >
+          {shown ? '🙈' : '👁'}
+        </button>
+      </span>
+      {children}
+    </label>
   )
 }
 
@@ -245,29 +305,18 @@ function StandaloneSetupForm() {
             onInput={(e) => setUsername((e.target as HTMLInputElement).value)}
           />
         </label>
-        <label class="sh-setup-field">
-          <span class="sh-setup-label">{t('setup.password')}</span>
-          <input
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            required
-            value={password}
-            onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-          />
+        <PasswordField
+          label={t('setup.password')}
+          value={password}
+          onInput={setPassword}
+        >
           <PasswordStrength value={password} />
-        </label>
-        <label class="sh-setup-field">
-          <span class="sh-setup-label">{t('setup.password_confirm')}</span>
-          <input
-            name="password_confirm"
-            type="password"
-            autoComplete="new-password"
-            required
-            value={confirm}
-            onInput={(e) => setConfirm((e.target as HTMLInputElement).value)}
-          />
-        </label>
+        </PasswordField>
+        <PasswordField
+          label={t('setup.password_confirm')}
+          value={confirm}
+          onInput={setConfirm}
+        />
         <FormError id="setup-error" message={error} />
         <Button type="submit" disabled={busy}>
           {busy ? t('setup.submitting') : t('setup.submit')}
@@ -438,27 +487,18 @@ function HaOwnerForm() {
             ))}
           </div>
         </fieldset>
-        <label class="sh-setup-field">
-          <span class="sh-setup-label">{t('setup.password')}</span>
-          <input
-            type="password"
-            autoComplete="new-password"
-            required
-            value={password}
-            onInput={(e) => setPassword((e.target as HTMLInputElement).value)}
-          />
+        <PasswordField
+          label={t('setup.password')}
+          value={password}
+          onInput={setPassword}
+        >
           <PasswordStrength value={password} />
-        </label>
-        <label class="sh-setup-field">
-          <span class="sh-setup-label">{t('setup.password_confirm')}</span>
-          <input
-            type="password"
-            autoComplete="new-password"
-            required
-            value={confirm}
-            onInput={(e) => setConfirm((e.target as HTMLInputElement).value)}
-          />
-        </label>
+        </PasswordField>
+        <PasswordField
+          label={t('setup.password_confirm')}
+          value={confirm}
+          onInput={setConfirm}
+        />
         <FormError id="setup-error" message={error} />
         <Button type="submit" disabled={busy}>
           {busy ? t('setup.submitting') : t('setup.submit')}
