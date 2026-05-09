@@ -216,7 +216,7 @@ class HighlightFederationOutbound:
         if kind == "all_paired":
             try:
                 peers = await self._federation_repo.list_instances(
-                    status="paired",
+                    status="confirmed",
                 )
             except Exception as exc:  # pragma: no cover — defensive
                 log.debug("highlight-outbound: list peers failed: %s", exc)

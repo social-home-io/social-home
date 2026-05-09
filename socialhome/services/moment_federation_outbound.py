@@ -222,7 +222,7 @@ class MomentFederationOutbound:
     ) -> None:
         own = self._federation.own_instance_id
         try:
-            peers = await self._federation_repo.list_instances(status="paired")
+            peers = await self._federation_repo.list_instances(status="confirmed")
         except Exception as exc:  # pragma: no cover — defensive
             log.debug("moment-outbound: list peers failed: %s", exc)
             return
