@@ -13,8 +13,16 @@ import { useRoute, useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Spinner } from '@/components/Spinner'
 import { Button } from '@/components/Button'
+import { Avatar } from '@/components/Avatar'
+import { Modal } from '@/components/Modal'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
+import {
+  householdDisplayName,
+  householdPictureUrl,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
+import { relativeDocsTime } from '@/utils/relativeTime'
 import type { Highlight, HighlightFrame } from '@/types'
 import { confirmDialog } from '@/components/confirm'
 import { openReport } from '@/components/ReportDialog'
@@ -38,6 +46,9 @@ const loading = signal<boolean>(true)
 const currentIndex = signal<number>(0)
 const paused = signal<boolean>(false)
 const reactionsOpen = signal<boolean>(false)
+/** Author-only "Seen by" sheet — when null, sheet is closed. Holds the
+ *  frame_id so a later frame change reopens onto the right list. */
+const seenBySheetFrameId = signal<string | null>(null)
 
 
 export default function HighlightViewerPage() {
@@ -53,6 +64,9 @@ export default function HighlightViewerPage() {
     currentIndex.value = 0
     paused.value = false
     reactionsOpen.value = false
+    seenBySheetFrameId.value = null
+    // Resolve raw user_ids (author + viewer + reactor) to display names.
+    void loadHouseholdUsers()
     const refetch = (initial: boolean) =>
       api.get(`/api/highlights/${highlightId}`)
         .then((d: HighlightDetail) => {
@@ -258,13 +272,18 @@ export default function HighlightViewerPage() {
       </span>
 
       <header class="sh-highlight-viewer-header">
-        <strong>{highlight.author_user_id}</strong>
+        <Avatar
+          name={householdDisplayName(highlight.author_user_id)}
+          src={householdPictureUrl(highlight.author_user_id)}
+          size={32}
+        />
+        <strong>{householdDisplayName(highlight.author_user_id)}</strong>
         <span class="sh-muted">{highlight.highlight_date}</span>
         {!isAuthor && (
           <button
             type="button"
             class="sh-highlight-viewer-overflow"
-            aria-label={`More actions for ${highlight.author_user_id}`}
+            aria-label={`More actions for ${householdDisplayName(highlight.author_user_id)}`}
             onClick={() => openUserActions(highlight.author_user_id)}
           >
             ⋯
@@ -332,9 +351,18 @@ export default function HighlightViewerPage() {
         )}
         {isAuthor && (
           <>
-            <span class="sh-highlight-author-meta">
+            <button
+              type="button"
+              class="sh-highlight-author-meta"
+              onClick={() => { seenBySheetFrameId.value = frame.id }}
+              aria-label={
+                myViews.length === 0 && myReactions.length === 0
+                  ? 'No views yet'
+                  : `Seen by ${myViews.length} · ${myReactions.length} reactions — open list`
+              }
+            >
               👁 {myViews.length} · {myReactions.length} reactions
-            </span>
+            </button>
             <Button
               variant="ghost"
               onClick={() => openPublishMenu(highlight.id, !!highlight.public_gfs_id)}
@@ -345,6 +373,14 @@ export default function HighlightViewerPage() {
           </>
         )}
       </footer>
+
+      {isAuthor && seenBySheetFrameId.value === frame.id && (
+        <HighlightSeenBySheet
+          views={myViews}
+          reactions={myReactions}
+          onClose={() => { seenBySheetFrameId.value = null }}
+        />
+      )}
 
       {reactionsOpen.value && (
         <div class="sh-highlight-react-tray" role="group" aria-label="Quick reactions">
@@ -361,5 +397,79 @@ export default function HighlightViewerPage() {
         </div>
       )}
     </div>
+  )
+}
+
+
+/**
+ * HighlightSeenBySheet — modal-backed list of who has viewed this frame
+ * and who has dropped a reaction. Author-only; opens from the viewer
+ * footer's eye chip. Empty arrays show their own gentle empty state so
+ * a brand-new highlight doesn't look broken.
+ */
+function HighlightSeenBySheet({
+  views, reactions, onClose,
+}: {
+  views: { viewer_user_id: string; viewed_at: string }[]
+  reactions: { reactor_user_id: string; emoji: string }[]
+  onClose: () => void
+}) {
+  const totalActivity = views.length + reactions.length
+  return (
+    <Modal open={true} onClose={onClose} title="Seen by">
+      {totalActivity === 0 && (
+        <p class="sh-muted" style={{ marginTop: 0 }}>
+          Nobody has watched this frame yet. As soon as someone in your
+          household or a paired friend opens the highlight, you'll see
+          them listed here.
+        </p>
+      )}
+
+      {views.length > 0 && (
+        <section class="sh-seenby-section" aria-label="Viewers">
+          <h3 class="sh-seenby-heading">
+            Viewers <span class="sh-muted">({views.length})</span>
+          </h3>
+          <ul class="sh-seenby-list">
+            {views.map(v => (
+              <li key={v.viewer_user_id} class="sh-seenby-row">
+                <Avatar
+                  name={householdDisplayName(v.viewer_user_id)}
+                  src={householdPictureUrl(v.viewer_user_id)}
+                  size={32}
+                />
+                <span class="sh-seenby-name">
+                  {householdDisplayName(v.viewer_user_id)}
+                </span>
+                <time class="sh-muted">{relativeDocsTime(v.viewed_at)}</time>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {reactions.length > 0 && (
+        <section class="sh-seenby-section" aria-label="Reactions">
+          <h3 class="sh-seenby-heading">
+            Reactions <span class="sh-muted">({reactions.length})</span>
+          </h3>
+          <ul class="sh-seenby-list">
+            {reactions.map(r => (
+              <li key={r.reactor_user_id} class="sh-seenby-row">
+                <Avatar
+                  name={householdDisplayName(r.reactor_user_id)}
+                  src={householdPictureUrl(r.reactor_user_id)}
+                  size={32}
+                />
+                <span class="sh-seenby-name">
+                  {householdDisplayName(r.reactor_user_id)}
+                </span>
+                <span class="sh-seenby-emoji" aria-hidden="true">{r.emoji}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </Modal>
   )
 }
