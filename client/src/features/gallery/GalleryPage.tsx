@@ -86,10 +86,25 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
     await loadItems(a.id)
   }
 
+  // Counts for the hero — system "Posts" album is folded into the
+  // total because it is real content from the household's perspective
+  // (every shared photo lives there); the "+ how many are custom"
+  // breakdown isn't useful for the user, but the totals are.
+  const albumCount = albums.value.length
+  const itemCount = albums.value.reduce((acc, a) => acc + a.item_count, 0)
+
   return (
     <div class="sh-gallery">
-      <header class="sh-page-header">
-        <Button onClick={() => (showCreate.value = true)}>+ New album</Button>
+      <header class="sh-gallery-hero">
+        <div class="sh-gallery-hero-headline">
+          <strong>{albumCount}</strong>{' '}
+          {albumCount === 1 ? 'album' : 'albums'} ·{' '}
+          <strong>{itemCount}</strong>{' '}
+          {itemCount === 1 ? 'photo or video' : 'photos and videos'}
+        </div>
+        <div class="sh-gallery-hero-actions">
+          <Button onClick={() => (showCreate.value = true)}>+ New album</Button>
+        </div>
       </header>
 
       {showCreate.value && (
@@ -116,7 +131,7 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
             <button
               key={a.id}
               type="button"
-              class="sh-album-card"
+              class={`sh-album-card${a.is_system ? ' sh-album-card--system' : ''}`}
               aria-label={`Open album ${a.name} — ${a.item_count} items`}
               onClick={() => void openAlbum(a)}
               onKeyDown={(e) => {
@@ -126,18 +141,7 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
                 }
               }}
             >
-              {a.cover_url ? (
-                <img
-                  src={a.cover_url}
-                  class="sh-album-cover"
-                  alt=""
-                  loading="lazy"
-                />
-              ) : (
-                <div class="sh-album-cover sh-album-cover--placeholder">
-                  <span>🖼️</span>
-                </div>
-              )}
+              <AlbumCover album={a} />
               <div class="sh-album-info">
                 <strong>
                   {a.name}
@@ -160,6 +164,31 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
         </div>
       )}
     </div>
+  )
+}
+
+/** Album cover — renders the signed cover URL with an onError swap to
+ *  the 🖼️ placeholder.  The previous implementation only showed the
+ *  placeholder when ``cover_url === null``, so a 404 / signature-
+ *  expired URL left a blank white card.  Tracking ``failed`` per
+ *  cover keeps the swap local to the affected album. */
+function AlbumCover({ album }: { album: Album }) {
+  const [failed, setFailed] = useState(false)
+  if (!album.cover_url || failed) {
+    return (
+      <div class="sh-album-cover sh-album-cover--placeholder">
+        <span aria-hidden="true">{album.is_system ? '📸' : '🖼️'}</span>
+      </div>
+    )
+  }
+  return (
+    <img
+      src={album.cover_url}
+      class="sh-album-cover"
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
   )
 }
 

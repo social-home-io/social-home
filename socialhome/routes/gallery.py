@@ -37,6 +37,13 @@ def _album_dict(a) -> dict:
         "cover_url": a.cover_url,
         "item_count": a.item_count,
         "retention_exempt": a.retention_exempt,
+        # The SPA renders system albums (auto-mirrored "Posts") with a
+        # different visual treatment + the "Auto" badge.  Surface the
+        # flag explicitly rather than asking the SPA to infer it from
+        # ``owner_user_id == null`` — the inference is fragile if a
+        # future album type ever has a null owner for a different
+        # reason.
+        "is_system": a.is_system,
         "created_at": a.created_at,
         "updated_at": a.updated_at,
     }
