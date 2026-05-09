@@ -19,6 +19,7 @@ import { Button } from '@/components/Button'
 import { SpaceListSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openPairing } from '@/components/PairingFlow'
+import { openSpaceCreate } from '@/components/SpaceCreateDialog'
 import { currentUser } from '@/store/auth'
 import type { DirectoryEntry, Space } from '@/types'
 import { SpaceCard } from './SpaceCard'
@@ -250,27 +251,79 @@ export default function SpaceBrowserPage() {
   if (loading.value) return <SpaceListSkeleton count={6} />
 
   const term = searchTerm.value
+  const searching = term.trim().length > 0
   const lists: Record<Tab, DirectoryEntry[]> = {
     household: filterBy(household.value, term),
     friends:   filterBy(friends.value,  term),
     global:    filterBy(global_.value,  term),
   }
+  const totals: Record<Tab, number> = {
+    household: household.value.length,
+    friends:   friends.value.length,
+    global:    global_.value.length,
+  }
   const me = currentUser.value
   const canRefresh = me?.is_admin === true
-  const hasFriends = friends.value.length > 0
+
+  // Empty-state copy depends on whether the bucket is genuinely empty
+  // or just filtered out by the search box.  Mixing the two confused
+  // testers — they'd see "No global spaces found" while typing a typo
+  // that hid 30 spaces, and reach for refresh instead of clearing the
+  // search.
+  const emptyCopy = (tab: Tab): { lead: string; hint?: string } => {
+    if (searching) {
+      return {
+        lead: `No matches for "${term}" in ${
+          tab === 'global' ? 'the global directory'
+            : tab === 'friends' ? 'your friends'
+            : 'your household'
+        }.`,
+        hint: 'Clear the search or pick a different tab.',
+      }
+    }
+    if (tab === 'global') {
+      return {
+        lead: 'No global spaces yet.',
+        hint: canRefresh
+          ? 'Try refreshing the directory above.'
+          : 'Ask a household admin to refresh the global directory.',
+      }
+    }
+    if (tab === 'friends') {
+      return {
+        lead: 'None of your paired households have shared a public space yet.',
+        hint: 'Pair with another household from Settings → Connections to start sharing.',
+      }
+    }
+    return {
+      lead: 'No spaces in your household yet.',
+      hint: 'Create one to get started.',
+    }
+  }
 
   return (
     <div class="sh-space-browser">
-      <div class="sh-page-header">
-        {canRefresh && (
-          <Button
-            variant="secondary" loading={refreshing}
-            onClick={onRefreshGfs}
-          >
-            ⟳ Refresh global directory
-          </Button>
-        )}
-      </div>
+      <header class="sh-browser-header">
+        <div class="sh-browser-header__copy">
+          <h1>Browse spaces</h1>
+          <p class="sh-muted">
+            Spaces are shared corners — a school-run, a holiday crew, a
+            neighbourhood watch.  Browse what's already here, or
+            create your own.
+          </p>
+        </div>
+        <div class="sh-browser-header__actions">
+          {canRefresh && (
+            <Button
+              variant="secondary" loading={refreshing}
+              onClick={onRefreshGfs}
+            >
+              ⟳ Refresh global directory
+            </Button>
+          )}
+          <Button onClick={openSpaceCreate}>+ Create space</Button>
+        </div>
+      </header>
 
       <div class="sh-browser-toolbar">
         <input
@@ -282,6 +335,15 @@ export default function SpaceBrowserPage() {
             searchTerm.value = (e.target as HTMLInputElement).value
           }}
         />
+        {searching && (
+          <button
+            type="button"
+            class="sh-browser-toolbar__clear"
+            onClick={() => { searchTerm.value = '' }}
+          >
+            Clear
+          </button>
+        )}
       </div>
 
       <nav class="sh-browser-tabs" role="tablist">
@@ -294,21 +356,23 @@ export default function SpaceBrowserPage() {
           }
           onClick={() => { activeTab.value = 'household' }}
         >
-          🏠 Your household ({lists.household.length})
+          🏠 Your household ({searching
+            ? `${lists.household.length}/${totals.household}`
+            : totals.household})
         </button>
-        {hasFriends && (
-          <button
-            role="tab"
-            aria-selected={activeTab.value === 'friends'}
-            class={
-              'sh-browser-tab'
-              + (activeTab.value === 'friends' ? ' sh-browser-tab--active' : '')
-            }
-            onClick={() => { activeTab.value = 'friends' }}
-          >
-            🤝 From friends ({lists.friends.length})
-          </button>
-        )}
+        <button
+          role="tab"
+          aria-selected={activeTab.value === 'friends'}
+          class={
+            'sh-browser-tab'
+            + (activeTab.value === 'friends' ? ' sh-browser-tab--active' : '')
+          }
+          onClick={() => { activeTab.value = 'friends' }}
+        >
+          🤝 From friends ({searching
+            ? `${lists.friends.length}/${totals.friends}`
+            : totals.friends})
+        </button>
         <button
           role="tab"
           aria-selected={activeTab.value === 'global'}
@@ -318,20 +382,33 @@ export default function SpaceBrowserPage() {
           }
           onClick={() => { activeTab.value = 'global' }}
         >
-          🌐 Global ({lists.global.length})
+          🌐 Global ({searching
+            ? `${lists.global.length}/${totals.global}`
+            : totals.global})
         </button>
       </nav>
 
       <section class="sh-browser-grid" role="tabpanel">
-        {lists[activeTab.value].length === 0 && (
-          <p class="sh-muted sh-browser-empty">
-            {activeTab.value === 'global'
-              ? 'No global spaces found. Try refreshing the directory or widening your search.'
-              : activeTab.value === 'friends'
-                ? 'None of your paired friends have shared a public space yet.'
-                : 'Nothing here yet. Create a space from the sidebar.'}
-          </p>
-        )}
+        {lists[activeTab.value].length === 0 && (() => {
+          const { lead, hint } = emptyCopy(activeTab.value)
+          return (
+            <div class="sh-browser-empty">
+              <p class="sh-muted">{lead}</p>
+              {hint && <p class="sh-muted">{hint}</p>}
+              {!searching && activeTab.value === 'household' && (
+                <Button onClick={openSpaceCreate}>+ Create your first space</Button>
+              )}
+              {!searching && activeTab.value === 'friends' && (
+                <Button
+                  variant="secondary"
+                  onClick={() => openPairing('household')}
+                >
+                  🤝 Pair with another household
+                </Button>
+              )}
+            </div>
+          )
+        })()}
         {lists[activeTab.value].map((e) => (
           <SpaceCard
             key={e.space_id}
