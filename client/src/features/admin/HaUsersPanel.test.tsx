@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render } from '@testing-library/preact'
+import { render, fireEvent } from '@testing-library/preact'
 
 describe('HaUsersPanel', () => {
   beforeEach(() => {
@@ -27,8 +27,8 @@ describe('HaUsersPanel', () => {
     const { findByText } = render(<HaUsersPanel />)
     expect(await findByText('Alice')).toBeTruthy()
     expect(await findByText('Kid')).toBeTruthy()
-    expect(await findByText('Synced')).toBeTruthy()
-    expect(await findByText('Not synced')).toBeTruthy()
+    expect(await findByText('Active')).toBeTruthy()
+    expect(await findByText('Not added')).toBeTruthy()
   })
 
   it('flips the toggle and calls POST /provision for a new sync (haos)', async () => {
@@ -73,17 +73,22 @@ describe('HaUsersPanel', () => {
     vi.doMock('@/store/instance', () => ({
       instanceConfig: { value: { mode: 'ha', capabilities: ['password_auth'], setup_required: false, instance_name: 'Home' } },
     }))
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('strong-pw-1')
     const { HaUsersPanel } = await import('./HaUsersPanel')
-    const { findByLabelText } = render(<HaUsersPanel />)
+    const { findByLabelText, findByText, container } = render(<HaUsersPanel />)
     const toggle = (await findByLabelText('Sync Kid')) as HTMLInputElement
-    toggle.click()
+    fireEvent.click(toggle)
+    // Modal opens — fill the two password fields and submit.
+    await findByText('Set a Social Home password')
+    const pwInputs = container.querySelectorAll<HTMLInputElement>('input[type="password"]')
+    expect(pwInputs.length).toBe(2)
+    fireEvent.input(pwInputs[0], { target: { value: 'strong-pw-1' } })
+    fireEvent.input(pwInputs[1], { target: { value: 'strong-pw-1' } })
+    const submit = await findByText(/^Add Kid$/) as HTMLButtonElement
+    fireEvent.click(submit)
     await new Promise((r) => setTimeout(r, 20))
-    expect(promptSpy).toHaveBeenCalled()
     expect(post).toHaveBeenCalledWith(
       '/api/admin/ha-users/kid/provision',
       { password: 'strong-pw-1' },
     )
-    promptSpy.mockRestore()
   })
 })
