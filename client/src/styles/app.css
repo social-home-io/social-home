@@ -6638,6 +6638,19 @@ hr {
   transform: rotate(-4deg);
   pointer-events: none;
 }
+/* Header row above the member list — title + the admin-only
+ * "+ Invite" button on the right.  Mirrors ``.sh-pages-hero``
+ * pattern so list surfaces feel like cousins. */
+.sh-member-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-xs);
+  padding-block: var(--sh-space-xs) var(--sh-space-xs);
+}
+.sh-member-list-header h3 {
+  margin: 0;
+}
 .sh-member-row {
   position: relative;
   display: flex;
@@ -11030,7 +11043,8 @@ a.sh-welcome-card:hover {
 }
 
 /* Invite / share token UI */
-.sh-invite-result, .sh-invite-token {
+.sh-invite-result, .sh-invite-token,
+.sh-invite-link, .sh-invite-link-row {
   padding: var(--sh-space-sm);
   background: var(--sh-bg-secondary);
   border: 1px solid var(--sh-border);
@@ -11038,6 +11052,27 @@ a.sh-welcome-card:hover {
   font-family: var(--sh-font-family-mono);
   font-size: var(--sh-font-size-sm);
   word-break: break-all;
+}
+/* SpaceInviteDialog body — flex column with comfortable gaps so
+ * the prompt + input + CTA stack reads as a tray, not as cramped
+ * form fields.  The link row inherits the mono code-block look. */
+.sh-invite-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+}
+.sh-invite-link-row {
+  /* Override the parent ``rules`` selector so the link block is a
+   * row, not nested padding-on-padding. */
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  display: block;
+}
+.sh-invite-link {
+  display: block;
+  background: transparent;
+  border: none;
+  padding: 0;
+  user-select: all;
 }
 .sh-share-btn {
   display: inline-flex;
