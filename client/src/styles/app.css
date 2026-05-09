@@ -7751,6 +7751,54 @@ a.sh-welcome-card:hover {
 .sh-welcome-card--catchup {
   cursor: default;
 }
+/* Corner-only card variants — Quick actions + Network map sit
+ * inside the same paper-stripe chrome as Today / Pending so the
+ * full ``/corner`` reads as the corner-light's bigger sibling. */
+.sh-welcome-card--quick,
+.sh-welcome-card--network {
+  cursor: default;
+}
+/* Header row inside catch-up / spaces card variants — title on
+ * the left, "Manage" link-button on the right. */
+.sh-welcome-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sh-space-xs);
+}
+.sh-welcome-card-header .sh-link-button {
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-primary, var(--sh-text));
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.sh-welcome-card-header .sh-link-button:hover {
+  text-decoration: underline;
+}
+/* Inside-card empty state — mirrors ``.sh-empty-state`` chrome but
+ * sits inline in a card so it doesn't feel like a hijacked page. */
+.sh-welcome-card-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-sm) 0;
+}
+/* Quick actions — keep the same row of pill links the original
+ * widget used.  ``flex-wrap`` so on mobile they reflow into 2-3
+ * rows instead of pushing the card off-screen. */
+.sh-welcome-card--quick .sh-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+}
+/* Network card — the embedded NetworkMap fills the card width.  No
+ * width/height overrides; the component sizes itself responsively. */
+.sh-welcome-card--network .sh-network-map {
+  margin: 0;
+}
 .sh-welcome-chips {
   display: flex;
   flex-wrap: wrap;
