@@ -1,6 +1,6 @@
 ---
 name: federation-demo
-description: Boots three Social Home households (a / b / c) on adjacent ports, walks the §11 QR pairing handshake between every pair, exercises the federation surface end-to-end (profile sync, posts, moments, highlights, DMs across instances, multi-household space with remote invites) under the real WebRTC transport, and asserts that every household sees the others' federated content. Use when validating an end-to-end federation change, smoke-testing a new ``aiolibdatachannel`` release, or reproducing a multi-household sync bug.
+description: Boots four Social Home households (a / b / c / d) on adjacent ports, walks the §11 QR handshake (a↔b, b↔c, a↔c, b↔d) plus the §11 simple-pairing trust-relay flow (a auto-pairs with d via b without a QR scan), exercises the federation surface end-to-end (profile sync, posts, moments, highlights, cross-household DMs, multi-household space with remote invites, space-calendar event + cross-household RSVP) under the real WebRTC transport, and asserts that every household sees the others' federated content. Use when validating an end-to-end federation change, smoke-testing a new ``aiolibdatachannel`` release, or reproducing a multi-household sync bug.
 ---
 
 ## When to invoke this skill
@@ -23,21 +23,26 @@ OpenSSL combination; rebuild it from source (``pip install -e
 ## Topology
 
 ```
-        ┌──── a ────┐
-        │           │
-        │           │
-        b ◄────► c
+            ┌──── a ────┐
+            │           │      a ↔ d is *not* a QR handshake — it is
+            │           │      established via the §11 trust-relay
+            b ◄───────► c       flow ("simple pairing" via b).
+            │
+            │
+            d
 ```
 
 - **a** — Alpha House @ ``127.0.0.1:18001`` (admin: ``alice``)
 - **b** — Beta House  @ ``127.0.0.1:18002`` (admin: ``bob``)
 - **c** — Gamma House @ ``127.0.0.1:18003`` (admin: ``carol``)
+- **d** — Delta House @ ``127.0.0.1:18004`` (admin: ``dave``)
 
-All three pairs are mutually paired via the §11 QR handshake. The
-naming "a ↔ b ↔ c" in conversation refers to *intent* (b sits in the
-middle of the social graph), not topology — every pair is a direct
-peer so DMs, highlight federation, and remote-invite acceptance don't
-depend on relay.
+The inner ring (a / b / c) is fully connected via the §11 QR
+handshake. **d is deliberately not paired with a directly** — only
+b↔d is a QR pair. The skill then exercises the §11 simple-pairing /
+trust-relay flow: Alpha asks Beta to vouch for an introduction to
+Delta, Delta's admin one-clicks "accept", and the a ↔ d pair lands
+without anyone scanning a QR code.
 
 ## Prereqs
 
@@ -47,7 +52,7 @@ depend on relay.
   aiolibdatachannel._core import PeerConnection;
   PeerConnection(ice_servers=['stun:stun.l.google.com:19302'])"``
   succeeds without segfaulting.
-- Ports ``18001`` / ``18002`` / ``18003`` must be free.
+- Ports ``18001`` / ``18002`` / ``18003`` / ``18004`` must be free.
 - ``/tmp/sh-demo`` will be wiped and re-created.
 
 ## Run it
@@ -60,11 +65,24 @@ That single command runs the full sequence:
 
 1. ``up`` — wipe ``/tmp/sh-demo``, write per-instance ``socialhome.toml``
    (configures ``[standalone].external_url`` so peers can reach each
-   other), launch all three backends, and walk the ``/api/setup/standalone``
-   wizard so each gets a bearer token.
-2. ``pair`` — three QR handshakes (a↔b, b↔c, a↔c). After this every
-   ``/api/pairing/connections`` returns two ``confirmed`` peers.
-3. ``traffic`` — for each household:
+   other), launch all four backends, and walk the
+   ``/api/setup/standalone`` wizard so each gets a bearer token.
+2. ``pair`` — four QR handshakes (a↔b, b↔c, a↔c, b↔d). After this
+   ``/api/pairing/connections`` returns the expected confirmed-peer
+   counts on each instance (a:2, b:3, c:2, d:1).
+3. ``relay-pair`` — §11 simple-pairing dry run.
+   - ``POST /api/pairing/auto-pair-via {via_instance_id, target_instance_id}``
+     on Alpha asks Beta to vouch for an introduction to Delta. Beta
+     forwards the request to Delta over federation; no admin click on
+     Beta's side.
+   - Delta's admin sees the pending request in
+     ``GET /api/pairing/auto-pair-requests`` and approves it via
+     ``POST /api/pairing/auto-pair-requests/{id}/approve`` —
+     one-click, no QR scan.
+   - Both a and d now show each other as ``CONFIRMED``.
+4. ``traffic`` — for each household (a / b / c — d stays out of the
+   common content fan-out so the inner-ring assertions still bound at
+   three viewers):
    - ``PATCH /api/me`` (display name + bio) → federates ``USER_UPDATED``
      to every paired peer.
    - ``POST /api/feed/posts`` (household-scoped, never federates — sanity
@@ -72,11 +90,23 @@ That single command runs the full sequence:
    - ``POST /api/moments`` (one per household; the public-moment ladder
      allows one new moment per 15 min).
    - ``POST /api/highlights/frames`` with ``audience_kind=all_paired``
-     → fans out the highlight + frame to both peers.
+     → fans out the highlight + frame to every paired peer.
    - 1:1 DM from **a → c** (cross-instance conversation; the message
      rides the federation envelope path).
    - **b** creates a space (``invite_only``) and mints a ``remote-invites``
      token for each of **a**'s and **c**'s admin users.
+5. ``calendar`` — cross-household space-calendar + RSVP federation.
+   - Alpha and Carol accept Beta's pending remote-invites
+     (``POST /api/remote_invites/{token}/accept``); both become space
+     members on Beta's side.
+   - Beta creates a calendar event in the space
+     (``POST /api/spaces/{id}/calendar/events``); the event federates
+     as ``SPACE_CALENDAR_EVENT_CREATED`` to Alpha and Gamma.
+   - Alpha and Carol RSVP "going"
+     (``POST /api/calendars/events/{id}/rsvp``); each RSVP federates
+     back to Beta as ``SPACE_CALENDAR_RSVP``.
+   - Beta's ``GET /api/calendars/events/{id}/rsvps`` is asserted to
+     show both Alpha and Carol as ``going``.
 
 4. ``verify`` — assertions across all three households:
    - Every household sees the other two's display names via

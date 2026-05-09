@@ -45,10 +45,15 @@ ROOT = Path("/tmp/sh-demo")
 STATE_PATH = ROOT / "state.json"
 
 # Each instance: (label, port, username, password, household_name).
+# ``d`` is intentionally NOT directly paired with ``a`` — it pairs only
+# with ``b`` so the harness can exercise §11 "simple pairing" via the
+# transitive auto-pair-via flow (a → request_via(b, d) → d's admin
+# approves → a ↔ d pair lands without a QR scan).
 INSTANCES: tuple[tuple[str, int, str, str, str], ...] = (
     ("a", 18001, "alice", "alpha-pw", "Alpha House"),
     ("b", 18002, "bob", "beta-pw", "Beta House"),
     ("c", 18003, "carol", "gamma-pw", "Gamma House"),
+    ("d", 18004, "dave", "delta-pw", "Delta House"),
 )
 
 
@@ -261,16 +266,31 @@ def _pair_two(state: dict, initiator: str, scanner: str) -> None:
 
 
 def cmd_pair() -> None:
-    """Pair every household pairwise (a↔b, b↔c, a↔c)."""
+    """Pair the inner ring (a/b/c) pairwise, plus d↔b.
+
+    ``d`` deliberately stays unpaired with ``a`` — :func:`cmd_relay_pair`
+    finishes the job through the §11 trust-relay flow.
+    """
     state = _load()
     if not state:
         raise SystemExit("run 'up' first")
 
-    for initiator, scanner in (("a", "b"), ("b", "c"), ("a", "c")):
+    for initiator, scanner in (
+        ("a", "b"),
+        ("b", "c"),
+        ("a", "c"),
+        ("b", "d"),
+    ):
         _pair_two(state, initiator, scanner)
 
     # Settle: peer-confirm + initial peer-directory snapshots.
     time.sleep(3)
+    expected = {
+        "a": 2,  # b, c
+        "b": 3,  # a, c, d
+        "c": 2,  # a, b
+        "d": 1,  # b only — a-via-relay lands later
+    }
     for label, info in state["instances"].items():
         s, conns = _request(
             f"http://127.0.0.1:{info['port']}/api/pairing/connections",
@@ -278,12 +298,101 @@ def cmd_pair() -> None:
         )
         _must(f"connections({label})", s, conns)
         confirmed = [c for c in conns if c["status"] == "confirmed"]
-        if len(confirmed) != 2:
+        if len(confirmed) != expected[label]:
             raise SystemExit(
-                f"{label}: expected 2 confirmed peers, got {len(confirmed)} "
+                f"{label}: expected {expected[label]} confirmed peers, "
+                f"got {len(confirmed)} "
                 f"({[c['display_name'] for c in conns]})"
             )
-    print("pair: ok (3/3 households mutually paired)")
+    print("pair: ok (a↔b, b↔c, a↔c, b↔d)")
+
+
+def cmd_relay_pair() -> None:
+    """Auto-pair a ↔ d via b (§11 simple-pairing / trust-relay flow).
+
+    1. Alpha asks Beta to vouch for an introduction to Delta:
+       ``POST /api/pairing/auto-pair-via {via_instance_id, target_instance_id}``.
+       Beta forwards the request to Delta over federation — no admin
+       click needed on Beta's side.
+    2. Delta's admin sees the pending request in
+       ``GET /api/pairing/auto-pair-requests`` and approves it via
+       ``POST /api/pairing/auto-pair-requests/{id}/approve`` —
+       one-click, no QR scan.
+    3. After approval the pair lands on both Alpha and Delta as
+       ``CONFIRMED`` and the peer-directory snapshot kicks in.
+
+    The QR step in :func:`cmd_pair` already burned much of Alpha's
+    ``/api/pairing/*`` rate-limit budget (5 / 60 s per user); we wait
+    for the bucket to drain before issuing the auto-pair-via. Without
+    this the very first request returns 429.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+
+    a = state["instances"]["a"]
+    d = state["instances"]["d"]
+    b = state["instances"]["b"]
+
+    print("  waiting 65 s for /api/pairing/* rate-limit window to drain...")
+    time.sleep(65)
+
+    s, _resp = _request(
+        f"http://127.0.0.1:{a['port']}/api/pairing/auto-pair-via",
+        token=a["token"],
+        method="POST",
+        body={
+            "via_instance_id": b["instance_id"],
+            "target_instance_id": d["instance_id"],
+            "target_display_name": d["name"],
+        },
+    )
+    _must("auto-pair-via(a→d)", s, _resp, ok=(202,))
+    print(f"  a → request_via(b, d): 202 {_resp}")
+
+    # Give the federated request a beat to land in d's inbox. Polling
+    # interval is 2 s — the auto-pair-requests endpoint is rate-limited
+    # so faster polls trip 429.
+    deadline = time.monotonic() + 30.0
+    request_id: str | None = None
+    while time.monotonic() < deadline:
+        s, inbox = _request(
+            f"http://127.0.0.1:{d['port']}/api/pairing/auto-pair-requests",
+            token=d["token"],
+        )
+        if s == 200:
+            items = inbox if isinstance(inbox, list) else (inbox.get("items") or [])
+            if items:
+                request_id = items[0]["request_id"]
+                break
+        time.sleep(2.0)
+    if request_id is None:
+        raise SystemExit("d's auto-pair inbox stayed empty after 30s")
+
+    s, _resp = _request(
+        f"http://127.0.0.1:{d['port']}/api/pairing/auto-pair-requests/"
+        f"{request_id}/approve",
+        token=d["token"],
+        method="POST",
+    )
+    _must("auto-pair approve(d)", s, _resp)
+    print(f"  d approves request {request_id}")
+
+    # Settle and assert both ends now see each other CONFIRMED.
+    time.sleep(3)
+    for label, peer in (("a", d["instance_id"]), ("d", a["instance_id"])):
+        info = state["instances"][label]
+        s, conns = _request(
+            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+            token=info["token"],
+        )
+        _must(f"connections({label})", s, conns)
+        match = [c for c in conns if c["instance_id"] == peer]
+        if not match or match[0]["status"] != "confirmed":
+            raise SystemExit(f"{label} → {peer[:8]}: expected confirmed, got {match!r}")
+    state["relay_pair_ran"] = True
+    _save(state)
+    print("relay-pair: ok (a ↔ d confirmed via b)")
 
 
 # ─── Step: traffic ─────────────────────────────────────────────────────────
@@ -401,6 +510,128 @@ def cmd_traffic() -> None:
         )
         _must(f"remote-invite({guest_label})", s, inv, ok=(201,))
         print(f"  b → {guest_label}: invite token issued")
+
+    _save(state)
+
+
+def cmd_calendar() -> None:
+    """Cross-household space calendar + RSVP federation.
+
+    Prereqs (run :func:`cmd_traffic` first):
+    * Beta has a private space with pending remote-invites for Alice
+      and Carol on it.
+
+    Sequence:
+    1. Alpha and Gamma fetch the inbound invite tokens via
+       ``GET /api/remote_invites`` and accept them
+       (``POST /api/remote_invites/{token}/accept``). Both households
+       become space members on Beta's side.
+    2. Beta creates a calendar event in the space
+       (``POST /api/spaces/{id}/calendar/events``). The event
+       federates as ``SPACE_CALENDAR_EVENT_CREATED`` to Alpha and Gamma.
+    3. Alpha and Carol RSVP "going"
+       (``POST /api/calendars/events/{id}/rsvp``). The RSVP federates
+       back to Beta as ``SPACE_CALENDAR_RSVP``.
+    4. Verify on Beta:
+       ``GET /api/calendars/events/{id}/rsvps`` returns both Alpha's
+       and Carol's user_ids with status="going".
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    if "space_id" not in state:
+        raise SystemExit("run 'traffic' first — needs Beta's tri-household space")
+
+    b = state["instances"]["b"]
+    space_id = state["space_id"]
+
+    # 1. Each guest accepts their pending remote-invite.
+    for guest_label in ("a", "c"):
+        guest = state["instances"][guest_label]
+        s, invites = _request(
+            f"http://127.0.0.1:{guest['port']}/api/remote_invites",
+            token=guest["token"],
+        )
+        _must(f"remote_invites({guest_label})", s, invites)
+        items = invites if isinstance(invites, list) else (invites.get("items") or [])
+        target = next(
+            (i for i in items if i.get("space_id") == space_id),
+            None,
+        )
+        if target is None:
+            raise SystemExit(
+                f"{guest_label} has no pending invite for space {space_id}",
+            )
+        token = target["invite_token"]
+        s, _r = _request(
+            f"http://127.0.0.1:{guest['port']}/api/remote_invites/{token}/accept",
+            token=guest["token"],
+            method="POST",
+        )
+        _must(f"accept-invite({guest_label})", s, _r, ok=(204,))
+        print(f"  {guest_label} accepted invite for space {space_id}")
+
+    # Settle: SPACE_PRIVATE_INVITE_ACCEPT round-trips back to Beta and
+    # seats the guest as a remote member.
+    time.sleep(3)
+
+    # 2. Beta creates a calendar event in the space.
+    start = "2027-01-15T18:00:00+00:00"
+    end = "2027-01-15T20:00:00+00:00"
+    s, ev = _request(
+        f"http://127.0.0.1:{b['port']}/api/spaces/{space_id}/calendar/events",
+        token=b["token"],
+        method="POST",
+        body={
+            "summary": "Tri-household tabletop night",
+            "start": start,
+            "end": end,
+            "description": "Bring snacks.",
+        },
+    )
+    _must("calendar create(b)", s, ev, ok=(201,))
+    event_id = ev["id"]
+    state["calendar_event_id"] = event_id
+    print(f"  b: calendar event {event_id} created")
+
+    # Let SPACE_CALENDAR_EVENT_CREATED fan out to a + c.
+    time.sleep(4)
+
+    # 3. Alpha + Carol RSVP "going" — RSVP federates back to Beta.
+    for guest_label in ("a", "c"):
+        guest = state["instances"][guest_label]
+        s, _r = _request(
+            f"http://127.0.0.1:{guest['port']}/api/calendars/events/{event_id}/rsvp",
+            token=guest["token"],
+            method="POST",
+            body={"status": "going"},
+        )
+        _must(f"rsvp({guest_label})", s, _r)
+        print(f"  {guest_label} RSVP'd 'going'")
+
+    # Settle: SPACE_CALENDAR_RSVP envelopes round-trip to Beta.
+    time.sleep(4)
+
+    # 4. Beta sees both RSVPs.
+    s, rsvps = _request(
+        f"http://127.0.0.1:{b['port']}/api/calendars/events/{event_id}/rsvps",
+        token=b["token"],
+    )
+    _must("rsvps(b)", s, rsvps)
+    rows = rsvps.get("rsvps") or []
+    going = {r["user_id"]: r["status"] for r in rows if r["status"] == "going"}
+    expected = {
+        state["instances"]["a"]["user_id"],
+        state["instances"]["c"]["user_id"],
+    }
+    missing = expected - set(going.keys())
+    if missing:
+        raise SystemExit(
+            f"b: missing RSVPs from {sorted(missing)}; got {rows!r}",
+        )
+    print(f"  b sees {sorted(going.keys())} going ✓")
+    _save(state)
+    print("calendar: ok")
 
     _save(state)
     print("traffic: ok")
@@ -526,7 +757,53 @@ def cmd_verify() -> None:
                 else:
                     print(f"  space pending acceptance from {label}")
 
-    # 5. Crash check — every instance still alive (WebRTC didn't blow up).
+    # 5. Trust-relay pair — a ↔ d should be CONFIRMED on both sides
+    #    *if* :func:`cmd_relay_pair` was run (excluded from ``all``).
+    if "relay_pair_ran" in state:
+        a_iid = state["instances"]["a"]["instance_id"]
+        d_iid = state["instances"]["d"]["instance_id"]
+        for viewer, peer in (("a", d_iid), ("d", a_iid)):
+            info = state["instances"][viewer]
+            s, conns = _request(
+                f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+                token=info["token"],
+            )
+            _must(f"connections({viewer})", s, conns)
+            match = [c for c in conns if c["instance_id"] == peer]
+            if not match or match[0]["status"] != "confirmed":
+                failures.append(
+                    f"{viewer}: relay-paired peer {peer[:8]} missing or not confirmed",
+                )
+            else:
+                print(f"  {viewer} ↔ {peer[:8]} confirmed via trust relay ✓")
+    else:
+        print("  trust-relay pair (a ↔ d via b) skipped — run 'relay-pair' to exercise")
+
+    # 6. Calendar RSVPs — Beta's space-calendar event has 'going' from
+    #    both Alpha and Carol after federation. Only asserted when
+    #    ``cmd_calendar`` ran; that step is excluded from ``all`` until
+    #    SPACE_CALENDAR_EVENT_CREATED outbound federation is wired.
+    if "calendar_event_id" in state:
+        b = state["instances"]["b"]
+        s, rsvps = _request(
+            f"http://127.0.0.1:{b['port']}/api/calendars/events/"
+            f"{state['calendar_event_id']}/rsvps",
+            token=b["token"],
+        )
+        _must("rsvps(b)", s, rsvps)
+        going = {
+            r["user_id"] for r in (rsvps.get("rsvps") or []) if r["status"] == "going"
+        }
+        for label in ("a", "c"):
+            uid = state["instances"][label]["user_id"]
+            if uid in going:
+                print(f"  b sees {label} 'going' ✓")
+            else:
+                failures.append(
+                    f"b: RSVP from {label} ({uid}) missing (got {sorted(going)})",
+                )
+
+    # 7. Crash check — every instance still alive (WebRTC didn't blow up).
     for label, info in state["instances"].items():
         if not _alive(info["pid"]):
             failures.append(f"{label}: process pid={info['pid']} is gone")
@@ -570,13 +847,25 @@ def main() -> None:
         sys.exit(2)
     cmd = sys.argv[1]
     if cmd == "all":
+        # ``relay-pair`` and ``calendar`` are intentionally excluded
+        # from the canonical ``all`` sequence — see the docstrings on
+        # :func:`cmd_relay_pair` and :func:`cmd_calendar`. Both are
+        # still wired as standalone subcommands and exercise real
+        # federation paths; they're just opted-out of the smoke run
+        # because (a) they depend on rate-limit / sync-window timing
+        # that's hard to make deterministic in a single-shot run and
+        # (b) ``cmd_calendar`` triggers a code path
+        # (``SPACE_CALENDAR_EVENT_CREATED`` outbound) that isn't yet
+        # implemented in ``socialhome`` — the inbound handler exists,
+        # but no service publishes the event when ``b`` creates a
+        # space-calendar event, so ``a`` and ``c`` never see it.
         cmd_up()
         cmd_pair()
         cmd_traffic()
         time.sleep(5)  # let federation settle before assertions
         cmd_verify()
         return
-    fn = globals().get(f"cmd_{cmd}")
+    fn = globals().get(f"cmd_{cmd.replace('-', '_')}")
     if fn is None:
         raise SystemExit(f"unknown subcommand: {cmd!r}")
     fn()
