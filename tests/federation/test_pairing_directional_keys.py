@@ -63,8 +63,12 @@ async def test_directional_keys_match_between_initiator_and_acceptor():
     """
     kek_a = _kek()
     kek_b = _kek()
-    coord_a = PairingCoordinator(_FakeRepo(), kek_a, generate_identity_keypair().public_key)
-    coord_b = PairingCoordinator(_FakeRepo(), kek_b, generate_identity_keypair().public_key)
+    coord_a = PairingCoordinator(
+        _FakeRepo(), kek_a, generate_identity_keypair().public_key
+    )
+    coord_b = PairingCoordinator(
+        _FakeRepo(), kek_b, generate_identity_keypair().public_key
+    )
 
     a_dh = generate_x25519_keypair()
     b_dh = generate_x25519_keypair()

@@ -374,6 +374,7 @@ class ReplayCache:
 
     def _prune(self, now: datetime) -> None:
         cutoff = now - self._window
+
         # Persisted ``received_at`` rows are written via SQLite's
         # ``datetime('now')`` (naive UTC), so :meth:`load` warms the
         # cache with offset-naive entries while ``seen()`` records

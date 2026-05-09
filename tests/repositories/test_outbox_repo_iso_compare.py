@@ -79,9 +79,7 @@ async def test_list_due_excludes_future_iso_timestamp(env):
         event_type=FederationEventType.SPACE_POST_CREATED,
         payload_json="{}",
     )
-    future = (
-        datetime.now(timezone.utc) + timedelta(hours=1)
-    ).isoformat()
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     await env.outbox_repo.reschedule(entry_id, future, attempts=1)
 
     due = await env.outbox_repo.list_due()

@@ -275,9 +275,7 @@ class PairingCoordinator:
         # in-process unit tests that bypass the route layer keep
         # passing.
         if own_inbox_base_url:
-            own_inbox_url = (
-                f"{own_inbox_base_url.rstrip('/')}/{own_local_inbox_id}"
-            )
+            own_inbox_url = f"{own_inbox_base_url.rstrip('/')}/{own_local_inbox_id}"
         else:
             own_inbox_url = qr_payload.get("inbox_url", "")
 
