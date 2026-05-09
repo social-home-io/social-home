@@ -223,7 +223,11 @@ export default function MomentumDetailPage() {
         </p>
       )}
       {m.media_type === 'image' && m.media_url && (
-        <img src={m.media_url} alt="" class="sh-momentum-detail-media" />
+        <img
+          src={m.media_url}
+          alt={m.content ? '' : `Photo from ${householdDisplayName(m.author_user_id)}`}
+          class="sh-momentum-detail-media"
+        />
       )}
       {m.media_type === 'video' && m.media_url && (
         <video src={m.media_url} controls class="sh-momentum-detail-media" />

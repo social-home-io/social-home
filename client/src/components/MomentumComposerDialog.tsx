@@ -183,7 +183,7 @@ export function MomentumComposerDialog({ onPosted }: Props = {}) {
           class="sh-momentum-composer-text"
           rows={5}
           maxLength={MAX_CONTENT}
-          placeholder="Share a moment…"
+          placeholder={isReply ? 'Your reply…' : 'Share a moment…'}
           aria-label={isReply ? 'Your reply' : 'Your moment'}
           value={content.value}
           onInput={(e) => { content.value = (e.target as HTMLTextAreaElement).value }}
@@ -219,6 +219,12 @@ export function MomentumComposerDialog({ onPosted }: Props = {}) {
                 muted
                 preload="metadata"
               />
+              {durationMs.value !== null && (
+                <span class="sh-momentum-composer-duration"
+                      aria-label={`Video duration ${(durationMs.value / 1000).toFixed(1)} seconds (cap ${MAX_VIDEO_MS / 1000} s)`}>
+                  ⏱ {(durationMs.value / 1000).toFixed(1)}s
+                </span>
+              )}
               <button
                 type="button"
                 class="sh-composer-remove-attach"

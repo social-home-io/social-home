@@ -177,8 +177,12 @@ export default function MomentumArchiveTab() {
                       </p>
                     )}
                     {m.media_type === 'image' && m.media_url && (
-                      <img src={m.media_url} alt="" loading="lazy"
-                        class="sh-momentum-row-media" />
+                      <img
+                        src={m.media_url}
+                        alt={m.content ? '' : `Photo from ${householdDisplayName(m.author_user_id)}`}
+                        loading="lazy"
+                        class="sh-momentum-row-media"
+                      />
                     )}
                     {m.media_type === 'video' && m.media_url && (
                       <span class="sh-momentum-row-media sh-momentum-row-media--video">
