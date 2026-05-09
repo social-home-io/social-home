@@ -259,7 +259,7 @@ function MembersTab() {
   if (users.value.length === 0) {
     return (
       <section class="sh-admin-section">
-        <h2>Household Members</h2>
+        <h2>Household members</h2>
         {isStandalone && <CreateStandaloneUserForm />}
         <p class="sh-muted">No household members yet.</p>
       </section>
@@ -267,7 +267,7 @@ function MembersTab() {
   }
   return (
     <section class="sh-admin-section">
-      <h2>Household Members</h2>
+      <h2>Household members</h2>
       {isStandalone && <CreateStandaloneUserForm />}
       <table class="sh-admin-table">
         <thead>
@@ -552,7 +552,7 @@ function ModerationTab() {
   if (reports.value.length === 0) {
     return (
       <section class="sh-admin-section">
-        <h2>Moderation Queue</h2>
+        <h2>Moderation queue</h2>
         <p class="sh-muted">
           No pending reports. Items appear here when a member flags a
           post, comment, or sticky for admin review.
@@ -562,39 +562,60 @@ function ModerationTab() {
   }
   return (
     <section class="sh-admin-section">
-      <h2>Moderation Queue</h2>
+      <h2>Moderation queue</h2>
       <p class="sh-muted sh-admin-section__hint">
         Reports filed by household members. <strong>Resolve</strong> when
         you've acted (removed / edited the content);
         <strong> Dismiss</strong> when the report is unfounded.
       </p>
       <ol class="sh-admin-queue">
-        {reports.value.map((m) => (
-          <li key={m.id} class="sh-admin-row">
-            <div class="sh-admin-row__hd">
-              <strong>{m.ref_type}</strong>
-              <span class="sh-muted">in space {m.space_id}</span>
-              <time class="sh-muted">
-                {new Date(m.occurred_at).toLocaleString()}
-              </time>
-            </div>
-            <p class="sh-admin-row__reason">{m.reason}</p>
-            <div class="sh-admin-row__actions">
-              <Button
-                variant="secondary"
-                onClick={() => void resolveReport(m.id, true)}
-              >
-                Dismiss
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => void resolveReport(m.id, false)}
-              >
-                Resolve
-              </Button>
-            </div>
-          </li>
-        ))}
+        {reports.value.map((m) => {
+          // ``ref_type`` is the wire enum (post / comment / sticky /
+          // page).  Sentence-case it so the row reads as a friendly
+          // line instead of "post in space {hash}".
+          const refLabel = ((t: string) => {
+            switch (t) {
+              case 'post':    return 'Post'
+              case 'comment': return 'Comment'
+              case 'sticky':  return 'Sticky note'
+              case 'page':    return 'Page'
+              default:        return t
+            }
+          })(m.ref_type)
+          return (
+            <li key={m.id} class="sh-admin-row">
+              <div class="sh-admin-row__hd">
+                <strong>{refLabel}</strong>
+                <span class="sh-muted">flagged in a space</span>
+                <time
+                  class="sh-muted"
+                  dateTime={m.occurred_at}
+                  title={new Date(m.occurred_at).toLocaleString()}
+                >
+                  {new Date(m.occurred_at).toLocaleDateString(undefined, {
+                    month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit',
+                  })}
+                </time>
+              </div>
+              <p class="sh-admin-row__reason">{m.reason}</p>
+              <div class="sh-admin-row__actions">
+                <Button
+                  variant="secondary"
+                  onClick={() => void resolveReport(m.id, true)}
+                >
+                  Dismiss
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => void resolveReport(m.id, false)}
+                >
+                  Resolve
+                </Button>
+              </div>
+            </li>
+          )
+        })}
       </ol>
     </section>
   )
@@ -677,7 +698,7 @@ function SettingsTab() {
 
   return (
     <section class="sh-admin-section">
-      <h2>Household Settings</h2>
+      <h2>Household settings</h2>
       <HouseholdToggles />
     </section>
   )

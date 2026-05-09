@@ -12,6 +12,65 @@ import { Button } from './Button'
 import { showToast } from './Toast'
 import { Spinner } from './Spinner'
 import { openRejectReason } from './RejectReasonDialog'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
+import { relativeDocsTime } from '@/utils/relativeTime'
+
+/** Friendly label for a feature/action pair so the queue doesn't
+ *  read as raw enum strings. */
+function actionLabel(feature: string, action: string): string {
+  const f = feature.toLowerCase()
+  const a = action.toLowerCase()
+  if (f === 'posts' && a === 'create')   return 'New post'
+  if (f === 'pages' && a === 'edit')     return 'Page edit'
+  if (f === 'pages' && a === 'create')   return 'New page'
+  if (f === 'gallery' && a === 'upload') return 'Gallery upload'
+  if (f === 'stickies' && a === 'create') return 'New sticky'
+  if (f === 'comments' && a === 'create') return 'New comment'
+  return `${feature} · ${action}`
+}
+
+/** Render the queue payload as readable copy instead of raw JSON.
+ *  Recognises the common shapes (post body, page diff, gallery
+ *  upload caption); falls back to a "no preview" line for unknown
+ *  shapes so the admin can still approve/reject by author + type. */
+function PayloadPreview({ payload }: { payload: Record<string, unknown> }) {
+  const content =
+    typeof payload.content === 'string' ? payload.content :
+    typeof payload.body    === 'string' ? payload.body :
+    typeof payload.text    === 'string' ? payload.text :
+    typeof payload.caption === 'string' ? payload.caption :
+    null
+  const title = typeof payload.title === 'string' ? payload.title : null
+  const url   = typeof payload.url   === 'string' ? payload.url   : null
+  if (!content && !title && !url) {
+    return (
+      <details class="sh-moderation-payload-details">
+        <summary class="sh-muted">No preview — view raw payload</summary>
+        <pre class="sh-moderation-payload">
+          {JSON.stringify(payload, null, 2)}
+        </pre>
+      </details>
+    )
+  }
+  return (
+    <div class="sh-moderation-preview">
+      {title && <strong>{title}</strong>}
+      {content && (
+        <p class="sh-moderation-preview-body">
+          {content.length > 300 ? `${content.slice(0, 300)}…` : content}
+        </p>
+      )}
+      {url && (
+        <a class="sh-link" href={url} target="_blank" rel="noopener noreferrer">
+          {url}
+        </a>
+      )}
+    </div>
+  )
+}
 
 interface QueueItem {
   id: string
@@ -32,6 +91,9 @@ const error = signal<string | null>(null)
 
 export function ModerationQueue({ spaceId }: { spaceId: string }) {
   useEffect(() => {
+    // Hydrate the household roster so submitter rows render with
+    // display names + avatars instead of raw user_ids.
+    void loadHouseholdUsers()
     let cancelled = false
     loading.value = true
     error.value = null
@@ -89,7 +151,7 @@ export function ModerationQueue({ spaceId }: { spaceId: string }) {
   if (error.value) {
     return (
       <div class="sh-moderation" role="alert">
-        <h3>Moderation Queue</h3>
+        <h3>Moderation queue</h3>
         <p class="sh-error">{error.value}</p>
       </div>
     )
@@ -97,23 +159,29 @@ export function ModerationQueue({ spaceId }: { spaceId: string }) {
 
   return (
     <div class="sh-moderation">
-      <h3>Moderation Queue</h3>
+      <h3>Moderation queue</h3>
       {items.value.length === 0 && (
-        <p class="sh-muted">No content pending review.</p>
+        <p class="sh-muted">Nothing pending — you're all caught up.</p>
       )}
       {items.value.map(item => (
         <div key={item.id} class="sh-moderation-item">
           <div class="sh-moderation-meta">
-            <span>By: {item.submitted_by}</span>
-            <span class="sh-muted">{item.feature} / {item.action}</span>
-            <time>{new Date(item.submitted_at).toLocaleString()}</time>
+            <span>
+              <strong>{householdDisplayName(item.submitted_by)}</strong>
+              <span class="sh-muted"> · {actionLabel(item.feature, item.action)}</span>
+            </span>
+            <time
+              class="sh-muted"
+              dateTime={item.submitted_at}
+              title={new Date(item.submitted_at).toLocaleString()}
+            >
+              {relativeDocsTime(item.submitted_at)}
+            </time>
           </div>
-          <pre class="sh-moderation-payload">
-            {JSON.stringify(item.payload, null, 2)}
-          </pre>
+          <PayloadPreview payload={item.payload} />
           <div class="sh-moderation-actions">
             <Button onClick={() => approve(item.id)}>Approve</Button>
-            <Button variant="danger" onClick={() => reject(item.id)}>
+            <Button variant="secondary" onClick={() => reject(item.id)}>
               Reject
             </Button>
           </div>
@@ -182,7 +250,7 @@ export function ContentReportsList() {
   if (reportsError.value) {
     return (
       <div class="sh-reports" role="alert">
-        <h3>Content Reports</h3>
+        <h3>Content reports</h3>
         <p class="sh-error">{reportsError.value}</p>
       </div>
     )
@@ -190,32 +258,56 @@ export function ContentReportsList() {
 
   return (
     <div class="sh-reports">
-      <h3>Content Reports</h3>
+      <h3>Content reports</h3>
       {reports.value.length === 0 && (
         <p class="sh-muted">No pending reports.</p>
       )}
-      {reports.value.map(r => (
-        <div key={r.id} class="sh-report-row">
-          <div class="sh-report-meta">
-            <span>{r.category} · {r.target_type} {r.target_id}</span>
-            <span class="sh-muted">by {r.reporter_user_id}</span>
-            {r.reporter_instance_id && (
-              <span class="sh-badge sh-badge--peer"
-                    title={`Report mirrored from peer ${r.reporter_instance_id}`}>
-                from peer
+      {reports.value.map(r => {
+        // Friendly category labels — the wire enum is uppercase
+        // snake_case but admins want sentence-cased categories.
+        const categoryLabel = ((c: string) => {
+          switch (c) {
+            case 'spam':           return 'Spam'
+            case 'harassment':     return 'Harassment'
+            case 'inappropriate':  return 'Inappropriate content'
+            case 'misinformation': return 'Misinformation'
+            case 'other':          return 'Other'
+            default:               return c
+          }
+        })(r.category)
+        const reporterName = householdDisplayName(r.reporter_user_id)
+        return (
+          <div key={r.id} class="sh-report-row">
+            <div class="sh-report-meta">
+              <strong>{categoryLabel}</strong>
+              <span class="sh-muted">
+                {' · '}{r.target_type === 'user' ? 'on a user' : 'on a post'}
+                {' · reported by '}{reporterName}
               </span>
-            )}
-            <time>{new Date(r.created_at).toLocaleString()}</time>
+              {r.reporter_instance_id && (
+                <span class="sh-badge sh-badge--peer"
+                      title={`Report mirrored from peer ${r.reporter_instance_id}`}>
+                  from peer
+                </span>
+              )}
+              <time
+                class="sh-muted"
+                dateTime={r.created_at}
+                title={new Date(r.created_at).toLocaleString()}
+              >
+                {relativeDocsTime(r.created_at)}
+              </time>
+            </div>
+            {r.notes && <p class="sh-muted">“{r.notes}”</p>}
+            <div class="sh-form-actions">
+              <Button onClick={() => resolve(r.id)}>Resolve</Button>
+              <Button variant="secondary" onClick={() => resolve(r.id, true)}>
+                Dismiss
+              </Button>
+            </div>
           </div>
-          {r.notes && <p class="sh-muted">{r.notes}</p>}
-          <div class="sh-form-actions">
-            <Button onClick={() => resolve(r.id)}>Resolve</Button>
-            <Button variant="secondary" onClick={() => resolve(r.id, true)}>
-              Dismiss
-            </Button>
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
