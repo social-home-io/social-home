@@ -14,6 +14,11 @@ import { ws } from '@/ws'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
 import { showToast } from './Toast'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
+import { relativeDocsTime } from '@/utils/relativeTime'
 
 interface JoinRequest {
   id:            string
@@ -44,6 +49,10 @@ async function loadRequests(spaceId: string): Promise<void> {
 
 export function JoinRequestList({ spaceId }: { spaceId: string }) {
   useEffect(() => {
+    // Load the household user roster so each request renders the
+    // applicant's display name + avatar instead of the raw user_id
+    // hash that the API returns on the wire.
+    void loadHouseholdUsers()
     void loadRequests(spaceId)
     const handlers = [
       ws.on('space.join.requested', (evt) => {
@@ -88,24 +97,33 @@ export function JoinRequestList({ spaceId }: { spaceId: string }) {
   return (
     <div class="sh-join-requests sh-card" aria-label="Pending join requests">
       <h4>Join requests ({rows.length})</h4>
-      {rows.map(r => (
-        <div key={r.id} class="sh-join-request">
-          <Avatar name={r.user_id} size={32} />
-          <div class="sh-join-info">
-            <span>{r.user_id}</span>
-            {r.message && <p class="sh-muted">“{r.message}”</p>}
-            {r.requested_at && (
-              <time class="sh-muted">
-                {new Date(r.requested_at).toLocaleString()}
-              </time>
-            )}
+      {rows.map(r => {
+        const name = householdDisplayName(r.user_id)
+        return (
+          <div key={r.id} class="sh-join-request">
+            <Avatar name={name} size={32} />
+            <div class="sh-join-info">
+              <strong>{name}</strong>
+              {r.message && <p class="sh-muted">“{r.message}”</p>}
+              {r.requested_at && (
+                <time
+                  class="sh-muted"
+                  dateTime={r.requested_at}
+                  title={new Date(r.requested_at).toLocaleString()}
+                >
+                  Asked {relativeDocsTime(r.requested_at)}
+                </time>
+              )}
+            </div>
+            <div class="sh-join-actions">
+              <Button onClick={() => act(r, 'approve')}>Approve</Button>
+              <Button variant="secondary" onClick={() => act(r, 'deny')}>
+                Decline
+              </Button>
+            </div>
           </div>
-          <div class="sh-join-actions">
-            <Button onClick={() => act(r, 'approve')}>Approve</Button>
-            <Button variant="danger" onClick={() => act(r, 'deny')}>Deny</Button>
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

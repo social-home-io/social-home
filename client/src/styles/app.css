@@ -10850,13 +10850,49 @@ a.sh-welcome-card:hover {
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-md);
 }
-.sh-moderation-meta { color: var(--sh-text-muted); font-size: var(--sh-font-size-xs); }
+.sh-moderation-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sh-space-xs);
+  font-size: var(--sh-font-size-sm);
+  flex-wrap: wrap;
+}
+/* Readable preview of the queued content — used instead of the
+ * raw-JSON ``<pre>`` block when the payload has a known shape
+ * (post body / page body / gallery caption).  Indented + cream
+ * background so the eye reads it as the actual content the
+ * member submitted, not as form-noise. */
+.sh-moderation-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  background: var(--sh-bg-secondary);
+  border-radius: var(--sh-radius-md);
+  border-left: 3px solid color-mix(in srgb, var(--sh-primary) 50%, transparent);
+}
+.sh-moderation-preview-body {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.sh-moderation-payload-details {
+  margin: 0;
+}
+.sh-moderation-payload-details summary {
+  cursor: pointer;
+  font-size: var(--sh-font-size-sm);
+}
 .sh-moderation-payload {
   background: var(--sh-bg-secondary);
-  padding: var(--sh-space-xs);
+  padding: var(--sh-space-sm);
+  margin-top: var(--sh-space-xs);
   border-radius: var(--sh-radius-sm);
   font-family: var(--sh-font-family-mono);
   font-size: var(--sh-font-size-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 .sh-moderation-actions { display: flex; gap: var(--sh-space-xs); margin-top: var(--sh-space-sm); }
 

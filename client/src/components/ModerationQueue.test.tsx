@@ -23,7 +23,9 @@ describe('ModerationQueue', () => {
     const { ModerationQueue } = await import('./ModerationQueue')
     const { findByText } = render(<ModerationQueue spaceId="sp-1" />)
     expect(await findByText('Approve')).toBeTruthy()
-    expect(await findByText(/By: uid-bob/)).toBeTruthy()
+    // The submitter falls back to the user_id when the household
+    // roster doesn't have a display name for the user.
+    expect(await findByText(/uid-bob/)).toBeTruthy()
   })
 
   it('renders the empty state when the queue returns []', async () => {
@@ -35,7 +37,7 @@ describe('ModerationQueue', () => {
     }))
     const { ModerationQueue } = await import('./ModerationQueue')
     const { findByText } = render(<ModerationQueue spaceId="sp-1" />)
-    expect(await findByText('No content pending review.')).toBeTruthy()
+    expect(await findByText(/Nothing pending/)).toBeTruthy()
   })
 
   it('shows an alert region when the fetch fails', async () => {
