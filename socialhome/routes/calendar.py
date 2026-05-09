@@ -198,8 +198,52 @@ class CalendarEventsView(BaseView):
 
 
 class CalendarEventDeleteView(BaseView):
-    """``PATCH /api/calendars/events/{id}`` — edit;
+    """``GET /api/calendars/events/{id}`` — read;
+    ``PATCH /api/calendars/events/{id}`` — edit;
     ``DELETE /api/calendars/events/{id}`` — delete an event."""
+
+    async def get(self) -> web.Response:
+        """Read a single calendar event by id.
+
+        The SPA's :class:`EventPostCard` fetches an event lazily by
+        ``linked_event_id`` so it can render the full event card under
+        an event-typed feed post.  Without this view the SPA fell back
+        to the "🗓 This event isn't here anymore" placeholder for every
+        event post — including events that exist and the user has
+        permission to see.
+
+        Space-scoped events check space membership; personal-calendar
+        events fall back to the calendar repo and return 403 if the
+        caller isn't allowed to read that calendar.
+        """
+        ctx = self.user
+        event_id = self.match("id")
+        space_cal_svc = self.svc(K.space_cal_service_key)
+        space_id = await _resolve_space_id_for_event(self, event_id)
+        if space_id is not None:
+            space_repo = self.svc(K.space_repo_key)
+            member = await space_repo.get_member(space_id, ctx.user_id)
+            if member is None:
+                return error_response(403, "FORBIDDEN", "Not a space member.")
+            result = await space_cal_svc._repo.get_event(event_id)
+            if result is None:
+                return error_response(404, "NOT_FOUND", "Event not found.")
+            _sid, event = result
+            return web.json_response(
+                _sign_payload(self.request, _event_dict(event)),
+            )
+        # Fall through to personal-calendar lookup.  ``get_event``
+        # raises ``KeyError`` when the event has been deleted; map it
+        # to 404 so the SPA can show the "isn't here anymore" hint
+        # consistently.
+        svc = self.svc(calendar_service_key)
+        try:
+            event = await svc.get_event(event_id)
+        except KeyError:
+            return error_response(404, "NOT_FOUND", "Event not found.")
+        return web.json_response(
+            _sign_payload(self.request, _event_dict(event)),
+        )
 
     async def delete(self) -> web.Response:
         self.user  # auth check
