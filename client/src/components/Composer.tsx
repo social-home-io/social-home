@@ -115,6 +115,36 @@ function typeAcceptsMedia(t: string): boolean { return MEDIA_TYPES.has(t) }
 function typeUsesBuilder(t: string): boolean { return BUILDER_TYPES.has(t) }
 function typeHidesTextarea(t: string): boolean { return TEXTAREA_HIDDEN_FOR.has(t) }
 
+/** "Pascal Vizeli" → "Pascal".  Single-word names pass through. */
+function firstName(displayName: string | undefined | null): string {
+  if (!displayName) return ''
+  const t = displayName.trim()
+  const sp = t.indexOf(' ')
+  return sp === -1 ? t : t.slice(0, sp)
+}
+
+/** Type-aware placeholder copy for the composer textarea — keeps the
+ *  invitation specific to what the author just chose ("Add a
+ *  caption…" reads warmer than "What's on your mind?" when the user
+ *  is uploading a photo).  The default text-post case folds in the
+ *  user's first name when we know it. */
+function placeholderFor(type: string, displayName: string | null | undefined): string {
+  switch (type) {
+    case 'image':    return 'Add a caption…'
+    case 'video':    return 'Tell us about this clip…'
+    case 'file':     return 'What\'s this file for?'
+    case 'location': return 'Where are you headed? (optional caption)'
+    case 'bazaar':   return 'Describe what you\'re sharing or selling…'
+    case 'text':
+    default: {
+      const name = firstName(displayName)
+      return name
+        ? `What's on your mind, ${name}?`
+        : 'What\'s on your mind?'
+    }
+  }
+}
+
 function inferTypeFromFile(file: File): 'image' | 'video' | 'file' {
   if (file.type.startsWith('image/')) return 'image'
   if (file.type.startsWith('video/')) return 'video'
@@ -434,7 +464,10 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
           <textarea
             ref={textareaRef}
             class="sh-composer-input"
-            placeholder={placeholder || "What's on your mind?"}
+            placeholder={
+              placeholder
+                ?? placeholderFor(postType.value, user?.display_name)
+            }
             value={content.value}
             onInput={(e) => {
               const t = e.target as HTMLTextAreaElement
