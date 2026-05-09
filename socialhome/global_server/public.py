@@ -152,7 +152,7 @@ def _render_landing(
 ) -> str:
     rows = []
     for sp in spaces:
-        accent = _escape(sp.get("accent_color") or "#6366f1")
+        accent = _escape(sp.get("accent_color") or "#ce5d3e")
         rows.append(f"""
           <li class="card" style="border-left:6px solid {accent}">
             <a href="/spaces/{_escape(sp["space_id"])}">
@@ -177,33 +177,90 @@ def _render_landing(
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta http-equiv="refresh" content="600" />
   <style>
+    /* GFS public theme — leans into the Social Home palette
+     *   (warm cream surface, terracotta primary, washi-tape accents)
+     * so the public landing feels like the same family of products as
+     * the SH SPA rather than a stark federation back-end. Pure CSS, no
+     * JS, no build step — server-rendered. */
+    :root {{
+      --warm-bg: #faf6f1;
+      --paper:   #fffdf9;
+      --ink:     #1f1916;
+      --ink-soft:#5b4f48;
+      --hair:    #ead8c2;
+      --primary: #ce5d3e;
+      --primary-soft: #f4dbd0;
+    }}
     * {{ box-sizing: border-box; }}
-    body {{ font: 15px/1.5 system-ui, sans-serif; margin: 0; color: #1f2937;
-            background: #fff; }}
+    body {{
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+            Roboto, sans-serif;
+      margin: 0; color: var(--ink); background: var(--warm-bg);
+    }}
     .hero-image {{ display: block; width: 100%; max-height: 240px;
                     object-fit: cover; }}
-    main {{ max-width: 860px; margin: 0 auto; padding: 20px; }}
-    h1 {{ font-size: 28px; margin: 16px 0 4px; }}
-    .muted {{ color: #6b7280; font-size: 13px; }}
-    section {{ border: 1px solid #e5e7eb; border-radius: 8px;
-              padding: 18px; margin: 18px 0; background: #f9fafb; }}
-    .pair {{ display: flex; gap: 22px; align-items: center; }}
-    .pair img {{ width: 200px; height: 200px; }}
-    .pair code {{ background: #fff; border: 1px solid #d1d5db;
+    main {{ max-width: 860px; margin: 0 auto; padding: 24px; }}
+    h1 {{
+      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
+      font-size: 32px; margin: 16px 0 4px; letter-spacing: -0.01em;
+    }}
+    h2 {{
+      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
+      font-size: 20px; margin: 0 0 12px;
+    }}
+    .muted {{ color: var(--ink-soft); font-size: 13px; }}
+    section {{
+      position: relative;
+      border: 1px solid var(--hair); border-radius: 12px;
+      padding: 22px; margin: 20px 0; background: var(--paper);
+      box-shadow: 0 1px 0 var(--hair),
+                  0 18px 36px -28px rgba(26, 24, 20, 0.25);
+    }}
+    /* Tiny washi-tape accent on the section corner — same vocabulary
+     * as the SH SPA's pinned-card aesthetic, just more restrained. */
+    section::before {{
+      content: ""; position: absolute; top: -8px; right: 28px;
+      width: 60px; height: 16px; transform: rotate(-3deg);
+      background: var(--primary-soft); opacity: 0.85;
+      border-radius: 2px;
+    }}
+    .pair {{ display: flex; gap: 22px; align-items: center; flex-wrap: wrap; }}
+    .pair img {{ width: 200px; height: 200px;
+                 background: #fff; padding: 6px;
+                 border: 1px solid var(--hair); border-radius: 8px; }}
+    .pair code {{ background: var(--warm-bg); border: 1px solid var(--hair);
                  padding: 4px 8px; border-radius: 6px;
-                 display: inline-block; word-break: break-all; }}
+                 display: inline-block; word-break: break-all;
+                 font-size: 13px; }}
     .filters {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }}
     .filters a {{ padding: 4px 12px; border-radius: 999px;
-                  border: 1px solid #d1d5db; color: #374151;
-                  text-decoration: none; background: #fff; }}
-    .filters a.active {{ background: #1f2937; color: #fff; border-color: #1f2937; }}
-    input[type=search] {{ padding: 6px 10px; border: 1px solid #d1d5db;
-                          border-radius: 6px; font: inherit; width: 100%;
-                          max-width: 320px; }}
+                  border: 1px solid var(--hair); color: var(--ink-soft);
+                  text-decoration: none; background: transparent;
+                  font-size: 13px; }}
+    .filters a:hover {{ color: var(--ink); border-color: var(--primary); }}
+    .filters a.active {{ background: var(--primary); color: #fff;
+                         border-color: var(--primary); }}
+    input[type=search] {{ padding: 8px 12px; border: 1px solid var(--hair);
+                          border-radius: 8px; font: inherit; width: 100%;
+                          max-width: 360px; background: var(--warm-bg);
+                          color: var(--ink); }}
+    input[type=search]:focus {{ outline: 2px solid var(--primary);
+                                outline-offset: 1px; }}
     ul {{ list-style: none; padding: 0; margin: 0; }}
-    .card {{ background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;
-             padding: 12px 14px; margin-bottom: 10px; }}
-    .card a {{ color: #111827; text-decoration: none; }}
+    .card {{ background: var(--warm-bg); border: 1px solid var(--hair);
+             border-radius: 10px;
+             padding: 14px 16px; margin-bottom: 10px;
+             transition: transform 100ms, box-shadow 100ms; }}
+    .card:hover {{ transform: translateY(-1px);
+                  box-shadow: 0 14px 28px -22px rgba(26, 24, 20, 0.4); }}
+    .card a {{ color: var(--ink); text-decoration: none; }}
+    .card a:hover strong {{ color: var(--primary); }}
+    a {{ color: var(--primary); }}
+    a:hover {{ color: var(--ink); }}
+    .footer-brand {{
+      text-align: center; padding: 14px 0 32px;
+      color: var(--ink-soft); font-size: 12px;
+    }}
   </style>
 </head>
 <body>
@@ -258,6 +315,10 @@ def _render_landing(
       socialhome.io</a>.</p>
     </section>
   </main>
+  <p class="footer-brand">
+    A Global Federation Server · powered by
+    <a href="https://socialhome.io" rel="nofollow noopener">Social Home</a>
+  </p>
 </body>
 </html>
 """
@@ -269,7 +330,7 @@ def _render_space_page(
     server_name: str,
     base_url: str,
 ) -> str:
-    accent = _escape(space.get("accent_color") or "#6366f1")
+    accent = _escape(space.get("accent_color") or "#ce5d3e")
     deep_link = f"sh://join-space/{base_url}/spaces/{_escape(space['space_id'])}"
     og_image = _escape(space.get("cover_url") or "")
     og_title = _escape(f"{space.get('name') or ''} — {server_name}")
@@ -286,18 +347,57 @@ def _render_space_page(
   <meta property="og:url"         content="{_escape(base_url)}/spaces/{_escape(space["space_id"])}" />
   <meta name="twitter:card"       content="summary_large_image" />
   <style>
-    body {{ font: 15px/1.5 system-ui, sans-serif; margin: 0; color: #1f2937;
-            background: #fff; }}
-    main {{ max-width: 780px; margin: 0 auto; padding: 20px; }}
-    .accent-bar {{ height: 6px; background: {accent}; margin: 10px 0 20px; }}
+    /* GFS per-space public page — same warm SH palette as the landing.
+     * The CTA picks up the per-space accent so the page feels keyed
+     * to that community, not just the server. */
+    :root {{
+      --warm-bg: #faf6f1;
+      --paper:   #fffdf9;
+      --ink:     #1f1916;
+      --ink-soft:#5b4f48;
+      --hair:    #ead8c2;
+      --primary: {accent};
+    }}
+    body {{
+      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+            Roboto, sans-serif;
+      margin: 0; color: var(--ink); background: var(--warm-bg);
+    }}
+    main {{ max-width: 780px; margin: 0 auto; padding: 24px; }}
+    .accent-bar {{ height: 6px; background: var(--primary);
+                   margin: 12px 0 22px; border-radius: 3px; }}
     .cover {{ width: 100%; max-height: 360px; object-fit: cover; }}
-    h1 {{ margin-bottom: 4px; font-size: 26px; }}
-    .muted {{ color: #6b7280; }}
-    .cta {{ background: #6366f1; color: #fff; padding: 10px 18px;
-            border-radius: 8px; display: inline-block;
-            text-decoration: none; font-weight: 600; }}
-    a.secondary {{ color: #374151; }}
-    section {{ margin: 20px 0; }}
+    h1 {{
+      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
+      margin-bottom: 4px; font-size: 30px; letter-spacing: -0.01em;
+    }}
+    h2 {{
+      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
+      font-size: 20px; margin: 0 0 8px;
+    }}
+    .muted {{ color: var(--ink-soft); }}
+    .cta {{ background: var(--primary); color: #fff; padding: 11px 22px;
+            border-radius: 999px; display: inline-block;
+            text-decoration: none; font-weight: 600; font-size: 15px;
+            transition: transform 100ms, filter 100ms; }}
+    .cta:hover {{ transform: translateY(-1px); filter: brightness(0.95); }}
+    a.secondary {{ color: var(--ink-soft); text-decoration: none; }}
+    a.secondary:hover {{ color: var(--primary); }}
+    section {{
+      margin: 22px 0;
+      background: var(--paper);
+      border: 1px solid var(--hair); border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 1px 0 var(--hair),
+                  0 18px 36px -28px rgba(26, 24, 20, 0.22);
+    }}
+    .cta-section {{ background: transparent; border: none;
+                    box-shadow: none; padding: 0; }}
+    .footer-brand {{
+      text-align: center; padding: 14px 0 32px;
+      color: var(--ink-soft); font-size: 12px;
+    }}
+    .footer-brand a {{ color: var(--primary); }}
   </style>
 </head>
 <body>
@@ -308,7 +408,7 @@ def _render_space_page(
     <h1>{_escape(space.get("name") or "—")}</h1>
     <p class="muted">{space.get("subscriber_count", 0)} members</p>
 
-    <section>
+    <section class="cta-section">
       <a class="cta" href="{_escape(deep_link)}">Open in Social Home</a>
     </section>
 
@@ -318,6 +418,10 @@ def _render_space_page(
       {space.get("about_markdown") or ""}
     </section>
   </main>
+  <p class="footer-brand">
+    Hosted on {_escape(server_name)} · powered by
+    <a href="https://socialhome.io" rel="nofollow noopener">Social Home</a>
+  </p>
 </body>
 </html>
 """
