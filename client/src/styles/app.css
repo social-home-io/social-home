@@ -11567,6 +11567,26 @@ a.sh-welcome-card:hover {
   gap: var(--sh-space-md);
   padding: var(--sh-space-lg) var(--sh-space-md);
   border-radius: var(--sh-radius-lg);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-primary) 14%, transparent),
+    transparent
+  );
+}
+.sh-space-public__hero--household {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-success) 14%, transparent),
+    transparent
+  );
+}
+.sh-space-public__hero--public,
+.sh-space-public__hero--global {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-warning) 16%, transparent),
+    transparent
+  );
 }
 .sh-space-public__emoji {
   font-size: 3rem;
@@ -11583,7 +11603,11 @@ a.sh-welcome-card:hover {
 .sh-space-public__accent {
   height: 6px;
   border-radius: 3px;
+  background: var(--sh-primary);
 }
+.sh-space-public__accent--household { background: var(--sh-success); }
+.sh-space-public__accent--public,
+.sh-space-public__accent--global    { background: var(--sh-warning); }
 .sh-space-public__chips {
   display: flex;
   flex-wrap: wrap;

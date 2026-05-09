@@ -156,8 +156,7 @@ export default function SpacePublicDetailPage() {
   }
 
   const entry = detail.value
-  const accent = '#6366f1'  // matches GFS default; per-space accent could
-                            // come from cover analysis later.
+  const isLocal = entry.host_instance_id === 'local'
   const scopeLabel =
     entry.scope === 'household' ? '🏠 Your household'
       : entry.scope === 'public' ? '🤝 Public'
@@ -192,10 +191,7 @@ export default function SpacePublicDetailPage() {
       >
         ← Browse spaces
       </a>
-      <div
-        class="sh-space-public__hero"
-        style={{ background: `linear-gradient(135deg, ${accent}22, transparent)` }}
-      >
+      <div class={`sh-space-public__hero sh-space-public__hero--${entry.scope}`}>
         <span class="sh-space-public__emoji" aria-hidden="true">
           {entry.emoji || '🗂'}
         </span>
@@ -203,14 +199,14 @@ export default function SpacePublicDetailPage() {
           <h1>{entry.name}</h1>
           <p class="sh-muted">
             {entry.member_count} {entry.member_count === 1 ? 'member' : 'members'}
-            {entry.scope !== 'household' && (
+            {!isLocal && (
               <> · hosted by <strong>{entry.host_display_name}</strong></>
             )}
           </p>
         </div>
       </div>
 
-      <div class="sh-space-public__accent" style={{ background: accent }} />
+      <div class={`sh-space-public__accent sh-space-public__accent--${entry.scope}`} />
 
       <div class="sh-space-public__chips">
         <span class="sh-scope-chip">{scopeLabel}</span>
