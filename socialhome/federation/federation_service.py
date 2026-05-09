@@ -1124,9 +1124,13 @@ class FederationService:
         """
         return await self._pairing.initiate(inbox_base_url)
 
-    async def accept_pairing(self, qr_payload: dict) -> dict:
+    async def accept_pairing(
+        self,
+        qr_payload: dict,
+        own_inbox_base_url: str | None = None,
+    ) -> dict:
         """Delegates to :class:`PairingCoordinator`."""
-        return await self._pairing.accept(qr_payload)
+        return await self._pairing.accept(qr_payload, own_inbox_base_url)
 
     async def confirm_pairing(
         self,

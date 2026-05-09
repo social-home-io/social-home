@@ -300,3 +300,26 @@ def test_replay_cache_prune_removes_old_entries():
     rc._seen["old"] = past
     rc.prune(now=datetime.now(timezone.utc))
     assert "old" not in rc._seen
+
+
+def test_replay_cache_prune_handles_naive_persisted_entries():
+    """:meth:`ReplayCache.load` warms the cache from
+    ``federation_replay_cache.received_at`` rows, which are written via
+    SQLite's ``datetime('now')`` and therefore offset-naive. ``seen()``
+    records new keys as offset-aware ``datetime.now(timezone.utc)``.
+
+    Pre-fix, the next ``_prune`` raised
+    ``TypeError: can't compare offset-naive and offset-aware datetimes``
+    and the inbound federation pipeline returned 500 for every
+    envelope on a node that had warmed its replay cache from disk.
+    """
+    rc = ReplayCache(window=timedelta(hours=1))
+    naive_recent = "2099-01-01 00:00:00"  # offset-naive (matches DB form)
+    rc.load([("persisted-msg", naive_recent)])
+
+    # Triggering ``seen()`` runs ``_prune`` against a current
+    # offset-aware ``now`` and a mix of offset-aware + offset-naive
+    # entries in ``_seen`` — must not raise.
+    assert rc.seen("fresh-msg") is False
+    # The persisted entry is still considered seen (well within window).
+    assert rc.seen("persisted-msg") is True

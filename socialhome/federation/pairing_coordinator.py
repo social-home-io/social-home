@@ -170,12 +170,18 @@ class PairingCoordinator:
         *,
         own_dh_sk: bytes,
         peer_dh_pk: bytes,
+        is_initiator: bool,
     ) -> tuple[str, str]:
         """X25519 ECDH → HKDF → KEK-encrypted directional AES-256-GCM keys.
 
-        Both sides of the handshake run this with their own/peer keys
-        mirrored and arrive at the same two directional keys — see
-        ``docs/crypto.md`` for the key schedule.
+        Both sides of the handshake produce the same shared secret via
+        ECDH, but the "self"/"remote" labels each side uses to store
+        the per-direction keys are mirror images of one another. Anchor
+        the HKDF info strings to the *role* (initiator vs acceptor)
+        rather than to ``self``/``remote`` so the initiator's
+        ``key_self_to_remote`` (the key it encrypts with on outbound)
+        is the same value as the acceptor's ``key_remote_to_self`` (the
+        key it decrypts inbound traffic with) — and vice versa.
         """
         shared_secret = x25519_exchange(own_dh_sk, peer_dh_pk)
 
@@ -188,15 +194,33 @@ class PairingCoordinator:
             )
             return hkdf.derive(shared_secret)
 
-        key_self_to_remote = _derive(b"socialhome/session/self-to-remote")
-        key_remote_to_self = _derive(b"socialhome/session/remote-to-self")
+        key_i_to_a = _derive(b"socialhome/session/initiator-to-acceptor")
+        key_a_to_i = _derive(b"socialhome/session/acceptor-to-initiator")
+        if is_initiator:
+            key_self_to_remote = key_i_to_a
+            key_remote_to_self = key_a_to_i
+        else:
+            key_self_to_remote = key_a_to_i
+            key_remote_to_self = key_i_to_a
         return (
             self._key_manager.encrypt(key_self_to_remote),
             self._key_manager.encrypt(key_remote_to_self),
         )
 
-    async def accept(self, qr_payload: dict) -> dict:
-        """Process an incoming QR scan."""
+    async def accept(
+        self,
+        qr_payload: dict,
+        own_inbox_base_url: str | None = None,
+    ) -> dict:
+        """Process an incoming QR scan.
+
+        ``own_inbox_base_url`` is this instance's externally-reachable
+        federation inbox base (e.g. ``https://b.example/federation/inbox``)
+        — required so we can tell A where to route subsequent envelopes
+        back to us. Without it the peer-accept body cannot carry our
+        own URL and A's :attr:`RemoteInstance.remote_inbox_url` ends
+        up pointing back at A itself.
+        """
         _require_fields(
             qr_payload,
             "token",
@@ -216,6 +240,7 @@ class PairingCoordinator:
         key_self_enc, key_remote_enc = self._derive_directional_keys(
             own_dh_sk=own_dh_kp.private_key,
             peer_dh_pk=bytes.fromhex(peer_dh_pk_hex),
+            is_initiator=False,
         )
 
         # Derive peer instance_id from their identity public key.
@@ -243,6 +268,19 @@ class PairingCoordinator:
         now = datetime.now(timezone.utc)
         expires_at = (now + timedelta(seconds=PAIRING_TTL_SECONDS)).isoformat()
 
+        # Compose our own externally-reachable inbox URL so A learns
+        # where to route back to. Falls back to the QR's inbox URL
+        # (the legacy behaviour) only when the caller didn't supply
+        # a base — that path is broken end-to-end and exists only so
+        # in-process unit tests that bypass the route layer keep
+        # passing.
+        if own_inbox_base_url:
+            own_inbox_url = (
+                f"{own_inbox_base_url.rstrip('/')}/{own_local_inbox_id}"
+            )
+        else:
+            own_inbox_url = qr_payload.get("inbox_url", "")
+
         # Store the in-progress pairing session for confirm_pairing.
         session = PairingSession(
             token=token,
@@ -252,7 +290,7 @@ class PairingCoordinator:
             peer_identity_pk=peer_identity_pk_hex,
             peer_dh_pk=peer_dh_pk_hex,
             peer_inbox_url=peer_inbox_url,
-            inbox_url=qr_payload.get("inbox_url", ""),
+            inbox_url=own_inbox_url,
             own_local_inbox_id=own_local_inbox_id,
             verification_code=verification_code,
             issued_at=now.isoformat(),
@@ -299,7 +337,7 @@ class PairingCoordinator:
                 "identity_pk": self._own_identity_pk.hex(),
                 "instance_id": derive_instance_id(self._own_identity_pk),
                 "dh_pk": own_dh_kp.public_key.hex(),
-                "inbox_url": qr_payload.get("inbox_url", ""),
+                "inbox_url": own_inbox_url,
                 "display_name": own_display_name,
                 "sig_suite": self._own_sig_suite,
             }
@@ -420,6 +458,7 @@ class PairingCoordinator:
         key_self_enc, key_remote_enc = self._derive_directional_keys(
             own_dh_sk=own_dh_sk,
             peer_dh_pk=peer_dh_pk_bytes,
+            is_initiator=True,
         )
 
         # Negotiate the suite — classical is the floor; hybrid requires

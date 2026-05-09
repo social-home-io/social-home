@@ -99,13 +99,22 @@ class SqliteOutboxRepo:
         The caller is responsible for filtering entries whose destination
         instance is banned or unreachable.
         """
+        # ``next_attempt_at`` and ``expires_at`` are stored as ISO-8601
+        # with a ``T`` separator and a timezone suffix (``...+00:00``).
+        # SQLite's ``datetime('now')`` returns ``YYYY-MM-DD HH:MM:SS``,
+        # so a raw lexical compare disagrees on the separator and
+        # treats no row as due. Wrapping both sides in ``datetime(...)``
+        # normalises them to the same canonical form.
         rows = await self._db.fetchall(
             """
             SELECT * FROM federation_outbox
              WHERE status='pending'
-               AND next_attempt_at <= datetime('now')
-               AND (expires_at IS NULL OR expires_at > datetime('now'))
-             ORDER BY next_attempt_at ASC
+               AND datetime(next_attempt_at) <= datetime('now')
+               AND (
+                   expires_at IS NULL
+                   OR datetime(expires_at) > datetime('now')
+               )
+             ORDER BY datetime(next_attempt_at) ASC
              LIMIT ?
             """,
             (int(limit),),

@@ -98,7 +98,12 @@ class PairingAcceptView(BaseView):
         # /api/pairing/accept is on the auth middleware's public-path list
         # (it IS the auth/handshake entry point) — no current_user check.
         body = await self.body()
-        result = await self.svc(federation_service_key).accept_pairing(body)
+        adapter = self.svc(platform_adapter_key)
+        own_base = await adapter.get_federation_base()
+        result = await self.svc(federation_service_key).accept_pairing(
+            body,
+            own_inbox_base_url=own_base,
+        )
         return web.json_response(result)
 
 
