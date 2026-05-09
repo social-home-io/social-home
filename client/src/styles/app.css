@@ -4687,6 +4687,25 @@ a.sh-friends-member-chip:hover {
 
 /* Gallery */
 .sh-gallery { display: flex; flex-direction: column; gap: var(--sh-space-md); }
+/* Gallery hero — count-led headline + an inline "+ New album" CTA.
+ * Mirrors the Friends hero (totals first, action second) so the
+ * gallery doesn't open as a button-floating-in-empty-space. */
+.sh-gallery-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--sh-space-xs);
+}
+.sh-gallery-hero-headline {
+  font: 500 clamp(1.4rem, 2vw + 1rem, 1.8rem) / 1.2 var(--sh-font-family-display);
+  letter-spacing: -0.01em;
+}
+.sh-gallery-hero-headline strong {
+  color: var(--sh-primary, var(--sh-text));
+}
+.sh-gallery-hero-actions { display: flex; gap: var(--sh-space-xs); }
 .sh-album-detail { display: flex; flex-direction: column; gap: var(--sh-space-md); position: relative; }
 .sh-album-detail--drag { outline: 2px dashed var(--sh-primary); outline-offset: 6px; border-radius: var(--sh-radius-lg); }
 
@@ -4760,6 +4779,25 @@ a.sh-friends-member-chip:hover {
   font-size: 2.25rem;
   color: var(--sh-text-muted);
   background: linear-gradient(135deg, var(--sh-bg-secondary), var(--sh-bg-tertiary));
+}
+
+/* System "Posts" album — visually distinct from custom albums so a
+ * member reads it as "the auto-managed pile of feed photos" not "a
+ * regular album that's missing its name".  Subtle terracotta inner
+ * frame on the cover + matching tinted info strip. */
+.sh-album-card--system .sh-album-cover {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--sh-primary) 12%, var(--sh-bg-secondary)),
+    color-mix(in srgb, var(--sh-primary) 4%, var(--sh-bg-tertiary))
+  );
+}
+.sh-album-card--system .sh-album-cover--placeholder {
+  font-size: 2.5rem;
+  color: color-mix(in srgb, var(--sh-primary) 70%, var(--sh-text-muted));
+}
+.sh-album-card--system .sh-album-info {
+  background: color-mix(in srgb, var(--sh-primary) 6%, var(--sh-bg-tertiary));
 }
 .sh-album-info {
   padding: var(--sh-space-sm) var(--sh-space-md);
