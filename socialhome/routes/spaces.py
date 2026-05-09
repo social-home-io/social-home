@@ -963,28 +963,58 @@ class SpaceFeedView(BaseView):
                     creator.display_name if creator else b.created_by
                 )
 
-        return web.json_response(
-            [
-                sanitise_for_api(
+        # Match the household-feed shape — every type-specific field
+        # the SPA needs to render rich posts (image_urls, location,
+        # file_meta, reactions, linked_event_id, linked_highlight_id,
+        # edited_at) needs to ride along.  The previous shape only
+        # carried ``content`` + ``media_url`` so location / image /
+        # file / event posts in space feeds rendered as bare text.
+        signer = self.request.app.get(media_signer_key)
+        out: list[dict] = []
+        for p in posts:
+            payload = {
+                "id": p.id,
+                "author": p.author,
+                "type": p.type.value,
+                "content": p.content,
+                "media_url": p.media_url,
+                "image_urls": list(p.image_urls or ()),
+                "file_meta": (
                     {
-                        "id": p.id,
-                        "author": p.author,
-                        "type": p.type.value,
-                        "content": p.content,
-                        "media_url": p.media_url,
-                        "comment_count": p.comment_count,
-                        "pinned": p.pinned,
-                        "created_at": p.created_at.isoformat()
-                        if p.created_at
-                        else None,
-                        "bot": _bot_view(p.bot_id, bots_by_id, creators_by_user_id)
-                        if p.author == SYSTEM_AUTHOR
-                        else None,
+                        "url": p.file_meta.url,
+                        "mime_type": p.file_meta.mime_type,
+                        "original_name": p.file_meta.original_name,
+                        "size_bytes": p.file_meta.size_bytes,
                     }
-                )
-                for p in posts
-            ]
-        )
+                    if p.file_meta is not None
+                    else None
+                ),
+                "location": (
+                    {
+                        "lat": p.location.lat,
+                        "lon": p.location.lon,
+                        "label": p.location.label,
+                    }
+                    if p.location is not None
+                    else None
+                ),
+                "reactions": {
+                    emoji: sorted(uids) for emoji, uids in (p.reactions or {}).items()
+                },
+                "comment_count": p.comment_count,
+                "pinned": p.pinned,
+                "edited_at": p.edited_at.isoformat() if p.edited_at else None,
+                "linked_event_id": p.linked_event_id,
+                "linked_highlight_id": p.linked_highlight_id,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "bot": _bot_view(p.bot_id, bots_by_id, creators_by_user_id)
+                if p.author == SYSTEM_AUTHOR
+                else None,
+            }
+            if signer is not None:
+                sign_media_urls_in(payload, signer)
+            out.append(sanitise_for_api(payload))
+        return web.json_response(out)
 
 
 def _bot_view(

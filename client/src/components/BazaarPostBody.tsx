@@ -71,6 +71,12 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
   const [tick, setTick] = useState(0)  // re-render for countdown
 
   const me = currentUser.value?.user_id
+  // Mirror PollUI / ScheduleUI's load-state machine — when the
+  // listing endpoint 404s (post created with type=bazaar but no
+  // listing envelope yet) the previous bare-catch left the renderer
+  // stuck on "Loading listing…" forever.  Surface a calmer
+  // placeholder for the missing case instead.
+  const [loadState, setLoadState] = useState<'loading' | 'missing' | 'error' | 'ok'>('loading')
 
   useEffect(() => {
     let stopped = false
@@ -83,7 +89,17 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
         if (stopped) return
         setListing(l)
         setBids(bs)
-      } catch { /* noop — listing may not exist yet */ }
+        setLoadState('ok')
+      } catch (err: unknown) {
+        if (stopped) return
+        const status = (err as { status?: number })?.status
+        const msg = (err as Error)?.message ?? ''
+        if (status === 404 || msg.includes('404')) {
+          setLoadState('missing')
+        } else {
+          setLoadState('error')
+        }
+      }
     }
     void refresh()
 
@@ -109,10 +125,26 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
   // Acknowledge tick in a way that satisfies eslint's exhaustive-deps.
   void tick
 
-  if (!listing) {
+  if (loadState === 'loading') {
     return (
       <div class="sh-bazaar-card sh-bazaar-card--loading">
         <span class="sh-muted">Loading listing…</span>
+      </div>
+    )
+  }
+  if (loadState === 'missing') {
+    return (
+      <div class="sh-bazaar-card sh-bazaar-card--missing">
+        <span class="sh-muted">
+          🛍 Listing details haven't been attached to this post yet.
+        </span>
+      </div>
+    )
+  }
+  if (loadState === 'error' || !listing) {
+    return (
+      <div class="sh-bazaar-card sh-bazaar-card--error">
+        <span class="sh-muted">Couldn't load this listing. Try again later.</span>
       </div>
     )
   }
