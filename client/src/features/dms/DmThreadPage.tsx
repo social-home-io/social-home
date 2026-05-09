@@ -1,4 +1,4 @@
-import { useEffect } from 'preact/hooks'
+import { useEffect, useRef } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useRoute, useLocation } from 'preact-iso'
 import { api } from '@/api'
@@ -6,11 +6,13 @@ import { ws } from '@/ws'
 import type { Message } from '@/types'
 import { DmThreadSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
+import { SttButton } from '@/components/SttButton'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
 import { openCallTypePicker } from '@/components/CallTypePickerDialog'
 import { currentUser } from '@/store/auth'
+import { hasCapability } from '@/store/instance'
 
 const messages = signal<Message[]>([])
 const loading = signal(true)
@@ -144,6 +146,11 @@ export default function DmThreadPage() {
   const { params } = useRoute()
   const convId = params.id
   const location = useLocation()
+  // Composer ``<input>`` ref — STT (push-to-talk transcription) appends
+  // its final transcript here so the user can review + edit before
+  // sending. Uncontrolled input + ref keeps the existing FormData send
+  // path untouched.
+  const composerInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     loading.value = true
@@ -442,8 +449,27 @@ export default function DmThreadPage() {
         </div>
       )}
       <form class="sh-composer" onSubmit={handleSend}>
-        <input name="content" placeholder="Type a message..." autocomplete="off"
-          onInput={handleInput} />
+        <input
+          ref={composerInputRef}
+          name="content"
+          placeholder="Type a message..."
+          autocomplete="off"
+          onInput={handleInput}
+        />
+        {hasCapability('stt') && (
+          <SttButton
+            onText={(t) => {
+              const input = composerInputRef.current
+              if (!input) return
+              const cur = input.value
+              const sep = cur && !/\s$/.test(cur) ? ' ' : ''
+              input.value = cur + sep + t
+              // Nudge the typing indicator + any input listeners.
+              input.dispatchEvent(new Event('input', { bubbles: true }))
+              input.focus()
+            }}
+          />
+        )}
         <Button type="submit">Send</Button>
       </form>
     </div>
