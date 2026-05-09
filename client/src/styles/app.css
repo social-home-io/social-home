@@ -12923,6 +12923,62 @@ a.sh-btn--ghost:hover {
   flex: 1;
   text-align: center;
   opacity: 0.85;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--sh-radius-full);
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.sh-highlight-author-meta:hover,
+.sh-highlight-author-meta:focus-visible {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.2);
+}
+.sh-highlight-author-meta:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* "Seen by" sheet — opened from the eye chip in the highlight viewer
+ * footer. Lives inside the standard sh-modal so focus-trap / Escape /
+ * scroll behaviour is shared with every other dialog. */
+.sh-seenby-section {
+  margin-top: var(--sh-space-md);
+}
+.sh-seenby-section:first-of-type {
+  margin-top: 0;
+}
+.sh-seenby-heading {
+  margin: 0 0 var(--sh-space-sm) 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.sh-seenby-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-seenby-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: 6px 8px;
+  border-radius: var(--sh-radius-sm);
+}
+.sh-seenby-row:hover {
+  background: var(--sh-surface-hover, rgba(0, 0, 0, 0.04));
+}
+.sh-seenby-name {
+  flex: 1;
+  font-weight: 500;
+}
+.sh-seenby-emoji {
+  font-size: 1.15rem;
 }
 .sh-highlight-react-tray {
   position: absolute;
