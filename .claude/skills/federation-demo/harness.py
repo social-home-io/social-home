@@ -235,6 +235,155 @@ def cmd_up() -> None:
     print("up: ok")
 
 
+# ─── Step: gfs-up ──────────────────────────────────────────────────────────
+
+GFS_PORT = 18765
+GFS_DIR = ROOT / "gfs"
+
+
+def _gfs_config_path() -> Path:
+    return GFS_DIR / "global_server.toml"
+
+
+def _gfs_alive(state: dict) -> bool:
+    pid = (state.get("gfs") or {}).get("pid")
+    return bool(pid and _alive(pid))
+
+
+def cmd_gfs_up() -> None:
+    """Start a Global Federation Server (GFS) on ``127.0.0.1:18765``.
+
+    Uses ``socialhome-global-server`` (the ``socialhome[global-server]``
+    console script) under the hood, but bypasses the interactive
+    ``--init`` / ``--set-password`` CLI: we write the example TOML
+    directly, set ``[server] base_url`` to the loopback URL, and seed
+    the bcrypt admin-password hash via :func:`set_password_in_toml` so
+    the harness can boot the GFS in one shot.
+
+    Prerequisite: ``cmd_up`` must have run so ``/tmp/sh-demo`` exists.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+
+    # Lazy import — these helpers only ship when the project is
+    # installed editable; the rest of the harness doesn't need them.
+    from socialhome.global_server.admin import hash_password
+    from socialhome.global_server.config import (
+        set_password_in_toml,
+        write_example_config,
+    )
+
+    GFS_DIR.mkdir(parents=True, exist_ok=True)
+    config_path = _gfs_config_path()
+    if not config_path.exists():
+        write_example_config(config_path)
+    # Patch the config in-place so the loopback start-up succeeds.
+    text = config_path.read_text(encoding="utf-8")
+    text = text.replace(
+        'host     = "0.0.0.0"',
+        'host     = "127.0.0.1"',
+    )
+    text = text.replace(
+        "port     = 8765",
+        f"port     = {GFS_PORT}",
+    )
+    text = text.replace(
+        'base_url = "https://gfs.example.com"',
+        f'base_url = "http://127.0.0.1:{GFS_PORT}"',
+    )
+    text = text.replace(
+        'data_dir = "/var/lib/sh-gfs"',
+        f'data_dir = "{GFS_DIR}"',
+    )
+    config_path.write_text(text, encoding="utf-8")
+    set_password_in_toml(config_path, hash_password("gfs-admin-pw"))
+
+    log = open(GFS_DIR / "log.txt", "wb")
+    # ``socialhome.global_server.server`` has no ``__main__`` guard, so
+    # ``python -m`` imports the module without calling ``main()``. Use
+    # ``-c`` to invoke ``main()`` directly. ``sys.argv`` inside the
+    # subprocess starts with ``-c`` then our forwarded args.
+    p = subprocess.Popen(
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            "from socialhome.global_server.server import main; main()",
+            "--config",
+            str(config_path),
+        ],
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 30.0
+    last_err: Any = None
+    while time.monotonic() < deadline:
+        try:
+            s, _ = _request(f"http://127.0.0.1:{GFS_PORT}/healthz", timeout=2.0)
+            if s == 200:
+                break
+        except Exception as exc:
+            last_err = exc
+        time.sleep(0.5)
+    else:
+        raise SystemExit(f"GFS not ready after 30 s (last error: {last_err!r})")
+    state["gfs"] = {
+        "pid": p.pid,
+        "port": GFS_PORT,
+        "base_url": f"http://127.0.0.1:{GFS_PORT}",
+        "config_path": str(config_path),
+        "admin_password": "gfs-admin-pw",
+    }
+    _save(state)
+    print(f"  gfs: pid={p.pid} port={GFS_PORT} healthz=200")
+    print("gfs-up: ok")
+
+
+def cmd_gfs_pair() -> None:
+    """Pair Alpha + Delta with the GFS.
+
+    .. note::
+        Stubbed out — a full GFS pairing flow needs the GFS-side QR
+        token (``GET /`` issues one) **and** the GFS's Ed25519 public
+        key (no public endpoint exposes it today, so the test would
+        have to read it out of the GFS data dir's identity file).
+        Plus the existing
+        :meth:`GfsConnectionService.pair` POSTs ``{"token": token}``
+        to ``/gfs/register`` which the route currently rejects (it
+        wants ``instance_id``, ``public_key``, ``inbox_url``). That's
+        a real bug to chase before this step can run end-to-end.
+
+    Until those gaps are closed, run :func:`cmd_gfs_up` to prove the
+    GFS process boots cleanly, then iterate from there.
+    """
+    raise SystemExit(
+        "cmd_gfs_pair is a stub — see the docstring for the API "
+        "gaps that need closing before this can run end-to-end.",
+    )
+
+
+def cmd_gfs_down() -> None:
+    """Stop the GFS started by :func:`cmd_gfs_up` (idempotent)."""
+    state = _load()
+    gfs = state.get("gfs")
+    if not gfs:
+        return
+    try:
+        os.killpg(gfs["pid"], signal.SIGTERM)
+    except ProcessLookupError, PermissionError:
+        pass
+    time.sleep(1)
+    try:
+        os.killpg(gfs["pid"], signal.SIGKILL)
+    except ProcessLookupError, PermissionError:
+        pass
+    state.pop("gfs", None)
+    _save(state)
+    print("gfs-down: ok")
+
+
 # ─── Step: pair ────────────────────────────────────────────────────────────
 
 
@@ -821,6 +970,13 @@ def cmd_verify() -> None:
 
 def cmd_down() -> None:
     state = _load()
+    gfs = state.get("gfs")
+    if gfs:
+        try:
+            os.killpg(gfs["pid"], signal.SIGTERM)
+            print(f"  gfs: SIGTERM pid={gfs['pid']}")
+        except ProcessLookupError, PermissionError:
+            pass
     for label, info in (state.get("instances") or {}).items():
         try:
             os.killpg(info["pid"], signal.SIGTERM)
@@ -828,6 +984,11 @@ def cmd_down() -> None:
         except ProcessLookupError, PermissionError:
             pass
     time.sleep(1)
+    if gfs:
+        try:
+            os.killpg(gfs["pid"], signal.SIGKILL)
+        except ProcessLookupError, PermissionError:
+            pass
     for label, info in (state.get("instances") or {}).items():
         try:
             os.killpg(info["pid"], signal.SIGKILL)

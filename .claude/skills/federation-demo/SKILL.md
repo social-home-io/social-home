@@ -127,6 +127,67 @@ To iterate faster you can run the steps individually
 (``python harness.py up`` / ``pair`` / ``traffic`` / ``verify``); state
 is persisted to ``/tmp/sh-demo/state.json`` between calls.
 
+## GFS (Global Federation Server) — experimental subcommands
+
+The skill also has scaffolding for testing the **GFS** path — public
+spaces, public moments, bazaar listings — but the wiring is partial.
+See the docstrings on each subcommand for what works today and what
+still needs upstream changes.
+
+### ``gfs-up`` (works)
+
+Starts a Global Federation Server on ``127.0.0.1:18765``. Bypasses
+the interactive ``socialhome-global-server --init / --set-password``
+CLI: writes the example TOML, points ``base_url`` and ``data_dir`` at
+the local sandbox, seeds a bcrypt admin-password hash, and spawns
+``python -c "from socialhome.global_server.server import main; main()"``
+under the hood. Verifies the GFS is reachable by polling ``/healthz``.
+
+```bash
+python .claude/skills/federation-demo/harness.py up
+python .claude/skills/federation-demo/harness.py gfs-up
+```
+
+State is persisted under ``/tmp/sh-demo/gfs/`` (same parent as the
+HFS sandboxes); ``gfs-down`` (or the broader ``down``) tears it down.
+
+### ``gfs-pair`` (stub — see docstring)
+
+Intended to pair Alpha + a fresh GFS-only client instance with the
+GFS that ``gfs-up`` started. Currently raises ``SystemExit`` because
+two upstream pieces are missing in ``socialhome``:
+
+1. **No public endpoint exposes the GFS's Ed25519 ``public_key``.**
+   The QR payload the HFS-side ``GfsConnectionService.pair`` consumes
+   needs ``{gfs_url, token, public_key}``; the harness can fetch a
+   token via the GFS landing page but has no programmatic way to
+   pull the public key (today it's only embedded in the QR PNG that
+   the landing page renders).
+2. **``GfsConnectionService.pair`` POSTs ``{"token": token}`` to
+   ``/gfs/register``, but the receiving ``RegisterView`` requires
+   ``instance_id``, ``public_key``, and ``inbox_url``.** That's a
+   real protocol mismatch worth fixing in a follow-up before a fully
+   automated pair test can land.
+
+### Global space + cross-household post / bazaar / public moment (TODO)
+
+The endpoints the harness would call once ``gfs-pair`` works:
+
+- ``POST /api/spaces`` (Alpha) with ``space_type=global``.
+- ``POST /api/spaces/{space_id}/publish/{gfs_id}`` to publish to GFS.
+- ``GET /gfs/spaces`` on the GFS side to list discoverable spaces.
+- ``POST /api/spaces/join`` on the joining instance with the GFS-
+  issued invite token.
+- ``POST /api/feed/posts`` against a global space federates as
+  ``SPACE_POST_CREATED`` via the GFS WebSocket relay.
+- ``POST /api/bazaar/listings`` for the Bazaar test path.
+- ``POST /api/moments`` with ``is_public=true`` for the public-moment
+  / GFS-following test path.
+
+These are deferred until the two ``gfs-pair`` issues above are
+fixed; then a single ``gfs-traffic`` subcommand should be able to
+exercise the full path.
+
 ## Troubleshooting
 
 - **PeerConnection segfaults on the very first call** — the
