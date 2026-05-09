@@ -259,10 +259,34 @@ export default function SpaceFeedPage() {
             <div class="sh-subscriber-banner" role="status">
               <span class="sh-subscriber-banner__icon" aria-hidden="true">🔔</span>
               <div class="sh-subscriber-banner__body">
-                <strong>You're subscribed to this space.</strong>
+                <strong>You're following this space.</strong>
                 <p class="sh-muted">
-                  You see new posts here but can't post, comment, or react.
-                  Ask an admin to upgrade you to a full member if you want to join in.
+                  {(() => {
+                    // Subscriber-engagement opt-ins (§23.49) — admins can
+                    // open one or both paths.  Banner copy reflects what
+                    // the viewer can actually do without contacting an
+                    // admin.
+                    const f = s?.features as {
+                      allow_subscriber_react?: boolean
+                      allow_subscriber_comment?: boolean
+                    } | undefined
+                    const canReact   = !!f?.allow_subscriber_react
+                    const canComment = !!f?.allow_subscriber_comment
+                    if (canReact && canComment) {
+                      return 'You can react and comment, but posting is for full members. ' +
+                             'Ask an admin if you want to start posts of your own.'
+                    }
+                    if (canReact) {
+                      return 'You can leave reactions, but commenting and posting are for full members. ' +
+                             'Ask an admin if you want to join the conversation.'
+                    }
+                    if (canComment) {
+                      return 'You can leave comments, but reactions and posting are for full members. ' +
+                             'Ask an admin if you want to react too.'
+                    }
+                    return 'You see new posts here but can\'t post, comment, or react. ' +
+                           'Ask an admin to upgrade you to a full member if you want to join in.'
+                  })()}
                 </p>
               </div>
               <button
