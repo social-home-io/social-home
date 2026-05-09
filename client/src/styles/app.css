@@ -13065,13 +13065,82 @@ a.sh-btn--ghost:hover {
   flex: 1;
   height: 3px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.22);
+  overflow: hidden;
+  position: relative;
 }
-.sh-highlight-progress-seg--done {
-  background: rgba(255, 255, 255, 0.85);
+.sh-highlight-progress-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: rgba(255, 255, 255, 0.92);
+  transform-origin: left;
 }
-.sh-highlight-progress-seg--active {
+.sh-highlight-progress-seg--done .sh-highlight-progress-fill {
+  width: 100%;
+}
+/* Active segment runs an explicit keyframe — width 0→100% over the
+ * frame's own duration. The duration is delivered via the inline
+ * ``--seg-dur`` custom property set on the segment from the JSX.
+ * Pausing the viewer (hold-to-pause) freezes the animation via
+ * animation-play-state. */
+.sh-highlight-progress-seg--active .sh-highlight-progress-fill {
   background: var(--sh-primary);
+  animation: sh-highlight-fill var(--seg-dur, 6000ms) linear forwards;
+}
+.sh-highlight-viewer--paused
+  .sh-highlight-progress-seg--active
+  .sh-highlight-progress-fill {
+  animation-play-state: paused;
+}
+@keyframes sh-highlight-fill {
+  from { width: 0; }
+  to   { width: 100%; }
+}
+
+/* Paused hint — small "⏸ Paused" pill that floats top-center while
+ * the user is holding the frame.  Hidden by default; the
+ * ``sh-highlight-viewer--paused`` modifier flips it on. */
+.sh-highlight-paused-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.85rem;
+  padding: 4px 12px;
+  border-radius: 999px;
+  pointer-events: none;
+  letter-spacing: 0.02em;
+  z-index: 3;
+}
+
+/* Per-frame mute toggle — only renders for video frames. Sits
+ * top-right inside the frame stage, above the tap-zone overlay so
+ * clicks don't get swallowed. */
+.sh-highlight-mute-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 1.05rem;
+  cursor: pointer;
+  z-index: 3;
+  display: flex; align-items: center; justify-content: center;
+}
+.sh-highlight-mute-btn:hover,
+.sh-highlight-mute-btn:focus-visible {
+  background: rgba(0, 0, 0, 0.7);
+}
+.sh-highlight-mute-btn:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 .sh-highlight-viewer-header {
   display: flex;
@@ -13079,13 +13148,18 @@ a.sh-btn--ghost:hover {
   gap: var(--sh-space-md);
   padding: 0 var(--sh-space-md) var(--sh-space-sm);
 }
-.sh-highlight-frame {
+/* Scoped under the viewer because the highlight composer also has a
+ * ``.sh-highlight-frame`` class (its per-frame editor row) further
+ * down in this file with a cream background that would otherwise win
+ * the cascade and leak warm cream into the dark story stage. */
+.sh-highlight-viewer .sh-highlight-frame {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   min-height: 0;
+  background: transparent;
 }
 .sh-highlight-frame-media {
   max-height: 100%;
