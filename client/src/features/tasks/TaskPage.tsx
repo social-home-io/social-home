@@ -197,10 +197,28 @@ export default function TaskPage() {
   // Reactive page title — flips when the user picks a different list.
   useTitle(activeListEntry?.name || 'Tasks')
 
+  // Count of open tasks across every list — gives the sidebar header
+  // a real "you have N things on your plate" stat.  Tasks store
+  // currently keeps the active-list rows; the count is approximate
+  // for lists not yet visited (we don't paginate-eagerly), but the
+  // active list always shows its real total.
+  const totalOpen = tasks.value.filter(t => t.status !== 'done').length
+  const newListInputRef = useRef<HTMLInputElement | null>(null)
+
   return (
     <div class="sh-tasks">
       <aside class="sh-tasks-sidebar">
-        <h3 style={{ margin: 0, padding: '0 0.5rem' }}>Lists</h3>
+        <header class="sh-tasks-sidebar-header">
+          <h3>Lists</h3>
+          <span class="sh-muted">
+            {lists.value.length === 1
+              ? '1 list'
+              : `${lists.value.length} lists`}
+            {lists.value.length > 0 && totalOpen > 0 && (
+              <> · {totalOpen} open</>
+            )}
+          </span>
+        </header>
         {lists.value.map(l => (
           <ListRow
             key={l.id} list={l}
@@ -213,6 +231,7 @@ export default function TaskPage() {
         <form class="sh-form-row" onSubmit={submitList}
               style={{ marginTop: '0.5rem' }}>
           <input
+            ref={newListInputRef}
             type="text"
             value={newListName.value}
             placeholder="+ New list"
@@ -327,7 +346,19 @@ export default function TaskPage() {
           <div class="sh-empty-state">
             <div aria-hidden="true">📋</div>
             <h3>No task lists yet</h3>
-            <p>Create your first list in the sidebar to get started.</p>
+            <p>
+              Lists keep work pinned to a topic — "House projects",
+              "Groceries", "School run". Pick a name and you're off.
+            </p>
+            <Button
+              onClick={() => {
+                // Defer a tick so the focus call hits a mounted input
+                // (avoids racing with the empty-state render unmount).
+                setTimeout(() => newListInputRef.current?.focus(), 0)
+              }}
+            >
+              + Create your first list
+            </Button>
           </div>
         )}
       </div>
