@@ -338,9 +338,23 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
       </div>
 
       <div class="sh-bazaar-meta">
-        <span>
-          {activeBids.length} {activeBids.length === 1 ? 'bid' : 'bids'}
-        </span>
+        {/* Activity-count copy varies by listing mode: auction / bid-from
+         *  modes count *bids*; offer / negotiable count *offers*; fixed
+         *  has no buyer activity at all so the line is suppressed.
+         *  Previously every mode read "N bids", which was wrong for
+         *  fixed (no bids exist) and confusing for offers. */}
+        {(listing.mode === 'auction' || listing.mode === 'bid_from') && (
+          <span>
+            {activeBids.length} {activeBids.length === 1 ? 'bid' : 'bids'}
+          </span>
+        )}
+        {(listing.mode === 'offer' || listing.mode === 'negotiable') && (
+          <span>
+            {activeBids.length} {activeBids.length === 1 ? 'offer' : 'offers'}
+          </span>
+        )}
+        {/* listing.mode === 'fixed' → no activity row; the price + countdown
+         *  carry enough information.  ``status`` pills below still render. */}
         {listing.status === 'sold' && listing.winning_price != null && (
           <span class="sh-bazaar-sold-pill">
             Sold · {formatBazaarAmount(listing.winning_price, listing.currency)}
