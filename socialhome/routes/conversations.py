@@ -13,7 +13,7 @@ from ..app_keys import (
     user_repo_key,
 )
 from ..media_signer import sign_media_urls_in, strip_signature_query
-from ..security import sanitise_for_api
+from ..security import error_response, sanitise_for_api
 from .base import BaseView
 
 
@@ -71,15 +71,29 @@ class ConversationCollectionView(BaseView):
 
 
 class ConversationDmView(BaseView):
-    """POST /api/conversations/dm — create a 1:1 DM."""
+    """POST /api/conversations/dm — create a 1:1 DM.
+
+    Body shape: either ``{"username": "..."}`` (local-only DM) or
+    ``{"user_id": "..."}`` (cross-household DM with a remote user
+    already mirrored from a paired peer's directory).
+    """
 
     async def post(self) -> web.Response:
         ctx = self.user
         svc = self.svc(dm_service_key)
         body = await self.body()
+        username = body.get("username")
+        user_id = body.get("user_id")
+        if (username is None) == (user_id is None):
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "exactly one of username / user_id is required",
+            )
         conv = await svc.create_dm(
             creator_username=ctx.username,
-            other_username=body["username"],
+            other_username=username,
+            other_user_id=user_id,
         )
         return web.json_response({"id": conv.id, "type": conv.type.value}, status=201)
 

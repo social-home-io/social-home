@@ -1599,11 +1599,13 @@ def create_app(config: Config | None = None) -> web.Application:
         real_space_service.attach_profile_picture_repo(profile_picture_repo)
         real_space_service.attach_cover_repo(space_cover_repo)
         real_space_service.attach_gfs_connection_service(gfs_connection_service)
-        real_space_service.attach_federation(
-            federation_service=federation_service,
-            federation_repo=federation_repo,
-            remote_member_repo=repos.space_remote_member,
-        )
+        # ``attach_federation`` is deferred until just after
+        # ``_wire_federation_stack`` returns the live ``federation_service``
+        # (see below). Calling it here would bind ``_federation`` to the
+        # ``None`` placeholder declared at the top of ``create_app``,
+        # which makes ``invite_remote_user`` (§D1b cross-household
+        # invites) raise ``RuntimeError: federation not attached`` with
+        # a 500.
         app[K.space_service_key] = real_space_service
 
         # 5a. SpaceContentEncryption — per-space epoch keys, KEK-protected.
@@ -1657,6 +1659,16 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         federation_service = fed.federation_service
         sync_manager = fed.sync_manager
+        # Cross-household private-space invites (§D1b) need a live
+        # ``FederationService``. Wire it now that ``_wire_federation_stack``
+        # has returned the real one — see the matching deferral note
+        # above the ``app[K.space_service_key] = real_space_service``
+        # registration.
+        real_space_service.attach_federation(
+            federation_service=federation_service,
+            federation_repo=federation_repo,
+            remote_member_repo=repos.space_remote_member,
+        )
         # Wire RSVP propagation onto the calendar service. Done after
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).

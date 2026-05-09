@@ -941,12 +941,17 @@ class SpaceService:
         # §25.8.21 — zero-leak envelope: space_id + invite_token + all
         # space metadata ride in the *encrypted* payload only. We do
         # NOT pass space_id to send_event (would put it in plaintext).
+        # ``invitee_user_id`` is required so the receiving instance can
+        # fan the invite out to the right local user — without it,
+        # :meth:`PrivateSpaceInviteHandler._on_invite` early-returns
+        # and ``GET /api/remote_invites`` stays empty on the recipient.
         await self._federation.send_event(
             to_instance_id=invitee_instance_id,
             event_type=FederationEventType.SPACE_PRIVATE_INVITE,
             payload={
                 "space_id": space_id,
                 "invite_token": token,
+                "invitee_user_id": invitee_user_id,
                 "inviter_user_id": actor.user_id,
                 "inviter_display_name": (actor.display_name or actor.username),
                 "space_display_hint": space.name,

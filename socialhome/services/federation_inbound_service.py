@@ -20,8 +20,12 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from ..domain.conversation import (
+    Conversation,
+    ConversationMember,
     ConversationMessage,
+    ConversationType,
     MESSAGE_TYPES,
+    RemoteConversationMember,
 )
 from ..domain.events import (
     CommentAdded,
@@ -244,6 +248,24 @@ class FederationInboundService:
                         expected_seq=incoming,
                     )
 
+        # Cross-household DMs arrive without the conversation ever
+        # being created on this instance — the *sender's* household
+        # built it locally via :meth:`DmService.create_dm` with
+        # ``other_user_id`` and we just got the first DM_MESSAGE for
+        # it. Auto-create the conversation row + seat the local
+        # recipient(s) as ``ConversationMember`` so
+        # ``GET /api/conversations`` finds the conv. Idempotent —
+        # ``conversation_repo`` upserts.
+        recipients = tuple(p.get("recipient_user_ids") or ())
+        await self._ensure_remote_dm_conversation(
+            conv_id=conv_id,
+            sender_instance_id=event.from_instance,
+            sender_user_id=sender_user_id,
+            sender_display_name=str(p.get("sender_display_name") or ""),
+            recipient_user_ids=recipients,
+            occurred_at=p.get("occurred_at"),
+        )
+
         msg = ConversationMessage(
             id=message_id,
             conversation_id=conv_id,
@@ -255,7 +277,6 @@ class FederationInboundService:
         )
         await self._conversation_repo.save_message(msg)
 
-        recipients = tuple(p.get("recipient_user_ids") or ())
         await self._bus.publish(
             DmMessageCreated(
                 conversation_id=conv_id,
@@ -270,6 +291,101 @@ class FederationInboundService:
                 occurred_at=msg.created_at,
             )
         )
+
+    async def _ensure_remote_dm_conversation(
+        self,
+        *,
+        conv_id: str,
+        sender_instance_id: str,
+        sender_user_id: str,
+        sender_display_name: str,
+        recipient_user_ids: tuple,
+        occurred_at: object,
+    ) -> None:
+        """Ensure the local conversation row + the recipient's local
+        membership exist for an inbound cross-household DM.
+
+        The sender's household creates the conversation locally on
+        send; the receiver's household has no row until the first
+        DM_MESSAGE arrives. Without this ensure-step the recipient
+        sees nothing in ``GET /api/conversations`` and
+        ``GET /api/conversations/{id}/messages`` returns 403
+        ("not a member").
+
+        Idempotent: ``conversation_repo.create`` upserts on the
+        primary key, ``add_member`` / ``add_remote_member`` upsert on
+        the natural keys.
+        """
+        existing = await self._conversation_repo.get(conv_id)
+        if existing is None:
+            now_iso = (
+                occurred_at
+                if isinstance(occurred_at, str) and occurred_at
+                else datetime.now(timezone.utc).isoformat()
+            )
+            try:
+                await self._conversation_repo.create(
+                    Conversation(
+                        id=conv_id,
+                        type=ConversationType.DM,
+                        created_at=parse_iso8601_lenient(now_iso),
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                log.debug(
+                    "_ensure_remote_dm_conversation: create skipped (%s)",
+                    exc,
+                )
+
+        joined_at = datetime.now(timezone.utc).isoformat()
+
+        # Seat each local recipient as a ConversationMember so
+        # list_for_user(username) finds the conv.
+        get_by_user_id = getattr(self._user_repo, "get_by_user_id", None)
+        for rid in recipient_user_ids:
+            if get_by_user_id is None:
+                break
+            local = await get_by_user_id(str(rid))
+            if local is None:
+                continue
+            try:
+                await self._conversation_repo.add_member(
+                    ConversationMember(
+                        conversation_id=conv_id,
+                        username=local.username,
+                        joined_at=joined_at,
+                    ),
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                log.debug(
+                    "_ensure_remote_dm_conversation: add_member %s skipped (%s)",
+                    local.username,
+                    exc,
+                )
+
+        # Seat the sender as a remote member so the conversation
+        # roster reflects who the recipient is talking to.
+        get_remote = getattr(self._user_repo, "get_remote", None)
+        if get_remote is not None:
+            remote = await get_remote(sender_user_id)
+            if remote is not None:
+                try:
+                    await self._conversation_repo.add_remote_member(
+                        RemoteConversationMember(
+                            conversation_id=conv_id,
+                            instance_id=sender_instance_id,
+                            remote_username=remote.remote_username,
+                            joined_at=joined_at,
+                        ),
+                    )
+                except Exception as exc:  # pragma: no cover - defensive
+                    log.debug(
+                        "_ensure_remote_dm_conversation: add_remote_member "
+                        "%s/%s skipped (%s)",
+                        sender_instance_id,
+                        remote.remote_username,
+                        exc,
+                    )
 
     async def _on_dm_deleted(self, event: "FederationEvent") -> None:
         message_id = str(event.payload.get("message_id") or "")
