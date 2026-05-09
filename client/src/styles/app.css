@@ -10439,7 +10439,25 @@ a.sh-welcome-card:hover {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--sh-text-muted);
-  margin: var(--sh-space-xs) 0 var(--sh-space-sm) !important;
+  margin: 0 !important;
+}
+/* Sidebar header — title + the running "X lists · Y open" stat
+ * sit on the same row so the user knows at a glance whether the
+ * board is busy without opening every list. */
+.sh-tasks-sidebar-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-xs) var(--sh-space-xs) var(--sh-space-sm);
+  border-bottom: 1px dashed var(--sh-border);
+  margin-bottom: var(--sh-space-xs);
+}
+.sh-tasks-sidebar-header > .sh-muted {
+  font-size: var(--sh-font-size-xs);
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 400;
 }
 .sh-task-list-row {
   position: relative;
