@@ -1,23 +1,29 @@
 /* Public Momentum directory landing — minimal, mobile-first. */
 
+/* Aligned with the GFS public landing + admin palette so the public
+ * Momentum directory feels like the same surface as ``GET /`` and
+ * ``GET /spaces/{id}`` — a warm cream paper, terracotta accents, and
+ * Lora-style serifs on the headings. */
 :root {
   color-scheme: light dark;
-  --bg: #fbfaf7;
-  --fg: #1a1a1a;
-  --muted: #5a5a5a;
-  --card: #ffffff;
-  --border: #e6e3dd;
-  --hearth: #c9624b;
+  --bg:        #faf6f1;
+  --fg:        #1f1916;
+  --muted:     #5b4f48;
+  --card:      #fffdf9;
+  --border:    #ead8c2;
+  --hearth:    #ce5d3e;
   --hearth-fg: #ffffff;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow:
+    0 1px 0 var(--border),
+    0 18px 36px -28px rgba(26, 24, 20, 0.22);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161513;
-    --fg: #f0ece5;
-    --muted: #9a958b;
-    --card: #21201d;
+    --bg:     #161513;
+    --fg:     #f0ece5;
+    --muted:  #9a958b;
+    --card:   #21201d;
     --border: #2e2c28;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   }
@@ -43,8 +49,10 @@ main {
 }
 
 header h1 {
-  font-size: 1.75rem;
+  font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 1.9rem;
   margin: 0 0 4px;
+  letter-spacing: -0.01em;
 }
 
 header p {
@@ -149,8 +157,10 @@ ul.cards {
 }
 
 .card.detail h1 {
-  font-size: 1.5rem;
+  font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 1.6rem;
   margin: 0;
+  letter-spacing: -0.01em;
 }
 
 .card.detail .handle {
@@ -171,16 +181,18 @@ ul.cards {
 
 .btn-primary {
   display: inline-block;
-  padding: 10px 20px;
+  padding: 11px 22px;
   background: var(--hearth);
   color: var(--hearth-fg);
-  border-radius: 8px;
+  border-radius: 999px;
   text-decoration: none;
   font-weight: 600;
+  transition: transform 100ms, filter 100ms;
 }
 
 .btn-primary:hover {
-  filter: brightness(1.05);
+  transform: translateY(-1px);
+  filter: brightness(0.95);
 }
 
 .back {

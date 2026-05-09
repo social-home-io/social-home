@@ -305,32 +305,55 @@ class HighlightPublicLandingView(GfsBaseView):
 # ─── Internal helpers ────────────────────────────────────────────────────
 
 
+_FALLBACK_STYLE = (
+    "<style>"
+    "html,body{margin:0;padding:0;background:#faf6f1;color:#1f1916;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+    "min-height:100%;}"
+    "main{max-width:560px;margin:0 auto;padding:48px 24px;"
+    "text-align:center;}"
+    "h1{font-family:'Lora','Iowan Old Style','Palatino Linotype',serif;"
+    "font-size:28px;letter-spacing:-0.01em;margin:0 0 12px;}"
+    "p{color:#5b4f48;line-height:1.55;margin:0 0 16px;}"
+    "small{color:#9a8d83;font-size:11px;}"
+    ".accent-bar{height:6px;background:#ce5d3e;border-radius:3px;"
+    "max-width:120px;margin:0 auto 24px;}"
+    "</style>"
+)
+
+
 def _gone_html(instance_id: str, highlight_id: str) -> web.Response:
     body = (
-        "<!doctype html><html><head>"
+        "<!doctype html><html lang='en'><head>"
         "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>Highlight expired</title>"
-        "</head><body>"
+        f"{_FALLBACK_STYLE}"
+        "</head><body><main>"
+        "<div class='accent-bar'></div>"
         "<h1>This highlight has ended</h1>"
         "<p>The link is no longer valid — the author may have "
         "unpublished it, the highlight expired, or this token was revoked.</p>"
         f"<p><small>{instance_id}/{highlight_id}</small></p>"
-        "</body></html>"
+        "</main></body></html>"
     )
     return web.Response(text=body, content_type="text/html", status=410)
 
 
 def _unavailable_html(instance_id: str, highlight_id: str) -> web.Response:
     body = (
-        "<!doctype html><html><head>"
+        "<!doctype html><html lang='en'><head>"
         "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>Highlight unavailable</title>"
         "<meta http-equiv='refresh' content='10'>"
-        "</head><body>"
+        f"{_FALLBACK_STYLE}"
+        "</head><body><main>"
+        "<div class='accent-bar'></div>"
         "<h1>Currently unavailable</h1>"
         "<p>The author's instance is offline. This page will retry "
         "automatically in 10 seconds.</p>"
         f"<p><small>{instance_id}/{highlight_id}</small></p>"
-        "</body></html>"
+        "</main></body></html>"
     )
     return web.Response(text=body, content_type="text/html", status=503)
