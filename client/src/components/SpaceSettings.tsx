@@ -69,6 +69,17 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
     ((space.features as { location_mode?: 'gps' | 'zone_only' } | undefined)
       ?.location_mode) ?? 'gps',
   )
+  // Subscriber-engagement opt-ins (§23.49) — admins flip these when
+  // they want followers to be able to react / comment without being
+  // promoted to full members.  Posts always remain member-only.
+  const allowSubscriberComment = useSignal(
+    Boolean((space.features as { allow_subscriber_comment?: boolean } | undefined)
+      ?.allow_subscriber_comment),
+  )
+  const allowSubscriberReact = useSignal(
+    Boolean((space.features as { allow_subscriber_react?: boolean } | undefined)
+      ?.allow_subscriber_react),
+  )
   // Retention is "delete posts older than N days". ``null`` means
   // "keep forever" — that's the legacy default and what fresh spaces
   // ship with. The text input is empty in that case; entering 0 or
@@ -110,6 +121,8 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
           ...(space.features as object),
           location: locationEnabled.value,
           location_mode: locationMode.value,
+          allow_subscriber_comment: allowSubscriberComment.value,
+          allow_subscriber_react: allowSubscriberReact.value,
         },
       })
       if (modeChanged) {
@@ -245,6 +258,45 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             ever shared.
           </p>
         </fieldset>
+
+        {/* Followers (subscribers) are read-only by default. Admins can
+         *  open one or both engagement paths so a follower-shaped
+         *  audience (extended family, alumni, peers) can leave a 👍 or
+         *  drop a comment without being promoted to a full member.
+         *  Posting top-level content stays member-only. */}
+        <fieldset class="sh-form-fieldset">
+          <legend>🔔 Followers</legend>
+          <p class="sh-muted" style={{ marginTop: 0 }}>
+            Anyone who follows this space sees new posts but is read-only
+            by default. Loosen that here without making them full members.
+          </p>
+          <label>
+            <input
+              type="checkbox"
+              checked={allowSubscriberReact.value}
+              onChange={(e) => {
+                allowSubscriberReact.value =
+                  (e.target as HTMLInputElement).checked
+              }}
+            />
+            Let followers leave reactions
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={allowSubscriberComment.value}
+              onChange={(e) => {
+                allowSubscriberComment.value =
+                  (e.target as HTMLInputElement).checked
+              }}
+            />
+            Let followers comment on posts
+          </label>
+          <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-xs)' }}>
+            Posting (text, images, polls, etc.) always stays member-only.
+          </p>
+        </fieldset>
+
         <div class="sh-form-actions">
           <Button onClick={save}>Save changes</Button>
         </div>

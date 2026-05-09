@@ -256,13 +256,14 @@ class SqliteSpaceRepo:
                 feature_stickies, feature_pages,
                 posts_access, pages_access, stickies_access,
                 calendar_access, tasks_access,
+                allow_subscriber_comment, allow_subscriber_react,
                 allow_post_text, allow_post_image, allow_post_video,
                 allow_post_transcript, allow_post_poll, allow_post_schedule,
                 allow_post_file, allow_post_bazaar,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
                 dissolved, about_markdown, cover_hash
             ) VALUES(
-                -- 40 placeholders, one per column listed above.
+                -- 42 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
@@ -271,6 +272,7 @@ class SqliteSpaceRepo:
                 ?, ?,                         -- feature_stickies, feature_pages
                 ?, ?, ?,                      -- posts_access, pages_access, stickies_access
                 ?, ?,                         -- calendar_access, tasks_access
+                ?, ?,                         -- allow_subscriber_comment, allow_subscriber_react
                 ?, ?, ?,                      -- allow_post_text, allow_post_image, allow_post_video
                 ?, ?, ?,                      -- allow_post_transcript, allow_post_poll, allow_post_schedule
                 ?, ?,                         -- allow_post_file, allow_post_bazaar
@@ -298,6 +300,8 @@ class SqliteSpaceRepo:
                 stickies_access=excluded.stickies_access,
                 calendar_access=excluded.calendar_access,
                 tasks_access=excluded.tasks_access,
+                allow_subscriber_comment=excluded.allow_subscriber_comment,
+                allow_subscriber_react=excluded.allow_subscriber_react,
                 allow_post_text=excluded.allow_post_text,
                 allow_post_image=excluded.allow_post_image,
                 allow_post_video=excluded.allow_post_video,
@@ -340,6 +344,8 @@ class SqliteSpaceRepo:
                 cols["stickies_access"],
                 cols["calendar_access"],
                 cols["tasks_access"],
+                cols["allow_subscriber_comment"],
+                cols["allow_subscriber_react"],
                 cols["allow_post_text"],
                 cols["allow_post_image"],
                 cols["allow_post_video"],

@@ -81,6 +81,11 @@ def _features_from_body(raw: object) -> SpaceFeatures | None:
         "stickies_access": access("stickies_access", SpaceFeatureAccess.OPEN),
         "calendar_access": access("calendar_access", SpaceFeatureAccess.OPEN),
         "tasks_access": access("tasks_access", SpaceFeatureAccess.OPEN),
+        # Subscriber-engagement opt-ins (§23.49). Default to ``False``
+        # so omitting either flag preserves the strict read-only
+        # contract subscribers used to ship with.
+        "allow_subscriber_comment": bool(raw.get("allow_subscriber_comment", False)),
+        "allow_subscriber_react": bool(raw.get("allow_subscriber_react", False)),
     }
     if allowed is not None:
         kwargs["allowed_post_types"] = allowed

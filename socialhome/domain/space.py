@@ -107,6 +107,15 @@ class SpaceFeatures:
     calendar_access: SpaceFeatureAccess = SpaceFeatureAccess.OPEN
     tasks_access: SpaceFeatureAccess = SpaceFeatureAccess.OPEN
 
+    #: Subscriber-engagement opt-ins (§23.49).  Subscribers
+    #: (``role='subscriber'``) are read-only by default — the
+    #: historical contract.  Admins flip these flags when they want
+    #: a follower-style audience to be able to leave a comment or a
+    #: reaction without being promoted to a full member.  Posting
+    #: top-level content stays member-only regardless.
+    allow_subscriber_comment: bool = False
+    allow_subscriber_react: bool = False
+
     allowed_post_types: tuple[str, ...] = _ALL_POST_TYPES
 
     # ── Helpers ──────────────────────────────────────────────────────────
@@ -180,6 +189,8 @@ class SpaceFeatures:
             stickies_access=SpaceFeatureAccess(row.get("stickies_access", "open")),
             calendar_access=SpaceFeatureAccess(row.get("calendar_access", "open")),
             tasks_access=SpaceFeatureAccess(row.get("tasks_access", "open")),
+            allow_subscriber_comment=bool(row.get("allow_subscriber_comment", 0)),
+            allow_subscriber_react=bool(row.get("allow_subscriber_react", 0)),
             allowed_post_types=allowed or ("text",),
         )
 
@@ -196,6 +207,8 @@ class SpaceFeatures:
             "stickies_access": self.stickies_access.value,
             "calendar_access": self.calendar_access.value,
             "tasks_access": self.tasks_access.value,
+            "allow_subscriber_comment": int(self.allow_subscriber_comment),
+            "allow_subscriber_react": int(self.allow_subscriber_react),
             "allow_post_text": int("text" in self.allowed_post_types),
             "allow_post_image": int("image" in self.allowed_post_types),
             "allow_post_video": int("video" in self.allowed_post_types),
@@ -225,6 +238,8 @@ class SpaceFeatures:
             "stickies_access": self.stickies_access.value,
             "calendar_access": self.calendar_access.value,
             "tasks_access": self.tasks_access.value,
+            "allow_subscriber_comment": self.allow_subscriber_comment,
+            "allow_subscriber_react": self.allow_subscriber_react,
             "allowed_post_types": list(self.allowed_post_types),
         }
 

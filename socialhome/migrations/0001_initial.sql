@@ -479,6 +479,14 @@ CREATE TABLE IF NOT EXISTS spaces (
     -- existing highlight so a moment can live in a feed beyond the
     -- author's retention window.
     allow_post_highlight_share INTEGER NOT NULL DEFAULT 1,
+    -- Subscriber engagement toggles (§23.49) — admin opt-in.  By
+    -- default subscribers are strictly read-only (the historical
+    -- behaviour); flipping these flags lets a subscriber leave a
+    -- comment or a reaction without becoming a full member.  Posts
+    -- always remain member-only (subscribers can't author top-level
+    -- content).
+    allow_subscriber_comment   INTEGER NOT NULL DEFAULT 0,
+    allow_subscriber_react     INTEGER NOT NULL DEFAULT 0,
     -- Public / discover fields (populated only when join_mode IN ('public','open'))
     lat                    REAL,
     lon                    REAL,

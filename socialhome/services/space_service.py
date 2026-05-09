@@ -1649,7 +1649,15 @@ class SpaceService:
         member = await self._spaces.get_member(space_id, author_user_id)
         if member is None:
             raise SpacePermissionError("not a member of this space")
-        self._assert_writable_member(member, action="comment")
+        # Subscribers may comment when the space's
+        # ``allow_subscriber_comment`` opt-in is on.  Non-subscribers
+        # short-circuit before the (cheap) space lookup.
+        space = (
+            await self._spaces.get(space_id)
+            if member.role == SpaceRole.SUBSCRIBER
+            else None
+        )
+        self._assert_writable_member(member, action="comment", space=space)
         ctype = _coerce_comment_type(comment_type)
         if ctype is CommentType.TEXT:
             _validate_text_length(content, limit=MAX_COMMENT_LENGTH)
@@ -1949,35 +1957,51 @@ class SpaceService:
         user_id: str,
         *,
         action: str = "post",
+        space: "Space | None" = None,
     ) -> None:
         """Raise :class:`SpacePermissionError` if ``user_id`` is a
-        subscriber of ``space_id``. Used on write paths that haven't
-        already fetched the member row (reactions). Non-subscribers —
-        real members and non-members — pass through untouched; any
-        further auth check (if one exists on the path) runs normally.
+        subscriber of ``space_id`` and the action isn't admin-opted-in
+        for subscribers.  Reactions and comments can be opted in via
+        ``SpaceFeatures.allow_subscriber_react`` /
+        ``allow_subscriber_comment``; posts always remain member-only.
 
-        For paths that have already fetched the member row, prefer
-        :meth:`_assert_writable_member` to avoid a second lookup.
+        Used on write paths that haven't already fetched the member
+        row.  For paths that have already fetched the member row,
+        prefer :meth:`_assert_writable_member` to avoid a second
+        lookup.
         """
         member = await self._spaces.get_member(space_id, user_id)
-        if member is not None:
-            self._assert_writable_member(member, action=action)
+        if member is None:
+            return
+        if space is None and member.role == SpaceRole.SUBSCRIBER:
+            space = await self._spaces.get(space_id)
+        self._assert_writable_member(member, action=action, space=space)
 
     @staticmethod
     def _assert_writable_member(
         member: SpaceMember,
         *,
         action: str = "post",
+        space: "Space | None" = None,
     ) -> None:
         """Raise :class:`SpacePermissionError` if ``member`` is a
-        read-only subscriber. Use on every write path after the
-        membership lookup so subscriber gating stays uniform across
-        post / comment / reaction / future mutations.
+        read-only subscriber and the action isn't admin-opted-in for
+        subscribers.  Use on every write path after the membership
+        lookup.
         """
-        if member.role == SpaceRole.SUBSCRIBER:
-            raise SpacePermissionError(
-                f"subscribers can only read — joining as a member is required to {action}",
-            )
+        if member.role != SpaceRole.SUBSCRIBER:
+            return
+        # Subscriber-engagement opt-ins (§23.49).  Admins may allow
+        # subscribers to react and/or comment without making them full
+        # members.  Posts (action=='post') stay strictly member-only.
+        if space is not None:
+            if action == "react" and space.features.allow_subscriber_react:
+                return
+            if action == "comment" and space.features.allow_subscriber_comment:
+                return
+        raise SpacePermissionError(
+            f"subscribers can only read — joining as a member is required to {action}",
+        )
 
     async def _require_admin_or_owner(
         self,
