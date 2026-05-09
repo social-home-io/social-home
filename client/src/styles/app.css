@@ -3183,9 +3183,44 @@ a.sh-friends-member-chip:hover {
   color: #fff;
   box-shadow: var(--sh-shadow-sm);
 }
+/* Composer textarea — the moment the user is about to share with the
+ * household, so the surface earns extra warmth.  Soft paper-tinted
+ * background, generous padding + line-height, larger reading font
+ * and a terracotta caret keep the input from reading as a
+ * default-styled web form field.  Focus state is handled by the
+ * outer ``.sh-composer:focus-within`` ring (already terracotta) so
+ * the textarea itself can stay borderless. */
 .sh-composer-input {
-  min-height: 90px;
+  min-height: 96px;
   resize: vertical;
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  background: color-mix(
+    in srgb,
+    var(--sh-bg-secondary) 70%,
+    var(--sh-bg-tertiary)
+  );
+  border: 1px solid transparent;
+  border-radius: var(--sh-radius-md);
+  font-size: 1.05rem;
+  line-height: 1.55;
+  caret-color: var(--sh-primary);
+  color: var(--sh-text);
+  transition: background var(--sh-transition-fast),
+              border-color var(--sh-transition-fast),
+              box-shadow var(--sh-transition-fast);
+}
+.sh-composer-input::placeholder {
+  /* Italics + slightly muted color so the prompt reads as a hint
+   * ("you can write here") rather than as already-typed copy. */
+  color: var(--sh-text-muted);
+  font-style: italic;
+  opacity: 0.85;
+}
+.sh-composer-input:focus {
+  outline: none;
+  background: var(--sh-bg);
+  border-color: color-mix(in srgb, var(--sh-primary) 25%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sh-primary) 10%, transparent);
 }
 .sh-composer-footer {
   display: flex;
