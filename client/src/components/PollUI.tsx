@@ -58,6 +58,13 @@ export function PollUI({
   postId, authorUserId, currentUserId, spaceId,
 }: Props) {
   const [data, setData] = useState<PollData | null>(null)
+  // ``null`` while loading, ``'missing'`` when the poll endpoint
+  // 404'd (post created with type=poll but no options attached —
+  // happens with sloppy demo seeds and any time a federation
+  // partial reaches us before the poll envelope), ``'error'`` on
+  // any other failure.  Lets the renderer show a calming placeholder
+  // instead of staying stuck on "Loading poll…" forever.
+  const [loadState, setLoadState] = useState<'loading' | 'missing' | 'error' | 'ok'>('loading')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -65,8 +72,22 @@ export function PollUI({
     const load = async () => {
       try {
         const d = await api.get(baseUrl(postId, spaceId)) as PollData
-        if (!stopped) setData(d)
-      } catch { /* noop */ }
+        if (stopped) return
+        setData(d)
+        setLoadState('ok')
+      } catch (err: unknown) {
+        if (stopped) return
+        // ApiError carries .status; bare Error.message has the verb +
+        // path "API 404: /api/posts/.../poll".  Either way, treat 404
+        // as "no poll attached" rather than as a hard failure.
+        const status = (err as { status?: number })?.status
+        const msg = (err as Error)?.message ?? ''
+        if (status === 404 || msg.includes('404')) {
+          setLoadState('missing')
+        } else {
+          setLoadState('error')
+        }
+      }
     }
     void load()
     const off1 = ws.on('poll.voted',   (e) => {
@@ -81,12 +102,33 @@ export function PollUI({
     return () => { stopped = true; off1(); off2(); off3() }
   }, [postId, spaceId])
 
-  if (!data) return (
+  if (loadState === 'loading') return (
     <div class="sh-poll">
       <p class="sh-muted">Loading poll…</p>
     </div>
   )
-  if (data.options.length === 0) return null
+  if (loadState === 'missing') return (
+    <div class="sh-poll sh-poll--missing">
+      <p class="sh-muted">
+        🗳 Poll options haven't been attached to this post yet.
+      </p>
+    </div>
+  )
+  if (loadState === 'error' || !data) return (
+    <div class="sh-poll sh-poll--error">
+      <p class="sh-muted">Couldn't load this poll. Try again later.</p>
+    </div>
+  )
+  if (data.options.length === 0) {
+    // 200 OK but zero options — same UX as 404 from the SPA's POV.
+    return (
+      <div class="sh-poll sh-poll--missing">
+        <p class="sh-muted">
+          🗳 Poll options haven't been attached to this post yet.
+        </p>
+      </div>
+    )
+  }
 
   const vote = async (optionId: string) => {
     if (busy || data.closed) return

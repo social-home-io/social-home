@@ -60,6 +60,12 @@ export function ScheduleUI(
   { postId, authorUserId, currentUserId, spaceId }: Props,
 ) {
   const [data, setData] = useState<ScheduleData | null>(null)
+  // Mirror PollUI's load-state machine — the summary endpoint 404s
+  // for any post created with type=schedule before the slots envelope
+  // arrives, and the previous bare-catch left the renderer stuck on
+  // "Loading schedule…" forever.  Surface the missing-slots case as
+  // a calmer placeholder instead.
+  const [loadState, setLoadState] = useState<'loading' | 'missing' | 'error' | 'ok'>('loading')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -71,8 +77,19 @@ export function ScheduleUI(
             ? `/api/spaces/${spaceId}/schedule-polls/${postId}/summary`
             : `/api/schedule-polls/${postId}/summary`,
         ) as ScheduleData
-        if (!stopped) setData(d)
-      } catch { /* noop — summary isn't critical to render */ }
+        if (stopped) return
+        setData(d)
+        setLoadState('ok')
+      } catch (err: unknown) {
+        if (stopped) return
+        const status = (err as { status?: number })?.status
+        const msg = (err as Error)?.message ?? ''
+        if (status === 404 || msg.includes('404')) {
+          setLoadState('missing')
+        } else {
+          setLoadState('error')
+        }
+      }
     }
     void load()
     const off1 = ws.on('schedule_poll.responded', (e) => {
@@ -86,13 +103,36 @@ export function ScheduleUI(
     return () => { stopped = true; off1(); off2() }
   }, [postId, spaceId])
 
-  if (!data) return (
+  if (loadState === 'loading') return (
     <div class="sh-schedule">
       <p class="sh-muted">Loading schedule…</p>
     </div>
   )
+  if (loadState === 'missing') return (
+    <div class="sh-schedule sh-schedule--missing">
+      <p class="sh-muted">
+        🗓 Schedule slots haven't been attached to this post yet.
+      </p>
+    </div>
+  )
+  if (loadState === 'error' || !data) return (
+    <div class="sh-schedule sh-schedule--error">
+      <p class="sh-muted">Couldn't load this schedule. Try again later.</p>
+    </div>
+  )
 
-  if (data.slots.length === 0) return null  // Post without attached poll.
+  if (data.slots.length === 0) {
+    // Post body said "schedule" but the poll envelope never set
+    // any slots — surface the same calming hint as the 404 path so
+    // the post never reads as broken.
+    return (
+      <div class="sh-schedule sh-schedule--missing">
+        <p class="sh-muted">
+          🗓 Schedule slots haven't been attached to this post yet.
+        </p>
+      </div>
+    )
+  }
 
   const myResponses = new Map(
     data.responses
