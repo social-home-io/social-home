@@ -5347,6 +5347,32 @@ a.sh-friends-member-chip:hover {
   margin-top: 12px;
   gap: 0;
 }
+/* Pages hero — count + last-edited timestamp + the "+ New page"
+ * action.  Sits at the top of the paper card so the page reads as
+ * "you have N pages" instead of as a button hovering above an empty
+ * pile of cards.  Mirrors the Friends/Gallery hero pattern. */
+.sh-pages-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-md);
+  flex-wrap: wrap;
+  padding: var(--sh-space-xs) 0 var(--sh-space-sm);
+  border-bottom: 1px dashed var(--sh-border);
+  margin-bottom: var(--sh-space-xs);
+}
+.sh-pages-hero-headline {
+  font: 500 clamp(1.3rem, 1.5vw + 1rem, 1.6rem) / 1.2 var(--sh-font-family-display);
+  letter-spacing: -0.01em;
+}
+.sh-pages-hero-headline strong {
+  color: var(--sh-primary, var(--sh-text));
+}
+.sh-pages-hero-actions { display: flex; gap: var(--sh-space-xs); }
+.sh-pages-list {
+  display: flex;
+  flex-direction: column;
+}
 .sh-pages::before {
   content: "";
   position: absolute;
@@ -5362,8 +5388,10 @@ a.sh-friends-member-chip:hover {
 }
 .sh-page-card {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: var(--sh-space-sm);
+  width: 100%;
   padding: var(--sh-space-sm) var(--sh-space-sm) var(--sh-space-sm) var(--sh-space-md);
   background: transparent;
   border: none;
@@ -5371,10 +5399,41 @@ a.sh-friends-member-chip:hover {
   border-left: 3px solid transparent;
   border-radius: var(--sh-radius-sm);
   cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
   transition: background var(--sh-transition-fast),
               border-left-color var(--sh-transition-fast);
 }
 .sh-page-card:last-child { border-bottom: none; }
+.sh-page-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.sh-page-card-main strong { font-size: var(--sh-font-size-base); }
+/* Snippet preview — single-line truncation so a long body doesn't
+ * push the time column off-card. */
+.sh-page-card-snippet {
+  font-size: var(--sh-font-size-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  max-width: 100%;
+  margin-top: 2px;
+}
+.sh-page-card-when {
+  font: 500 calc(var(--sh-font-size-xs) - 1px) / 1.2
+        ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
 .sh-page-card:hover {
   background: color-mix(in srgb, var(--sh-bg) 60%, transparent);
   border-left-color: var(--sh-primary);
@@ -5420,6 +5479,25 @@ a.sh-friends-member-chip:hover {
 .sh-pages-empty-help ul {
   margin: var(--sh-space-sm) 0 0;
   padding-left: 1.25rem;
+}
+/* Persistent Markdown cheatsheet — used in the empty state AND under
+ * the populated list, so authors with at least one page can still
+ * reach it.  Collapsed by default; the summary uses muted-text so
+ * the disclosure stays low-key on the populated surface. */
+.sh-pages-help {
+  margin-top: var(--sh-space-md);
+  text-align: left;
+  padding-top: var(--sh-space-sm);
+  border-top: 1px dashed var(--sh-border);
+}
+.sh-pages-help summary {
+  cursor: pointer;
+  font-size: var(--sh-font-size-sm);
+}
+.sh-pages-help ul {
+  margin: var(--sh-space-sm) 0 0;
+  padding-left: 1.25rem;
+  font-size: var(--sh-font-size-sm);
 }
 .sh-page-viewer, .sh-page-editor { display: flex; flex-direction: column; gap: var(--sh-space-md); }
 .sh-page-textarea { font-family: ui-monospace, 'SF Mono', Menlo, monospace; line-height: 1.6; min-height: 400px; }
