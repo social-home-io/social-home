@@ -10980,11 +10980,53 @@ a.sh-welcome-card:hover {
   align-items: center;
   padding: var(--sh-space-sm) var(--sh-space-md);
   border-bottom: 1px solid var(--sh-border);
+  flex-wrap: wrap;
 }
 .sh-ha-user-row:last-child, .sh-federation-row:last-child, .sh-token-row:last-child { border-bottom: none; }
 .sh-ha-user-info, .sh-federation-actions { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .sh-ha-user-name { font-weight: 600; }
 .sh-federation-actions { display: flex; flex-direction: row; gap: var(--sh-space-xs); justify-content: flex-end; flex: 0 0 auto; }
+/* Public-link row — appears on a published GFS row so the admin can
+ * grab the URL of the SSR /spaces/{id} page. Wraps under the
+ * connection meta on narrow widths via the row's flex-wrap. */
+.sh-federation-public-url {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  flex: 1 1 100%;
+  margin-top: var(--sh-space-xs);
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  background: var(--sh-bg-secondary, var(--sh-bg));
+  border-radius: var(--sh-radius-sm);
+  font-size: 0.875rem;
+}
+.sh-federation-public-url__link {
+  color: var(--sh-text);
+  text-decoration: none;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.sh-federation-public-url__link:hover {
+  color: var(--sh-accent, var(--sh-text));
+  text-decoration: underline;
+}
+.sh-federation-public-url__copy {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--sh-radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 1rem;
+  flex: 0 0 auto;
+}
+.sh-federation-public-url__copy:hover {
+  background: var(--sh-surface-hover, color-mix(in srgb, var(--sh-text) 8%, transparent));
+  border-color: var(--sh-border);
+}
 .sh-token-create {
   padding: var(--sh-space-md);
   background: var(--sh-bg-secondary);
