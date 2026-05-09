@@ -517,11 +517,35 @@ export default function PagesPage() {
   }
 
   // 4. Index.
+  // Hero shape — "X pages · last updated 5h" tells the household at a
+  // glance whether the wiki is alive or stale.  Pulled from the freshest
+  // updated_at across the loaded list (the API returns newest-first
+  // but we don't depend on order — defensive max).
+  const newestUpdate = pages.value.length === 0
+    ? null
+    : pages.value.reduce<string | null>((acc, p) => {
+        if (!acc) return p.updated_at
+        return Date.parse(p.updated_at) > Date.parse(acc) ? p.updated_at : acc
+      }, null)
   return (
     <div class="sh-pages">
-      <div class="sh-page-header">
-        <Button onClick={() => showNew.value = true}>+ New page</Button>
-      </div>
+      <header class="sh-pages-hero">
+        <div class="sh-pages-hero-headline">
+          <strong>{pages.value.length}</strong>{' '}
+          {pages.value.length === 1 ? 'page' : 'pages'}
+          {newestUpdate && (
+            <>
+              {' · '}
+              <span class="sh-muted">
+                last edited {relativeDocsTime(newestUpdate)}
+              </span>
+            </>
+          )}
+        </div>
+        <div class="sh-pages-hero-actions">
+          <Button onClick={() => showNew.value = true}>+ New page</Button>
+        </div>
+      </header>
       {pages.value.length === 0 ? (
         <div class="sh-empty-state">
           <div aria-hidden="true">📝</div>
@@ -531,39 +555,53 @@ export default function PagesPage() {
           <Button onClick={() => showNew.value = true}>
             + Create your first page
           </Button>
-          <details class="sh-pages-empty-help">
-            <summary class="sh-muted">
-              Markdown basics
-            </summary>
-            <ul>
-              <li><code># Heading</code> → H1</li>
-              <li><code>**bold**</code> → <strong>bold</strong></li>
-              <li><code>*italic*</code> → <em>italic</em></li>
-              <li><code>[link](https://…)</code> — links to a URL</li>
-              <li><code>- item</code> or <code>1. item</code> — lists</li>
-              <li><code>![alt](url)</code> — embed an image</li>
-              <li><code>[[Page Title]]</code> — link to another page</li>
-            </ul>
-          </details>
+          <MarkdownBasics />
         </div>
-      ) : pages.value.map(p => (
-        <div key={p.id} class="sh-page-card" onClick={() => void viewPage(p.id)}>
-          <div>
-            <strong>{p.title}</strong>
-            {p.last_editor_user_id && (
-              <div class="sh-page-card-byline">
-                Edited by {householdDisplayName(p.last_editor_user_id)}
-              </div>
-            )}
+      ) : (
+        <>
+          <div class="sh-pages-list">
+            {pages.value.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                class="sh-page-card"
+                onClick={() => void viewPage(p.id)}
+              >
+                <div class="sh-page-card-main">
+                  <strong>{p.title}</strong>
+                  {/* Snippet preview — first ~140 chars of the rendered
+                   *  page body.  Strips Markdown noise (heading hashes,
+                   *  list bullets, fenced code fences) and the leading
+                   *  H1 if it duplicates the page title (very common —
+                   *  authors retype the title at the top of the body)
+                   *  so the line reads as natural body text rather than
+                   *  as raw source. */}
+                  <span class="sh-page-card-snippet sh-muted">
+                    {snippetFromMarkdown(p.content, p.title)}
+                  </span>
+                  {p.last_editor_user_id && (
+                    <span class="sh-page-card-byline sh-muted">
+                      Edited by {householdDisplayName(p.last_editor_user_id)}
+                    </span>
+                  )}
+                </div>
+                <time
+                  class="sh-page-card-when sh-muted"
+                  dateTime={p.updated_at}
+                  title={new Date(p.updated_at).toLocaleString()}
+                >
+                  {relativeDocsTime(p.updated_at)}
+                </time>
+              </button>
+            ))}
           </div>
-          <time
-            dateTime={p.updated_at}
-            title={new Date(p.updated_at).toLocaleString()}
-          >
-            {relativeDocsTime(p.updated_at)}
-          </time>
-        </div>
-      ))}
+          {/* Once a household has at least one page the empty-state
+           *  cheatsheet is gone — surface the same help below the list
+           *  so authors don't have to remember the syntax in their
+           *  heads. Collapsed by default to keep the surface clean. */}
+          <MarkdownBasics />
+        </>
+      )}
 
       <NewPageDialog
         open={showNew.value}
@@ -571,5 +609,56 @@ export default function PagesPage() {
         onCreate={(t) => void createPage(t)}
       />
     </div>
+  )
+}
+
+/** Strip enough Markdown noise from the page body that the first ~140
+ *  characters of source read as natural body copy in the card snippet.
+ *  This is intentionally small and lossy — it covers the cases that
+ *  matter for a glance ("# Heading", "- item", "**bold**") and lets
+ *  the rest fall through; we are not trying to render Markdown here.
+ */
+function snippetFromMarkdown(src: string, title?: string): string {
+  if (!src) return 'Empty page'
+  // First lossy pass — strip the most common Markdown noise so the
+  // surviving text reads like body copy.
+  const cleaned = src
+    .replace(/^#+\s*/gm, '')        // strip ATX heading marks
+    .replace(/^[-*]\s+/gm, '')      // bullet lists
+    .replace(/^\d+\.\s+/gm, '')     // numbered lists
+    .replace(/[*_`]+/g, '')         // emphasis + inline code marks
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url) → text
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1') // images → alt
+  // Drop the leading line if it just repeats the page title — many
+  // authors retype the title as an H1 on the first line of the body.
+  const lines = cleaned.split('\n')
+  if (title && lines.length > 0
+      && lines[0].trim().toLowerCase() === title.trim().toLowerCase()) {
+    lines.shift()
+  }
+  const flat = lines.join(' ').replace(/\s+/g, ' ').trim()
+  if (!flat) return 'Empty page'
+  return flat.length > 160 ? `${flat.slice(0, 160)}…` : flat
+}
+
+/** Persistent Markdown cheatsheet — collapsed by default.  Used both
+ *  in the empty state (so first-time authors learn the basics) and
+ *  under the populated list (so returning authors can refresh their
+ *  memory without leaving the surface).  Single source of truth so
+ *  the two callsites can never drift. */
+function MarkdownBasics() {
+  return (
+    <details class="sh-pages-help">
+      <summary class="sh-muted">Markdown basics</summary>
+      <ul>
+        <li><code># Heading</code> → H1</li>
+        <li><code>**bold**</code> → <strong>bold</strong></li>
+        <li><code>*italic*</code> → <em>italic</em></li>
+        <li><code>[link](https://…)</code> — links to a URL</li>
+        <li><code>- item</code> or <code>1. item</code> — lists</li>
+        <li><code>![alt](url)</code> — embed an image</li>
+        <li><code>[[Page Title]]</code> — link to another page</li>
+      </ul>
+    </details>
   )
 }
