@@ -67,9 +67,14 @@ export function ReportDialog() {
     <Modal
       open={open.value}
       onClose={() => (open.value = false)}
-      title="Report Content"
+      title="Report content"
     >
       <div class="sh-form">
+        <p class="sh-muted" style={{ marginTop: 0 }}>
+          Reports go to your household admin. If the content lives on a
+          Global Federation Server, the report also forwards there for
+          community review unless you opt out below.
+        </p>
         <label>
           Category *
           <select
@@ -78,7 +83,7 @@ export function ReportDialog() {
               (category.value = (e.target as HTMLSelectElement).value)
             }
           >
-            <option value="">Select a reason...</option>
+            <option value="">Select a reason…</option>
             {CATEGORIES.map((c) => (
               <option key={c.value} value={c.value}>
                 {c.label}
@@ -94,31 +99,41 @@ export function ReportDialog() {
               (notes.value = (e.target as HTMLTextAreaElement).value)
             }
             rows={3}
-            placeholder="Optional details..."
+            placeholder="Optional details…"
           />
         </label>
-        <p class="sh-muted" style="margin:4px 0 2px">
-          Reports are sent to your household admin. Reports on content
-          from a Global Federation Server are also forwarded there for
-          community review.
-        </p>
-        <label style="display:flex;gap:8px;align-items:center;margin:4px 0 10px">
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:0">
           <input
             type="checkbox"
             checked={householdOnly.value}
             onChange={(e) =>
               (householdOnly.value = (e.target as HTMLInputElement).checked)
             }
+            style={{ marginTop: '4px' }}
           />
-          Keep this report in my household only
+          <span>
+            Don't share this report beyond my household
+            <span class="sh-muted" style={{ display: 'block', fontSize: 'var(--sh-font-size-xs)' }}>
+              Keep the moderation loop local even when the content
+              came from a Global Federation Server.
+            </span>
+          </span>
         </label>
-        <Button
-          onClick={submit}
-          loading={submitting.value}
-          disabled={!category.value}
-        >
-          Submit report
-        </Button>
+        <div class="sh-form-actions">
+          <Button
+            variant="secondary"
+            onClick={() => { open.value = false }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={submit}
+            loading={submitting.value}
+            disabled={!category.value}
+          >
+            Submit report
+          </Button>
+        </div>
       </div>
     </Modal>
   )
