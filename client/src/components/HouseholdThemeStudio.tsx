@@ -5,6 +5,14 @@
  * PUT /api/household/features for the household name. Since the backend
  * accepts PATCH-style partials, each field edit can be saved
  * independently; the UI batches the form into a single Save press.
+ *
+ * Surface mirrors :mod:`SpaceThemeStudio`: a row of preset swatches at
+ * the top for one-click "make it look nice", a tighter form grid for
+ * the colour pickers, and a live preview card showing how a feed post
+ * will read with the current values.  The household theme is the
+ * default that every space inherits from, so this view earns at least
+ * the same polish as the per-space studio rather than the bare-slider
+ * stack it used to ship as.
  */
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
@@ -28,6 +36,28 @@ interface HouseholdTheme {
   corner_radius: number
 }
 
+interface Preset {
+  label: string
+  primary: string
+  accent: string
+  /** Optional surface tint — leave ``null`` to keep the brand cream. */
+  surface: string | null
+}
+
+/** Quick-apply palettes — same names as :mod:`SpaceThemeStudio` so a
+ *  household admin who's used the per-space studio recognises the
+ *  language.  ``Default`` is the brand hearth+honey; ``Calm`` cools
+ *  to a soft blue/teal; ``Bold`` is a punchy magenta on near-black;
+ *  ``Playful`` is purple on lavender; ``High contrast`` is the
+ *  accessibility-first option. */
+const PRESETS: Preset[] = [
+  { label: 'Default',       primary: '#D2542A', accent: '#C8902F', surface: null },
+  { label: 'Calm',          primary: '#5D7CBB', accent: '#70B3A4', surface: '#F0F4F8' },
+  { label: 'Bold',          primary: '#E94E77', accent: '#FFB400', surface: '#1F1E26' },
+  { label: 'Playful',       primary: '#B14AED', accent: '#FFD447', surface: '#FDF4FF' },
+  { label: 'High contrast', primary: '#000000', accent: '#0050E6', surface: '#FFFFFF' },
+]
+
 // Initial signals match the brand defaults in ``tokens.css`` and the
 // ``household_theme`` schema row — opening the studio and saving
 // without changing the colours leaves the SPA on the warm hearth
@@ -44,14 +74,24 @@ const householdName = signal('Home')
 const loading       = signal(true)
 const saving        = signal(false)
 
+function applyPreset(p: Preset) {
+  primary.value = p.primary
+  accent.value  = p.accent
+  surface.value = p.surface ?? ''
+}
+
 export function HouseholdThemeStudio() {
   useEffect(() => { void load() }, [])
 
   if (loading.value) return <Spinner />
 
   return (
-    <section class="sh-household-theme-studio">
-      <h3>Household appearance</h3>
+    <section class="sh-theme-studio sh-household-theme-studio">
+      <h3 style={{ margin: 0 }}>Household appearance</h3>
+      <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-sm)', margin: 0 }}>
+        Sets the default look for every surface in this household.
+        Spaces inherit unless an admin overrides them.
+      </p>
 
       <label>
         Household name
@@ -64,114 +104,122 @@ export function HouseholdThemeStudio() {
         />
       </label>
 
-      <label>
-        Primary colour
-        <input
-          type="color"
-          value={primary.value}
-          onInput={(e) => (primary.value = (e.target as HTMLInputElement).value)}
-        />
-      </label>
-
-      <label>
-        Accent colour
-        <input
-          type="color"
-          value={accent.value}
-          onInput={(e) => (accent.value = (e.target as HTMLInputElement).value)}
-        />
-      </label>
-
-      <label>
-        Light surface
-        <input
-          type="color"
-          value={surface.value || '#ffffff'}
-          onInput={(e) => (surface.value = (e.target as HTMLInputElement).value)}
-        />
-      </label>
-
-      <label>
-        Dark surface
-        <input
-          type="color"
-          value={surfaceDark.value || '#101820'}
-          onInput={(e) =>
-            (surfaceDark.value = (e.target as HTMLInputElement).value)}
-        />
-      </label>
-
-      <label>
-        Mode
-        <select
-          value={mode.value}
-          onChange={(e) =>
-            (mode.value = (e.target as HTMLSelectElement).value as Mode)}
-        >
-          <option value="auto">Auto (system)</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </label>
-
-      <label>
-        Font
-        <select
-          value={font.value}
-          onChange={(e) =>
-            (font.value = (e.target as HTMLSelectElement).value as FontId)}
-        >
-          <option value="system">System</option>
-          <option value="serif">Serif</option>
-          <option value="rounded">Rounded</option>
-          <option value="mono">Mono</option>
-        </select>
-      </label>
-
-      <label>
-        Density
-        <select
-          value={density.value}
-          onChange={(e) =>
-            (density.value = (e.target as HTMLSelectElement).value as Density)}
-        >
-          <option value="compact">Compact</option>
-          <option value="comfortable">Comfortable</option>
-          <option value="spacious">Spacious</option>
-        </select>
-      </label>
-
-      <label>
-        Corner radius ({cornerRadius.value}px)
-        <input
-          type="range"
-          min={0}
-          max={24}
-          step={1}
-          value={cornerRadius.value}
-          onInput={(e) =>
-            (cornerRadius.value = parseInt(
-              (e.target as HTMLInputElement).value, 10,
-            ))}
-        />
-      </label>
-
-      <div
-        class="sh-theme-preview"
-        style={
-          `--sh-primary:${primary.value};` +
-          `--sh-accent:${accent.value};` +
-          `--sh-radius:${cornerRadius.value}px;` +
-          `--sh-surface:${surface.value || 'var(--sh-surface-default)'};`
-        }
-      >
-        <span class="sh-swatch sh-swatch-primary" />
-        <span class="sh-swatch sh-swatch-accent" />
+      <div class="sh-theme-presets" role="group" aria-label="Theme presets">
+        {PRESETS.map(p => (
+          <button key={p.label} type="button"
+                  class="sh-theme-preset"
+                  onClick={() => applyPreset(p)}
+                  title={p.label}>
+            <span class="sh-theme-preset-swatch"
+                  style={{
+                    background: `linear-gradient(135deg, ${p.primary} 0 50%, ${p.accent} 50% 100%)`,
+                  }}
+                  aria-hidden="true" />
+            <span>{p.label}</span>
+          </button>
+        ))}
       </div>
 
-      <Button onClick={save} disabled={saving.value}>
-        {saving.value ? 'Saving…' : 'Save'}
-      </Button>
+      <div class="sh-theme-studio-grid">
+        <label>
+          Primary
+          <input type="color" value={primary.value}
+                 onInput={(e) => (primary.value = (e.target as HTMLInputElement).value)} />
+        </label>
+        <label>
+          Accent
+          <input type="color" value={accent.value}
+                 onInput={(e) => (accent.value = (e.target as HTMLInputElement).value)} />
+        </label>
+        <label>
+          Light surface
+          <input type="color" value={surface.value || '#ffffff'}
+                 onInput={(e) => (surface.value = (e.target as HTMLInputElement).value)} />
+          {surface.value && (
+            <button type="button" class="sh-link"
+                    onClick={() => (surface.value = '')}>
+              Clear
+            </button>
+          )}
+        </label>
+        <label>
+          Dark surface
+          <input type="color" value={surfaceDark.value || '#101820'}
+                 onInput={(e) => (surfaceDark.value = (e.target as HTMLInputElement).value)} />
+          {surfaceDark.value && (
+            <button type="button" class="sh-link"
+                    onClick={() => (surfaceDark.value = '')}>
+              Clear
+            </button>
+          )}
+        </label>
+        <label>
+          Mode
+          <select value={mode.value}
+                  onChange={(e) =>
+                    (mode.value = (e.target as HTMLSelectElement).value as Mode)}>
+            <option value="auto">Auto (system)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label>
+          Font
+          <select value={font.value}
+                  onChange={(e) =>
+                    (font.value = (e.target as HTMLSelectElement).value as FontId)}>
+            <option value="system">System</option>
+            <option value="serif">Serif</option>
+            <option value="rounded">Rounded</option>
+            <option value="mono">Mono</option>
+          </select>
+        </label>
+        <label>
+          Density
+          <select value={density.value}
+                  onChange={(e) =>
+                    (density.value = (e.target as HTMLSelectElement).value as Density)}>
+            <option value="compact">Compact</option>
+            <option value="comfortable">Comfortable</option>
+            <option value="spacious">Spacious</option>
+          </select>
+        </label>
+        <label>
+          Corner radius ({cornerRadius.value}px)
+          <input type="range" min={0} max={24} step={1}
+                 value={cornerRadius.value}
+                 onInput={(e) =>
+                   (cornerRadius.value = parseInt(
+                     (e.target as HTMLInputElement).value, 10,
+                   ))} />
+        </label>
+      </div>
+
+      {/* Live preview card — same shape as the per-space studio so
+       *  the two surfaces feel like cousins.  Sets CSS variables
+       *  inline so we don't have to flush ``applyToDocument`` until
+       *  the user actually saves. */}
+      <div class="sh-theme-studio-preview"
+           style={{
+             '--preview-primary': primary.value,
+             '--preview-accent': accent.value,
+             '--preview-tint': surface.value || 'transparent',
+           } as Record<string, string>}>
+        <div class="sh-theme-preview-card">
+          <div class="sh-theme-preview-header">
+            <span class="sh-theme-preview-dot" />
+            <strong>Preview</strong>
+          </div>
+          <p>Your household feed will look like this.</p>
+          <div class="sh-theme-preview-chip">👍 3</div>
+        </div>
+      </div>
+
+      <div class="sh-form-actions">
+        <Button onClick={save} disabled={saving.value}>
+          {saving.value ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
     </section>
   )
 }
@@ -192,8 +240,11 @@ async function load() {
       { household_name: string }
     householdName.value = feats.household_name
     applyToDocument()
-  } catch (err: any) {
-    showToast(`Could not load theme: ${err?.message || err}`, 'error')
+  } catch (err: unknown) {
+    showToast(
+      `Could not load theme: ${(err as Error)?.message ?? err}`,
+      'error',
+    )
   } finally {
     loading.value = false
   }
@@ -241,8 +292,11 @@ async function save() {
     })
     applyToDocument()
     showToast('Saved', 'success')
-  } catch (err: any) {
-    showToast(`Save failed: ${err?.message || err}`, 'error')
+  } catch (err: unknown) {
+    showToast(
+      `Save failed: ${(err as Error)?.message ?? err}`,
+      'error',
+    )
   } finally {
     saving.value = false
   }
