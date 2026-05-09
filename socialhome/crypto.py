@@ -374,7 +374,17 @@ class ReplayCache:
 
     def _prune(self, now: datetime) -> None:
         cutoff = now - self._window
-        stale = [k for k, t in self._seen.items() if t < cutoff]
+
+        # Persisted ``received_at`` rows are written via SQLite's
+        # ``datetime('now')`` (naive UTC), so :meth:`load` warms the
+        # cache with offset-naive entries while ``seen()`` records
+        # offset-aware ones. Normalise to aware UTC before comparing
+        # so the prune step doesn't ``TypeError`` on a freshly-warmed
+        # cache.
+        def _aware(t: datetime) -> datetime:
+            return t if t.tzinfo is not None else t.replace(tzinfo=timezone.utc)
+
+        stale = [k for k, t in self._seen.items() if _aware(t) < cutoff]
         for k in stale:
             del self._seen[k]
 
