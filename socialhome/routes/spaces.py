@@ -28,7 +28,7 @@ from ..app_keys import (
     user_repo_key,
 )
 from ..domain.post import LocationData
-from ..domain.space import SpaceZone
+from ..domain.space import SpaceFeatureAccess, SpaceFeatures, SpaceZone
 from ..domain.user import SYSTEM_AUTHOR
 from ..domain.federation import PairingStatus
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
@@ -38,6 +38,54 @@ from ..services.space_service import _UNSET_MEMBER_PROFILE
 from .base import BaseView
 
 _PROFILE_PICTURE_MAX_UPLOAD_BYTES = PROFILE_PICTURE_MAX_UPLOAD_BYTES
+
+
+def _features_from_body(raw: object) -> SpaceFeatures | None:
+    """Rehydrate :class:`SpaceFeatures` from a PATCH body.
+
+    The wire shape mirrors :meth:`SpaceFeatures.to_wire_dict` —
+    boolean flags + access-level enums + an ``allowed_post_types``
+    list.  Missing keys fall back to dataclass defaults.
+    Returns ``None`` when the caller didn't include a ``features``
+    block, so the service layer treats it as "leave unchanged".
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    def access(name: str, default: SpaceFeatureAccess) -> SpaceFeatureAccess:
+        v = raw.get(name)
+        if v is None:
+            return default
+        try:
+            return SpaceFeatureAccess(v)
+        except ValueError:
+            return default
+
+    location_mode_raw = raw.get("location_mode", "gps")
+    location_mode = "zone_only" if location_mode_raw == "zone_only" else "gps"
+    allowed_raw = raw.get("allowed_post_types")
+    allowed = (
+        tuple(sorted(str(t) for t in allowed_raw))
+        if isinstance(allowed_raw, (list, tuple)) and allowed_raw
+        else None
+    )
+    kwargs: dict = {
+        "calendar": bool(raw.get("calendar", False)),
+        "todo": bool(raw.get("todo", True)),
+        "location": bool(raw.get("location", False)),
+        "location_mode": location_mode,
+        "stickies": bool(raw.get("stickies", False)),
+        "pages": bool(raw.get("pages", True)),
+        "posts_access": access("posts_access", SpaceFeatureAccess.OPEN),
+        "pages_access": access("pages_access", SpaceFeatureAccess.OPEN),
+        "stickies_access": access("stickies_access", SpaceFeatureAccess.OPEN),
+        "calendar_access": access("calendar_access", SpaceFeatureAccess.OPEN),
+        "tasks_access": access("tasks_access", SpaceFeatureAccess.OPEN),
+    }
+    if allowed is not None:
+        kwargs["allowed_post_types"] = allowed
+    return SpaceFeatures(**kwargs)
+
 
 # Earth's mean radius — used by the zone-match helper. Mirrors the
 # constant in :mod:`services.space_location_outbound`.
@@ -167,12 +215,20 @@ class SpaceDetailView(BaseView):
         svc = self.svc(space_service_key)
         space_id = self.match("id")
         body = await self.body()
+        # ``features`` arrives in the same wire shape the GET response
+        # ships (``to_wire_dict``).  The previous handler silently
+        # dropped this key, so the SpaceSettings UI's location toggle
+        # appeared to save (200 OK) but never actually flipped the
+        # feature.  Rehydrate into a ``SpaceFeatures`` instance so the
+        # service layer can persist it.
+        features = _features_from_body(body.get("features"))
         updated = await svc.update_config(
             space_id,
             actor_username=ctx.username,
             name=body.get("name"),
             description=body.get("description"),
             emoji=body.get("emoji"),
+            features=features,
             join_mode=body.get("join_mode"),
             space_type=body.get("space_type"),
             retention_days=body.get("retention_days"),
