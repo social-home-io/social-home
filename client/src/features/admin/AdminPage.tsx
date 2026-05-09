@@ -123,8 +123,8 @@ export default function AdminPage() {
 }
 
 function _tabLabel(t: TabId): string {
-  if (t === 'ha-users') return 'HA Users'
-  if (t === 'child-protection') return 'Child Protection'
+  if (t === 'ha-users') return 'HA users'
+  if (t === 'child-protection') return 'Child protection'
   if (t === 'storage') return 'Storage'
   if (t === 'backup') return 'Backup'
   return t.charAt(0).toUpperCase() + t.slice(1)

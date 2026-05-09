@@ -874,6 +874,16 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   font-size: var(--sh-font-size-sm);
   margin-top: var(--sh-space-xs);
 }
+/* Inline form hint — light grey by default, red when paired with
+ * .sh-form-hint--error.  Lives directly under the offending input
+ * so the user reads the rule next to the field that broke it. */
+.sh-form-hint {
+  display: block;
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  margin-top: 2px;
+}
+.sh-form-hint--error { color: var(--sh-danger); }
 .sh-char-count {
   font-size: var(--sh-font-size-xs);
   color: var(--sh-text-muted);
