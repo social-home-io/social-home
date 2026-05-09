@@ -346,11 +346,15 @@ def cmd_traffic() -> None:
     # Cross-household DMs: a → c (transit through pairwise federation).
     a = state["instances"]["a"]
     c = state["instances"]["c"]
+    # Cross-household DM uses ``user_id`` so the DM service can resolve
+    # Carol from her ``remote_users`` row (mirrored on Alpha when the
+    # peer-directory snapshot from Gamma landed); ``username`` is
+    # local-only.
     s, conv = _request(
         f"http://127.0.0.1:{a['port']}/api/conversations/dm",
         token=a["token"],
         method="POST",
-        body={"username": c["username"]},
+        body={"user_id": c["user_id"]},
     )
     if s in (200, 201):
         state["dm_a_to_c"] = conv["id"]
@@ -482,7 +486,8 @@ def cmd_verify() -> None:
             token=c["token"],
         )
         _must("conversations(c)", s, convs)
-        ids = {c0.get("id") for c0 in (convs.get("items") or convs)}
+        conv_list = convs if isinstance(convs, list) else (convs.get("items") or [])
+        ids = {c0.get("id") for c0 in conv_list}
         if state["dm_a_to_c"] not in ids:
             failures.append(f"c: conversation {state['dm_a_to_c']} not in c's inbox")
         else:

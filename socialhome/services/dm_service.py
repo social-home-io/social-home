@@ -29,6 +29,7 @@ from ..domain.conversation import (
     ConversationMessage,
     ConversationType,
     MESSAGE_TYPES,
+    RemoteConversationMember,
 )
 from ..domain.events import DmConversationCreated, DmMessageCreated
 from ..domain.federation import FederationEventType
@@ -109,25 +110,96 @@ class DmService:
         self,
         *,
         creator_username: str,
-        other_username: str,
+        other_username: str | None = None,
+        other_user_id: str | None = None,
     ) -> Conversation:
         """Start a 1:1 DM. Idempotent if one already exists between these
         two participants — returns the existing conversation.
-        """
-        creator = await self._require_user(creator_username)
-        other = await self._require_user(other_username)
-        if creator.username == other.username:
-            raise ValueError("cannot DM yourself")
-        await self._guard_block_pair(creator.user_id, other.user_id)
 
-        # Check for existing 1:1 between these two
+        ``other_username`` resolves a *local* user. ``other_user_id`` is
+        the cross-household path: the DM is opened with a remote user
+        already known via a paired peer's directory snapshot
+        (``remote_users`` row). Exactly one must be supplied.
+        """
+        if (other_username is None) == (other_user_id is None):
+            raise ValueError(
+                "create_dm: pass exactly one of other_username / other_user_id",
+            )
+        creator = await self._require_user(creator_username)
+
+        # Local-target path — both participants are users on this instance.
+        if other_username is not None:
+            other = await self._require_user(other_username)
+            if creator.username == other.username:
+                raise ValueError("cannot DM yourself")
+            await self._guard_block_pair(creator.user_id, other.user_id)
+
+            existing = await self._convos.list_for_user(creator_username)
+            for conv in existing:
+                if conv.type is not ConversationType.DM:
+                    continue
+                members = await self._convos.list_members(conv.id)
+                usernames = {m.username for m in members}
+                if usernames == {creator.username, other.username}:
+                    return conv
+
+            conv = Conversation(
+                id=uuid.uuid4().hex,
+                type=ConversationType.DM,
+                created_at=datetime.now(timezone.utc),
+            )
+            await self._convos.create(conv)
+            now = datetime.now(timezone.utc).isoformat()
+            await self._convos.add_member(
+                ConversationMember(
+                    conversation_id=conv.id,
+                    username=creator.username,
+                    joined_at=now,
+                )
+            )
+            await self._convos.add_member(
+                ConversationMember(
+                    conversation_id=conv.id,
+                    username=other.username,
+                    joined_at=now,
+                )
+            )
+            await self._publish_conversation_created(
+                conv,
+                creator_user_id=creator.user_id,
+                member_usernames=(creator.username, other.username),
+            )
+            return conv
+
+        # Cross-household path — ``other_user_id`` references a remote user
+        # already mirrored locally by the peer-directory snapshot. We
+        # seat the local creator as a :class:`ConversationMember` and
+        # the remote target as a :class:`RemoteConversationMember`; from
+        # there the DM_MESSAGE federation envelopes route via the remote
+        # member's instance_id.
+        get_remote = getattr(self._users, "get_remote", None)
+        if get_remote is None:
+            raise ValueError(
+                "create_dm: cross-household DM requires user repo with get_remote",
+            )
+        remote = await get_remote(str(other_user_id))
+        if remote is None:
+            raise KeyError(f"remote user {other_user_id!r} not found")
+        if remote.user_id == creator.user_id:
+            raise ValueError("cannot DM yourself")
+        await self._guard_block_pair(creator.user_id, remote.user_id)
+
         existing = await self._convos.list_for_user(creator_username)
         for conv in existing:
             if conv.type is not ConversationType.DM:
                 continue
-            members = await self._convos.list_members(conv.id)
-            usernames = {m.username for m in members}
-            if usernames == {creator.username, other.username}:
+            local_members = await self._convos.list_members(conv.id)
+            remote_members = await self._convos.list_remote_members(conv.id)
+            local_set = {m.username for m in local_members}
+            remote_set = {(m.instance_id, m.remote_username) for m in remote_members}
+            if local_set == {creator.username} and remote_set == {
+                (remote.instance_id, remote.remote_username),
+            }:
                 return conv
 
         conv = Conversation(
@@ -139,18 +211,23 @@ class DmService:
         now = datetime.now(timezone.utc).isoformat()
         await self._convos.add_member(
             ConversationMember(
-                conversation_id=conv.id, username=creator.username, joined_at=now
+                conversation_id=conv.id,
+                username=creator.username,
+                joined_at=now,
             )
         )
-        await self._convos.add_member(
-            ConversationMember(
-                conversation_id=conv.id, username=other.username, joined_at=now
+        await self._convos.add_remote_member(
+            RemoteConversationMember(
+                conversation_id=conv.id,
+                instance_id=remote.instance_id,
+                remote_username=remote.remote_username,
+                joined_at=now,
             )
         )
         await self._publish_conversation_created(
             conv,
             creator_user_id=creator.user_id,
-            member_usernames=(creator.username, other.username),
+            member_usernames=(creator.username,),
         )
         return conv
 
@@ -308,6 +385,10 @@ class DmService:
         # Fan-out: every member except the sender is a push recipient.
         # ConversationMember stores usernames, not user_ids — resolve
         # to user_ids for the PushService which keys on user_id.
+        # Cross-household DMs also include the user_ids of remote
+        # members so :meth:`FederationInboundService._on_dm_message`
+        # on the recipient side can ensure the conversation row +
+        # local membership exists for the right user.
         recipients: list[str] = []
         for m in await self._convos.list_members(conversation_id):
             if m.username == sender_username:
@@ -315,6 +396,22 @@ class DmService:
             u = await self._users.get(m.username)
             if u is not None:
                 recipients.append(u.user_id)
+        # Resolve each remote member's ``user_id`` via the
+        # ``remote_users`` mirror so the federation envelope carries
+        # the full recipient set. ``RemoteConversationMember`` only
+        # stores ``(instance_id, remote_username)``; the user_id has
+        # to be looked up by-instance so the receiver-side inbound
+        # handler can ensure conversation membership for the right
+        # local user.
+        for rm in await self._convos.list_remote_members(conversation_id):
+            list_remote = getattr(self._users, "list_remote_for_instance", None)
+            if list_remote is None:
+                continue
+            for ru in await list_remote(rm.instance_id):
+                if ru.remote_username == rm.remote_username:
+                    if ru.user_id not in recipients:
+                        recipients.append(ru.user_id)
+                    break
         await self._bus.publish(
             DmMessageCreated(
                 conversation_id=conversation_id,
