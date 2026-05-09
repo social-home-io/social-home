@@ -7,7 +7,7 @@
  * else's frame a "Reply" chip surfaces below the frame; tapping it
  * routes to the DM thread with the frame's snapshot pre-loaded.
  */
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useRoute, useLocation } from 'preact-iso'
 import { api } from '@/api'
@@ -56,6 +56,11 @@ export default function HighlightViewerPage() {
   const loc = useLocation()
   const highlightId = params.highlightId
   const myId = currentUser.value?.user_id
+  // Video frames default muted so a tap into the inbox doesn't blast
+  // sound through a quiet room. The user can flip the toggle per-
+  // viewer (signal lives outside the component so the choice persists
+  // across frame transitions in the same session).
+  const [muted, setMuted] = useState(true)
 
   // ── Load the highlight detail on mount / id change ─────────────────────
   useEffect(() => {
@@ -245,14 +250,25 @@ export default function HighlightViewerPage() {
   const myViews = detail.value.views?.[frame.id] ?? []
   const myReactions = detail.value.reactions?.[frame.id] ?? []
 
+  // Active-segment fill animation duration matches the frame's own
+  // duration so the progress bar tracks the timer one-to-one. Videos
+  // use their explicit duration_ms; images fall back to the default.
+  const activeFillDuration = frame.duration_ms && frame.duration_ms > 0
+    ? frame.duration_ms
+    : FRAME_DURATION_MS
+
   return (
     <div
-      class="sh-highlight-viewer"
-      onPointerDown={() => { paused.value = true }}
-      onPointerUp={() => { paused.value = false }}
-      onPointerLeave={() => { paused.value = false }}
+      class={
+        paused.value
+          ? 'sh-highlight-viewer sh-highlight-viewer--paused'
+          : 'sh-highlight-viewer'
+      }
     >
-      {/* Progress bar — one segment per frame. */}
+      {/* Progress bar — one segment per frame. The active segment's
+       *  inner fill animates from 0 → 100% over the frame's duration,
+       *  giving the same "story" pacing cue Instagram / Snapchat use.
+       *  Pause freezes the animation via animation-play-state. */}
       <div class="sh-highlight-progress" aria-hidden="true">
         {frames.map((_, i) => (
           <span
@@ -264,7 +280,18 @@ export default function HighlightViewerPage() {
                   ? 'sh-highlight-progress-seg sh-highlight-progress-seg--active'
                   : 'sh-highlight-progress-seg'
             }
-          />
+          >
+            <span
+              class="sh-highlight-progress-fill"
+              // Setting the duration only on the active fill keeps the
+              // CSS lean — done/queued segments don't need it.
+              style={
+                i === currentIndex.value
+                  ? `--seg-dur: ${activeFillDuration}ms`
+                  : undefined
+              }
+            />
+          </span>
         ))}
       </div>
       <span class="sr-only" aria-live="polite">
@@ -292,21 +319,51 @@ export default function HighlightViewerPage() {
         <Button variant="ghost" onClick={() => loc.route('/highlights')}>Close</Button>
       </header>
 
-      <div class="sh-highlight-frame">
+      <div
+        class="sh-highlight-frame"
+        // Press-and-hold on the frame stage pauses the timer — Instagram
+        // / Snapchat behaviour. Bound here (not on the whole viewer) so
+        // tapping the React/Reply/Report footer does not get re-routed
+        // through pause-resume on every click.
+        onPointerDown={() => { paused.value = true }}
+        onPointerUp={() => { paused.value = false }}
+        onPointerLeave={() => { paused.value = false }}
+        onPointerCancel={() => { paused.value = false }}
+      >
         <button class="sh-highlight-tap-left"  onClick={onTapLeft}  aria-label="Previous frame" />
         <button class="sh-highlight-tap-right" onClick={onTapRight} aria-label="Next frame" />
         {frame.frame_type === 'image' ? (
           <img src={frame.media_url} alt={frame.caption_text ?? ''} class="sh-highlight-frame-media" />
         ) : (
           <video
+            // ``key`` forces a fresh element when the frame id changes
+            // — without it, switching from one video to another keeps
+            // the previous element + its currentTime, which made the
+            // new frame stutter on entry.
+            key={frame.id}
             src={frame.media_url}
             class="sh-highlight-frame-media"
             autoPlay
             playsInline
-            muted={false}
+            muted={muted}
             controls={false}
             onEnded={advance}
           />
+        )}
+        {/* Per-frame mute toggle — only meaningful on video frames, but
+         *  rendering it consistently keeps the chrome stable when the
+         *  user steps between image and video frames. */}
+        {frame.frame_type === 'video' && (
+          <button
+            type="button"
+            class="sh-highlight-mute-btn"
+            onClick={(ev) => { ev.stopPropagation(); setMuted(m => !m) }}
+            aria-pressed={muted}
+            aria-label={muted ? 'Unmute video' : 'Mute video'}
+            title={muted ? 'Unmute' : 'Mute'}
+          >
+            {muted ? '🔇' : '🔊'}
+          </button>
         )}
         {(frame.caption_text || frame.caption_emoji) && (
           <p class="sh-highlight-frame-caption">
@@ -317,6 +374,14 @@ export default function HighlightViewerPage() {
             )}
             {frame.caption_text}
           </p>
+        )}
+        {/* "Paused" hint appears while the user is holding to pause —
+         *  reassures them the timer has actually stopped, and tells
+         *  first-time users that hold-to-pause is a thing. */}
+        {paused.value && (
+          <span class="sh-highlight-paused-hint" aria-hidden="true">
+            ⏸ Paused
+          </span>
         )}
       </div>
 
