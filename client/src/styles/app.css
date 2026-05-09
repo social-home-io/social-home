@@ -11321,9 +11321,40 @@ a.sh-welcome-card:hover {
   padding: var(--sh-space-md);
   max-width: 1200px; margin: 0 auto;
 }
-.sh-browser-toolbar {
-  display: flex; gap: var(--sh-space-sm);
+.sh-browser-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sh-space-md);
   padding: 0 var(--sh-space-xs);
+  flex-wrap: wrap;
+}
+.sh-browser-header__copy h1 {
+  margin: 0 0 var(--sh-space-xs);
+  font-size: 1.4rem;
+}
+.sh-browser-header__copy p {
+  margin: 0;
+  max-width: 60ch;
+}
+.sh-browser-header__actions {
+  display: flex; gap: var(--sh-space-sm);
+  flex-wrap: wrap;
+}
+.sh-browser-toolbar {
+  display: flex; gap: var(--sh-space-sm); align-items: center;
+  padding: 0 var(--sh-space-xs);
+}
+.sh-browser-toolbar__clear {
+  background: transparent;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm);
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  color: var(--sh-muted);
+  cursor: pointer;
+  font: inherit;
+}
+.sh-browser-toolbar__clear:hover {
+  color: var(--sh-text);
+  border-color: var(--sh-accent);
 }
 .sh-browser-toolbar .sh-input {
   flex: 1;
@@ -11360,6 +11391,9 @@ a.sh-welcome-card:hover {
   grid-column: 1 / -1;
   padding: var(--sh-space-xl);
   text-align: center;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: var(--sh-space-sm);
 }
 
 /* Card — repeating unit across all three browser tabs. Picks up the
