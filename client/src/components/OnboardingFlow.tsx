@@ -9,6 +9,7 @@
  */
 import { signal } from '@preact/signals'
 import { type ComponentChildren } from 'preact'
+import { useEffect } from 'preact/hooks'
 import { api } from '@/api'
 import { currentUser } from '@/store/auth'
 import { Button } from './Button'
@@ -152,6 +153,21 @@ export function OnboardingFlow({ onComplete }: { onComplete: () => void }) {
   const skip = () => {
     finish()
   }
+
+  // Keyboard nav so power users (or anyone on a keyboard-only device)
+  // can step through without grabbing the mouse: ←/→ flip steps,
+  // Esc skips the tour. Bound on `window` because the dialog isn't
+  // focus-trapped — the tour is a peer of the main UI, not a modal
+  // gate.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'ArrowRight') { ev.preventDefault(); next() }
+      else if (ev.key === 'ArrowLeft') { ev.preventDefault(); back() }
+      else if (ev.key === 'Escape')   { ev.preventDefault(); skip() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [step.value])
 
   return (
     <div class="sh-onboarding" role="dialog" aria-labelledby="sh-onboarding-title">
