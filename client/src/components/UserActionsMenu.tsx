@@ -16,6 +16,7 @@ import { Modal } from './Modal'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { showToast } from './Toast'
+import { openReport } from './ReportDialog'
 import { blockUser, unblockUser, isBlocked } from '@/store/blocks'
 import {
   followUser,
@@ -103,6 +104,22 @@ export function UserActionsMenu() {
           {!alreadyBlocked && alreadyFollowing && (
             <Button variant="secondary" onClick={onUnfollow}>
               ✓ Unfollow
+            </Button>
+          )}
+          {/* Report sits between Follow and Block — it's the
+           *  middle-ground response when something a user posts is
+           *  off but you don't want to sever the connection.  Wired
+           *  to ``ReportDialog`` with type=user so the moderation
+           *  flow uses the same surface as post reports. */}
+          {!alreadyBlocked && (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                open.value = false
+                openReport('user', targetUserId.value)
+              }}
+            >
+              🚩 Report this user
             </Button>
           )}
           {!alreadyBlocked && (
