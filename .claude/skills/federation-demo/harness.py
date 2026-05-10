@@ -438,6 +438,77 @@ def cmd_gfs_pair() -> None:
     print("gfs-pair: ok (a + d connected to GFS)")
 
 
+def cmd_gfs_traffic() -> None:
+    """Exercise the global-space publish path against the running GFS.
+
+    1. Alpha creates a ``space_type=global`` space. The
+       ``_auto_publish_on_type`` hook on ``SpaceService`` fans out a
+       signed publish call to every paired GFS.
+    2. The harness polls ``GET /gfs/spaces`` on the GFS until the new
+       space appears with ``status="active"``. Asserts the published
+       metadata (name, owning_instance) matches what Alpha sent.
+
+    This validates the publish wire end-to-end (SH-side ``publish_space``
+    → POST ``/gfs/spaces/{id}/publish`` → GFS verifies the Ed25519
+    signature against the registered ``ClientInstance.public_key`` →
+    ``upsert_space`` row → ``list_spaces``). The downstream join /
+    SPACE_POST_CREATED relay path is still TODO — see SKILL.md.
+    """
+    state = _load()
+    if not state or not _gfs_alive(state):
+        raise SystemExit("run 'gfs-up' + 'gfs-pair' first")
+
+    a = state["instances"]["a"]
+    space_name = "Global Test Space"
+    s, body = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces",
+        token=a["token"],
+        method="POST",
+        body={
+            "name": space_name,
+            "description": "harness end-to-end probe for GFS publish",
+            "space_type": "global",
+        },
+    )
+    body = _must("create-global-space", s, body, ok=(201,))
+    space_id = body["id"]
+    print(f"  a: created global space {space_id}")
+    state.setdefault("gfs", {})["global_space_id"] = space_id
+    _save(state)
+
+    deadline = time.monotonic() + 30.0
+    listing: list[dict] = []
+    while time.monotonic() < deadline:
+        s, payload = _request(f"http://127.0.0.1:{GFS_PORT}/gfs/spaces")
+        if s == 200:
+            listing = payload.get("spaces", []) if isinstance(payload, dict) else []
+            if any(sp["space_id"] == space_id for sp in listing):
+                break
+        time.sleep(1.0)
+    match = [sp for sp in listing if sp["space_id"] == space_id]
+    if not match:
+        raise SystemExit(
+            f"gfs-traffic: space {space_id} did not appear on GET /gfs/spaces"
+            f" within 30s — listing was {listing!r}",
+        )
+    sp = match[0]
+    if sp["name"] != space_name:
+        raise SystemExit(
+            f"gfs-traffic: GFS listed name={sp['name']!r}, expected"
+            f" {space_name!r}",
+        )
+    if sp["owning_instance"] != a["instance_id"]:
+        raise SystemExit(
+            f"gfs-traffic: GFS listed owning_instance={sp['owning_instance']!r},"
+            f" expected {a['instance_id']!r}",
+        )
+    print(
+        f"  gfs lists '{sp['name']}' "
+        f"(owner {sp['owning_instance'][:8]}…, status {sp['status']}) ✓"
+    )
+    print("gfs-traffic: ok (publish round-trip)")
+
+
 def cmd_gfs_down() -> None:
     """Stop the GFS started by :func:`cmd_gfs_up` (idempotent)."""
     state = _load()
@@ -1031,12 +1102,164 @@ def cmd_verify() -> None:
         if not _alive(info["pid"]):
             failures.append(f"{label}: process pid={info['pid']} is gone")
 
+    # 8. Log audit — scan each backend's stdout/stderr for unhandled
+    #    exceptions, ERROR-level lines, federation-pipeline rejects.
+    #    Anything we can't account for (i.e. doesn't match the
+    #    benign-noise allow-list) becomes a verify failure so the
+    #    next run forces it to be either fixed or explicitly excused.
+    failures.extend(_audit_logs(state))
+
     if failures:
         print("\n--- FAIL ---")
         for f in failures:
             print(f"  {f}")
         sys.exit(1)
     print("verify: ok")
+
+
+# ─── Log audit — surface backend exceptions ────────────────────────────────
+
+
+#: Substrings that mark a log line as known-benign noise we should NOT
+#: flag in :func:`_audit_logs`. Each entry is a comment so the next
+#: person to trip a new line knows whether to suppress or fix.
+_LOG_BENIGN: tuple[str, ...] = (
+    # ICE candidate failures from STUN — expected on hosts behind a
+    # symmetric NAT (the harness uses Google's STUN server but the
+    # instances themselves talk loopback-only, so the candidate path
+    # never converges).
+    "FederationEventType.FEDERATION_RTC_ICE",
+    "rtcAddRemoteCandidate: runtime failure",
+    # ICE answer-before-offer race inside libdatachannel — the C++
+    # side accepts a remote candidate the moment it's seen, but the
+    # Python wrapper hasn't applied the remote SDP yet on the same
+    # frame. Logged + dropped natively; no Python-side action.
+    "Got a remote candidate without remote description",
+    # Outbox retry warnings while a peer is briefly unreachable —
+    # expected during the inner-ring pair handshake settle window.
+    "outbox:",
+    # Native libdatachannel info lines (always at INFO/level — never
+    # cause real failure, but the str grep would otherwise flag them).
+    "rtc::impl::IceTransport::LogCallback",
+    "aiolibdatachannel:rtc::",
+    # The rate-limit middleware's own log lines fire when relay-pair
+    # waits the 65s; expected by design.
+    "rate_limit",
+)
+
+#: Substrings that — when they appear — are real signal worth
+#: surfacing. These are the patterns an exception traceback or an
+#: explicit ``log.error`` / ``log.warning`` produces.
+_LOG_INTERESTING: tuple[str, ...] = (
+    "Traceback (most recent call last):",
+    "ERROR:",
+    "WARNING:",
+    "Exception:",
+)
+
+
+def _audit_logs(state: dict) -> list[str]:
+    """Return a list of failure strings, one per offending log block.
+
+    Each instance writes ``log.txt`` under its data dir; the GFS does
+    the same under ``gfs/log.txt``. We split the file into "blocks"
+    (each block is a single ERROR/WARNING/Traceback and the
+    indented frames that follow it), and a block is suppressed if
+    *any* line within it matches a substring in :data:`_LOG_BENIGN`.
+    That way an RTC ICE traceback whose tail line names the
+    allow-listed cause stays suppressed even though the leading
+    ``Traceback`` line itself doesn't contain the benign needle.
+    Reports up to 5 distinct offending blocks per file (anything more
+    is usually the same root cause repeating)."""
+    failures: list[str] = []
+    sources = list((state.get("instances") or {}).items())
+    if state.get("gfs"):
+        sources.append(("gfs", {"log_path": str(GFS_DIR / "log.txt")}))
+    for label, info in sources:
+        path = Path(info.get("log_path") or _instance_dir(label) / "log.txt")
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        blocks = _split_log_into_blocks(text)
+        hits: list[str] = []
+        for header, block_text in blocks:
+            if not any(marker in header for marker in _LOG_INTERESTING):
+                continue
+            if any(needle in block_text for needle in _LOG_BENIGN):
+                continue
+            hits.append(header)
+            if len(hits) >= 5:
+                break
+        for h in hits:
+            failures.append(f"{label}: log audit — {h.strip()[:200]}")
+    return failures
+
+
+def _split_log_into_blocks(text: str) -> list[tuple[str, str]]:
+    """Group lines into ``(header, full_block)`` tuples.
+
+    A block starts at the first non-indented line with one of
+    :data:`_LOG_INTERESTING` markers and continues through every
+    subsequent indented frame (``  File "...``,
+    ``    cursor.execute(...)`` etc.) plus the final exception-type
+    summary line. Blank lines reset the block. The header is what
+    we match for "is this interesting"; the full block text is what
+    the benign filter scans, so a Traceback whose final line names
+    a known-benign cause gets suppressed cleanly.
+    """
+    out: list[tuple[str, str]] = []
+    cur_header: str | None = None
+    cur_lines: list[str] = []
+
+    def _flush() -> None:
+        nonlocal cur_header, cur_lines
+        if cur_header is not None:
+            out.append((cur_header, "\n".join(cur_lines)))
+        cur_header = None
+        cur_lines = []
+
+    for line in text.splitlines():
+        if not line.strip():
+            _flush()
+            continue
+        # Continuation lines: leading whitespace, or the
+        # ``ExceptionType: ...`` summary that closes a Traceback.
+        is_continuation = (
+            cur_header is not None
+            and (line.startswith((" ", "\t")) or _looks_like_exc_summary(line))
+        )
+        if is_continuation:
+            cur_lines.append(line)
+            continue
+        # Otherwise this line starts a new (header) block.
+        _flush()
+        cur_header = line
+        cur_lines = [line]
+    _flush()
+    return out
+
+
+def _looks_like_exc_summary(line: str) -> bool:
+    """Heuristic: lines that look like ``ExceptionType: detail`` —
+    closing summary of a traceback. We coalesce them onto the
+    in-progress block so the benign filter can scan them.
+
+    Accepts dotted forms (``mod.sub.RTCError: …``) as well as bare
+    type names (``ValueError: …``); the rule is "no whitespace
+    before the first colon and the rightmost dotted component starts
+    with a capital".
+    """
+    stripped = line.strip()
+    if ":" not in stripped:
+        return False
+    head = stripped.split(":", 1)[0]
+    if not head or " " in head:
+        return False
+    last = head.rsplit(".", 1)[-1]
+    return bool(last) and last[0].isupper()
 
 
 # ─── Step: down ────────────────────────────────────────────────────────────

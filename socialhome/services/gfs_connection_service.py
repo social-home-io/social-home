@@ -42,7 +42,13 @@ class GfsConnectionError(Exception):
 class GfsConnectionService:
     """Service for managing GFS connections and space publications."""
 
-    __slots__ = ("_repo", "_http_client")
+    __slots__ = (
+        "_repo",
+        "_http_client",
+        "_space_repo",
+        "_own_instance_id",
+        "_own_signing_key",
+    )
 
     def __init__(
         self,
@@ -52,6 +58,28 @@ class GfsConnectionService:
     ) -> None:
         self._repo = repo
         self._http_client = http_client
+        # Attached lazily after construction (the space repo + identity
+        # aren't available at the same wiring step as the GFS-connection
+        # repo). When unset, ``publish_space`` falls back to a metadata-
+        # less ``{space_id}`` body and the GFS lands a pending row.
+        self._space_repo = None
+        self._own_instance_id = ""
+        self._own_signing_key = b""
+
+    def attach_publish_context(
+        self,
+        *,
+        space_repo,
+        own_instance_id: str,
+        own_signing_key: bytes,
+    ) -> None:
+        """Wire the dependencies needed to ship full space metadata (and
+        an Ed25519 signature) on publish. Optional — without it,
+        ``publish_space`` no-ops the body, the GFS sits at
+        ``status='pending'`` until an admin completes it manually."""
+        self._space_repo = space_repo
+        self._own_instance_id = own_instance_id
+        self._own_signing_key = own_signing_key
 
     def attach_session(self, session: aiohttp.ClientSession) -> None:
         """Provide the shared aiohttp session after construction.
@@ -186,18 +214,24 @@ class GfsConnectionService:
     async def publish_space(self, space_id: str, gfs_id: str) -> None:
         """Publish a space to a GFS.
 
-        Sends a POST to the GFS endpoint and records the publication locally.
+        Builds the metadata payload from the local ``Space`` row,
+        signs it with the household identity key, and POSTs to
+        ``/gfs/spaces/{space_id}/publish`` so the GFS can list the
+        space on ``GET /gfs/spaces``. Records the local publication
+        regardless of network success — the outbox / scheduled retry
+        layer is responsible for retrying the publish.
         """
         conn = await self._repo.get(gfs_id)
         if conn is None:
             raise GfsConnectionError(f"GFS connection {gfs_id} not found")
 
+        body = await self._build_publish_body(space_id)
         client = self._client()
         publish_url = f"{conn.inbox_url}/gfs/spaces/{space_id}/publish"
         try:
             async with client.post(
                 publish_url,
-                json={"space_id": space_id},
+                json=body,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status not in (200, 201, 204):
@@ -211,6 +245,45 @@ class GfsConnectionService:
             log.warning("GFS publish request failed: %s", exc)
 
         await self._repo.publish_space(space_id, gfs_id)
+
+    async def _build_publish_body(self, space_id: str) -> dict:
+        """Compose + sign the publish body. Falls back to the
+        metadata-less ``{space_id}`` shape when the publish context
+        isn't wired (tests, early boot)."""
+        if self._space_repo is None or not self._own_instance_id:
+            return {"space_id": space_id}
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            return {"space_id": space_id}
+        # Avoid a circular import — these helpers are on the crypto
+        # module; pulling them only at the call site keeps the module
+        # graph clean for tests that stub publish out entirely.
+        from ..crypto import b64url_encode, sign_ed25519
+
+        body: dict = {
+            "space_id": space.id,
+            "owning_instance": self._own_instance_id,
+            "name": space.name,
+            "description": space.description or "",
+            "about_markdown": getattr(space, "about_markdown", "") or "",
+            "cover_url": (
+                f"/api/spaces/{space.id}/cover?v={space.cover_hash}"
+                if getattr(space, "cover_hash", None)
+                else ""
+            ),
+            "min_age": 0,
+            "target_audience": "all",
+            "accent_color": "#D2542A",
+        }
+        canonical = json.dumps(
+            body,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        body["signature"] = b64url_encode(
+            sign_ed25519(self._own_signing_key, canonical),
+        )
+        return body
 
     async def unpublish_space(self, space_id: str, gfs_id: str) -> None:
         """Unpublish a space from a GFS."""

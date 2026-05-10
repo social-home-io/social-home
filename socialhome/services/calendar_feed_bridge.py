@@ -46,6 +46,7 @@ from ..infrastructure.event_bus import EventBus
 if TYPE_CHECKING:
     from ..repositories.calendar_repo import AbstractSpaceCalendarRepo
     from ..repositories.space_post_repo import AbstractSpacePostRepo
+    from ..repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ log = logging.getLogger(__name__)
 class CalendarFeedBridge:
     """Mirror calendar event lifecycle into the space feed."""
 
-    __slots__ = ("_bus", "_post_repo", "_calendar_repo")
+    __slots__ = ("_bus", "_post_repo", "_calendar_repo", "_space_repo")
 
     def __init__(
         self,
@@ -61,10 +62,16 @@ class CalendarFeedBridge:
         bus: EventBus,
         post_repo: "AbstractSpacePostRepo",
         calendar_repo: "AbstractSpaceCalendarRepo",
+        space_repo: "AbstractSpaceRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._post_repo = post_repo
         self._calendar_repo = calendar_repo
+        # Optional — when wired, the bridge skips peer households'
+        # cross-household calendar mirrors (their ``space_posts`` FK
+        # would fail without a local ``spaces`` row). Tests that
+        # exercise the bridge in isolation can omit it.
+        self._space_repo = space_repo
 
     def wire(self) -> None:
         self._bus.subscribe(CalendarEventCreated, self._on_created)
@@ -76,6 +83,19 @@ class CalendarFeedBridge:
         if result is None:
             return
         space_id, event = result
+        # Cross-household calendar events arrive on peer households
+        # that mirror the calendar row but don't own the parent
+        # ``spaces`` row (the §D1b invitee-side mirror). The
+        # ``space_posts`` FK requires a local space row, so the
+        # feed-bridge has nothing useful to do for those — skip
+        # rather than crash with FOREIGN KEY constraint failed.
+        # The peer's calendar UI still renders the event; only the
+        # feed-mirror is host-local.
+        if (
+            self._space_repo is not None
+            and await self._space_repo.get(space_id) is None
+        ):
+            return
         # Idempotency guard — a peer event arriving twice (initial sync +
         # live federation) shouldn't create two posts. Keyed on the
         # linked_event_id; lookup is a single indexed read.
