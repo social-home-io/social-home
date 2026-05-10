@@ -46,13 +46,16 @@ jobs:
         run: |
           pip install build
           python -m build
-      # Copy the single ``py3-none-any`` wheel to a stable filename so
-      # the Dockerfiles can ``COPY dist/socialhome.whl`` directly,
-      # without globbing or ``head -1`` shell tricks. ``socialhome``
-      # is pure-Python so ``python -m build`` produces exactly one
-      # wheel; the guard fails the workflow loudly if that ever stops
-      # being true (e.g. someone introduces a C extension).
-      - name: Pin wheel filename for the docker COPY
+      # Capture the wheel filename so the docker jobs can reference it
+      # via ``--build-arg WHEEL``. ``uv pip install`` validates the
+      # filename against PEP 427 (it must be
+      # ``{name}-{version}-{python}-{abi}-{platform}.whl``), so we
+      # can't just rename to ``socialhome.whl``. ``socialhome`` is
+      # pure-Python → ``python -m build`` produces exactly one wheel;
+      # the guard fails the workflow loudly if a future change breaks
+      # that assumption (e.g. someone introduces a C extension).
+      - name: Capture wheel filename
+        id: wheel
         shell: bash
         run: |
           set -euo pipefail
@@ -62,12 +65,14 @@ jobs:
             echo "Expected exactly 1 wheel in dist/, got ${#wheels[@]}: ${wheels[*]}" >&2
             exit 1
           fi
-          cp -- "${wheels[0]}" dist/socialhome.whl
+          echo "name=$(basename "${wheels[0]}")" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
           retention-days: 7
+    outputs:
+      wheel: ${{ steps.wheel.outputs.name }}
 
   # ── Python package → PyPI via trusted publisher (OIDC) ──────────────────
   pypi:
@@ -138,6 +143,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            WHEEL=${{ needs.build.outputs.wheel }}
           cache-from: type=gha
           cache-to:   type=gha,mode=max
 
@@ -182,5 +189,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            WHEEL=${{ needs.build.outputs.wheel }}
           cache-from: type=gha
           cache-to:   type=gha,mode=max

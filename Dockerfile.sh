@@ -36,16 +36,17 @@ RUN groupadd --system --gid 10001 hsuser && \
 
 WORKDIR /app
 
-# Pre-built wheel from the publish workflow's ``build`` job (or
-# local ``pnpm --dir client run build && python -m build &&
-# cp dist/socialhome-*.whl dist/socialhome.whl``). The SPA bundle
-# lives inside under ``socialhome/static/``. ``--system`` installs
-# into the base image's site-packages directly (no venv);
-# ``--no-cache`` keeps the layer size down. The wheel is removed
-# after install so it doesn't bloat the final layer.
-COPY dist/socialhome.whl /tmp/socialhome.whl
-RUN uv pip install --system --no-cache /tmp/socialhome.whl && \
-    rm /tmp/socialhome.whl
+# Pre-built wheel from the publish workflow's ``build`` job. The
+# job captures the exact PEP 427 filename
+# (``socialhome-{version}-py3-none-any.whl``) and passes it via
+# ``--build-arg WHEEL`` so we keep the version-bearing filename
+# uv requires. SPA bundle lives inside under ``socialhome/static/``.
+# ``--system`` installs into the base image's site-packages directly
+# (no venv); ``--no-cache`` keeps the layer size down.
+ARG WHEEL
+COPY dist/${WHEEL} /tmp/${WHEEL}
+RUN uv pip install --system --no-cache /tmp/${WHEEL} && \
+    rm /tmp/${WHEEL}
 
 RUN mkdir -p /data && chown -R hsuser:hsuser /data
 

@@ -38,12 +38,13 @@ RUN groupadd --system --gid 10001 gfsuser && \
 WORKDIR /app
 
 # Pre-built wheel from the publish workflow's ``build`` job. The
-# wheel arrives at a stable filename so the install line names it
-# directly + tacks on the ``[global-server]`` extra so bcrypt +
-# qrcode land too.
-COPY dist/socialhome.whl /tmp/socialhome.whl
-RUN uv pip install --system --no-cache "/tmp/socialhome.whl[global-server]" && \
-    rm /tmp/socialhome.whl
+# job captures the exact PEP 427 filename and passes it via
+# ``--build-arg WHEEL``. The ``[global-server]`` extra pulls bcrypt
+# + qrcode[pil] on top of the wheel's base deps.
+ARG WHEEL
+COPY dist/${WHEEL} /tmp/${WHEEL}
+RUN uv pip install --system --no-cache "/tmp/${WHEEL}[global-server]" && \
+    rm /tmp/${WHEEL}
 
 # /var/lib/sh-gfs is the spec's default GFSDATA_DIR (config.py). Use
 # a volume so operators can persist the config + SQLite across
