@@ -174,6 +174,7 @@ python .claude/skills/federation-demo/harness.py up
 python .claude/skills/federation-demo/harness.py gfs-up
 python .claude/skills/federation-demo/harness.py gfs-pair
 python .claude/skills/federation-demo/harness.py gfs-traffic
+python .claude/skills/federation-demo/harness.py gfs-replay
 python .claude/skills/federation-demo/harness.py gfs-down
 ```
 
@@ -219,6 +220,35 @@ with the right name + owning instance.
 
 Prerequisites: ``up`` + ``gfs-up`` + ``gfs-pair`` (Alpha must be
 a paired client of the GFS so the registration sig verifies).
+
+### ``gfs-replay`` — owning-HFS downtime survives the publish
+
+Validates that a GFS publication is durable across an owning-HFS
+restart. Runs after ``gfs-traffic`` (which already published Alpha's
+global space). Sequence:
+
+1. Pre-check: ``GET /gfs/spaces`` lists Alpha's space, and Alpha's
+   ``/api/gfs/publications`` mirrors the same row.
+2. SIGTERM Alpha; wait for the process to exit.
+3. While Alpha is offline, the GFS continues to list the space — the
+   GFS does not proactively unpublish on owning-instance disconnect.
+4. Respawn Alpha on the same data_dir; wait for
+   ``/api/instance/config`` to answer 200.
+5. Wait ~8 s for the ``GfsWebSocketSupervisor`` to reconcile its
+   per-connection clients and the ``GfsWebSocketClient`` to reopen
+   ``wss://gfs/gfs/ws``.
+6. Re-assert: Alpha's ``/api/gfs/connections`` shows the connection
+   active, ``/api/gfs/publications`` still lists the space, and
+   ``GET /gfs/spaces`` still lists it.
+
+Failure modes this catches:
+
+- The GFS-side ``GlobalSpace`` row gets garbage-collected on
+  owning-HFS disconnect (regression).
+- ``GfsWebSocketSupervisor.start()`` is no longer fired from
+  ``_on_startup`` (regression — the WS would never reconnect).
+- The publication mirror in ``gfs_publications`` gets wiped by a
+  migration or a misfired ``unpublish_space_from_all`` on shutdown.
 
 ### Cross-household post / bazaar / public moment over GFS (TODO)
 

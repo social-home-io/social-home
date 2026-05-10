@@ -509,6 +509,164 @@ def cmd_gfs_traffic() -> None:
     print("gfs-traffic: ok (publish round-trip)")
 
 
+def cmd_gfs_replay() -> None:
+    """Validate GFS-paired state survives an HFS restart.
+
+    Sequence:
+    1. Pre-check that the GFS lists Alpha's published global space and
+       Alpha's local ``/api/gfs/publications`` shows the same row
+       (i.e. the publish from :func:`cmd_gfs_traffic` already landed).
+    2. SIGTERM Alpha and wait for the process to exit.
+    3. While Alpha is down, the GFS still lists the space — the owning
+       HFS being unreachable is not a deregistration signal. Asserted.
+    4. Respawn Alpha on the same data_dir; wait for
+       ``/api/instance/config`` to answer 200.
+    5. Wait across the GFS WS supervisor reconcile interval + the
+       ``GfsWebSocketClient`` first-connect window so the supervisor's
+       background loop reopens ``wss://gfs/gfs/ws`` against the GFS.
+    6. Re-assert: Alpha's ``/api/gfs/connections`` still shows the
+       connection active, ``/api/gfs/publications`` still lists the
+       global space, and the GFS continues to list it on
+       ``GET /gfs/spaces``.
+
+    Prereqs (chain via ``up`` → ``gfs-up`` → ``gfs-pair`` →
+    ``gfs-traffic``).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    if not _gfs_alive(state):
+        raise SystemExit("run 'gfs-up' first")
+    gfs = state.get("gfs") or {}
+    global_space_id = gfs.get("global_space_id")
+    if not global_space_id:
+        raise SystemExit("run 'gfs-traffic' first — needs Alpha's global space")
+
+    a = state["instances"]["a"]
+    a_token = a["token"]
+    gfs_url = f"http://127.0.0.1:{GFS_PORT}"
+    pairings = (state.get("gfs") or {}).get("pairings") or {}
+    alpha_pairing = pairings.get("a")
+    if not alpha_pairing:
+        raise SystemExit("run 'gfs-pair' first — Alpha must be paired")
+    # ``cmd_gfs_pair`` stashes the local SH-side ``GfsConnection.id``
+    # (UUID generated when Alpha called ``POST /api/gfs/connections``)
+    # under ``id``. That's the row Alpha looks up via
+    # ``/api/gfs/connections``; the GFS-side instance id is separate.
+    gfs_conn_id = alpha_pairing["id"]
+
+    # 1a. Pre-check — GFS lists the space.
+    s, payload = _request(f"{gfs_url}/gfs/spaces")
+    _must("gfs-replay: pre /gfs/spaces", s, payload)
+    listing = payload.get("spaces", []) if isinstance(payload, dict) else []
+    if not any(sp["space_id"] == global_space_id for sp in listing):
+        raise SystemExit(
+            f"gfs-replay precheck: GFS {gfs_url} did not list "
+            f"{global_space_id} before Alpha shutdown — listing={listing!r}",
+        )
+    print(f"  pre-check: GFS lists {global_space_id[:8]}… ✓")
+
+    # 1b. Pre-check — Alpha's local publications mirror.
+    def _alpha_publications() -> list[dict]:
+        s, body = _request(
+            f"http://127.0.0.1:{a['port']}/api/gfs/publications",
+            token=a_token,
+        )
+        _must("gfs-replay: /api/gfs/publications", s, body)
+        return list(body.get("publications") or [])
+
+    pubs = _alpha_publications()
+    if not any(p.get("space_id") == global_space_id for p in pubs):
+        raise SystemExit(
+            f"gfs-replay precheck: Alpha's /api/gfs/publications missing "
+            f"{global_space_id} — got {pubs!r}",
+        )
+    print(f"  pre-check: Alpha sees publication for {global_space_id[:8]}… ✓")
+
+    # 2. Tear Alpha down (SIGTERM, then SIGKILL after grace) — process
+    #    group so libdatachannel + the GFS WS background task exit too.
+    print(f"  killing a (pid={a['pid']}) to simulate owning-HFS downtime")
+    try:
+        os.killpg(a["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        print("  a was already gone")
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and _alive(a["pid"]):
+        time.sleep(0.2)
+    if _alive(a["pid"]):
+        try:
+            os.killpg(a["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        time.sleep(0.5)
+
+    # 3. While Alpha is offline, GFS keeps the row. (The GFS does not
+    #    proactively unpublish on owning-instance disconnect — that
+    #    would create a thundering-herd republish whenever a flock of
+    #    HFSes restart in concert.)
+    s, payload = _request(f"{gfs_url}/gfs/spaces")
+    _must("gfs-replay: /gfs/spaces while a is down", s, payload)
+    listing = payload.get("spaces", []) if isinstance(payload, dict) else []
+    if not any(sp["space_id"] == global_space_id for sp in listing):
+        raise SystemExit(
+            f"gfs-replay: GFS dropped {global_space_id} while owning HFS "
+            f"was offline — listing={listing!r}",
+        )
+    print(f"  during downtime: GFS still lists {global_space_id[:8]}… ✓")
+
+    # 4. Respawn Alpha on the same port + data_dir.
+    new_pid = _spawn("a", a["port"])
+    state["instances"]["a"]["pid"] = new_pid
+    _wait_ready(a["port"])
+    print(f"  a respawned: pid={new_pid} ready=200")
+
+    # 5. Settle the GFS WS supervisor reconnect. Worst case is one
+    #    reconcile-loop pass (~5 s) + one WS reconnect-delay slot
+    #    (1 s default). 8 s is generous for the WS hello to land.
+    settle = 8
+    print(f"  waiting {settle}s for GFS WS supervisor to reconnect…")
+    time.sleep(settle)
+
+    # 6a. Alpha's local connection row still active.
+    s, conns = _request(
+        f"http://127.0.0.1:{a['port']}/api/gfs/connections",
+        token=a_token,
+    )
+    _must("gfs-replay: /api/gfs/connections", s, conns)
+    rows = conns if isinstance(conns, list) else []
+    match = [c for c in rows if c.get("id") == gfs_conn_id]
+    if not match or match[0].get("status") != "active":
+        raise SystemExit(
+            f"gfs-replay: Alpha's connection {gfs_conn_id} not active after "
+            f"restart — got {rows!r}",
+        )
+    print(f"  post-restart: Alpha connection {gfs_conn_id[:8]}… status=active ✓")
+
+    # 6b. Alpha's publication mirror survived the restart.
+    pubs = _alpha_publications()
+    if not any(p.get("space_id") == global_space_id for p in pubs):
+        raise SystemExit(
+            f"gfs-replay: Alpha's /api/gfs/publications dropped "
+            f"{global_space_id} across the restart — got {pubs!r}",
+        )
+    print(f"  post-restart: Alpha sees publication for {global_space_id[:8]}… ✓")
+
+    # 6c. GFS still lists Alpha's space.
+    s, payload = _request(f"{gfs_url}/gfs/spaces")
+    _must("gfs-replay: /gfs/spaces post-restart", s, payload)
+    listing = payload.get("spaces", []) if isinstance(payload, dict) else []
+    if not any(sp["space_id"] == global_space_id for sp in listing):
+        raise SystemExit(
+            f"gfs-replay: GFS lost the space after Alpha restart — "
+            f"listing={listing!r}",
+        )
+    print(f"  post-restart: GFS still lists {global_space_id[:8]}… ✓")
+
+    state["gfs_replay_ran"] = True
+    _save(state)
+    print("gfs-replay: ok (publication survives owning-HFS downtime)")
+
+
 def cmd_gfs_down() -> None:
     """Stop the GFS started by :func:`cmd_gfs_up` (idempotent)."""
     state = _load()
