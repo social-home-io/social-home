@@ -83,18 +83,28 @@ That single command runs the full sequence:
 4. ``traffic`` — for each household (a / b / c — d stays out of the
    common content fan-out so the inner-ring assertions still bound at
    three viewers):
+   - **a → b** and **c → b** ``POST /api/moments/follows`` so Beta's
+     moment in the next step lands in Alpha's and Carol's inboxes.
+     The follow itself federates as ``USER_FOLLOW``.
    - ``PATCH /api/me`` (display name + bio) → federates ``USER_UPDATED``
      to every paired peer.
    - ``POST /api/feed/posts`` (household-scoped, never federates — sanity
      baseline that local writes still work).
    - ``POST /api/moments`` (one per household; the public-moment ladder
-     allows one new moment per 15 min).
+     allows one new moment per 15 min). Beta's moment id is stashed in
+     ``state.json`` so ``verify`` can grep it on Alpha's and Carol's
+     inboxes.
    - ``POST /api/highlights/frames`` with ``audience_kind=all_paired``
      → fans out the highlight + frame to every paired peer.
    - 1:1 DM from **a → c** (cross-instance conversation; the message
      rides the federation envelope path).
    - **b** creates a space (``invite_only``) and mints a ``remote-invites``
      token for each of **a**'s and **c**'s admin users.
+   - **b** posts a ``mode=fixed`` bazaar listing in the salon space;
+     **a** opens a DM to Beta quoting the listing id ("interested in
+     your bazaar listing X"). The listing itself is HFS-local
+     (bazaar rows are space-scoped), but the inquiry DM rides the
+     usual cross-instance ``DM_RELAY`` path.
 5. ``calendar`` — cross-household space-calendar + RSVP federation.
    - Alpha and Carol accept Beta's pending remote-invites
      (``POST /api/remote_invites/{token}/accept``); both become space
@@ -115,6 +125,12 @@ That single command runs the full sequence:
      under ``/api/highlights``.
    - **c** has the a→c DM in ``/api/conversations`` and the message body
      round-tripped.
+   - **b** has the a→b bazaar-inquiry DM in ``/api/conversations``,
+     and the message body still quotes the listing id (i.e. the body
+     made it through ``DM_RELAY`` decryption intact).
+   - **a** and **c** have **b**'s moment in their ``/api/moments``
+     inbox (validates ``MOMENT_CREATED`` outbound + the inbox-
+     fan-out mirror against ``moment_follows``).
    - **b**'s space membership is queryable (Alice / Carol show as
      pending or joined depending on whether the invitation flow has
      auto-accepted by the time the assertion runs).
@@ -127,18 +143,24 @@ That single command runs the full sequence:
      verify failure. New unexpected logs surface in the next run as
      "log audit — …" so they get either fixed or explicitly excused.
 
-5. The harness exits non-zero if any assertion fails or any process
+5. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
+   post one ``audience_kind=all_paired`` highlight while **c** is
+   offline, restarts **c**, waits across the second outbox-backoff
+   slot (~35 s), and asserts the queued highlight lands. Validates
+   the §24 ``ResilientFederationOutbox`` flush-on-reachable path.
+
+6. The harness exits non-zero if any assertion fails or any process
    crashed during the run.
 
 The canonical ``all`` sequence runs ``up → pair → traffic →
-calendar → verify → relay-pair`` in that order. ``gfs-up`` /
+calendar → verify → relay-pair → replay`` in that order. ``gfs-up`` /
 ``gfs-pair`` / ``gfs-down`` stay opt-in (they spin up a separate
 GFS process and aren't required to validate the HFS↔HFS surface).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
-/ ``relay-pair``); state is persisted to ``/tmp/sh-demo/state.json``
-between calls.
+/ ``relay-pair`` / ``replay``); state is persisted to
+``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands
 
