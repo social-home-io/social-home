@@ -24,7 +24,6 @@ from socialhome.crypto import (
 )
 from socialhome.global_server import create_gfs_app
 from socialhome.global_server.app_keys import (
-    gfs_admin_repo_key,
     gfs_fed_repo_key,
 )
 from socialhome.global_server.domain import ClientInstance, GlobalSpace
@@ -70,9 +69,7 @@ def _sign_publish_body(body: dict, *, seed: bytes) -> dict:
     canonicalises before verifying — sorted keys, no whitespace,
     no ``signature`` field included in the signed bytes.
     """
-    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
-    )
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return {**body, "signature": b64url_encode(sign_ed25519(seed, canonical))}
 
 
