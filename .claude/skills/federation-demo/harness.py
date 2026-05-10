@@ -1124,28 +1124,43 @@ def cmd_verify() -> None:
 #: flag in :func:`_audit_logs`. Each entry is a comment so the next
 #: person to trip a new line knows whether to suppress or fix.
 _LOG_BENIGN: tuple[str, ...] = (
-    # ICE candidate failures from STUN — expected on hosts behind a
-    # symmetric NAT (the harness uses Google's STUN server but the
-    # instances themselves talk loopback-only, so the candidate path
-    # never converges). The ``rtcAddRemoteCandidate: runtime failure``
-    # / ``Got a remote candidate without remote description`` pair
-    # used to live here too — they were the symptom of an offer-vs-
-    # candidate race in ``aiolibdatachannel``'s wrapper. The 2026.5.10
-    # release fixed it (candidates received before the SDP land in a
-    # local buffer and drain on ``set_remote_description``), so the
-    # harness no longer sees those lines and we no longer suppress
-    # them; if they reappear, audit catches a regression.
-    "FederationEventType.FEDERATION_RTC_ICE",
-    # Outbox retry warnings while a peer is briefly unreachable —
-    # expected during the inner-ring pair handshake settle window.
-    "outbox:",
-    # Native libdatachannel info lines (always at INFO/level — never
-    # cause real failure, but the str grep would otherwise flag them).
-    "rtc::impl::IceTransport::LogCallback",
-    "aiolibdatachannel:rtc::",
-    # The rate-limit middleware's own log lines fire when relay-pair
-    # waits the 65s; expected by design.
+    # Outbox retry warning while a peer is briefly unreachable —
+    # expected during the inner-ring pair handshake settle window
+    # (peer is booting / DNS/RPS not yet warm). Narrow to the
+    # specific "returned HTTP" pattern so a *different* outbox
+    # error (e.g. shutdown corruption, schema mismatch) still
+    # surfaces.
+    "outbox: ", " returned HTTP ",
+    # libdatachannel native ICE state-machine status lines. The
+    # harness intentionally configures STUN against an external
+    # endpoint while the instances themselves talk loopback-only,
+    # so the C library logs candidate-gathering failures /
+    # connectivity-timer expiries that are pure environment noise.
+    # Narrow to the specific juice/SCTP status messages so a
+    # different libdatachannel-level error still surfaces.
+    "juice: Changing state to",
+    "juice: Connectivity timer",
+    "juice: Got STUN mapped address",
+    "juice: STUN server binding successful",
+    "juice: Candidate gathering done",
+    "juice: Using STUN server",
+    # The rate-limit middleware's own audit log fires when
+    # relay-pair waits the 65 s window; expected by design.
     "rate_limit",
+    # Earlier entries removed because the underlying conditions
+    # were fixed upstream (instead of permanently allowlisted):
+    # * ``FederationEventType.FEDERATION_RTC_ICE`` /
+    #   ``rtcAddRemoteCandidate: runtime failure`` /
+    #   ``Got a remote candidate without remote description``
+    #   were all symptoms of an offer-vs-candidate race in
+    #   ``aiolibdatachannel`` < 2026.5.10. The 2026.5.10 buffer
+    #   fix eliminates them entirely; if they reappear, the
+    #   audit catches a regression.
+    # * The previous ``rtc::impl::IceTransport::LogCallback`` /
+    #   ``aiolibdatachannel:rtc::`` blanket-suppressions covered
+    #   every C++-side log including *real* ERROR lines. Replaced
+    #   with the specific juice/STUN status entries above so a
+    #   genuine libdatachannel failure still trips the audit.
 )
 
 #: Substrings that — when they appear — are real signal worth
