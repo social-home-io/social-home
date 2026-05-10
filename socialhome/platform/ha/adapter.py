@@ -187,23 +187,14 @@ class HaAdapter(PlatformAdapter):
         """Public wrapper around the auth provider's bearer flow.
 
         Kept for tests / API consumers that drive the bearer flow
-        without going through an HTTP request. Tries the local
-        credential store (wizard-set passwords) first, then HA's own
-        verify_token for long-lived access tokens."""
-        if self._credentials is not None:
-            local = await self._credentials.authenticate_bearer(token)
-            if local is not None:
-                return local
-        data = await self._client.verify_token(token)
-        if data is None:
+        without going through an HTTP request. Only tokens in the
+        local credential store (``platform_tokens``) are accepted —
+        see :class:`HaAuthProvider._authenticate_bearer` for the
+        rationale.
+        """
+        if self._credentials is None:
             return None
-        username = data.get("username") or "ha_api_user"
-        return ExternalUser(
-            username=username,
-            display_name=username,
-            picture_url=None,
-            is_admin=True,
-        )
+        return await self._credentials.authenticate_bearer(token)
 
     async def get_instance_config(self) -> InstanceConfig:
         cfg = await self._client.get_config()

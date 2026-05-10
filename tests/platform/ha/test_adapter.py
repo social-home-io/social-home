@@ -141,26 +141,43 @@ async def test_authenticate_ingress_user_looks_up_person_entity():
     assert ("get_state", "person.pascal") in client.calls
 
 
-async def test_authenticate_bearer_falls_back_when_no_ingress_header():
+async def test_authenticate_bearer_rejected_without_local_credentials():
+    """HA's REST has no token→user mapping, so a bearer that isn't in
+    the local ``platform_tokens`` store must be rejected — never
+    fall through to ``GET /api/`` and pretend the token belongs to a
+    shared identity."""
     client = _FakeHaClient(
-        verify_token_response={"message": "OK", "username": "api"},
+        verify_token_response={"message": "API running."},
     )
     adapter = _build_adapter(client=client)
     user = await adapter.authenticate(
         _FakeRequest(headers={"Authorization": "Bearer tok123"}),
     )
-    assert user is not None
-    assert ("verify_token", "tok123") in client.calls
+    assert user is None
+    # ``verify_token`` is no longer called from the bearer flow — the
+    # only acceptance path is the local credential store.
+    assert ("verify_token", "tok123") not in client.calls
 
 
-async def test_authenticate_bearer_valid_returns_user():
-    client = _FakeHaClient(
-        verify_token_response={"message": "OK", "username": "admin"},
-    )
-    adapter = _build_adapter(client=client)
+async def test_authenticate_bearer_accepted_via_local_credentials():
+    class _FakeCredentials:
+        async def authenticate_bearer(self, token):
+            from socialhome.platform.adapter import ExternalUser
+
+            if token == "tok":
+                return ExternalUser(
+                    username="alice",
+                    display_name="Alice",
+                    picture_url=None,
+                    is_admin=True,
+                )
+            return None
+
+    adapter = _build_adapter(client=_FakeHaClient())
+    adapter._credentials = _FakeCredentials()
     user = await adapter.authenticate_bearer("tok")
     assert user is not None
-    assert user.username == "admin"
+    assert user.username == "alice"
     assert user.is_admin is True
 
 
