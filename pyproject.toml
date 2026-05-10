@@ -84,6 +84,18 @@ build-backend = "hatchling.build"
 # optional extra only; core install stays tag-based.
 allow-direct-references = true
 
+[tool.hatch.build.targets.wheel]
+# ``socialhome/static/`` is gitignored (vite output — built per release
+# from ``client/``). Hatchling defaults to skipping VCS-ignored files,
+# which would ship a wheel without the SPA. ``artifacts`` is the
+# documented escape hatch for "include this regardless of .gitignore".
+# The build pipeline (``.github/workflows/publish.yml``) runs
+# ``pnpm --dir client run build`` before ``python -m build`` so the
+# bundle is on disk by the time hatchling packages the wheel.
+artifacts = [
+    "socialhome/static/**/*",
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
