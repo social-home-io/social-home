@@ -375,8 +375,15 @@ class FederationService:
             self._event_registry.register(event_type, self._handle_call_signal)
 
     def set_ice_servers(self, servers: list[dict]) -> None:
-        """Update the WebRTC ICE-server config served to peers."""
-        self._ice_servers = servers or []
+        """Update the WebRTC ICE-server config served to peers.
+
+        Propagates the new list to the attached transport so future
+        DataChannel handshakes pick it up. Existing peers keep their
+        current config — renegotiation is out of scope.
+        """
+        self._ice_servers = list(servers or [])
+        if self._transport is not None and hasattr(self._transport, "set_ice_servers"):
+            self._transport.set_ice_servers(self._ice_servers)
 
     @property
     def own_instance_id(self) -> str:

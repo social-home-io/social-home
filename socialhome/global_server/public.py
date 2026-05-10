@@ -176,38 +176,70 @@ def _render_landing(
   <title>{_escape(server_name)}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta http-equiv="refresh" content="600" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..900,0..100,0..1&display=swap"
+  />
   <style>
-    /* GFS public theme — leans into the Social Home palette
-     *   (warm cream surface, terracotta primary, washi-tape accents)
-     * so the public landing feels like the same family of products as
-     * the SH SPA rather than a stark federation back-end. Pure CSS, no
-     * JS, no build step — server-rendered. */
+    /* GFS public theme — mirrors the SH SPA design tokens (see
+     * ``client/src/styles/tokens.css``) so the public landing feels
+     * like part of the same product family as the app. Pure CSS, no
+     * JS, no build step — server-rendered. The token values below
+     * are copied verbatim from ``--sh-*`` in the SPA so a brand
+     * tweak in the SPA tokens file is a small ``s/old/new/`` here
+     * too. (We don't ``@import`` the SPA file because that would
+     * require shipping it from the GFS aiohttp app — keeping the
+     * SSR pages self-contained avoids the round trip.) */
     :root {{
-      --warm-bg: #faf6f1;
-      --paper:   #fffdf9;
-      --ink:     #1f1916;
-      --ink-soft:#5b4f48;
-      --hair:    #ead8c2;
-      --primary: #ce5d3e;
-      --primary-soft: #f4dbd0;
+      --warm-bg:      #F4ECE0;       /* paper — primary surface */
+      --paper:        #EFE3D2;       /* paper-tinted — cards */
+      --ink:          #1A1814;       /* ink — warm-tinted brown */
+      --ink-soft:     #807766;       /* ink-quiet — 5.4:1 on paper */
+      --hair:         #D8CFC0;       /* warm-tinted hairline */
+      --primary:      #D2542A;       /* hearth — terracotta */
+      --primary-soft: #F1D9CA;       /* hearth-tint — for tinted surfaces */
+    }}
+    /* Dark mode — warm ember palette (see comment in
+     * ``users_directory.css`` for the full design rationale).
+     * ``--primary-soft`` is overridden to a saturated terracotta
+     * overlay so the washi-tape accent on each card stays visible
+     * against the deep ember background. */
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --warm-bg:      #1A1612;     /* deep ember */
+        --paper:        #251E18;     /* coffee surface */
+        --ink:          #F1E9DA;     /* ink-light — warm cream */
+        --ink-soft:     #9A8E7D;     /* warm muted */
+        --hair:         #3D332A;     /* burnt-sienna hairline */
+        --primary:      #E96A3F;     /* hearth lifted for dark */
+        --primary-soft: #4A2419;     /* hearth-on-dark — for washi accents */
+      }}
     }}
     * {{ box-sizing: border-box; }}
     body {{
-      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
-            Roboto, sans-serif;
+      /* Manrope geometric body — same family the SH SPA picked in
+       * 2026.4 ("looks like a household, not every other SaaS app").
+       * System fallbacks keep the first paint quick on a slow link. */
+      font: 15px/1.55 'Manrope', -apple-system, BlinkMacSystemFont,
+            'Segoe UI', Roboto, sans-serif;
       margin: 0; color: var(--ink); background: var(--warm-bg);
     }}
     .hero-image {{ display: block; width: 100%; max-height: 240px;
                     object-fit: cover; }}
     main {{ max-width: 860px; margin: 0 auto; padding: 24px; }}
-    h1 {{
-      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
-      font-size: 32px; margin: 16px 0 4px; letter-spacing: -0.01em;
+    /* Display copy — Fraunces serif with the SPA's hand-set tuning
+     * (``salt`` + ``ss01`` features, soft + wonk axes) so the
+     * wordmark + section titles read editorial, not stock. */
+    h1, h2 {{
+      font-family: 'Fraunces', 'Iowan Old Style', 'Palatino Linotype', serif;
+      font-feature-settings: "ss01" on, "salt" on;
+      font-variation-settings: "SOFT" 75, "WONK" 1, "opsz" 96;
+      letter-spacing: -0.01em;
     }}
-    h2 {{
-      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
-      font-size: 20px; margin: 0 0 12px;
-    }}
+    h1 {{ font-size: 34px; margin: 16px 0 4px; }}
+    h2 {{ font-size: 22px; margin: 0 0 12px; }}
     .muted {{ color: var(--ink-soft); font-size: 13px; }}
     section {{
       position: relative;
@@ -330,7 +362,7 @@ def _render_space_page(
     server_name: str,
     base_url: str,
 ) -> str:
-    accent = _escape(space.get("accent_color") or "#ce5d3e")
+    accent = _escape(space.get("accent_color") or "#D2542A")
     deep_link = f"sh://join-space/{base_url}/spaces/{_escape(space['space_id'])}"
     og_image = _escape(space.get("cover_url") or "")
     og_title = _escape(f"{space.get('name') or ''} — {server_name}")
@@ -346,35 +378,55 @@ def _render_space_page(
   <meta property="og:image"       content="{og_image}" />
   <meta property="og:url"         content="{_escape(base_url)}/spaces/{_escape(space["space_id"])}" />
   <meta name="twitter:card"       content="summary_large_image" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..900,0..100,0..1&display=swap"
+  />
   <style>
-    /* GFS per-space public page — same warm SH palette as the landing.
-     * The CTA picks up the per-space accent so the page feels keyed
-     * to that community, not just the server. */
+    /* GFS per-space public page — same SH design tokens as the
+     * landing (see the matching ``:root`` block in
+     * ``handle_landing``'s template). The CTA + accent-bar pick
+     * up the per-space accent so the page feels keyed to that
+     * community, not just the server. */
     :root {{
-      --warm-bg: #faf6f1;
-      --paper:   #fffdf9;
-      --ink:     #1f1916;
-      --ink-soft:#5b4f48;
-      --hair:    #ead8c2;
-      --primary: {accent};
+      --warm-bg:  #F4ECE0;
+      --paper:    #EFE3D2;
+      --ink:      #1A1814;
+      --ink-soft: #807766;
+      --hair:     #D8CFC0;
+      --primary:  {accent};
+    }}
+    /* Dark mode — warm ember (see ``users_directory.css`` rationale).
+     * ``--primary`` keeps the per-space accent so the page reads as
+     * "keyed to this community" even at night. */
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --warm-bg:  #1A1612;
+        --paper:    #251E18;
+        --ink:      #F1E9DA;
+        --ink-soft: #9A8E7D;
+        --hair:     #3D332A;
+      }}
     }}
     body {{
-      font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
-            Roboto, sans-serif;
+      font: 15px/1.55 'Manrope', -apple-system, BlinkMacSystemFont,
+            'Segoe UI', Roboto, sans-serif;
       margin: 0; color: var(--ink); background: var(--warm-bg);
     }}
     main {{ max-width: 780px; margin: 0 auto; padding: 24px; }}
     .accent-bar {{ height: 6px; background: var(--primary);
                    margin: 12px 0 22px; border-radius: 3px; }}
     .cover {{ width: 100%; max-height: 360px; object-fit: cover; }}
-    h1 {{
-      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
-      margin-bottom: 4px; font-size: 30px; letter-spacing: -0.01em;
+    h1, h2 {{
+      font-family: 'Fraunces', 'Iowan Old Style', 'Palatino Linotype', serif;
+      font-feature-settings: "ss01" on, "salt" on;
+      font-variation-settings: "SOFT" 75, "WONK" 1, "opsz" 96;
+      letter-spacing: -0.01em;
     }}
-    h2 {{
-      font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
-      font-size: 20px; margin: 0 0 8px;
-    }}
+    h1 {{ margin-bottom: 4px; font-size: 30px; }}
+    h2 {{ font-size: 20px; margin: 0 0 8px; }}
     .muted {{ color: var(--ink-soft); }}
     .cta {{ background: var(--primary); color: #fff; padding: 11px 22px;
             border-radius: 999px; display: inline-block;
@@ -435,8 +487,13 @@ def _render_invite_page(
     base_url: str,
 ) -> str:
     if space is None:
-        return "<!doctype html><p>This invite has expired or was revoked.</p>"
-    accent = _escape(space.get("accent_color") or "#6366f1")
+        return (
+            "<!doctype html>"
+            "<style>body{font:15px/1.5 'Manrope',-apple-system,system-ui,sans-serif;"
+            "margin:0;padding:48px 24px;color:#1A1814;background:#F4ECE0}</style>"
+            "<p>This invite has expired or was revoked.</p>"
+        )
+    accent = _escape(space.get("accent_color") or "#D2542A")
     deep_link = f"sh://gfs-invite/{base_url}/join/{_escape(token)}"
     return f"""<!doctype html>
 <html lang="en">
@@ -444,15 +501,51 @@ def _render_invite_page(
   <meta charset="utf-8" />
   <title>Join {_escape(space.get("name") or "")} — {_escape(server_name)}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..900,0..100,0..1&display=swap"
+  />
   <style>
-    body {{ font: 15px/1.5 system-ui, sans-serif; margin: 0; color: #1f2937;
-            background: #fff; }}
-    main {{ max-width: 640px; margin: 0 auto; padding: 20px; }}
-    .accent-bar {{ height: 6px; background: {accent}; margin: 10px 0 20px; }}
-    h1 {{ font-size: 26px; margin-bottom: 4px; }}
-    .cta {{ background: #6366f1; color: #fff; padding: 10px 18px;
-            border-radius: 8px; display: inline-block;
-            text-decoration: none; font-weight: 600; }}
+    /* Same SH design tokens as the landing + per-space pages so
+     * the invite-link handoff feels continuous with the rest of
+     * the GFS surface and the SH SPA. */
+    :root {{
+      --warm-bg:  #F4ECE0;
+      --ink:      #1A1814;
+      --ink-soft: #807766;
+    }}
+    /* Dark mode — warm ember (see ``users_directory.css``
+     * rationale). The CTA keeps the per-space accent for contrast
+     * even at night. */
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --warm-bg:  #1A1612;
+        --ink:      #F1E9DA;
+        --ink-soft: #9A8E7D;
+      }}
+    }}
+    body {{
+      font: 15px/1.5 'Manrope', -apple-system, BlinkMacSystemFont,
+            'Segoe UI', Roboto, sans-serif;
+      margin: 0; color: var(--ink); background: var(--warm-bg);
+    }}
+    main {{ max-width: 640px; margin: 0 auto; padding: 24px; }}
+    .accent-bar {{ height: 6px; background: {accent};
+                   margin: 12px 0 22px; border-radius: 3px; }}
+    h1 {{
+      font-family: 'Fraunces', 'Iowan Old Style', 'Palatino Linotype', serif;
+      font-feature-settings: "ss01" on, "salt" on;
+      font-variation-settings: "SOFT" 75, "WONK" 1, "opsz" 96;
+      font-size: 30px; margin-bottom: 4px; letter-spacing: -0.01em;
+    }}
+    .cta {{ background: {accent}; color: #fff; padding: 11px 22px;
+            border-radius: 999px; display: inline-block;
+            text-decoration: none; font-weight: 600; font-size: 15px;
+            transition: transform 100ms, filter 100ms; }}
+    .cta:hover {{ transform: translateY(-1px); filter: brightness(0.95); }}
+    .muted {{ color: var(--ink-soft); font-size: 13px; }}
   </style>
 </head>
 <body>

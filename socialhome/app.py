@@ -126,6 +126,7 @@ from .repositories.space_key_repo import SqliteSpaceKeyRepo
 from .repositories.storage_stats_repo import SqliteStorageStatsRepo
 from .repositories.theme_repo import SqliteThemeRepo
 from .routes import setup_routes
+from .routes.ha_integration import load_persisted_ice_servers
 from .services.auto_pair_inbox import AutoPairInbox
 from .services import (
     DmService,
@@ -1728,6 +1729,15 @@ def create_app(config: Config | None = None) -> web.Application:
             inbound_handler=federation_service.handle_inbound_rtc,
         )
         federation_service.attach_transport(fed_transport)
+
+        # Replay any operator-pushed STUN/TURN list (PUT /api/ha/integration/
+        # ice-servers) so the live FederationService + transport see the
+        # operator's TURN config before the first peer handshake. The
+        # ``_default_ice_servers(config)`` list above is just the
+        # ``Config``-level fallback used on a fresh DB.
+        persisted_ice = await load_persisted_ice_servers(db)
+        if persisted_ice:
+            federation_service.set_ice_servers(persisted_ice)
 
         app[K.federation_service_key] = federation_service
         app[K.sync_session_manager_key] = sync_manager

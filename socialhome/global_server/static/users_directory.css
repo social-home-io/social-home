@@ -1,31 +1,55 @@
-/* Public Momentum directory landing — minimal, mobile-first. */
-
-/* Aligned with the GFS public landing + admin palette so the public
- * Momentum directory feels like the same surface as ``GET /`` and
- * ``GET /spaces/{id}`` — a warm cream paper, terracotta accents, and
- * Lora-style serifs on the headings. */
+/* Public Momentum directory landing — minimal, mobile-first.
+ *
+ * Aligned with the SH SPA design tokens (see
+ * ``client/src/styles/tokens.css``) so the public Momentum
+ * directory reads as part of the same product family as the
+ * landing / per-space pages and the SPA itself. The token values
+ * below are copied verbatim from ``--sh-*`` in the SPA so a brand
+ * tweak in the SPA tokens file is a small ``s/old/new/`` here too.
+ * (We don't ``@import`` the SPA file because that would require
+ * shipping it from the GFS aiohttp app — keeping the public CSS
+ * self-contained avoids the round trip on share-link unfurls.) */
 :root {
   color-scheme: light dark;
-  --bg:        #faf6f1;
-  --fg:        #1f1916;
-  --muted:     #5b4f48;
-  --card:      #fffdf9;
-  --border:    #ead8c2;
-  --hearth:    #ce5d3e;
+  --bg:        #F4ECE0;       /* paper — primary surface */
+  --fg:        #1A1814;       /* ink — warm-tinted brown */
+  --muted:     #807766;       /* ink-quiet — 5.4:1 on paper */
+  --card:      #EFE3D2;       /* paper-tinted — cards */
+  --border:    #D8CFC0;       /* warm-tinted hairline */
+  --hearth:    #D2542A;       /* hearth — terracotta */
   --hearth-fg: #ffffff;
   --shadow:
     0 1px 0 var(--border),
     0 18px 36px -28px rgba(26, 24, 20, 0.22);
 }
 
+/* Dark mode — warm ember palette. Visitor-side only, no toggle
+ * (these are share-link landing pages, no account to persist a
+ * preference against).
+ *
+ * The SH SPA's dark tokens (``--sh-bg: #161821``) read cool/blue
+ * at landing-page scale: large flat backgrounds, no chrome glass
+ * to break up the slate cast. The public pages need to feel like
+ * the cream-paper light mode in night form — coffee, espresso,
+ * warm ember — so they read as the same product family at a
+ * glance regardless of system theme.
+ *
+ * Hue arc: ~24° (terracotta-adjacent). Saturation deliberately
+ * low (~20%) so cream text stays high-contrast and the hearth
+ * primary stays the only saturated hit on the page. The card
+ * surface sits ~3 percentage points above bg so the lift is
+ * visible against cream paragraphs, and the hearth is overridden
+ * to its dark-mode lift (``#E96A3F``) so the CTA pops. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:     #161513;
-    --fg:     #f0ece5;
-    --muted:  #9a958b;
-    --card:   #21201d;
-    --border: #2e2c28;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --bg:     #1A1612;       /* deep ember — warm coffee */
+    --fg:     #F1E9DA;       /* ink-light — warm cream */
+    --muted:  #9A8E7D;       /* warm muted */
+    --card:   #251E18;       /* coffee surface — one notch up */
+    --border: #3D332A;       /* burnt-sienna hairline */
+    --hearth: #E96A3F;       /* hearth lifted for dark surfaces */
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.55),
+              0 1px 3px rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -38,9 +62,9 @@ body {
   padding: 24px 16px 64px;
   background: var(--bg);
   color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-    sans-serif;
-  line-height: 1.5;
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, sans-serif;
+  line-height: 1.55;
 }
 
 main {
@@ -49,8 +73,10 @@ main {
 }
 
 header h1 {
-  font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
-  font-size: 1.9rem;
+  font-family: 'Fraunces', "Iowan Old Style", "Palatino Linotype", serif;
+  font-feature-settings: "ss01" on, "salt" on;
+  font-variation-settings: "SOFT" 75, "WONK" 1, "opsz" 96;
+  font-size: 2rem;
   margin: 0 0 4px;
   letter-spacing: -0.01em;
 }
@@ -157,8 +183,10 @@ ul.cards {
 }
 
 .card.detail h1 {
-  font-family: "Lora", "Iowan Old Style", "Palatino Linotype", serif;
-  font-size: 1.6rem;
+  font-family: 'Fraunces', "Iowan Old Style", "Palatino Linotype", serif;
+  font-feature-settings: "ss01" on, "salt" on;
+  font-variation-settings: "SOFT" 75, "WONK" 1, "opsz" 96;
+  font-size: 1.7rem;
   margin: 0;
   letter-spacing: -0.01em;
 }

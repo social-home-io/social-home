@@ -93,7 +93,10 @@ from .conversations import (
     ConversationUnreadView,
 )
 from .federation import FederationInboxView
-from .ha_integration import HaIntegrationFederationBaseView
+from .ha_integration import (
+    HaIntegrationFederationBaseView,
+    HaIntegrationIceServersView,
+)
 from .feed import (
     FeedCollectionView,
     FeedReadWatermarkView,
@@ -860,6 +863,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/ha/integration/federation-base",
         HaIntegrationFederationBaseView,
+    )
+    app.router.add_view(
+        "/api/ha/integration/ice-servers",
+        HaIntegrationIceServersView,
     )
 
     # ── Pairing / connections ───────────────────────────────────────────

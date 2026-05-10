@@ -440,6 +440,15 @@ class FederationTransport:
         # Attached by FederationService after construction.
         self._inbound_handler = inbound_handler
 
+    def set_ice_servers(self, servers: list[dict]) -> None:
+        """Update the ICE-server list used for *future* peer handshakes.
+
+        Existing peers keep their original config — renegotiating live
+        DataChannels is out of scope. New ``_ensure_handshake`` calls
+        pick up the updated list.
+        """
+        self._ice_servers = list(servers or [])
+
     # ─── Outbound ─────────────────────────────────────────────────────────
 
     async def send(
