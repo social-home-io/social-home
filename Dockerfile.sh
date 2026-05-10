@@ -13,6 +13,11 @@
 
 FROM python:3.14-slim AS base
 
+# uv replaces pip for the package install — ~10× faster, deterministic
+# resolution, and ships static via the official ``ghcr.io/astral-sh/uv``
+# image so we don't depend on an extra apt / pip-bootstrap layer.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 # System deps for Pillow + ffmpeg.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -21,9 +26,8 @@ RUN apt-get update && \
       libwebp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user up front so the data dir gets the right owner (the HA
-# Supervisor mounts /data on the host; we still chown so standalone
-# users don't accidentally write as root).
+# Non-root user up front so a host-mounted ``/data`` volume ends up
+# with the right owner.
 RUN groupadd --system --gid 10001 appuser && \
     useradd  --system --uid 10001 --gid appuser --create-home appuser
 
@@ -33,7 +37,7 @@ WORKDIR /app
 # ``global-server`` extras — that lives in Dockerfile.gfs.
 COPY pyproject.toml LICENSE ./
 COPY socialhome/ socialhome/
-RUN pip install --no-cache-dir .
+RUN uv pip install --system --no-cache .
 
 # Build the frontend if present. Kept conditional so a minimal
 # sub-image (built from a slimmer context) still works.

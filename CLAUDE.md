@@ -159,12 +159,15 @@ The spec is the source of truth — if code and spec disagree, fix the code.
 
 ### Releases
 
-- Triggered by pushing a `v*.*.*` git tag or publishing a GitHub
-  Release. `.github/workflows/publish.yml` runs three jobs in
-  parallel: PyPI (via OIDC trusted publishing), core Docker image
-  to `ghcr.io/social-home-io/socialhome`, and GFS Docker image to
-  `ghcr.io/social-home-io/gfs`.
-- Bump the version in `pyproject.toml` before tagging.
+- CalVer (`YYYY.M.D`). Triggered by pushing a `*.*.*` git tag or
+  publishing a GitHub Release. `.github/workflows/publish.yml` runs
+  three jobs in parallel: PyPI (via OIDC trusted publishing), core
+  Docker image to `ghcr.io/social-home-io/socialhome`, and GFS
+  Docker image to `ghcr.io/social-home-io/gfs`. Each Docker push
+  gets four tags: pinned (`:2026.5.10`), month track (`:2026.5`),
+  year track (`:2026`), and `:latest`.
+- Bump the version in `pyproject.toml` to match the tag before
+  tagging — no `v` prefix.
 
 ### Encryption-First Rule (§25.8.21)
 
