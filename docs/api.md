@@ -686,6 +686,7 @@ These pages are server-rendered HTML and require no auth.
 | `POST /api/calls/{id}/hangup` | 30 / min / user |
 | `POST /cluster/signaling-session{,/release}` | 60 / min / paired instance |
 | Federation inbound (per signing instance) | Rolling window; see §24.11. |
+| `POST /federation/inbox/{inbox_id}` (per remote IP) | 1000 / min — defends against unauthenticated floods that the per-user limiter would otherwise miss. |
 
 Rate-limit responses return HTTP 429 with a `Retry-After` header.
 

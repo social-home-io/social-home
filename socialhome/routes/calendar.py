@@ -14,6 +14,7 @@ from ..app_keys import (
     user_repo_key,
 )
 from ..domain.federation import PairingStatus
+from ..domain.space import SpaceRole
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from ..services.calendar_import_service import (
@@ -735,7 +736,7 @@ class CalendarEventApprovalView(BaseView):
             return error_response(404, "NOT_FOUND", "Event not found.")
         _sid, event = result
         is_creator = event.created_by == ctx.user_id
-        is_admin = member.role in ("owner", "admin")
+        is_admin = member.role in (SpaceRole.OWNER, SpaceRole.ADMIN)
         if not (is_creator or is_admin):
             return error_response(
                 403,
@@ -796,7 +797,10 @@ class CalendarEventPendingView(BaseView):
         if result is None:
             return error_response(404, "NOT_FOUND", "Event not found.")
         _sid, event = result
-        if event.created_by != ctx.user_id and member.role not in ("owner", "admin"):
+        if event.created_by != ctx.user_id and member.role not in (
+            SpaceRole.OWNER,
+            SpaceRole.ADMIN,
+        ):
             return error_response(
                 403,
                 "FORBIDDEN",

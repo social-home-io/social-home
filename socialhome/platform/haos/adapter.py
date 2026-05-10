@@ -158,6 +158,17 @@ class HaosAdapter(PlatformAdapter):
             )
         return self._ha_client
 
+    async def validate_ingress_token(self, token: str) -> bool:
+        """Delegate to :meth:`SupervisorClient.validate_session_token`.
+
+        Fail-closed (returns ``False``) until the supervisor client is
+        wired in :meth:`on_startup` — ingress requests during the brief
+        startup window are rejected rather than trusted blindly.
+        Used by the auth middleware via :class:`HaIngressStrategy`."""
+        if self._supervisor_client is None:
+            return False
+        return await self._supervisor_client.validate_session_token(token)
+
     async def get_instance_config(self) -> InstanceConfig:
         cfg = await self._client.get_config()
         if cfg is None:

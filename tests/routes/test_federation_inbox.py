@@ -227,3 +227,62 @@ async def test_inbound_does_not_require_bearer_token(client, env):
     # No headers — auth middleware must let this through.
     r = await client.post("/federation/inbox/wh-test", data=body)
     assert r.status == 200
+
+
+async def test_inbound_rate_limit_per_ip(client, env):
+    """§Audit #4: a flood from one remote IP gets 429'd. We exercise the
+    limiter directly rather than firing 1000 real HTTP requests so the
+    test stays fast and deterministic. The route consults
+    ``rate_limiter_key`` with ``federation-inbox:{client_ip}`` —
+    pre-saturating that bucket forces the *next* POST to 429."""
+    from socialhome.app_keys import rate_limiter_key
+    from socialhome.routes.federation import (
+        INBOX_RATE_LIMIT,
+        INBOX_RATE_WINDOW_S,
+    )
+
+    limiter = client.server.app[rate_limiter_key]
+    # The TestClient uses 127.0.0.1 — match what the route sees so the
+    # bucket key collides.
+    bucket = "federation-inbox:127.0.0.1"
+    for _ in range(INBOX_RATE_LIMIT):
+        assert limiter.is_allowed(
+            bucket,
+            limit=INBOX_RATE_LIMIT,
+            window_s=INBOX_RATE_WINDOW_S,
+        )
+
+    body = _build_envelope(
+        own_iid=env["own_iid"],
+        peer_kp=env["peer_kp"],
+        session_key=env["session_key"],
+        payload={"user_id": "alice"},
+        msg_id="rate-msg",
+    )
+    r = await client.post("/federation/inbox/wh-test", data=body)
+    assert r.status == 429
+    body_json = await r.json()
+    assert body_json["error"] == "rate_limited"
+
+
+async def test_inbound_error_does_not_leak_exception_text(client, env):
+    """§Audit #7: validation rejections must NOT echo the underlying
+    ``ValueError`` text to the wire — that exposes ban-list / replay
+    cache state to an attacker probing inbox IDs."""
+    # Replay the same msg_id twice — the second response should be 410
+    # but with a generic body (no "Replay detected: msg_id=…").
+    body = _build_envelope(
+        own_iid=env["own_iid"],
+        peer_kp=env["peer_kp"],
+        session_key=env["session_key"],
+        payload={"x": 1},
+        msg_id="leak-test-1",
+    )
+    r1 = await client.post("/federation/inbox/wh-test", data=body)
+    assert r1.status == 200
+    r2 = await client.post("/federation/inbox/wh-test", data=body)
+    assert r2.status == 410
+    body_json = await r2.json()
+    assert body_json == {"error": "gone"}
+    assert "msg_id" not in str(body_json)
+    assert "Replay" not in str(body_json)

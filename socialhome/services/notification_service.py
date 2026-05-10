@@ -59,6 +59,7 @@ from ..domain.events import (
     TaskDeadlineDue,
     UserFollowed,
 )
+from ..domain.space import SpaceRole
 from ..i18n import Catalog
 from ..infrastructure.event_bus import EventBus
 from ..repositories.notification_repo import (
@@ -601,7 +602,7 @@ class NotificationService:
             return
         members = await self._spaces.list_members(event.item.space_id)
         for member in members:
-            if member.role in ("owner", "admin"):
+            if member.role in (SpaceRole.OWNER, SpaceRole.ADMIN):
                 recipient = await self._users.get_by_user_id(member.user_id)
                 await self._save_notif(
                     new_notification(
@@ -834,7 +835,7 @@ class NotificationService:
         name = requester.display_name if requester else event.user_id
         members = await self._spaces.list_members(event.space_id)
         for member in members:
-            if member.role not in ("owner", "admin"):
+            if member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
                 continue
             recipient = await self._users.get_by_user_id(member.user_id)
             await self._save_notif(
@@ -909,7 +910,7 @@ class NotificationService:
         members = await self._spaces.list_members(event.space_id)
         # Narrow to space admins: members with role admin|owner.
         for m in members:
-            if m.role not in ("owner", "admin"):
+            if m.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
                 continue
             recipient = await self._users.get_by_user_id(m.user_id)
             await self._save_notif(
@@ -934,7 +935,7 @@ class NotificationService:
             return
         members = await self._spaces.list_members(event.space_id)
         for m in members:
-            if m.role not in ("owner", "admin"):
+            if m.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
                 continue
             recipient = await self._users.get_by_user_id(m.user_id)
             await self._save_notif(

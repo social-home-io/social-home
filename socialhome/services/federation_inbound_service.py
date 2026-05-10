@@ -46,6 +46,7 @@ from ..domain.events import (
     UserStatusChanged,
 )
 from ..domain.post import Comment, CommentType, LocationData, Post, PostType
+from ..domain.presence import truncate_coord
 from ..domain.space import SpaceMember
 from ..domain.highlight import (
     Highlight,
@@ -1284,13 +1285,21 @@ class FederationInboundService:
         # Location is carried inside the encrypted payload alongside the
         # rest of the post body. Drop it silently if the peer sent
         # malformed coords — the post itself is still readable.
+        # GPS coordinates are truncated to 4 decimal places before
+        # storage to match the §25 / CLAUDE.md privacy invariant — peers
+        # could send full precision, so the receiver re-applies the
+        # truncation rather than trusting the wire value.
         location: LocationData | None = None
         raw_loc = payload.get("location")
         if isinstance(raw_loc, dict):
             try:
+                lat_t = truncate_coord(float(raw_loc["lat"]))
+                lon_t = truncate_coord(float(raw_loc["lon"]))
+                if lat_t is None or lon_t is None:
+                    raise ValueError("nan coordinate")
                 location = LocationData(
-                    lat=float(raw_loc["lat"]),
-                    lon=float(raw_loc["lon"]),
+                    lat=lat_t,
+                    lon=lon_t,
                     label=raw_loc.get("label"),
                 )
             except KeyError, TypeError, ValueError:

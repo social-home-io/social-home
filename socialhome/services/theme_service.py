@@ -8,7 +8,7 @@ omits it.
 
 from __future__ import annotations
 
-from ..domain.space import SpacePermissionError
+from ..domain.space import SpacePermissionError, SpaceRole
 from ..repositories.theme_repo import (
     AbstractThemeRepo,
     HouseholdTheme,
@@ -86,7 +86,7 @@ class ThemeService:
     ) -> SpaceTheme:
         # Only space owner / admin may set the space theme.
         member = await self._space_repo.get_member(space_id, actor_user_id)
-        if member is None or member.role not in ("owner", "admin"):
+        if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
             raise SpacePermissionError(
                 "Only space owners/admins may change the space theme",
             )

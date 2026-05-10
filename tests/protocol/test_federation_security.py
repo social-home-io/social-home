@@ -14,6 +14,9 @@ Coverage:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
+import orjson
 import pytest
 
 from socialhome.crypto import (
@@ -27,6 +30,7 @@ from socialhome.domain.federation import (
     PairingStatus,
     RemoteInstance,
 )
+from socialhome.federation.encoder import FederationEncoder
 from socialhome.federation.federation_service import FederationService
 from socialhome.federation.sync_manager import (
     SyncSessionManager,
@@ -362,3 +366,198 @@ def test_signed_sdp_rejects_wrong_key():
     kp_b = generate_identity_keypair()
     signed = sign_rtc_offer("v=0\r\n", "offer", identity_seed=kp_a.private_key)
     assert verify_rtc_offer(signed, remote_public_key=kp_b.public_key) is False
+
+
+# ─── §24.11 #1 / #14 — from_instance bound to verified signer ─────────────
+
+
+def _build_signed_envelope(
+    *,
+    encoder,
+    signer_seed: bytes,
+    session_key: bytes,
+    msg_id: str,
+    from_instance: str,
+    to_instance: str,
+    timestamp: str,
+    payload: dict,
+) -> bytes:
+    """Construct a fully signed + encrypted federation envelope.
+
+    Lets a test sign with one identity seed but claim a different
+    ``from_instance`` — the audit-finding scenario.
+    """
+    # Build a signer encoder using the provided seed (independent of the
+    # encoder used for verification on the receiver side).
+    signer = FederationEncoder(signer_seed, sig_suite="ed25519")
+    payload_json = orjson.dumps(payload).decode("utf-8")
+    encrypted_payload = signer.encrypt_payload(payload_json, session_key)
+    envelope: dict = {
+        "msg_id": msg_id,
+        "event_type": FederationEventType.PRESENCE_UPDATED.value,
+        "from_instance": from_instance,
+        "to_instance": to_instance,
+        "timestamp": timestamp,
+        "encrypted_payload": encrypted_payload,
+        "space_id": None,
+        "proto_version": 1,
+        "sig_suite": "ed25519",
+    }
+    envelope_bytes = orjson.dumps(envelope)
+    envelope["signatures"] = signer.sign_envelope_all(
+        envelope_bytes,
+        suite="ed25519",
+    )
+    # Re-serialise with signatures attached for the wire.
+    return orjson.dumps(envelope)
+
+
+async def test_inbound_rejects_from_instance_mismatch_with_signer(fed):
+    """§24.11 #1 / #14: an envelope signed by peer A claiming
+    ``from_instance: B`` must be rejected before reaching replay cache,
+    ban check, or event dispatch.
+    """
+    svc, fed_repo, key_mgr, own_iid = (
+        fed["svc"],
+        fed["fed_repo"],
+        fed["key_mgr"],
+        fed["own_iid"],
+    )
+
+    # Set up two paired peers — A (the actual signer) and B (the
+    # impersonated identity).
+    a_kp = generate_identity_keypair()
+    b_kp = generate_identity_keypair()
+    a_id = derive_instance_id(a_kp.public_key)
+    b_id = derive_instance_id(b_kp.public_key)
+    session_key = b"\x07" * 32
+    wrapped = key_mgr.encrypt(session_key)
+    a = RemoteInstance(
+        id=a_id,
+        display_name="A",
+        remote_identity_pk=a_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://a.invalid/wh",
+        local_inbox_id="wh-a",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    b = RemoteInstance(
+        id=b_id,
+        display_name="B",
+        remote_identity_pk=b_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://b.invalid/wh",
+        local_inbox_id="wh-b",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(a)
+    await fed_repo.save_instance(b)
+
+    # Spy on event dispatch — it MUST NOT be called for a forged envelope.
+    dispatch_calls: list = []
+
+    async def _spy_handler(event):
+        dispatch_calls.append(event)
+
+    # Register a handler for PRESENCE_UPDATED so we'd see a successful
+    # dispatch if the forged envelope wasn't rejected.
+    svc._event_registry.register(
+        FederationEventType.PRESENCE_UPDATED,
+        _spy_handler,
+    )
+
+    # Forge: A signs the envelope but claims from_instance = B. Send to
+    # the inbox tied to A so the lookup step resolves to A's keys.
+    msg_id = "forged-msg-1"
+    timestamp = datetime.now(timezone.utc).isoformat()
+    body = _build_signed_envelope(
+        encoder=svc._encoder,
+        signer_seed=a_kp.private_key,
+        session_key=session_key,
+        msg_id=msg_id,
+        from_instance=b_id,  # ← LIE: claim to be B
+        to_instance=own_iid,
+        timestamp=timestamp,
+        payload={"hi": "there"},
+    )
+
+    with pytest.raises(ValueError, match="Invalid envelope signature"):
+        await svc.handle_inbound_envelope("wh-a", body)
+
+    # Pipeline aborted → no replay row, no dispatch, no ban-check
+    # side-effect (we never seed bans here, so a "no ban" outcome is
+    # implicit; the relevant property is that the impostor msg_id never
+    # got persisted into replay).
+    replay = await fed_repo.load_replay_cache()
+    assert all(mid != msg_id for mid, _ in replay)
+    assert dispatch_calls == []
+
+
+async def test_inbound_rejects_non_string_from_instance(fed):
+    """§24.11 #17: required string fields must be type-checked at parse time."""
+    body = (
+        b'{"msg_id":"x","event_type":"presence_updated",'
+        b'"from_instance":["a","b"],"to_instance":"b",'
+        b'"timestamp":"2026-01-01T00:00:00+00:00",'
+        b'"encrypted_payload":"x:y","sig_suite":"ed25519",'
+        b'"signatures":{"ed25519":"z"}}'
+    )
+    with pytest.raises(ValueError, match="from_instance must be a string"):
+        await fed["svc"].handle_inbound_envelope("wh-1", body)
+
+
+async def test_inbound_accepts_matching_from_instance(fed):
+    """Sanity: a legitimately signed envelope (signer == from_instance)
+    is NOT rejected by the new bind check — it still passes through to
+    decrypt + dispatch."""
+    svc, fed_repo, key_mgr, own_iid = (
+        fed["svc"],
+        fed["fed_repo"],
+        fed["key_mgr"],
+        fed["own_iid"],
+    )
+    a_kp = generate_identity_keypair()
+    a_id = derive_instance_id(a_kp.public_key)
+    session_key = b"\x09" * 32
+    wrapped = key_mgr.encrypt(session_key)
+    a = RemoteInstance(
+        id=a_id,
+        display_name="A",
+        remote_identity_pk=a_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://a.invalid/wh",
+        local_inbox_id="wh-a-ok",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(a)
+
+    dispatched: list = []
+
+    async def _spy(event):
+        dispatched.append(event)
+
+    svc._event_registry.register(
+        FederationEventType.PRESENCE_UPDATED,
+        _spy,
+    )
+
+    body = _build_signed_envelope(
+        encoder=svc._encoder,
+        signer_seed=a_kp.private_key,
+        session_key=session_key,
+        msg_id="ok-msg-1",
+        from_instance=a_id,  # matches signer
+        to_instance=own_iid,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        payload={"user_id": "u1", "state": "home"},
+    )
+    result = await svc.handle_inbound_envelope("wh-a-ok", body)
+    assert result == {"status": "ok"}
+    assert len(dispatched) == 1
+    assert dispatched[0].from_instance == a_id

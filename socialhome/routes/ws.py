@@ -6,6 +6,13 @@ the WS handshake it can't include arbitrary headers, so we accept a
 ``?token=`` query parameter as the fallback per
 :class:`BearerTokenStrategy`.
 
+Origin enforcement (§Audit #5): WebSocket upgrades carry an ``Origin``
+header in the browser. We require it to be either same-origin with the
+request or in ``config.cors_allowed_origins`` — the CORS-deny
+middleware only acts when ``Origin`` is present, leaving curl-style
+clients (which can omit ``Origin`` entirely) unchecked. We close that
+gap here at the WS upgrade.
+
 Inbound frames:
 
 * ``"ping"`` (text) -> ``"pong"`` keepalive.
@@ -21,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from urllib.parse import urlparse
 
 from aiohttp import WSMsgType, web
 
@@ -30,6 +38,52 @@ from .base import BaseView
 log = logging.getLogger(__name__)
 
 
+# NOTE: the audit also called out "Origin missing → reject" but doing
+# that would break every native / cli client that holds a valid bearer
+# token. The CORS-deny middleware made the same trade-off. We accept
+# missing Origin (treat it as a non-browser client) and *strictly*
+# reject any present-but-disallowed Origin — that's the actual CSRF
+# vector a malicious page tries to exploit.
+def _origin_allowed(request: web.Request) -> bool:
+    """Return ``True`` iff the request's ``Origin`` header is permitted
+    for a WebSocket upgrade.
+
+    The CORS-deny middleware applies the same allow-list to plain HTTP
+    requests when ``Origin`` is present, but skips when ``Origin`` is
+    absent (native clients). We mirror that pragma here:
+
+    * No ``Origin`` header → accept (native / cli clients with a valid
+      bearer token; same as the CORS-deny middleware's pass-through).
+    * ``Origin`` host matches the request's ``X-Forwarded-Host`` /
+      ``Host`` → same-origin, accept.
+    * ``Origin`` is in :attr:`Config.cors_allowed_origins` → accept.
+    * Otherwise reject (the cross-origin browser CSRF case the audit
+      flagged: a malicious page issuing ``new WebSocket(...)`` against
+      this server would carry its own ``Origin``).
+    """
+    origin = request.headers.get("Origin")
+    if origin is None or origin == "":
+        return True
+    config = request.app.get(K.config_key)
+    allowlist: frozenset[str] = frozenset(
+        getattr(config, "cors_allowed_origins", ()) or ()
+    )
+    if origin in allowlist:
+        return True
+    try:
+        parsed = urlparse(origin)
+    except ValueError:
+        return False
+    if not parsed.netloc:
+        return False
+    request_host = (
+        request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or ""
+    ).strip()
+    if not request_host:
+        return False
+    return parsed.netloc.lower() == request_host.lower()
+
+
 class WebSocketView(BaseView):
     """``GET /api/ws`` — upgrade to WebSocket for realtime push."""
 
@@ -37,6 +91,18 @@ class WebSocketView(BaseView):
         ctx = self.user
         if ctx is None or ctx.user_id is None:
             return web.json_response({"error": "unauthenticated"}, status=401)
+
+        # §Audit #5: enforce Origin allow-list before upgrading. The CORS
+        # middleware lets requests without an Origin header through, so
+        # curl-style clients could otherwise open a WS that the
+        # ``connect_src`` CSP would block in browsers. Reject early.
+        if not _origin_allowed(self.request):
+            log.warning(
+                "ws: blocked Origin=%r for user=%s",
+                self.request.headers.get("Origin"),
+                ctx.user_id,
+            )
+            return web.json_response({"error": "forbidden_origin"}, status=403)
 
         ws = web.WebSocketResponse(heartbeat=30.0)
         await ws.prepare(self.request)

@@ -1278,25 +1278,16 @@ class SpaceService:
             raise SpacePermissionError(
                 "host household is not a CONFIRMED peer — pair first",
             )
-        request_id = uuid.uuid4().hex
         # Persist locally so the inbound APPROVED handler can look up
         # the applicant_user_id; there's no host-side space row locally.
-        await self._spaces._db.enqueue(
-            """
-            INSERT INTO space_join_requests(
-                id, space_id, user_id, message, expires_at,
-                remote_applicant_instance_id
-            ) VALUES(
-                ?, ?, ?, ?, datetime('now', '+7 days'), ?
-            )
-            """,
-            (
-                request_id,
-                space_id,
-                applicant_user_id,
-                message,
-                host_instance_id,
-            ),
+        # §Audit #11: route through ``save_join_request`` rather than
+        # poking the repo's private ``_db`` — no SQL in services.
+        request_id = await self._spaces.save_join_request(
+            space_id,
+            applicant_user_id,
+            message=message,
+            ttl_days=7,
+            remote_applicant_instance_id=host_instance_id,
         )
         await self._federation.send_event(
             to_instance_id=host_instance_id,

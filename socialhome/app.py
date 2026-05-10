@@ -1347,7 +1347,23 @@ def create_app(config: Config | None = None) -> web.Application:
     signed_media_strategy = SignedMediaStrategy()
     strategies: list = [signed_media_strategy]
     if Capability.INGRESS in platform_adapter.capabilities:
-        strategies.append(HaIngressStrategy(user_repo))
+        # §Audit #6: HaIngressStrategy is fail-closed — it requires a
+        # validate_token callback so a misconfigured ingress proxy can't
+        # let a forged X-Ingress-User header through. The HAOS adapter
+        # exposes :meth:`validate_ingress_token` which calls into the
+        # Supervisor; until on_startup wires the supervisor client the
+        # callback returns False (reject). We bind to the bound method
+        # so the strategy resolves the live client at call time.
+        validate_token_cb = getattr(platform_adapter, "validate_ingress_token", None)
+        if validate_token_cb is None:
+            raise RuntimeError(
+                "Adapter advertises Capability.INGRESS but does not"
+                " provide validate_ingress_token — refusing to wire"
+                " HaIngressStrategy without a real validator (Audit #6).",
+            )
+        strategies.append(
+            HaIngressStrategy(user_repo, validate_token=validate_token_cb),
+        )
     strategies.append(bearer_strategy)
     chained_strategy = ChainedStrategy(*strategies)
     auth_middleware = require_auth(chained_strategy)

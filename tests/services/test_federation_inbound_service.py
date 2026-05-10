@@ -210,6 +210,55 @@ async def test_space_post_created_carries_location(db, bus, inbound):
     assert loc.label == "Marina"
 
 
+async def test_space_post_created_truncates_full_precision_gps(db, bus, inbound):
+    """§25 / CLAUDE.md GPS rule: a peer can put full precision on the
+    wire, but the receiver MUST truncate to 4 decimal places before
+    persisting / publishing — same invariant as outbound posts. The
+    persisted Post.location lat/lon should match
+    ``round(raw, 4)`` exactly."""
+    await db.enqueue(
+        """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
+                              identity_public_key, space_type, join_mode)
+           VALUES(?,?,?,?,?,?,?)""",
+        (
+            "sp-trunc",
+            "Space",
+            "peer-a",
+            "owner",
+            "aa" * 32,
+            SpaceType.HOUSEHOLD.value,
+            JoinMode.INVITE_ONLY.value,
+        ),
+    )
+    captured: list[SpacePostCreated] = []
+    bus.subscribe(SpacePostCreated, captured.append)
+
+    await inbound._on_space_post_created(
+        _event(
+            FederationEventType.SPACE_POST_CREATED,
+            {
+                "id": "post-trunc",
+                "author": "user-remote",
+                "type": "location",
+                "location": {
+                    "lat": 52.523456789,
+                    "lon": 4.067123456,
+                    "label": "Park",
+                },
+            },
+            space_id="sp-trunc",
+        )
+    )
+    assert captured and captured[0].post.location is not None
+    loc = captured[0].post.location
+    assert loc.lat == 52.5235
+    assert loc.lon == 4.0671
+    # Defence in depth: re-rounding the persisted value MUST be a no-op
+    # (i.e. no extra decimals snuck through).
+    assert round(loc.lat, 4) == loc.lat
+    assert round(loc.lon, 4) == loc.lon
+
+
 async def test_space_post_created_drops_malformed_location(db, bus, inbound):
     """A peer that sends a non-numeric lat shouldn't break the post —
     the location is silently dropped, the rest is preserved."""
