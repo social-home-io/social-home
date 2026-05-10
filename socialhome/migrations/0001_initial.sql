@@ -35,7 +35,10 @@ CREATE TABLE IF NOT EXISTS instance_identity (
     home_lat              REAL,                -- 4dp-truncated
     home_lon              REAL,
     home_label            TEXT,
-    routing_secret        TEXT NOT NULL,       -- 32 random bytes, hex; never transmitted
+    -- 32 random bytes, hex (= 64 chars); never transmitted. The CHECK
+    -- catches a truncated value at write time so a buggy bootstrap
+    -- can't quietly degrade the DM-routing-id derivation.
+    routing_secret        TEXT NOT NULL CHECK(length(routing_secret) = 64),
     created_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -50,7 +53,8 @@ CREATE TABLE IF NOT EXISTS users (
     username                   TEXT PRIMARY KEY,
     user_id                    TEXT NOT NULL UNIQUE,
     display_name               TEXT NOT NULL,
-    is_admin                   INTEGER NOT NULL DEFAULT 0,
+    is_admin                   INTEGER NOT NULL DEFAULT 0
+                               CHECK(is_admin IN (0,1)),
     -- Short hex digest of the current profile picture (or NULL). The
     -- bytes live in user_profile_pictures; this column exists purely so
     -- client URLs like /api/users/{id}/picture?v=<hash> can cache-bust
@@ -68,12 +72,16 @@ CREATE TABLE IF NOT EXISTS users (
     status_expires_at          TEXT,
     public_key                 TEXT,
     public_key_version         INTEGER NOT NULL DEFAULT 0,
-    is_new_member              INTEGER NOT NULL DEFAULT 1,
+    is_new_member              INTEGER NOT NULL DEFAULT 1
+                               CHECK(is_new_member IN (0,1)),
     preferences_json           TEXT NOT NULL DEFAULT '{}',
-    onboarding_complete        INTEGER NOT NULL DEFAULT 0,
+    onboarding_complete        INTEGER NOT NULL DEFAULT 0
+                               CHECK(onboarding_complete IN (0,1)),
     -- Child Protection (§CP) — never exposed in API responses
-    is_minor                   INTEGER NOT NULL DEFAULT 0,
-    child_protection_enabled   INTEGER NOT NULL DEFAULT 0,
+    is_minor                   INTEGER NOT NULL DEFAULT 0
+                               CHECK(is_minor IN (0,1)),
+    child_protection_enabled   INTEGER NOT NULL DEFAULT 0
+                               CHECK(child_protection_enabled IN (0,1)),
     date_of_birth              TEXT,
     declared_age               INTEGER,
     -- Sensitive PII — never federated
@@ -154,7 +162,8 @@ CREATE TABLE IF NOT EXISTS platform_users (
     username         TEXT PRIMARY KEY,
     display_name     TEXT NOT NULL,
     picture_url      TEXT,
-    is_admin         INTEGER NOT NULL DEFAULT 0,
+    is_admin         INTEGER NOT NULL DEFAULT 0
+                     CHECK(is_admin IN (0,1)),
     email            TEXT,
     notify_endpoint  TEXT,
     password_hash    TEXT,
@@ -169,6 +178,9 @@ CREATE TABLE IF NOT EXISTS platform_tokens (
     expires_at    TEXT,
     last_used_at  TEXT
 );
+-- Covers the ON DELETE CASCADE child-scan when a platform user is removed.
+CREATE INDEX IF NOT EXISTS idx_platform_tokens_username
+    ON platform_tokens(username);
 
 -- ── Federation: peers, pairing, outbox, replay ──────────────────────────────
 
@@ -194,7 +206,8 @@ CREATE TABLE IF NOT EXISTS remote_instances (
     -- both sides' supported suites; stays fixed for the life of the pair.
     sig_suite             TEXT NOT NULL DEFAULT 'ed25519'
                           CHECK(sig_suite IN ('ed25519','ed25519+mldsa65')),
-    intro_relay_enabled   INTEGER NOT NULL DEFAULT 1,
+    intro_relay_enabled   INTEGER NOT NULL DEFAULT 1
+                          CHECK(intro_relay_enabled IN (0,1)),
     relay_via             TEXT,                    -- introducer instance_id
     home_lat              REAL,
     home_lon              REAL,
@@ -226,13 +239,18 @@ CREATE INDEX IF NOT EXISTS idx_remote_instances_status ON remote_instances(statu
 CREATE TABLE IF NOT EXISTS peer_user_visibility (
     instance_id  TEXT NOT NULL REFERENCES remote_instances(id) ON DELETE CASCADE,
     user_id      TEXT NOT NULL REFERENCES users(user_id)       ON DELETE CASCADE,
-    visible      INTEGER NOT NULL DEFAULT 0,
+    visible      INTEGER NOT NULL DEFAULT 0
+                 CHECK(visible IN (0,1)),
     set_at       TEXT NOT NULL DEFAULT (datetime('now')),
     set_by       TEXT,
     PRIMARY KEY (instance_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_peer_user_vis_instance
     ON peer_user_visibility(instance_id);
+-- Covers the ON DELETE CASCADE child-scan from ``users`` and the
+-- ``WHERE user_id=?`` lookup when checking a user's per-peer visibility.
+CREATE INDEX IF NOT EXISTS idx_peer_user_vis_user
+    ON peer_user_visibility(user_id);
 
 -- ── Household instance bans (§Momentum-relay-policy) ─────────────────────────
 -- Coarse-grained block list: any envelope whose
@@ -326,24 +344,25 @@ CREATE INDEX IF NOT EXISTS idx_federation_replay_received
 CREATE TABLE IF NOT EXISTS household_features (
     id                TEXT PRIMARY KEY DEFAULT 'default' CHECK(id = 'default'),
     household_name    TEXT NOT NULL DEFAULT 'Home',
-    feat_feed         INTEGER NOT NULL DEFAULT 1,
-    feat_pages        INTEGER NOT NULL DEFAULT 1,
-    feat_tasks        INTEGER NOT NULL DEFAULT 1,
-    feat_stickies     INTEGER NOT NULL DEFAULT 1,
-    feat_calendar     INTEGER NOT NULL DEFAULT 1,
-    feat_highlights      INTEGER NOT NULL DEFAULT 1,
-    feat_momentum     INTEGER NOT NULL DEFAULT 1,
+    feat_feed         INTEGER NOT NULL DEFAULT 1 CHECK(feat_feed IN (0,1)),
+    feat_pages        INTEGER NOT NULL DEFAULT 1 CHECK(feat_pages IN (0,1)),
+    feat_tasks        INTEGER NOT NULL DEFAULT 1 CHECK(feat_tasks IN (0,1)),
+    feat_stickies     INTEGER NOT NULL DEFAULT 1 CHECK(feat_stickies IN (0,1)),
+    feat_calendar     INTEGER NOT NULL DEFAULT 1 CHECK(feat_calendar IN (0,1)),
+    feat_highlights   INTEGER NOT NULL DEFAULT 1 CHECK(feat_highlights IN (0,1)),
+    feat_momentum     INTEGER NOT NULL DEFAULT 1 CHECK(feat_momentum IN (0,1)),
     -- Bazaar is a per-space feature only (gated by ``space.features``).
     -- The household feed never carries bazaar posts, so no
     -- ``feat_bazaar`` / ``allow_bazaar`` here.
-    allow_text        INTEGER NOT NULL DEFAULT 1,
-    allow_image       INTEGER NOT NULL DEFAULT 1,
-    allow_video       INTEGER NOT NULL DEFAULT 1,
-    allow_file        INTEGER NOT NULL DEFAULT 1,
-    allow_poll        INTEGER NOT NULL DEFAULT 1,
-    allow_schedule    INTEGER NOT NULL DEFAULT 1,
-    allow_location    INTEGER NOT NULL DEFAULT 1,
+    allow_text        INTEGER NOT NULL DEFAULT 1 CHECK(allow_text IN (0,1)),
+    allow_image       INTEGER NOT NULL DEFAULT 1 CHECK(allow_image IN (0,1)),
+    allow_video       INTEGER NOT NULL DEFAULT 1 CHECK(allow_video IN (0,1)),
+    allow_file        INTEGER NOT NULL DEFAULT 1 CHECK(allow_file IN (0,1)),
+    allow_poll        INTEGER NOT NULL DEFAULT 1 CHECK(allow_poll IN (0,1)),
+    allow_schedule    INTEGER NOT NULL DEFAULT 1 CHECK(allow_schedule IN (0,1)),
+    allow_location    INTEGER NOT NULL DEFAULT 1 CHECK(allow_location IN (0,1)),
     allow_highlight_share INTEGER NOT NULL DEFAULT 1
+                          CHECK(allow_highlight_share IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS presence (
@@ -401,11 +420,11 @@ CREATE TABLE IF NOT EXISTS feed_posts (
     media_url       TEXT,
     reactions       TEXT NOT NULL DEFAULT '{}',    -- JSON {emoji: [user_id...]}
     comment_count   INTEGER NOT NULL DEFAULT 0,
-    pinned          INTEGER NOT NULL DEFAULT 0,
-    deleted         INTEGER NOT NULL DEFAULT 0,
+    pinned          INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)),
+    deleted         INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
     edited_at       TEXT,
-    no_link_preview INTEGER NOT NULL DEFAULT 0,
-    moderated       INTEGER NOT NULL DEFAULT 0,
+    no_link_preview INTEGER NOT NULL DEFAULT 0 CHECK(no_link_preview IN (0,1)),
+    moderated       INTEGER NOT NULL DEFAULT 0 CHECK(moderated IN (0,1)),
     file_meta_json  TEXT,                          -- JSON FileMeta when type=file
     -- JSON {lat, lon, label?} when type='location'. Coordinates are
     -- 4dp-truncated at the service layer (§GPS truncation), so the
@@ -424,6 +443,10 @@ CREATE TABLE IF NOT EXISTS feed_posts (
 );
 CREATE INDEX IF NOT EXISTS idx_feed_posts_created ON feed_posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_feed_posts_author  ON feed_posts(author);
+-- Covers the ON DELETE SET NULL child-scan when a highlight is purged,
+-- and the rare "find feed posts pointing at this highlight" lookup.
+CREATE INDEX IF NOT EXISTS idx_feed_posts_linked_highlight
+    ON feed_posts(linked_highlight_id) WHERE linked_highlight_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS post_comments (
     id          TEXT PRIMARY KEY,
@@ -434,11 +457,15 @@ CREATE TABLE IF NOT EXISTS post_comments (
                 CHECK(type IN ('text','image')),
     content     TEXT,
     media_url   TEXT,
-    deleted     INTEGER NOT NULL DEFAULT 0,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
     edited_at   TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_post_comments_post ON post_comments(post_id);
+-- Covers the self-FK ON DELETE CASCADE walk when a parent comment is
+-- removed (otherwise SQLite full-scans the table for every child).
+CREATE INDEX IF NOT EXISTS idx_post_comments_parent
+    ON post_comments(parent_id) WHERE parent_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS saved_posts (
     user_id   TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -449,6 +476,10 @@ CREATE TABLE IF NOT EXISTS saved_posts (
 
 CREATE TABLE IF NOT EXISTS feed_read_positions (
     user_id           TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    -- Intentionally no FK on ``last_read_post_id``. A post hard-delete
+    -- makes the id stale; the renderer treats unknown ids as "no unread
+    -- marker" and falls back to ``last_read_at``. Keeping the row
+    -- around is cheaper than re-anchoring on every retention sweep.
     last_read_post_id TEXT,
     last_read_at      TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (user_id)
@@ -473,9 +504,12 @@ CREATE TABLE IF NOT EXISTS spaces (
     retention_days         INTEGER,
     retention_exempt_json  TEXT NOT NULL DEFAULT '[]',
     -- Feature toggles (mirror domain/space.SpaceFeatures.to_columns)
-    feature_calendar       INTEGER NOT NULL DEFAULT 0,
-    feature_todo           INTEGER NOT NULL DEFAULT 1,
-    feature_location       INTEGER NOT NULL DEFAULT 0,
+    feature_calendar       INTEGER NOT NULL DEFAULT 0
+                           CHECK(feature_calendar IN (0,1)),
+    feature_todo           INTEGER NOT NULL DEFAULT 1
+                           CHECK(feature_todo IN (0,1)),
+    feature_location       INTEGER NOT NULL DEFAULT 0
+                           CHECK(feature_location IN (0,1)),
     location_mode          TEXT NOT NULL DEFAULT 'gps'
                            CHECK(location_mode IN ('gps', 'zone_only')),
     -- feature_location is the on/off switch for the per-space map (§23.8.6).
@@ -487,8 +521,10 @@ CREATE TABLE IF NOT EXISTS spaces (
     --               originating household. Outside-zone updates are skipped.
     -- HA-defined zone names never reach a space-bound channel under either
     -- mode — see §23.8.5/§23.8.6.
-    feature_stickies       INTEGER NOT NULL DEFAULT 0,
-    feature_pages          INTEGER NOT NULL DEFAULT 1,
+    feature_stickies       INTEGER NOT NULL DEFAULT 0
+                           CHECK(feature_stickies IN (0,1)),
+    feature_pages          INTEGER NOT NULL DEFAULT 1
+                           CHECK(feature_pages IN (0,1)),
     posts_access           TEXT NOT NULL DEFAULT 'open'
                            CHECK(posts_access IN ('open','moderated','admin_only')),
     pages_access           TEXT NOT NULL DEFAULT 'open'
@@ -499,33 +535,46 @@ CREATE TABLE IF NOT EXISTS spaces (
                            CHECK(calendar_access IN ('open','moderated','admin_only')),
     tasks_access           TEXT NOT NULL DEFAULT 'open'
                            CHECK(tasks_access IN ('open','moderated','admin_only')),
-    allow_post_text        INTEGER NOT NULL DEFAULT 1,
-    allow_post_image       INTEGER NOT NULL DEFAULT 1,
-    allow_post_video       INTEGER NOT NULL DEFAULT 1,
-    allow_post_transcript  INTEGER NOT NULL DEFAULT 1,
-    allow_post_poll        INTEGER NOT NULL DEFAULT 1,
-    allow_post_schedule    INTEGER NOT NULL DEFAULT 1,
-    allow_post_file        INTEGER NOT NULL DEFAULT 1,
-    allow_post_bazaar      INTEGER NOT NULL DEFAULT 1,
+    allow_post_text        INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_text IN (0,1)),
+    allow_post_image       INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_image IN (0,1)),
+    allow_post_video       INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_video IN (0,1)),
+    allow_post_transcript  INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_transcript IN (0,1)),
+    allow_post_poll        INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_poll IN (0,1)),
+    allow_post_schedule    INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_schedule IN (0,1)),
+    allow_post_file        INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_file IN (0,1)),
+    allow_post_bazaar      INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_bazaar IN (0,1)),
     -- Phase B: auto-created event posts in the feed when a calendar
     -- event is created. One post per event series — recurring events
     -- don't generate per-occurrence posts.
-    allow_post_event       INTEGER NOT NULL DEFAULT 1,
+    allow_post_event       INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_event IN (0,1)),
     -- One-shot location-share posts (composer's 📍 picker).
     -- Coordinates are stored 4dp-truncated in the post's location_json.
-    allow_post_location    INTEGER NOT NULL DEFAULT 1,
+    allow_post_location    INTEGER NOT NULL DEFAULT 1
+                           CHECK(allow_post_location IN (0,1)),
     -- Highlight-share posts (§Highlights) — share-card pointing at an
     -- existing highlight so a moment can live in a feed beyond the
     -- author's retention window.
-    allow_post_highlight_share INTEGER NOT NULL DEFAULT 1,
+    allow_post_highlight_share INTEGER NOT NULL DEFAULT 1
+                               CHECK(allow_post_highlight_share IN (0,1)),
     -- Subscriber engagement toggles (§23.49) — admin opt-in.  By
     -- default subscribers are strictly read-only (the historical
     -- behaviour); flipping these flags lets a subscriber leave a
     -- comment or a reaction without becoming a full member.  Posts
     -- always remain member-only (subscribers can't author top-level
     -- content).
-    allow_subscriber_comment   INTEGER NOT NULL DEFAULT 0,
-    allow_subscriber_react     INTEGER NOT NULL DEFAULT 0,
+    allow_subscriber_comment   INTEGER NOT NULL DEFAULT 0
+                               CHECK(allow_subscriber_comment IN (0,1)),
+    allow_subscriber_react     INTEGER NOT NULL DEFAULT 0
+                               CHECK(allow_subscriber_react IN (0,1)),
     -- Public / discover fields (populated only when join_mode IN ('public','open'))
     lat                    REAL,
     lon                    REAL,
@@ -534,15 +583,19 @@ CREATE TABLE IF NOT EXISTS spaces (
     -- space_covers). NULL → no cover, gradient fallback renders.
     cover_hash             TEXT,
     about_markdown         TEXT,
-    feature_gallery        INTEGER NOT NULL DEFAULT 0,
+    feature_gallery        INTEGER NOT NULL DEFAULT 0
+                           CHECK(feature_gallery IN (0,1)),
     welcome_version        INTEGER NOT NULL DEFAULT 0,
     -- When 1, the HA integration may post to this space via the bot-bridge
     -- (one named SpaceBot persona per automation). Admin opt-in: bots cannot
     -- appear in the space without this. Toggling to 0 is an admin kill-switch
     -- — existing bot tokens stay valid, posting is blocked until re-enabled.
-    bot_enabled            INTEGER NOT NULL DEFAULT 0,
-    allow_here_mention     INTEGER NOT NULL DEFAULT 0,
-    dissolved              INTEGER NOT NULL DEFAULT 0,
+    bot_enabled            INTEGER NOT NULL DEFAULT 0
+                           CHECK(bot_enabled IN (0,1)),
+    allow_here_mention     INTEGER NOT NULL DEFAULT 0
+                           CHECK(allow_here_mention IN (0,1)),
+    dissolved              INTEGER NOT NULL DEFAULT 0
+                           CHECK(dissolved IN (0,1)),
     -- Child protection (§CP)
     min_age                INTEGER NOT NULL DEFAULT 0
                            CHECK(min_age IN (0, 13, 16, 18)),
@@ -550,6 +603,7 @@ CREATE TABLE IF NOT EXISTS spaces (
                            CHECK(target_audience IN ('all','family','teen','adult')),
     created_at             TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(space_type);
 
 -- ── Child protection: guardian links + per-minor blocks ────────────────────
 
@@ -570,7 +624,6 @@ CREATE TABLE IF NOT EXISTS cp_minor_blocks (
     blocked_at       TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (minor_user_id, blocked_user_id)
 );
-CREATE INDEX IF NOT EXISTS idx_spaces_type ON spaces(space_type);
 
 CREATE TABLE IF NOT EXISTS space_members (
     space_id              TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
@@ -579,7 +632,8 @@ CREATE TABLE IF NOT EXISTS space_members (
                           CHECK(role IN ('owner','admin','member','subscriber')),
     joined_at             TEXT NOT NULL DEFAULT (datetime('now')),
     history_visible_from  TEXT,
-    location_share_enabled INTEGER NOT NULL DEFAULT 0,
+    location_share_enabled INTEGER NOT NULL DEFAULT 0
+                           CHECK(location_share_enabled IN (0,1)),
     space_display_name    TEXT,
     -- Per-space profile-picture override (§4.1.6). NULL means the
     -- member inherits their household picture. The bytes live in
@@ -725,6 +779,9 @@ CREATE TABLE IF NOT EXISTS space_invite_tokens (
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     expires_at    TEXT
 );
+-- Covers the ON DELETE CASCADE child-scan on space deletion.
+CREATE INDEX IF NOT EXISTS idx_space_invite_tokens_space
+    ON space_invite_tokens(space_id);
 
 -- Indexes added at the bottom of the table for the admin pending-list
 -- view and the periodic expiry sweep — the only two read paths.
@@ -757,6 +814,9 @@ CREATE TABLE IF NOT EXISTS space_aliases (
     updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (space_id, local_username)
 );
+-- Covers the ON DELETE CASCADE child-scan when a user is removed.
+CREATE INDEX IF NOT EXISTS idx_space_aliases_local_username
+    ON space_aliases(local_username);
 
 -- Per-viewer private aliases for users (§4.1.6).
 -- ``viewer_user_id`` is the local user setting the alias (their own
@@ -830,11 +890,11 @@ CREATE TABLE IF NOT EXISTS space_posts (
     media_url       TEXT,
     reactions       TEXT NOT NULL DEFAULT '{}',
     comment_count   INTEGER NOT NULL DEFAULT 0,
-    pinned          INTEGER NOT NULL DEFAULT 0,
-    deleted         INTEGER NOT NULL DEFAULT 0,
+    pinned          INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)),
+    deleted         INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
     edited_at       TEXT,
-    no_link_preview INTEGER NOT NULL DEFAULT 0,
-    moderated       INTEGER NOT NULL DEFAULT 0,
+    no_link_preview INTEGER NOT NULL DEFAULT 0 CHECK(no_link_preview IN (0,1)),
+    moderated       INTEGER NOT NULL DEFAULT 0 CHECK(moderated IN (0,1)),
     file_meta_json  TEXT,
     -- JSON {lat, lon, label?} when type='location'. Coordinates are
     -- 4dp-truncated at the service layer; the federated payload
@@ -871,11 +931,14 @@ CREATE TABLE IF NOT EXISTS space_post_comments (
                 CHECK(type IN ('text','image')),
     content     TEXT,
     media_url   TEXT,
-    deleted     INTEGER NOT NULL DEFAULT 0,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
     edited_at   TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_space_post_comments_post ON space_post_comments(post_id);
+-- Same self-FK reason as ``post_comments.parent_id`` above.
+CREATE INDEX IF NOT EXISTS idx_space_post_comments_parent
+    ON space_post_comments(parent_id) WHERE parent_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS space_moderation_queue (
     id                TEXT PRIMARY KEY,
@@ -893,6 +956,10 @@ CREATE TABLE IF NOT EXISTS space_moderation_queue (
     reviewed_at       TEXT,
     rejection_reason  TEXT
 );
+-- Covers ``WHERE space_id=? AND status=?`` admin-queue listings and the
+-- ON DELETE CASCADE child-scan on space deletion.
+CREATE INDEX IF NOT EXISTS idx_space_moderation_queue_space
+    ON space_moderation_queue(space_id, status);
 
 -- ── User-filed reports (spam / harassment / misinformation / …) ────────────
 
@@ -928,8 +995,8 @@ CREATE TABLE IF NOT EXISTS polls (
     post_id        TEXT PRIMARY KEY REFERENCES feed_posts(id) ON DELETE CASCADE,
     question       TEXT NOT NULL,
     closes_at      TEXT,
-    closed         INTEGER NOT NULL DEFAULT 0,
-    allow_multiple INTEGER NOT NULL DEFAULT 0
+    closed         INTEGER NOT NULL DEFAULT 0 CHECK(closed IN (0,1)),
+    allow_multiple INTEGER NOT NULL DEFAULT 0 CHECK(allow_multiple IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS poll_options (
@@ -938,6 +1005,8 @@ CREATE TABLE IF NOT EXISTS poll_options (
     text       TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0
 );
+-- ``list options for a poll`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_poll_options_post ON poll_options(post_id);
 
 CREATE TABLE IF NOT EXISTS poll_votes (
     option_id      TEXT NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
@@ -950,8 +1019,8 @@ CREATE TABLE IF NOT EXISTS space_polls (
     post_id        TEXT PRIMARY KEY REFERENCES space_posts(id) ON DELETE CASCADE,
     question       TEXT NOT NULL,
     closes_at      TEXT,
-    closed         INTEGER NOT NULL DEFAULT 0,
-    allow_multiple INTEGER NOT NULL DEFAULT 0
+    closed         INTEGER NOT NULL DEFAULT 0 CHECK(closed IN (0,1)),
+    allow_multiple INTEGER NOT NULL DEFAULT 0 CHECK(allow_multiple IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS space_poll_options (
@@ -960,6 +1029,9 @@ CREATE TABLE IF NOT EXISTS space_poll_options (
     text       TEXT NOT NULL,
     position   INTEGER NOT NULL DEFAULT 0
 );
+-- ``list options for a space poll`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_space_poll_options_post
+    ON space_poll_options(post_id);
 
 CREATE TABLE IF NOT EXISTS space_poll_votes (
     option_id      TEXT NOT NULL REFERENCES space_poll_options(id) ON DELETE CASCADE,
@@ -978,6 +1050,8 @@ CREATE TABLE IF NOT EXISTS schedule_slots (
     end_time    TEXT,
     position    INTEGER NOT NULL DEFAULT 0
 );
+-- ``list slots for a schedule poll`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_schedule_slots_post ON schedule_slots(post_id);
 
 CREATE TABLE IF NOT EXISTS schedule_responses (
     slot_id       TEXT NOT NULL REFERENCES schedule_slots(id) ON DELETE CASCADE,
@@ -992,7 +1066,7 @@ CREATE TABLE IF NOT EXISTS schedule_poll_meta (
     title              TEXT NOT NULL,
     deadline           TEXT,
     finalized_slot_id  TEXT,
-    closed             INTEGER NOT NULL DEFAULT 0
+    closed             INTEGER NOT NULL DEFAULT 0 CHECK(closed IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS space_schedule_slots (
@@ -1003,6 +1077,9 @@ CREATE TABLE IF NOT EXISTS space_schedule_slots (
     end_time    TEXT,
     position    INTEGER NOT NULL DEFAULT 0
 );
+-- ``list slots for a space schedule poll`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_space_schedule_slots_post
+    ON space_schedule_slots(post_id);
 
 CREATE TABLE IF NOT EXISTS space_schedule_responses (
     slot_id       TEXT NOT NULL REFERENCES space_schedule_slots(id) ON DELETE CASCADE,
@@ -1017,7 +1094,7 @@ CREATE TABLE IF NOT EXISTS space_schedule_poll_meta (
     title              TEXT NOT NULL,
     deadline           TEXT,
     finalized_slot_id  TEXT,
-    closed             INTEGER NOT NULL DEFAULT 0
+    closed             INTEGER NOT NULL DEFAULT 0 CHECK(closed IN (0,1))
 );
 
 -- ── Bazaar (marketplace) ───────────────────────────────────────────────────
@@ -1063,10 +1140,10 @@ CREATE TABLE IF NOT EXISTS bazaar_bids (
     bidder_user_id    TEXT NOT NULL,
     amount            INTEGER NOT NULL,
     message           TEXT,
-    accepted          INTEGER NOT NULL DEFAULT 0,
-    rejected          INTEGER NOT NULL DEFAULT 0,
+    accepted          INTEGER NOT NULL DEFAULT 0 CHECK(accepted IN (0,1)),
+    rejected          INTEGER NOT NULL DEFAULT 0 CHECK(rejected IN (0,1)),
     rejection_reason  TEXT,
-    withdrawn         INTEGER NOT NULL DEFAULT 0,
+    withdrawn         INTEGER NOT NULL DEFAULT 0 CHECK(withdrawn IN (0,1)),
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bazaar_bids_listing ON bazaar_bids(listing_post_id);
@@ -1091,6 +1168,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     -- using the user's API token. DMs have no named bot personas (the 1:1
     -- context makes "Home Assistant" adequate) — this is a simple on/off.
     bot_enabled      INTEGER NOT NULL DEFAULT 0
+                     CHECK(bot_enabled IN (0,1))
 );
 
 CREATE TABLE IF NOT EXISTS conversation_members (
@@ -1106,6 +1184,11 @@ CREATE TABLE IF NOT EXISTS conversation_members (
     deleted_at            TEXT,
     PRIMARY KEY (conversation_id, username)
 );
+-- The PK has ``username`` as the second column, so SQLite cannot use
+-- it for the ON DELETE CASCADE child-scan from ``users`` (and the
+-- "list conversations for this user" reverse lookup).
+CREATE INDEX IF NOT EXISTS idx_conversation_members_username
+    ON conversation_members(username);
 
 CREATE TABLE IF NOT EXISTS conversation_remote_members (
     conversation_id       TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -1133,12 +1216,15 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
     --   highlight_date}``. Frozen so the reply stays meaningful after the
     -- frame expires. NULL when the message isn't a highlight-frame reply.
     reply_to_highlight_frame_snapshot  TEXT,
-    deleted         INTEGER NOT NULL DEFAULT 0,
+    deleted         INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
     edited_at       TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_conv_created
     ON conversation_messages(conversation_id, created_at DESC);
+-- Self-FK ON DELETE SET NULL child-scan when a parent message is removed.
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_reply_to
+    ON conversation_messages(reply_to_id) WHERE reply_to_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS message_reactions (
     message_id  TEXT NOT NULL REFERENCES conversation_messages(id) ON DELETE CASCADE,
@@ -1184,6 +1270,9 @@ CREATE TABLE IF NOT EXISTS highlights (
 );
 CREATE INDEX IF NOT EXISTS idx_highlights_expires ON highlights(expires_at);
 CREATE INDEX IF NOT EXISTS idx_highlights_author  ON highlights(author_user_id, highlight_date DESC);
+-- Covers the ON DELETE SET NULL child-scan when a GFS is unpaired.
+CREATE INDEX IF NOT EXISTS idx_highlights_public_gfs
+    ON highlights(public_gfs_id) WHERE public_gfs_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS highlight_frames (
     id              TEXT PRIMARY KEY,
@@ -1255,6 +1344,9 @@ CREATE TABLE IF NOT EXISTS space_task_lists (
     created_by  TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- ``list lists for a space`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_space_task_lists_space
+    ON space_task_lists(space_id);
 
 CREATE TABLE IF NOT EXISTS space_tasks (
     id                   TEXT PRIMARY KEY,
@@ -1277,6 +1369,8 @@ CREATE TABLE IF NOT EXISTS space_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_space_tasks_list        ON space_tasks(list_id);
 CREATE INDEX IF NOT EXISTS idx_space_tasks_archived_at ON space_tasks(archived_at);
+-- Covers the ON DELETE CASCADE child-scan on space deletion.
+CREATE INDEX IF NOT EXISTS idx_space_tasks_space       ON space_tasks(space_id);
 
 CREATE TABLE IF NOT EXISTS task_deadline_notifications (
     task_id    TEXT NOT NULL,
@@ -1295,6 +1389,8 @@ CREATE TABLE IF NOT EXISTS calendars (
     calendar_type   TEXT NOT NULL DEFAULT 'personal'
                     CHECK(calendar_type IN ('personal','space'))
 );
+-- ``list calendars for a user`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_calendars_owner ON calendars(owner_username);
 
 CREATE TABLE IF NOT EXISTS calendar_events (
     id              TEXT PRIMARY KEY,
@@ -1303,7 +1399,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     description     TEXT,
     start_dt        TEXT NOT NULL,
     end_dt          TEXT NOT NULL,
-    all_day         INTEGER NOT NULL DEFAULT 0,
+    all_day         INTEGER NOT NULL DEFAULT 0 CHECK(all_day IN (0,1)),
     attendees_json  TEXT NOT NULL DEFAULT '[]',
     mirrored_from   TEXT,
     rrule           TEXT,                   -- RFC 5545 recurrence rule (§17.2)
@@ -1311,7 +1407,7 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     -- ``attendees`` list. ``0`` (default) means "this event is just
     -- on your calendar — no buttons to confirm". The household-event
     -- dialog flips this when the host explicitly wants confirmations.
-    rsvp_enabled    INTEGER NOT NULL DEFAULT 0,
+    rsvp_enabled    INTEGER NOT NULL DEFAULT 0 CHECK(rsvp_enabled IN (0,1)),
     -- Optional cover image for the event card (relative ``/api/media/{filename}``
     -- URL). Renders at the top of EventPostCard on the feed and as a
     -- thumbnail in the calendar list view. NULL = no cover.
@@ -1332,6 +1428,9 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- ``list events for a calendar`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_calendar_events_calendar
+    ON calendar_events(calendar_id);
 
 -- §D1b cross-household private spaces — calendar events. No FK on
 -- ``space_id``: peer households mirror the space without a local
@@ -1345,7 +1444,8 @@ CREATE TABLE IF NOT EXISTS space_calendar_events (
     description            TEXT,
     start_dt               TEXT NOT NULL,
     end_dt                 TEXT NOT NULL,
-    all_day                INTEGER NOT NULL DEFAULT 0,
+    all_day                INTEGER NOT NULL DEFAULT 0
+                           CHECK(all_day IN (0,1)),
     attendees_json         TEXT NOT NULL DEFAULT '[]',
     rrule                  TEXT,            -- RFC 5545 recurrence rule (§17.2)
     created_by             TEXT NOT NULL,
@@ -1447,10 +1547,18 @@ CREATE TABLE IF NOT EXISTS space_calendar_feed_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_feed_tokens_token_hash
     ON space_calendar_feed_tokens(token_hash) WHERE revoked_at IS NULL;
+-- Covers the ON DELETE CASCADE child-scan on space deletion.
+CREATE INDEX IF NOT EXISTS idx_space_calendar_feed_tokens_space
+    ON space_calendar_feed_tokens(space_id);
 
 -- Out-of-order federation RSVP buffer. When a SPACE_RSVP_UPDATED arrives
 -- before its event has propagated, the FK to space_calendar_events
 -- would fail; we hold the RSVP here and flush on event arrival.
+--
+-- ``status`` is intentionally a *superset* of ``space_calendar_rsvps.status``:
+-- the extra ``'removed'`` value represents a DELETE that arrived before
+-- its event. ``CalendarRepo.flush_pending_rsvps`` translates ``'removed'``
+-- into a DELETE on the canonical table, so it never lands there.
 CREATE TABLE IF NOT EXISTS pending_federated_rsvps (
     event_id      TEXT NOT NULL,
     user_id       TEXT NOT NULL,
@@ -1533,6 +1641,10 @@ CREATE TABLE IF NOT EXISTS stickies (
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- ``list stickies in a space`` + ON DELETE CASCADE child-scan; partial
+-- on space_id to skip the household-feed (NULL space_id) rows.
+CREATE INDEX IF NOT EXISTS idx_stickies_space
+    ON stickies(space_id) WHERE space_id IS NOT NULL;
 
 -- ── Notifications ──────────────────────────────────────────────────────────
 
@@ -1558,6 +1670,9 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     device_label TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- ``list subscriptions for a user`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+    ON push_subscriptions(user_id);
 
 -- ── Public space discovery / moderation ────────────────────────────────────
 
@@ -1571,8 +1686,12 @@ CREATE TABLE IF NOT EXISTS public_space_cache (
     lon             REAL,
     radius_km       REAL,
     member_count    INTEGER NOT NULL DEFAULT 0,
-    min_age         INTEGER NOT NULL DEFAULT 0,
-    target_audience TEXT NOT NULL DEFAULT 'all',
+    -- Mirror ``spaces.min_age`` / ``spaces.target_audience`` CHECKs so
+    -- a malformed inbound discover entry cannot quietly land.
+    min_age         INTEGER NOT NULL DEFAULT 0
+                    CHECK(min_age IN (0, 13, 16, 18)),
+    target_audience TEXT NOT NULL DEFAULT 'all'
+                    CHECK(target_audience IN ('all','family','teen','adult')),
     cached_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -1625,9 +1744,14 @@ CREATE TABLE IF NOT EXISTS peer_space_directory (
     description      TEXT,
     emoji            TEXT,
     member_count     INTEGER NOT NULL DEFAULT 0,
-    join_mode        TEXT NOT NULL DEFAULT 'request',
-    min_age          INTEGER NOT NULL DEFAULT 0,
-    target_audience  TEXT NOT NULL DEFAULT 'all',
+    -- Mirror ``spaces.join_mode``'s CHECK so a malformed inbound
+    -- directory frame can't quietly land an unknown value.
+    join_mode        TEXT NOT NULL DEFAULT 'request'
+                     CHECK(join_mode IN ('invite_only','open','link','request')),
+    min_age          INTEGER NOT NULL DEFAULT 0
+                     CHECK(min_age IN (0, 13, 16, 18)),
+    target_audience  TEXT NOT NULL DEFAULT 'all'
+                     CHECK(target_audience IN ('all','family','teen','adult')),
     updated_at       TEXT,
     cached_at        TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (instance_id, space_id)
@@ -1690,7 +1814,8 @@ CREATE TABLE IF NOT EXISTS moments (
     -- Public-via-GFS opt-in (§Momentum-public). 1 when the moment was
     -- (or will be) fanned out via at least one GFS the author has
     -- registered on. Author-side decision; recipients ignore.
-    is_public          INTEGER NOT NULL DEFAULT 0,
+    is_public          INTEGER NOT NULL DEFAULT 0
+                       CHECK(is_public IN (0,1)),
     -- Provenance: how this row landed locally. ``self`` = composed
     -- here; ``household`` = arrived via the §24.11 federation pipeline
     -- (the relay-able path); ``gfs`` = arrived via a public-GFS
@@ -1705,6 +1830,9 @@ CREATE INDEX IF NOT EXISTS idx_moments_created_at  ON moments(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_moments_expires     ON moments(expires_at);
 CREATE INDEX IF NOT EXISTS idx_moments_parent      ON moments(parent_moment_id);
 CREATE INDEX IF NOT EXISTS idx_moments_author_date ON moments(author_user_id, created_at DESC);
+-- Covers the ON DELETE SET NULL child-scan when a GFS is unpaired.
+CREATE INDEX IF NOT EXISTS idx_moments_received_via_gfs
+    ON moments(received_via_gfs_id) WHERE received_via_gfs_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS moment_reactions (
     moment_id        TEXT NOT NULL REFERENCES moments(id) ON DELETE CASCADE,
@@ -1739,7 +1867,8 @@ CREATE TABLE IF NOT EXISTS moment_public_registrations (
     registered_at  TEXT NOT NULL DEFAULT (datetime('now')),
     -- 1 = compose defaults to "Public via GFS"; 0 = the user must
     -- explicitly tick the public chip per moment.
-    default_share  INTEGER NOT NULL DEFAULT 1,
+    default_share  INTEGER NOT NULL DEFAULT 1
+                   CHECK(default_share IN (0,1)),
     -- Last avatar digest pushed to this GFS. The profile-sync flow
     -- compares against ``users.picture_hash`` and skips the picture
     -- upload when they match (re-register still runs on every save
@@ -1747,6 +1876,9 @@ CREATE TABLE IF NOT EXISTS moment_public_registrations (
     last_picture_digest TEXT,
     PRIMARY KEY (user_id, gfs_id)
 );
+-- Covers the ON DELETE CASCADE child-scan on GFS unpairing.
+CREATE INDEX IF NOT EXISTS idx_moment_public_registrations_gfs
+    ON moment_public_registrations(gfs_id);
 
 -- Follower-side: who this user follows publicly via which GFS. The
 -- author's home-instance public key is cached at follow-time so every
@@ -1768,13 +1900,16 @@ CREATE TABLE IF NOT EXISTS moment_public_follows (
 );
 CREATE INDEX IF NOT EXISTS idx_moment_public_follows_followed
     ON moment_public_follows(followed_user_id);
+-- Covers the ON DELETE CASCADE child-scan on GFS unpairing.
+CREATE INDEX IF NOT EXISTS idx_moment_public_follows_gfs
+    ON moment_public_follows(gfs_id);
 
 -- ── Shopping list (§23.120) ────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS shopping_list_items (
     id            TEXT PRIMARY KEY,
     text          TEXT NOT NULL,
-    completed     INTEGER NOT NULL DEFAULT 0,
+    completed     INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
     created_by    TEXT NOT NULL,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     completed_at  TEXT
@@ -1831,6 +1966,8 @@ CREATE TABLE IF NOT EXISTS space_links (
     url       TEXT NOT NULL,
     position  INTEGER NOT NULL DEFAULT 0
 );
+-- ``list links for a space`` + ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_space_links_space ON space_links(space_id);
 
 -- ── Per-space notification preferences ────────────────────────────────────
 
@@ -1841,6 +1978,10 @@ CREATE TABLE IF NOT EXISTS space_notif_prefs (
               CHECK(level IN ('all','mentions','muted')),
     PRIMARY KEY (user_id, space_id)
 );
+-- Covers the ON DELETE CASCADE child-scan on space deletion (PK already
+-- covers the user_id → user_id cascade since user_id is the leading column).
+CREATE INDEX IF NOT EXISTS idx_space_notif_prefs_space
+    ON space_notif_prefs(space_id);
 
 -- ── DM contact requests (§23.47) ──────────────────────────────────────────
 
@@ -1947,7 +2088,8 @@ CREATE TABLE IF NOT EXISTS conversation_sender_sequences (
     PRIMARY KEY (conversation_id, sender_user_id)
 );
 
--- DM_RELAY dedup (§12.5.3)
+-- DM_RELAY dedup (§12.5.3). Pruned by ``DmRoutingService.prune_seen``
+-- on a periodic tick (default cutoff: ``RELAY_DEDUP_TTL`` ago).
 CREATE TABLE IF NOT EXISTS dm_relay_seen (
     msg_id     TEXT PRIMARY KEY,
     seen_at    TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1965,6 +2107,10 @@ CREATE TABLE IF NOT EXISTS network_discovery (
     hop_count      INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (instance_id, discovered_via)
 );
+-- Reverse lookup: "what instances did peer X tell us about?" — used by
+-- the BFS path-selection in DmRoutingService.
+CREATE INDEX IF NOT EXISTS idx_network_discovery_via
+    ON network_discovery(discovered_via);
 
 -- Schedule-poll responses live in ``schedule_responses`` (declared
 -- alongside ``schedule_slots`` / ``schedule_poll_meta`` earlier in
@@ -2004,6 +2150,10 @@ CREATE TABLE IF NOT EXISTS gfs_space_publications (
     published_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (space_id, gfs_connection_id)
 );
+-- ``gfs_connection_id`` is the second column of the PK, so SQLite
+-- cannot use the PK for the ON DELETE CASCADE child-scan.
+CREATE INDEX IF NOT EXISTS idx_gfs_space_publications_gfs
+    ON gfs_space_publications(gfs_connection_id);
 
 -- Page snapshots for resolve-conflict diff3 (§4.4.4.1). When two
 -- instances concurrently edit a page the service stores both bodies
@@ -2016,7 +2166,7 @@ CREATE TABLE IF NOT EXISTS space_page_snapshots (
     body         TEXT NOT NULL,
     snapshot_by  TEXT NOT NULL,
     side         TEXT NOT NULL DEFAULT 'mine' CHECK(side IN ('base','mine','theirs')),
-    conflict     INTEGER NOT NULL DEFAULT 0,
+    conflict     INTEGER NOT NULL DEFAULT 0 CHECK(conflict IN (0,1)),
     PRIMARY KEY (page_id, snapshot_at)
 );
 CREATE INDEX IF NOT EXISTS idx_space_page_snapshots_conflict
@@ -2070,13 +2220,19 @@ CREATE TABLE IF NOT EXISTS guardian_audit_log (
 
 CREATE TABLE IF NOT EXISTS gallery_albums (
     id              TEXT PRIMARY KEY,
-    space_id        TEXT REFERENCES spaces(id) ON DELETE CASCADE,
+    -- ``space_id`` cannot be the literal sentinel ``'__household__'``
+    -- because the ``idx_gallery_albums_system_unique`` partial index
+    -- coalesces NULL → '__household__' and would mis-collide.
+    space_id        TEXT REFERENCES spaces(id) ON DELETE CASCADE
+                    CHECK(space_id IS NULL OR space_id <> '__household__'),
                     -- NULL = household-level album
-    retention_exempt INTEGER NOT NULL DEFAULT 0,
+    retention_exempt INTEGER NOT NULL DEFAULT 0
+                    CHECK(retention_exempt IN (0,1)),
     -- ``is_system = 1`` marks the auto-mirrored "Posts" album; cannot
     -- be deleted, renamed, or directly uploaded to. Exactly one per
     -- (space_id, is_system=1) bucket — see partial unique index below.
-    is_system       INTEGER NOT NULL DEFAULT 0,
+    is_system       INTEGER NOT NULL DEFAULT 0
+                    CHECK(is_system IN (0,1)),
     -- NULLable so the system album, which has no human owner, can sit
     -- in this table. User-created albums always set this.
     owner_user_id   TEXT REFERENCES users(user_id) ON DELETE CASCADE,
@@ -2109,6 +2265,9 @@ CREATE TABLE IF NOT EXISTS gallery_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_gallery_albums_space   ON gallery_albums(space_id, created_at DESC);
+-- Covers the ON DELETE CASCADE child-scan when an owner user is removed.
+CREATE INDEX IF NOT EXISTS idx_gallery_albums_owner
+    ON gallery_albums(owner_user_id) WHERE owner_user_id IS NOT NULL;
 -- At most one system album per scope. ``COALESCE`` is required
 -- because SQLite treats NULL as distinct in unique indexes, which
 -- would otherwise allow multiple household-level (space_id IS NULL)
