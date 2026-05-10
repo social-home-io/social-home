@@ -692,9 +692,7 @@ async def test_publish_body_carries_metadata_and_signature(env):
     assert body["name"] == "Local Birds"
     assert body["description"] == "everyday birds in the neighbourhood"
     sig_b64 = body.pop("signature")
-    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
-    )
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig_b64))
 
 
