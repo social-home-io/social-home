@@ -48,6 +48,9 @@ class _RaisingSession:
 
         self.exc = aiohttp.ClientError("boom")
 
+    def get(self, *a, **kw):
+        raise self.exc
+
     def post(self, *a, **kw):
         raise self.exc
 
@@ -56,18 +59,56 @@ class _RaisingSession:
 
 
 class _StubSession:
-    def __init__(self, *, status: int = 200, body: dict | None = None):
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        body: dict | None = None,
+        method_responses: dict[str, tuple[int, dict]] | None = None,
+    ):
         self._status = status
         self._body = body or {}
+        self.method_responses = method_responses or {}
         self.calls: list[tuple[str, str]] = []
+
+    def _resp(self, method: str) -> _StubResp:
+        override = self.method_responses.get(method)
+        if override is not None:
+            status, body = override
+            return _StubResp(status, body)
+        return _StubResp(self._status, self._body)
+
+    def get(self, url, **kw):
+        self.calls.append(("GET", url))
+        return self._resp("GET")
 
     def post(self, url, **kw):
         self.calls.append(("POST", url))
-        return _StubResp(self._status, self._body)
+        return self._resp("POST")
 
     def delete(self, url, **kw):
         self.calls.append(("DELETE", url))
-        return _StubResp(self._status, self._body)
+        return self._resp("DELETE")
+
+
+_OWN_PAIR_KW = {
+    "own_instance_id": "alpha.home",
+    "own_public_key_hex": "aa" * 32,
+    "own_inbox_url": "https://alpha.example/federation/inbox",
+    "own_display_name": "Alpha House",
+}
+
+
+def _info_response(public_key: str = "bb" * 32) -> tuple[int, dict]:
+    return (
+        200,
+        {
+            "gfs_instance_id": "inst-1",
+            "public_key": public_key,
+            "server_name": "Demo",
+            "base_url": "https://gfs.example",
+        },
+    )
 
 
 @pytest.fixture
@@ -126,21 +167,20 @@ async def test_attach_session_once(env):
 async def test_pair_missing_fields_raises(env):
     svc = GfsConnectionService(env, http_client=_StubSession())
     with pytest.raises(GfsConnectionError):
-        await svc.pair({})
+        await svc.pair({}, **_OWN_PAIR_KW)
 
 
 async def test_pair_registers_and_saves(env):
     session = _StubSession(
-        status=200,
-        body={"gfs_instance_id": "inst-1", "display_name": "Demo"},
+        method_responses={
+            "GET": _info_response(),
+            "POST": (200, {"status": "registered"}),
+        },
     )
     svc = GfsConnectionService(env, http_client=session)
     conn = await svc.pair(
-        {
-            "gfs_url": "https://gfs.example/",
-            "token": "tkn",
-            "public_key": "pk-hex",
-        }
+        {"gfs_url": "https://gfs.example/", "token": "tkn"},
+        **_OWN_PAIR_KW,
     )
     assert conn.gfs_instance_id == "inst-1"
     assert conn.display_name == "Demo"
@@ -148,15 +188,14 @@ async def test_pair_registers_and_saves(env):
 
 
 async def test_pair_non_200_raises(env):
-    session = _StubSession(status=401, body={})
+    session = _StubSession(
+        method_responses={"GET": _info_response(), "POST": (401, {})},
+    )
     svc = GfsConnectionService(env, http_client=session)
     with pytest.raises(GfsConnectionError):
         await svc.pair(
-            {
-                "gfs_url": "https://x",
-                "token": "tkn",
-                "public_key": "pk",
-            }
+            {"gfs_url": "https://x", "token": "tkn"},
+            **_OWN_PAIR_KW,
         )
 
 
@@ -164,20 +203,20 @@ async def test_pair_network_error_raises(env):
     svc = GfsConnectionService(env, http_client=_RaisingSession())
     with pytest.raises(GfsConnectionError):
         await svc.pair(
-            {
-                "gfs_url": "https://x",
-                "token": "t",
-                "public_key": "p",
-            }
+            {"gfs_url": "https://x", "token": "t"},
+            **_OWN_PAIR_KW,
         )
 
 
-async def test_pair_missing_gfs_instance_id_raises(env):
-    session = _StubSession(status=200, body={})
+async def test_pair_missing_gfs_info_fields_raises(env):
+    session = _StubSession(
+        method_responses={"GET": (200, {})},
+    )
     svc = GfsConnectionService(env, http_client=session)
     with pytest.raises(GfsConnectionError):
         await svc.pair(
-            {"gfs_url": "https://x", "token": "t", "public_key": "p"},
+            {"gfs_url": "https://x", "token": "t"},
+            **_OWN_PAIR_KW,
         )
 
 

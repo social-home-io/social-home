@@ -44,9 +44,26 @@ class GfsConnectionCollectionView(BaseView):
         if not ctx.is_admin:
             return error_response(403, "FORBIDDEN", "Admin only.")
         body = await self.body()
+        adapter = self.svc(K.platform_adapter_key)
+        own_base = await adapter.get_federation_base()
+        if not own_base:
+            return error_response(
+                422,
+                "NOT_CONFIGURED",
+                "External URL is not configured — set it before pairing a GFS.",
+            )
         svc = self.svc(K.gfs_connection_service_key)
+        own_instance_id = self.request.app[K.instance_id_key]
+        own_pk: bytes = self.request.app[K.instance_public_key_key]
+        config = self.request.app[K.config_key]
         try:
-            conn = await svc.pair(body)
+            conn = await svc.pair(
+                body,
+                own_instance_id=own_instance_id,
+                own_public_key_hex=own_pk.hex(),
+                own_inbox_url=own_base,
+                own_display_name=config.instance_name,
+            )
         except GfsConnectionError as exc:
             return error_response(422, "GFS_PAIRING_FAILED", str(exc))
         return web.json_response(_conn_dict(conn), status=201)

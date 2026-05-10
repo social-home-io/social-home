@@ -14,12 +14,47 @@ from .base import GfsBaseView
 log = logging.getLogger(__name__)
 
 
+class GfsInfoView(GfsBaseView):
+    """``GET /gfs/info`` — public GFS identity descriptor.
+
+    Returns the GFS's instance id, Ed25519 public key, and display
+    metadata so an HFS client that scanned the pairing QR (which only
+    carries ``{base_url, token}``) can fetch the public key it needs to
+    pin before sending its registration. Unauthenticated by design —
+    the public key is, well, public.
+    """
+
+    async def get(self) -> web.Response:
+        cfg = self.svc(K.gfs_config_key)
+        cluster = self.svc(K.gfs_cluster_key)
+        admin_repo = self.svc(K.gfs_admin_repo_key)
+        server_name = (
+            await admin_repo.get_config("server_name")
+        ) or cfg.server_name
+        return web.json_response(
+            {
+                "gfs_instance_id": cfg.instance_id,
+                "public_key": cluster.own_public_key_hex,
+                "server_name": server_name,
+                "base_url": cfg.base_url,
+            }
+        )
+
+
 class RegisterView(GfsBaseView):
-    """``POST /gfs/register`` — register or update a client instance."""
+    """``POST /gfs/register`` — register or update a client instance.
+
+    Body shape: ``{token, instance_id, public_key, inbox_url,
+    display_name?}``. The ``token`` is the single-use pairing token
+    from the QR (``PairingTokenService.consume``); the rest is the
+    HFS's own identity. Requests without a valid token are rejected
+    with ``401`` so a stale QR can't be replayed.
+    """
 
     async def post(self) -> web.Response:
         svc = self.svc(K.gfs_federation_key)
         admin_repo = self.svc(K.gfs_admin_repo_key)
+        token_svc = self.request.app["gfs_token_service"]
         body = await self.body_or_400()
         try:
             instance_id = body["instance_id"]
@@ -27,6 +62,14 @@ class RegisterView(GfsBaseView):
             inbox_url = body["inbox_url"]
         except KeyError as exc:
             raise web.HTTPBadRequest(reason=f"Missing field: {exc}") from exc
+        token = str(body.get("token") or "")
+        if not token:
+            raise web.HTTPBadRequest(reason="Missing field: token")
+        if not await token_svc.consume(token):
+            return web.json_response(
+                {"error": "invalid_or_expired_token"},
+                status=401,
+            )
         display_name = str(body.get("display_name") or "")
         auto_accept = (await admin_repo.get_config("auto_accept_clients")) == "1"
         await svc.register_instance(

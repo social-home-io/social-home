@@ -39,20 +39,45 @@ class _StubResp:
 
 
 class _StubSession:
-    __slots__ = ("_status", "_body", "calls")
+    """Stub aiohttp session.
 
-    def __init__(self, *, status: int = 200, body: dict | None = None):
+    Per-method overrides land in ``method_responses`` (keyed by ``"GET"``
+    / ``"POST"`` / etc.); fall back to the default ``status`` / ``body``
+    when the method has no override.
+    """
+
+    __slots__ = ("_status", "_body", "method_responses", "calls")
+
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        body: dict | None = None,
+        method_responses: dict[str, tuple[int, dict]] | None = None,
+    ):
         self._status = status
         self._body = body or {}
+        self.method_responses = method_responses or {}
         self.calls: list[tuple[str, str]] = []
+
+    def _resp(self, method: str) -> _StubResp:
+        override = self.method_responses.get(method)
+        if override is not None:
+            status, body = override
+            return _StubResp(status, body)
+        return _StubResp(self._status, self._body)
+
+    def get(self, url, **kw):
+        self.calls.append(("GET", url))
+        return self._resp("GET")
 
     def post(self, url, **kw):
         self.calls.append(("POST", url))
-        return _StubResp(self._status, self._body)
+        return self._resp("POST")
 
     def delete(self, url, **kw):
         self.calls.append(("DELETE", url))
-        return _StubResp(self._status, self._body)
+        return self._resp("DELETE")
 
 
 # ─── Fixtures ───────────────────────────────────────────────────────────
@@ -280,62 +305,154 @@ async def test_count_published_spaces(env):
 # ─── Service tests ──────────────────────────────────────────────────────
 
 
+_OWN_PAIR_KW = {
+    "own_instance_id": "alpha.home",
+    "own_public_key_hex": "aa" * 32,
+    "own_inbox_url": "https://alpha.example/federation/inbox",
+    "own_display_name": "Alpha House",
+}
+
+
 async def test_pair_success(env):
     _, repo = env
     session = _StubSession(
-        body={"gfs_instance_id": "remote-gfs-id", "display_name": "Test GFS"},
+        method_responses={
+            "GET": (
+                200,
+                {
+                    "gfs_instance_id": "remote-gfs-id",
+                    "public_key": "bb" * 32,
+                    "server_name": "Test GFS",
+                    "base_url": "https://gfs.example.com",
+                },
+            ),
+            "POST": (200, {"status": "registered", "instance_id": "alpha.home"}),
+        },
     )
     svc = GfsConnectionService(repo, http_client=session)
     conn = await svc.pair(
-        {
-            "gfs_url": "https://gfs.example.com",
-            "token": "tok-123",
-            "public_key": "pk-hex",
-        }
+        {"gfs_url": "https://gfs.example.com", "token": "tok-123"},
+        **_OWN_PAIR_KW,
     )
     assert conn.status == "active"
     assert conn.gfs_instance_id == "remote-gfs-id"
+    # The display name comes from the GFS's own ``server_name`` (its
+    # branding), not anything the SH made up locally.
     assert conn.display_name == "Test GFS"
-    assert len(session.calls) == 1
-    assert session.calls[0] == ("POST", "https://gfs.example.com/gfs/register")
-
+    # The pinned public key is the GFS's, fetched via ``/gfs/info`` —
+    # this is the trust anchor for every subsequent relay.
+    assert conn.public_key == "bb" * 32
+    # Two calls: GET /gfs/info, then POST /gfs/register.
+    assert session.calls == [
+        ("GET", "https://gfs.example.com/gfs/info"),
+        ("POST", "https://gfs.example.com/gfs/register"),
+    ]
     # Saved to repo.
     saved = await repo.get(conn.id)
     assert saved is not None
 
 
-async def test_pair_missing_fields(env):
+async def test_pair_pending_status(env):
+    """A GFS with auto-accept disabled returns ``status="pending"``;
+    the local connection lands as ``pending`` (not ``active``) so the
+    UI can render the "awaiting GFS admin review" state."""
+    _, repo = env
+    session = _StubSession(
+        method_responses={
+            "GET": (
+                200,
+                {
+                    "gfs_instance_id": "remote",
+                    "public_key": "cc" * 32,
+                    "server_name": "GFS",
+                    "base_url": "https://gfs",
+                },
+            ),
+            "POST": (200, {"status": "pending"}),
+        },
+    )
+    svc = GfsConnectionService(repo, http_client=session)
+    conn = await svc.pair(
+        {"gfs_url": "https://gfs", "token": "tok"},
+        **_OWN_PAIR_KW,
+    )
+    assert conn.status == "pending"
+
+
+async def test_pair_missing_qr_fields(env):
     _, repo = env
     svc = GfsConnectionService(repo, http_client=_StubSession())
-    with pytest.raises(GfsConnectionError, match="required"):
-        await svc.pair({"gfs_url": "https://x.com"})
+    with pytest.raises(GfsConnectionError, match="QR payload"):
+        await svc.pair({"gfs_url": "https://x.com"}, **_OWN_PAIR_KW)
 
 
-async def test_pair_gfs_rejects(env):
+async def test_pair_missing_own_identity(env):
     _, repo = env
-    session = _StubSession(status=403, body={})
-    svc = GfsConnectionService(repo, http_client=session)
-    with pytest.raises(GfsConnectionError, match="HTTP 403"):
+    svc = GfsConnectionService(repo, http_client=_StubSession())
+    with pytest.raises(GfsConnectionError, match="own_instance_id"):
         await svc.pair(
-            {
-                "gfs_url": "https://gfs.example.com",
-                "token": "tok",
-                "public_key": "pk",
-            }
+            {"gfs_url": "https://x.com", "token": "tok"},
+            own_instance_id="",
+            own_public_key_hex="ab",
+            own_inbox_url="https://x",
         )
 
 
-async def test_pair_no_instance_id_in_response(env):
+async def test_pair_gfs_info_unreachable(env):
+    """A GFS that doesn't expose ``/gfs/info`` cannot be pinned —
+    surface the failure cleanly instead of saving a half-trusted
+    connection."""
     _, repo = env
-    session = _StubSession(body={"no_id": True})
+    session = _StubSession(
+        method_responses={"GET": (404, {})},
+    )
     svc = GfsConnectionService(repo, http_client=session)
-    with pytest.raises(GfsConnectionError, match="gfs_instance_id"):
+    with pytest.raises(GfsConnectionError, match="HTTP 404"):
         await svc.pair(
-            {
-                "gfs_url": "https://gfs.example.com",
-                "token": "tok",
-                "public_key": "pk",
-            }
+            {"gfs_url": "https://gfs.example.com", "token": "tok"},
+            **_OWN_PAIR_KW,
+        )
+
+
+async def test_pair_register_rejects(env):
+    _, repo = env
+    session = _StubSession(
+        method_responses={
+            "GET": (
+                200,
+                {
+                    "gfs_instance_id": "remote",
+                    "public_key": "cc" * 32,
+                    "server_name": "GFS",
+                    "base_url": "https://gfs",
+                },
+            ),
+            "POST": (401, {}),
+        },
+    )
+    svc = GfsConnectionService(repo, http_client=session)
+    with pytest.raises(GfsConnectionError, match="HTTP 401"):
+        await svc.pair(
+            {"gfs_url": "https://gfs.example.com", "token": "stale-tok"},
+            **_OWN_PAIR_KW,
+        )
+
+
+async def test_pair_no_public_key_in_info(env):
+    """``/gfs/info`` must return both ``gfs_instance_id`` and
+    ``public_key`` — without the key there's no anchor to verify
+    later reports against, so refuse to register."""
+    _, repo = env
+    session = _StubSession(
+        method_responses={
+            "GET": (200, {"gfs_instance_id": "remote", "public_key": ""}),
+        },
+    )
+    svc = GfsConnectionService(repo, http_client=session)
+    with pytest.raises(GfsConnectionError, match="gfs_instance_id and public_key"):
+        await svc.pair(
+            {"gfs_url": "https://gfs.example.com", "token": "tok"},
+            **_OWN_PAIR_KW,
         )
 
 

@@ -53,6 +53,7 @@ from .cluster import (
 )
 from .relay import (
     AppealView,
+    GfsInfoView,
     HealthzView,
     PublishView,
     RegisterView,
@@ -117,6 +118,11 @@ def register_routes(
     """
     # Pairing handshake (spec §24.12 — the only HTTPS hop in the
     # primary flow; everything afterwards rides the WebSocket below).
+    # ``/gfs/info`` is the public-key descriptor HFS clients fetch after
+    # scanning the QR (which only ships ``{base_url, token}``); they
+    # then POST to ``/gfs/register`` with ``{token, instance_id,
+    # public_key, inbox_url}``.
+    app.router.add_view("/gfs/info", GfsInfoView)
     app.router.add_view("/gfs/register", RegisterView)
 
     # Persistent SH↔GFS WebSocket — primary transport (spec §24.12).

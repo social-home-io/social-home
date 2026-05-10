@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import signal
 import subprocess
@@ -341,27 +342,100 @@ def cmd_gfs_up() -> None:
     print("gfs-up: ok")
 
 
+def _gfs_mint_pair_token() -> str:
+    """Hit the GFS landing page from a fresh-looking IP and pull the
+    one-time pair token out of the rendered HTML.
+
+    The token is also embedded in the QR PNG, but the landing page
+    renders it as a copyable string in the right column too — easier
+    to scrape from a script than the PNG.
+    """
+    # Use a unique X-Forwarded-For so the per-IP rate limiter doesn't
+    # gate test reruns.
+    ip_marker = f"127.{secrets.randbelow(255)}.0.{secrets.randbelow(255)}"
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{GFS_PORT}/",
+        headers={"X-Forwarded-For": ip_marker},
+    )
+    with urllib.request.urlopen(req, timeout=5) as r:
+        html = r.read().decode("utf-8")
+    # The landing template renders ``token`` directly in the page
+    # body (in a copy-friendly token block) so we can pull it out
+    # with a simple substring search. Fall back to None — the harness
+    # surfaces a clearer error than a random KeyError that way.
+    marker = 'data-pair-token="'
+    idx = html.find(marker)
+    if idx < 0:
+        # Older template: the token is rendered inside a ``<code>`` on
+        # the QR card.
+        for needle in ('id="pair-token">', 'class="pair-token">'):
+            j = html.find(needle)
+            if j >= 0:
+                start = j + len(needle)
+                end = html.find("<", start)
+                tok = html[start:end].strip()
+                if tok:
+                    return tok
+        raise SystemExit(
+            "could not extract pair token from GFS landing page —"
+            " template format may have changed",
+        )
+    start = idx + len(marker)
+    end = html.find('"', start)
+    return html[start:end]
+
+
 def cmd_gfs_pair() -> None:
     """Pair Alpha + Delta with the GFS.
 
-    .. note::
-        Stubbed out — a full GFS pairing flow needs the GFS-side QR
-        token (``GET /`` issues one) **and** the GFS's Ed25519 public
-        key (no public endpoint exposes it today, so the test would
-        have to read it out of the GFS data dir's identity file).
-        Plus the existing
-        :meth:`GfsConnectionService.pair` POSTs ``{"token": token}``
-        to ``/gfs/register`` which the route currently rejects (it
-        wants ``instance_id``, ``public_key``, ``inbox_url``). That's
-        a real bug to chase before this step can run end-to-end.
+    Walk the §24 GFS pairing flow end-to-end:
 
-    Until those gaps are closed, run :func:`cmd_gfs_up` to prove the
-    GFS process boots cleanly, then iterate from there.
+    1. Mint a one-time pair token via the GFS landing page (rendered
+       at ``GET /`` — the same page that displays the QR code).
+    2. POST it to Alpha's ``/api/gfs/connections`` so Alpha runs
+       :meth:`GfsConnectionService.pair` (fetch ``GET /gfs/info``,
+       then ``POST /gfs/register`` with Alpha's identity + the
+       token).
+    3. Repeat for Delta with a fresh token.
+    4. Assert both households now show the GFS connection as
+       ``status="active"`` (auto-accept is on by default for fresh
+       deployments).
     """
-    raise SystemExit(
-        "cmd_gfs_pair is a stub — see the docstring for the API "
-        "gaps that need closing before this can run end-to-end.",
-    )
+    state = _load()
+    if not state or not _gfs_alive(state):
+        raise SystemExit("run 'gfs-up' first")
+
+    a = state["instances"]["a"]
+    d = state["instances"]["d"]
+    gfs_url = f"http://127.0.0.1:{GFS_PORT}"
+
+    state.setdefault("gfs", {})
+    state["gfs"]["pairings"] = {}
+    for label, info in (("a", a), ("d", d)):
+        token = _gfs_mint_pair_token()
+        s, resp = _request(
+            f"http://127.0.0.1:{info['port']}/api/gfs/connections",
+            token=info["token"],
+            method="POST",
+            body={"gfs_url": gfs_url, "token": token},
+        )
+        _must(f"gfs-pair({label})", s, resp, ok=(201,))
+        state["gfs"]["pairings"][label] = {
+            "id": resp["id"],
+            "gfs_instance_id": resp["gfs_instance_id"],
+            "status": resp["status"],
+        }
+        print(
+            f"  {label}: paired with GFS — id={resp['id'][:8]} "
+            f"status={resp['status']}"
+        )
+        if resp["status"] != "active":
+            raise SystemExit(
+                f"{label}: expected GFS connection status=active, got"
+                f" {resp['status']!r}",
+            )
+    _save(state)
+    print("gfs-pair: ok (a + d connected to GFS)")
 
 
 def cmd_gfs_down() -> None:
@@ -372,12 +446,12 @@ def cmd_gfs_down() -> None:
         return
     try:
         os.killpg(gfs["pid"], signal.SIGTERM)
-    except ProcessLookupError, PermissionError:
+    except (ProcessLookupError, PermissionError):
         pass
     time.sleep(1)
     try:
         os.killpg(gfs["pid"], signal.SIGKILL)
-    except ProcessLookupError, PermissionError:
+    except (ProcessLookupError, PermissionError):
         pass
     state.pop("gfs", None)
     _save(state)
