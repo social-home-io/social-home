@@ -26,9 +26,8 @@ RUN apt-get update && \
       libwebp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user up front so the data dir gets the right owner (the HA
-# Supervisor mounts /data on the host; we still chown so standalone
-# users don't accidentally write as root).
+# Non-root user up front so a host-mounted ``/data`` volume ends up
+# with the right owner.
 RUN groupadd --system --gid 10001 appuser && \
     useradd  --system --uid 10001 --gid appuser --create-home appuser
 
