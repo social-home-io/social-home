@@ -14,27 +14,62 @@ permissions:
   contents: read
 
 jobs:
+  # ── Build wheel + sdist (SPA bundled in) ──────────────────────────────
+  # One artefact, three downstream consumers (PyPI publish + both Docker
+  # images). The frontend is built here on amd64 — node and pnpm never
+  # reach the multi-arch matrix, so the docker jobs don't pay a 5–10×
+  # QEMU tax to install npm. Hatchling picks up ``socialhome/static/**``
+  # via the ``artifacts`` rule in ``pyproject.toml``.
+  build:
+    name: Build wheel + sdist
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Build SPA + GFS bundles
+        run: |
+          pnpm --dir client install --frozen-lockfile
+          pnpm --dir client run build
+      - name: Build wheel + sdist
+        run: |
+          pip install build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
   # ── Python package → PyPI via trusted publisher (OIDC) ──────────────────
   pypi:
     name: Publish socialhome to PyPI
+    needs: build
     runs-on: ubuntu-latest
     environment: pypi
     # Job-level permissions REPLACE the workflow-level block entirely
     # (everything not listed defaults to ``none``). ``contents: read``
-    # is required for ``actions/checkout`` on private repos and is
-    # safer to keep explicit on public ones too.
+    # keeps ``actions/checkout`` working on private repos and is safer
+    # to keep explicit on public ones too.
     permissions:
       id-token: write          # OIDC — no API token needed
-      contents: read           # actions/checkout
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.14"
-      - name: Install build tooling
-        run: pip install build
-      - name: Build sdist + wheel
-        run: python -m build
+          name: dist
+          path: dist/
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         # Trusted publisher — configure at pypi.org/manage/account/publishing/
@@ -43,12 +78,17 @@ jobs:
   # ── Docker core image → GHCR ────────────────────────────────────────────
   docker-core:
     name: Build & push core Docker image
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -88,12 +128,17 @@ jobs:
   # Separate job so a failure in the GFS build doesn't block the core push.
   docker-gfs:
     name: Build & push GFS Docker image
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3

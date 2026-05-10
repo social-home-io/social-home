@@ -5,15 +5,18 @@
 # Runtime: Python 3.14-slim + ffmpeg (video transcoding in SpacePosts
 # + BazaarListing thumbnails) + libjpeg / libwebp (Pillow).
 #
-# Builds the frontend (client/) with pnpm so a stock image boots
-# straight into the full web UI without a second build step.
+# Installs from a pre-built wheel — the SPA bundle in
+# ``socialhome/static/`` is already baked in by the publish workflow's
+# ``build`` job (or by a local ``pnpm --dir client run build`` +
+# ``python -m build``). The runtime image therefore needs no node /
+# pnpm at all, which keeps the multi-arch build cheap on QEMU.
 #
 # Published as ``ghcr.io/social-home-io/socialhome:{tag}`` by the
 # ``docker-core`` job in .github/workflows/publish.yml.
 
 FROM python:3.14-slim AS base
 
-# uv replaces pip for the package install — ~10× faster, deterministic
+# uv replaces pip for the wheel install — ~10× faster, deterministic
 # resolution, and ships static via the official ``ghcr.io/astral-sh/uv``
 # image so we don't depend on an extra apt / pip-bootstrap layer.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -33,24 +36,17 @@ RUN groupadd --system --gid 10001 appuser && \
 
 WORKDIR /app
 
-# Install the Python package. Core image ships without the
-# ``global-server`` extras — that lives in Dockerfile.gfs.
-COPY pyproject.toml LICENSE ./
-COPY socialhome/ socialhome/
-RUN uv pip install --system --no-cache .
+# Pre-built wheel from the publish workflow (or local
+# ``python -m build``). The SPA assets are inside under
+# ``socialhome/static/``; ``--system`` installs into the base image's
+# site-packages directly (no venv); ``--no-cache`` keeps the layer
+# size down. The wheel is removed after install so it doesn't bloat
+# the final layer.
+COPY dist/socialhome-*.whl /tmp/
+RUN uv pip install --system --no-cache /tmp/socialhome-*.whl && \
+    rm /tmp/socialhome-*.whl
 
-# Build the frontend if present. Kept conditional so a minimal
-# sub-image (built from a slimmer context) still works.
-COPY client/ client/
-RUN if [ -f client/package.json ]; then \
-      npm install -g pnpm && \
-      pnpm --dir client install --frozen-lockfile && \
-      pnpm --dir client run build; \
-    fi
-
-# Reset ownership so the non-root runtime user can read app code +
-# write to the persisted data volume without a chown at boot.
-RUN mkdir -p /data && chown -R appuser:appuser /app /data
+RUN mkdir -p /data && chown -R appuser:appuser /data
 
 VOLUME /data
 ENV SH_DATA_DIR=/data
