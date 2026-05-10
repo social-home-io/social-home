@@ -294,8 +294,7 @@ class SqliteDmRoutingRepo:
         n = int(row["n"]) if row else 0
         if n:
             await self._db.enqueue(
-                "DELETE FROM dm_relay_seen "
-                "WHERE datetime(seen_at) < datetime(?)",
+                "DELETE FROM dm_relay_seen WHERE datetime(seen_at) < datetime(?)",
                 (cutoff_iso,),
             )
         return n

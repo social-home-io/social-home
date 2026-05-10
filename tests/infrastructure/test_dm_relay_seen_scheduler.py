@@ -34,12 +34,9 @@ async def test_prune_once_deletes_old_rows(env):
     # ``datetime('now')`` (space separator, no TZ); for the stale row
     # we hand-craft an ISO-with-Z timestamp from the distant past.
     await db.enqueue(
-        "INSERT INTO dm_relay_seen(msg_id, seen_at) "
-        "VALUES('fresh', datetime('now'))",
+        "INSERT INTO dm_relay_seen(msg_id, seen_at) VALUES('fresh', datetime('now'))",
     )
-    stale_iso = (
-        datetime.now(timezone.utc) - timedelta(days=2)
-    ).isoformat()
+    stale_iso = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
     await db.enqueue(
         "INSERT INTO dm_relay_seen(msg_id, seen_at) VALUES('stale', ?)",
         (stale_iso,),
