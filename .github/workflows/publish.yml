@@ -56,23 +56,33 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Derive image tag
-        id: tag
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.event.release.tag_name || 'latest' }}" >> "$GITHUB_OUTPUT"
-          fi
+      # CalVer (YYYY.M.D) image tags. ``docker/metadata-action`` runs
+      # the regexes below against ``github.ref_name`` and emits one
+      # tag per match, so a single ``v2026.5.10`` push gets:
+      #   :2026.5.10  — pinned, immutable
+      #   :2026.5     — minor track (rolling within the month)
+      #   :2026       — major track (rolling within the year)
+      #   :latest     — current stable
+      # The ``v?`` in each pattern keeps things working whether the
+      # tag is pushed as ``v2026.5.10`` or as bare ``2026.5.10``.
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/social-home-io/socialhome
+          tags: |
+            type=match,pattern=v?(\d+\.\d+\.\d+),group=1
+            type=match,pattern=v?(\d+\.\d+)\.\d+,group=1
+            type=match,pattern=v?(\d+)\.\d+\.\d+,group=1
+            type=raw,value=latest,enable=${{ github.event_name != 'workflow_dispatch' }}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.sh
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/social-home-io/socialhome:latest
-            ghcr.io/social-home-io/socialhome:${{ steps.tag.outputs.ref }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to:   type=gha,mode=max
 
@@ -93,22 +103,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Derive image tag
-        id: tag
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "ref=${{ github.event.release.tag_name || 'latest' }}" >> "$GITHUB_OUTPUT"
-          fi
+      # Same CalVer fan-out as ``docker-core`` — see comments there.
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/social-home-io/gfs
+          tags: |
+            type=match,pattern=v?(\d+\.\d+\.\d+),group=1
+            type=match,pattern=v?(\d+\.\d+)\.\d+,group=1
+            type=match,pattern=v?(\d+)\.\d+\.\d+,group=1
+            type=raw,value=latest,enable=${{ github.event_name != 'workflow_dispatch' }}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile.gfs
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/social-home-io/gfs:latest
-            ghcr.io/social-home-io/gfs:${{ steps.tag.outputs.ref }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to:   type=gha,mode=max
