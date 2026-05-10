@@ -561,11 +561,15 @@ async def test_full_auto_pair_handshake(
         own_inbox_base_url="https://c.example/federation/inbox",
     )
     assert confirmed.status is PairingStatus.CONFIRMED
-    # Ack sent to A.
+    # Ack sent to B (the trust relay), not directly to A — A has no
+    # confirmed pairing with C yet, so the envelope-level signature
+    # check on A would reject a direct C→A ack. B re-enwraps and
+    # forwards to A using the established A↔B trust.
     assert fed_service.send_event.await_count == 1
     ack_kwargs = fed_service.send_event.await_args.kwargs
-    assert ack_kwargs["event_type"] == FederationEventType.PAIRING_INTRO_AUTO_ACK
-    assert ack_kwargs["to_instance_id"] == a_id
+    assert ack_kwargs["event_type"] == FederationEventType.PAIRING_INTRO_AUTO_ACK_VIA
+    assert ack_kwargs["to_instance_id"] == _diid(identity.public_key)
+    assert ack_kwargs["payload"]["to_a_id"] == a_id
 
 
 async def test_decline_pending_sends_abort(coord, inbox, fed_service):
@@ -589,6 +593,45 @@ async def test_decline_pending_sends_abort(coord, inbox, fed_service):
     kwargs = fed_service.send_event.await_args.kwargs
     assert kwargs["event_type"] == FederationEventType.PAIRING_ABORT
     assert kwargs["payload"]["reason"] == "spam"
+
+
+# ── on_ack_via_at_relay (B side) ───────────────────────────────────
+
+
+async def test_on_ack_via_unknown_a_noop(coord, fed_service):
+    """B refuses to forward an ack-via for an unknown a_id — silent
+    drop, but logs a warning (visible in operator logs)."""
+    await coord.on_ack_via_at_relay(_evt("c", {"to_a_id": "unknown.a"}))
+    fed_service.send_event.assert_not_awaited()
+
+
+async def test_on_ack_via_forwards_to_a(coord, fed_repo, fed_service):
+    a_kp = generate_identity_keypair()
+    a_inst = _make_peer_remote_instance(a_kp.public_key.hex())
+    fed_repo.instances[a_inst.id] = a_inst
+    payload = {
+        "to_a_id": a_inst.id,
+        "a_id": a_inst.id,
+        "c_id": "c.id",
+        "c_pk": "cc" * 32,
+        "c_inbox_url": "https://c.example/inbox/x",
+        "c_dh_pk": "dd" * 32,
+        "via_b_id": "b.id",
+        "vouch_sig": "ab" * 32,
+        "ack_sig": "cd" * 32,
+        "ts": "2026-04-20T00:00:00+00:00",
+        "nonce": "n" * 16,
+        "token": "tk",
+    }
+    await coord.on_ack_via_at_relay(_evt("c.id", payload))
+    fed_service.send_event.assert_awaited_once()
+    kwargs = fed_service.send_event.await_args.kwargs
+    assert kwargs["event_type"] == FederationEventType.PAIRING_INTRO_AUTO_ACK
+    assert kwargs["to_instance_id"] == a_inst.id
+    # ``to_a_id`` is a B-only routing field — strip before forwarding
+    # so A's ``on_ack_at_originator`` doesn't see it.
+    assert "to_a_id" not in kwargs["payload"]
+    assert kwargs["payload"]["c_pk"] == "cc" * 32
 
 
 # ── on_ack_at_originator ───────────────────────────────────────────

@@ -135,6 +135,17 @@ class PrivateSpaceInviteHandler:
             user_pk=str(invitee_pk) if invitee_pk else None,
             display_name=str(invitee_display) if invitee_display else None,
         )
+        # Register the accepting peer as a space *instance* member too —
+        # ``broadcast_to_space_members`` queries ``space_instances``, so
+        # without this row the peer's household never receives the
+        # space's federation events (calendar events, posts, etc.).
+        # The accepting host is the source-of-truth for membership, so
+        # add the row on their side; the inviter learns about new peer
+        # households via the existing ``SpaceMemberJoined`` channel.
+        await self._space_repo.add_space_instance(
+            invite["space_id"],
+            event.from_instance,
+        )
         await self._space_repo.update_invitation_status(
             invite["id"],
             "accepted",

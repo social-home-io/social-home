@@ -555,6 +555,10 @@ def _wire_federation_stack(
         FederationEventType.PAIRING_INTRO_AUTO_ACK,
         auto_pair_coordinator.on_ack_at_originator,
     )
+    federation_service._event_registry.register(
+        FederationEventType.PAIRING_INTRO_AUTO_ACK_VIA,
+        auto_pair_coordinator.on_ack_via_at_relay,
+    )
     app[K.auto_pair_coordinator_key] = auto_pair_coordinator
     app[K.auto_pair_inbox_key] = auto_pair_inbox
     SpaceMembershipInboundHandlers(

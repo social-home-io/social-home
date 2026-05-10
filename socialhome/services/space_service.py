@@ -999,6 +999,15 @@ class SpaceService:
             invite["id"],
             "accepted",
         )
+        # Record the (space_id, host_instance_id) mapping locally so
+        # later space-scoped events the peer mints (RSVPs, comments,
+        # …) federate back to the host. Without this row,
+        # ``broadcast_to_space_members`` returns no targets on the
+        # invitee side and the events go nowhere.
+        await self._spaces.add_space_instance(
+            invite["space_id"],
+            host_instance,
+        )
 
     async def decline_remote_invite(
         self,

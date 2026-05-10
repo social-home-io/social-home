@@ -536,9 +536,15 @@ class AutoPairCoordinator:
             "nonce": req.nonce,
             "token": req.token,
         }
+        # Route the ack through B (the trust relay) — A has no
+        # confirmed pairing with C yet, so a direct C→A envelope fails
+        # the inbound signature check (the PENDING_SENT row on A has
+        # no identity key on it). B is trusted by both, so C→B and
+        # B→A both work over established trust.
+        ack_payload["to_a_id"] = req.from_a_id
         await self._federation.send_event(
-            to_instance_id=req.from_a_id,
-            event_type=FederationEventType.PAIRING_INTRO_AUTO_ACK,
+            to_instance_id=req.via_b_id,
+            event_type=FederationEventType.PAIRING_INTRO_AUTO_ACK_VIA,
             payload=ack_payload,
         )
         return confirmed
@@ -560,6 +566,41 @@ class AutoPairCoordinator:
                 "token": req.token,
                 "reason": reason or "declined_by_target",
             },
+        )
+
+    # ── Vouching peer (B) — relay the ack from C to A ──────────────────
+
+    async def on_ack_via_at_relay(self, event: "FederationEvent") -> None:
+        """B side: receives ``PAIRING_INTRO_AUTO_ACK_VIA`` from C and
+        forwards as ``PAIRING_INTRO_AUTO_ACK`` to A.
+
+        Both legs use existing pair trust (C↔B was paired by QR before
+        the auto-pair started, A↔B likewise). B does not validate the
+        ack body — that's A's job — but it does enforce that the
+        relayed ``a_id`` is one of B's confirmed peers, so a stale or
+        mistargeted ack doesn't get forwarded into the void.
+        """
+        p = event.payload
+        to_a_id = str(p.get("to_a_id") or p.get("a_id") or "")
+        if not to_a_id:
+            log.warning("auto-pair (relay): missing to_a_id / a_id")
+            return
+        a = await self._repo.get_instance(to_a_id)
+        if a is None or a.status is not PairingStatus.CONFIRMED:
+            log.warning(
+                "auto-pair (relay): refusing — a_id=%s not a confirmed peer of B",
+                to_a_id,
+            )
+            return
+        # Strip the routing field B added on C's behalf — A's
+        # ``on_ack_at_originator`` doesn't read it (and shouldn't see
+        # B-only routing metadata).
+        forward_payload = dict(p)
+        forward_payload.pop("to_a_id", None)
+        await self._federation.send_event(
+            to_instance_id=to_a_id,
+            event_type=FederationEventType.PAIRING_INTRO_AUTO_ACK,
+            payload=forward_payload,
         )
 
     # ── Originator (A) — ack handler ───────────────────────────────────
