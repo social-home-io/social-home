@@ -4,10 +4,14 @@
 # in pyproject.toml, pointing at ``socialhome.global_server.server:main``).
 # Port: 8765 (default; overridable via GFS_PORT env var).
 #
+# Installs from the same pre-built wheel as the core image, with the
+# ``[global-server]`` extra added on top. The frontend bundles for the
+# GFS public landing pages live under
+# ``socialhome/global_server/static/`` and are checked into git, so
+# they ride the wheel without a separate node build.
+#
 # Runtime differs from the core image:
 #   * No ffmpeg / Pillow heavy deps — GFS never transcodes media.
-#   * No client/ frontend build — the GFS admin UI is a single static
-#     ``admin_ui/index.html`` shipped inside the Python package.
 #   * Installs the ``global-server`` extra (bcrypt + qrcode[pil]).
 #
 # Published as ``ghcr.io/social-home-io/gfs:{tag}`` by the
@@ -15,7 +19,7 @@
 
 FROM python:3.14-slim AS base
 
-# uv replaces pip for the package install — ~10× faster, deterministic
+# uv replaces pip for the wheel install — ~10× faster, deterministic
 # resolution, and ships static via the official ``ghcr.io/astral-sh/uv``
 # image so we don't depend on an extra apt / pip-bootstrap layer.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
@@ -33,11 +37,14 @@ RUN groupadd --system --gid 10001 gfsuser && \
 
 WORKDIR /app
 
-COPY pyproject.toml LICENSE ./
-COPY socialhome/ socialhome/
-# Install the package + the global-server extra in one go so the
-# console script + its transitive deps land on the image.
-RUN uv pip install --system --no-cache '.[global-server]'
+# Pre-built wheel from the publish workflow (or local
+# ``python -m build``). The shell expansion picks up the single wheel
+# we copied in (filename varies with the CalVer release version) and
+# tacks on the ``[global-server]`` extra so bcrypt + qrcode land too.
+COPY dist/socialhome-*.whl /tmp/
+RUN WHEEL=$(ls /tmp/socialhome-*.whl | head -1) && \
+    uv pip install --system --no-cache "${WHEEL}[global-server]" && \
+    rm /tmp/socialhome-*.whl
 
 # /var/lib/sh-gfs is the spec's default GFSDATA_DIR (config.py). Use
 # a volume so operators can persist the config + SQLite across
@@ -45,7 +52,7 @@ RUN uv pip install --system --no-cache '.[global-server]'
 # --init --config /var/lib/sh-gfs/global_server.toml`` once in a
 # throwaway container, set ``base_url`` + the admin password, then
 # mount the resulting file.
-RUN mkdir -p /var/lib/sh-gfs && chown -R gfsuser:gfsuser /app /var/lib/sh-gfs
+RUN mkdir -p /var/lib/sh-gfs && chown -R gfsuser:gfsuser /var/lib/sh-gfs
 
 VOLUME /var/lib/sh-gfs
 ENV GFS_HOST=0.0.0.0
