@@ -1,6 +1,6 @@
 [project]
 name = "socialhome"
-version = "1.0.0"
+version = "2026.5.10"
 requires-python = ">=3.14"
 license = {text = "Mozilla Public License 2.0"}
 license-files = ["LICENSE"]
