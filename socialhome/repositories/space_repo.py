@@ -972,9 +972,10 @@ class SqliteSpaceRepo:
         return row_to_dict(row)
 
     async def get_invitation_by_token(self, token: str) -> dict | None:
+        # ``invite_token`` is partial-UNIQUE in the schema (where
+        # invite_token IS NOT NULL), so at most one row can match.
         row = await self._db.fetchone(
-            "SELECT * FROM space_invitations WHERE invite_token=?"
-            " ORDER BY created_at DESC LIMIT 1",
+            "SELECT * FROM space_invitations WHERE invite_token=?",
             (token,),
         )
         return row_to_dict(row)

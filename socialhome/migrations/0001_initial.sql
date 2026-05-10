@@ -266,6 +266,11 @@ CREATE TABLE IF NOT EXISTS pending_pairings (
     issued_at           TEXT NOT NULL DEFAULT (datetime('now')),
     expires_at          TEXT NOT NULL
 );
+-- The pairing scheduler sweeps expired tokens off the inflight set
+-- on a periodic loop; this index keeps the sweep from full-scanning
+-- once the table has accumulated rows.
+CREATE INDEX IF NOT EXISTS idx_pending_pairings_expires
+    ON pending_pairings(expires_at);
 
 -- §11.9 — admin-pending PAIRING_INTRO_RELAY requests. Persisted so a
 -- restart doesn't lose admin queue state.
@@ -303,6 +308,11 @@ CREATE TABLE IF NOT EXISTS federation_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_federation_outbox_due
     ON federation_outbox(status, next_attempt_at);
+-- Per-peer back-pressure check: ``count_pending_for(instance_id)``
+-- in the outbox repo. Without this, the scheduler full-scans the
+-- table every quota check.
+CREATE INDEX IF NOT EXISTS idx_federation_outbox_instance
+    ON federation_outbox(instance_id, status);
 
 CREATE TABLE IF NOT EXISTS federation_replay_cache (
     msg_id      TEXT PRIMARY KEY,
@@ -691,6 +701,21 @@ CREATE TABLE IF NOT EXISTS space_invitations (
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     expires_at              TEXT NOT NULL
 );
+-- ``get_invitation_by_token`` is on the cross-household accept path —
+-- runs once per invite acceptance. Partial-UNIQUE on the random
+-- token rules out collisions and gives the lookup an index.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_space_invitations_token
+    ON space_invitations(invite_token) WHERE invite_token IS NOT NULL;
+-- "Pending invites for me" + "accepted membership for this space"
+-- are the two inbound list paths. Filter on ``remote_instance_id IS
+-- NOT NULL`` keeps the index small (local invites use a different
+-- query path).
+CREATE INDEX IF NOT EXISTS idx_space_invitations_remote_user
+    ON space_invitations(remote_user_id, status)
+    WHERE remote_instance_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_space_invitations_space_remote
+    ON space_invitations(space_id, remote_user_id)
+    WHERE remote_instance_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS space_invite_tokens (
     token         TEXT PRIMARY KEY,
@@ -701,6 +726,8 @@ CREATE TABLE IF NOT EXISTS space_invite_tokens (
     expires_at    TEXT
 );
 
+-- Indexes added at the bottom of the table for the admin pending-list
+-- view and the periodic expiry sweep — the only two read paths.
 CREATE TABLE IF NOT EXISTS space_join_requests (
     id                        TEXT PRIMARY KEY,
     space_id                  TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
@@ -718,6 +745,10 @@ CREATE TABLE IF NOT EXISTS space_join_requests (
     reviewed_at   TEXT,
     expires_at    TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_space_join_requests_pending
+    ON space_join_requests(space_id, status, requested_at);
+CREATE INDEX IF NOT EXISTS idx_space_join_requests_expires
+    ON space_join_requests(expires_at) WHERE status='pending';
 
 CREATE TABLE IF NOT EXISTS space_aliases (
     space_id        TEXT NOT NULL,
@@ -1017,6 +1048,14 @@ CREATE TABLE IF NOT EXISTS bazaar_listings (
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_bazaar_listings_space ON bazaar_listings(space_id);
+-- Public-bazaar tab renders ``WHERE status='active' ORDER BY
+-- created_at DESC`` across spaces; expiry sweep filters
+-- ``WHERE status='active' AND end_time < now``. Two partial
+-- indexes keep the hot paths off the full table scan.
+CREATE INDEX IF NOT EXISTS idx_bazaar_listings_active_created
+    ON bazaar_listings(created_at DESC) WHERE status='active';
+CREATE INDEX IF NOT EXISTS idx_bazaar_listings_active_end
+    ON bazaar_listings(end_time) WHERE status='active';
 
 CREATE TABLE IF NOT EXISTS bazaar_bids (
     id                TEXT PRIMARY KEY,
@@ -1056,7 +1095,11 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 CREATE TABLE IF NOT EXISTS conversation_members (
     conversation_id       TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    username              TEXT NOT NULL REFERENCES users(username),
+    -- ``ON DELETE CASCADE`` mirrors every other user-keyed table.  User
+    -- deletion is normally soft (``users.deleted_at``), but a hard purge
+    -- (admin script, test cleanup, GDPR delete) would otherwise hit a
+    -- FK constraint violation here.
+    username              TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
     joined_at             TEXT NOT NULL DEFAULT (datetime('now')),
     last_read_at          TEXT,
     history_visible_from  TEXT,
@@ -1389,16 +1432,21 @@ CREATE INDEX IF NOT EXISTS idx_rsvp_reminders_pending
 -- on a stable URL without OAuth. The token is unique and revocable;
 -- separate from the user's API token so revoking it doesn't affect
 -- other API access.
+-- §Audit #3 — feed tokens are stored as SHA-256 hashes, never as
+-- plaintext. The raw token is returned to the user once at generation
+-- time; storage retains only the hash so a leaked DB / backup does not
+-- expose live calendar feed URLs. Lookup hashes the incoming token
+-- before the SELECT.
 CREATE TABLE IF NOT EXISTS space_calendar_feed_tokens (
     user_id    TEXT NOT NULL,
     space_id   TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
-    token      TEXT NOT NULL UNIQUE,
+    token_hash TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     revoked_at TEXT,
     PRIMARY KEY (user_id, space_id)
 );
-CREATE INDEX IF NOT EXISTS idx_feed_tokens_token
-    ON space_calendar_feed_tokens(token) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_feed_tokens_token_hash
+    ON space_calendar_feed_tokens(token_hash) WHERE revoked_at IS NULL;
 
 -- Out-of-order federation RSVP buffer. When a SPACE_RSVP_UPDATED arrives
 -- before its event has propagated, the FK to space_calendar_events
@@ -1556,8 +1604,12 @@ CREATE TABLE IF NOT EXISTS space_remote_members (
     joined_at      TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (space_id, instance_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS idx_space_remote_members_instance
-    ON space_remote_members(instance_id);
+-- Covers both the "list members of peer instance" sweep and the
+-- ``WHERE instance_id=? AND user_id=?`` lookup on every cross-household
+-- DM/space delivery. The leading column alone still satisfies the
+-- single-column case via prefix scan.
+CREATE INDEX IF NOT EXISTS idx_space_remote_members_instance_user
+    ON space_remote_members(instance_id, user_id);
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- §D1a  peer-public-space directory sync
@@ -1582,20 +1634,6 @@ CREATE TABLE IF NOT EXISTS peer_space_directory (
 );
 CREATE INDEX IF NOT EXISTS idx_peer_space_directory_instance
     ON peer_space_directory(instance_id);
-
-CREATE TABLE IF NOT EXISTS content_reports (
-    id              TEXT PRIMARY KEY,
-    reporter_user_id TEXT NOT NULL,
-    target_type     TEXT NOT NULL CHECK(target_type IN ('post','comment','user','space','highlight','moment')),
-    target_id       TEXT NOT NULL,
-    category        TEXT NOT NULL,
-    notes           TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending'
-                    CHECK(status IN ('pending','actioned','dismissed')),
-    reviewed_by     TEXT,
-    reviewed_at     TEXT,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
 
 -- ── User blocks ────────────────────────────────────────────────────────────
 
@@ -1851,29 +1889,14 @@ CREATE TABLE IF NOT EXISTS call_quality_samples (
     jitter_ms        INTEGER,
     loss_pct         REAL,
     audio_bitrate    INTEGER,
-    video_bitrate    INTEGER
+    video_bitrate    INTEGER,
+    -- Three-tuple PK dedups same-peer same-tick samples (e.g. an
+    -- envelope retry on reconnect); the natural sample cadence is
+    -- one per ~10 s so collisions are rare but not impossible.
+    PRIMARY KEY (call_id, reporter_user_id, sampled_at)
 );
 CREATE INDEX IF NOT EXISTS idx_call_quality_call
     ON call_quality_samples(call_id, sampled_at DESC);
-
--- ── Content reports (moderation) ──────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS content_reports (
-    id                TEXT PRIMARY KEY,
-    space_id          TEXT,
-    post_id           TEXT NOT NULL,
-    reporter_user_id  TEXT NOT NULL,
-    reason            TEXT NOT NULL CHECK(reason IN
-        ('spam','harassment','inappropriate','misinformation','other')),
-    detail            TEXT NOT NULL DEFAULT '',
-    status            TEXT NOT NULL DEFAULT 'pending'
-                      CHECK(status IN ('pending','approved','rejected')),
-    reviewed_by       TEXT,
-    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-    reviewed_at       TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_content_reports_status
-    ON content_reports(status, created_at DESC);
 
 -- ── §28/§29 supplemental tables ───────────────────────────────────────────
 
@@ -1974,7 +1997,10 @@ CREATE TABLE IF NOT EXISTS gfs_connections (
 
 CREATE TABLE IF NOT EXISTS gfs_space_publications (
     space_id TEXT NOT NULL,
-    gfs_connection_id TEXT NOT NULL REFERENCES gfs_connections(id),
+    -- Cascades when the GFS pairing is dissolved: the publication rows
+    -- evaporate alongside the connection.  Default ``NO ACTION`` would
+    -- otherwise reject the GFS unpairing.
+    gfs_connection_id TEXT NOT NULL REFERENCES gfs_connections(id) ON DELETE CASCADE,
     published_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (space_id, gfs_connection_id)
 );
