@@ -101,12 +101,26 @@ class PresenceLocationView(BaseView):
     """
 
     async def post(self) -> web.Response:
-        self.user
+        ctx = self.user
         body = await self.body()
 
         username = body.get("username")
         if not username:
             return error_response(422, "UNPROCESSABLE", "username is required.")
+
+        # Self-or-admin gate. The HA integration pushes presence
+        # for every household member through one admin bearer (the
+        # auto-provisioned HA-owner token), so admin must pass; an
+        # ordinary user is only allowed to push their own row (mobile
+        # apps, future first-party SH clients). Without this check
+        # any authenticated household member could spoof another
+        # member's location.
+        if username != ctx.username and not ctx.is_admin:
+            return error_response(
+                403,
+                "FORBIDDEN",
+                "Can only push presence for yourself unless you are admin.",
+            )
 
         zone_name = body.get("zone_name")
         state: PresenceState = body.get("state") or _derive_state(zone_name)
