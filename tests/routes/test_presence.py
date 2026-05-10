@@ -194,8 +194,7 @@ async def test_update_location_admin_can_push_for_other_user(client):
     pk_bytes = bytes.fromhex(row["identity_public_key"])
     target_uid = derive_user_id(pk_bytes, "lily")
     await db.enqueue(
-        "INSERT INTO users(username, user_id, display_name, is_admin) "
-        "VALUES(?,?,?,0)",
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
         ("lily", target_uid, "Lily"),
     )
 
@@ -221,14 +220,12 @@ async def test_update_location_non_admin_self_push_allowed(client):
     pk_bytes = bytes.fromhex(row["identity_public_key"])
     uid = derive_user_id(pk_bytes, "bob")
     await db.enqueue(
-        "INSERT INTO users(username, user_id, display_name, is_admin) "
-        "VALUES(?,?,?,0)",
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
         ("bob", uid, "Bob"),
     )
     raw = "bob-tok"
     await db.enqueue(
-        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) "
-        "VALUES(?,?,?,?)",
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) VALUES(?,?,?,?)",
         ("t-bob", uid, "t", sha256_token_hash(raw)),
     )
     r = await client.post(
@@ -254,19 +251,16 @@ async def test_update_location_non_admin_cross_user_push_403(client):
     bob_uid = derive_user_id(pk_bytes, "bob")
     lily_uid = derive_user_id(pk_bytes, "lily")
     await db.enqueue(
-        "INSERT INTO users(username, user_id, display_name, is_admin) "
-        "VALUES(?,?,?,0)",
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
         ("bob", bob_uid, "Bob"),
     )
     await db.enqueue(
-        "INSERT INTO users(username, user_id, display_name, is_admin) "
-        "VALUES(?,?,?,0)",
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
         ("lily", lily_uid, "Lily"),
     )
     raw = "bob-tok"
     await db.enqueue(
-        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) "
-        "VALUES(?,?,?,?)",
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) VALUES(?,?,?,?)",
         ("t-bob", bob_uid, "t", sha256_token_hash(raw)),
     )
     r = await client.post(
