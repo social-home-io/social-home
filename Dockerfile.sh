@@ -13,6 +13,11 @@
 
 FROM python:3.14-slim AS base
 
+# uv replaces pip for the package install — ~10× faster, deterministic
+# resolution, and ships static via the official ``ghcr.io/astral-sh/uv``
+# image so we don't depend on an extra apt / pip-bootstrap layer.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 # System deps for Pillow + ffmpeg.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -33,7 +38,7 @@ WORKDIR /app
 # ``global-server`` extras — that lives in Dockerfile.gfs.
 COPY pyproject.toml LICENSE ./
 COPY socialhome/ socialhome/
-RUN pip install --no-cache-dir .
+RUN uv pip install --system --no-cache .
 
 # Build the frontend if present. Kept conditional so a minimal
 # sub-image (built from a slimmer context) still works.

@@ -15,6 +15,11 @@
 
 FROM python:3.14-slim AS base
 
+# uv replaces pip for the package install — ~10× faster, deterministic
+# resolution, and ships static via the official ``ghcr.io/astral-sh/uv``
+# image so we don't depend on an extra apt / pip-bootstrap layer.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 # Minimal system deps. qrcode[pil] pulls Pillow, which needs libjpeg +
 # libwebp for the landing-page QR image rendering (§24 onboarding).
 RUN apt-get update && \
@@ -32,7 +37,7 @@ COPY pyproject.toml LICENSE ./
 COPY socialhome/ socialhome/
 # Install the package + the global-server extra in one go so the
 # console script + its transitive deps land on the image.
-RUN pip install --no-cache-dir '.[global-server]'
+RUN uv pip install --system --no-cache '.[global-server]'
 
 # /var/lib/sh-gfs is the spec's default GFSDATA_DIR (config.py). Use
 # a volume so operators can persist the config + SQLite across
