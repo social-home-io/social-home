@@ -14,8 +14,9 @@ here.
 ## Event types
 
 `PAIRING_INTRO`, `PAIRING_INTRO_RELAY`, `PAIRING_INTRO_AUTO`,
-`PAIRING_INTRO_AUTO_ACK`, `PAIRING_ACCEPT`, `PAIRING_CONFIRM`,
-`PAIRING_ABORT`, `UNPAIR`, `URL_UPDATED`.
+`PAIRING_INTRO_AUTO_ACK`, `PAIRING_INTRO_AUTO_ACK_VIA`,
+`PAIRING_ACCEPT`, `PAIRING_CONFIRM`, `PAIRING_ABORT`, `UNPAIR`,
+`URL_UPDATED`.
 
 ## Flow — direct QR handshake
 
@@ -64,14 +65,22 @@ ciphertext; the two endpoints derive the session keys themselves.
 sequenceDiagram
     autonumber
     participant A as HFS A
-    participant C as HFS C<br/>(relay)
-    participant B as HFS B
-    A->>C: PAIRING_INTRO_AUTO<br/>(addressed to B)
-    C->>B: PAIRING_INTRO_RELAY
-    B->>C: PAIRING_INTRO_AUTO_ACK
-    C->>A: PAIRING_INTRO_AUTO_ACK<br/>(forwarded)
-    Note over A,B: proceed as direct flow:<br/>ACCEPT, CONFIRM
+    participant B as HFS B<br/>(relay — vouches for both)
+    participant C as HFS C<br/>(target)
+    A->>B: PAIRING_INTRO_AUTO<br/>{target_id: C, a_dh_pk, a_inbox_url}
+    B->>C: PAIRING_INTRO_AUTO<br/>{from_a_*, vouch_sig over A's identity}
+    Note over C: admin one-clicks "approve"<br/>(no QR scan, vouched by B)
+    C->>B: PAIRING_INTRO_AUTO_ACK_VIA<br/>{to_a_id, c_pk, c_dh_pk, ack_sig}
+    B->>A: PAIRING_INTRO_AUTO_ACK<br/>(forwarded — both hops over established trust)
+    Note over A,C: A↔C now CONFIRMED;<br/>federation envelopes flow normally.
 ```
+
+The ack rides through `B` rather than directly C → A because A
+holds only a `PENDING_SENT` row for C (no identity key yet) — a
+direct C → A envelope would fail the §24.11 inbound signature
+check. Both legs of the ack are over established trust (A↔B and
+B↔C are confirmed pairs, set up via QR before the auto-pair flow
+started).
 
 ## Key derivation
 
