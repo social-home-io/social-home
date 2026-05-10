@@ -28,9 +28,7 @@ class GfsInfoView(GfsBaseView):
         cfg = self.svc(K.gfs_config_key)
         cluster = self.svc(K.gfs_cluster_key)
         admin_repo = self.svc(K.gfs_admin_repo_key)
-        server_name = (
-            await admin_repo.get_config("server_name")
-        ) or cfg.server_name
+        server_name = (await admin_repo.get_config("server_name")) or cfg.server_name
         return web.json_response(
             {
                 "gfs_instance_id": cfg.instance_id,
