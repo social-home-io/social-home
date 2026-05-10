@@ -7,8 +7,10 @@ cryptography.
 
 > **Status (2026-04-18):** classical crypto is in production shape.
 > The hybrid Ed25519 + ML-DSA-65 signature path is wired end-to-end
-> behind `Config.federation_sig_suite = "ed25519+mldsa65"` and an
-> optional `liboqs-python` extra (`pip install 'socialhome[pq]'`).
+> behind `Config.federation_sig_suite = "ed25519+mldsa65"` and a
+> manually-installed `liboqs-python` package (PyPI rejects the direct
+> URL ref so it can't ship as a `socialhome[pq]` extra — see Operator
+> checklist below for the install command).
 > Further PQ work (ML-KEM for pairing, PQ VAPID) is tracked in
 > [§ Post-quantum migration path](#post-quantum-migration-path) below.
 
@@ -256,9 +258,11 @@ still on `sig_suite = "ed25519"` before the flag is flipped.
 
 To enable the hybrid signature suite on a deployment:
 
-1. Install the optional extra: `pip install 'socialhome[pq]'` (pulls
-   in `liboqs-python` from GitHub; requires the native `liboqs` C
-   library on the host).
+1. Install `liboqs-python` next to the existing `socialhome` install:
+   `pip install 'oqs @ git+https://github.com/open-quantum-safe/liboqs-python@0.10.0'`
+   (PyPI doesn't accept direct URL refs so we can't bundle this as a
+   `socialhome[pq]` extra; install it manually). Requires the native
+   `liboqs` C library on the host.
 2. Set `federation_sig_suite = "ed25519+mldsa65"` in `socialhome.toml`
    (or `SH_FEDERATION_SIG_SUITE=ed25519+mldsa65` as an env var).
 3. Restart. `identity_bootstrap` detects the suite change and mints

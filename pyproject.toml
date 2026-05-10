@@ -55,13 +55,6 @@ dev = [
     "bcrypt>=4",
     "qrcode[pil]>=7",
 ]
-# Post-quantum signatures (hybrid Ed25519 + ML-DSA-65, FIPS 204).
-# Install with: pip install 'socialhome[pq]'
-# Requires the host to have liboqs C library available; see
-# docs/crypto.md for the migration rationale.
-pq = [
-    "oqs @ git+https://github.com/open-quantum-safe/liboqs-python@0.10.0",
-]
 # Global Federation Server (GFS) runtime deps — pulled by the
 # `socialhome-global-server` console script.
 # Install with: pip install 'socialhome[global-server]'
@@ -76,13 +69,6 @@ socialhome-global-server = "socialhome.global_server.server:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-# The ``pq`` optional extra pulls liboqs-python from a git tag — no
-# PyPI release under that name. Hatchling otherwise refuses direct
-# references in ``project.optional-dependencies``. Scoped to the
-# optional extra only; core install stays tag-based.
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 # ``socialhome/static/`` is gitignored (vite output — built per release
