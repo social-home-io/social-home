@@ -156,6 +156,7 @@ from .pairing import (
     PairingConfirmView,
     PairingConnectionCollectionView,
     PairingConnectionDetailView,
+    PairingConnectionVisibleUsersView,
     PairingInitiateView,
     PairingIntroduceView,
     PairingRelayApproveView,
@@ -894,6 +895,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/pairing/connections/{instance_id}",
         PairingConnectionDetailView,
+    )
+    app.router.add_view(
+        "/api/pairing/connections/{instance_id}/visible-users",
+        PairingConnectionVisibleUsersView,
     )
     app.router.add_view("/api/connections", PairingConnectionCollectionView)
     app.router.add_view(

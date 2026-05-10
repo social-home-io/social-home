@@ -19,6 +19,8 @@ frontend NetworkMap component consumes.
 
 from __future__ import annotations
 
+import logging
+
 from aiohttp import web
 
 from ..app_keys import (
@@ -27,11 +29,15 @@ from ..app_keys import (
     federation_repo_key,
     federation_service_key,
     pairing_relay_queue_key,
+    peer_user_visibility_repo_key,
     platform_adapter_key,
+    user_repo_key,
 )
 from ..domain.federation import FederationEventType, PairingStatus
 from ..security import error_response
 from .base import BaseView
+
+log = logging.getLogger(__name__)
 
 
 def _instance_dict(inst) -> dict:
@@ -396,3 +402,158 @@ class PairingRelayDeclineView(BaseView):
         if dropped is None:
             return error_response(404, "NOT_FOUND", "Relay request not found.")
         return web.Response(status=204)
+
+
+class PairingConnectionVisibleUsersView(BaseView):
+    """``GET / PATCH /api/pairing/connections/{instance_id}/visible-users``.
+
+    Per-pair allow / deny list of which local users surface to a paired
+    peer. Default-visible: a household member is visible unless an admin
+    has explicitly hidden them. Admin-only.
+
+    On PATCH the handler also fans the appropriate envelope to the peer
+    so their ``remote_users`` mirror tracks the change immediately —
+    ``USER_REMOVED`` when a row flips to hidden, ``USER_UPDATED`` when
+    one flips back to visible.
+    """
+
+    async def get(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        instance_id = self.match("instance_id")
+        fed_repo = self.svc(federation_repo_key)
+        inst = await fed_repo.get_instance(instance_id)
+        if inst is None or inst.status is not PairingStatus.CONFIRMED:
+            return error_response(404, "NOT_FOUND", "Confirmed peer not found.")
+
+        users_repo = self.svc(user_repo_key)
+        vis_repo = self.svc(peer_user_visibility_repo_key)
+        hidden = await vis_repo.hidden_user_ids_for_peer(instance_id)
+        local_users = await users_repo.list_active()
+        return web.json_response(
+            {
+                "users": [
+                    {
+                        "user_id": u.user_id,
+                        "username": u.username,
+                        "display_name": u.display_name,
+                        "is_admin": bool(getattr(u, "is_admin", False)),
+                        "visible": u.user_id not in hidden,
+                    }
+                    for u in local_users
+                ]
+            }
+        )
+
+    async def patch(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        instance_id = self.match("instance_id")
+        fed_repo = self.svc(federation_repo_key)
+        inst = await fed_repo.get_instance(instance_id)
+        if inst is None or inst.status is not PairingStatus.CONFIRMED:
+            return error_response(404, "NOT_FOUND", "Confirmed peer not found.")
+
+        body = await self.body()
+        updates = body.get("updates")
+        if not isinstance(updates, list) or not updates:
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "updates must be a non-empty list of {user_id, visible} entries.",
+            )
+
+        users_repo = self.svc(user_repo_key)
+        local_users = await users_repo.list_active()
+        local_by_id = {u.user_id: u for u in local_users}
+
+        normalized: list[tuple[str, bool]] = []
+        for entry in updates:
+            if not isinstance(entry, dict):
+                return error_response(
+                    422,
+                    "UNPROCESSABLE",
+                    "Each update must be a {user_id, visible} object.",
+                )
+            uid = entry.get("user_id")
+            vis = entry.get("visible")
+            if not isinstance(uid, str) or not isinstance(vis, bool):
+                return error_response(
+                    422,
+                    "UNPROCESSABLE",
+                    "Each update needs string user_id + boolean visible.",
+                )
+            if uid not in local_by_id:
+                return error_response(
+                    422,
+                    "UNPROCESSABLE",
+                    f"Unknown local user_id: {uid!r}.",
+                )
+            normalized.append((uid, vis))
+
+        vis_repo = self.svc(peer_user_visibility_repo_key)
+        prev_hidden = await vis_repo.hidden_user_ids_for_peer(instance_id)
+        federation = self.svc(federation_service_key)
+
+        for uid, vis in normalized:
+            await vis_repo.set_visibility(
+                instance_id=instance_id,
+                user_id=uid,
+                visible=vis,
+                set_by=user.user_id,
+            )
+            was_hidden = uid in prev_hidden
+            if vis and was_hidden:
+                # Re-publish the user's profile so the peer's mirror
+                # repopulates the row that ``USER_REMOVED`` previously
+                # dropped. Use the current users_repo state — display
+                # name / bio may have changed while the user was hidden.
+                u = local_by_id[uid]
+                try:
+                    await federation.send_event(
+                        to_instance_id=instance_id,
+                        event_type=FederationEventType.USER_UPDATED,
+                        payload={
+                            "user_id": u.user_id,
+                            "username": u.username,
+                            "display_name": u.display_name,
+                            "bio": getattr(u, "bio", None),
+                            "picture_hash": getattr(u, "picture_hash", None),
+                        },
+                    )
+                except Exception:  # pragma: no cover — defensive
+                    log.exception(
+                        "visible-users: USER_UPDATED republish to %s failed",
+                        instance_id,
+                    )
+            elif not vis and not was_hidden:
+                try:
+                    await federation.send_event(
+                        to_instance_id=instance_id,
+                        event_type=FederationEventType.USER_REMOVED,
+                        payload={"user_id": uid},
+                    )
+                except Exception:  # pragma: no cover — defensive
+                    log.exception(
+                        "visible-users: USER_REMOVED to %s failed",
+                        instance_id,
+                    )
+
+        # Re-read to return the post-update state — uniform shape with GET.
+        hidden = await vis_repo.hidden_user_ids_for_peer(instance_id)
+        return web.json_response(
+            {
+                "users": [
+                    {
+                        "user_id": u.user_id,
+                        "username": u.username,
+                        "display_name": u.display_name,
+                        "is_admin": bool(getattr(u, "is_admin", False)),
+                        "visible": u.user_id not in hidden,
+                    }
+                    for u in local_users
+                ]
+            }
+        )

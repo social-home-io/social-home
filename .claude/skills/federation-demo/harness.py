@@ -1616,6 +1616,188 @@ def _looks_like_exc_summary(line: str) -> bool:
 # ─── Step: down ────────────────────────────────────────────────────────────
 
 
+def cmd_visibility() -> None:
+    """Per-pair user-visibility — Alpha hides a local user from Beta.
+
+    Validates the outbound peer-user-visibility filter (§Connection
+    Detail UX): Alpha provisions a second local user (``ada``), Beta's
+    ``/api/friends`` confirms ada is mirrored locally, Alpha PATCHes
+    ``/api/pairing/connections/{beta_id}/visible-users`` to hide ada,
+    and we assert ada disappears from Beta's ``/api/friends`` after
+    federation settles. Then we flip ada back to visible and confirm
+    she reappears.
+
+    Sequence:
+    1. Provision a second user on Alpha via
+       ``POST /api/admin/users {username, password, display_name}``.
+    2. Patch the new user's profile so a ``USER_UPDATED`` envelope
+       fans out to Beta — i.e. Beta now mirrors ``ada`` in
+       ``remote_users``. Wait briefly for federation settle.
+    3. Assert Beta's ``/api/friends`` includes Alpha's household and
+       lists Ada among its members.
+    4. Hide ada from Beta via the visibility PATCH; the route fans a
+       ``USER_REMOVED`` to Beta.
+    5. Wait, then assert Beta's ``/api/friends`` no longer lists ada
+       (the rest of the household stays).
+    6. Flip ada back to visible; the route fans a ``USER_UPDATED``.
+    7. Wait, then assert Beta sees ada again.
+
+    Prereq: ``up`` + ``pair`` (a ↔ b must be confirmed).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+
+    a = state["instances"]["a"]
+    b = state["instances"]["b"]
+    a_url = f"http://127.0.0.1:{a['port']}"
+    b_url = f"http://127.0.0.1:{b['port']}"
+
+    # ``cmd_pair`` burns through the /api/pairing rate-limit window
+    # (mostly via the four QR handshakes + their settle). The visible-
+    # users PATCH lives under the same ``/api/pairing/*`` bucket as
+    # /api/pairing/initiate, so a quick run of ``up → pair →
+    # visibility`` would 429 here. Drain the window the same way
+    # ``cmd_relay_pair`` does.
+    if state.get("rate_limit_drained_for") != "visibility":
+        wait = 65
+        print(f"  waiting {wait}s for /api/pairing/* rate-limit window to drain...")
+        time.sleep(wait)
+        state["rate_limit_drained_for"] = "visibility"
+        _save(state)
+
+    # 1. Provision a second user on Alpha.
+    new_username = "ada"
+    new_display = "Ada Lovelace"
+    s, prov = _request(
+        f"{a_url}/api/admin/users",
+        token=a["token"],
+        method="POST",
+        body={
+            "username": new_username,
+            "password": "harness-pwd-ada",
+            "display_name": new_display,
+            "is_admin": False,
+        },
+    )
+    # 409 = already exists from a prior run; reuse.
+    if s == 409:
+        s, listing = _request(
+            f"{a_url}/api/users",
+            token=a["token"],
+        )
+        _must("list users(a)", s, listing)
+        ada = next(
+            (u for u in listing if u.get("username") == new_username),
+            None,
+        )
+        if ada is None:
+            raise SystemExit("visibility: ada exists per 409 but not in /api/users")
+        ada_user_id = ada["user_id"]
+    else:
+        _must("provision ada(a)", s, prov, ok=(201,))
+        ada_user_id = prov["user_id"]
+    state["visibility_user_id"] = ada_user_id
+    print(f"  a: provisioned {new_username} ({ada_user_id[:8]}…)")
+
+    # 2. Trigger a profile update so USER_UPDATED federates to Beta.
+    #    ``UserProfileUpdated`` is published by ``user_service.update_profile``
+    #    which only the user themselves can invoke (PATCH /api/me).
+    #    Log in as ada to get a bearer token, then PATCH /api/me.
+    s, login = _request(
+        f"{a_url}/api/auth/token",
+        method="POST",
+        body={"username": new_username, "password": "harness-pwd-ada"},
+    )
+    _must("ada login(a)", s, login)
+    ada_token = login["token"]
+    s, _ = _request(
+        f"{a_url}/api/me",
+        token=ada_token,
+        method="PATCH",
+        body={"display_name": new_display, "bio": "Hello from Alpha (visibility test)"},
+    )
+    _must("ada profile patch(a)", s, _)
+    time.sleep(3)
+
+    # 3. Beta sees Ada in /api/friends.
+    def _friends_users_for(viewer_url: str, viewer_token: str, owner_iid: str) -> set[str]:
+        s, payload = _request(
+            f"{viewer_url}/api/friends",
+            token=viewer_token,
+        )
+        _must("friends(b)", s, payload)
+        households = payload.get("households", []) or []
+        for h in households:
+            if h.get("instance_id") == owner_iid:
+                return {m.get("user_id") for m in (h.get("members") or [])}
+        return set()
+
+    seen = _friends_users_for(b_url, b["token"], a["instance_id"])
+    if ada_user_id not in seen:
+        raise SystemExit(
+            f"visibility precheck: ada {ada_user_id} not yet visible to Beta "
+            f"(saw {sorted(seen)!r}) — federation may not have settled yet",
+        )
+    print(f"  pre-check: Beta sees ada via /api/friends ✓")
+
+    # 4. Hide ada from Beta.
+    s, body = _request(
+        f"{a_url}/api/pairing/connections/{b['instance_id']}/visible-users",
+        token=a["token"],
+        method="PATCH",
+        body={"updates": [{"user_id": ada_user_id, "visible": False}]},
+    )
+    _must("hide ada(a→b)", s, body)
+    rows = {u["user_id"]: u for u in body.get("users", [])}
+    if rows.get(ada_user_id, {}).get("visible") is not False:
+        raise SystemExit(
+            f"visibility: hide PATCH did not flip ada to hidden — got {body!r}",
+        )
+    print(f"  a hid ada from Beta — USER_REMOVED fan-out queued")
+
+    # 5. Wait for USER_REMOVED to land and Beta's mirror to drop ada.
+    time.sleep(4)
+    seen_after_hide = _friends_users_for(b_url, b["token"], a["instance_id"])
+    if ada_user_id in seen_after_hide:
+        raise SystemExit(
+            f"visibility: Beta still sees ada {ada_user_id} after hide — "
+            f"saw {sorted(seen_after_hide)!r}",
+        )
+    print(f"  post-hide: Beta no longer lists ada ✓")
+
+    # 6. Flip back to visible — Alpha's PATCH sends USER_UPDATED.
+    s, body = _request(
+        f"{a_url}/api/pairing/connections/{b['instance_id']}/visible-users",
+        token=a["token"],
+        method="PATCH",
+        body={"updates": [{"user_id": ada_user_id, "visible": True}]},
+    )
+    _must("unhide ada(a→b)", s, body)
+    print(f"  a re-exposed ada to Beta — USER_UPDATED fan-out queued")
+
+    # 7. Wait for USER_UPDATED to land and Beta to repopulate the row.
+    #    Outbox redelivery + USER_UPDATED inbound + remote_users insert
+    #    is several federation-pipeline hops; allow generous settle.
+    deadline = time.monotonic() + 30.0
+    seen_after_show: set[str] = set()
+    while time.monotonic() < deadline:
+        seen_after_show = _friends_users_for(b_url, b["token"], a["instance_id"])
+        if ada_user_id in seen_after_show:
+            break
+        time.sleep(2)
+    if ada_user_id not in seen_after_show:
+        raise SystemExit(
+            f"visibility: Beta still doesn't see ada after un-hide within 30s — "
+            f"saw {sorted(seen_after_show)!r}",
+        )
+    print(f"  post-unhide: Beta sees ada again ✓")
+
+    state["visibility_ran"] = True
+    _save(state)
+    print("visibility: ok (per-pair user-visibility filter works both ways)")
+
+
 def cmd_replay() -> None:
     """Federation outbox redelivery — kill Carol, post from Alpha, restart.
 
@@ -1779,6 +1961,10 @@ def main() -> None:
         cmd_calendar()
         cmd_verify()
         cmd_relay_pair()
+        # ``visibility`` toggles a local user hidden from a peer and
+        # asserts the peer's ``/api/friends`` mirror tracks the
+        # change. Validates the outbound peer-user-visibility filter.
+        cmd_visibility()
         # ``replay`` exercises the §24 outbox redelivery path by
         # killing Carol, posting a highlight from Alpha, restarting
         # Carol, and asserting the queued envelope flushes after the

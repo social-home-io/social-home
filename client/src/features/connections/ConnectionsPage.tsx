@@ -18,6 +18,7 @@ import { Spinner } from '@/components/Spinner'
 import { openPairing, PairingFlow } from '@/components/PairingFlow'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { AutoPairDialog, openAutoPair } from '@/components/AutoPairDialog'
+import { ConnectionDetail } from '@/components/ConnectionDetail'
 import { showToast } from '@/components/Toast'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
@@ -34,6 +35,9 @@ interface Connection {
   paired_at?: string | null
   source?: string
   reachable: boolean
+  inbox_url?: string
+  intro_relay_enabled?: boolean
+  unreachable_since?: string | null
 }
 
 interface AutoPairRequest {
@@ -154,6 +158,7 @@ async function unpair(instanceId: string) {
 export default function ConnectionsPage() {
   useTitle(t('connections.title'))
   const [autoPairBusy, setAutoPairBusy] = useState(false)
+  const [detail, setDetail] = useState<Connection | null>(null)
 
   useEffect(() => {
     void loadConnections()
@@ -286,10 +291,16 @@ export default function ConnectionsPage() {
                 </div>
                 <div class="sh-connection-actions">
                   {c.status === 'confirmed' && (
-                    <Button variant="danger"
-                            onClick={() => void unpair(c.instance_id)}>
-                      Unpair
-                    </Button>
+                    <>
+                      <Button variant="secondary"
+                              onClick={() => setDetail(c)}>
+                        Manage
+                      </Button>
+                      <Button variant="danger"
+                              onClick={() => void unpair(c.instance_id)}>
+                        Unpair
+                      </Button>
+                    </>
                   )}
                 </div>
               </div>
@@ -340,6 +351,21 @@ export default function ConnectionsPage() {
 
       <PairingFlow onGfsConnected={loadGfsConnections} />
       <AutoPairDialog onPaired={() => void loadConnections()} />
+      {detail && (
+        <ConnectionDetail
+          conn={{
+            instance_id: detail.instance_id,
+            display_name: detail.display_name,
+            status: detail.status,
+            inbox_url: detail.inbox_url ?? '',
+            intro_relay_enabled: detail.intro_relay_enabled ?? true,
+            unreachable_since: detail.unreachable_since ?? null,
+            paired_at: detail.paired_at ?? null,
+          }}
+          onClose={() => setDetail(null)}
+          onRevoke={() => { setDetail(null); void loadConnections() }}
+        />
+      )}
       <ConfirmDialog
         open={disconnectTarget.value !== null}
         title={t('gfs.disconnect')}
