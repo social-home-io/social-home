@@ -305,18 +305,25 @@ class HighlightPublicLandingView(GfsBaseView):
 # ─── Internal helpers ────────────────────────────────────────────────────
 
 
+#: Fallback style used by the gone/unavailable HTML responses.
+#: Token values mirror ``--sh-*`` from ``client/src/styles/tokens.css`` —
+#: paper / ink / hairline / hearth — so the failure pages read as
+#: part of the SH product family rather than a stark federation
+#: error screen. We don't try to load the Manrope/Fraunces webfont
+#: here (failure path; no preconnect handshake to spend) — system
+#: fallbacks are fine for two short paragraphs.
 _FALLBACK_STYLE = (
     "<style>"
-    "html,body{margin:0;padding:0;background:#faf6f1;color:#1f1916;"
-    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
-    "min-height:100%;}"
+    "html,body{margin:0;padding:0;background:#F4ECE0;color:#1A1814;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,"
+    "system-ui,sans-serif;min-height:100%;line-height:1.55;}"
     "main{max-width:560px;margin:0 auto;padding:48px 24px;"
     "text-align:center;}"
-    "h1{font-family:'Lora','Iowan Old Style','Palatino Linotype',serif;"
+    "h1{font-family:'Iowan Old Style','Palatino Linotype',Georgia,serif;"
     "font-size:28px;letter-spacing:-0.01em;margin:0 0 12px;}"
-    "p{color:#5b4f48;line-height:1.55;margin:0 0 16px;}"
-    "small{color:#9a8d83;font-size:11px;}"
-    ".accent-bar{height:6px;background:#ce5d3e;border-radius:3px;"
+    "p{color:#807766;margin:0 0 16px;}"
+    "small{color:#A8A090;font-size:11px;}"
+    ".accent-bar{height:6px;background:#D2542A;border-radius:3px;"
     "max-width:120px;margin:0 auto 24px;}"
     "</style>"
 )
