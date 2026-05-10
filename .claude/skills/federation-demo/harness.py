@@ -1049,24 +1049,24 @@ def cmd_down() -> None:
         try:
             os.killpg(gfs["pid"], signal.SIGTERM)
             print(f"  gfs: SIGTERM pid={gfs['pid']}")
-        except ProcessLookupError, PermissionError:
+        except (ProcessLookupError, PermissionError):
             pass
     for label, info in (state.get("instances") or {}).items():
         try:
             os.killpg(info["pid"], signal.SIGTERM)
             print(f"  {label}: SIGTERM pid={info['pid']}")
-        except ProcessLookupError, PermissionError:
+        except (ProcessLookupError, PermissionError):
             pass
     time.sleep(1)
     if gfs:
         try:
             os.killpg(gfs["pid"], signal.SIGKILL)
-        except ProcessLookupError, PermissionError:
+        except (ProcessLookupError, PermissionError):
             pass
     for label, info in (state.get("instances") or {}).items():
         try:
             os.killpg(info["pid"], signal.SIGKILL)
-        except ProcessLookupError, PermissionError:
+        except (ProcessLookupError, PermissionError):
             pass
     if ROOT.exists():
         shutil.rmtree(ROOT)
@@ -1082,23 +1082,20 @@ def main() -> None:
         sys.exit(2)
     cmd = sys.argv[1]
     if cmd == "all":
-        # ``relay-pair`` and ``calendar`` are intentionally excluded
-        # from the canonical ``all`` sequence — see the docstrings on
-        # :func:`cmd_relay_pair` and :func:`cmd_calendar`. Both are
-        # still wired as standalone subcommands and exercise real
-        # federation paths; they're just opted-out of the smoke run
-        # because (a) they depend on rate-limit / sync-window timing
-        # that's hard to make deterministic in a single-shot run and
-        # (b) ``cmd_calendar`` triggers a code path
-        # (``SPACE_CALENDAR_EVENT_CREATED`` outbound) that isn't yet
-        # implemented in ``socialhome`` — the inbound handler exists,
-        # but no service publishes the event when ``b`` creates a
-        # space-calendar event, so ``a`` and ``c`` never see it.
+        # The full path: pair the inner ring → traffic + invites →
+        # accept invites + RSVP-on-event (cmd_calendar) → assertions →
+        # transitive auto-pair via the trust relay (cmd_relay_pair).
+        # GFS lifecycle (``gfs-up`` / ``gfs-pair`` / ``gfs-down``) is
+        # opt-in and not part of the canonical smoke run; the GFS
+        # process is heavyweight to spin up and not strictly required
+        # for the HFS↔HFS federation surface this skill validates.
         cmd_up()
         cmd_pair()
         cmd_traffic()
         time.sleep(5)  # let federation settle before assertions
+        cmd_calendar()
         cmd_verify()
+        cmd_relay_pair()
         return
     fn = globals().get(f"cmd_{cmd.replace('-', '_')}")
     if fn is None:
