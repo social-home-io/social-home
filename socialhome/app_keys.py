@@ -74,6 +74,7 @@ space_poll_service_key: AppKey = AppKey("space_poll_service")
 bazaar_service_key: AppKey = AppKey("bazaar_service")
 instance_id_key: AppKey[str] = AppKey("instance_id")
 instance_signing_key_key: AppKey[bytes] = AppKey("instance_signing_key")
+instance_public_key_key: AppKey[bytes] = AppKey("instance_public_key")
 #: HMAC signer for short-lived browser-loaded media URLs (§23.21). Set
 #: in ``_on_startup`` once ``identity_seed`` is available; route
 #: handlers and the auth strategy read it via ``request.app[…]``.

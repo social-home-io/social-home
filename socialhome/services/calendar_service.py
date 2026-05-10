@@ -765,6 +765,11 @@ class SpaceCalendarService:
         saved = await self._repo.save_event(space_id, event)
         if self._bus is not None:
             await self._bus.publish(CalendarEventCreated(event=saved))
+        await self._publish_federation_event_saved(
+            space_id=space_id,
+            event=saved,
+            evt_type=FederationEventType.SPACE_CALENDAR_EVENT_CREATED,
+        )
         # Phase C: auto-RSVP the creator as going for the first
         # occurrence — they're implicitly going, even on a capped event
         # (skips the approval flow for self). Publish SpaceRsvpChanged
@@ -820,6 +825,11 @@ class SpaceCalendarService:
                     space_id=snapshot_space,
                     notify_user_ids=notify,
                 )
+            )
+        if snapshot_space is not None:
+            await self._publish_federation_event_deleted(
+                space_id=snapshot_space,
+                event_id=event_id,
             )
 
     async def resolve_space_id(self, event_id: str) -> str | None:
@@ -898,6 +908,11 @@ class SpaceCalendarService:
             cover_url=new_cover,
         )
         await self._repo.save_event(space_id, updated)
+        await self._publish_federation_event_saved(
+            space_id=space_id,
+            event=updated,
+            evt_type=FederationEventType.SPACE_CALENDAR_EVENT_UPDATED,
+        )
         # Compute *material* field changes — Phase D: only these
         # trigger update push notifications. Cosmetic changes (description,
         # attendees, rrule, all_day) are silent.
@@ -1410,6 +1425,50 @@ class SpaceCalendarService:
                 f"of event {event.id}",
             )
         return occ_dt
+
+    async def _publish_federation_event_saved(
+        self,
+        *,
+        space_id: str,
+        event: CalendarEvent,
+        evt_type: FederationEventType,
+    ) -> None:
+        """Broadcast a SPACE_CALENDAR_EVENT_CREATED / _UPDATED to peers
+        co-hosting this space. No-op when federation isn't wired."""
+        if self._federation is None:
+            return
+        payload: dict = {
+            "event_id": event.id,
+            "calendar_id": event.calendar_id,
+            "summary": event.summary,
+            "description": event.description,
+            "start": event.start.isoformat(),
+            "end": event.end.isoformat(),
+            "all_day": event.all_day,
+            "attendees": list(event.attendees),
+            "created_by": event.created_by,
+            "rrule": event.rrule,
+            "cover_url": event.cover_url,
+        }
+        await self._federation.broadcast_to_space_members(
+            space_id,
+            evt_type,
+            payload,
+        )
+
+    async def _publish_federation_event_deleted(
+        self,
+        *,
+        space_id: str,
+        event_id: str,
+    ) -> None:
+        if self._federation is None:
+            return
+        await self._federation.broadcast_to_space_members(
+            space_id,
+            FederationEventType.SPACE_CALENDAR_EVENT_DELETED,
+            {"event_id": event_id},
+        )
 
     async def _publish_federation_rsvp(
         self,

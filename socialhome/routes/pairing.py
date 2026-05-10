@@ -211,12 +211,25 @@ class AutoPairViaView(BaseView):
                 "UNPROCESSABLE",
                 "via_instance_id and target_instance_id are required.",
             )
+        adapter = self.svc(platform_adapter_key)
+        own_base = await adapter.get_federation_base()
+        if not own_base:
+            return error_response(
+                422,
+                "NOT_CONFIGURED",
+                (
+                    "Set external URL in Home Assistant (Settings ▸ System ▸ "
+                    "Network / Nabu Casa) or config.toml [standalone].external_url "
+                    "before auto-pairing."
+                ),
+            )
         coord = self.svc(auto_pair_coordinator_key)
         try:
             result = await coord.request_via(
                 via_instance_id=via,
                 target_instance_id=target,
                 target_display_name=display_name,
+                own_inbox_base_url=own_base,
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
@@ -257,9 +270,24 @@ class AutoPairInboxApproveView(BaseView):
         if not ctx.is_admin:
             return error_response(403, "FORBIDDEN", "Admin only.")
         request_id = self.match("request_id")
+        adapter = self.svc(platform_adapter_key)
+        own_base = await adapter.get_federation_base()
+        if not own_base:
+            return error_response(
+                422,
+                "NOT_CONFIGURED",
+                (
+                    "Set external URL in Home Assistant (Settings ▸ System ▸ "
+                    "Network / Nabu Casa) or config.toml [standalone].external_url "
+                    "before approving auto-pair requests."
+                ),
+            )
         coord = self.svc(auto_pair_coordinator_key)
         try:
-            inst = await coord.finalize_pending(request_id)
+            inst = await coord.finalize_pending(
+                request_id,
+                own_inbox_base_url=own_base,
+            )
         except KeyError:
             return error_response(
                 404,

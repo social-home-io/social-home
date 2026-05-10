@@ -136,6 +136,17 @@ class ClusterService:
         #: them after a partition heals.
         self._partition_gaps: dict[str, dict] = {}
 
+    @property
+    def own_public_key_hex(self) -> str:
+        """Hex-encoded Ed25519 public key for this GFS instance.
+
+        Exposed so the public ``GET /gfs/info`` endpoint can publish the
+        key HFS clients pin during pairing. The matching private key is
+        derived from the GFS ``instance_id`` and never leaves the
+        process.
+        """
+        return self._own_pk_hex
+
     # ─── Node registry API ────────────────────────────────────────────
 
     async def announce(self, node_id: str, address: str) -> None:

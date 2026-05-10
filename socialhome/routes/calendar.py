@@ -591,7 +591,9 @@ class CalendarEventRsvpView(BaseView):
             return error_response(404, "NOT_FOUND", "Event not found.")
         space_repo = self.svc(K.space_repo_key)
         member = await space_repo.get_member(space_id, ctx.user_id)
-        if member is None:
+        if member is None and not await space_repo.is_user_remote_member(
+            space_id, ctx.user_id
+        ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
 
         try:
@@ -624,7 +626,9 @@ class CalendarEventRsvpView(BaseView):
             return error_response(404, "NOT_FOUND", "Event not found.")
         space_repo = self.svc(K.space_repo_key)
         member = await space_repo.get_member(space_id, ctx.user_id)
-        if member is None:
+        if member is None and not await space_repo.is_user_remote_member(
+            space_id, ctx.user_id
+        ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
 
         try:
@@ -784,7 +788,9 @@ class CalendarEventPendingView(BaseView):
             return error_response(404, "NOT_FOUND", "Event not found.")
         space_repo = self.svc(K.space_repo_key)
         member = await space_repo.get_member(space_id, ctx.user_id)
-        if member is None:
+        if member is None and not await space_repo.is_user_remote_member(
+            space_id, ctx.user_id
+        ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
         result = await space_cal_svc._repo.get_event(event_id)
         if result is None:
@@ -828,7 +834,9 @@ class CalendarEventRemindersView(BaseView):
             return error_response(404, "NOT_FOUND", "Event not found.")
         space_repo = self.svc(K.space_repo_key)
         member = await space_repo.get_member(space_id, ctx.user_id)
-        if member is None:
+        if member is None and not await space_repo.is_user_remote_member(
+            space_id, ctx.user_id
+        ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
         return space_id, ctx.user_id
 

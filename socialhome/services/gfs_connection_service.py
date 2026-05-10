@@ -4,10 +4,17 @@ Handles pairing with Global Federation Servers, disconnecting, and
 publishing / unpublishing spaces to paired GFS instances.
 
 The pairing flow (simpler than HFS):
-1. Admin scans GFS QR code -> extracts ``{gfs_url, token, public_key}``
-2. Instance POSTs to ``{gfs_url}/gfs/register`` with own identity + inbox
-3. GFS responds with ``gfs_instance_id``
-4. Connection saved as ``status=active``
+1. Admin scans GFS QR code → extracts ``{gfs_url, token}``.
+2. Instance ``GET {gfs_url}/gfs/info`` to fetch the GFS's
+   ``{gfs_instance_id, public_key}`` so it can pin them before
+   trusting any future relay.
+3. Instance POSTs to ``{gfs_url}/gfs/register`` with
+   ``{token, instance_id (own), public_key (own), inbox_url,
+   display_name}``.
+4. GFS validates the token (single-use), registers the client,
+   responds ``{status, instance_id}``.
+5. Connection saved with ``status=active`` (or ``pending`` if the
+   GFS requires admin approval).
 """
 
 from __future__ import annotations
@@ -64,33 +71,75 @@ class GfsConnectionService:
             )
         return self._http_client
 
-    async def pair(self, qr_payload: dict) -> GfsConnection:
+    async def pair(
+        self,
+        qr_payload: dict,
+        *,
+        own_instance_id: str,
+        own_public_key_hex: str,
+        own_inbox_url: str,
+        own_display_name: str = "",
+    ) -> GfsConnection:
         """Pair with a GFS using a scanned QR payload.
 
-        Parameters
-        ----------
-        qr_payload:
-            Must contain ``gfs_url``, ``token``, and ``public_key``.
-
-        Returns
-        -------
-        The saved :class:`GfsConnection`.
+        ``qr_payload`` carries ``{gfs_url, token}`` — the QR no longer
+        embeds the GFS's public key (it would bloat the QR for a value
+        any client can pull from ``GET /gfs/info``). The own-identity
+        fields come from the calling SH adapter so the GFS sees the
+        registering household, not a generic blob.
         """
         gfs_url = str(qr_payload.get("gfs_url") or "").rstrip("/")
         token = str(qr_payload.get("token") or "")
-        public_key = str(qr_payload.get("public_key") or "")
-
-        if not gfs_url or not token or not public_key:
+        if not gfs_url or not token:
             raise GfsConnectionError(
-                "gfs_url, token, and public_key are required",
+                "gfs_url and token are required in the QR payload",
+            )
+        if not own_instance_id or not own_public_key_hex or not own_inbox_url:
+            raise GfsConnectionError(
+                "own_instance_id, own_public_key_hex, and own_inbox_url"
+                " are required for GFS registration",
             )
 
-        register_url = f"{gfs_url}/gfs/register"
         client = self._client()
+
+        # 1. Fetch the GFS's public-key descriptor so we can pin it.
+        info_url = f"{gfs_url}/gfs/info"
+        try:
+            async with client.get(
+                info_url,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    detail = await resp.text()
+                    raise GfsConnectionError(
+                        f"GFS /gfs/info failed (HTTP {resp.status}): {detail}",
+                    )
+                info = await resp.json()
+        except aiohttp.ClientError as exc:
+            raise GfsConnectionError(
+                f"GFS unreachable while fetching /gfs/info: {exc}",
+            ) from exc
+
+        gfs_instance_id = str(info.get("gfs_instance_id") or "")
+        gfs_public_key = str(info.get("public_key") or "")
+        gfs_display_name = str(info.get("server_name") or gfs_url)
+        if not gfs_instance_id or not gfs_public_key:
+            raise GfsConnectionError(
+                "GFS /gfs/info did not return gfs_instance_id and public_key",
+            )
+
+        # 2. Register the HFS instance using the QR token.
+        register_url = f"{gfs_url}/gfs/register"
         try:
             async with client.post(
                 register_url,
-                json={"token": token},
+                json={
+                    "token": token,
+                    "instance_id": own_instance_id,
+                    "public_key": own_public_key_hex,
+                    "inbox_url": own_inbox_url,
+                    "display_name": own_display_name,
+                },
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status != 200:
@@ -104,21 +153,20 @@ class GfsConnectionService:
                 f"GFS unreachable: {exc}",
             ) from exc
 
-        gfs_instance_id = str(body.get("gfs_instance_id") or "")
-        display_name = str(body.get("display_name") or gfs_url)
-        if not gfs_instance_id:
-            raise GfsConnectionError(
-                "GFS did not return a gfs_instance_id",
-            )
+        # ``status`` is "registered" (auto-accepted) or "pending" (admin
+        # review). Pending is still a recorded connection, just inert
+        # until the GFS admin flips it.
+        registration_status = str(body.get("status") or "registered")
+        local_status = "active" if registration_status == "registered" else "pending"
 
         now = datetime.now(timezone.utc).isoformat()
         conn = GfsConnection(
             id=uuid.uuid4().hex,
             gfs_instance_id=gfs_instance_id,
-            display_name=display_name,
-            public_key=public_key,
+            display_name=gfs_display_name,
+            public_key=gfs_public_key,
             inbox_url=gfs_url,
-            status="active",
+            status=local_status,
             paired_at=now,
         )
         await self._repo.save(conn)

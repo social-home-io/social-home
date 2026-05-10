@@ -174,6 +174,18 @@ class AbstractSpaceRepo(Protocol):
         invitation_id: str,
         status: str,
     ) -> None: ...
+    async def is_user_remote_member(
+        self,
+        space_id: str,
+        user_id: str,
+    ) -> bool:
+        """Whether ``user_id`` accepted a remote (cross-household) invite
+        for ``space_id`` — i.e. is a member of a peer-owned space via
+        the §D1b invitation flow. Distinct from
+        :meth:`get_member`, which only sees rows in the local
+        ``space_members`` table.
+        """
+        ...
 
     # ── Join requests ──────────────────────────────────────────────────
     async def save_join_request(
@@ -987,6 +999,24 @@ class SqliteSpaceRepo:
             (user_id,),
         )
         return rows_to_dicts(rows)
+
+    async def is_user_remote_member(
+        self,
+        space_id: str,
+        user_id: str,
+    ) -> bool:
+        row = await self._db.fetchone(
+            """
+            SELECT 1 FROM space_invitations
+             WHERE space_id=? AND remote_user_id=?
+               AND remote_instance_id IS NOT NULL
+               AND remote_instance_id != ''
+               AND status='accepted'
+             LIMIT 1
+            """,
+            (space_id, user_id),
+        )
+        return row is not None
 
     async def update_invitation_status(
         self,

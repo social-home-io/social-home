@@ -249,3 +249,11 @@ When adding or changing a table after v1, drop a `0002_*.sql` (or
 later) into `socialhome/migrations/` and update both the matching
 section above and the `Sqlite*Repo` that owns it. See `CLAUDE.md` →
 **"Keep docs in sync"** for the reviewer rule.
+
+## Migrations after v1
+
+| File | Purpose |
+|---|---|
+| `0002_relax_space_invitations_fk.sql` | Drops the FK from `space_invitations.space_id → spaces.id`. The same row exists on both sides of a §D1b cross-household invite, but the invitee has no row in the local `spaces` table. |
+| `0003_relax_space_calendar_events_fk.sql` | Same class of fix for `space_calendar_events` (and its FK-children `space_calendar_rsvps` / `space_calendar_rsvp_reminders`) — peer households mirror events for spaces they don't own locally. |
+| `0004_relax_space_instances_fk.sql` | Same fix for `space_instances` so a peer can record `(remote_space_id, host_instance_id)` for outbound RSVP / future-write routing. |

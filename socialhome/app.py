@@ -555,6 +555,10 @@ def _wire_federation_stack(
         FederationEventType.PAIRING_INTRO_AUTO_ACK,
         auto_pair_coordinator.on_ack_at_originator,
     )
+    federation_service._event_registry.register(
+        FederationEventType.PAIRING_INTRO_AUTO_ACK_VIA,
+        auto_pair_coordinator.on_ack_via_at_relay,
+    )
     app[K.auto_pair_coordinator_key] = auto_pair_coordinator
     app[K.auto_pair_inbox_key] = auto_pair_inbox
     SpaceMembershipInboundHandlers(
@@ -1523,6 +1527,7 @@ def create_app(config: Config | None = None) -> web.Application:
         real_instance_id = identity.instance_id
         app[K.instance_id_key] = real_instance_id
         app[K.instance_signing_key_key] = identity_seed
+        app[K.instance_public_key_key] = identity_pk
         # Stamp Momentum rows with the local instance_id so the 3-hop
         # relay can guard against echo loops (origin_instance_id check).
         moment_service.attach_instance_id(real_instance_id)

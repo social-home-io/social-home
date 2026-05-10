@@ -280,7 +280,7 @@ def _render_landing(
             <li>Spaces → Discover → ⬡ Global</li>
             <li>Scan this code or paste the token below</li>
           </ol>
-          <p><code>{_escape(token)}</code></p>
+          <p><code data-pair-token="{_escape(token)}">{_escape(token)}</code></p>
           <p class="muted">Valid for 10 minutes · single-use.</p>
         </div>
       </div>

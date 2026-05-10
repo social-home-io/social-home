@@ -28,6 +28,12 @@ class FederationEventType(str, enum.Enum):
     PAIRING_INTRO_RELAY = "pairing_intro_relay"
     PAIRING_INTRO_AUTO = "pairing_intro_auto"
     PAIRING_INTRO_AUTO_ACK = "pairing_intro_auto_ack"
+    #: ``C → B`` carrying the same ack body as ``PAIRING_INTRO_AUTO_ACK``.
+    #: B then forwards as ``PAIRING_INTRO_AUTO_ACK`` to A. Required because
+    #: A has no confirmed pairing with C yet, so a direct C→A envelope
+    #: would fail the inbound pipeline's signature check (the
+    #: PENDING_SENT row A holds for C has no identity key on it).
+    PAIRING_INTRO_AUTO_ACK_VIA = "pairing_intro_auto_ack_via"
     PAIRING_ACCEPT = "pairing_accept"
     PAIRING_CONFIRM = "pairing_confirm"
     PAIRING_ABORT = "pairing_abort"
@@ -252,6 +258,7 @@ PAIRING_EVENTS: frozenset[FederationEventType] = frozenset(
         FederationEventType.PAIRING_INTRO_RELAY,
         FederationEventType.PAIRING_INTRO_AUTO,
         FederationEventType.PAIRING_INTRO_AUTO_ACK,
+        FederationEventType.PAIRING_INTRO_AUTO_ACK_VIA,
         FederationEventType.PAIRING_ACCEPT,
         FederationEventType.PAIRING_CONFIRM,
         FederationEventType.PAIRING_ABORT,
