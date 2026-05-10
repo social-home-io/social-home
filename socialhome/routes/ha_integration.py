@@ -200,7 +200,7 @@ def _load_ice_servers(raw_value: str | None) -> list[dict]:
         return []
     try:
         parsed = json.loads(raw_value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         log.warning("ha_integration: persisted ice_servers JSON is malformed")
         return []
     cleaned = _validate_ice_servers(parsed)
