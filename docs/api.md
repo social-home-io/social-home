@@ -540,6 +540,8 @@ Bearer auth (the integration holds the auto-provisioned token).
 |---|---|---|
 | GET | `/api/ha/integration/federation-base` | Current base the addon advertises. Returns `{"base": string \| null}`. |
 | PUT | `/api/ha/integration/federation-base` | Upsert `{"base": "https://..."}`. Validates scheme (http/https) and strips trailing slash. On value change, fans out `URL_UPDATED` to every confirmed peer. Returns `{ok, base, changed, peers_notified}`. |
+| GET | `/api/ha/integration/ice-servers` | Current operator-pushed STUN/TURN list. Returns `{"ice_servers": [...]}` (empty list when unset). |
+| PUT | `/api/ha/integration/ice-servers` | Upsert `{"ice_servers": [{"urls": [...], "username"?, "credential"?}]}`. Schemes restricted to `stun:`, `stuns:`, `turn:`, `turns:`. Persisted to `instance_config` (replayed on reboot) and pushed live to `FederationService` so future DataChannel handshakes pick up the new list. Returns `{ok, ice_servers, changed}`. |
 
 ## HFS — Storage, backup, misc
 
