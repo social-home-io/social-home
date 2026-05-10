@@ -55,10 +55,16 @@ async def test_set_visibility_then_is_visible_returns_value(repo):
 
 async def test_set_visibility_upserts_in_place(repo):
     await repo.set_visibility(
-        instance_id="peer-1", user_id="uid-lily", visible=False, set_by=None,
+        instance_id="peer-1",
+        user_id="uid-lily",
+        visible=False,
+        set_by=None,
     )
     await repo.set_visibility(
-        instance_id="peer-1", user_id="uid-lily", visible=True, set_by="uid-alice",
+        instance_id="peer-1",
+        user_id="uid-lily",
+        visible=True,
+        set_by="uid-alice",
     )
     assert await repo.is_visible("peer-1", "uid-lily") is True
     rows = await repo.list_for_peer("peer-1")
@@ -71,11 +77,17 @@ async def test_set_visibility_upserts_in_place(repo):
 
 async def test_hidden_user_ids_for_peer_returns_only_hidden(repo):
     await repo.set_visibility(
-        instance_id="peer-1", user_id="uid-lily", visible=False, set_by=None,
+        instance_id="peer-1",
+        user_id="uid-lily",
+        visible=False,
+        set_by=None,
     )
     # Explicit-allow row should NOT show up in the hidden set.
     await repo.set_visibility(
-        instance_id="peer-1", user_id="uid-alice", visible=True, set_by=None,
+        instance_id="peer-1",
+        user_id="uid-alice",
+        visible=True,
+        set_by=None,
     )
     hidden = await repo.hidden_user_ids_for_peer("peer-1")
     assert hidden == frozenset({"uid-lily"})
@@ -83,10 +95,16 @@ async def test_hidden_user_ids_for_peer_returns_only_hidden(repo):
 
 async def test_list_for_peer_returns_all_rows_for_that_peer(repo):
     await repo.set_visibility(
-        instance_id="peer-1", user_id="uid-lily", visible=False, set_by=None,
+        instance_id="peer-1",
+        user_id="uid-lily",
+        visible=False,
+        set_by=None,
     )
     await repo.set_visibility(
-        instance_id="peer-1", user_id="uid-alice", visible=True, set_by=None,
+        instance_id="peer-1",
+        user_id="uid-alice",
+        visible=True,
+        set_by=None,
     )
     rows = await repo.list_for_peer("peer-1")
     assert {r.user_id for r in rows} == {"uid-lily", "uid-alice"}
