@@ -171,12 +171,16 @@ def test_derive_session_keys_produces_32_bytes():
 # ── request_via error paths ────────────────────────────────────────
 
 
+_OWN_INBOX_BASE = "https://a.example/federation/inbox"
+
+
 async def test_request_via_rejects_unknown_peer(coord):
     with pytest.raises(ValueError, match="confirmed paired"):
         await coord.request_via(
             via_instance_id="no-such-peer",
             target_instance_id="target",
             target_display_name="T",
+            own_inbox_base_url=_OWN_INBOX_BASE,
         )
 
 
@@ -191,6 +195,7 @@ async def test_request_via_rejects_self_target(coord, fed_repo, identity):
             via_instance_id=b.id,
             target_instance_id=own_id,
             target_display_name="self",
+            own_inbox_base_url=_OWN_INBOX_BASE,
         )
 
 
@@ -206,6 +211,25 @@ async def test_request_via_rejects_already_paired(coord, fed_repo):
             via_instance_id=b.id,
             target_instance_id=c_existing.id,
             target_display_name="C",
+            own_inbox_base_url=_OWN_INBOX_BASE,
+        )
+
+
+async def test_request_via_rejects_missing_base_url(coord, fed_repo):
+    """Regression guard: empty ``own_inbox_base_url`` would mean A sends
+    an empty ``a_inbox_url``, which C would silently reject — the only
+    feedback being a stuck spinner. Surface it as a 422 instead."""
+    b_kp = generate_identity_keypair()
+    b = _make_peer_remote_instance(b_kp.public_key.hex())
+    fed_repo.instances[b.id] = b
+    c_kp = generate_identity_keypair()
+    c_id = derive_instance_id(c_kp.public_key)
+    with pytest.raises(ValueError, match="own_inbox_base_url"):
+        await coord.request_via(
+            via_instance_id=b.id,
+            target_instance_id=c_id,
+            target_display_name="C",
+            own_inbox_base_url="",
         )
 
 
@@ -219,6 +243,7 @@ async def test_request_via_happy_path_sends_intro(coord, fed_repo, fed_service):
         via_instance_id=b.id,
         target_instance_id=c_id,
         target_display_name="Chess Club",
+        own_inbox_base_url=_OWN_INBOX_BASE,
     )
     assert r["status"] == "sent"
     assert r["token"]
@@ -228,6 +253,13 @@ async def test_request_via_happy_path_sends_intro(coord, fed_repo, fed_service):
     assert kwargs["event_type"] == FederationEventType.PAIRING_INTRO_AUTO
     # Provisional row exists.
     assert fed_repo.instances[c_id].status is PairingStatus.PENDING_SENT
+    # The wire payload must carry a non-empty ``a_inbox_url`` — that's
+    # how C's ``on_intro_at_target`` validates the introduction. The
+    # silent-empty bug had bitten the harness before this regression
+    # guard landed.
+    payload = kwargs["payload"]
+    assert payload["a_inbox_url"].startswith(_OWN_INBOX_BASE)
+    assert payload["a_inbox_url"] != _OWN_INBOX_BASE  # has the per-peer suffix
 
 
 # ── on_intro_from_peer (B side) ────────────────────────────────────
@@ -424,7 +456,10 @@ async def test_on_intro_at_target_bad_vouch_sig(coord, fed_repo, inbox):
 
 async def test_finalize_pending_unknown_raises(coord):
     with pytest.raises(KeyError):
-        await coord.finalize_pending("nope")
+        await coord.finalize_pending(
+            "nope",
+            own_inbox_base_url=_OWN_INBOX_BASE,
+        )
 
 
 async def test_decline_pending_unknown_raises(coord):
@@ -521,7 +556,10 @@ async def test_full_auto_pair_handshake(
 
     # C admin approves.
     fed_service.send_event.reset_mock()
-    confirmed = await c_coord.finalize_pending(req.request_id)
+    confirmed = await c_coord.finalize_pending(
+        req.request_id,
+        own_inbox_base_url="https://c.example/federation/inbox",
+    )
     assert confirmed.status is PairingStatus.CONFIRMED
     # Ack sent to A.
     assert fed_service.send_event.await_count == 1
@@ -571,6 +609,7 @@ async def test_on_ack_target_mismatch(coord, fed_repo):
         via_instance_id=b.id,
         target_instance_id=c_id,
         target_display_name="",
+        own_inbox_base_url=_OWN_INBOX_BASE,
     )
     # Reply with a mismatched c_id → early return.
     await coord.on_ack_at_originator(

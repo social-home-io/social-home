@@ -88,6 +88,7 @@ class _PendingAutoSession:
     dh_pk_hex: str
     ts: str
     nonce: str
+    a_inbox_url: str
 
 
 def _vouch_blob(
@@ -200,6 +201,7 @@ class AutoPairCoordinator:
         via_instance_id: str,
         target_instance_id: str,
         target_display_name: str,
+        own_inbox_base_url: str,
     ) -> dict:
         via = await self._repo.get_instance(via_instance_id)
         if via is None or via.status is not PairingStatus.CONFIRMED:
@@ -208,6 +210,11 @@ class AutoPairCoordinator:
             )
         if target_instance_id == derive_instance_id(self._own_identity_pk):
             raise ValueError("cannot auto-pair with yourself")
+        if not own_inbox_base_url:
+            raise ValueError(
+                "own_inbox_base_url required — set [standalone].external_url"
+                " (or HA's external URL) before auto-pairing",
+            )
         existing = await self._repo.get_instance(target_instance_id)
         if existing is not None and existing.status is PairingStatus.CONFIRMED:
             raise ValueError("already paired with this instance")
@@ -217,11 +224,12 @@ class AutoPairCoordinator:
         nonce = secrets.token_hex(16)
         ts = datetime.now(timezone.utc).isoformat()
 
-        a_inbox_url = (
-            self._federation.own_inbox_url
-            if hasattr(self._federation, "own_inbox_url")
-            else ""
-        )
+        # A mints a per-peer inbox URL — the suffix becomes
+        # ``RemoteInstance.local_inbox_id`` for the C-side row, so the
+        # inbound pipeline can resolve C's later messages back to this
+        # pairing.
+        own_local_inbox_id = secrets.token_urlsafe(24)
+        a_inbox_url = f"{own_inbox_base_url.rstrip('/')}/{own_local_inbox_id}"
         self._pending[token] = _PendingAutoSession(
             token=token,
             target_instance_id=target_instance_id,
@@ -230,6 +238,7 @@ class AutoPairCoordinator:
             dh_pk_hex=dh_kp.public_key.hex(),
             ts=ts,
             nonce=nonce,
+            a_inbox_url=a_inbox_url,
         )
 
         provisional = RemoteInstance(
@@ -239,7 +248,7 @@ class AutoPairCoordinator:
             key_self_to_remote="",
             key_remote_to_self="",
             remote_inbox_url="",
-            local_inbox_id=secrets.token_urlsafe(24),
+            local_inbox_id=own_local_inbox_id,
             status=PairingStatus.PENDING_SENT,
             source=InstanceSource.MANUAL,
             relay_via=via_instance_id,
@@ -273,28 +282,41 @@ class AutoPairCoordinator:
         ts = str(p.get("ts") or "")
         nonce = str(p.get("nonce") or "")
         token = str(p.get("token") or "")
-        if not all([target_id, a_dh_pk_hex, ts, nonce, token]):
-            log.debug("PAIRING_INTRO_AUTO missing fields")
+        if not all([target_id, a_inbox_url, a_dh_pk_hex, ts, nonce, token]):
+            log.warning(
+                "auto-pair (vouch): missing fields target_id=%r a_inbox_url=%r"
+                " a_dh_pk=%r ts=%r nonce=%r token=%r",
+                target_id,
+                a_inbox_url,
+                a_dh_pk_hex,
+                ts,
+                nonce,
+                token,
+            )
             return
         try:
             t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             if (datetime.now(timezone.utc) - t).total_seconds() > INTRO_TTL_SECONDS:
-                log.debug("PAIRING_INTRO_AUTO stale ts=%s", ts)
+                log.warning("auto-pair (vouch): stale ts=%s", ts)
                 return
         except ValueError:
+            log.warning("auto-pair (vouch): invalid ts=%s", ts)
             return
         a = await self._repo.get_instance(event.from_instance)
         if a is None or a.status is not PairingStatus.CONFIRMED:
-            log.info(
-                "auto-pair: refusing vouch for unknown sender=%s",
+            log.warning(
+                "auto-pair (vouch): refusing — sender=%s status=%s",
                 event.from_instance,
+                getattr(a, "status", None),
             )
             return
         c = await self._repo.get_instance(target_id)
         if c is None or c.status is not PairingStatus.CONFIRMED:
-            log.info(
-                "auto-pair: cannot vouch — target %s is not a paired peer",
+            log.warning(
+                "auto-pair (vouch): refusing — target=%s status=%s (must be a"
+                " confirmed paired peer of B)",
                 target_id,
+                getattr(c, "status", None),
             )
             return
 
@@ -363,7 +385,19 @@ class AutoPairCoordinator:
                 token,
             ]
         ):
-            log.debug("PAIRING_INTRO_AUTO target: missing fields")
+            log.warning(
+                "auto-pair (target): missing fields a_id=%r a_pk=%r a_inbox=%r"
+                " a_dh=%r via_b=%r vouch_sig=%r ts=%r nonce=%r token=%r",
+                a_id,
+                a_pk_hex,
+                a_inbox_url,
+                a_dh_pk_hex,
+                via_b_id,
+                vouch_sig_hex,
+                ts,
+                nonce,
+                token,
+            )
             return
 
         b = await self._repo.get_instance(via_b_id)
@@ -428,11 +462,28 @@ class AutoPairCoordinator:
             )
         )
 
-    async def finalize_pending(self, request_id: str) -> RemoteInstance:
-        """C's admin clicked approve — finish the pair instantly."""
+    async def finalize_pending(
+        self,
+        request_id: str,
+        *,
+        own_inbox_base_url: str,
+    ) -> RemoteInstance:
+        """C's admin clicked approve — finish the pair instantly.
+
+        ``own_inbox_base_url`` is the federation-inbox base for *this*
+        instance (e.g. ``https://c.example/federation/inbox``). C mints
+        a per-A inbox URL on top of it — the suffix becomes
+        :attr:`RemoteInstance.local_inbox_id` so A's later messages
+        route back to this pairing.
+        """
         req = self._inbox.pop(request_id)
         if req is None:
             raise KeyError(f"no pending auto-pair request {request_id!r}")
+        if not own_inbox_base_url:
+            raise ValueError(
+                "own_inbox_base_url required — set [standalone].external_url"
+                " (or HA's external URL) before approving auto-pair requests",
+            )
 
         dh_kp = generate_x25519_keypair()
         k_self_to_remote, k_remote_to_self = _derive_session_keys(
@@ -471,11 +522,7 @@ class AutoPairCoordinator:
                 nonce=req.nonce,
             ),
         )
-        c_inbox_url = (
-            self._federation.own_inbox_url
-            if hasattr(self._federation, "own_inbox_url")
-            else ""
-        )
+        c_inbox_url = f"{own_inbox_base_url.rstrip('/')}/{inbox_id}"
         ack_payload = {
             "a_id": req.from_a_id,
             "c_id": c_id,
@@ -545,11 +592,7 @@ class AutoPairCoordinator:
             log.warning("auto-pair ack: via mismatch")
             return
         a_id = derive_instance_id(self._own_identity_pk)
-        a_inbox_url = (
-            self._federation.own_inbox_url
-            if hasattr(self._federation, "own_inbox_url")
-            else ""
-        )
+        a_inbox_url = session.a_inbox_url
         b = await self._repo.get_instance(via_b_id)
         if b is None:
             log.warning("auto-pair ack: via-peer %s unknown", via_b_id)

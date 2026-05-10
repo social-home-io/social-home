@@ -1289,13 +1289,118 @@ async def test_rsvp_publishes_federation_event(space_cal_env):
         event_id=event.id,
         user_id="uid-alice",
     )
-    assert len(fed.calls) == 2
-    assert fed.calls[0][0] == "sp-cal"
-    assert fed.calls[0][1].value == "space_rsvp_updated"
-    assert fed.calls[0][2]["status"] == RSVPStatus.GOING
-    assert fed.calls[0][2]["occurrence_at"] == now.isoformat()
-    assert fed.calls[1][1].value == "space_rsvp_deleted"
-    assert "status" not in fed.calls[1][2]
+    rsvp_calls = [c for c in fed.calls if c[1].value.startswith("space_rsvp")]
+    assert len(rsvp_calls) == 2
+    assert rsvp_calls[0][0] == "sp-cal"
+    assert rsvp_calls[0][1].value == "space_rsvp_updated"
+    assert rsvp_calls[0][2]["status"] == RSVPStatus.GOING
+    assert rsvp_calls[0][2]["occurrence_at"] == now.isoformat()
+    assert rsvp_calls[1][1].value == "space_rsvp_deleted"
+    assert "status" not in rsvp_calls[1][2]
+
+
+async def test_create_event_publishes_federation_event(space_cal_env):
+    """create_event broadcasts SPACE_CALENDAR_EVENT_CREATED with full payload.
+
+    Regression guard for the outbound-publisher gap that left calendar
+    events stuck on the host instance — Beta would create the event but
+    Alpha / Carol's RSVP attempts would 404 because the event row never
+    federated.
+    """
+    env = space_cal_env
+
+    class _FakeFed:
+        def __init__(self):
+            self.calls: list[tuple] = []
+
+        async def broadcast_to_space_members(self, space_id, event_type, payload):
+            self.calls.append((space_id, event_type, payload))
+
+    fed = _FakeFed()
+    env.space_cal_svc.attach_federation(fed)
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Anniversary",
+        description="our 5th",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=2)).isoformat(),
+        created_by="uid-alice",
+        cover_url="https://cdn.example/cover.jpg",
+    )
+    created_calls = [
+        c for c in fed.calls if c[1].value == "space_calendar_event_created"
+    ]
+    assert len(created_calls) == 1
+    space_id, evt_type, payload = created_calls[0]
+    assert space_id == "sp-cal"
+    assert payload["event_id"] == event.id
+    assert payload["calendar_id"] == "sp-cal"
+    assert payload["summary"] == "Anniversary"
+    assert payload["description"] == "our 5th"
+    assert payload["start"] == now.isoformat()
+    assert payload["end"] == (now + timedelta(hours=2)).isoformat()
+    assert payload["created_by"] == "uid-alice"
+    assert payload["cover_url"] == "https://cdn.example/cover.jpg"
+
+
+async def test_update_event_publishes_federation_event(space_cal_env):
+    """update_event broadcasts SPACE_CALENDAR_EVENT_UPDATED."""
+    env = space_cal_env
+
+    class _FakeFed:
+        def __init__(self):
+            self.calls: list[tuple] = []
+
+        async def broadcast_to_space_members(self, space_id, event_type, payload):
+            self.calls.append((space_id, event_type, payload))
+
+    fed = _FakeFed()
+    env.space_cal_svc.attach_federation(fed)
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Old",
+        start=now.isoformat(),
+        end=now.isoformat(),
+        created_by="uid-alice",
+    )
+    await env.space_cal_svc.update_event(event.id, summary="New summary")
+    updated_calls = [
+        c for c in fed.calls if c[1].value == "space_calendar_event_updated"
+    ]
+    assert len(updated_calls) == 1
+    assert updated_calls[0][2]["summary"] == "New summary"
+
+
+async def test_delete_event_publishes_federation_event(space_cal_env):
+    """delete_event broadcasts SPACE_CALENDAR_EVENT_DELETED."""
+    env = space_cal_env
+
+    class _FakeFed:
+        def __init__(self):
+            self.calls: list[tuple] = []
+
+        async def broadcast_to_space_members(self, space_id, event_type, payload):
+            self.calls.append((space_id, event_type, payload))
+
+    fed = _FakeFed()
+    env.space_cal_svc.attach_federation(fed)
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Bye",
+        start=now.isoformat(),
+        end=now.isoformat(),
+        created_by="uid-alice",
+    )
+    await env.space_cal_svc.delete_event(event.id)
+    deleted_calls = [
+        c for c in fed.calls if c[1].value == "space_calendar_event_deleted"
+    ]
+    assert len(deleted_calls) == 1
+    assert deleted_calls[0][0] == "sp-cal"
+    assert deleted_calls[0][2]["event_id"] == event.id
 
 
 async def test_create_event_empty_summary(env):
