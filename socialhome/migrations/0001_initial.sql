@@ -626,8 +626,13 @@ CREATE TABLE IF NOT EXISTS space_covers (
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- §D1b cross-household private spaces — peer-side instance index. No
+-- FK on ``space_id``: peer households mirror a space without a local
+-- ``spaces`` row, so a FK rejects the inbound INSERT. Cascade-delete-
+-- on-space-removal becomes the responsibility of the delete-space
+-- code path, which already prunes related rows explicitly.
 CREATE TABLE IF NOT EXISTS space_instances (
-    space_id      TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    space_id      TEXT NOT NULL,
     instance_id   TEXT NOT NULL,
     joined_at     TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -660,9 +665,15 @@ CREATE TABLE IF NOT EXISTS space_instance_bans (
     PRIMARY KEY (space_id, instance_id)
 );
 
+-- §D1b cross-household invites — no FK on ``space_id``. The same
+-- table holds rows on *both* sides of a cross-household invitation:
+-- the host side has a local ``spaces`` row, the invitee side does
+-- not. A FK to ``spaces.id`` would reject the inbound INSERT and
+-- ``GET /api/remote_invites`` would always be empty. Cascade-delete-
+-- on-space-removal is the delete-space code path's responsibility.
 CREATE TABLE IF NOT EXISTS space_invitations (
     id                      TEXT PRIMARY KEY,
-    space_id                TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    space_id                TEXT NOT NULL,
     invited_user_id         TEXT NOT NULL,
     invited_by              TEXT NOT NULL,
     -- §D1b — cross-household invites for type=private spaces. Both
@@ -1279,9 +1290,14 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- §D1b cross-household private spaces — calendar events. No FK on
+-- ``space_id``: peer households mirror the space without a local
+-- ``spaces`` row, so a FK rejects ``SPACE_CALENDAR_EVENT_CREATED``
+-- inbound and downstream RSVPs 404. Cascade-delete is the delete-
+-- event code path's responsibility, which already prunes children.
 CREATE TABLE IF NOT EXISTS space_calendar_events (
     id                     TEXT PRIMARY KEY,
-    space_id               TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+    space_id               TEXT NOT NULL,
     summary                TEXT NOT NULL,
     description            TEXT,
     start_dt               TEXT NOT NULL,
@@ -1307,8 +1323,11 @@ CREATE TABLE IF NOT EXISTS space_calendar_events (
 CREATE INDEX IF NOT EXISTS idx_space_calendar_events_space
     ON space_calendar_events(space_id, start_dt);
 
+-- No FK to ``space_calendar_events`` — same cross-household reason
+-- as the parent table: peer-side rows would be rejected. Cascade-
+-- delete is the delete-event code path's responsibility.
 CREATE TABLE IF NOT EXISTS space_calendar_rsvps (
-    event_id      TEXT NOT NULL REFERENCES space_calendar_events(id) ON DELETE CASCADE,
+    event_id      TEXT NOT NULL,
     user_id       TEXT NOT NULL,
     -- Per-occurrence RSVP key. For non-recurring events this equals
     -- ``event.start``. For recurring events (rrule != NULL) this is
@@ -1354,7 +1373,7 @@ CREATE INDEX IF NOT EXISTS idx_calendar_event_rsvps_user
 -- is set after delivery so retries are easy to detect; the partial
 -- index covers the hot-path scan (un-sent + future).
 CREATE TABLE IF NOT EXISTS space_calendar_rsvp_reminders (
-    event_id        TEXT NOT NULL REFERENCES space_calendar_events(id) ON DELETE CASCADE,
+    event_id        TEXT NOT NULL,
     user_id         TEXT NOT NULL,
     occurrence_at   TEXT NOT NULL,
     minutes_before  INTEGER NOT NULL CHECK(minutes_before >= 0),
