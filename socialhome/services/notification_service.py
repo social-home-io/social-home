@@ -380,6 +380,16 @@ class NotificationService:
         title = f"{event.sender_display_name} messaged you"
         link = f"/dms/{event.conversation_id}"
         for recipient_id in event.recipient_user_ids:
+            # Notifications.user_id FK's into ``users`` (local accounts
+            # only). Remote recipients' rows live in ``remote_users``;
+            # they get notified on their *own* household via the
+            # inbound DM federation handler. Skipping them here keeps
+            # the sender-side ``DmMessageCreated`` handler from blowing
+            # up with a FOREIGN KEY constraint failure for every
+            # cross-household DM.
+            local = await self._users.get_by_user_id(recipient_id)
+            if local is None:
+                continue
             await self._save_notif(
                 new_notification(
                     user_id=recipient_id,

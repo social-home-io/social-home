@@ -1147,6 +1147,7 @@ def create_app(config: Config | None = None) -> web.Application:
         bus=bus,
         post_repo=space_post_repo,
         calendar_repo=space_cal_repo,
+        space_repo=space_repo,
     )
     calendar_feed_bridge.wire()
 
@@ -1531,6 +1532,15 @@ def create_app(config: Config | None = None) -> web.Application:
         # Stamp Momentum rows with the local instance_id so the 3-hop
         # relay can guard against echo loops (origin_instance_id check).
         moment_service.attach_instance_id(real_instance_id)
+
+        # Wire the GFS publish context so global-space metadata + an
+        # Ed25519 signature ride the publish call (otherwise the GFS
+        # only sees ``{space_id}`` and lands a pending row).
+        gfs_connection_service.attach_publish_context(
+            space_repo=repos.space,
+            own_instance_id=real_instance_id,
+            own_signing_key=identity_seed,
+        )
 
         # Short-lived signed URLs for browser-loaded media — see §23.21
         # ``media_signer.py``. The HMAC key is HKDF-derived from the

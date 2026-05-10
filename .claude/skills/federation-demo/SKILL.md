@@ -119,6 +119,13 @@ That single command runs the full sequence:
      pending or joined depending on whether the invitation flow has
      auto-accepted by the time the assertion runs).
    - Every backend process is still alive (no WebRTC native crash).
+   - **Log audit**: every backend's ``log.txt`` is scanned for
+     ``Traceback`` / ``ERROR:`` / ``WARNING:`` / ``Exception:``
+     lines. Anything that doesn't match the benign-noise allow-list
+     (``_LOG_BENIGN`` in the harness — STUN / outbox-retry /
+     libdatachannel info chatter that's expected on loopback) is a
+     verify failure. New unexpected logs surface in the next run as
+     "log audit — …" so they get either fixed or explicitly excused.
 
 5. The harness exits non-zero if any assertion fails or any process
    crashed during the run.
@@ -144,6 +151,7 @@ runs end-to-end against a real GFS process.
 python .claude/skills/federation-demo/harness.py up
 python .claude/skills/federation-demo/harness.py gfs-up
 python .claude/skills/federation-demo/harness.py gfs-pair
+python .claude/skills/federation-demo/harness.py gfs-traffic
 python .claude/skills/federation-demo/harness.py gfs-down
 ```
 
@@ -175,24 +183,35 @@ running GFS:
    ``status="active"`` (auto-accept is on by default for fresh
    deployments).
 
-### Global space + cross-household post / bazaar / public moment (TODO)
+### ``gfs-traffic`` — global-space publish round-trip
 
-The harness has not yet been wired through the global-space path.
-The endpoints involved:
+Validates the **publish** wire end-to-end: Alpha creates a
+``space_type=global`` space, ``SpaceService._auto_publish_on_type``
+fires, ``GfsConnectionService.publish_space`` builds a metadata
+payload, signs it with Alpha's identity key, and POSTs to
+``/gfs/spaces/{space_id}/publish``. The GFS verifies the
+signature against the registered ``ClientInstance.public_key``,
+upserts a ``GlobalSpace`` row at ``status='active'``, and the
+harness then asserts the space appears on ``GET /gfs/spaces``
+with the right name + owning instance.
 
-- ``POST /api/spaces`` (Alpha) with ``space_type=global``.
-- ``POST /api/spaces/{space_id}/publish/{gfs_id}`` to publish to GFS.
-- ``GET /gfs/spaces`` on the GFS side to list discoverable spaces.
-- ``POST /api/spaces/join`` on the joining instance with the GFS-
-  issued invite token.
-- ``POST /api/feed/posts`` against a global space federates as
-  ``SPACE_POST_CREATED`` via the GFS WebSocket relay.
+Prerequisites: ``up`` + ``gfs-up`` + ``gfs-pair`` (Alpha must be
+a paired client of the GFS so the registration sig verifies).
+
+### Cross-household post / bazaar / public moment over GFS (TODO)
+
+Still to wire end-to-end:
+
+- A discovery-side mirror (subscriber fetches ``/gfs/spaces/{id}``
+  for full metadata, creates a stub ``spaces`` row) so
+  ``subscribe_to_space`` accepts the join.
+- ``POST /api/feed/posts`` against a global space federating as
+  ``SPACE_POST_CREATED`` via the GFS WebSocket relay (the
+  ``publish_event`` path already exists; just needs a subscriber
+  on the receiving side).
 - ``POST /api/bazaar/listings`` for the Bazaar test path.
-- ``POST /api/moments`` with ``is_public=true`` for the public-moment
-  / GFS-following test path.
-
-A future ``gfs-traffic`` subcommand should exercise these together;
-the pair handshake (above) is the prerequisite that's now in place.
+- ``POST /api/moments`` with ``is_public=true`` for the public-
+  moment / GFS-following test path.
 
 ## Troubleshooting
 

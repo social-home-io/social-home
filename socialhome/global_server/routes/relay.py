@@ -143,6 +143,91 @@ class SpacesListView(GfsBaseView):
         )
 
 
+class SpaceDetailView(GfsBaseView):
+    """``GET /gfs/spaces/{space_id}`` — single space metadata.
+
+    SH clients hit this after picking a row from
+    :class:`SpacesListView` so they can mirror name / description /
+    cover onto a local ``spaces`` stub before subscribing — without
+    that mirror, the SH-side ``subscribe_to_space`` route would refuse
+    the join (no local row to attach a member to).
+    """
+
+    async def get(self) -> web.Response:
+        svc = self.svc(K.gfs_federation_key)
+        space_id = self.request.match_info["space_id"]
+        space = await svc.get_space(space_id)
+        if space is None or space.status != "active":
+            raise web.HTTPNotFound(reason="Space not found or not published")
+        return web.json_response(asdict(space))
+
+
+class SpacePublishView(GfsBaseView):
+    """``POST /gfs/spaces/{space_id}/publish`` — owning HFS pushes
+    space metadata so this GFS can list it on ``/gfs/spaces``.
+
+    Body: ``{owning_instance, name, description?, about_markdown?,
+    cover_url?, min_age?, target_audience?, accent_color?, signature}``.
+    The Ed25519 signature is verified against the registered
+    ``ClientInstance.public_key`` (so a paired-but-malicious peer
+    can't masquerade as another household's space owner).
+    """
+
+    async def post(self) -> web.Response:
+        svc = self.svc(K.gfs_federation_key)
+        space_id = self.request.match_info["space_id"]
+        body = await self.body_or_400()
+        try:
+            owning_instance = body["owning_instance"]
+            name = body["name"]
+        except KeyError as exc:
+            raise web.HTTPBadRequest(reason=f"Missing field: {exc}") from exc
+        try:
+            space = await svc.publish_space(
+                space_id=space_id,
+                owning_instance=str(owning_instance),
+                name=str(name),
+                description=body.get("description"),
+                about_markdown=body.get("about_markdown"),
+                cover_url=body.get("cover_url"),
+                min_age=int(body.get("min_age") or 0),
+                target_audience=str(body.get("target_audience") or "all"),
+                accent_color=str(body.get("accent_color") or "#D2542A"),
+                signature=str(body.get("signature") or ""),
+            )
+        except PermissionError as exc:
+            return web.json_response(
+                {"error": str(exc)},
+                status=403,
+            )
+        return web.json_response(
+            {"status": space.status, "space_id": space.space_id},
+        )
+
+
+class SpaceUnpublishView(GfsBaseView):
+    """``DELETE /gfs/spaces/{space_id}/unpublish`` — owning HFS removes
+    its global-space listing.
+
+    The implementation just flips the status to ``banned`` (so it
+    disappears from the public list) rather than deleting the row;
+    keeps the GFS admin's audit trail intact and lets re-publishes
+    pick up the same id.
+    """
+
+    async def post(self) -> web.Response:
+        return await self._handle()
+
+    async def delete(self) -> web.Response:
+        return await self._handle()
+
+    async def _handle(self) -> web.Response:
+        svc = self.svc(K.gfs_federation_key)
+        space_id = self.request.match_info["space_id"]
+        await svc.hide_space(space_id)
+        return web.json_response({"status": "unpublished"})
+
+
 class HealthzView(GfsBaseView):
     """``GET /healthz`` — liveness probe."""
 

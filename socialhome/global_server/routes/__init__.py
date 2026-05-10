@@ -58,7 +58,10 @@ from .relay import (
     PublishView,
     RegisterView,
     ReportView,
+    SpaceDetailView,
+    SpacePublishView,
     SpacesListView,
+    SpaceUnpublishView,
     SubscribeView,
 )
 from .rtc import (
@@ -135,6 +138,9 @@ def register_routes(
     app.router.add_view("/gfs/report", ReportView)
     app.router.add_view("/gfs/appeal", AppealView)
     app.router.add_view("/gfs/spaces", SpacesListView)
+    app.router.add_view("/gfs/spaces/{space_id}", SpaceDetailView)
+    app.router.add_view("/gfs/spaces/{space_id}/publish", SpacePublishView)
+    app.router.add_view("/gfs/spaces/{space_id}/unpublish", SpaceUnpublishView)
     app.router.add_view("/healthz", HealthzView)
 
     # Public SSR pages (spec §24.7 / §24.8) — staying procedural since

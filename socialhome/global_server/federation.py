@@ -173,6 +173,122 @@ class GfsFederationService:
         """
         return await self._repo.list_spaces(status=status)
 
+    async def get_space(self, space_id: str) -> GlobalSpace | None:
+        """Single-space lookup — used by ``GET /gfs/spaces/{id}`` so SH
+        clients fetching the metadata for a discovery-link can mirror
+        the space row locally before subscribing."""
+        return await self._repo.get_space(space_id)
+
+    async def hide_space(self, space_id: str) -> None:
+        """Mark a space as ``banned`` so it drops off ``GET /gfs/spaces``.
+
+        Used by ``DELETE /gfs/spaces/{id}/unpublish`` when the owning
+        HFS retracts the listing. We keep the row so the GFS admin's
+        audit trail survives; a later ``publish_space`` call from the
+        owner will flip the status back.
+        """
+        existing = await self._repo.get_space(space_id)
+        if existing is None:
+            return
+        await self._repo.upsert_space(
+            GlobalSpace(
+                space_id=existing.space_id,
+                owning_instance=existing.owning_instance,
+                name=existing.name,
+                description=existing.description,
+                about_markdown=existing.about_markdown,
+                cover_url=existing.cover_url,
+                min_age=existing.min_age,
+                target_audience=existing.target_audience,
+                accent_color=existing.accent_color,
+                status="banned",
+                subscriber_count=existing.subscriber_count,
+                posts_per_week=existing.posts_per_week,
+                published_at=existing.published_at,
+            )
+        )
+
+    async def publish_space(
+        self,
+        *,
+        space_id: str,
+        owning_instance: str,
+        name: str,
+        description: str | None = None,
+        about_markdown: str | None = None,
+        cover_url: str | None = None,
+        min_age: int = 0,
+        target_audience: str = "all",
+        accent_color: str = "#D2542A",
+        signature: str = "",
+    ) -> GlobalSpace:
+        """Register / refresh a space row from the owning instance.
+
+        Drives the ``POST /gfs/spaces/{id}/publish`` route. The publish
+        body is signed by the owning HFS so a malicious peer can't
+        flip another household's space metadata; signature is verified
+        against the registered ``ClientInstance.public_key``.
+        Auto-accepted clients land as ``status='active'`` (visible on
+        ``GET /gfs/spaces``); pending clients stay pending until the
+        GFS admin flips them.
+        """
+        inst = await self._repo.get_instance(owning_instance)
+        if inst is None:
+            raise PermissionError(
+                f"Unknown owning_instance: {owning_instance}",
+            )
+        if signature:
+            canonical = json.dumps(
+                {
+                    "space_id": space_id,
+                    "owning_instance": owning_instance,
+                    "name": name,
+                    "description": description or "",
+                    "about_markdown": about_markdown or "",
+                    "cover_url": cover_url or "",
+                    "min_age": min_age,
+                    "target_audience": target_audience,
+                    "accent_color": accent_color,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            raw_key = bytes.fromhex(inst.public_key)
+            raw_sig = b64url_decode(signature)
+            if not verify_ed25519(raw_key, canonical, raw_sig):
+                raise PermissionError("Invalid Ed25519 signature")
+        existing = await self._repo.get_space(space_id)
+        # Preserve subscriber_count / posts_per_week / published_at from
+        # the existing row — those are GFS-side bookkeeping, not the
+        # owner's to declare. Only the owner's name / description /
+        # cover travel with the publish.
+        next_status = "active" if inst.auto_accept else "pending"
+        if existing is not None and existing.status == "banned":
+            next_status = "banned"
+        space = GlobalSpace(
+            space_id=space_id,
+            owning_instance=owning_instance,
+            name=name,
+            description=description,
+            about_markdown=about_markdown,
+            cover_url=cover_url,
+            min_age=min_age,
+            target_audience=target_audience,
+            accent_color=accent_color,
+            status=next_status,
+            subscriber_count=existing.subscriber_count if existing else 0,
+            posts_per_week=existing.posts_per_week if existing else 0.0,
+            published_at=existing.published_at if existing else "",
+        )
+        await self._repo.upsert_space(space)
+        log.info(
+            "GFS: published space %s (owner=%s, status=%s)",
+            space_id,
+            owning_instance,
+            next_status,
+        )
+        return space
+
     # ── Fan-out ──────────────────────────────────────────────────────────
 
     async def _fan_out(
