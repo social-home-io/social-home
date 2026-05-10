@@ -67,6 +67,7 @@ from .infrastructure.task_recurrence_scheduler import TaskRecurrenceScheduler
 from .infrastructure.post_draft_scheduler import PostDraftCleanupScheduler
 from .infrastructure.gfs_ws_supervisor import GfsWebSocketSupervisor
 from .infrastructure.dm_gc_scheduler import DmGcScheduler
+from .infrastructure.dm_relay_seen_scheduler import DmRelaySeenPruneScheduler
 from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionScheduler
 from .infrastructure.password_reset_cleanup_scheduler import (
     PasswordResetCleanupScheduler,
@@ -1400,6 +1401,7 @@ def create_app(config: Config | None = None) -> web.Application:
     stale_call_scheduler: StaleCallCleanupScheduler | None = None
     gfs_ws_supervisor: GfsWebSocketSupervisor | None = None
     replay_cache_scheduler: ReplayCachePruneScheduler | None = None
+    dm_relay_seen_scheduler: DmRelaySeenPruneScheduler | None = None
     password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
     dm_gc_scheduler: DmGcScheduler | None = None
@@ -1838,6 +1840,14 @@ def create_app(config: Config | None = None) -> web.Application:
         replay_cache_scheduler = ReplayCachePruneScheduler(federation_repo)
         await replay_cache_scheduler.start()
 
+        # DM-relay-seen pruner (§12.5.3) — same shape as the replay-cache
+        # pruner, but for the DM_RELAY dedup ring. Without this the
+        # ``dm_relay_seen`` table grows unbounded for the lifetime of
+        # the instance.
+        nonlocal dm_relay_seen_scheduler
+        dm_relay_seen_scheduler = DmRelaySeenPruneScheduler(dm_routing_service)
+        await dm_relay_seen_scheduler.start()
+
         # Password-reset cleanup — drops expired admin-issued reset
         # tokens so the table doesn't accumulate one row per reset
         # forever (1h TTL, runs hourly).
@@ -1949,6 +1959,8 @@ def create_app(config: Config | None = None) -> web.Application:
         await highlight_signaling_handler.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
+        if dm_relay_seen_scheduler is not None:
+            await dm_relay_seen_scheduler.stop()
         if password_reset_cleanup_scheduler is not None:
             await password_reset_cleanup_scheduler.stop()
         await online_status_service.stop()

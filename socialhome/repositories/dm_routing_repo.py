@@ -279,14 +279,23 @@ class SqliteDmRoutingRepo:
         return row is not None
 
     async def prune_seen(self, *, cutoff_iso: str) -> int:
+        # ``mark_seen`` writes the column DEFAULT (``datetime('now')``,
+        # space-separator, no TZ). The scheduler hands us an ISO-with-``T``
+        # cutoff. A bare lexical compare would treat
+        # ``'2026-05-10 16:30:00'`` as *less than*
+        # ``'2026-05-10T15:30:00+00:00'`` (space 0x20 < 'T' 0x54) and
+        # prune fresh rows. Wrapping both sides in ``datetime(...)``
+        # normalises them — same trick ``outbox_repo`` uses.
         row = await self._db.fetchone(
-            "SELECT COUNT(*) AS n FROM dm_relay_seen WHERE seen_at < ?",
+            "SELECT COUNT(*) AS n FROM dm_relay_seen "
+            "WHERE datetime(seen_at) < datetime(?)",
             (cutoff_iso,),
         )
         n = int(row["n"]) if row else 0
         if n:
             await self._db.enqueue(
-                "DELETE FROM dm_relay_seen WHERE seen_at < ?",
+                "DELETE FROM dm_relay_seen "
+                "WHERE datetime(seen_at) < datetime(?)",
                 (cutoff_iso,),
             )
         return n
