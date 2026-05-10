@@ -715,3 +715,56 @@ async def test_save_event_origin_defaults_to_local(env):
     assert fetched.origin == "local"
     assert fetched.remote_event_id is None
     assert fetched.remote_instance_id is None
+
+
+# ── §Audit #3 — feed tokens stored as SHA-256 hash ───────────────────────
+
+
+async def test_feed_token_persisted_as_hash_not_plaintext(env):
+    """The raw token returned to the user MUST NOT appear in storage —
+    only its SHA-256 hash. Lookup hashes the inbound query string token
+    before matching, so the round-trip works without leaking the secret."""
+    from socialhome.auth import sha256_token_hash
+
+    sid = await _seed_space(env, "sp-feed")
+    raw_token = "user-visible-token-12345"
+
+    await env.space_cal_repo.upsert_feed_token(
+        user_id="uid-alice",
+        space_id=sid,
+        token=raw_token,
+    )
+
+    # Direct DB read — the column should hold the hash, not the raw token.
+    row = await env.db.fetchone(
+        "SELECT token_hash FROM space_calendar_feed_tokens WHERE user_id=? AND space_id=?",
+        ("uid-alice", sid),
+    )
+    stored = row["token_hash"] if row else None
+    assert stored == sha256_token_hash(raw_token)
+    assert stored != raw_token
+
+    # And lookup with the raw token still resolves the row.
+    resolved = await env.space_cal_repo.get_user_for_feed_token(raw_token)
+    assert resolved == ("uid-alice", sid)
+
+    # A bogus token does not resolve.
+    bogus = await env.space_cal_repo.get_user_for_feed_token("not-a-token")
+    assert bogus is None
+
+
+async def test_feed_token_revoked_lookup_returns_none(env):
+    """Once revoked, the token no longer resolves even if the raw value
+    was reused (the route returns 401)."""
+    sid = await _seed_space(env, "sp-feed-rev")
+    raw = "another-token"
+    await env.space_cal_repo.upsert_feed_token(
+        user_id="uid-alice",
+        space_id=sid,
+        token=raw,
+    )
+    await env.space_cal_repo.revoke_feed_token(
+        user_id="uid-alice",
+        space_id=sid,
+    )
+    assert await env.space_cal_repo.get_user_for_feed_token(raw) is None

@@ -159,7 +159,16 @@ class BaseView(web.View):
         except SpaceZoneNameConflictError as exc:
             return error_response(409, "ZONE_NAME_TAKEN", str(exc))
         except KeyError as exc:
-            return error_response(404, "NOT_FOUND", str(exc).strip("'\""))
+            # §Audit #7 / #15: never echo the raw KeyError text — the
+            # missing dict-key name leaks payload structure / internal
+            # IDs to a client probing a 404 surface. Fixed string only;
+            # the underlying detail is logged for triage.
+            log.warning(
+                "%s: KeyError surfaced from handler: %s",
+                type(self).__name__,
+                exc,
+            )
+            return error_response(404, "NOT_FOUND", "Resource not found.")
         except PublicSpaceLimitError as exc:
             return error_response(409, "SPACE_LIMIT", str(exc))
         except ModerationAlreadyDecidedError as exc:
@@ -200,7 +209,20 @@ class BaseView(web.View):
         except (ChildProtectionError, BazaarServiceError) as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
         except ValueError as exc:
-            return error_response(422, "UNPROCESSABLE", str(exc))
+            # §Audit #7: ``str(exc)`` on a ValueError can carry
+            # implementation detail (e.g. "Replay detected: msg_id=…"
+            # bubbled up from a service layer). Log full context;
+            # surface only a generic validation message.
+            log.warning(
+                "%s: ValueError surfaced from handler: %s",
+                type(self).__name__,
+                exc,
+            )
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "Request could not be processed.",
+            )
         except Exception:
             log.exception("Unhandled error in %s", type(self).__name__)
             return error_response(500, "INTERNAL_ERROR")

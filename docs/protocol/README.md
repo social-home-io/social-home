@@ -70,6 +70,14 @@ Each step is an independently-testable async callable composed via
 steps are appended to the chain — `handle_inbound_envelope` is not
 edited. The same chain runs for RTC-delivered envelopes.
 
+The signature step **also binds `from_instance` to the verified signing
+identity**: an envelope whose `from_instance` claim does not match the
+instance whose public key passed verification is rejected with
+`Invalid envelope signature`. Without this binding, peer A holding a
+valid signing key could spoof messages from peer B and downstream the
+ban check, replay cache, and event dispatch would consume the
+unauthenticated claim.
+
 ## Transports
 
 | Transport | When it's used |

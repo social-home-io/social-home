@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from ..domain.events import DomainEvent
-from ..domain.space import SpacePermissionError
+from ..domain.space import SpacePermissionError, SpaceRole
 from ..domain.space_bot import (
     MAX_BOT_ICON_LEN,
     MAX_BOT_NAME_LEN,
@@ -290,7 +290,7 @@ class SpaceBotService:
         if actor is None:
             raise KeyError(f"user {username!r} not found")
         member = await self._spaces.get_member(space_id, actor.user_id)
-        if member is None or member.role not in ("owner", "admin"):
+        if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
             raise SpacePermissionError(
                 "owner/admin required to manage space-scope bots"
             )
@@ -303,7 +303,7 @@ class SpaceBotService:
         member = await self._spaces.get_member(bot.space_id, actor.user_id)
         if member is None:
             raise SpacePermissionError("not a member of this space")
-        if member.role in ("owner", "admin"):
+        if member.role in (SpaceRole.OWNER, SpaceRole.ADMIN):
             return
         # Non-admins can only manage their own member-scope bots.
         if bot.scope is BotScope.MEMBER and bot.created_by == actor.user_id:

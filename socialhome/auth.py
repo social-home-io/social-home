@@ -234,11 +234,13 @@ class HaIngressStrategy:
     """Authenticate via HA's Ingress headers (``X-Ingress-User`` + token).
 
     The Supervisor sets ``X-Ingress-User`` to the HA username and
-    ``X-Ingress-Token`` to a per-session token. The integration is
-    expected to validate ``X-Ingress-Token`` against the supervisor API
-    — we keep it simple and trust the username field when a non-empty
-    token is present. A production deployment can strengthen this by
-    plumbing through the supervisor validation callback.
+    ``X-Ingress-Token`` to a per-session token. The strategy is
+    fail-closed: a ``validate_token`` callback that actually checks the
+    token against the Supervisor API is REQUIRED. Wiring this without
+    one would let any client smuggle ``X-Ingress-User`` past a
+    misconfigured proxy and be authenticated as that user — which is
+    exactly the audit-flagged hole. Construction raises ``ValueError``
+    when the callback is missing so a dev mistake fails loudly.
     """
 
     __slots__ = ("_user_repo", "_validate_token")
@@ -247,25 +249,24 @@ class HaIngressStrategy:
         self,
         user_repo,
         *,
-        validate_token: Callable[[str], Awaitable[bool]] | None = None,
+        validate_token: Callable[[str], Awaitable[bool]],
     ) -> None:
+        if validate_token is None:
+            raise ValueError(
+                "HaIngressStrategy requires a validate_token callback —"
+                " trusting X-Ingress-User without verification is a"
+                " misconfiguration risk (Audit #6)."
+            )
         self._user_repo = user_repo
         self._validate_token = validate_token
-        if validate_token is None:
-            log.warning(
-                "HaIngressStrategy: token validation is disabled — "
-                "X-Ingress-User header is trusted without verification. "
-                "This is only safe behind the HA Supervisor ingress proxy."
-            )
 
     async def authenticate(self, request: "web.Request") -> AuthContext | None:
         username = request.headers.get("X-Ingress-User")
         token = request.headers.get("X-Ingress-Token")
         if not username or not token:
             return None
-        if self._validate_token is not None:
-            if not await self._validate_token(token):
-                return None
+        if not await self._validate_token(token):
+            return None
         user = await self._user_repo.get(username)
         if user is None:
             return None

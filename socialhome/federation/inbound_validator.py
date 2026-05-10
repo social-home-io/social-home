@@ -149,6 +149,21 @@ def make_parse_json(*, loads) -> InboundStep:
         missing = [f for f in required if f not in ctx.envelope]
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
+        # §24.11 #17: type-check required string fields. Without this a
+        # peer could send e.g. ``"from_instance": ["a", "b"]`` and downstream
+        # code would happily plumb the list value into ban-check / replay
+        # cache keys.
+        for str_field in (
+            "msg_id",
+            "event_type",
+            "from_instance",
+            "to_instance",
+            "timestamp",
+            "encrypted_payload",
+            "sig_suite",
+        ):
+            if not isinstance(ctx.envelope[str_field], str):
+                raise ValueError(f"{str_field} must be a string")
         if not isinstance(ctx.envelope["signatures"], dict):
             raise ValueError("signatures must be a dict keyed by algorithm")
 
@@ -229,6 +244,17 @@ def make_verify_signature(*, encoder) -> InboundStep:
 
     async def verify_signature(ctx: InboundContext) -> None:
         data = ctx.envelope
+        # §24.11 #1 / #14: bind ``from_instance`` to the verified signer.
+        # Without this, peer A whose Ed25519 key signs the envelope can
+        # claim ``from_instance: B`` and downstream the ban check, replay
+        # cache, and event dispatch would consume the unauthenticated
+        # claim. We compare *before* signature verification so peers that
+        # mis-route an envelope get a clean rejection without burning
+        # crypto cycles.
+        signer_id = ctx.instance.from_instance
+        claimed_from = data["from_instance"]
+        if claimed_from != signer_id:
+            raise ValueError("Invalid envelope signature")
         remote_pk = bytes.fromhex(ctx.instance.remote_identity_pk)
         # Reconstruct the signed bytes (envelope without the signatures map).
         envelope_for_verify = {

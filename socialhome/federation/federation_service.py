@@ -466,8 +466,16 @@ class FederationService:
         try:
             session_key = self._key_manager.decrypt(instance.key_self_to_remote)
         except Exception as exc:
-            log.error(
-                "send_event: failed to decrypt session key for %s: %s",
+            # §Audit #12: don't surface the underlying crypto exception
+            # text at error level — that leaks detail useful to a key-
+            # tampering attacker and the operator can see the full
+            # traceback at debug. Fixed-string warn is enough.
+            log.warning(
+                "send_event: failed to decrypt session key for %s",
+                to_instance_id,
+            )
+            log.debug(
+                "send_event: key decrypt error detail for %s: %s",
                 to_instance_id,
                 exc,
             )

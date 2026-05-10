@@ -283,15 +283,18 @@ class AutoPairCoordinator:
         nonce = str(p.get("nonce") or "")
         token = str(p.get("token") or "")
         if not all([target_id, a_inbox_url, a_dh_pk_hex, ts, nonce, token]):
+            # §Audit #8: redact secret-bearing fields. Nonce + token are
+            # the credentials gating the trust-relay flow; show only a
+            # prefix so logs are still triagable but not exploitable.
             log.warning(
                 "auto-pair (vouch): missing fields target_id=%r a_inbox_url=%r"
-                " a_dh_pk=%r ts=%r nonce=%r token=%r",
+                " a_dh_pk=%r ts=%r nonce=%s… token=%s…",
                 target_id,
                 a_inbox_url,
                 a_dh_pk_hex,
                 ts,
-                nonce,
-                token,
+                (nonce or "")[:8],
+                (token or "")[:8],
             )
             return
         try:
@@ -385,18 +388,21 @@ class AutoPairCoordinator:
                 token,
             ]
         ):
+            # §Audit #8: redact secret-bearing fields (nonce, token,
+            # vouch_sig, a_dh) — these are the credentials of the
+            # trust-relay flow; full values must never reach disk logs.
             log.warning(
                 "auto-pair (target): missing fields a_id=%r a_pk=%r a_inbox=%r"
-                " a_dh=%r via_b=%r vouch_sig=%r ts=%r nonce=%r token=%r",
+                " a_dh=%s… via_b=%r vouch_sig=%s… ts=%r nonce=%s… token=%s…",
                 a_id,
                 a_pk_hex,
                 a_inbox_url,
-                a_dh_pk_hex,
+                (a_dh_pk_hex or "")[:8],
                 via_b_id,
-                vouch_sig_hex,
+                (vouch_sig_hex or "")[:8],
                 ts,
-                nonce,
-                token,
+                (nonce or "")[:8],
+                (token or "")[:8],
             )
             return
 
@@ -610,7 +616,13 @@ class AutoPairCoordinator:
         token = str(p.get("token") or "")
         session = self._pending.pop(token, None)
         if session is None:
-            log.debug("PAIRING_INTRO_AUTO_ACK: unknown token=%s", token)
+            # §Audit #8: redact pairing nonce in logs — it's the secret
+            # that gates the trust-relay flow. First-8-chars matches the
+            # token-redaction style used elsewhere.
+            log.debug(
+                "PAIRING_INTRO_AUTO_ACK: unknown token=%s…",
+                token[:8],
+            )
             return
         c_id = str(p.get("c_id") or "")
         c_pk_hex = str(p.get("c_pk") or "")

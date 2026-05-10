@@ -27,6 +27,38 @@ async def test_ws_upgrade_succeeds_with_token(client):
         await ws.close()
 
 
+async def test_ws_rejects_disallowed_origin(client):
+    """§Audit #5: a cross-origin browser page (Origin: evil.com) MUST
+    be rejected at the WS upgrade — the CORS-deny middleware already
+    does this for plain HTTP, the WS route enforces the same allow-list."""
+    import aiohttp
+
+    with pytest.raises(aiohttp.WSServerHandshakeError) as exc_info:
+        await client.ws_connect(
+            f"/api/ws?token={client._tok}",
+            headers={"Origin": "https://evil.example"},
+        )
+    assert exc_info.value.status == 403
+
+
+async def test_ws_accepts_same_origin(client):
+    """A same-origin Origin header (Host = test client's host) is allowed."""
+    # The pytest-aiohttp TestClient resolves to 127.0.0.1; matching on
+    # netloc means any "http://127.0.0.1:<port>" passes.
+    host = client.server.host
+    port = client.server.port
+    ws = await client.ws_connect(
+        f"/api/ws?token={client._tok}",
+        headers={"Origin": f"http://{host}:{port}"},
+    )
+    try:
+        await ws.send_str("ping")
+        msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
+        assert msg.data == "pong"
+    finally:
+        await ws.close()
+
+
 async def test_ws_receives_realtime_post_event(client):
     """Creating a post should fan out a post.created frame to the user's WS."""
     from socialhome.app_keys import ws_manager_key

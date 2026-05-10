@@ -40,6 +40,7 @@ from ..domain.media_constraints import (
     VIDEO_MAX_DIMENSION,
 )
 from ..domain.post import Post, PostType
+from ..domain.space import SpaceRole
 from ..infrastructure.event_bus import EventBus
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
@@ -510,7 +511,10 @@ class GalleryService:
 
     async def _is_space_admin(self, space_id: str, user_id: str) -> bool:
         member = await self._space_repo.get_member(space_id, user_id)
-        return member is not None and member.role in ("owner", "admin")
+        return member is not None and member.role in (
+            SpaceRole.OWNER,
+            SpaceRole.ADMIN,
+        )
 
     async def _require_album_owner_or_admin(
         self,
