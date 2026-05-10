@@ -23,17 +23,30 @@
     0 18px 36px -28px rgba(26, 24, 20, 0.22);
 }
 
-/* Dark mode mirrors the SPA's ``.sh-theme-dark`` token block — same
- * warm slate base, lifted hearth for contrast. Visitor-side only,
- * no toggle (these are share-link landing pages, no account to
- * persist a preference against). */
+/* Dark mode — warm ember palette. Visitor-side only, no toggle
+ * (these are share-link landing pages, no account to persist a
+ * preference against).
+ *
+ * The SH SPA's dark tokens (``--sh-bg: #161821``) read cool/blue
+ * at landing-page scale: large flat backgrounds, no chrome glass
+ * to break up the slate cast. The public pages need to feel like
+ * the cream-paper light mode in night form — coffee, espresso,
+ * warm ember — so they read as the same product family at a
+ * glance regardless of system theme.
+ *
+ * Hue arc: ~24° (terracotta-adjacent). Saturation deliberately
+ * low (~20%) so cream text stays high-contrast and the hearth
+ * primary stays the only saturated hit on the page. The card
+ * surface sits ~3 percentage points above bg so the lift is
+ * visible against cream paragraphs, and the hearth is overridden
+ * to its dark-mode lift (``#E96A3F``) so the CTA pops. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg:     #161821;       /* paper-deep dark */
+    --bg:     #1A1612;       /* deep ember — warm coffee */
     --fg:     #F1E9DA;       /* ink-light — warm cream */
-    --muted:  #8A8270;       /* ink-quiet dark */
-    --card:   #1F222C;       /* one notch up for chrome */
-    --border: #3A3A36;       /* warm-tinted hairline */
+    --muted:  #9A8E7D;       /* warm muted */
+    --card:   #251E18;       /* coffee surface — one notch up */
+    --border: #3D332A;       /* burnt-sienna hairline */
     --hearth: #E96A3F;       /* hearth lifted for dark surfaces */
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.55),
               0 1px 3px rgba(0, 0, 0, 0.45);

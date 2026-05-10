@@ -201,6 +201,22 @@ def _render_landing(
       --primary:      #D2542A;       /* hearth — terracotta */
       --primary-soft: #F1D9CA;       /* hearth-tint — for tinted surfaces */
     }}
+    /* Dark mode — warm ember palette (see comment in
+     * ``users_directory.css`` for the full design rationale).
+     * ``--primary-soft`` is overridden to a saturated terracotta
+     * overlay so the washi-tape accent on each card stays visible
+     * against the deep ember background. */
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --warm-bg:      #1A1612;     /* deep ember */
+        --paper:        #251E18;     /* coffee surface */
+        --ink:          #F1E9DA;     /* ink-light — warm cream */
+        --ink-soft:     #9A8E7D;     /* warm muted */
+        --hair:         #3D332A;     /* burnt-sienna hairline */
+        --primary:      #E96A3F;     /* hearth lifted for dark */
+        --primary-soft: #4A2419;     /* hearth-on-dark — for washi accents */
+      }}
+    }}
     * {{ box-sizing: border-box; }}
     body {{
       /* Manrope geometric body — same family the SH SPA picked in
@@ -382,6 +398,18 @@ def _render_space_page(
       --hair:     #D8CFC0;
       --primary:  {accent};
     }}
+    /* Dark mode — warm ember (see ``users_directory.css`` rationale).
+     * ``--primary`` keeps the per-space accent so the page reads as
+     * "keyed to this community" even at night. */
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --warm-bg:  #1A1612;
+        --paper:    #251E18;
+        --ink:      #F1E9DA;
+        --ink-soft: #9A8E7D;
+        --hair:     #3D332A;
+      }}
+    }}
     body {{
       font: 15px/1.55 'Manrope', -apple-system, BlinkMacSystemFont,
             'Segoe UI', Roboto, sans-serif;
@@ -483,10 +511,25 @@ def _render_invite_page(
     /* Same SH design tokens as the landing + per-space pages so
      * the invite-link handoff feels continuous with the rest of
      * the GFS surface and the SH SPA. */
+    :root {{
+      --warm-bg:  #F4ECE0;
+      --ink:      #1A1814;
+      --ink-soft: #807766;
+    }}
+    /* Dark mode — warm ember (see ``users_directory.css``
+     * rationale). The CTA keeps the per-space accent for contrast
+     * even at night. */
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --warm-bg:  #1A1612;
+        --ink:      #F1E9DA;
+        --ink-soft: #9A8E7D;
+      }}
+    }}
     body {{
       font: 15px/1.5 'Manrope', -apple-system, BlinkMacSystemFont,
             'Segoe UI', Roboto, sans-serif;
-      margin: 0; color: #1A1814; background: #F4ECE0;
+      margin: 0; color: var(--ink); background: var(--warm-bg);
     }}
     main {{ max-width: 640px; margin: 0 auto; padding: 24px; }}
     .accent-bar {{ height: 6px; background: {accent};
@@ -502,7 +545,7 @@ def _render_invite_page(
             text-decoration: none; font-weight: 600; font-size: 15px;
             transition: transform 100ms, filter 100ms; }}
     .cta:hover {{ transform: translateY(-1px); filter: brightness(0.95); }}
-    .muted {{ color: #807766; font-size: 13px; }}
+    .muted {{ color: var(--ink-soft); font-size: 13px; }}
   </style>
 </head>
 <body>
