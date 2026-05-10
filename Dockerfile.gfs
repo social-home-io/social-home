@@ -37,14 +37,13 @@ RUN groupadd --system --gid 10001 gfsuser && \
 
 WORKDIR /app
 
-# Pre-built wheel from the publish workflow (or local
-# ``python -m build``). The shell expansion picks up the single wheel
-# we copied in (filename varies with the CalVer release version) and
-# tacks on the ``[global-server]`` extra so bcrypt + qrcode land too.
-COPY dist/socialhome-*.whl /tmp/
-RUN WHEEL=$(ls /tmp/socialhome-*.whl | head -1) && \
-    uv pip install --system --no-cache "${WHEEL}[global-server]" && \
-    rm /tmp/socialhome-*.whl
+# Pre-built wheel from the publish workflow's ``build`` job. The
+# wheel arrives at a stable filename so the install line names it
+# directly + tacks on the ``[global-server]`` extra so bcrypt +
+# qrcode land too.
+COPY dist/socialhome.whl /tmp/socialhome.whl
+RUN uv pip install --system --no-cache "/tmp/socialhome.whl[global-server]" && \
+    rm /tmp/socialhome.whl
 
 # /var/lib/sh-gfs is the spec's default GFSDATA_DIR (config.py). Use
 # a volume so operators can persist the config + SQLite across

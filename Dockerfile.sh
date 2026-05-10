@@ -31,22 +31,23 @@ RUN apt-get update && \
 
 # Non-root user up front so a host-mounted ``/data`` volume ends up
 # with the right owner.
-RUN groupadd --system --gid 10001 appuser && \
-    useradd  --system --uid 10001 --gid appuser --create-home appuser
+RUN groupadd --system --gid 10001 hsuser && \
+    useradd  --system --uid 10001 --gid hsuser --create-home hsuser
 
 WORKDIR /app
 
-# Pre-built wheel from the publish workflow (or local
-# ``python -m build``). The SPA assets are inside under
-# ``socialhome/static/``; ``--system`` installs into the base image's
-# site-packages directly (no venv); ``--no-cache`` keeps the layer
-# size down. The wheel is removed after install so it doesn't bloat
-# the final layer.
-COPY dist/socialhome-*.whl /tmp/
-RUN uv pip install --system --no-cache /tmp/socialhome-*.whl && \
-    rm /tmp/socialhome-*.whl
+# Pre-built wheel from the publish workflow's ``build`` job (or
+# local ``pnpm --dir client run build && python -m build &&
+# cp dist/socialhome-*.whl dist/socialhome.whl``). The SPA bundle
+# lives inside under ``socialhome/static/``. ``--system`` installs
+# into the base image's site-packages directly (no venv);
+# ``--no-cache`` keeps the layer size down. The wheel is removed
+# after install so it doesn't bloat the final layer.
+COPY dist/socialhome.whl /tmp/socialhome.whl
+RUN uv pip install --system --no-cache /tmp/socialhome.whl && \
+    rm /tmp/socialhome.whl
 
-RUN mkdir -p /data && chown -R appuser:appuser /data
+RUN mkdir -p /data && chown -R hsuser:hsuser /data
 
 VOLUME /data
 ENV SH_DATA_DIR=/data
@@ -54,6 +55,6 @@ ENV SH_MODE=standalone
 
 EXPOSE 8099 8124
 
-USER appuser
+USER hsuser
 
 CMD ["python", "-m", "socialhome"]

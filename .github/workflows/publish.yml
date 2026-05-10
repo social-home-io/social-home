@@ -46,6 +46,23 @@ jobs:
         run: |
           pip install build
           python -m build
+      # Copy the single ``py3-none-any`` wheel to a stable filename so
+      # the Dockerfiles can ``COPY dist/socialhome.whl`` directly,
+      # without globbing or ``head -1`` shell tricks. ``socialhome``
+      # is pure-Python so ``python -m build`` produces exactly one
+      # wheel; the guard fails the workflow loudly if that ever stops
+      # being true (e.g. someone introduces a C extension).
+      - name: Pin wheel filename for the docker COPY
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wheels=(dist/socialhome-*.whl)
+          if (( ${#wheels[@]} != 1 )); then
+            echo "Expected exactly 1 wheel in dist/, got ${#wheels[@]}: ${wheels[*]}" >&2
+            exit 1
+          fi
+          cp -- "${wheels[0]}" dist/socialhome.whl
       - uses: actions/upload-artifact@v4
         with:
           name: dist
