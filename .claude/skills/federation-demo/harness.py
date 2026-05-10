@@ -698,6 +698,37 @@ def cmd_traffic() -> None:
     if not state:
         raise SystemExit("run 'up' first")
 
+    # Momentum follows (a → b, c → b) are issued first so Beta's moment
+    # later in the loop fans out to Alpha + Carol as inbox recipients.
+    # The follow itself federates as ``USER_FOLLOW`` and Beta's
+    # ``moment_follows`` mirror picks it up before the moment is posted.
+    state["moment_follows"] = {}
+    for follower_label in ("a", "c"):
+        follower = state["instances"][follower_label]
+        s, _r = _request(
+            f"http://127.0.0.1:{follower['port']}/api/moments/follows",
+            token=follower["token"],
+            method="POST",
+            body={
+                "user_id": state["instances"]["b"]["user_id"],
+                "instance_id": state["instances"]["b"]["instance_id"],
+            },
+        )
+        # 200/201/204 all valid (depending on follow-create vs idempotent
+        # re-follow); 409 means we're already following from a prior run
+        # of ``traffic`` against a re-used /tmp/sh-demo.
+        if s in (200, 201, 204, 409):
+            state["moment_follows"][follower_label] = "b"
+            print(f"  {follower_label} now follows b on momentum")
+        else:
+            print(f"  {follower_label} → b follow FAILED: {s} {_r}")
+    # Settle the follow before any household posts a moment so Beta's
+    # ``moment_follows`` mirror is populated when ``MOMENT_CREATED``
+    # fans out.
+    if state["moment_follows"]:
+        time.sleep(2)
+
+    state.setdefault("moments", {})
     for label, info in state["instances"].items():
         port, token, user = info["port"], info["token"], info["username"]
         url = f"http://127.0.0.1:{port}"
@@ -723,13 +754,22 @@ def cmd_traffic() -> None:
 
         # Moment audience defaults to households in the schema; rate-limited
         # to one per 15min, so a single moment per instance is all we need.
-        s, _ = _request(
+        moment_content = f"🌅 [{label}] moment from {info['name']}"
+        s, m_resp = _request(
             f"{url}/api/moments",
             token=token,
             method="POST",
-            body={"content": f"🌅 [{label}] moment from {info['name']}"},
+            body={"content": moment_content},
         )
-        _must(f"moment({label})", s, _, ok=(201, 429))
+        _must(f"moment({label})", s, m_resp, ok=(201, 429))
+        if s == 201:
+            # Strip the verify-side signature wrapper if it exists; the
+            # signed payload nests the moment under ``data``.
+            mp = m_resp.get("data") if isinstance(m_resp.get("data"), dict) else m_resp
+            state["moments"][label] = {
+                "id": mp.get("id"),
+                "content": moment_content,
+            }
 
         s, _ = _request(
             f"{url}/api/highlights/frames",
@@ -804,6 +844,74 @@ def cmd_traffic() -> None:
         )
         _must(f"remote-invite({guest_label})", s, inv, ok=(201,))
         print(f"  b → {guest_label}: invite token issued")
+
+    # Bazaar listing in the salon space — Beta posts a fixed-price item
+    # to validate the bazaar surface boots inside a fresh space, and to
+    # give Alpha something concrete to inquire about over DM in the
+    # next step. The listing itself stays HFS-local (bazaar listings
+    # are space-scoped); the *DM about the listing* is the federation
+    # path under test.
+    listing_title = "Vintage moka pot — barely used"
+    s, listing = _request(
+        f"http://127.0.0.1:{b['port']}/api/bazaar",
+        token=b["token"],
+        method="POST",
+        body={
+            "space_id": space["id"],
+            "title": listing_title,
+            "description": "Three-cup, brass-coloured. Pickup or shipping.",
+            "mode": "fixed",
+            "currency": "EUR",
+            "price": 1500,
+            "duration_days": 30,
+        },
+    )
+    _must("bazaar create(b)", s, listing, ok=(201,))
+    # Bazaar listings are keyed by ``post_id`` (not ``id``) — the
+    # listing row composes onto the underlying post and shares its
+    # primary key. The DM body quotes this value so verify can grep
+    # for it on Beta's inbox.
+    listing_id = listing["post_id"]
+    state["bazaar_listing_id"] = listing_id
+    state["bazaar_listing_title"] = listing_title
+    print(f"  b: bazaar listing {listing_id[:8]}… created in salon")
+
+    # Alpha → Beta DM *about the bazaar listing*. Bazaar's own DM-the-
+    # seller flow is a SPA convenience (deep-link to the conversations
+    # tab); on the wire it's a regular DM message that mentions the
+    # listing id. We exercise the cross-household DM path: Alpha
+    # creates the conversation against Beta's user_id (via federation
+    # routing through the b↔a peer link) and posts a text message
+    # quoting the listing title + id so the verify step has a stable
+    # needle to grep for in Beta's inbox.
+    s, conv_ab = _request(
+        f"http://127.0.0.1:{a['port']}/api/conversations/dm",
+        token=a["token"],
+        method="POST",
+        body={"user_id": b["user_id"]},
+    )
+    if s in (200, 201):
+        state["dm_a_to_b"] = conv_ab["id"]
+        msg_body = (
+            f"[a→b] hi Bob — interested in your bazaar listing "
+            f"{listing_id} ({listing_title!r}). still available?"
+        )
+        s, msg = _request(
+            f"http://127.0.0.1:{a['port']}/api/conversations/{conv_ab['id']}/messages",
+            token=a["token"],
+            method="POST",
+            body={"content": msg_body},
+        )
+        if s in (200, 201):
+            state["dm_a_to_b_body"] = msg_body
+            print(
+                f"  a→b bazaar DM created: conv={conv_ab['id']}, "
+                f"msg={msg.get('id')}"
+            )
+        else:
+            print(f"  a→b bazaar DM message FAILED: {s} {msg}")
+    else:
+        print(f"  a→b bazaar DM SKIPPED (create returned {s} {conv_ab})")
 
     _save(state)
 
@@ -1031,6 +1139,75 @@ def cmd_verify() -> None:
                 failures.append(f"c: a→c DM body missing (got {bodies!r})")
     else:
         print("  DM a→c was skipped during traffic step")
+
+    # 3b. Bazaar DM a→b — Beta's conversation list should include
+    #     Alpha's inquiry, with the listing id quoted in the body.
+    if "dm_a_to_b" in state and "bazaar_listing_id" in state:
+        b = state["instances"]["b"]
+        s, convs = _request(
+            f"http://127.0.0.1:{b['port']}/api/conversations",
+            token=b["token"],
+        )
+        _must("conversations(b)", s, convs)
+        conv_list = convs if isinstance(convs, list) else (convs.get("items") or [])
+        ids = {c0.get("id") for c0 in conv_list}
+        if state["dm_a_to_b"] not in ids:
+            failures.append(
+                f"b: bazaar-inquiry conversation {state['dm_a_to_b']} "
+                f"not in Beta's inbox",
+            )
+        else:
+            s, msgs = _request(
+                f"http://127.0.0.1:{b['port']}"
+                f"/api/conversations/{state['dm_a_to_b']}/messages",
+                token=b["token"],
+            )
+            _must("messages(b/bazaar)", s, msgs)
+            bodies = [
+                m.get("content") for m in (msgs if isinstance(msgs, list) else [])
+            ]
+            needle = state["bazaar_listing_id"]
+            if any(needle in (m_body or "") for m_body in bodies):
+                print(f"  b received a→b bazaar-inquiry DM ✓")
+            else:
+                failures.append(
+                    f"b: bazaar-inquiry DM body missing listing id "
+                    f"{needle!r} (got {bodies!r})",
+                )
+    elif "bazaar_listing_id" not in state:
+        print("  bazaar listing skipped during traffic step")
+    else:
+        print("  DM a→b was skipped during traffic step")
+
+    # 3c. Momentum visibility — a + c follow b on momentum, so Beta's
+    #     moment from cmd_traffic should land in their inbox after
+    #     federation settles. Beta's own moment should be visible to
+    #     Beta locally.
+    beta_moment = state.get("moments", {}).get("b")
+    if beta_moment and "moment_follows" in state:
+        for viewer_label in ("a", "c"):
+            if viewer_label not in state["moment_follows"]:
+                continue
+            viewer = state["instances"][viewer_label]
+            s, payload = _request(
+                f"http://127.0.0.1:{viewer['port']}/api/moments",
+                token=viewer["token"],
+            )
+            _must(f"moments({viewer_label})", s, payload)
+            inbox = payload.get("data") if isinstance(payload, dict) else payload
+            inbox_list = inbox if isinstance(inbox, list) else []
+            contents = [m.get("content") for m in inbox_list]
+            if any(beta_moment["content"] in (mc or "") for mc in contents):
+                print(f"  {viewer_label} sees b's moment in inbox ✓")
+            else:
+                failures.append(
+                    f"{viewer_label}: b's moment {beta_moment['id']!r} "
+                    f"not in inbox (got contents={contents!r})",
+                )
+    elif beta_moment is None:
+        print("  Beta's moment was rate-limited during traffic — skipping inbox check")
+    else:
+        print("  moment-follow step was skipped during traffic")
 
     # 4. Space — Beta's space, both Alice and Carol invited.
     if "space_id" in state:
@@ -1281,6 +1458,115 @@ def _looks_like_exc_summary(line: str) -> bool:
 # ─── Step: down ────────────────────────────────────────────────────────────
 
 
+def cmd_replay() -> None:
+    """Federation outbox redelivery — kill Carol, post from Alpha, restart.
+
+    Validates the §24 ResilientFederationOutbox path: when a paired
+    peer is unreachable, the sender's outbox marks the entry pending
+    and retries on a backoff. Once the peer is back up its
+    ``/api/instance/config`` becomes reachable and the next outbox tick
+    flushes the queued envelopes.
+
+    Sequence:
+    1. SIGTERM Carol's process; wait for exit.
+    2. Alpha creates a new ``audience_kind=all_paired`` highlight with
+       a unique caption — the harness later asserts Carol receives
+       this exact caption (i.e. it didn't pre-exist from
+       :func:`cmd_traffic`).
+    3. Settle ~4 s so Alpha's outbox makes (and fails) one delivery
+       attempt against the now-dead Carol — the entry transitions
+       to ``unreachable`` status.
+    4. Respawn Carol on the same port; wait for ``/api/instance/config``
+       to answer 200.
+    5. Settle the outbox redelivery window (default 30s exponential
+       backoff; the harness sleeps 25 s which crosses the second
+       backoff slot).
+    6. Assert Carol's ``/api/highlights`` now contains the new caption.
+
+    Run this *after* :func:`cmd_pair` so the a↔c link is confirmed
+    (``cmd_traffic`` is optional — the test only depends on the
+    pair). Re-running it twice in a single ``up`` is fine; the
+    caption uses :func:`time.time_ns` so each run picks a unique
+    needle.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+
+    a = state["instances"]["a"]
+    c = state["instances"]["c"]
+    needle_marker = f"replay-{time.time_ns()}"
+    caption = f"[a] resilient highlight {needle_marker}"
+
+    # 1. Tear down Carol — SIGTERM the process group so libdatachannel's
+    #    background threads also exit cleanly.
+    print(f"  killing c (pid={c['pid']}) to simulate offline peer")
+    try:
+        os.killpg(c["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        print("  c was already gone")
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and _alive(c["pid"]):
+        time.sleep(0.2)
+    if _alive(c["pid"]):
+        try:
+            os.killpg(c["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        time.sleep(0.5)
+
+    # 2. Alpha posts a highlight while Carol is dead. Alpha's outbox
+    #    will queue the envelope; the next federation flush against
+    #    Carol fails fast.
+    s, _hl = _request(
+        f"http://127.0.0.1:{a['port']}/api/highlights/frames",
+        token=a["token"],
+        method="POST",
+        body={
+            "media_url": "https://example.invalid/replay.jpg",
+            "frame_type": "image",
+            "caption_text": caption,
+            "audience_kind": "all_paired",
+        },
+    )
+    _must("replay highlight(a)", s, _hl, ok=(201,))
+    print(f"  a created highlight while c offline (caption={needle_marker})")
+
+    # 3. Let Alpha's outbox attempt + fail one delivery so the row is
+    #    in the redeliver-pending state.
+    time.sleep(4)
+
+    # 4. Respawn Carol on the same port; reuse the existing per-instance
+    #    data_dir so identity + paired peers stay intact.
+    new_pid = _spawn("c", c["port"])
+    state["instances"]["c"]["pid"] = new_pid
+    _wait_ready(c["port"])
+    print(f"  c respawned: pid={new_pid} ready=200")
+
+    # 5. Outbox redelivery window. The default backoff schedule is
+    #    {0, 5, 30, 120, 600}s; we already burned the immediate slot
+    #    in step 3, so we sleep across the 30s slot to give the
+    #    second attempt a chance to land.
+    settle = 35
+    print(f"  waiting {settle}s for outbox redelivery to flush…")
+    time.sleep(settle)
+
+    # 6. Carol should now have Alpha's highlight despite having been
+    #    down at the moment Alpha posted it.
+    captions = _highlight_captions(state, "c")
+    if caption in captions:
+        print(f"  c received the replayed highlight ✓")
+    else:
+        raise SystemExit(
+            f"replay: Carol did not receive {caption!r} after redelivery "
+            f"window — captions seen: {sorted(captions)!r}",
+        )
+
+    state["replay_ran"] = True
+    _save(state)
+    print("replay: ok")
+
+
 def cmd_down() -> None:
     state = _load()
     gfs = state.get("gfs")
@@ -1335,6 +1621,12 @@ def main() -> None:
         cmd_calendar()
         cmd_verify()
         cmd_relay_pair()
+        # ``replay`` exercises the §24 outbox redelivery path by
+        # killing Carol, posting a highlight from Alpha, restarting
+        # Carol, and asserting the queued envelope flushes after the
+        # backoff window. Runs last so the kill-restart cycle can't
+        # destabilise the earlier topology assertions.
+        cmd_replay()
         return
     fn = globals().get(f"cmd_{cmd.replace('-', '_')}")
     if fn is None:
