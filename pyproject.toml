@@ -20,10 +20,19 @@ dependencies = [
     # open a direct peer connection. Also mandatory for GFS relay
     # (§24). The PyPI distribution and import name are both
     # ``aiolibdatachannel`` — async-native bindings over libdatachannel.
-    # 2026.9.5 ships per-Python-version wheels (cp312 / cp313 / cp314)
-    # — earlier ABI3 wheels segfaulted on first ``PeerConnection`` use
-    # under CPython 3.14 (nanobind stable-ABI marshalling regression).
-    "aiolibdatachannel>=2026.9.5",
+    # 2026.5.10 is the resumption of the ``YYYY.M.D`` CalVer pattern
+    # after a one-off mistake: 2026.9.5 was tagged on 2026-05-09 (the
+    # date was meant to be 2026.5.9). 2026.9.5 has been yanked on PyPI;
+    # any ``>=2026.5.10`` pin resolves to a non-yanked candidate, while
+    # 2026.9.5 itself remains reachable only via an explicit
+    # ``==2026.9.5`` pin (which we don't expect anyone to hold).
+    # Per-Python-version wheels (cp312 / cp313 / cp314); pre-2026.5.10
+    # ABI3 wheels segfaulted on first ``PeerConnection`` use under
+    # CPython 3.14 (nanobind stable-ABI marshalling regression).
+    # 2026.5.10 also includes the remote-candidate buffering fix that
+    # eliminates spurious ``rtcAddRemoteCandidate: runtime failure
+    # (-2)`` tracebacks during normal trickle-ICE flow.
+    "aiolibdatachannel>=2026.5.10",
 ]
 
 [project.optional-dependencies]

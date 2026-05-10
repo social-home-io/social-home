@@ -1127,14 +1127,15 @@ _LOG_BENIGN: tuple[str, ...] = (
     # ICE candidate failures from STUN — expected on hosts behind a
     # symmetric NAT (the harness uses Google's STUN server but the
     # instances themselves talk loopback-only, so the candidate path
-    # never converges).
+    # never converges). The ``rtcAddRemoteCandidate: runtime failure``
+    # / ``Got a remote candidate without remote description`` pair
+    # used to live here too — they were the symptom of an offer-vs-
+    # candidate race in ``aiolibdatachannel``'s wrapper. The 2026.5.10
+    # release fixed it (candidates received before the SDP land in a
+    # local buffer and drain on ``set_remote_description``), so the
+    # harness no longer sees those lines and we no longer suppress
+    # them; if they reappear, audit catches a regression.
     "FederationEventType.FEDERATION_RTC_ICE",
-    "rtcAddRemoteCandidate: runtime failure",
-    # ICE answer-before-offer race inside libdatachannel — the C++
-    # side accepts a remote candidate the moment it's seen, but the
-    # Python wrapper hasn't applied the remote SDP yet on the same
-    # frame. Logged + dropped natively; no Python-side action.
-    "Got a remote candidate without remote description",
     # Outbox retry warnings while a peer is briefly unreachable —
     # expected during the inner-ring pair handshake settle window.
     "outbox:",
