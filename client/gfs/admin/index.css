@@ -1,99 +1,193 @@
-/* GFS admin portal styling. Ported from the inline ``<style>`` in
-   the previous ``admin_ui/index.html``. Future GFS UI work
-   (global-space landing pages) can reuse the tokens here. */
+/* GFS admin portal styling.
+ *
+ * Aligned to the Social Home SPA design tokens (see
+ * ``client/src/styles/tokens.css``) so the admin reads as part of
+ * the SH product family. The previous slate-grey palette
+ * (#1f2937 / #111827 / #f9fafb) lived here as a port from the
+ * pre-Preact ``admin_ui/index.html`` — pre-dating the 2026.4 brand
+ * refresh that brought the SPA onto warm cream parchment +
+ * hearth-terracotta primary.
+ *
+ * Token sourcing: we ``@import`` the SPA tokens file at the top so
+ * every ``--sh-*`` custom property is in scope. A brand tweak in the
+ * SPA tokens propagates here without code change. We deliberately
+ * don't deep-import the SPA's app.css — the admin is a tighter
+ * surface (one router, fixed-width tabs, simple forms) so we keep
+ * its own dialect of utility rules right here in this file.
+ */
+
+@import '../../src/styles/tokens.css';
 
 * { box-sizing: border-box; }
 
 body {
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: 14px/1.45 var(--sh-font-family);
   margin: 0;
-  color: #1f2937;
-  background: #f9fafb;
+  color: var(--sh-text);
+  background: var(--sh-bg);
 }
 
+/* Top app bar — warm-cream chrome panel with ink wordmark, mirrors
+ * the SPA's TopBar treatment instead of the old dark-slate header. */
 header {
-  background: #111827;
-  color: #fff;
+  background: var(--sh-bg-secondary);
+  color: var(--sh-text);
   padding: 14px 22px;
+  border-bottom: 1px solid var(--sh-border);
   display: flex;
   align-items: center;
   gap: 16px;
 }
 header h1 {
   margin: 0;
-  font-size: 18px;
+  font-family: var(--sh-font-family-display);
+  font-feature-settings: var(--sh-display-feat);
+  font-variation-settings: var(--sh-display-axes);
+  font-size: 22px;
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
-header .right { margin-left: auto; font-size: 13px; }
+header .right {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--sh-text-muted);
+}
 
+/* Nav tabs — pill-shaped, hearth highlight on the active tab. */
 nav {
   display: flex;
-  gap: 2px;
-  background: #fff;
+  gap: 4px;
+  background: var(--sh-bg);
   padding: 8px 22px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--sh-border);
 }
 nav a {
   padding: 8px 14px;
-  border-radius: 6px;
-  color: #374151;
+  border-radius: var(--sh-radius-sm);
+  color: var(--sh-text-muted);
   text-decoration: none;
   font-weight: 500;
+  transition: var(--sh-transition-fast);
 }
-nav a.active { background: #1f2937; color: #fff; }
+nav a:hover {
+  color: var(--sh-text);
+  background: var(--sh-bg-tertiary);
+}
+nav a.active {
+  background: var(--sh-primary);
+  color: #fff;
+}
 
 main { padding: 22px; max-width: 1100px; margin: 0 auto; }
 
+/* Card sections — paper-tinted surface, warm hairline, tiny earth
+ * shadow for the same lived-in feel as the SPA's feed cards. */
 section {
-  background: #fff;
+  background: var(--sh-bg-tertiary);
   padding: 18px 22px;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border-radius: var(--sh-radius-md);
+  border: 1px solid var(--sh-border);
+  box-shadow: var(--sh-shadow-sm);
   margin-bottom: 18px;
 }
-h2 { margin: 0 0 14px 0; font-size: 16px; }
+h2 {
+  margin: 0 0 14px 0;
+  font-family: var(--sh-font-family-display);
+  font-feature-settings: var(--sh-display-feat);
+  font-variation-settings: var(--sh-display-axes);
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
 
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 14px;
 }
-.card { background: #f3f4f6; padding: 16px; border-radius: 6px; }
-.card .val { font-size: 28px; font-weight: 700; margin-top: 6px; }
+.card {
+  background: var(--sh-bg);
+  padding: 16px;
+  border-radius: var(--sh-radius-sm);
+  border: 1px solid var(--sh-border);
+}
+.card .val {
+  font-family: var(--sh-font-family-display);
+  font-variation-settings: var(--sh-display-axes);
+  font-size: 30px;
+  font-weight: 700;
+  margin-top: 6px;
+  letter-spacing: -0.01em;
+}
 
 table { width: 100%; border-collapse: collapse; }
 th, td {
   padding: 8px 10px;
   text-align: left;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--sh-border);
 }
-th { background: #f3f4f6; font-weight: 600; font-size: 13px; color: #374151; }
+th {
+  background: var(--sh-bg);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--sh-text-muted);
+}
 
+/* Form controls — inherit body font, paper background, warm hairline
+ * border, hearth focus ring (matches the SPA's input.tsx). */
 button, input, select, textarea {
   font: inherit;
   padding: 6px 12px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm);
+  background: var(--sh-bg);
+  color: var(--sh-text);
+  transition: var(--sh-transition-fast);
+}
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 1px;
+  border-color: var(--sh-primary);
 }
 button { cursor: pointer; }
-button.primary   { background: #6366f1; color: #fff; border-color: #6366f1; }
-button.danger    { background: #ef4444; color: #fff; border-color: #ef4444; }
-button.secondary { background: #f3f4f6; }
-button.secondary.is-active { background: #1f2937; color: #fff; border-color: #1f2937; }
-button[disabled] { opacity: 0.6; cursor: not-allowed; }
+button:hover:not([disabled]) { border-color: var(--sh-border-strong); }
+button.primary {
+  background: var(--sh-primary);
+  color: #fff;
+  border-color: var(--sh-primary);
+}
+button.primary:hover:not([disabled]) {
+  background: var(--sh-primary-hover);
+  border-color: var(--sh-primary-hover);
+}
+button.danger {
+  background: var(--sh-danger);
+  color: #fff;
+  border-color: var(--sh-danger);
+}
+button.danger:hover:not([disabled]) {
+  background: var(--sh-danger-hover);
+  border-color: var(--sh-danger-hover);
+}
+button.secondary { background: var(--sh-bg-tertiary); }
+button.secondary.is-active {
+  background: var(--sh-primary);
+  color: #fff;
+  border-color: var(--sh-primary);
+}
+button[disabled] { opacity: 0.55; cursor: not-allowed; }
 
 .row-actions button { margin-left: 6px; }
-.muted { color: #6b7280; font-size: 13px; }
-.error { color: #b91c1c; }
+.muted { color: var(--sh-text-muted); font-size: 13px; }
+.error { color: var(--sh-danger); }
 
 .login {
   max-width: 380px;
   margin: 80px auto;
   padding: 22px;
-  background: #fff;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  background: var(--sh-bg-tertiary);
+  border-radius: var(--sh-radius-md);
+  border: 1px solid var(--sh-border);
+  box-shadow: var(--sh-shadow-sm);
 }
 .login h2 { margin-bottom: 16px; }
 .login label { display: block; margin-bottom: 12px; font-weight: 500; }
@@ -104,21 +198,38 @@ button[disabled] { opacity: 0.6; cursor: not-allowed; }
 .field input, .field textarea, .field select { width: 100%; }
 textarea { min-height: 110px; font-family: inherit; }
 
+/* Status pills — semantic badges on top of the warm token ladder.
+ * Banned uses the SH danger color; pending uses honey (warning); active
+ * uses moss (success). All readable on cream paper. */
 .pill {
   display: inline-block;
-  padding: 1px 8px;
-  border-radius: 999px;
+  padding: 1px 10px;
+  border-radius: var(--sh-radius-full);
   font-size: 12px;
-  background: #e5e7eb;
-  color: #374151;
+  font-weight: 500;
+  background: var(--sh-bg);
+  color: var(--sh-text-muted);
+  border: 1px solid var(--sh-border);
 }
-.pill.banned  { background: #fee2e2; color: #991b1b; }
-.pill.pending { background: #fef3c7; color: #92400e; }
-.pill.active  { background: #dcfce7; color: #166534; }
+.pill.banned {
+  background: color-mix(in srgb, var(--sh-danger) 15%, transparent);
+  color: var(--sh-danger-hover);
+  border-color: color-mix(in srgb, var(--sh-danger) 35%, transparent);
+}
+.pill.pending {
+  background: color-mix(in srgb, var(--sh-warning) 18%, transparent);
+  color: color-mix(in srgb, var(--sh-warning) 75%, var(--sh-text));
+  border-color: color-mix(in srgb, var(--sh-warning) 35%, transparent);
+}
+.pill.active {
+  background: color-mix(in srgb, var(--sh-success) 15%, transparent);
+  color: var(--sh-success);
+  border-color: color-mix(in srgb, var(--sh-success) 35%, transparent);
+}
 
 .audit-row {
   font-size: 13px;
   padding: 6px 0;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--sh-border);
 }
-.audit-row time { color: #6b7280; font-size: 12px; }
+.audit-row time { color: var(--sh-text-muted); font-size: 12px; }
