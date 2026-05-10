@@ -136,6 +136,13 @@ The spec is the source of truth — if code and spec disagree, fix the code.
 
 - Unit tests: no real network, no real disk. All repos are in-memory stubs.
 - Integration tests: real SQLite in `tmp_path`, real aiohttp `TestClient`.
+- **Every Python module under `socialhome/` has a same-named test file** under
+  `tests/<matching subpath>/test_<module>.py` — `socialhome/services/foo.py`
+  → `tests/services/test_foo.py`, `socialhome/repositories/bar_repo.py` →
+  `tests/repositories/test_bar_repo.py`, `socialhome/routes/baz.py` →
+  `tests/routes/test_baz.py`. The test file is added in the same commit as
+  the production file. The only exception is the `__init__.py` re-export
+  shims, which carry no logic.
 - Protocol tests in `tests/protocol/` are a **release blocker** — never skip them.
 - Run `pytest tests/protocol/ -m security` before every commit touching federation
   or presence code.

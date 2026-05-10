@@ -86,6 +86,7 @@ from .repositories import (
     SqliteNotificationRepo,
     SqliteOutboxRepo,
     SqlitePageRepo,
+    SqlitePeerUserVisibilityRepo,
     SqlitePostRepo,
     SqlitePushSubscriptionRepo,
     SqliteShoppingRepo,
@@ -363,6 +364,7 @@ def _build_repos(db: AsyncDatabase):
         space_zone=SqliteSpaceZoneRepo(db),
         password_reset=SqlitePasswordResetRepo(db),
         auth_audit_log=SqliteAuthAuditLogRepo(db),
+        peer_user_visibility=SqlitePeerUserVisibilityRepo(db),
     )
 
 
@@ -409,6 +411,7 @@ def _wire_federation_stack(
     space_zone_repo,
     presence_repo,
     ws_manager,
+    peer_user_visibility_repo,
 ):
     """Build :class:`FederationService` + attach the whole federation stack.
 
@@ -713,6 +716,7 @@ def _wire_federation_stack(
         bus=bus,
         federation_service=federation_service,
         federation_repo=federation_repo,
+        visibility_repo=peer_user_visibility_repo,
     )
     profile_federation_outbound.wire()
 
@@ -1464,6 +1468,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.conversation_repo_key] = conversation_repo
     app[K.outbox_repo_key] = outbox_repo
     app[K.federation_repo_key] = federation_repo
+    app[K.peer_user_visibility_repo_key] = repos.peer_user_visibility
     app[K.page_repo_key] = page_repo
     app[K.page_conflict_service_key] = page_conflict_service
     app[K.presence_service_key] = presence_service
@@ -1672,6 +1677,7 @@ def create_app(config: Config | None = None) -> web.Application:
             space_zone_repo=repos.space_zone,
             presence_repo=repos.presence,
             ws_manager=ws_manager,
+            peer_user_visibility_repo=repos.peer_user_visibility,
         )
         federation_service = fed.federation_service
         sync_manager = fed.sync_manager

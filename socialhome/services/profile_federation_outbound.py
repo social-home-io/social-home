@@ -29,6 +29,9 @@ from ..infrastructure.event_bus import EventBus
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +39,12 @@ log = logging.getLogger(__name__)
 class ProfileFederationOutbound:
     """Publish :class:`UserProfileUpdated` events as ``USER_UPDATED``."""
 
-    __slots__ = ("_bus", "_federation", "_federation_repo")
+    __slots__ = (
+        "_bus",
+        "_federation",
+        "_federation_repo",
+        "_visibility_repo",
+    )
 
     def __init__(
         self,
@@ -44,10 +52,16 @@ class ProfileFederationOutbound:
         bus: EventBus,
         federation_service: "FederationService",
         federation_repo: "AbstractFederationRepo",
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
         self._federation_repo = federation_repo
+        # Optional so existing test wiring (which constructs this
+        # service without the visibility filter) keeps working — when
+        # unset, every user fans to every confirmed peer just like
+        # before this PR.
+        self._visibility_repo = visibility_repo
 
     def wire(self) -> None:
         self._bus.subscribe(UserProfileUpdated, self._on_updated)
@@ -77,6 +91,25 @@ class ProfileFederationOutbound:
             instance_id = getattr(peer, "id", None)
             if not instance_id or instance_id == own:
                 continue
+            # Per-pair user-visibility filter (peer_user_visibility).
+            # Default-visible: ``is_visible`` returns ``True`` when the
+            # admin hasn't explicitly hidden ``event.user_id`` from
+            # this peer.
+            if self._visibility_repo is not None:
+                try:
+                    visible = await self._visibility_repo.is_visible(
+                        instance_id,
+                        event.user_id,
+                    )
+                except Exception as exc:  # pragma: no cover — defensive
+                    log.debug(
+                        "profile-outbound: visibility check for %s failed: %s",
+                        instance_id,
+                        exc,
+                    )
+                    visible = True
+                if not visible:
+                    continue
             try:
                 await self._federation.send_event(
                     to_instance_id=instance_id,

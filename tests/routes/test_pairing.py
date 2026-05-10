@@ -308,6 +308,185 @@ async def test_relay_list_approve_decline_full_flow(client):
     assert len(remaining) == 1
 
 
+# ── /api/pairing/connections/{id}/visible-users ────────────────────────
+
+
+async def _seed_extra_user(client, username: str) -> str:
+    """Create a second local user, return their user_id."""
+    from socialhome.app_keys import db_key as _db_key
+    from socialhome.crypto import derive_user_id
+
+    db = client.app[_db_key]
+    row = await db.fetchone(
+        "SELECT identity_public_key FROM instance_identity WHERE id='self'",
+    )
+    pk_bytes = bytes.fromhex(row["identity_public_key"])
+    uid = derive_user_id(pk_bytes, username)
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        (username, uid, username.title()),
+    )
+    return uid
+
+
+async def test_visible_users_get_returns_default_visible(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-vis-1"))
+    extra_uid = await _seed_extra_user(client, "lily")
+
+    r = await client.get(
+        "/api/pairing/connections/peer-vis-1/visible-users",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    rows = {u["user_id"]: u for u in body["users"]}
+    # Both admin and the freshly-seeded ``lily`` default to visible.
+    assert client._uid in rows and rows[client._uid]["visible"] is True
+    assert extra_uid in rows and rows[extra_uid]["visible"] is True
+
+
+async def test_visible_users_patch_hides_user_and_sends_user_removed(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-vis-2"))
+    extra_uid = await _seed_extra_user(client, "kai")
+
+    captured: list[dict] = []
+
+    class _Recorder:
+        async def send_event(self, *, to_instance_id, event_type, payload):
+            captured.append(
+                {"to": to_instance_id, "type": event_type, "payload": payload},
+            )
+
+    from socialhome.app_keys import federation_service_key
+
+    client.app[federation_service_key] = _Recorder()
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-vis-2/visible-users",
+        json={"updates": [{"user_id": extra_uid, "visible": False}]},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    rows = {u["user_id"]: u for u in body["users"]}
+    assert rows[extra_uid]["visible"] is False
+
+    from socialhome.domain.federation import FederationEventType
+
+    assert len(captured) == 1
+    assert captured[0]["to"] == "peer-vis-2"
+    assert captured[0]["type"] is FederationEventType.USER_REMOVED
+    assert captured[0]["payload"] == {"user_id": extra_uid}
+
+
+async def test_visible_users_patch_unhide_sends_user_updated(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-vis-3"))
+    extra_uid = await _seed_extra_user(client, "max")
+
+    from socialhome.app_keys import (
+        federation_service_key,
+        peer_user_visibility_repo_key,
+    )
+
+    # Pre-hide the user via the repo so the PATCH path tests the
+    # hidden→visible transition specifically.
+    vis_repo = client.app[peer_user_visibility_repo_key]
+    await vis_repo.set_visibility(
+        instance_id="peer-vis-3",
+        user_id=extra_uid,
+        visible=False,
+        set_by=None,
+    )
+
+    captured: list[dict] = []
+
+    class _Recorder:
+        async def send_event(self, *, to_instance_id, event_type, payload):
+            captured.append({"type": event_type, "payload": payload})
+
+    client.app[federation_service_key] = _Recorder()
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-vis-3/visible-users",
+        json={"updates": [{"user_id": extra_uid, "visible": True}]},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+
+    from socialhome.domain.federation import FederationEventType
+
+    assert len(captured) == 1
+    assert captured[0]["type"] is FederationEventType.USER_UPDATED
+    assert captured[0]["payload"]["user_id"] == extra_uid
+
+
+async def test_visible_users_patch_no_op_when_already_in_target_state(client):
+    """Visible-→visible flip is a no-op (already-visible default)."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-vis-4"))
+    extra_uid = await _seed_extra_user(client, "noop")
+
+    captured: list[dict] = []
+
+    class _Recorder:
+        async def send_event(self, *, to_instance_id, event_type, payload):
+            captured.append({})
+
+    from socialhome.app_keys import federation_service_key
+
+    client.app[federation_service_key] = _Recorder()
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-vis-4/visible-users",
+        json={"updates": [{"user_id": extra_uid, "visible": True}]},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    # Already-visible to already-visible — no envelope sent.
+    assert captured == []
+
+
+async def test_visible_users_patch_rejects_unknown_user(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-vis-5"))
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-vis-5/visible-users",
+        json={"updates": [{"user_id": "not-a-real-user", "visible": False}]},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_visible_users_404_for_unknown_peer(client):
+    r = await client.get(
+        "/api/pairing/connections/no-such-peer/visible-users",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+
+
+async def test_visible_users_requires_admin(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-vis-6"))
+
+    from socialhome.app_keys import db_key as _db_key
+
+    db = client.app[_db_key]
+    await db.enqueue(
+        "UPDATE users SET is_admin=0 WHERE user_id=?",
+        (client._uid,),
+    )
+    r = await client.get(
+        "/api/pairing/connections/peer-vis-6/visible-users",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+
+
 async def test_relay_requests_require_admin(client):
     """Non-admin user gets 403."""
     from socialhome.app_keys import db_key as _db_key

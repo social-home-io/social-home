@@ -23,6 +23,11 @@ from .conversation_repo import (
     new_conversation,
 )
 from .federation_repo import AbstractFederationRepo, SqliteFederationRepo
+from .peer_user_visibility_repo import (
+    AbstractPeerUserVisibilityRepo,
+    PeerUserVisibilityRow,
+    SqlitePeerUserVisibilityRepo,
+)
 from .notification_repo import (
     AbstractNotificationRepo,
     Notification,
@@ -70,6 +75,8 @@ __all__ = [
     "AbstractCalendarRepo",
     "AbstractConversationRepo",
     "AbstractFederationRepo",
+    "AbstractPeerUserVisibilityRepo",
+    "PeerUserVisibilityRow",
     "AbstractNotificationRepo",
     "AbstractOutboxRepo",
     "AbstractPageRepo",
@@ -96,6 +103,7 @@ __all__ = [
     "SqliteCalendarRepo",
     "SqliteConversationRepo",
     "SqliteFederationRepo",
+    "SqlitePeerUserVisibilityRepo",
     "SqliteNotificationRepo",
     "SqliteOutboxRepo",
     "SqlitePageRepo",

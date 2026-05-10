@@ -258,6 +258,12 @@ class SqliteUserRepo:
         return _row_to_remote_user(row_to_dict(row))
 
     async def upsert_remote(self, remote: RemoteUser) -> None:
+        # ``deprovisioned_at`` is reset on upsert so a USER_UPDATED that
+        # arrives after a previous USER_REMOVED re-provisions the row.
+        # The owning instance is authoritative for their own users —
+        # if they re-publish the profile, we trust they want the user
+        # visible again (e.g. peer-user-visibility flipped from hidden
+        # back to visible).
         await self._db.enqueue(
             """
             INSERT INTO remote_users(
@@ -276,7 +282,8 @@ class SqliteUserRepo:
                 status_json=excluded.status_json,
                 public_key=excluded.public_key,
                 public_key_version=excluded.public_key_version,
-                synced_at=excluded.synced_at
+                synced_at=excluded.synced_at,
+                deprovisioned_at=NULL
             """,
             (
                 remote.user_id,

@@ -205,6 +205,35 @@ CREATE TABLE IF NOT EXISTS remote_instances (
 );
 CREATE INDEX IF NOT EXISTS idx_remote_instances_status ON remote_instances(status);
 
+-- ── Peer-user visibility (outbound) ──────────────────────────────────────────
+-- Admin-controlled allow / deny list of which local household users surface
+-- to a given paired peer. Default behaviour (no row) = visible, so existing
+-- pairs keep working unchanged; the toggle is opt-out, not opt-in.
+--
+-- Owner of the policy is the *exposed* user's household — Lily's household
+-- decides where Lily shows up. Per-pair, not global ("hide Lily from
+-- grandma" is a different decision than "hide Lily from Anna's House").
+--
+-- Future user-scoped events (USER_UPDATED / USER_REMOVED, presence,
+-- online/idle/offline, outbound DM_RELAY) are filtered against this table
+-- on the fan-out. Past content in shared spaces stays — those are
+-- space-scoped, not user-scoped.
+--
+-- ``visible`` is INTEGER (0 | 1) rather than implementing
+-- "row exists ⇒ hidden, otherwise visible" so a future per-row metadata
+-- addition (reason, set_at, set_by) has a place to land without another
+-- migration. ``set_by`` records the admin user_id that flipped the row.
+CREATE TABLE IF NOT EXISTS peer_user_visibility (
+    instance_id  TEXT NOT NULL REFERENCES remote_instances(id) ON DELETE CASCADE,
+    user_id      TEXT NOT NULL REFERENCES users(user_id)       ON DELETE CASCADE,
+    visible      INTEGER NOT NULL DEFAULT 0,
+    set_at       TEXT NOT NULL DEFAULT (datetime('now')),
+    set_by       TEXT,
+    PRIMARY KEY (instance_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_peer_user_vis_instance
+    ON peer_user_visibility(instance_id);
+
 -- ── Household instance bans (§Momentum-relay-policy) ─────────────────────────
 -- Coarse-grained block list: any envelope whose
 -- ``from_instance`` (or hop-bearing ``origin_instance_id``) matches
