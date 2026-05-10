@@ -16,6 +16,7 @@ from typing import Protocol, runtime_checkable
 
 from dataclasses import replace
 
+from ..auth import sha256_token_hash
 from ..db import AsyncDatabase
 from ..domain.calendar import (
     Calendar,
@@ -947,17 +948,22 @@ class SqliteSpaceCalendarRepo:
         token: str,
     ) -> None:
         """Persist a feed token. Idempotent: a regenerate replaces the
-        previous (user, space) row, also clearing any prior revoke."""
+        previous (user, space) row, also clearing any prior revoke.
+
+        The raw token is SHA-256 hashed before storage — server-side dumps
+        of ``space_calendar_feed_tokens`` no longer disclose live feed
+        URLs. The raw token is still returned to the user at generation
+        time (only the persisted form changes)."""
         await self._db.enqueue(
             """
-            INSERT INTO space_calendar_feed_tokens(user_id, space_id, token)
+            INSERT INTO space_calendar_feed_tokens(user_id, space_id, token_hash)
             VALUES(?, ?, ?)
             ON CONFLICT(user_id, space_id) DO UPDATE SET
-                token=excluded.token,
+                token_hash=excluded.token_hash,
                 created_at=datetime('now'),
                 revoked_at=NULL
             """,
-            (user_id, space_id, token),
+            (user_id, space_id, sha256_token_hash(token)),
         )
 
     async def get_feed_token(
@@ -966,24 +972,30 @@ class SqliteSpaceCalendarRepo:
         user_id: str,
         space_id: str,
     ) -> str | None:
+        """Return the *hashed* feed token, or ``None`` if absent / revoked.
+
+        Note: the raw token is no longer recoverable from storage. This
+        accessor exists for tests and existence checks only — to mint a
+        fresh raw token, call :meth:`upsert_feed_token` again."""
         row = await self._db.fetchone(
-            "SELECT token FROM space_calendar_feed_tokens "
+            "SELECT token_hash FROM space_calendar_feed_tokens "
             "WHERE user_id=? AND space_id=? AND revoked_at IS NULL",
             (user_id, space_id),
         )
         d = row_to_dict(row)
-        return d["token"] if d else None
+        return d["token_hash"] if d else None
 
     async def get_user_for_feed_token(
         self,
         token: str,
     ) -> tuple[str, str] | None:
-        """Resolve a feed token to ``(user_id, space_id)``, or None if
-        the token is unknown or revoked."""
+        """Resolve a *raw* feed token to ``(user_id, space_id)``, or
+        ``None`` if the token is unknown or revoked. The lookup hashes
+        the token first because storage holds only the hash."""
         row = await self._db.fetchone(
             "SELECT user_id, space_id FROM space_calendar_feed_tokens "
-            "WHERE token=? AND revoked_at IS NULL",
-            (token,),
+            "WHERE token_hash=? AND revoked_at IS NULL",
+            (sha256_token_hash(token),),
         )
         d = row_to_dict(row)
         if d is None:

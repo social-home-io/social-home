@@ -103,7 +103,7 @@ anything below contradicts the file, the file wins.
 | `space_calendar_events` | Space calendar events. Holds RFC 5545 `rrule`, attendees JSON, `capacity`, `notify_before_minutes`. |
 | `space_calendar_rsvps` | Per-occurrence RSVPs — `(event_id, user_id, occurrence_at)` PK. Status: `going` / `maybe` / `declined` / `requested` / `waitlist`. |
 | `space_calendar_rsvp_reminders` | Pre-event reminder fan-out — `fire_at` partial index on un-sent + future. Driven by `infrastructure/calendar_reminder_scheduler.py`. |
-| `space_calendar_feed_tokens` | Per-`(user, space)` revocable tokens for the iCal `.ics` feed. Separate from API tokens so revoking one doesn't affect the other. |
+| `space_calendar_feed_tokens` | Per-`(user, space)` revocable tokens for the iCal `.ics` feed. The `token_hash` column holds a SHA-256 hash of the raw token (matching `api_tokens`); a leaked DB never exposes a live feed URL. Separate from API tokens so revoking one doesn't affect the other. |
 | `pending_federated_rsvps` | Buffer for RSVP federation events arriving before their event has propagated. Flushed on event arrival. |
 | `space_pages` | Wiki-style space pages with edit-lock fields and pending-delete approval workflow. |
 | `space_page_snapshots` | Concurrent-edit conflict resolution (§4.4.4.1). Sides are `base` / `mine` / `theirs`; `conflict=1` blocks further edits until resolved. |
