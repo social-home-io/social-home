@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from socialhome.crypto import derive_instance_id, generate_identity_keypair
@@ -46,7 +48,7 @@ class _StubSession:
     when the method has no override.
     """
 
-    __slots__ = ("_status", "_body", "method_responses", "calls")
+    __slots__ = ("_status", "_body", "method_responses", "calls", "_last_body")
 
     def __init__(
         self,
@@ -59,6 +61,10 @@ class _StubSession:
         self._body = body or {}
         self.method_responses = method_responses or {}
         self.calls: list[tuple[str, str]] = []
+        # Last JSON body the caller passed via ``json=`` — exposed for
+        # tests that need to assert what got serialized on the wire
+        # (e.g. publish-body signature verification).
+        self._last_body: dict | None = None
 
     def _resp(self, method: str) -> _StubResp:
         override = self.method_responses.get(method)
@@ -73,6 +79,8 @@ class _StubSession:
 
     def post(self, url, **kw):
         self.calls.append(("POST", url))
+        if "json" in kw:
+            self._last_body = kw["json"]
         return self._resp("POST")
 
     def delete(self, url, **kw):
@@ -614,3 +622,101 @@ async def test_release_signaling_node_no_url_is_noop(env):
         signing_key=kp.private_key,
     )
     assert session.calls == []
+
+
+# ── publish-space context (attach_publish_context + _build_publish_body) ──
+
+
+async def test_publish_body_falls_back_when_context_unset(env):
+    """Without ``attach_publish_context``, ``publish_space`` ships only
+    the bare ``{space_id}`` body — preserves the legacy shape so an
+    unmigrated SH (no identity wired) still triggers a ``status='pending'``
+    row on the GFS rather than failing the publish call entirely."""
+    _, repo = env
+    await repo.save(_make_conn("gfs-1", inbox_url="https://gfs.example"))
+    session = _StubSession(method_responses={"POST": (200, {"status": "pending"})})
+    svc = GfsConnectionService(repo, http_client=session)
+    # No attach_publish_context call. publish_space still works.
+    await svc.publish_space("sp-bare", "gfs-1")
+    assert session.calls == [("POST", "https://gfs.example/gfs/spaces/sp-bare/publish")]
+
+
+async def test_publish_body_carries_metadata_and_signature(env):
+    """With ``attach_publish_context`` wired, the publish body includes
+    the local space's name + description + signed canonical JSON the
+    GFS verifies against ``ClientInstance.public_key``."""
+    from socialhome.crypto import (
+        b64url_decode,
+        verify_ed25519,
+    )
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+    from socialhome.repositories.space_repo import SqliteSpaceRepo
+
+    db, conn_repo = env
+    await conn_repo.save(_make_conn("gfs-2", inbox_url="https://gfs.example"))
+    space_repo = SqliteSpaceRepo(db)
+    space = Space(
+        id="sp-rich",
+        name="Local Birds",
+        owner_instance_id="alpha.home",
+        owner_username="alice",
+        identity_public_key="aa" * 32,
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.GLOBAL,
+        join_mode=JoinMode.OPEN,
+        description="everyday birds in the neighbourhood",
+    )
+    await space_repo.save(space)
+
+    kp = generate_identity_keypair()
+    session = _StubSession(
+        method_responses={"POST": (200, {"status": "registered"})},
+    )
+    svc = GfsConnectionService(conn_repo, http_client=session)
+    svc.attach_publish_context(
+        space_repo=space_repo,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    await svc.publish_space("sp-rich", "gfs-2")
+    # Capture the body the stub session forwarded.
+    body = session._last_body  # type: ignore[attr-defined]
+    assert body["space_id"] == "sp-rich"
+    assert body["owning_instance"] == "alpha.home"
+    assert body["name"] == "Local Birds"
+    assert body["description"] == "everyday birds in the neighbourhood"
+    sig_b64 = body.pop("signature")
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig_b64))
+
+
+async def test_publish_body_falls_back_when_space_missing(env):
+    """``attach_publish_context`` is wired but the local space row is
+    gone — fall back to the legacy ``{space_id}`` body rather than
+    crashing the auto-publish hook. The GFS will still create a
+    pending row keyed on the id; an admin or a re-publish can fill
+    in the metadata later."""
+    from socialhome.repositories.space_repo import SqliteSpaceRepo
+
+    db, conn_repo = env
+    await conn_repo.save(_make_conn("gfs-3", inbox_url="https://gfs.example"))
+    kp = generate_identity_keypair()
+    session = _StubSession(method_responses={"POST": (200, {"status": "pending"})})
+    svc = GfsConnectionService(conn_repo, http_client=session)
+    svc.attach_publish_context(
+        space_repo=SqliteSpaceRepo(db),
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    await svc.publish_space("sp-missing", "gfs-3")
+    # We don't have the body-capture in the legacy path; just assert
+    # the request landed and didn't raise.
+    assert session.calls == [
+        ("POST", "https://gfs.example/gfs/spaces/sp-missing/publish"),
+    ]
