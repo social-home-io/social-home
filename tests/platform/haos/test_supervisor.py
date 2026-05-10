@@ -10,12 +10,7 @@ from socialhome.platform.haos.supervisor import SupervisorClient
 
 @pytest.fixture
 async def sv_server(aiohttp_server):
-    captured: dict = {
-        "discovery": [],
-        "auth_response": None,
-        "validate_status": 200,
-        "validate_calls": [],
-    }
+    captured: dict = {"discovery": [], "auth_response": None}
 
     async def auth_list(request: web.Request) -> web.Response:
         captured["auth_header"] = request.headers.get("Authorization")
@@ -44,19 +39,9 @@ async def sv_server(aiohttp_server):
         captured["discovery"].append(body)
         return web.json_response({"result": "ok"})
 
-    async def validate_session(request: web.Request) -> web.Response:
-        body = await request.json()
-        captured["validate_calls"].append(body)
-        return web.json_response({}, status=captured["validate_status"])
-
     app = web.Application()
     app.router.add_get("/auth/list", auth_list)
     app.router.add_post("/discovery", discovery)
-    # Real Supervisor route (see ``supervisor/api/__init__.py`` upstream
-    # — ``web.post("/ingress/validate_session", api_ingress.validate_session)``).
-    # The earlier code in this repo posted to the wrong path
-    # (``/ingress/session/validate``) which 404'd on every call.
-    app.router.add_post("/ingress/validate_session", validate_session)
     server = await aiohttp_server(app)
     return server, captured
 
@@ -100,21 +85,3 @@ async def test_push_discovery_true_on_2xx(client, sv_server):
     assert captured["discovery"] == [
         {"service": "socialhome", "config": {"token": "abc"}},
     ]
-
-
-async def test_validate_session_token_hits_correct_path(client, sv_server):
-    _, captured = sv_server
-    captured["validate_status"] = 200
-    assert await client.validate_session_token("session-x") is True
-    assert captured["validate_calls"] == [{"session": "session-x"}]
-
-
-async def test_validate_session_token_rejects_on_4xx(client, sv_server):
-    _, captured = sv_server
-    captured["validate_status"] = 401
-    assert await client.validate_session_token("bad") is False
-
-
-async def test_validate_session_token_rejects_empty(client):
-    """No round-trip; empty token short-circuits to False."""
-    assert await client.validate_session_token("") is False

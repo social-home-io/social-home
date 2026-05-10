@@ -79,29 +79,6 @@ class SupervisorClient:
             return None
         return owner.get("username") or owner.get("name")
 
-    async def validate_session_token(self, token: str) -> bool:
-        """Validate a Supervisor-issued ingress session token.
-
-        The Supervisor's ``POST /ingress/validate_session`` endpoint
-        (see ``supervisor/api/__init__.py`` in home-assistant/supervisor)
-        returns 200 for live tokens and 401 / 403 for everything else.
-        Network failures and unexpected statuses fail closed — better
-        to bounce a legitimate user once than to fall back to
-        "trust the X-Ingress-User header" which is the §Audit #6 hole.
-        """
-        if not token:
-            return False
-        try:
-            async with self._session.post(
-                f"{self._base_url}/ingress/validate_session",
-                headers=self._headers(),
-                json={"session": token},
-            ) as resp:
-                return 200 <= resp.status < 300
-        except aiohttp.ClientError as exc:
-            log.warning("supervisor: ingress token validation failed: %s", exc)
-            return False
-
     async def push_discovery(self, payload: dict) -> bool:
         """POST ``/discovery`` — returns ``True`` on 2xx.
 
