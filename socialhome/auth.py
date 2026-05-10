@@ -231,41 +231,31 @@ class BearerTokenStrategy:
 
 
 class HaIngressStrategy:
-    """Authenticate via HA's Ingress headers (``X-Ingress-User`` + token).
+    """Authenticate via HA's Ingress headers (``X-Ingress-User``).
 
-    The Supervisor sets ``X-Ingress-User`` to the HA username and
-    ``X-Ingress-Token`` to a per-session token. The strategy is
-    fail-closed: a ``validate_token`` callback that actually checks the
-    token against the Supervisor API is REQUIRED. Wiring this without
-    one would let any client smuggle ``X-Ingress-User`` past a
-    misconfigured proxy and be authenticated as that user — which is
-    exactly the audit-flagged hole. Construction raises ``ValueError``
-    when the callback is missing so a dev mistake fails loudly.
+    The HA Supervisor sits in front of us as a reverse proxy and
+    validates the ingress session token *before* forwarding the
+    request to our container. By the time bytes reach this handler
+    Supervisor has already authenticated the user — we trust the
+    ``X-Ingress-User`` header it stamps in. This matches the
+    convention every other HA add-on follows (node-red, vscode,
+    file-editor, ESPHome…).
+
+    The threat model is "Supervisor proxied this request" — if an
+    operator misconfigures the add-on so its internal port is reachable
+    bypassing Supervisor, ``X-Ingress-User`` becomes spoofable, but
+    the same is true for every HA add-on. Closing that hole is a
+    Supervisor-level concern, not an add-on-level concern.
     """
 
-    __slots__ = ("_user_repo", "_validate_token")
+    __slots__ = ("_user_repo",)
 
-    def __init__(
-        self,
-        user_repo,
-        *,
-        validate_token: Callable[[str], Awaitable[bool]],
-    ) -> None:
-        if validate_token is None:
-            raise ValueError(
-                "HaIngressStrategy requires a validate_token callback —"
-                " trusting X-Ingress-User without verification is a"
-                " misconfiguration risk (Audit #6)."
-            )
+    def __init__(self, user_repo) -> None:
         self._user_repo = user_repo
-        self._validate_token = validate_token
 
     async def authenticate(self, request: "web.Request") -> AuthContext | None:
         username = request.headers.get("X-Ingress-User")
-        token = request.headers.get("X-Ingress-Token")
-        if not username or not token:
-            return None
-        if not await self._validate_token(token):
+        if not username:
             return None
         user = await self._user_repo.get(username)
         if user is None:

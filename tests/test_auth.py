@@ -93,75 +93,34 @@ async def test_bearer_strategy_no_creds(env):
     assert ctx is None
 
 
-async def _allow_any_token(_token: str) -> bool:
-    """Permissive validate_token used by the legacy positive-path tests.
-
-    The fail-closed test (``test_ha_ingress_requires_validate_token``)
-    is what enforces the §Audit #6 invariant — these tests check that
-    the strategy still works once a callback IS wired."""
-    return True
-
-
-async def _deny_any_token(_token: str) -> bool:
-    return False
-
-
-def test_ha_ingress_requires_validate_token(env):
-    """§Audit #6: instantiating without a validate_token callback must
-    raise — silently trusting X-Ingress-User behind a misconfigured
-    proxy is the exact bypass the audit flagged."""
-    with pytest.raises(ValueError, match="validate_token"):
-        HaIngressStrategy(env.user_repo, validate_token=None)  # type: ignore[arg-type]
-
-
 async def test_ha_ingress_strategy(env):
-    """X-Ingress-User + X-Ingress-Token headers authenticate the user."""
-    strategy = HaIngressStrategy(env.user_repo, validate_token=_allow_any_token)
-    req = _FakeRequest(
-        headers={
-            "X-Ingress-User": "testuser",
-            "X-Ingress-Token": "some-supervisor-token",
-        }
-    )
+    """X-Ingress-User authenticates the user — Supervisor authenticated
+    upstream and we trust the header it stamps in."""
+    strategy = HaIngressStrategy(env.user_repo)
+    req = _FakeRequest(headers={"X-Ingress-User": "testuser"})
     ctx = await strategy.authenticate(req)
     assert ctx is not None
     assert ctx.username == "testuser"
     assert ctx.auth_method == "ha_ingress"
 
 
-async def test_ha_ingress_rejects_when_validate_token_says_no(env):
-    """The validate_token callback is the actual gate — it returns False
-    → authenticate returns None even when both headers are present."""
-    strategy = HaIngressStrategy(env.user_repo, validate_token=_deny_any_token)
-    req = _FakeRequest(
-        headers={
-            "X-Ingress-User": "testuser",
-            "X-Ingress-Token": "any-token",
-        }
-    )
+async def test_ha_ingress_missing_header(env):
+    """Missing X-Ingress-User returns None."""
+    strategy = HaIngressStrategy(env.user_repo)
+    assert await strategy.authenticate(_FakeRequest()) is None
+
+
+async def test_ha_ingress_unknown_user(env):
+    """Header carries a username we don't have a row for → None."""
+    strategy = HaIngressStrategy(env.user_repo)
+    req = _FakeRequest(headers={"X-Ingress-User": "stranger"})
     assert await strategy.authenticate(req) is None
-
-
-async def test_ha_ingress_missing_headers(env):
-    """Missing X-Ingress-User or X-Ingress-Token returns None."""
-    strategy = HaIngressStrategy(env.user_repo, validate_token=_allow_any_token)
-
-    ctx = await strategy.authenticate(
-        _FakeRequest(headers={"X-Ingress-User": "testuser"})
-    )
-    assert ctx is None
-
-    ctx2 = await strategy.authenticate(_FakeRequest(headers={"X-Ingress-Token": "tok"}))
-    assert ctx2 is None
-
-    ctx3 = await strategy.authenticate(_FakeRequest())
-    assert ctx3 is None
 
 
 async def test_chained_strategy(env):
     """First matching strategy wins; no match across all strategies returns None."""
     bearer = BearerTokenStrategy(env.user_repo)
-    ingress = HaIngressStrategy(env.user_repo, validate_token=_allow_any_token)
+    ingress = HaIngressStrategy(env.user_repo)
     chained = ChainedStrategy(bearer, ingress)
 
     req_bearer = _FakeRequest(headers={"Authorization": f"Bearer {env.raw_token}"})

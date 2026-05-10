@@ -63,26 +63,21 @@ class HaAuthProvider:
         return None
 
     async def _authenticate_bearer(self, token: str) -> ExternalUser | None:
-        # Try the local credential store first — if the operator picked
-        # an HA owner during the setup wizard and minted a session via
-        # /api/auth/token, the token lives in platform_tokens. Fall back
-        # to validating against HA's own auth API for long-lived access
-        # tokens issued in HA.
+        # Tokens are only valid when they live in the local credential
+        # store (``platform_tokens``). Those are minted by the setup
+        # wizard against a known HA person, so the row carries a real
+        # ``username`` we can trust.
+        #
+        # We deliberately do NOT accept arbitrary HA long-lived access
+        # tokens here. ``GET /api/`` only returns ``{"message": "API
+        # running."}`` — the REST surface has no way to map a bearer
+        # token back to its owning HA user, so any fallback would
+        # collapse every LLAT into one shared SH identity. Reject
+        # unknown tokens loudly instead.
         credentials = self._adapter._credentials
-        if credentials is not None:
-            local = await credentials.authenticate_bearer(token)
-            if local is not None:
-                return local
-        data = await self._adapter._client.verify_token(token)
-        if data is None:
+        if credentials is None:
             return None
-        username = data.get("username") or "ha_api_user"
-        return ExternalUser(
-            username=username,
-            display_name=username,
-            picture_url=None,
-            is_admin=True,
-        )
+        return await credentials.authenticate_bearer(token)
 
 
 class HaUserDirectory:
