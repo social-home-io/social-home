@@ -142,27 +142,49 @@
   --hh-density-gap:   var(--sh-space-md);   /* "comfortable" */
 }
 
-/* Dark mode (§23.35) — warm slate with brand-coherent ink. */
+/* Dark mode (§23.35) — warm ember palette.
+ *
+ * Pre-2026.5 this block used the slate-blue ladder
+ * (``#161821`` paper-deep, ``#1F222C`` chrome, ``#252834`` nested
+ * cards). Side-by-side with the cream-paper light theme it read as
+ * "different product" rather than "night version of the same
+ * product" — the cool blue cast clashes with the warm hearth
+ * accents and the cream text.
+ *
+ * The new ladder is keyed at hue ≈24° (terracotta-adjacent) with
+ * ~20% saturation. Cream text stays high-contrast; the hearth
+ * primary stays the only saturated hit on the page; the surface
+ * lift between bg / secondary / tertiary is calibrated so cards
+ * read as "lifted" against cream paragraphs. The result feels like
+ * the cream-paper light mode in night form — coffee, espresso,
+ * warm ember — rather than generic dark-mode SaaS.
+ *
+ * Same ladder is mirrored verbatim into the GFS public surface
+ * (``socialhome/global_server/static/users_directory.css`` and
+ * the inline tokens in ``socialhome/global_server/public.py``)
+ * so a brand tweak here propagates to the federation entry-pages
+ * with a small ``s/old/new/`` over there too. */
 .sh-theme-dark {
   --sh-primary:        #E96A3F;  /* hearth lifted for dark surfaces */
   --sh-primary-hover:  #C04E22;  /* hearth-deep dark variant */
-  --sh-primary-soft:   #3A211A;  /* hearth tinted onto a dark surface */
+  --sh-primary-soft:   #4A2419;  /* hearth-on-dark — for tinted accents */
   --sh-success:        #6FA38B;  /* moss-light — readable on dark */
   --sh-warning:        #E8B865;  /* honey-light */
   --sh-danger:         #F87171;  /* red-400 */
   --sh-danger-hover:   #EF4444;
 
-  --sh-bg:             #161821;  /* paper-deep dark */
-  --sh-bg-secondary:   #1F222C;  /* one notch up for chrome */
-  --sh-bg-tertiary:    #252834;  /* two notches up for nested cards */
+  --sh-bg:             #1A1612;  /* deep ember — warm coffee */
+  --sh-bg-secondary:   #251E18;  /* one notch up for chrome */
+  --sh-bg-tertiary:    #2F261E;  /* two notches up for nested cards */
 
-  /* On dark slate the light-theme white-35% stripe glares — drop to
-     10% so the sheen is visible without bleaching the placeholder. */
+  /* On the warm ember bg the light-theme white-35% stripe glares —
+     drop to 10% so the sheen is visible without bleaching the
+     placeholder. */
   --sh-skeleton-highlight: color-mix(in srgb, #fff 10%, transparent);
-  --sh-text:           #F1E9DA;  /* ink-light — warm cream */
-  --sh-text-muted:     #8A8270;  /* ink-quiet dark */
-  --sh-border:         #3A3A36;  /* warm-tinted hairline */
-  --sh-border-strong:  #4F4A40;  /* ink-faint dark */
+  --sh-text:           #F1E9DA;  /* ink-light — warm cream (kept) */
+  --sh-text-muted:     #9A8E7D;  /* warm muted */
+  --sh-border:         #3D332A;  /* burnt-sienna hairline */
+  --sh-border-strong:  #56473A;  /* hairline lifted for hover */
 
   /* Shadows can stay near-black on dark surfaces; the warm tint
      above is what carries the brand. */
