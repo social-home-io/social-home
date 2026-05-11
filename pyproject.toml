@@ -1,6 +1,6 @@
 [project]
 name = "socialhome"
-version = "2026.5.10"
+dynamic = ["version"]
 requires-python = ">=3.14"
 license = {text = "Mozilla Public License 2.0"}
 license-files = ["LICENSE"]
@@ -67,8 +67,20 @@ global-server = [
 socialhome-global-server = "socialhome.global_server.server:main"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# CalVer versioning driven by git tags — ``YYYY.M.D`` tags
+# (``2026.5.11``, ``2026.5.11.1`` for same-day re-releases). The
+# build reads the latest tag, hatch-vcs writes it into
+# ``socialhome/_version.py`` (gitignored), and ``__version__`` in
+# ``socialhome/__init__.py`` imports from there. No more manual
+# ``version = "..."`` bump in this file before each release.
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "socialhome/_version.py"
 
 [tool.hatch.build.targets.wheel]
 # ``socialhome/static/`` is gitignored (vite output — built per release
