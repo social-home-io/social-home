@@ -280,16 +280,12 @@ async def test_batch_error_is_isolated_to_failing_statement(tmp_dir):
 
         async def bad_write() -> int:
             # No parent row with id=999 → FK violation.
-            return await db.enqueue(
-                "INSERT INTO child(parent_id) VALUES(?)", (999,)
-            )
+            return await db.enqueue("INSERT INTO child(parent_id) VALUES(?)", (999,))
 
         # Fire both concurrently so they coalesce into one batch.
         good_task = asyncio.create_task(good_write())
         bad_task = asyncio.create_task(bad_write())
-        results = await asyncio.gather(
-            good_task, bad_task, return_exceptions=True
-        )
+        results = await asyncio.gather(good_task, bad_task, return_exceptions=True)
         good_outcome, bad_outcome = results
 
         # Good write committed; lastrowid is a positive int.
