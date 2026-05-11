@@ -929,6 +929,19 @@ def create_app(config: Config | None = None) -> web.Application:
     # Configure logging
     logging.basicConfig(level=getattr(logging, config.log_level, logging.INFO))
 
+    # Capture ``warnings.warn(...)`` calls through the standard logger
+    # so deprecation / resource warnings flow through the same
+    # handlers and filters as everything else (mirrors HA Core's
+    # ``async_enable_logging``).
+    logging.captureWarnings(True)
+
+    # Quiet aiohttp's per-request access log — every request was
+    # being emitted at INFO and drowning real signal. Mirrors
+    # ``logging.getLogger("aiohttp.access").setLevel(WARNING)`` in
+    # both home-assistant/core (``homeassistant/bootstrap.py``) and
+    # the Supervisor (``supervisor/bootstrap.py``).
+    logging.getLogger("aiohttp.access").setLevel(logging.WARNING)
+
     # Route libdatachannel's native ICE/DTLS/SCTP logs through Python's
     # logging module so operators see them in the same stream they
     # already watch. The adapter derives the native filter level from
