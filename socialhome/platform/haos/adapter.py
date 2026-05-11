@@ -77,6 +77,16 @@ class HaIngressAuthProvider:
         self,
         request: "web.Request",
     ) -> ExternalUser | None:
+        # Gate on the canonical "came through HA Core's ingress proxy"
+        # marker first. HA Core sets ``X-Hass-Source: core.ingress`` by
+        # direct assignment on every ingress hop
+        # (``homeassistant/components/hassio/ingress.py``), overwriting
+        # any browser-supplied value — so its presence on the request
+        # proves the user already passed through Core's authentication
+        # and Supervisor's session check. Without it we have no business
+        # trusting ``X-Remote-User-Name``.
+        if request.headers.get("X-Hass-Source") != "core.ingress":
+            return None
         ingress_user = request.headers.get("X-Remote-User-Name")
         if not ingress_user:
             return None

@@ -124,10 +124,29 @@ async def test_ingress_auth_with_header_resolves_person():
     client = _FakeHaClient(state_by_entity={"person.alice": state})
     adapter = _build_haos_adapter(ha_client=client)
     user = await adapter.auth.authenticate(
-        _FakeRequest(headers={"X-Remote-User-Name": "alice"}),
+        _FakeRequest(
+            headers={
+                "X-Hass-Source": "core.ingress",
+                "X-Remote-User-Name": "alice",
+            }
+        ),
     )
     assert user is not None
     assert user.username == "alice"
+
+
+async def test_ingress_auth_username_without_hass_source_rejected():
+    """A request carrying ``X-Remote-User-Name`` but missing the
+    ``X-Hass-Source: core.ingress`` marker did not come through Core's
+    ingress proxy — the HAOS adapter must refuse to authenticate it
+    regardless of whether the username exists locally."""
+    state = {"entity_id": "person.alice", "attributes": {"friendly_name": "Alice"}}
+    client = _FakeHaClient(state_by_entity={"person.alice": state})
+    adapter = _build_haos_adapter(ha_client=client)
+    user = await adapter.auth.authenticate(
+        _FakeRequest(headers={"X-Remote-User-Name": "alice"}),
+    )
+    assert user is None
 
 
 # ─── Instance config + location override ────────────────────────────────────

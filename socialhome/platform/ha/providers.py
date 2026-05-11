@@ -54,9 +54,16 @@ class HaAuthProvider:
         self,
         request: "web.Request",
     ) -> ExternalUser | None:
-        ingress_user = request.headers.get("X-Remote-User-Name")
-        if ingress_user:
-            return await self._adapter.users.get(ingress_user)
+        # Only trust ``X-Remote-User-Name`` when HA Core's ingress proxy
+        # is in the path — confirmed by ``X-Hass-Source: core.ingress``
+        # (set by direct assignment in ``homeassistant/components/hassio/
+        # ingress.py``, overwriting any client-supplied value). Without
+        # the marker the request didn't pass Core's auth, so fall
+        # through to the bearer path.
+        if request.headers.get("X-Hass-Source") == "core.ingress":
+            ingress_user = request.headers.get("X-Remote-User-Name")
+            if ingress_user:
+                return await self._adapter.users.get(ingress_user)
         token = _extract_bearer(request)
         if token:
             return await self._authenticate_bearer(token)

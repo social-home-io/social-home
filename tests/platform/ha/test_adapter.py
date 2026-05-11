@@ -135,7 +135,12 @@ async def test_authenticate_ingress_user_looks_up_person_entity():
     adapter = _build_adapter(client=client)
 
     user = await adapter.authenticate(
-        _FakeRequest(headers={"X-Remote-User-Name": "pascal"}),
+        _FakeRequest(
+            headers={
+                "X-Hass-Source": "core.ingress",
+                "X-Remote-User-Name": "pascal",
+            }
+        ),
     )
     assert user is not None and user.username == "pascal"
     assert ("get_state", "person.pascal") in client.calls

@@ -257,6 +257,13 @@ class HaIngressStrategy:
         self._user_repo = user_repo
 
     async def authenticate(self, request: "web.Request") -> AuthContext | None:
+        # Only trust ``X-Remote-User-Name`` when HA Core's ingress
+        # proxy is in the path. ``X-Hass-Source: core.ingress`` is set
+        # by direct assignment in ``homeassistant/components/hassio/
+        # ingress.py``, overwriting any client-supplied value, so its
+        # presence proves the request went through Core's authentication.
+        if request.headers.get("X-Hass-Source") != "core.ingress":
+            return None
         username = request.headers.get("X-Remote-User-Name")
         if not username:
             return None
