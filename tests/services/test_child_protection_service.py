@@ -20,6 +20,7 @@ from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.child_protection_service import (
     ChildProtectionService,
     GuardianRequiredError,
+    UserNotFoundError,
 )
 
 
@@ -777,3 +778,68 @@ async def test_get_membership_audit_blocks_strangers(env):
             minor_user_id="lila-id",
             requester_user_id="mom-id",
         )
+
+
+# ─── User-existence prechecks (audit follow-up to #280) ──────────────────
+
+
+async def test_enable_protection_unknown_username_raises(env):
+    """A typo'd ``minor_username`` would otherwise UPDATE 0 rows silently
+    and still emit ``CpProtectionEnabled`` — surface 404 instead."""
+    svc, _ = env
+    with pytest.raises(UserNotFoundError) as excinfo:
+        await svc.enable_protection(
+            minor_username="ghost",
+            declared_age=12,
+            actor_user_id="admin-id",
+        )
+    assert "ghost" in str(excinfo.value)
+
+
+async def test_disable_protection_unknown_username_raises(env):
+    svc, _ = env
+    with pytest.raises(UserNotFoundError):
+        await svc.disable_protection(
+            minor_username="ghost",
+            actor_user_id="admin-id",
+        )
+
+
+async def test_add_guardian_unknown_minor_raises(env):
+    """``cp_guardians.minor_user_id`` is FK to ``users(user_id)``; without
+    the precheck a bad id surfaces as ``sqlite3.IntegrityError`` 500."""
+    svc, _ = env
+    with pytest.raises(UserNotFoundError) as excinfo:
+        await svc.add_guardian(
+            minor_user_id="nonexistent",
+            guardian_user_id="mom-id",
+            actor_user_id="admin-id",
+        )
+    assert "nonexistent" in str(excinfo.value)
+
+
+async def test_add_guardian_unknown_guardian_raises(env):
+    """Same precheck for ``guardian_user_id`` — symmetric FK."""
+    svc, _ = env
+    with pytest.raises(UserNotFoundError) as excinfo:
+        await svc.add_guardian(
+            minor_user_id="lila-id",
+            guardian_user_id="nonexistent",
+            actor_user_id="admin-id",
+        )
+    assert "nonexistent" in str(excinfo.value)
+
+
+async def test_add_guardian_both_present_still_works(env):
+    """Sanity check: the precheck doesn't break the happy path."""
+    svc, db = env
+    await svc.add_guardian(
+        minor_user_id="lila-id",
+        guardian_user_id="mom-id",
+        actor_user_id="admin-id",
+    )
+    row = await db.fetchone(
+        "SELECT 1 FROM cp_guardians WHERE minor_user_id='lila-id' "
+        "AND guardian_user_id='mom-id'",
+    )
+    assert row is not None
