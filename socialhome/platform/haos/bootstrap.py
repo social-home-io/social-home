@@ -15,8 +15,13 @@ The bootstrap is idempotent — the ``ha_bootstrap_done`` flag in
 discovery push runs on every boot (so HA recovers from a restart even
 before it next re-polls its discovery cache).
 
-HA resolves the add-on hostname itself, so we no longer fetch it from
-Supervisor — the discovery payload only carries the integration token.
+The discovery payload advertises the add-on's reachable ``host`` and
+``port`` (sourced from ``GET /addons/self/info``) alongside the
+integration token. Letting the add-on tell HA exactly where to reach
+it removes a class of subtle bugs — Docker DNS rewrites underscores
+to dashes in container hostnames, and the listen port is whatever
+the operator set in ``[server] listen_port`` — that the integration
+would otherwise have to reproduce by convention.
 """
 
 from __future__ import annotations
@@ -188,8 +193,11 @@ class HaBootstrap:
         """Advertise the integration to HA via the Supervisor.
 
         Runs on every boot so HA recovers its discovery cache after a
-        Supervisor restart. HA resolves the add-on hostname itself, so
-        the payload only carries the integration token.
+        Supervisor restart. The payload carries the integration
+        token plus the add-on's reachable ``host`` + ``port`` (read
+        from ``GET /addons/self/info``) so HA Core's ``socialhome``
+        config flow can talk to us straight away — no slug-to-host
+        substitution on the integration side.
         """
         token_path = self._token_path()
         if not os.path.exists(token_path):
@@ -207,12 +215,28 @@ class HaBootstrap:
             )
             return
 
+        info = await self._sv.get_self_info()
+        if info is None:
+            log.warning(
+                "ha_bootstrap: /addons/self/info missing hostname/ingress_port"
+                " — skipping discovery"
+            )
+            return
+
         payload = {
             "service": "socialhome",
-            "config": {"token": raw_token},
+            "config": {
+                "host": info.hostname,
+                "port": info.ingress_port,
+                "token": raw_token,
+            },
         }
         if await self._sv.push_discovery(payload):
-            log.info("ha_bootstrap: discovery pushed")
+            log.info(
+                "ha_bootstrap: discovery pushed (host=%s port=%d)",
+                info.hostname,
+                info.ingress_port,
+            )
 
     # ─── Config-flag helpers ──────────────────────────────────────────────
 
