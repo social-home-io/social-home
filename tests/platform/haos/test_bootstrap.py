@@ -27,13 +27,28 @@ class _FakeSupervisor:
         *,
         owner_username: str | None = "ha_admin",
         fail_discovery: bool = False,
+        self_info: dict | None = None,
     ) -> None:
         self.owner_username = owner_username
         self.fail_discovery = fail_discovery
+        # ``None`` here means "Supervisor said no" — the bootstrap
+        # logs and skips the push instead of guessing.
+        self.self_info: dict | None = (
+            self_info
+            if self_info is not None
+            else {
+                "slug": "local_social_home",
+                "hostname": "local-social-home",
+                "ingress_port": 8099,
+            }
+        )
         self.pushed_payloads: list[dict] = []
 
     async def get_owner_username(self) -> str | None:
         return self.owner_username
+
+    async def get_self_info(self) -> dict | None:
+        return self.self_info
 
     async def push_discovery(self, payload: dict) -> bool:
         self.pushed_payloads.append(payload)
@@ -167,11 +182,14 @@ async def test_run_provisions_admin_and_pushes_discovery(env):
     # Flag set
     assert await bs._is_done() is True
 
-    # Discovery pushed with the freshly-minted token — no url field.
+    # Discovery pushed with the freshly-minted token, plus the
+    # add-on's reachable hostname + port read from /addons/self/info.
     assert len(sv.pushed_payloads) == 1
     payload = sv.pushed_payloads[0]
     assert payload["service"] == "socialhome"
-    assert set(payload["config"].keys()) == {"token"}
+    assert set(payload["config"].keys()) == {"host", "port", "token"}
+    assert payload["config"]["host"] == "local-social-home"
+    assert payload["config"]["port"] == 8099
     with open(token_file) as f:
         assert payload["config"]["token"] == f.read().strip()
 
@@ -225,6 +243,30 @@ async def test_run_discovery_skipped_when_token_file_missing(env):
     bs = HaBootstrap(env.db, sv, env.data_dir)
     await bs._mark_done()
 
+    await bs.run()
+    assert sv.pushed_payloads == []
+
+
+async def test_run_discovery_skipped_when_self_info_unavailable(env):
+    """If ``/addons/self/info`` returns no hostname/port we don't push
+    a half-formed payload — the integration would fail at ``_validate``."""
+    sv = _FakeSupervisor(owner_username="ha_admin", self_info=None)
+    bs = HaBootstrap(env.db, sv, env.data_dir)
+    await bs.run()
+    # Owner was still provisioned + token was minted — we just
+    # didn't advertise it this boot. A later boot with a working
+    # Supervisor will push.
+    assert await env.db.fetchval("SELECT COUNT(*) FROM users") == 1
+    assert sv.pushed_payloads == []
+
+
+async def test_run_discovery_skipped_when_self_info_missing_port(env):
+    """Same guard for partial payloads — hostname without port."""
+    sv = _FakeSupervisor(
+        owner_username="ha_admin",
+        self_info={"hostname": "local-social-home"},
+    )
+    bs = HaBootstrap(env.db, sv, env.data_dir)
     await bs.run()
     assert sv.pushed_payloads == []
 

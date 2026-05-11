@@ -39,9 +39,25 @@ async def sv_server(aiohttp_server):
         captured["discovery"].append(body)
         return web.json_response({"result": "ok"})
 
+    async def self_info(request: web.Request) -> web.Response:
+        captured["self_info_header"] = request.headers.get("Authorization")
+        return web.json_response(
+            captured.get("self_info_response")
+            or {
+                "result": "ok",
+                "data": {
+                    "slug": "local_social_home",
+                    "hostname": "local-social-home",
+                    "ingress_port": 8099,
+                    "ip_address": "172.30.33.0",
+                },
+            }
+        )
+
     app = web.Application()
     app.router.add_get("/auth/list", auth_list)
     app.router.add_post("/discovery", discovery)
+    app.router.add_get("/addons/self/info", self_info)
     server = await aiohttp_server(app)
     return server, captured
 
@@ -85,3 +101,26 @@ async def test_push_discovery_true_on_2xx(client, sv_server):
     assert captured["discovery"] == [
         {"service": "socialhome", "config": {"token": "abc"}},
     ]
+
+
+async def test_get_self_info_returns_data_block(client, sv_server):
+    _, captured = sv_server
+    info = await client.get_self_info()
+    assert info == {
+        "slug": "local_social_home",
+        "hostname": "local-social-home",
+        "ingress_port": 8099,
+        "ip_address": "172.30.33.0",
+    }
+    assert captured["self_info_header"] == "Bearer sv-token"
+
+
+async def test_get_self_info_returns_none_when_supervisor_unreachable():
+    """A bad URL surfaces as ``None`` (no exception escapes)."""
+    import aiohttp
+
+    async with aiohttp.ClientSession() as session:
+        # Port 1 is reserved and refused on every sane host; the
+        # client wraps the connection error into a warning + ``None``.
+        sv = SupervisorClient(session, "http://127.0.0.1:1", "sv-token")
+        assert await sv.get_self_info() is None
