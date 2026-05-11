@@ -352,6 +352,7 @@ from .setup import (
     HaosCompleteSetupView,
     StandaloneSetupView,
 )
+from .spa import mount_spa
 from .stt import SttStreamView
 from .ws import WebSocketView
 
@@ -1101,6 +1102,13 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     if adapter is not None:
         for path, view_cls in adapter.get_extra_routes():
             app.router.add_view(path, view_cls)
+
+    # ── SPA bundle (index.html + assets) ───────────────────────────────
+    # Preact SPA in ``client/`` builds into ``socialhome/static/``; the
+    # SPA router handles its own in-app routes, so the backend only
+    # serves the entry document plus the PWA manifest, service worker,
+    # and the hashed asset bundles.
+    mount_spa(app)
 
 
 __all__ = ["setup_routes"]

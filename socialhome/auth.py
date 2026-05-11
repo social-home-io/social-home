@@ -61,14 +61,26 @@ _DEFAULT_PUBLIC_PATHS: tuple[str, ...] = (
     # SpaceBotRepo.get_by_token_hash. DM bot-bridge posts use a normal
     # user token and go through the standard middleware.
     "/api/bot-bridge/spaces/",
+    # SPA entry points — the browser fetches these before the user has
+    # a token. ``routes.spa.mount_spa`` registers the matching handlers;
+    # ``/`` itself is opened via the ``^/$`` regex below (the prefix
+    # matcher would otherwise treat ``/`` as public-everything).
+    "/manifest.json",
+    "/sw.js",
+    "/assets/",
 )
 
 #: Phase F — iCal subscription feeds carry a per-(user, space) token in
 #: the query string because most desktop calendar clients refresh
 #: without OAuth. The route handler validates the token; this regex
 #: lets the auth middleware skip the standard Bearer-token requirement.
+#:
+#: ``^/$`` matches just the root URL — the SPA index. Using a regex
+#: instead of adding ``/`` to :data:`_DEFAULT_PUBLIC_PATHS` keeps the
+#: prefix matcher from turning every URL public.
 _DEFAULT_PUBLIC_PATH_PATTERNS: tuple[str, ...] = (
     r"^/api/spaces/[^/]+/calendar/export\.ics$",
+    r"^/$",
 )
 
 
