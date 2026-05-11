@@ -45,6 +45,7 @@ from ..services.child_protection_service import (
 from ..services.gallery_service import GalleryNotFoundError, GalleryPermissionError
 from ..services.page_conflict_service import NoActiveConflictError
 from ..services.poll_service import PollClosedError, PollNotFoundError
+from ..services.presence_service import UserNotFoundError as PresenceUserNotFoundError
 from ..services.space_zone_service import (
     SpaceZoneLimitError,
     SpaceZoneNameConflictError,
@@ -146,6 +147,7 @@ class BaseView(web.View):
             HighlightNotFoundError,
             HighlightPublicationNotFoundError,
             MomentNotFoundError,
+            PresenceUserNotFoundError,
         ) as exc:
             return error_response(404, "NOT_FOUND", str(exc))
         except HighlightPublicationError as exc:

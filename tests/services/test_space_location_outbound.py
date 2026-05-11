@@ -748,7 +748,7 @@ async def test_mode_changed_event_refires_presence_for_space_only(env):
     # don't fire PresenceUpdated) — we want to verify the
     # mode-change handler reads the row directly.
     presence_repo = SqlitePresenceRepo(env.db)
-    presence_svc = PresenceService(presence_repo)  # no bus
+    presence_svc = PresenceService(presence_repo, SqliteUserRepo(env.db))  # no bus
     await presence_svc.update_location(
         LocationUpdate(
             username="alice",

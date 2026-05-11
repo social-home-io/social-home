@@ -295,3 +295,17 @@ async def test_presence_drops_blocked_household_member(client):
     assert r.status == 201
     body = await (await client.get("/api/presence", headers=_auth(client._tok))).json()
     assert not any(p["user_id"] == "uid-bob-presence" for p in body)
+
+
+async def test_update_location_unknown_username_404(client):
+    """Pushing presence for a username that does not exist in ``users``
+    must return 404, not the previous opaque 500 from the FK violation
+    on ``presence.username -> users.username``."""
+    r = await client.post(
+        "/api/presence/location",
+        json={"username": "nobody", "zone_name": "home"},
+        headers=_auth(client._tok),  # admin token from conftest
+    )
+    assert r.status == 404
+    body = await r.json()
+    assert body["error"]["code"] == "NOT_FOUND"
