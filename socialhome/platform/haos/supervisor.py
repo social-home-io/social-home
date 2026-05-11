@@ -110,7 +110,7 @@ class SupervisorClient:
         if not owner:
             log.warning("supervisor: no owner found in /auth/list")
             return None
-        return owner.get("username") or owner.get("name")
+        return owner.get("username")
 
     async def get_self_info(self) -> AddonInfo | None:
         """Return ``GET /addons/self/info`` as a typed :class:`AddonInfo`,
