@@ -19,6 +19,7 @@ from socialhome.crypto import (
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.presence import LocationUpdate, truncate_coord
 from socialhome.repositories.presence_repo import SqlitePresenceRepo
+from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.presence_service import PresenceService
 
 
@@ -60,7 +61,7 @@ async def env(tmp_dir):
     await db.enqueue(
         "INSERT INTO users(username, user_id, display_name) VALUES('alice', 'a-id', 'Alice')",
     )
-    yield db, PresenceService(SqlitePresenceRepo(db))
+    yield db, PresenceService(SqlitePresenceRepo(db), SqliteUserRepo(db))
     await db.shutdown()
 
 

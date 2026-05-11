@@ -1207,7 +1207,7 @@ def create_app(config: Config | None = None) -> web.Application:
     page_conflict_service = PageConflictService(page_repo)
 
     # ── Presence service (local + remote) ──────────────────────────────
-    presence_service = PresenceService(repos.presence, bus)
+    presence_service = PresenceService(repos.presence, repos.user, bus)
 
     # ── Online status (session presence) ───────────────────────────────
     online_status_service = OnlineStatusService(

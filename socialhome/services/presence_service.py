@@ -24,6 +24,7 @@ from ..domain.presence import (
 )
 from ..infrastructure.event_bus import EventBus
 from ..repositories.presence_repo import AbstractPresenceRepo
+from ..repositories.user_repo import AbstractUserRepo
 
 log = logging.getLogger(__name__)
 
@@ -31,17 +32,33 @@ log = logging.getLogger(__name__)
 MAX_GPS_ACCURACY_M = 500.0
 
 
+class UserNotFoundError(LookupError):
+    """Raised when a presence update names a username that doesn't exist.
+
+    The ``presence`` table is FK-linked to ``users(username)``, so without
+    this guard the upsert would surface as a generic ``IntegrityError`` to
+    the caller — opaque, and (until #278) used to also poison every other
+    write in the same batch.
+    """
+
+
 class PresenceService:
     """Read and update household member presence."""
 
-    __slots__ = ("_repo", "_bus")
+    __slots__ = ("_repo", "_users", "_bus")
 
     def __init__(
         self,
         repo: AbstractPresenceRepo,
+        users: AbstractUserRepo,
         bus: EventBus | None = None,
     ) -> None:
         self._repo = repo
+        # ``_users`` is used to short-circuit ``update_location`` for a
+        # username that doesn't exist locally — the ``presence`` table's
+        # FK on ``users(username)`` would otherwise raise a generic
+        # ``sqlite3.IntegrityError``.
+        self._users = users
         # The bus is optional so existing call sites that don't pass
         # one (route handlers, tests) keep working — only the WS
         # publish path requires it.
@@ -82,9 +99,18 @@ class PresenceService:
         GPS coordinates are truncated to 4dp. If ``gps_accuracy_m``
         exceeds :data:`MAX_GPS_ACCURACY_M`, coordinates are nulled but
         the zone name is still stored.
+
+        Raises :class:`UserNotFoundError` if ``update.username`` is not
+        a local user — the FK on ``presence(username)`` would otherwise
+        produce a generic ``IntegrityError``. The check happens before
+        any write so the failure path doesn't share a writer batch with
+        unrelated handlers.
         """
         if update.state not in PRESENCE_STATES:
             raise ValueError(f"invalid presence state {update.state!r}")
+
+        if await self._users.get(update.username) is None:
+            raise UserNotFoundError(update.username)
 
         lat = update.latitude
         lon = update.longitude

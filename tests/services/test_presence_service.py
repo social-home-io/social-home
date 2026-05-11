@@ -9,7 +9,11 @@ from socialhome.crypto import (
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.presence import LocationUpdate
 from socialhome.repositories.presence_repo import SqlitePresenceRepo
-from socialhome.services.presence_service import PresenceService
+from socialhome.repositories.user_repo import SqliteUserRepo
+from socialhome.services.presence_service import (
+    PresenceService,
+    UserNotFoundError,
+)
 
 
 @pytest.fixture
@@ -33,7 +37,7 @@ async def env(tmp_dir):
 
     e = E()
     e.db = db
-    e.svc = PresenceService(SqlitePresenceRepo(db))
+    e.svc = PresenceService(SqlitePresenceRepo(db), SqliteUserRepo(db))
     e.uid = uid
     yield e
     await db.shutdown()
@@ -208,4 +212,21 @@ async def test_apply_remote_ignores_empty_username(env):
     row = await env.db.fetchone(
         "SELECT 1 FROM remote_presence WHERE from_instance='peer-5'",
     )
+    assert row is None
+
+
+async def test_update_location_unknown_username_raises_user_not_found(env):
+    """Pushing presence for a username that doesn't exist in ``users`` must
+    raise :class:`UserNotFoundError` before the DB write — otherwise the
+    FK on ``presence(username)`` surfaces as a generic IntegrityError that
+    used to also poison every other write in the same writer batch."""
+    with pytest.raises(UserNotFoundError) as excinfo:
+        await env.svc.update_location(
+            LocationUpdate(username="nobody", state="home"),
+        )
+    assert "nobody" in str(excinfo.value)
+
+    # And the presence row was never persisted, so a sibling enqueue
+    # in the same writer tick wouldn't have seen a FK violation.
+    row = await env.db.fetchone("SELECT 1 FROM presence WHERE username='nobody'")
     assert row is None
