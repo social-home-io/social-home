@@ -111,7 +111,7 @@ async def test_ingress_auth_no_header_returns_none():
 
 async def test_ingress_auth_with_bearer_only_returns_none():
     """Critical security invariant: a bearer token without
-    X-Ingress-User must NOT authenticate. Ingress is the only entry point."""
+    X-Remote-User-Name must NOT authenticate. Ingress is the only entry point."""
     adapter = _build_haos_adapter()
     user = await adapter.auth.authenticate(
         _FakeRequest(headers={"Authorization": "Bearer leaked-token"}),
@@ -124,7 +124,7 @@ async def test_ingress_auth_with_header_resolves_person():
     client = _FakeHaClient(state_by_entity={"person.alice": state})
     adapter = _build_haos_adapter(ha_client=client)
     user = await adapter.auth.authenticate(
-        _FakeRequest(headers={"X-Ingress-User": "alice"}),
+        _FakeRequest(headers={"X-Remote-User-Name": "alice"}),
     )
     assert user is not None
     assert user.username == "alice"

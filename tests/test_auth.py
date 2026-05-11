@@ -94,10 +94,10 @@ async def test_bearer_strategy_no_creds(env):
 
 
 async def test_ha_ingress_strategy(env):
-    """X-Ingress-User authenticates the user — Supervisor authenticated
+    """X-Remote-User-Name authenticates the user — Supervisor authenticated
     upstream and we trust the header it stamps in."""
     strategy = HaIngressStrategy(env.user_repo)
-    req = _FakeRequest(headers={"X-Ingress-User": "testuser"})
+    req = _FakeRequest(headers={"X-Remote-User-Name": "testuser"})
     ctx = await strategy.authenticate(req)
     assert ctx is not None
     assert ctx.username == "testuser"
@@ -105,7 +105,7 @@ async def test_ha_ingress_strategy(env):
 
 
 async def test_ha_ingress_missing_header(env):
-    """Missing X-Ingress-User returns None."""
+    """Missing X-Remote-User-Name returns None."""
     strategy = HaIngressStrategy(env.user_repo)
     assert await strategy.authenticate(_FakeRequest()) is None
 
@@ -113,7 +113,7 @@ async def test_ha_ingress_missing_header(env):
 async def test_ha_ingress_unknown_user(env):
     """Header carries a username we don't have a row for → None."""
     strategy = HaIngressStrategy(env.user_repo)
-    req = _FakeRequest(headers={"X-Ingress-User": "stranger"})
+    req = _FakeRequest(headers={"X-Remote-User-Name": "stranger"})
     assert await strategy.authenticate(req) is None
 
 
@@ -130,7 +130,7 @@ async def test_chained_strategy(env):
 
     req_ingress = _FakeRequest(
         headers={
-            "X-Ingress-User": "testuser",
+            "X-Remote-User-Name": "testuser",
             "X-Ingress-Token": "tok",
         }
     )

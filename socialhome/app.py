@@ -1354,7 +1354,7 @@ def create_app(config: Config | None = None) -> web.Application:
     # the basic ``ha`` adapter would noisily log the
     # "token validation is disabled" warning on every cold start AND
     # leave a tiny attack surface — a request smuggling
-    # ``X-Ingress-User`` past a non-ingress reverse proxy could bypass
+    # ``X-Remote-User-Name`` past a non-ingress reverse proxy could bypass
     # bearer auth. Gate on the capability and the strategy disappears
     # entirely outside HAOS.
     bearer_strategy = BearerTokenStrategy(user_repo)
@@ -1363,7 +1363,7 @@ def create_app(config: Config | None = None) -> web.Application:
     if Capability.INGRESS in platform_adapter.capabilities:
         # ``haos`` mode runs behind the HA Supervisor ingress proxy.
         # Supervisor authenticates the user upstream and stamps
-        # ``X-Ingress-User`` on the proxied request; we trust that
+        # ``X-Remote-User-Name`` on the proxied request; we trust that
         # header the same way every other HA add-on does (node-red,
         # vscode, file-editor, ESPHome…). Capability gating keeps the
         # strategy off in ``standalone`` / ``ha`` modes where there is

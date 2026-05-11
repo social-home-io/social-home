@@ -10,7 +10,7 @@ concrete adapters live alongside this module:
   the HA REST API.
 * :class:`~socialhome.platform.haos.HaosAdapter` — HA OS / Supervisor
   add-on. Auto-login through the Supervisor ingress proxy
-  (``X-Ingress-User`` header).
+  (``X-Remote-User-Name`` header).
 
 The concrete adapter is selected by
 :func:`socialhome.platform.build_platform_adapter` using ``Config.mode``.
@@ -126,9 +126,9 @@ class AuthProvider(Protocol):
     Mode-specific implementations:
 
     * Standalone: SHA-256 lookup in ``platform_tokens`` / ``api_tokens``.
-    * HA Core: ``X-Ingress-User`` header (when behind a proxy) +
+    * HA Core: ``X-Remote-User-Name`` header (when behind a proxy) +
       bearer-token validation against the HA REST API.
-    * HAOS: ``X-Ingress-User`` (Supervisor-injected) + bearer fallback
+    * HAOS: ``X-Remote-User-Name`` (Supervisor-injected) + bearer fallback
       for token-API consumers.
 
     Returning ``None`` always means "401 unauthenticated" — never raise.

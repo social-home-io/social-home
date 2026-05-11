@@ -9,7 +9,7 @@ Two endpoints, two auth models:
 * ``POST /api/bot-bridge/conversations/{id}`` — authenticated by the
   caller's regular user API token (standard middleware path).
 
-Both reject requests carrying ``X-Ingress-User`` so a locally-authenticated
+Both reject requests carrying ``X-Remote-User-Name`` so a locally-authenticated
 UI user can't impersonate the HA integration through this path.
 """
 
@@ -41,12 +41,12 @@ def _extract_bearer(request: web.Request) -> str | None:
 def _reject_ingress_user(request: web.Request) -> None:
     """The bot-bridge endpoints are for automations, not UI users.
 
-    ``X-Ingress-User`` is set by Home Assistant's Ingress when a
+    ``X-Remote-User-Name`` is set by Home Assistant's Ingress when a
     browser-authenticated user hits the add-on — presence of that header
     means the request is coming from the UI, not from an HA automation's
     HTTP call. Explicit rejection keeps the auth surface narrow.
     """
-    if request.headers.get("X-Ingress-User"):
+    if request.headers.get("X-Remote-User-Name"):
         raise web.HTTPForbidden(
             reason="bot-bridge endpoints require Bearer token auth only"
         )

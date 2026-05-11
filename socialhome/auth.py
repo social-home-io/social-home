@@ -231,19 +231,22 @@ class BearerTokenStrategy:
 
 
 class HaIngressStrategy:
-    """Authenticate via HA's Ingress headers (``X-Ingress-User``).
+    """Authenticate via HA's Ingress headers (``X-Remote-User-Name``).
 
     The HA Supervisor sits in front of us as a reverse proxy and
     validates the ingress session token *before* forwarding the
     request to our container. By the time bytes reach this handler
     Supervisor has already authenticated the user — we trust the
-    ``X-Ingress-User`` header it stamps in. This matches the
-    convention every other HA add-on follows (node-red, vscode,
-    file-editor, ESPHome…).
+    ``X-Remote-User-Name`` header it stamps in. Supervisor sets it
+    from authenticated session state and explicitly **strips** any
+    client-supplied ``X-Remote-User-*`` header on the inbound path
+    (see ``supervisor/api/ingress.py``), so the value cannot be
+    spoofed by the browser. This matches the convention every other
+    HA add-on follows (node-red, vscode, file-editor, ESPHome…).
 
     The threat model is "Supervisor proxied this request" — if an
     operator misconfigures the add-on so its internal port is reachable
-    bypassing Supervisor, ``X-Ingress-User`` becomes spoofable, but
+    bypassing Supervisor, ``X-Remote-User-Name`` becomes spoofable, but
     the same is true for every HA add-on. Closing that hole is a
     Supervisor-level concern, not an add-on-level concern.
     """
@@ -254,7 +257,7 @@ class HaIngressStrategy:
         self._user_repo = user_repo
 
     async def authenticate(self, request: "web.Request") -> AuthContext | None:
-        username = request.headers.get("X-Ingress-User")
+        username = request.headers.get("X-Remote-User-Name")
         if not username:
             return None
         user = await self._user_repo.get(username)

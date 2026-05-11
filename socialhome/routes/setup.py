@@ -6,7 +6,7 @@
   pick which one becomes the SH owner.
 * ``POST /api/setup/ha/owner`` — operator submits ``{username}`` for the
   picked HA person; we mirror them into ``users`` as admin and mark
-  setup complete. ha-mode auth runs through HA (X-Ingress-User or HA
+  setup complete. ha-mode auth runs through HA (X-Remote-User-Name or HA
   bearer tokens), so no password is needed at this step.
 * ``POST /api/setup/haos/complete`` — optional ``{household_name}``.
   Reads the HA owner from ``http://supervisor/auth/list``, mirrors
@@ -172,7 +172,7 @@ class HaOwnerSetupView(BaseView):
 
     The picked HA person becomes the SH admin. The password is stored in
     ``platform_users`` so the operator can also log in via
-    ``POST /api/auth/token`` (in addition to X-Ingress-User and HA
+    ``POST /api/auth/token`` (in addition to X-Remote-User-Name and HA
     long-lived access tokens). Returns ``{token}`` (status 201) so the
     SPA drops straight into the app.
     """
