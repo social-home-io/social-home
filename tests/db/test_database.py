@@ -246,6 +246,73 @@ async def test_batch_write_error_propagates(tmp_dir):
     await db.shutdown()
 
 
+async def test_batch_error_is_isolated_to_failing_statement(tmp_dir):
+    """Regression for #278.
+
+    Two independent enqueues that land in the same writer batch must
+    not poison each other: the failing statement raises in its own
+    awaiter and rolls back via a per-statement SAVEPOINT; the good
+    statement commits and its awaiter sees ``lastrowid``.
+
+    Reproduces the live trace where a presence FK violation 500ed an
+    unrelated, valid ICE-server write in the same batch.
+    """
+    import asyncio
+    import sqlite3 as _sql
+
+    # Use a long batch_timeout_ms so the two enqueues below are
+    # guaranteed to be drained into a single batch by the writer
+    # loop. Without that the writer can fire on the first statement
+    # before the second one arrives.
+    db = AsyncDatabase(tmp_dir / "iso.db", batch_timeout_ms=200)
+    await db.startup()
+    try:
+        # Schema with a FK so the bad statement raises ``IntegrityError``.
+        await db.enqueue("CREATE TABLE parent(id INTEGER PRIMARY KEY)")
+        await db.enqueue(
+            "CREATE TABLE child(id INTEGER PRIMARY KEY, "
+            "parent_id INTEGER REFERENCES parent(id))"
+        )
+        await db.enqueue("CREATE TABLE good(val TEXT)")
+
+        async def good_write() -> int:
+            return await db.enqueue("INSERT INTO good(val) VALUES(?)", ("ok",))
+
+        async def bad_write() -> int:
+            # No parent row with id=999 → FK violation.
+            return await db.enqueue(
+                "INSERT INTO child(parent_id) VALUES(?)", (999,)
+            )
+
+        # Fire both concurrently so they coalesce into one batch.
+        good_task = asyncio.create_task(good_write())
+        bad_task = asyncio.create_task(bad_write())
+        results = await asyncio.gather(
+            good_task, bad_task, return_exceptions=True
+        )
+        good_outcome, bad_outcome = results
+
+        # Good write committed; lastrowid is a positive int.
+        assert isinstance(good_outcome, int), (
+            f"good write should succeed, got {good_outcome!r}"
+        )
+        assert good_outcome > 0
+
+        # Bad write raised, in isolation.
+        assert isinstance(bad_outcome, _sql.IntegrityError), (
+            f"bad write should raise IntegrityError, got {bad_outcome!r}"
+        )
+
+        # The good row is durably committed even though its
+        # batch-sibling rolled back at the savepoint.
+        assert await db.fetchval("SELECT COUNT(*) FROM good") == 1
+        assert await db.fetchval("SELECT val FROM good") == "ok"
+        # And no child row leaked through.
+        assert await db.fetchval("SELECT COUNT(*) FROM child") == 0
+    finally:
+        await db.shutdown()
+
+
 async def test_executemany(tmp_dir):
     """executemany inserts multiple rows."""
     db = AsyncDatabase(tmp_dir / "em.db", batch_timeout_ms=10)
