@@ -94,10 +94,17 @@ async def test_bearer_strategy_no_creds(env):
 
 
 async def test_ha_ingress_strategy(env):
-    """X-Ingress-User authenticates the user — Supervisor authenticated
-    upstream and we trust the header it stamps in."""
+    """X-Remote-User-Name authenticates the user when accompanied by
+    the canonical ``X-Hass-Source: core.ingress`` marker — Core set
+    that header by direct assignment on every ingress hop, so its
+    presence proves the request passed Core's auth before reaching us."""
     strategy = HaIngressStrategy(env.user_repo)
-    req = _FakeRequest(headers={"X-Ingress-User": "testuser"})
+    req = _FakeRequest(
+        headers={
+            "X-Hass-Source": "core.ingress",
+            "X-Remote-User-Name": "testuser",
+        }
+    )
     ctx = await strategy.authenticate(req)
     assert ctx is not None
     assert ctx.username == "testuser"
@@ -105,15 +112,30 @@ async def test_ha_ingress_strategy(env):
 
 
 async def test_ha_ingress_missing_header(env):
-    """Missing X-Ingress-User returns None."""
+    """Missing X-Remote-User-Name returns None."""
     strategy = HaIngressStrategy(env.user_repo)
     assert await strategy.authenticate(_FakeRequest()) is None
+
+
+async def test_ha_ingress_username_without_hass_source_rejected(env):
+    """A request carrying ``X-Remote-User-Name`` but missing
+    ``X-Hass-Source: core.ingress`` did not pass through Core's
+    ingress proxy and must not be trusted — even if the username
+    matches a real local user."""
+    strategy = HaIngressStrategy(env.user_repo)
+    req = _FakeRequest(headers={"X-Remote-User-Name": "testuser"})
+    assert await strategy.authenticate(req) is None
 
 
 async def test_ha_ingress_unknown_user(env):
     """Header carries a username we don't have a row for → None."""
     strategy = HaIngressStrategy(env.user_repo)
-    req = _FakeRequest(headers={"X-Ingress-User": "stranger"})
+    req = _FakeRequest(
+        headers={
+            "X-Hass-Source": "core.ingress",
+            "X-Remote-User-Name": "stranger",
+        }
+    )
     assert await strategy.authenticate(req) is None
 
 
@@ -130,7 +152,8 @@ async def test_chained_strategy(env):
 
     req_ingress = _FakeRequest(
         headers={
-            "X-Ingress-User": "testuser",
+            "X-Hass-Source": "core.ingress",
+            "X-Remote-User-Name": "testuser",
             "X-Ingress-Token": "tok",
         }
     )

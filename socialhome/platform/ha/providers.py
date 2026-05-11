@@ -5,7 +5,7 @@ have one HA-shaped implementation each that both :class:`HaAdapter`
 (Core) and :class:`~socialhome.platform.haos.HaosAdapter` (Supervisor
 add-on) compose. The auth provider is the only piece that varies —
 HAOS uses :class:`~socialhome.platform.haos.adapter.HaIngressAuthProvider`
-which trusts the Supervisor-injected ``X-Ingress-User`` header before
+which trusts the Supervisor-injected ``X-Remote-User-Name`` header before
 falling back to the bearer flow.
 
 Each provider holds a back-reference to its adapter so it can lazily
@@ -38,7 +38,7 @@ def _state_to_user(state: dict) -> ExternalUser:
 
 
 class HaAuthProvider:
-    """Resolve a request via ``X-Ingress-User`` header or HA bearer token.
+    """Resolve a request via ``X-Remote-User-Name`` header or HA bearer token.
 
     Default for :class:`HaAdapter` (HA Core / non-supervisor mode).
     HAOS swaps in :class:`~socialhome.platform.haos.adapter.HaIngressAuthProvider`,
@@ -54,9 +54,16 @@ class HaAuthProvider:
         self,
         request: "web.Request",
     ) -> ExternalUser | None:
-        ingress_user = request.headers.get("X-Ingress-User")
-        if ingress_user:
-            return await self._adapter.users.get(ingress_user)
+        # Only trust ``X-Remote-User-Name`` when HA Core's ingress proxy
+        # is in the path — confirmed by ``X-Hass-Source: core.ingress``
+        # (set by direct assignment in ``homeassistant/components/hassio/
+        # ingress.py``, overwriting any client-supplied value). Without
+        # the marker the request didn't pass Core's auth, so fall
+        # through to the bearer path.
+        if request.headers.get("X-Hass-Source") == "core.ingress":
+            ingress_user = request.headers.get("X-Remote-User-Name")
+            if ingress_user:
+                return await self._adapter.users.get(ingress_user)
         token = _extract_bearer(request)
         if token:
             return await self._authenticate_bearer(token)

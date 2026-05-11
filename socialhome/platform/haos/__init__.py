@@ -4,7 +4,7 @@ Adapter for Social Home running as an HA add-on with the Supervisor
 ingress proxy in front. Reuses the HA Core provider classes from
 :mod:`socialhome.platform.ha.providers` but swaps in
 :class:`HaIngressAuthProvider` (trust the Supervisor-injected
-``X-Ingress-User`` header without a bearer fallback) and runs
+``X-Remote-User-Name`` header without a bearer fallback) and runs
 :class:`HaBootstrap` on first boot to provision the HA owner.
 """
 

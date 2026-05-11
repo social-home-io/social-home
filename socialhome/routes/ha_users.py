@@ -6,7 +6,7 @@ here list the HA users alongside their provisioning state and let
 admins flip them on / off.
 
 * ``ha`` mode requires a ``password`` on provision so the user can sign
-  in via ``POST /api/auth/token`` (X-Ingress-User isn't available
+  in via ``POST /api/auth/token`` (X-Remote-User-Name isn't available
   outside the Supervisor proxy).
 * ``haos`` mode rejects ``password`` — Ingress is the only entry point,
   the Supervisor proxy authenticates the HA user before forwarding.

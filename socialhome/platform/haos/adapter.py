@@ -2,7 +2,7 @@
 
 Social Home running as a Home Assistant add-on. Talks to HA Core
 through the Supervisor proxy at ``http://supervisor/core/api`` and
-trusts the Supervisor-injected ``X-Ingress-User`` header for inbound
+trusts the Supervisor-injected ``X-Remote-User-Name`` header for inbound
 auth (no separate password — the proxy already authenticated the
 HA user before forwarding).
 
@@ -54,7 +54,7 @@ log = logging.getLogger(__name__)
 
 
 class HaIngressAuthProvider:
-    """Trust the Supervisor-injected ``X-Ingress-User`` header.
+    """Trust the Supervisor-injected ``X-Remote-User-Name`` header.
 
     HAOS routes every web request through the Supervisor's ingress
     proxy, which authenticates the HA user via Home Assistant's own
@@ -77,7 +77,17 @@ class HaIngressAuthProvider:
         self,
         request: "web.Request",
     ) -> ExternalUser | None:
-        ingress_user = request.headers.get("X-Ingress-User")
+        # Gate on the canonical "came through HA Core's ingress proxy"
+        # marker first. HA Core sets ``X-Hass-Source: core.ingress`` by
+        # direct assignment on every ingress hop
+        # (``homeassistant/components/hassio/ingress.py``), overwriting
+        # any browser-supplied value — so its presence on the request
+        # proves the user already passed through Core's authentication
+        # and Supervisor's session check. Without it we have no business
+        # trusting ``X-Remote-User-Name``.
+        if request.headers.get("X-Hass-Source") != "core.ingress":
+            return None
+        ingress_user = request.headers.get("X-Remote-User-Name")
         if not ingress_user:
             return None
         return await self._adapter.users.get(ingress_user)

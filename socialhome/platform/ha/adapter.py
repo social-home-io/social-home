@@ -107,7 +107,7 @@ class HaAdapter(PlatformAdapter):
             Capability.HA_PERSON_DIRECTORY,
             # Local password auth — the wizard sets a password for the
             # picked HA owner so the user can log in via /api/auth/token
-            # in addition to X-Ingress-User and HA bearer tokens.
+            # in addition to X-Remote-User-Name and HA bearer tokens.
             Capability.PASSWORD_AUTH,
         }
         if self._options.get("stt_entity_id"):
