@@ -41,6 +41,7 @@ from ..services.bazaar_service import BazaarServiceError, ListingNotFoundError
 from ..services.child_protection_service import (
     ChildProtectionError,
     GuardianRequiredError,
+    UserNotFoundError as CpUserNotFoundError,
 )
 from ..services.gallery_service import GalleryNotFoundError, GalleryPermissionError
 from ..services.page_conflict_service import NoActiveConflictError
@@ -148,6 +149,7 @@ class BaseView(web.View):
             HighlightPublicationNotFoundError,
             MomentNotFoundError,
             PresenceUserNotFoundError,
+            CpUserNotFoundError,
         ) as exc:
             return error_response(404, "NOT_FOUND", str(exc))
         except HighlightPublicationError as exc:

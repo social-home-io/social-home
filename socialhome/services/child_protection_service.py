@@ -58,6 +58,17 @@ class GuardianRequiredError(ChildProtectionError):
     """Caller is not a guardian of the referenced minor."""
 
 
+class UserNotFoundError(ChildProtectionError):
+    """A username / user_id referenced by the request doesn't exist locally.
+
+    Raised by ``add_guardian`` / ``enable_protection`` / ``disable_protection``
+    before any DB write so a typo'd id doesn't surface as either an opaque
+    ``sqlite3.IntegrityError`` (FK on ``cp_guardians.{minor,guardian}_user_id``)
+    or a silent ``UPDATE … WHERE username='nope'`` no-op that still fires
+    a bus event for a phantom subject. ``routes/base.py`` maps it to 404.
+    """
+
+
 # ─── Service ─────────────────────────────────────────────────────────────
 
 
@@ -111,6 +122,12 @@ class ChildProtectionService:
         it must agree with ``declared_age`` within ±1 year.
         """
         await self._require_admin(actor_user_id)
+        if await self._users.get(minor_username) is None:
+            # ``cp_repo.enable_protection`` runs ``UPDATE users SET … WHERE
+            # username=?`` — a typo'd username would silently affect 0 rows
+            # but still emit ``CpProtectionEnabled``, telling subscribers a
+            # phantom user is now a minor. Fail loudly instead.
+            raise UserNotFoundError(minor_username)
         if not (0 <= declared_age <= 17):
             raise ValueError("declared_age must be 0–17 for a minor account")
         if date_of_birth:
@@ -144,6 +161,8 @@ class ChildProtectionService:
         actor_user_id: str,
     ) -> None:
         await self._require_admin(actor_user_id)
+        if await self._users.get(minor_username) is None:
+            raise UserNotFoundError(minor_username)
         await self._repo.disable_protection(minor_username)
         await self._bus.publish(
             CpProtectionDisabled(
@@ -163,6 +182,14 @@ class ChildProtectionService:
         await self._require_admin(actor_user_id)
         if minor_user_id == guardian_user_id:
             raise ValueError("A user cannot be their own guardian")
+        # ``cp_guardians.{minor,guardian}_user_id`` both REFERENCE
+        # ``users(user_id)`` — without these prechecks a typo'd id from
+        # the URL path would surface as a generic ``sqlite3.IntegrityError``
+        # 500. ``INSERT OR IGNORE`` covers UNIQUE/CHECK/NOT NULL but not FK.
+        if await self._users.get_by_user_id(minor_user_id) is None:
+            raise UserNotFoundError(minor_user_id)
+        if await self._users.get_by_user_id(guardian_user_id) is None:
+            raise UserNotFoundError(guardian_user_id)
         await self._repo.add_guardian(
             minor_user_id=minor_user_id,
             guardian_user_id=guardian_user_id,
