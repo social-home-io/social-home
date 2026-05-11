@@ -180,6 +180,97 @@ async def test_update_location_missing_username_422(client):
     assert r.status == 422
 
 
+async def test_update_location_admin_can_push_for_other_user(client):
+    """Admin bearer (HA-integration's auto-provisioned token) can push
+    presence on behalf of any household member — that's how one
+    integration token covers every person.* entity."""
+    from socialhome.app_keys import db_key as _db_key
+    from socialhome.crypto import derive_user_id
+
+    db = client.app[_db_key]
+    row = await db.fetchone(
+        "SELECT identity_public_key FROM instance_identity WHERE id='self'",
+    )
+    pk_bytes = bytes.fromhex(row["identity_public_key"])
+    target_uid = derive_user_id(pk_bytes, "lily")
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        ("lily", target_uid, "Lily"),
+    )
+
+    r = await client.post(
+        "/api/presence/location",
+        json={"username": "lily", "zone_name": "home"},
+        headers=_auth(client._tok),  # admin token from conftest
+    )
+    assert r.status == 204
+
+
+async def test_update_location_non_admin_self_push_allowed(client):
+    """A non-admin can push their OWN row — mobile clients / first-
+    party SPA presence rely on this path."""
+    from socialhome.app_keys import db_key as _db_key
+    from socialhome.auth import sha256_token_hash
+    from socialhome.crypto import derive_user_id
+
+    db = client.app[_db_key]
+    row = await db.fetchone(
+        "SELECT identity_public_key FROM instance_identity WHERE id='self'",
+    )
+    pk_bytes = bytes.fromhex(row["identity_public_key"])
+    uid = derive_user_id(pk_bytes, "bob")
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        ("bob", uid, "Bob"),
+    )
+    raw = "bob-tok"
+    await db.enqueue(
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) VALUES(?,?,?,?)",
+        ("t-bob", uid, "t", sha256_token_hash(raw)),
+    )
+    r = await client.post(
+        "/api/presence/location",
+        json={"username": "bob", "zone_name": "home"},
+        headers=_auth(raw),
+    )
+    assert r.status == 204
+
+
+async def test_update_location_non_admin_cross_user_push_403(client):
+    """A non-admin can NOT push someone else's presence — closes the
+    cross-user spoof hole."""
+    from socialhome.app_keys import db_key as _db_key
+    from socialhome.auth import sha256_token_hash
+    from socialhome.crypto import derive_user_id
+
+    db = client.app[_db_key]
+    row = await db.fetchone(
+        "SELECT identity_public_key FROM instance_identity WHERE id='self'",
+    )
+    pk_bytes = bytes.fromhex(row["identity_public_key"])
+    bob_uid = derive_user_id(pk_bytes, "bob")
+    lily_uid = derive_user_id(pk_bytes, "lily")
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        ("bob", bob_uid, "Bob"),
+    )
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        ("lily", lily_uid, "Lily"),
+    )
+    raw = "bob-tok"
+    await db.enqueue(
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) VALUES(?,?,?,?)",
+        ("t-bob", bob_uid, "t", sha256_token_hash(raw)),
+    )
+    r = await client.post(
+        "/api/presence/location",
+        json={"username": "lily", "zone_name": "home"},
+        headers=_auth(raw),
+    )
+    assert r.status == 403
+
+
 async def test_presence_drops_blocked_household_member(client):
     """A blocked user is filtered out of the caller's /api/presence list."""
     # Seed a second household member with a presence row.
