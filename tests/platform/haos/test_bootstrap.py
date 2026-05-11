@@ -6,8 +6,6 @@ import os
 
 import pytest
 
-from types import SimpleNamespace
-
 from socialhome.crypto import derive_instance_id, generate_identity_keypair
 from socialhome.db.database import AsyncDatabase
 from socialhome.platform.haos.bootstrap import (
@@ -21,43 +19,39 @@ from socialhome.platform.haos.bootstrap import (
 # ─── Fakes ───────────────────────────────────────────────────────────────
 
 
-_DEFAULT_SELF_INFO = SimpleNamespace(
-    hostname="local-social-home",
-    ingress_port=8099,
-)
-
-
 class _FakeSupervisor:
-    """In-process :class:`SupervisorClient` substitute for tests.
-
-    ``get_self_info`` returns a ``SimpleNamespace`` rather than an
-    ``aiohasupervisor.models.InstalledAddonComplete`` so we don't have
-    to fill the 40+ required fields of the real dataclass — bootstrap
-    only reads ``.hostname`` and ``.ingress_port``.
-    """
+    """In-process :class:`SupervisorClient` substitute for tests."""
 
     def __init__(
         self,
         *,
         owner_username: str | None = "ha_admin",
         fail_discovery: bool = False,
-        self_info: SimpleNamespace | None = _DEFAULT_SELF_INFO,
+        self_info: dict | None = None,
     ) -> None:
         self.owner_username = owner_username
         self.fail_discovery = fail_discovery
         # ``None`` here means "Supervisor said no" — the bootstrap
         # logs and skips the push instead of guessing.
-        self.self_info = self_info
+        self.self_info: dict | None = (
+            self_info
+            if self_info is not None
+            else {
+                "slug": "local_social_home",
+                "hostname": "local-social-home",
+                "ingress_port": 8099,
+            }
+        )
         self.pushed_payloads: list[dict] = []
 
     async def get_owner_username(self) -> str | None:
         return self.owner_username
 
-    async def get_self_info(self) -> SimpleNamespace | None:
+    async def get_self_info(self) -> dict | None:
         return self.self_info
 
-    async def push_discovery(self, service: str, config: dict) -> bool:
-        self.pushed_payloads.append({"service": service, "config": config})
+    async def push_discovery(self, payload: dict) -> bool:
+        self.pushed_payloads.append(payload)
         return not self.fail_discovery
 
 
@@ -270,7 +264,7 @@ async def test_run_discovery_skipped_when_self_info_missing_port(env):
     """Same guard for partial payloads — hostname without port."""
     sv = _FakeSupervisor(
         owner_username="ha_admin",
-        self_info=SimpleNamespace(hostname="local-social-home", ingress_port=None),
+        self_info={"hostname": "local-social-home"},
     )
     bs = HaBootstrap(env.db, sv, env.data_dir)
     await bs.run()
