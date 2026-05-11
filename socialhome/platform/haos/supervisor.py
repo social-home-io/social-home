@@ -21,10 +21,38 @@ environment.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import aiohttp
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class AddonInfo:
+    """Subset of ``GET /addons/self/info`` that we actually consume.
+
+    The Supervisor response carries 40+ fields; we only need the
+    DNS hostname and the ingress port to build the discovery
+    payload. Modelling just those keeps the surface easy to type
+    and easy to fake in tests without re-creating the whole
+    upstream schema.
+    """
+
+    hostname: str
+    ingress_port: int
+
+    @classmethod
+    def from_response(cls, data: dict | None) -> AddonInfo | None:
+        """Return an :class:`AddonInfo` or ``None`` if either required
+        field is missing from the Supervisor's response."""
+        if not data:
+            return None
+        hostname = data.get("hostname")
+        port = data.get("ingress_port")
+        if not hostname or port is None:
+            return None
+        return cls(hostname=str(hostname), ingress_port=int(port))
 
 
 class SupervisorClient:
@@ -84,14 +112,15 @@ class SupervisorClient:
             return None
         return owner.get("username") or owner.get("name")
 
-    async def get_self_info(self) -> dict | None:
-        """Return ``GET /addons/self/info``'s data block, or ``None``.
+    async def get_self_info(self) -> AddonInfo | None:
+        """Return ``GET /addons/self/info`` as a typed :class:`AddonInfo`,
+        or ``None`` if the call failed / the response was missing
+        the fields :class:`HaBootstrap._push_discovery` needs.
 
-        Used by :meth:`HaBootstrap._push_discovery` so the payload can
-        advertise the add-on's reachable ``host`` and ``port``. The
-        Supervisor's ``hostname`` field has already had ``_`` replaced
-        with ``-`` (Docker DNS doesn't accept underscores), so the
-        integration can use it verbatim without further substitution.
+        ``AddonInfo.hostname`` has already had ``_`` replaced with
+        ``-`` by the Supervisor (Docker DNS doesn't accept
+        underscores), so the integration can use it verbatim
+        without further substitution.
         """
         try:
             async with self._session.get(
@@ -103,7 +132,7 @@ class SupervisorClient:
         except aiohttp.ClientError as exc:
             log.warning("supervisor: /addons/self/info failed: %s", exc)
             return None
-        return data.get("data") or None
+        return AddonInfo.from_response(data.get("data"))
 
     async def push_discovery(self, payload: dict) -> bool:
         """POST ``/discovery`` — returns ``True`` on 2xx.
@@ -130,4 +159,4 @@ class SupervisorClient:
             return False
 
 
-__all__ = ["SupervisorClient"]
+__all__ = ["AddonInfo", "SupervisorClient"]

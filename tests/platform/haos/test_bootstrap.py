@@ -14,9 +14,18 @@ from socialhome.platform.haos.bootstrap import (
     INTEGRATION_TOKEN_LABEL,
     HaBootstrap,
 )
+from socialhome.platform.haos.supervisor import AddonInfo
 
 
 # ─── Fakes ───────────────────────────────────────────────────────────────
+
+
+_DEFAULT_ADDON_INFO = AddonInfo(hostname="local-social-home", ingress_port=8099)
+
+
+# Sentinel that means "the test didn't override self_info" — distinct
+# from ``None`` (which the test uses to assert the missing-data branch).
+_UNSET = object()
 
 
 class _FakeSupervisor:
@@ -27,27 +36,21 @@ class _FakeSupervisor:
         *,
         owner_username: str | None = "ha_admin",
         fail_discovery: bool = False,
-        self_info: dict | None = None,
+        self_info: AddonInfo | None = _UNSET,  # type: ignore[assignment]
     ) -> None:
         self.owner_username = owner_username
         self.fail_discovery = fail_discovery
         # ``None`` here means "Supervisor said no" — the bootstrap
         # logs and skips the push instead of guessing.
-        self.self_info: dict | None = (
-            self_info
-            if self_info is not None
-            else {
-                "slug": "local_social_home",
-                "hostname": "local-social-home",
-                "ingress_port": 8099,
-            }
+        self.self_info: AddonInfo | None = (
+            _DEFAULT_ADDON_INFO if self_info is _UNSET else self_info
         )
         self.pushed_payloads: list[dict] = []
 
     async def get_owner_username(self) -> str | None:
         return self.owner_username
 
-    async def get_self_info(self) -> dict | None:
+    async def get_self_info(self) -> AddonInfo | None:
         return self.self_info
 
     async def push_discovery(self, payload: dict) -> bool:
@@ -257,17 +260,6 @@ async def test_run_discovery_skipped_when_self_info_unavailable(env):
     # didn't advertise it this boot. A later boot with a working
     # Supervisor will push.
     assert await env.db.fetchval("SELECT COUNT(*) FROM users") == 1
-    assert sv.pushed_payloads == []
-
-
-async def test_run_discovery_skipped_when_self_info_missing_port(env):
-    """Same guard for partial payloads — hostname without port."""
-    sv = _FakeSupervisor(
-        owner_username="ha_admin",
-        self_info={"hostname": "local-social-home"},
-    )
-    bs = HaBootstrap(env.db, sv, env.data_dir)
-    await bs.run()
     assert sv.pushed_payloads == []
 
 

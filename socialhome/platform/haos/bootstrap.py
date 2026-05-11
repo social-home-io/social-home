@@ -216,29 +216,26 @@ class HaBootstrap:
             return
 
         info = await self._sv.get_self_info()
-        host = (info or {}).get("hostname") if info else None
-        port = (info or {}).get("ingress_port") if info else None
-        if not host or not port:
+        if info is None:
             log.warning(
                 "ha_bootstrap: /addons/self/info missing hostname/ingress_port"
-                " (got %r) — skipping discovery",
-                info,
+                " — skipping discovery"
             )
             return
 
         payload = {
             "service": "socialhome",
             "config": {
-                "host": host,
-                "port": int(port),
+                "host": info.hostname,
+                "port": info.ingress_port,
                 "token": raw_token,
             },
         }
         if await self._sv.push_discovery(payload):
             log.info(
                 "ha_bootstrap: discovery pushed (host=%s port=%d)",
-                host,
-                int(port),
+                info.hostname,
+                info.ingress_port,
             )
 
     # ─── Config-flag helpers ──────────────────────────────────────────────
