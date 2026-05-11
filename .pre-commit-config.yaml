@@ -28,25 +28,28 @@ repos:
       - id: detect-private-key
 
   # ── Python lint + format via ruff ──────────────────────────────────────
-  # Run repo-wide (always_run + pass_filenames: false) so pre-commit
-  # matches CI's `ruff check .` / `ruff format --check .` scope.
+  # Scope matches CI's ``ruff check socialhome/ tests/`` /
+  # ``ruff format --check socialhome/ tests/`` (see
+  # ``.github/workflows/ci.yml``). Skipping ``.claude/skills/`` etc
+  # avoids the pre-commit hook tripping over (or auto-mangling) tree
+  # paths the shipped code doesn't touch and CI doesn't gate on.
   #
-  # Keep ``rev`` in sync with the ruff version CI's `pip install -e .[dev]`
-  # resolves — ruff's format rules change between minors, so a stale
-  # pin silently diverges from CI and lets format violations slip
-  # through until they fail on the push. Bump via
-  # ``pre-commit autoupdate --repo https://github.com/astral-sh/ruff-pre-commit``.
+  # Keep ``rev`` in sync with the ruff version CI's
+  # ``pip install -e .[dev]`` resolves — ruff's format rules change
+  # between minors, so a stale pin silently diverges from CI and lets
+  # format violations slip through until they fail on the push. Bump
+  # via ``pre-commit autoupdate --repo https://github.com/astral-sh/ruff-pre-commit``.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.11
     hooks:
       - id: ruff
-        name: ruff (lint, repo-wide)
-        args: ["--fix", "."]
+        name: ruff (lint, socialhome/ + tests/)
+        args: ["--fix", "socialhome", "tests"]
         always_run: true
         pass_filenames: false
       - id: ruff-format
-        name: ruff (format, repo-wide)
-        args: ["."]
+        name: ruff (format, socialhome/ + tests/)
+        args: ["socialhome", "tests"]
         always_run: true
         pass_filenames: false
 
