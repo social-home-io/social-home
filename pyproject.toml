@@ -33,6 +33,11 @@ dependencies = [
     # eliminates spurious ``rtcAddRemoteCandidate: runtime failure
     # (-2)`` tracebacks during normal trickle-ICE flow.
     "aiolibdatachannel>=2026.5.10",
+    # Typed async client for the Home Assistant Supervisor REST API.
+    # Used in ``haos`` mode (HA add-on deployments) for the discovery
+    # push and ``/addons/self/info`` read. ``/auth/list`` isn't in
+    # the library's surface yet, so that call stays as raw aiohttp.
+    "aiohasupervisor>=0.4",
 ]
 
 [project.optional-dependencies]
