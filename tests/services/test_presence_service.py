@@ -228,7 +228,5 @@ async def test_update_location_unknown_username_raises_user_not_found(env):
 
     # And the presence row was never persisted, so a sibling enqueue
     # in the same writer tick wouldn't have seen a FK violation.
-    row = await env.db.fetchone(
-        "SELECT 1 FROM presence WHERE username='nobody'"
-    )
+    row = await env.db.fetchone("SELECT 1 FROM presence WHERE username='nobody'")
     assert row is None
