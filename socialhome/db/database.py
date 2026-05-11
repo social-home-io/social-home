@@ -319,16 +319,38 @@ class AsyncDatabase:
 
         lock = self._conn_thread_lock
 
-        def _run() -> list[tuple["_PendingWrite", Any]]:
-            # Single transaction for the whole batch. If any statement fails,
-            # the entire batch rolls back and every future receives the
-            # exception — callers see the failure atomically.
+        def _run() -> list[tuple["_PendingWrite", int | BaseException]]:
+            # Each pending statement is wrapped in its own SAVEPOINT so a
+            # constraint violation in one handler doesn't 500 every other
+            # handler whose statement happened to be drained into the same
+            # batch (issue #278). The outer ``BEGIN IMMEDIATE``/``COMMIT``
+            # still wraps the batch so the throughput win of coalescing
+            # is preserved.
+            #
+            # Per-statement failures classified as ``sqlite3.Error`` (FK,
+            # CHECK, UNIQUE, …) are rolled back to the savepoint, recorded
+            # on the future, and the loop continues. Anything else
+            # (Python-level bugs, ``MemoryError``, …) propagates out and
+            # the outer try/except rolls the whole batch back — those are
+            # not "this row was bad", they're "the writer is in an
+            # unrecoverable state".
             with lock:
-                results: list[tuple[_PendingWrite, Any]] = []
+                results: list[tuple[_PendingWrite, int | BaseException]] = []
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    for pending in batch:
-                        cursor = conn.execute(pending.sql, pending.params)
+                    for i, pending in enumerate(batch):
+                        sp = f"sh_batch_{i}"
+                        conn.execute(f"SAVEPOINT {sp}")
+                        try:
+                            cursor = conn.execute(pending.sql, pending.params)
+                        except sqlite3.Error as stmt_exc:
+                            # Roll back only this statement; release the
+                            # savepoint so it doesn't pin the page cache.
+                            conn.execute(f"ROLLBACK TO {sp}")
+                            conn.execute(f"RELEASE {sp}")
+                            results.append((pending, stmt_exc))
+                            continue
+                        conn.execute(f"RELEASE {sp}")
                         results.append((pending, cursor.lastrowid or 0))
                     conn.execute("COMMIT")
                 except Exception:
@@ -346,9 +368,23 @@ class AsyncDatabase:
             log.exception("DB write batch failed (%d stmts)", len(batch))
             return
 
-        for pending, rowid in results:
-            if not pending.future.done():
-                pending.future.set_result(rowid)
+        # Per-statement: succeed or fail each future independently.
+        failures = 0
+        for pending, outcome in results:
+            if pending.future.done():
+                continue
+            if isinstance(outcome, BaseException):
+                pending.future.set_exception(outcome)
+                failures += 1
+            else:
+                pending.future.set_result(outcome)
+        if failures:
+            log.warning(
+                "DB write batch: %d/%d statements failed (rolled back to "
+                "per-statement savepoint, sibling statements committed)",
+                failures,
+                len(batch),
+            )
 
     def _assert_running(self) -> None:
         if self._conn is None:
