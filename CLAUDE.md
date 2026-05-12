@@ -117,6 +117,82 @@ The spec is the source of truth — if code and spec disagree, fix the code.
   Merge changes directly into the existing class.
 - Never use inheritance to patch gaps. Fix the original class.
 
+### Frontend (SPA) & ingress
+
+The Preact SPA in `client/` runs behind three different document bases
+depending on the platform mode:
+
+- **standalone / dev** — document base is `/`. `fetch('/api/me')`
+  resolves against the document origin and reaches the backend.
+- **ha** — same shape as standalone when reachable directly, OR
+  served behind a reverse proxy with a path prefix.
+- **haos** — document base is HA Supervisor's
+  `/api/hassio_ingress/<token>/`. The Supervisor proxies every
+  request to the add-on container, ADDING the auth headers
+  (`X-Hass-Source: core.ingress`, `X-Remote-User-Name`) that the
+  backend's `HaIngressStrategy` accepts as the handshake. The SPA
+  carries NO bearer token in this mode.
+
+All three deployments load the same `index.html` and the same JS
+bundle. The backend's `SpaIndexView` rewrites `<base href>` from the
+Supervisor-injected `X-Ingress-Path` header per request; the SPA
+reads `document.baseURI` once at module load and anchors every
+runtime URL on it.
+
+The rules that keep this working:
+
+- **Every URL in the SPA is anchored on `document.baseURI`**, never
+  on the document origin. Use the helpers in `client/src/baseUrl.ts`:
+  - For API fetches: call `api.get/post/patch/delete`; the api client
+    strips the leading slash so `fetch` resolves the path against
+    `<base href>`. Never call `fetch('/api/...')` directly. Same for
+    WebSockets — the `ws` manager passes `'api/ws'` (no leading slash).
+  - For `window.location.href` / `.assign` to the app root: use
+    `basePath`. Hard-coding `'/'` skips the ingress prefix and
+    bounces the iframe to HA Core's frontend.
+  - For `window.location.href` to an in-app path: wrap in
+    `addBase('/spaces/...')` so the ingress prefix is prepended.
+  - For markdown / user-supplied links: see `utils/markdown.ts` — it
+    already routes through the base; don't reinvent.
+- **Auth state is mode-agnostic**: `isAuthed` is `currentUser != null`.
+  A successful `/api/me` is the only signal of a working auth
+  handshake — that holds for bearer (standalone/ha) and ingress
+  (haos) alike. Don't reintroduce a `token != null` requirement in
+  the gate.
+- **In haos mode the SPA never has a token.** `POST
+  /api/setup/haos/complete` deliberately returns `{username}` and no
+  token — ingress is the only entry point. Cold-start probes
+  `/api/me` without an `Authorization` header and lets the
+  Supervisor-added ingress headers do the auth. A new setup
+  endpoint for haos must follow the same pattern (no token, no
+  password collection); standalone / ha setup endpoints DO return a
+  token.
+- **A 401 without a stashed token is NOT a session expiry.** The
+  api client guards the "Session expired" toast on `token.value !==
+  null` — never show the toast for an ingress probe that 401'd.
+  The App shell renders a dedicated `IngressAuthFailed` page in that
+  case (the right surface for "Supervisor headers aren't reaching
+  us" is a reload-the-sidebar-entry CTA, not a password form).
+- **Tests cover the ingress shape.** `client/src/baseUrl.test.ts`
+  exercises the path-rewriting helpers and
+  `IngressLocationProvider.test.tsx` exercises the router. When
+  you add a new URL surface (a redirect, a fetch target, an icon /
+  manifest reference), extend these — the test names mention the
+  ingress prefix explicitly so a future contributor sees the
+  invariant before they write code that breaks it.
+
+References:
+- `client/src/baseUrl.ts` — `basePath`, `addBase`, `stripBase`
+- `client/src/api.ts` — `_rel` strips leading slashes
+- `client/src/ws.ts` — relative WS path resolves against
+  `document.baseURI`
+- `client/src/router/IngressLocationProvider.tsx` — preact-iso
+  router glue
+- `socialhome/routes/spa.py` — `SpaIndexView` rewrites `<base href>`
+  from `X-Ingress-Path`
+- `socialhome/auth.py` — `HaIngressStrategy` is the backend
+  authentication strategy that accepts the ingress headers
+
 ### Federation & Security
 
 - Every inbound federation event MUST pass through the §24.11 validation pipeline:
@@ -299,3 +375,21 @@ perfect?" Incremental accuracy beats big bang rewrites.
 - Never add / rename / remove a `FederationEventType` or an HTTP
   endpoint without updating the matching page in `docs/protocol/` or
   `docs/api.md` in the same commit. See "Keep docs in sync" above
+- Never write `window.location.href = "/..."` (or `.assign`, `.replace`)
+  with an absolute path in the SPA — it bypasses the HA Supervisor
+  ingress prefix and bounces the iframe to HA Core's frontend. Use
+  `basePath` for the app root or `addBase('/path')` for an in-app
+  destination, both from `client/src/baseUrl.ts`. Same goes for
+  `fetch('/api/...')`: route through the `api` client which strips
+  the leading slash so `<base href>` is honoured. See
+  "Frontend (SPA) & ingress" above
+- Never gate `isAuthed` on `token != null` in the SPA — under haos
+  the SPA carries no token (ingress headers stand in for the
+  bearer). The gate is `currentUser != null`; a successful
+  `/api/me` is the only signal of a working auth handshake. See
+  "Frontend (SPA) & ingress" above
+- Never have a setup endpoint return a bearer token in haos mode —
+  ingress is the only entry point and a token would create a parallel
+  auth path operators can't easily revoke. Standalone / ha setup
+  endpoints DO return a token; haos setup endpoints return `{username}`
+  and the SPA cold-start probes `/api/me` via ingress headers

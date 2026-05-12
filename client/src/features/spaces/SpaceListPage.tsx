@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { addBase } from '@/baseUrl'
 import { spaces, loadSpaces } from '@/store/spaces'
 import type { Space } from '@/types'
 import { SpaceListSkeleton } from '@/components/Skeleton'
@@ -127,7 +128,7 @@ export default function SpaceListPage() {
         <div class="sh-page-header__actions">
           <Button
             variant="secondary"
-            onClick={() => { window.location.href = '/spaces/browse' }}
+            onClick={() => { window.location.href = addBase('/spaces/browse') }}
           >
             🔭 Browse spaces
           </Button>
@@ -150,7 +151,7 @@ export default function SpaceListPage() {
             </Button>
             <Button
               variant="secondary"
-              onClick={() => { window.location.href = '/spaces/browse' }}
+              onClick={() => { window.location.href = addBase('/spaces/browse') }}
             >
               🔭 Browse public spaces
             </Button>

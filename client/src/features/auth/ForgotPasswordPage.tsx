@@ -15,6 +15,7 @@
  * unauthenticated reset link works without the login form intercepting.
  */
 import { useState } from 'preact/hooks'
+import { basePath } from '@/baseUrl'
 import { Button } from '@/components/Button'
 import { FormError } from '@/components/FormError'
 import { showToast } from '@/components/Toast'
@@ -81,8 +82,10 @@ function ResetForm({ token }: { token: string }) {
       if (res.status === 204) {
         showToast('Password updated — please sign in.', 'success')
         // Hard-reload so the SPA lands on LoginPage with a clean state
-        // (no stale signals from the reset flow).
-        window.location.href = '/'
+        // (no stale signals from the reset flow). ``basePath`` is the
+        // document base — ``/`` here would skip the ingress prefix
+        // when the SPA is served behind HA Supervisor.
+        window.location.href = basePath
         return
       }
       if (res.status === 410) {

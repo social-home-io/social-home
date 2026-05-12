@@ -4,6 +4,7 @@ import { IngressLocationProvider as LocationProvider } from '@/router/IngressLoc
 import { useComputed, signal } from '@preact/signals'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
+import { basePath } from '@/baseUrl'
 import { isAuthed, currentUser, loadCurrentUser, setToken, token } from '@/store/auth'
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { isGuardian, loadGuardian } from '@/store/guardian'
@@ -43,6 +44,13 @@ import { MobileNav } from '@/components/MobileNav'
 
 const showOnboarding = signal(false)
 
+// Latches on the first ``loadCurrentUser()`` resolution (success or
+// failure). The App shell uses it to avoid flashing the login form
+// before the haos ingress probe has finished — without the gate the
+// SPA paints LoginPage for one tick on every cold start while
+// ``/api/me`` is in flight.
+const authProbeAttempted = signal(false)
+
 /**
  * LoginPage — standalone-mode credential form (§23.3).
  *
@@ -73,9 +81,9 @@ function LoginPage() {
       const resp = await api.post('/api/auth/token', { username, password }) as
         { token: string }
       setToken(resp.token)
-      // Without this the SPA stays stuck on the login form: isAuthed
-      // is `token != null && currentUser != null`, and currentUser is
-      // null until we fetch /api/me.
+      // Without this the SPA stays stuck on the login form:
+      // ``isAuthed`` is ``currentUser != null``, and ``currentUser``
+      // stays null until ``/api/me`` resolves.
       await loadCurrentUser()
       showToast('Welcome back', 'success')
     } catch (err: any) {
@@ -142,6 +150,49 @@ function LoginPage() {
   )
 }
 
+/**
+ * IngressAuthFailed — terminal state for a haos cold-start that
+ * couldn't authenticate via HA Supervisor ingress headers.
+ *
+ * In ``haos`` mode the SPA never carries a bearer token: ingress
+ * adds ``X-Hass-Source: core.ingress`` + ``X-Remote-User-Name`` to
+ * every request as it proxies through HA Core, and the backend's
+ * :class:`HaIngressStrategy` accepts that as the auth handshake. If
+ * those headers don't arrive (Supervisor restart mid-flight, the
+ * panel was loaded from a stale URL outside the ingress prefix, or
+ * the add-on was rebuilt and HA hasn't reconnected yet) the cold-
+ * start probe of ``/api/me`` 401s and we land here.
+ *
+ * The fix is always "reload from the Home Assistant sidebar
+ * entry" — that re-runs the ingress dance and gets the headers
+ * back. The Reload button bounces the document to ``basePath``
+ * (which under ingress is ``/api/hassio_ingress/<token>/``); if the
+ * SPA was reached via a stale URL, the new URL is the canonical
+ * one HA constructs for the sidebar entry.
+ */
+function IngressAuthFailed() {
+  return (
+    <div class="sh-login" role="main">
+      <div class="sh-login-hero">
+        <Wordmark size={48} tagline="The social home for your household." />
+      </div>
+      <h1 style={{ textAlign: 'center' }}>Couldn't reach Social Home</h1>
+      <p class="sh-muted" style={{ maxWidth: '34em', margin: '0 auto var(--sh-space-md)' }}>
+        Home Assistant didn't pass through the authentication
+        headers Social Home needs to sign you in. This usually means
+        the panel was opened from a stale link, or the add-on was
+        restarted mid-session. Open the <strong>Social Home</strong>
+        sidebar entry again — that re-runs the ingress handshake.
+      </p>
+      <div style={{ textAlign: 'center' }}>
+        <Button onClick={() => { window.location.assign(basePath) }}>
+          Reload
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function TopBar() {
   return (
     <header class="sh-topbar" role="banner">
@@ -169,14 +220,42 @@ export function App() {
     }
   }, [])
 
-  // Cold-start auth rehydrate: if localStorage handed us a token but we
-  // haven't loaded /api/me yet, do it now. Without this a refresh of an
-  // already-signed-in session boots into the login screen.
+  // Cold-start auth probe: pick the right /api/me handshake for the
+  // current platform mode.
+  //
+  // * standalone / ha — bearer auth. Skip the probe entirely without
+  //   a stashed token (it would 401 and bring the SPA up on the
+  //   "Session expired" toast instead of a clean LoginPage); with a
+  //   token, rehydrate so a refresh of an already-signed-in session
+  //   doesn't bounce through the login screen.
+  // * haos — ingress auth. The SPA never sees a token; HA Supervisor
+  //   adds ``X-Hass-Source: core.ingress`` + ``X-Remote-User-Name`` to
+  //   every request and the backend's ``HaIngressStrategy`` accepts
+  //   that as the handshake. Probe ``/api/me`` unconditionally —
+  //   success populates ``currentUser`` (and ``isAuthed`` flips
+  //   true); failure means the panel was opened from a stale URL or
+  //   the Supervisor isn't proxying — we render
+  //   :func:`IngressAuthFailed` in that case instead of the bearer-
+  //   mode login form.
+  //
+  // The single-shot ``authProbeAttempted`` latch keeps the render gate
+  // below from flashing the login form for one tick while the probe
+  // is in flight.
   useEffect(() => {
-    if (token.value !== null && currentUser.value === null) {
-      void loadCurrentUser()
+    if (cfg.value === null) return
+    if (cfg.value.setup_required) return
+    if (authProbeAttempted.value) return
+    if (currentUser.value !== null) {
+      authProbeAttempted.value = true
+      return
     }
-  }, [])
+    const shouldProbe = cfg.value.mode === 'haos' || token.value !== null
+    if (!shouldProbe) {
+      authProbeAttempted.value = true
+      return
+    }
+    void loadCurrentUser().finally(() => { authProbeAttempted.value = true })
+  }, [cfg.value])
 
   // Cold-start sidebar inputs: household feature toggles drive
   // gating (`feat_feed`, `feat_pages`, …) and `/api/cp/minors`
@@ -212,7 +291,14 @@ export function App() {
     return <ForgotPasswordPage token={params.get('token')} />
   }
 
-  if (!authed.value) return <LoginPage />
+  // Don't render LoginPage / IngressAuthFailed until the cold-start
+  // probe has resolved — otherwise the page paints the wrong shell
+  // for a tick while ``/api/me`` is in flight.
+  if (!authProbeAttempted.value) return null
+
+  if (!authed.value) {
+    return cfg.value.mode === 'haos' ? <IngressAuthFailed /> : <LoginPage />
+  }
 
   const user = currentUser.value
   if (user?.is_new_member && !showOnboarding.value) {

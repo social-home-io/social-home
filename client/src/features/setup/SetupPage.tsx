@@ -2,6 +2,7 @@ import { type ComponentChildren } from 'preact'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { basePath } from '@/baseUrl'
 import { loadCurrentUser, setToken } from '@/store/auth'
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { Button } from '@/components/Button'
@@ -269,7 +270,10 @@ function StandaloneSetupForm() {
       // and the SPA stops redirecting here.
       await loadInstanceConfig()
       showToast(t('setup.success'), 'success')
-      window.location.href = '/'
+      // ``basePath`` is the document base (``/`` standalone, or the
+      // HA Supervisor ingress prefix for ha/haos). Hard-coding ``/``
+      // here bounced the iframe to HA Core's frontend root.
+      window.location.href = basePath
     } catch (err: any) {
       setError(err?.message || t('setup.error.generic'))
     } finally {
@@ -391,7 +395,10 @@ function HaOwnerForm() {
       await loadCurrentUser()
       await loadInstanceConfig()
       showToast(t('setup.success'), 'success')
-      window.location.href = '/'
+      // ``basePath`` is the document base (``/`` standalone, or the
+      // HA Supervisor ingress prefix for ha/haos). Hard-coding ``/``
+      // here bounced the iframe to HA Core's frontend root.
+      window.location.href = basePath
     } catch (err: any) {
       setError(err?.message || t('setup.error.generic'))
     } finally {
@@ -527,7 +534,10 @@ function HaosFlow() {
       await loadInstanceConfig()
       // Ingress already provides the auth headers, so we don't need
       // a token — bounce straight into the app.
-      window.location.href = '/'
+      // ``basePath`` is the document base (``/`` standalone, or the
+      // HA Supervisor ingress prefix for ha/haos). Hard-coding ``/``
+      // here bounced the iframe to HA Core's frontend root.
+      window.location.href = basePath
     } catch (err: any) {
       setError(err?.message || t('setup.error.generic'))
       setBusy(false)

@@ -38,12 +38,17 @@ class ApiClient {
    *  expired" toast before logging the user out so the page doesn't
    *  silently wipe to the login form. Same path applies to every
    *  verb (GET/POST/PUT/PATCH/DELETE/upload) so an expired token is
-   *  handled identically no matter which method tripped the 401. */
+   *  handled identically no matter which method tripped the 401.
+   *
+   *  A 401 with **no token attached** is a different beast: it
+   *  usually means an ingress-mode cold-start probe (haos) couldn't
+   *  authenticate via the Supervisor headers. The App shell renders
+   *  a dedicated "Ingress auth failed" page for that — we stay quiet
+   *  here so the user doesn't see a misleading "Session expired"
+   *  toast for a session that never existed. */
   private async _handle(res: Response, path: string): Promise<Response> {
     if (res.status === 401) {
-      // Single banner per logout — repeated 401s in a render burst
-      // shouldn't stack toasts on the way out.
-      if (!ApiClient._loggingOut) {
+      if (token.value !== null && !ApiClient._loggingOut) {
         ApiClient._loggingOut = true
         showToast('Session expired — please sign in again', 'info')
         const auth = await import('@/store/auth')

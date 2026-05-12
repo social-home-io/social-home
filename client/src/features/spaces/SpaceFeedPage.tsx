@@ -2,6 +2,7 @@ import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useRoute } from 'preact-iso'
 import { api } from '@/api'
+import { addBase } from '@/baseUrl'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
 import { loadHouseholdUsers } from '@/store/householdUsers'
@@ -298,7 +299,11 @@ export default function SpaceFeedPage() {
                   try {
                     await api.delete(`/api/spaces/${spaceId}/subscribe`)
                     showToast('Unsubscribed', 'info')
-                    window.location.href = '/spaces'
+                    // ``addBase`` prepends the HA Supervisor ingress
+                    // prefix (no-op for standalone) so the
+                    // hard-navigate stays inside the SPA shell instead
+                    // of bouncing the iframe to HA Core's frontend.
+                    window.location.href = addBase('/spaces')
                   } catch (exc) {
                     showToast((exc as Error).message, 'error')
                   }
