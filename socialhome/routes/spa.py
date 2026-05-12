@@ -144,6 +144,21 @@ class SpaServiceWorkerView(_SpaFileView):
     _extra_headers = {"Service-Worker-Allowed": "/"}  # noqa: RUF012
 
 
+class SpaFaviconView(_SpaFileView):
+    """``GET /favicon.svg`` — branded SVG icon shipped in the bundle.
+
+    Browsers ask for ``/favicon.svg`` (or ``/favicon.ico``) when no
+    ``<link rel="icon">`` is in the HTML head, and also when one is.
+    Serving the file directly avoids the catchall returning the SPA
+    shell for a request the browser expects to be an image.
+    """
+
+    _filename = "favicon.svg"
+    # Cache the SVG for an hour — it changes rarely and the bundle
+    # ships a fresh copy on every build.
+    _cache_control = "public, max-age=3600"
+
+
 class SpaCatchallView(SpaIndexView):
     """Serves the SPA shell for any non-``/api/`` GET path.
 
@@ -202,6 +217,7 @@ def mount_spa(app: web.Application, static_dir: Path | None = None) -> bool:
 
     app.router.add_view("/manifest.json", SpaManifestView)
     app.router.add_view("/sw.js", SpaServiceWorkerView)
+    app.router.add_view("/favicon.svg", SpaFaviconView)
     app.router.add_view("/", SpaIndexView)
     # Registered LAST so every more-specific route (``/api/...``,
     # ``/healthz``, ``/manifest.json``, ``/sw.js``, ``/assets/...``,

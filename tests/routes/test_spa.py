@@ -29,6 +29,7 @@ def fake_spa(tmp_path: Path) -> Path:
     )
     (static / "manifest.json").write_text('{"name":"Social Home"}')
     (static / "sw.js").write_text("// service worker")
+    (static / "favicon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
     (static / "assets" / "app-deadbeef.js").write_text("console.log('app');")
     return static
 
@@ -91,6 +92,14 @@ async def test_service_worker_served_with_root_scope_header(spa_client):
     assert resp.status == 200
     assert resp.headers["Service-Worker-Allowed"] == "/"
     assert resp.headers["Cache-Control"] == "no-cache"
+
+
+async def test_favicon_svg_served_unauthenticated(spa_client):
+    """``/favicon.svg`` is served without auth (browsers fetch it on every page)."""
+    resp = await spa_client.get("/favicon.svg")
+    assert resp.status == 200
+    assert "image/svg" in resp.headers["Content-Type"]
+    assert "<svg" in await resp.text()
 
 
 # ── Backend routes stay backend routes ────────────────────────────────────

@@ -88,7 +88,11 @@ _DEFAULT_PUBLIC_PATH_PATTERNS: tuple[str, ...] = (
     # ``/{name}.{ext}`` paths the SPA might own — e.g. a hypothetical
     # ``/robots.txt`` — are intentionally NOT matched so a missing
     # asset surfaces as 404 instead of an HTML shell.
-    r"^/(?!api/|healthz$|federation/|\.well-known/|assets/|manifest\.json$|sw\.js$)[^.]+$",
+    r"^/(?!api/|healthz$|federation/|\.well-known/|assets/|manifest\.json$|sw\.js$|favicon\.svg$)[^.]+$",
+    # ``/favicon.svg`` is the only dotted root-level asset we serve from
+    # the SPA bundle; the catchall regex above excludes paths containing
+    # dots, so list the file explicitly here.
+    r"^/favicon\.svg$",
 )
 
 
