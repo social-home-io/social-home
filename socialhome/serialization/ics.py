@@ -104,6 +104,8 @@ def _event_block(
     lines.append(f"SUMMARY:{_escape(event.summary)}")
     if event.description:
         lines.append(f"DESCRIPTION:{_escape(event.description)}")
+    if event.location:
+        lines.append(f"LOCATION:{_escape(event.location)}")
     if event.rrule:
         # The stored RRULE is already RFC 5545 — pass through verbatim.
         lines.append(f"RRULE:{event.rrule}")

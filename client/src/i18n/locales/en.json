@@ -525,6 +525,8 @@
   "event.dialog.end_date": "End date",
   "event.dialog.end_time": "End time",
   "event.dialog.description": "Description",
+  "event.dialog.location": "Location",
+  "event.dialog.location_placeholder": "Venue, address, room, or link",
   "event.dialog.create": "Create event",
   "event.dialog.created": "Event created.",
   "event.dialog.failed": "Couldn't create the event.",

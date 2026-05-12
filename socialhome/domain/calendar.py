@@ -58,6 +58,13 @@ class CalendarEvent:
     #: thumbnail in the calendar list view. ``None`` means "no cover";
     #: the post + list-row fall back to the icon placeholder.
     cover_url: str | None = None
+    #: Free-form location text — venue, address, room, conference URL.
+    #: Surfaced under the event title on the card and emitted as the
+    #: ``LOCATION:`` line on ICS export. ``None`` means "no location";
+    #: the post / list row omit the line. No structured parsing — the
+    #: line is rendered verbatim, so it accepts whatever the host
+    #: typed (multilingual, multi-line via ``\n``, URL).
+    location: str | None = None
 
     #: Origin of this event row. ``"local"`` = authored on this
     #: instance. ``"remote_invite"`` = mirror of an event on a paired
@@ -87,6 +94,7 @@ class CalendarEventCreate:
     rrule: str | None = None
     rsvp_enabled: bool = False
     cover_url: str | None = None
+    location: str | None = None
 
 
 # Sentinel for ``CalendarEventUpdate.cover_url`` to distinguish
@@ -118,11 +126,21 @@ class CalendarEventUpdate:
     #: ``UNSET_COVER`` (default) = leave cover as-is. ``None`` =
     #: clear it. ``str`` = set it to that URL.
     cover_url: object = _UNSET
+    #: ``UNSET_LOCATION`` (default) = leave location as-is. ``None`` =
+    #: clear it. ``str`` = set it to that text. Same clear-vs-keep
+    #: distinction as ``cover_url`` because an explicit empty/null value
+    #: on the wire has to be able to wipe the field.
+    location: object = _UNSET
 
 
 #: Public alias of the cover-clearing sentinel — exported so route
 #: handlers can construct an update without touching the cover field.
 UNSET_COVER = _UNSET
+#: Public alias of the location-clearing sentinel. Same shape as
+#: :data:`UNSET_COVER` — route handlers use it as the "no change"
+#: default for ``location`` so an explicit ``None`` on the wire still
+#: clears the field.
+UNSET_LOCATION = _UNSET
 
 
 class RSVPStatus:

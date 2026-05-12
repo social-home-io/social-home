@@ -344,6 +344,7 @@ export default function CalendarPage() {
         all_day: evt.all_day,
         attendees: evt.attendees,
         rsvp_enabled: evt.rsvp_enabled,
+        location: evt.location,
       },
       calendars.value,
     )
@@ -549,6 +550,11 @@ export default function CalendarPage() {
                   && (e.attendees ?? []).includes(myUid ?? '__none__')
                 return (
                 <div class="sh-event-detail">
+                  {e.location && (
+                    <p class="sh-event-location" aria-label="Location">
+                      📍 {e.location}
+                    </p>
+                  )}
                   {e.description && <p>{e.description}</p>}
                   <div class="sh-event-times">
                     <span>{t('event.starts')} {new Date(e.start).toLocaleString()}</span>

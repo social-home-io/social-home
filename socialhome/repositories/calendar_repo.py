@@ -213,9 +213,9 @@ class SqliteCalendarRepo:
             INSERT INTO calendar_events(
                 id, calendar_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, mirrored_from, rrule,
-                rsvp_enabled, cover_url, origin, remote_event_id,
+                rsvp_enabled, cover_url, location, origin, remote_event_id,
                 remote_instance_id, created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -229,6 +229,7 @@ class SqliteCalendarRepo:
                 rrule=excluded.rrule,
                 rsvp_enabled=excluded.rsvp_enabled,
                 cover_url=excluded.cover_url,
+                location=excluded.location,
                 origin=excluded.origin,
                 remote_event_id=excluded.remote_event_id,
                 remote_instance_id=excluded.remote_instance_id,
@@ -247,6 +248,7 @@ class SqliteCalendarRepo:
                 event.rrule,
                 int(event.rsvp_enabled),
                 event.cover_url,
+                event.location,
                 event.origin,
                 event.remote_event_id,
                 event.remote_instance_id,
@@ -557,8 +559,8 @@ class SqliteSpaceCalendarRepo:
             INSERT INTO space_calendar_events(
                 id, space_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, rrule, capacity, cover_url,
-                created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,
+                location, created_by, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -571,6 +573,7 @@ class SqliteSpaceCalendarRepo:
                 rrule=excluded.rrule,
                 capacity=excluded.capacity,
                 cover_url=excluded.cover_url,
+                location=excluded.location,
                 updated_at=datetime('now')
             """,
             (
@@ -585,6 +588,7 @@ class SqliteSpaceCalendarRepo:
                 event.rrule,
                 event.capacity,
                 event.cover_url,
+                event.location,
                 event.created_by,
                 None,
                 None,
@@ -1048,6 +1052,7 @@ def _row_to_event(row: dict | None) -> CalendarEvent | None:
         rrule=row.get("rrule"),
         rsvp_enabled=bool_col(row.get("rsvp_enabled", 0)),
         cover_url=row.get("cover_url"),
+        location=row.get("location"),
         origin=row.get("origin") or "local",
         remote_event_id=row.get("remote_event_id"),
         remote_instance_id=row.get("remote_instance_id"),
@@ -1071,4 +1076,5 @@ def _row_to_space_event(row: dict) -> CalendarEvent:
         rrule=row.get("rrule"),
         capacity=int(cap) if cap is not None else None,
         cover_url=row.get("cover_url"),
+        location=row.get("location"),
     )

@@ -100,7 +100,7 @@ anything below contradicts the file, the file wins.
 | `space_moderation_queue` | Pending mod actions — feature, action, payload, reviewer, status, expiry. |
 | `space_polls` / `space_poll_options` / `space_poll_votes` | Space-feed polls. Vote rows are encrypted in transit so the GFS never sees who voted what (§25.8.21). |
 | `space_schedule_slots` / `space_schedule_responses` / `space_schedule_poll_meta` | Space-scoped Doodle polls. |
-| `space_calendar_events` | Space calendar events. Holds RFC 5545 `rrule`, attendees JSON, `capacity`, `notify_before_minutes`. |
+| `space_calendar_events` | Space calendar events. Holds RFC 5545 `rrule`, attendees JSON, `capacity`, `notify_before_minutes`, `location` (free-form). |
 | `space_calendar_rsvps` | Per-occurrence RSVPs — `(event_id, user_id, occurrence_at)` PK. Status: `going` / `maybe` / `declined` / `requested` / `waitlist`. |
 | `space_calendar_rsvp_reminders` | Pre-event reminder fan-out — `fire_at` partial index on un-sent + future. Driven by `infrastructure/calendar_reminder_scheduler.py`. |
 | `space_calendar_feed_tokens` | Per-`(user, space)` revocable tokens for the iCal `.ics` feed. The `token_hash` column holds a SHA-256 hash of the raw token (matching `api_tokens`); a leaked DB never exposes a live feed URL. Separate from API tokens so revoking one doesn't affect the other. |
@@ -208,7 +208,7 @@ themselves moments and link to the conversation root via
 | Table | Purpose |
 |---|---|
 | `calendars` | Personal + space calendars. Personal calendars are owned by a username; space calendars share lifecycle with their space. |
-| `calendar_events` | Personal calendar events with `rrule`, attendees, `mirrored_from` (when a space event is mirrored into a personal calendar). New columns: `origin` ∈ `{local, remote_invite}` distinguishes locally-authored rows from cross-household invite mirrors; `remote_event_id` + `remote_instance_id` link a mirror back to the organiser's row so RSVP responses propagate via `PERSONAL_CALENDAR_RSVP_UPDATED`. |
+| `calendar_events` | Personal calendar events with `rrule`, attendees, `mirrored_from` (when a space event is mirrored into a personal calendar). New columns: `origin` ∈ `{local, remote_invite}` distinguishes locally-authored rows from cross-household invite mirrors; `remote_event_id` + `remote_instance_id` link a mirror back to the organiser's row so RSVP responses propagate via `PERSONAL_CALENDAR_RSVP_UPDATED`; `location` carries free-form venue/address text emitted as the iCal `LOCATION:` line on export. |
 | `calendar_event_rsvps` | Personal-calendar RSVPs — cross-household invites only. PK `(event_id, user_id, occurrence_at)`. Status ∈ `{accepted, declined, tentative}`. Local household members never RSVP — the household is the unit of trust and members coordinate by writing directly to each other's calendars via the dialog's calendar selector. |
 
 ## Pages (household)

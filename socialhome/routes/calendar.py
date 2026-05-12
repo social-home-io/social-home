@@ -21,7 +21,7 @@ from ..services.calendar_import_service import (
     AICalendarImportError,
     AICalendarImportUnavailable,
 )
-from ..services.calendar_service import UNSET_COVER
+from ..services.calendar_service import UNSET_COVER, UNSET_LOCATION
 from .base import BaseView
 
 
@@ -59,6 +59,7 @@ def _event_dict(event) -> dict:
         "capacity": getattr(event, "capacity", None),
         "rsvp_enabled": getattr(event, "rsvp_enabled", False),
         "cover_url": getattr(event, "cover_url", None),
+        "location": getattr(event, "location", None),
     }
 
 
@@ -192,6 +193,7 @@ class CalendarEventsView(BaseView):
             # See ``strip_signature_query`` — drops any ``?exp=&sig=``
             # the SPA echoed back from a signed upload preview.
             cover_url=strip_signature_query(body.get("cover_url")),
+            location=body.get("location"),
         )
         return web.json_response(
             _sign_payload(self.request, _event_dict(event)), status=201
@@ -267,6 +269,9 @@ class CalendarEventDeleteView(BaseView):
             if "cover_url" in body
             else UNSET_COVER
         )
+        # Tri-state again for ``location``: omitted = leave; ``null`` =
+        # clear; string = set. The service trims + clamps the value.
+        location = body["location"] if "location" in body else UNSET_LOCATION
         event = await svc.update_event(
             event_id,
             summary=body.get("summary"),
@@ -278,6 +283,7 @@ class CalendarEventDeleteView(BaseView):
             rrule=body.get("rrule"),
             rsvp_enabled=body.get("rsvp_enabled"),
             cover_url=cover,
+            location=location,
         )
         return web.json_response(_sign_payload(self.request, _event_dict(event)))
 
@@ -296,6 +302,7 @@ async def _persist_imported_events(view, calendar_id, created_by, events):
                 all_day=ev.all_day,
                 description=ev.description,
                 rrule=ev.rrule,
+                location=ev.location,
             )
         )
     return web.json_response(
@@ -494,6 +501,7 @@ class SpaceCalendarEventsView(BaseView):
                 rrule=body.get("rrule"),
                 capacity=body.get("capacity"),
                 cover_url=strip_signature_query(body.get("cover_url")),
+                location=body.get("location"),
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
@@ -526,6 +534,7 @@ class SpaceCalendarEventDetailView(BaseView):
                 if "cover_url" in body
                 else UNSET_COVER
             )
+            location = body["location"] if "location" in body else UNSET_LOCATION
             event = await space_cal_svc.update_event(
                 event_id,
                 summary=body.get("summary") or body.get("title"),
@@ -542,6 +551,7 @@ class SpaceCalendarEventDetailView(BaseView):
                 capacity=body.get("capacity"),
                 clear_capacity=bool(body.get("clear_capacity", False)),
                 cover_url=cover,
+                location=location,
             )
         except KeyError:
             return error_response(404, "NOT_FOUND", "Event not found.")

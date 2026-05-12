@@ -382,6 +382,10 @@ export interface CalendarEvent {
    *  Renders at the top of EventPostCard on the feed and as a
    *  horizontal thumbnail in the calendar list view. */
   cover_url?: string | null
+  /** Free-form location (venue, address, room name, conference URL).
+   *  Surfaces under the event title on the card and is emitted on ICS
+   *  export. ``null`` means "no location". */
+  location?: string | null
 }
 
 /** Per-event reminder configured by a user (Phase D). */

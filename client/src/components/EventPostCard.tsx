@@ -138,6 +138,12 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
           </span>
         )}
       </div>
+      {event.location && (
+        <div class="sh-event-card-location">
+          <span class="sh-event-card-when-icon" aria-hidden="true">📍</span>
+          <span>{event.location}</span>
+        </div>
+      )}
 
       <CapacityStrip counts={counts} capacity={event.capacity} myStatus={myStatus} />
 

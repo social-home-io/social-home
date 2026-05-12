@@ -146,6 +146,7 @@ class PersonalCalendarInboundHandlers:
                 rrule=p.get("rrule"),
                 rsvp_enabled=bool(p.get("rsvp_enabled", False)),
                 cover_url=p.get("cover_url"),
+                location=p.get("location"),
                 origin="remote_invite",
                 remote_event_id=remote_event_id,
                 remote_instance_id=event.from_instance,
@@ -164,6 +165,7 @@ class PersonalCalendarInboundHandlers:
                     rrule=p.get("rrule"),
                     rsvp_enabled=bool(p.get("rsvp_enabled", False)),
                     cover_url=p.get("cover_url"),
+                    location=p.get("location"),
                 )
             await self._calendar_repo.save_event(mirrored)
             # On first receipt, default the recipient's RSVP to
