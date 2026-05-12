@@ -3,8 +3,6 @@
 A thin wrapper for the Supervisor-only endpoints used by
 :class:`HaBootstrap` when Social Home runs as a HA add-on:
 
-* ``GET /auth/list``  — discover the HA owner account so we can provision
-  them as the initial Social Home admin.
 * ``GET /addons/self/info`` — read our own add-on metadata so the
   discovery payload can advertise a reachable ``host`` + ``port`` for
   the integration. The Supervisor rewrites underscores in the slug
@@ -14,8 +12,17 @@ A thin wrapper for the Supervisor-only endpoints used by
 * ``POST /discovery`` — register the add-on with HA's discovery integration
   so the official ``socialhome`` HA integration can pick us up automatically.
 
-The Supervisor sets ``SUPERVISOR_URL`` / ``SUPERVISOR_TOKEN`` in the add-on
-environment.
+User discovery (the owner account, the picker for the wizard, the
+ingress-header → identity resolution) goes through HA Core's WS
+``config/auth/list`` instead — see
+:meth:`socialhome.platform.ha.client.HaClient.list_auth_users`.
+The Supervisor's REST ``/auth/list`` was a second source of identity
+data with a strictly smaller payload (no ``id``, no
+``credentials``) and the same envelope; keeping it forked invited
+the kind of slug-vs-username gotchas issue #297 documents.
+
+The Supervisor sets ``SUPERVISOR_URL`` / ``SUPERVISOR_TOKEN`` in the
+add-on environment.
 """
 
 from __future__ import annotations
@@ -26,43 +33,6 @@ from dataclasses import dataclass
 import aiohttp
 
 log = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class HaUser:
-    """A Home Assistant user record as returned by Supervisor ``/auth/list``.
-
-    Carries the **auth-provider username** (the credential the operator
-    types at the HA login screen) plus the **display name** HA renders
-    for the person — distinct concepts that the previous code path
-    conflated by deriving an entity slug from the username and looking
-    up ``person.<username>`` in the state machine. Issue #297 documents
-    the symptom; the fix is to stop guessing the slug and trust the
-    fields ``/auth/list`` already returns.
-    """
-
-    username: str
-    name: str
-    is_owner: bool
-
-    @classmethod
-    def from_dict(cls, data: dict) -> HaUser | None:
-        """Return a :class:`HaUser` from the Supervisor payload, or
-        ``None`` when the entry is system-generated or missing the
-        username field. Supervisor includes service accounts (e.g. the
-        cloud / mobile-app bridges) in ``/auth/list`` with
-        ``system_generated: true``; those are uninteresting to the
-        provisioning wizard."""
-        if data.get("system_generated", False):
-            return None
-        username = data.get("username")
-        if not username:
-            return None
-        return cls(
-            username=str(username),
-            name=str(data.get("name") or username),
-            is_owner=bool(data.get("is_owner", False)),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,55 +87,6 @@ class SupervisorClient:
             "Content-Type": "application/json",
         }
 
-    async def list_users(self) -> list[HaUser]:
-        """Return every non-system HA user from ``/auth/list``.
-
-        Supervisor's response envelope is ``{"data": {"users": [...]}}``
-        as of HA 2024+; the older ``{"users": [...]}`` shape is tolerated.
-        Filters out ``system_generated: true`` entries (cloud / mobile-app
-        service accounts) — the wizard wants real human accounts only.
-        """
-        try:
-            async with self._session.get(
-                f"{self._base_url}/auth/list",
-                headers=self._headers(),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-        except aiohttp.ClientError as exc:
-            log.warning("supervisor: /auth/list failed: %s", exc)
-            return []
-        users_raw = data.get("data", data).get("users", [])
-        out: list[HaUser] = []
-        for entry in users_raw:
-            user = HaUser.from_dict(entry)
-            if user is not None:
-                out.append(user)
-        return out
-
-    async def get_owner(self) -> HaUser | None:
-        """Return the HA owner (``is_owner: true``) or ``None``.
-
-        Carries username + display name so the provisioning wizard can
-        mirror the admin without a ``person.*`` round-trip — see #297.
-        """
-        for user in await self.list_users():
-            if user.is_owner:
-                return user
-        log.warning("supervisor: no owner found in /auth/list")
-        return None
-
-    async def get_owner_username(self) -> str | None:
-        """Back-compat shim returning just the owner's username.
-
-        Bootstrap (``HaBootstrap.run``) and the admin-picture sync still
-        consume a bare string; switching them is a separate cleanup.
-        Wizard provisioning has moved to :meth:`get_owner` so it gets
-        the display name in the same round-trip.
-        """
-        owner = await self.get_owner()
-        return owner.username if owner else None
-
     async def get_self_info(self) -> AddonInfo | None:
         """Return ``GET /addons/self/info`` as a typed :class:`AddonInfo`,
         or ``None`` if the call failed / the response was missing
@@ -213,4 +134,4 @@ class SupervisorClient:
             return False
 
 
-__all__ = ["AddonInfo", "HaUser", "SupervisorClient"]
+__all__ = ["AddonInfo", "SupervisorClient"]

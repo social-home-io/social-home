@@ -26,12 +26,22 @@ if TYPE_CHECKING:
 def _auth_user_to_external(row: dict) -> ExternalUser | None:
     """Convert an HA ``config/auth/list`` row to :class:`ExternalUser`.
 
-    Returns ``None`` for system-generated rows (the cloud / mobile-app
-    service accounts HA reports alongside human users) and for rows
-    missing the auth-provider username — both unfit for SH
-    provisioning.
+    Returns ``None`` for rows the SH user pipeline can't / shouldn't
+    accept:
+
+    * ``system_generated: true`` — the Supervisor's own service
+      account, ``Home Assistant Content``, and the cloud / mobile-app
+      bridges. They carry ``username: null`` and never log in
+      through ingress.
+    * ``is_active: false`` — disabled HA accounts; SH shouldn't
+      surface them in the wizard picker or honour them when ingress
+      forwards their header.
+    * ``username: null`` — defensive belt-and-braces for any future
+      system row that omits the ``system_generated`` flag.
     """
     if row.get("system_generated", False):
+        return None
+    if row.get("is_active", True) is False:
         return None
     username = row.get("username")
     if not username:
@@ -48,6 +58,15 @@ def _auth_user_to_external(row: dict) -> ExternalUser | None:
         is_admin=False,
         email=None,
     )
+
+
+def _row_to_owner(row: dict) -> ExternalUser | None:
+    """Same as :func:`_auth_user_to_external`, but only returns the
+    row when it represents an HA *owner*. Used by the haos wizard to
+    pick the initial SH admin without iterating callers."""
+    if not row.get("is_owner", False):
+        return None
+    return _auth_user_to_external(row)
 
 
 class HaAuthProvider:
@@ -139,12 +158,76 @@ class HaUserDirectory:
     async def get(self, username: str) -> ExternalUser | None:
         # ``config/auth/list`` doesn't accept a filter — the list is
         # short (≤ tens of accounts on a typical household instance),
-        # so a linear scan is cheaper than maintaining a per-username
-        # cache. Match on the auth-provider username, not the display
-        # name.
+        # and the WS round-trip is cached on the client side, so a
+        # linear scan over a recent list is essentially free. Match
+        # on the auth-provider username (the credential ingress
+        # forwards), not the display name.
         for row in await self._adapter._client.list_auth_users():
             if row.get("username") == username:
                 return _auth_user_to_external(row)
+        return None
+
+    async def get_owner(self) -> ExternalUser | None:
+        """First HA owner from the auth list, or ``None``.
+
+        Used by the haos wizard to pick the initial SH admin without
+        a separate Supervisor REST round-trip. An HA instance always
+        has exactly one owner.
+        """
+        for row in await self._adapter._client.list_auth_users():
+            user = _row_to_owner(row)
+            if user is not None:
+                return user
+        return None
+
+    async def fetch_picture_bytes(self, username: str) -> bytes | None:
+        """Resolve + download the picture for HA auth user ``username``.
+
+        Centralises the auth user → ``user_id`` → ``person.*`` join
+        that every "what does this human look like?" caller needs:
+
+        1. Look ``username`` up in ``config/auth/list`` to recover the
+           HA ``user_id`` (32-hex string).
+        2. Scan ``person.*`` entity states for one whose
+           ``attributes.user_id`` matches — that's the documented HA
+           join, resilient to display-name renames (which change the
+           entity slug but never the user_id).
+        3. ``GET`` ``entity_picture`` via the integration token.
+
+        Returns the raw bytes so the caller can run them through the
+        ImageProcessor pipeline. ``None`` for any missing link in the
+        chain (no auth user, no matching person, no picture attribute,
+        transport error). Lives on the directory rather than the
+        adapter so both ``HaAdapter`` and ``HaosAdapter`` share one
+        implementation — see #297 for the previous duplicated
+        ``person.<username>`` lookup that this replaces.
+        """
+        target_id = await self._find_ha_user_id(username)
+        if not target_id:
+            return None
+        for state in await self._adapter._client.get_states():
+            entity_id = state.get("entity_id", "")
+            if not entity_id.startswith("person."):
+                continue
+            attrs: dict = state.get("attributes", {}) or {}
+            if attrs.get("user_id") != target_id:
+                continue
+            entity_picture = attrs.get("entity_picture")
+            if not entity_picture:
+                return None
+            return await self._adapter._client.fetch_path_bytes(entity_picture)
+        return None
+
+    async def _find_ha_user_id(self, username: str) -> str | None:
+        """Return the HA ``user_id`` for ``username`` (the auth
+        provider credential) or ``None``. The ``id`` field never
+        escapes the directory through ``ExternalUser`` — that type
+        intentionally stays platform-agnostic — so callers that need
+        it (the picture lifter) ask the directory for the join."""
+        for row in await self._adapter._client.list_auth_users():
+            if row.get("username") == username:
+                user_id = row.get("id")
+                return str(user_id) if user_id else None
         return None
 
     async def is_enabled(self, username: str) -> bool:

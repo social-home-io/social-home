@@ -304,36 +304,63 @@ async def test_local_password_wrong_returns_none(tmp_path):
 
 
 async def test_list_external_users_reads_auth_list():
-    """The directory now sources users from ``config/auth/list`` rather
-    than ``person.*`` states — the auth username is what HA forwards in
-    ingress headers, so identity walks through that field, not the
-    derived person entity slug (#297)."""
+    """The directory sources users from ``config/auth/list``. Filters
+    rejected entries: ``system_generated: true`` rows (Supervisor's
+    own service account, ``Home Assistant Content``, cloud / mobile-
+    app bridges — they carry ``username: null``); ``is_active: false``
+    rows (disabled HA accounts shouldn't surface in the wizard); rows
+    with ``username: null`` defensively, in case a future system row
+    omits the flag (#297 / #298)."""
     auth_users = [
         {
             "id": "abc",
             "username": "pascal",
             "name": "Pascal V",
             "is_owner": True,
+            "is_active": True,
+            "system_generated": False,
         },
         {
             "id": "def",
             "username": "maria",
             "name": "Maria",
             "is_owner": False,
+            "is_active": True,
+            "system_generated": False,
         },
         {
-            "id": "sys",
-            "username": "Home Assistant Cloud",
-            "name": "Cloud",
+            "id": "sys-supervisor",
+            "username": None,
+            "name": "Supervisor",
+            "is_owner": False,
+            "is_active": True,
             "system_generated": True,
+        },
+        {
+            "id": "disabled",
+            "username": "ex-roommate",
+            "name": "Ex Roommate",
+            "is_owner": False,
+            "is_active": False,
+            "system_generated": False,
         },
     ]
     adapter = _build_adapter(client=_FakeHaClient(auth_users=auth_users))
     users = await adapter.list_external_users()
-    # System-generated entries (cloud / mobile-app service accounts)
-    # are filtered out — the wizard wants real humans only.
     assert [u.username for u in users] == ["pascal", "maria"]
     assert users[0].display_name == "Pascal V"
+
+
+async def test_directory_get_owner_returns_first_owner():
+    """``HaUserDirectory.get_owner`` walks the auth list and returns
+    the row with ``is_owner=True``."""
+    auth_users = [
+        {"id": "a", "username": "alice", "name": "Alice", "is_owner": False},
+        {"id": "b", "username": "bob", "name": "Bob", "is_owner": True},
+    ]
+    adapter = _build_adapter(client=_FakeHaClient(auth_users=auth_users))
+    owner = await adapter.users.get_owner()
+    assert owner is not None and owner.username == "bob"
 
 
 async def test_list_external_users_empty_on_client_error():

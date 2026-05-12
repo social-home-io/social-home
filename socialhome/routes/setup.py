@@ -221,10 +221,14 @@ class HaOwnerSetupView(BaseView):
 
 
 class HaosCompleteSetupView(BaseView):
-    """``POST /api/setup/haos/complete`` — read the owner from Supervisor.
+    """``POST /api/setup/haos/complete`` — read the owner from HA Core.
 
     Idempotent. The SPA POSTs this silently on first load when
-    ``mode == 'haos'`` and redirects to the app afterwards.
+    ``mode == 'haos'`` and redirects to the app afterwards. The owner
+    record (``username``, display ``name``) comes from HA Core's WS
+    ``config/auth/list``; the Supervisor's REST ``/auth/list`` is
+    deliberately *not* a second source (#297 / #298 — same data,
+    smaller payload, kept the slug-vs-username confusion alive).
     """
 
     async def post(self) -> web.Response:
@@ -258,36 +262,26 @@ class HaosCompleteSetupView(BaseView):
                 "INTERNAL_ERROR",
                 "haos adapter is missing the INGRESS capability.",
             )
-        sv_client = getattr(adapter, "_supervisor_client", None)
-        if sv_client is None:
-            return error_response(
-                503,
-                "SUPERVISOR_UNAVAILABLE",
-                "Supervisor client not yet wired — try again after startup.",
-            )
-        owner = await sv_client.get_owner()
+        owner = await adapter.users.get_owner()
         if owner is None:
             return error_response(
                 422,
                 "NO_OWNER",
-                "Home Assistant Supervisor reported no owner user.",
+                "Home Assistant reported no owner user.",
             )
-        # Build the :class:`ExternalUser` directly from the Supervisor
-        # response — both ``username`` and ``name`` are already in
-        # ``/auth/list``. The previous code path also did an
-        # ``adapter.users.get(owner)`` round-trip through ``person.*``,
-        # which 404s on any instance where the operator's display name
-        # diverges from their auth username (issue #297). ``person.*``
-        # is the wrong source for identity data anyway — see the
-        # provider docstring in ``platform/ha/providers.py``.
-        external = ExternalUser(
-            username=owner.username,
-            display_name=owner.name,
-            picture_url=None,
-            is_admin=True,
-            email=None,
+        # ``owner`` is already an ``ExternalUser`` with the correct
+        # auth-provider username + display name; just flip ``is_admin``
+        # before mirroring into the local ``users`` table.
+        await _mirror_admin_user(
+            self.svc(db_key),
+            ExternalUser(
+                username=owner.username,
+                display_name=owner.display_name,
+                picture_url=owner.picture_url,
+                is_admin=True,
+                email=owner.email,
+            ),
         )
-        await _mirror_admin_user(self.svc(db_key), external)
         await _apply_household_name(self, household_name)
         await self.svc(setup_service_key).mark_complete()
         return web.json_response({"username": owner.username})

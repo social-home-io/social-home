@@ -56,6 +56,14 @@ class HaAdapter(PlatformAdapter):
     bypass that by injecting a pre-built ``ha_client`` kwarg.
     """
 
+    # Narrow the protocol-typed ``users`` field on the base class to
+    # the HA-specific subtype so mypy lets us call ``get_owner`` /
+    # ``fetch_picture_bytes`` — both genuinely HA-only operations
+    # (owner is an HA concept, the picture join walks HA's
+    # ``person.*`` registry). The runtime assignment in
+    # ``__init__`` is the same ``HaUserDirectory`` instance.
+    users: HaUserDirectory
+
     __slots__ = (
         "_ha_url",
         "_ha_token",
@@ -281,43 +289,13 @@ class HaAdapter(PlatformAdapter):
         self,
         username: str,
     ) -> bytes | None:
-        """Resolve + download the picture for HA auth user ``username``.
+        """Delegate to :meth:`HaUserDirectory.fetch_picture_bytes`.
 
-        Walks **auth username → user id → person.* state** rather than
-        guessing the slug from the username. The previous version
-        called ``get_state(f"person.{username}")`` directly, which is
-        wrong on any instance where the operator's display name
-        diverges from their auth username — HA Core derives the
-        ``person.*`` entity id from the display name, not the
-        credential (#297). The user_id chain is HA's documented
-        contract (``person.attributes.user_id`` references
-        ``config/auth/list[].id``), so it stays resilient to
-        display-name renames.
-
-        Returns the raw bytes so the caller can re-run them through
-        the ImageProcessor pipeline. ``None`` when the user has no
-        ``person.*`` mapping, the person has no picture, or HA is
-        unreachable.
+        The join (auth user → user_id → ``person.*``) lives on the
+        directory so the same logic serves both ``HaAdapter`` and
+        ``HaosAdapter`` without duplication.
         """
-        target_id: str | None = None
-        for row in await self._client.list_auth_users():
-            if row.get("username") == username:
-                target_id = row.get("id")
-                break
-        if not target_id:
-            return None
-        for state in await self._client.get_states():
-            entity_id = state.get("entity_id", "")
-            if not entity_id.startswith("person."):
-                continue
-            attrs: dict = state.get("attributes", {}) or {}
-            if attrs.get("user_id") != target_id:
-                continue
-            entity_picture = attrs.get("entity_picture")
-            if not entity_picture:
-                return None
-            return await self._client.fetch_path_bytes(entity_picture)
-        return None
+        return await self.users.fetch_picture_bytes(username)
 
 
 # Back-compat alias — old call sites and tests still import the

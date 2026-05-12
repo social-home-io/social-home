@@ -1,27 +1,27 @@
 """One-time HA add-on bootstrap (§5.2).
 
-Runs on startup when Social Home is deployed as a Home Assistant add-on
-(i.e. when a :class:`~.supervisor.SupervisorClient` is available).
+Runs on startup when Social Home is deployed as a Home Assistant add-on.
 The bootstrap:
 
-* looks up the Home Assistant owner via the Supervisor API and provisions
-  them as the Social Home admin;
+* looks up the Home Assistant owner via the **user directory** and
+  provisions them as the Social Home admin;
 * generates a persistent API token for the HA integration to use;
-* pushes a Supervisor discovery entry so the official HA integration can
-  find us automatically.
+* pushes a **Supervisor discovery** entry so the official HA
+  integration can find us automatically.
+
+Two narrow collaborators do these two jobs:
+
+* :class:`HaUserDirectory` (HA Core, WS ``config/auth/list``) — the
+  single source of HA user records.
+* :class:`SupervisorClient` (Supervisor REST) — addon info +
+  discovery push. The Supervisor's own ``/auth/list`` REST is
+  deliberately not consulted; see #297 / #298 for the slug-vs-
+  username gotchas a forked identity source introduces.
 
 The bootstrap is idempotent — the ``ha_bootstrap_done`` flag in
 ``instance_config`` gates the one-off provisioning steps, while the
 discovery push runs on every boot (so HA recovers from a restart even
 before it next re-polls its discovery cache).
-
-The discovery payload advertises the add-on's reachable ``host`` and
-``port`` (sourced from ``GET /addons/self/info``) alongside the
-integration token. Letting the add-on tell HA exactly where to reach
-it removes a class of subtle bugs — Docker DNS rewrites underscores
-to dashes in container hostnames, and the listen port is whatever
-the operator set in ``[server] listen_port`` — that the integration
-would otherwise have to reproduce by convention.
 """
 
 from __future__ import annotations
@@ -32,10 +32,14 @@ import os
 import secrets
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from ...crypto import derive_user_id
 from ...db import AsyncDatabase
 from .supervisor import SupervisorClient
+
+if TYPE_CHECKING:
+    from ..ha.providers import HaUserDirectory
 
 log = logging.getLogger(__name__)
 
@@ -51,24 +55,32 @@ class HaBootstrap:
     ----------
     db:
         The application database.
-    supervisor_client:
-        Client for the Supervisor API (``/auth/list``, ``/discovery``).
+    users:
+        :class:`HaUserDirectory` from the haos adapter — the source of
+        the HA owner record (auth-provider ``username`` + display
+        ``name``). Backed by HA Core's WS ``config/auth/list``.
+    supervisor:
+        :class:`SupervisorClient` — addon info + discovery push.
+        Identity data is NOT pulled from here; that's the directory's
+        job.
     data_dir:
         Directory where the raw integration token is persisted so the
         discovery push can read it on subsequent boots. Typically
         ``config.data_dir`` — ``/data`` in add-on mode.
     """
 
-    __slots__ = ("_db", "_sv", "_data_dir")
+    __slots__ = ("_db", "_users", "_sv", "_data_dir")
 
     def __init__(
         self,
         db: AsyncDatabase,
-        supervisor_client: SupervisorClient,
+        users: HaUserDirectory,
+        supervisor: SupervisorClient,
         data_dir: str,
     ) -> None:
         self._db = db
-        self._sv = supervisor_client
+        self._users = users
+        self._sv = supervisor
         self._data_dir = data_dir
 
     # ─── Public entry point ───────────────────────────────────────────────
@@ -76,12 +88,18 @@ class HaBootstrap:
     async def run(self) -> None:
         """Run the full bootstrap. Idempotent."""
         if not await self._is_done():
-            owner = await self._sv.get_owner_username()
-            if owner:
-                await self._provision_admin(owner)
-                await self._generate_integration_token(owner)
+            owner = await self._users.get_owner()
+            if owner is not None:
+                await self._provision_admin(
+                    username=owner.username,
+                    display_name=owner.display_name,
+                )
+                await self._generate_integration_token(owner.username)
                 await self._mark_done()
-                log.info("ha_bootstrap: admin provisioned as %r", owner)
+                log.info(
+                    "ha_bootstrap: admin provisioned as %r",
+                    owner.username,
+                )
             else:
                 log.warning("ha_bootstrap: could not determine HA owner — skipping")
 
@@ -89,7 +107,12 @@ class HaBootstrap:
 
     # ─── Provisioning ────────────────────────────────────────────────────
 
-    async def _provision_admin(self, username: str) -> None:
+    async def _provision_admin(
+        self,
+        *,
+        username: str,
+        display_name: str,
+    ) -> None:
         """Insert or re-enable the HA owner as a SH admin."""
         existing = await self._db.fetchone(
             "SELECT user_id FROM users WHERE username=?",
@@ -122,7 +145,12 @@ class HaBootstrap:
                               created_at, source)
             VALUES(?, ?, ?, 1, ?, 'ha')
             """,
-            (user_id, username, username, datetime.now(timezone.utc).isoformat()),
+            (
+                user_id,
+                username,
+                display_name or username,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
 
     async def _generate_integration_token(self, username: str) -> None:
