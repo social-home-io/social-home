@@ -17,9 +17,7 @@ class _HaLikeAdapter:
     Provider surface isn't needed.
     """
 
-    capabilities = frozenset(
-        {Capability.HA_PERSON_DIRECTORY, Capability.PASSWORD_AUTH}
-    )
+    capabilities = frozenset({Capability.HA_PERSON_DIRECTORY, Capability.PASSWORD_AUTH})
 
 
 async def test_create_user_happy_path(client):
