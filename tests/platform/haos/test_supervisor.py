@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from aiohttp import web
 
-from socialhome.platform.haos.supervisor import AddonInfo, SupervisorClient
+from socialhome.platform.haos.supervisor import AddonInfo, HaUser, SupervisorClient
 
 # pytest-homeassistant-custom-component (a transitive dev dep when this
 # repo's venv is shared with the ha-integration repo) installs a
@@ -35,11 +35,19 @@ async def sv_server(aiohttp_server):
                     "users": [
                         {
                             "username": "ha_owner",
+                            "name": "Social Home Test",
                             "is_owner": True,
                             "system_generated": False,
                         },
                         {
+                            "username": "maria",
+                            "name": "Maria",
+                            "is_owner": False,
+                            "system_generated": False,
+                        },
+                        {
                             "username": "system",
+                            "name": "Cloud",
                             "is_owner": False,
                             "system_generated": True,
                         },
@@ -87,14 +95,20 @@ async def client(sv_server):
         )
 
 
-async def test_get_owner_username_returns_non_system_owner(client, sv_server):
+async def test_get_owner_returns_full_owner_record(client, sv_server):
+    """Wizard provisioning reads username + display name from this in
+    one round-trip — no ``person.*`` lookup needed (#297)."""
     _, captured = sv_server
-    owner = await client.get_owner_username()
-    assert owner == "ha_owner"
+    owner = await client.get_owner()
+    assert owner == HaUser(
+        username="ha_owner",
+        name="Social Home Test",
+        is_owner=True,
+    )
     assert captured["auth_header"] == "Bearer sv-token"
 
 
-async def test_get_owner_username_returns_none_when_no_owner(client, sv_server):
+async def test_get_owner_returns_none_when_no_owner(client, sv_server):
     _, captured = sv_server
     captured["auth_response"] = {
         "data": {
@@ -103,7 +117,23 @@ async def test_get_owner_username_returns_none_when_no_owner(client, sv_server):
             ]
         }
     }
-    assert await client.get_owner_username() is None
+    assert await client.get_owner() is None
+
+
+async def test_get_owner_username_back_compat_shim(client, sv_server):
+    """Bootstrap + the admin-picture sync still call the legacy
+    method — keep it green until they migrate."""
+    owner = await client.get_owner_username()
+    assert owner == "ha_owner"
+
+
+async def test_list_users_drops_system_generated(client, sv_server):
+    """Service accounts (cloud / mobile-app bridges) come back with
+    ``system_generated: true`` and must never appear in the wizard
+    picker."""
+    users = await client.list_users()
+    assert [u.username for u in users] == ["ha_owner", "maria"]
+    assert users[0].name == "Social Home Test"
 
 
 async def test_push_discovery_true_on_2xx(client, sv_server):

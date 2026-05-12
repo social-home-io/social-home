@@ -265,24 +265,32 @@ class HaosCompleteSetupView(BaseView):
                 "SUPERVISOR_UNAVAILABLE",
                 "Supervisor client not yet wired — try again after startup.",
             )
-        owner = await sv_client.get_owner_username()
-        if not owner:
+        owner = await sv_client.get_owner()
+        if owner is None:
             return error_response(
                 422,
                 "NO_OWNER",
                 "Home Assistant Supervisor reported no owner user.",
             )
-        external = await adapter.users.get(owner)
-        if external is None:
-            return error_response(
-                422,
-                "NO_OWNER",
-                f"Supervisor owner {owner!r} has no person.* entity in HA.",
-            )
+        # Build the :class:`ExternalUser` directly from the Supervisor
+        # response — both ``username`` and ``name`` are already in
+        # ``/auth/list``. The previous code path also did an
+        # ``adapter.users.get(owner)`` round-trip through ``person.*``,
+        # which 404s on any instance where the operator's display name
+        # diverges from their auth username (issue #297). ``person.*``
+        # is the wrong source for identity data anyway — see the
+        # provider docstring in ``platform/ha/providers.py``.
+        external = ExternalUser(
+            username=owner.username,
+            display_name=owner.name,
+            picture_url=None,
+            is_admin=True,
+            email=None,
+        )
         await _mirror_admin_user(self.svc(db_key), external)
         await _apply_household_name(self, household_name)
         await self.svc(setup_service_key).mark_complete()
-        return web.json_response({"username": owner})
+        return web.json_response({"username": owner.username})
 
 
 async def _mirror_admin_user(db, external: ExternalUser) -> None:

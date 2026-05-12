@@ -286,11 +286,28 @@ async def test_ha_owner_unknown_username_422(aiohttp_client, tmp_dir):
 
 
 class _FakeSupervisorClient:
-    def __init__(self, owner: str | None = "owner"):
-        self._owner = owner
+    def __init__(
+        self,
+        owner: str | None = "owner",
+        *,
+        name: str = "The Owner",
+    ):
+        self._owner_username = owner
+        self._owner_name = name
+
+    async def get_owner(self):
+        if self._owner_username is None:
+            return None
+        from socialhome.platform.haos.supervisor import HaUser
+
+        return HaUser(
+            username=self._owner_username,
+            name=self._owner_name,
+            is_owner=True,
+        )
 
     async def get_owner_username(self):
-        return self._owner
+        return self._owner_username
 
 
 class _FakeHaosAdapter(_FakeHaAdapter):
@@ -358,14 +375,31 @@ async def test_haos_complete_no_owner_returns_422(aiohttp_client, tmp_dir):
     assert (await r.json())["error"]["code"] == "NO_OWNER"
 
 
-async def test_haos_complete_owner_not_in_persons_422(aiohttp_client, tmp_dir):
+async def test_haos_complete_persists_display_name_from_supervisor(
+    aiohttp_client, tmp_dir
+):
+    """The wizard now reads username + display name from
+    ``/auth/list`` in one round-trip — no ``person.*`` lookup, so an
+    instance whose owner has a display name that differs from their
+    auth username provisions cleanly (#297)."""
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
-    adapter = _FakeHaosAdapter([])  # supervisor returns 'owner' but no person.* entity
-    adapter._supervisor_client = _FakeSupervisorClient("owner")
+    adapter = _FakeHaosAdapter([])  # no persons at all — irrelevant now
+    adapter._supervisor_client = _FakeSupervisorClient(
+        "socialhome",
+        name="Social Home Test",
+    )
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r = await tc.post("/api/setup/haos/complete")
-    assert r.status == 422
+    assert r.status == 200, await r.text()
+    db = tc._app[_db_key]
+    row = await db.fetchone(
+        "SELECT username, display_name FROM users WHERE username=?",
+        ("socialhome",),
+    )
+    assert row is not None
+    assert row["username"] == "socialhome"
+    assert row["display_name"] == "Social Home Test"
 
 
 async def test_haos_complete_missing_supervisor_client_503(aiohttp_client, tmp_dir):

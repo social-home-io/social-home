@@ -41,7 +41,6 @@ from ..ha.providers import (
     HaPushProvider,
     HaSTTProvider,
     HaUserDirectory,
-    _state_to_user,
 )
 from .bootstrap import HaBootstrap
 from .supervisor import SupervisorClient
@@ -289,13 +288,30 @@ class HaosAdapter(PlatformAdapter):
         self,
         username: str,
     ) -> bytes | None:
-        state = await self._client.get_state(f"person.{username}")
-        if state is None:
-            return None
-        attrs: dict = state.get("attributes", {}) or {}
-        entity_picture = attrs.get("entity_picture")
-        if not entity_picture:
-            return None
-        return await self._client.fetch_path_bytes(entity_picture)
+        """Resolve + download the picture for HA auth user ``username``.
 
-    _state_to_user = staticmethod(_state_to_user)
+        Walks auth username → user_id → person.* via
+        ``attributes.user_id`` rather than guessing ``person.<username>``
+        — HA Core builds the person entity slug from the display name,
+        not the credential, so the old path 404s after any rename
+        (#297).
+        """
+        target_id: str | None = None
+        for row in await self._client.list_auth_users():
+            if row.get("username") == username:
+                target_id = row.get("id")
+                break
+        if not target_id:
+            return None
+        for state in await self._client.get_states():
+            entity_id = state.get("entity_id", "")
+            if not entity_id.startswith("person."):
+                continue
+            attrs: dict = state.get("attributes", {}) or {}
+            if attrs.get("user_id") != target_id:
+                continue
+            entity_picture = attrs.get("entity_picture")
+            if not entity_picture:
+                return None
+            return await self._client.fetch_path_bytes(entity_picture)
+        return None

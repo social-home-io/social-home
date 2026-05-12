@@ -38,7 +38,6 @@ from .providers import (
     HaPushProvider,
     HaSTTProvider,
     HaUserDirectory,
-    _state_to_user,
 )
 
 if TYPE_CHECKING:
@@ -282,25 +281,43 @@ class HaAdapter(PlatformAdapter):
         self,
         username: str,
     ) -> bytes | None:
-        """Resolve + download the ``person.<username>`` ``entity_picture``.
+        """Resolve + download the picture for HA auth user ``username``.
 
-        Returns the raw bytes so the caller (e.g.
-        :meth:`UserService.set_picture`) can re-run them through the
-        ImageProcessor pipeline. ``None`` when the person has no
-        picture or HA is unreachable.
+        Walks **auth username → user id → person.* state** rather than
+        guessing the slug from the username. The previous version
+        called ``get_state(f"person.{username}")`` directly, which is
+        wrong on any instance where the operator's display name
+        diverges from their auth username — HA Core derives the
+        ``person.*`` entity id from the display name, not the
+        credential (#297). The user_id chain is HA's documented
+        contract (``person.attributes.user_id`` references
+        ``config/auth/list[].id``), so it stays resilient to
+        display-name renames.
+
+        Returns the raw bytes so the caller can re-run them through
+        the ImageProcessor pipeline. ``None`` when the user has no
+        ``person.*`` mapping, the person has no picture, or HA is
+        unreachable.
         """
-        state = await self._client.get_state(f"person.{username}")
-        if state is None:
+        target_id: str | None = None
+        for row in await self._client.list_auth_users():
+            if row.get("username") == username:
+                target_id = row.get("id")
+                break
+        if not target_id:
             return None
-        attrs: dict = state.get("attributes", {}) or {}
-        entity_picture = attrs.get("entity_picture")
-        if not entity_picture:
-            return None
-        return await self._client.fetch_path_bytes(entity_picture)
-
-    # Module-level ``_state_to_user`` is the canonical helper; preserve
-    # the historical class-attribute access path.
-    _state_to_user = staticmethod(_state_to_user)
+        for state in await self._client.get_states():
+            entity_id = state.get("entity_id", "")
+            if not entity_id.startswith("person."):
+                continue
+            attrs: dict = state.get("attributes", {}) or {}
+            if attrs.get("user_id") != target_id:
+                continue
+            entity_picture = attrs.get("entity_picture")
+            if not entity_picture:
+                return None
+            return await self._client.fetch_path_bytes(entity_picture)
+        return None
 
 
 # Back-compat alias — old call sites and tests still import the

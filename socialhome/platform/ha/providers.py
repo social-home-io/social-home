@@ -23,15 +23,28 @@ if TYPE_CHECKING:
     from aiohttp import web
 
 
-def _state_to_user(state: dict) -> ExternalUser:
-    """Convert an HA ``person.*`` state dict to :class:`ExternalUser`."""
-    entity_id: str = state.get("entity_id", "")
-    username = entity_id.removeprefix("person.")
-    attrs: dict = state.get("attributes", {})
+def _auth_user_to_external(row: dict) -> ExternalUser | None:
+    """Convert an HA ``config/auth/list`` row to :class:`ExternalUser`.
+
+    Returns ``None`` for system-generated rows (the cloud / mobile-app
+    service accounts HA reports alongside human users) and for rows
+    missing the auth-provider username — both unfit for SH
+    provisioning.
+    """
+    if row.get("system_generated", False):
+        return None
+    username = row.get("username")
+    if not username:
+        return None
     return ExternalUser(
-        username=username,
-        display_name=attrs.get("friendly_name") or username,
-        picture_url=attrs.get("entity_picture"),
+        username=str(username),
+        display_name=str(row.get("name") or username),
+        # ``config/auth/list`` doesn't carry the picture URL — that
+        # lives on the matching ``person.*`` entity. The avatar lifter
+        # in ``HaAdapter.fetch_entity_picture_bytes`` does the cross-
+        # reference via ``attributes.user_id`` so the wizard doesn't
+        # need it on this code path.
+        picture_url=None,
         is_admin=False,
         email=None,
     )
@@ -88,12 +101,25 @@ class HaAuthProvider:
 
 
 class HaUserDirectory:
-    """List / get principals from the HA ``person.*`` registry.
+    """List / get HA principals from ``config/auth/list`` (WS).
 
-    HA mode treats persons as read-only data — provisioning happens
-    via the steady-state ``/api/admin/ha-users`` routes which mirror
-    enabled persons into the local ``users`` table. ``enable`` /
-    ``disable`` raise :class:`NotImplementedError` so misuse is loud.
+    HA's auth users (``username`` + ``name`` + ``id``) are the
+    canonical identity surface. The previous implementation read
+    ``person.*`` states and derived ``ExternalUser.username`` from the
+    entity slug — which HA Core constructs from the user's
+    **display name**, not the auth-provider username (#297). On any
+    instance where the operator renamed their account after creation
+    the two diverge and the wizard / ingress-auth path 404s.
+
+    Switching to ``config/auth/list`` makes ``ExternalUser.username``
+    the authentic credential the operator types at the HA login
+    screen — the same string ingress forwards as
+    ``X-Remote-User-Name`` — so the rest of the SH user pipeline can
+    treat it as a stable key.
+
+    ``enable`` / ``disable`` still raise :class:`NotImplementedError`
+    because provisioning goes through the steady-state
+    ``/api/admin/ha-users`` routes.
     """
 
     __slots__ = ("_adapter",)
@@ -102,18 +128,24 @@ class HaUserDirectory:
         self._adapter = adapter
 
     async def list_users(self) -> list[ExternalUser]:
-        states = await self._adapter._client.get_states()
+        rows = await self._adapter._client.list_auth_users()
         out: list[ExternalUser] = []
-        for state in states:
-            entity_id: str = state.get("entity_id", "")
-            if not entity_id.startswith("person."):
-                continue
-            out.append(_state_to_user(state))
+        for row in rows:
+            user = _auth_user_to_external(row)
+            if user is not None:
+                out.append(user)
         return out
 
     async def get(self, username: str) -> ExternalUser | None:
-        state = await self._adapter._client.get_state(f"person.{username}")
-        return _state_to_user(state) if state else None
+        # ``config/auth/list`` doesn't accept a filter — the list is
+        # short (≤ tens of accounts on a typical household instance),
+        # so a linear scan is cheaper than maintaining a per-username
+        # cache. Match on the auth-provider username, not the display
+        # name.
+        for row in await self._adapter._client.list_auth_users():
+            if row.get("username") == username:
+                return _auth_user_to_external(row)
+        return None
 
     async def is_enabled(self, username: str) -> bool:
         return (await self.get(username)) is not None

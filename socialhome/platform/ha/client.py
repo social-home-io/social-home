@@ -127,6 +127,90 @@ class HaClient:
             log.warning("ha_client: fetch_path_bytes(%r) failed: %s", path, exc)
             return None
 
+    async def ws_command(self, type_: str, **fields: object) -> dict | None:
+        """Open a one-shot WebSocket session, auth, send one command, return result.
+
+        HA Core exposes a handful of inspection APIs only over the WS
+        bus — ``config/auth/list`` (the authoritative list of HA users,
+        with their auth-provider usernames + display names + ids) is the
+        relevant one for #297. The REST surface has no equivalent, so
+        the wizard's "drop person.* lookup" needs WS access.
+
+        The handshake is short:
+
+        1. Server greets with ``{type: "auth_required"}``.
+        2. We reply ``{type: "auth", access_token: <bearer>}``.
+        3. Server confirms ``{type: "auth_ok"}`` (or ``auth_invalid`` →
+           we return ``None`` and log).
+        4. We send ``{id: 1, type, **fields}``.
+        5. Server replies ``{id: 1, type: "result", success: bool,
+           result?: ...}``.
+
+        The connection is closed after one command so the helper stays
+        stateless — no long-lived WS, no event subscriptions, no
+        re-auth on token rotation. Callers that need bulk traffic
+        should build a dedicated client.
+
+        Returns the ``result`` payload, or ``None`` on any failure
+        (handshake reject, transport error, non-success result).
+        """
+        url = f"{self._base_url}/api/websocket"
+        # ``http(s)://...`` → ``ws(s)://...`` so aiohttp's ws_connect
+        # picks the right scheme. The Supervisor proxy at
+        # ``http://supervisor/core/api/websocket`` works transparently
+        # because Supervisor upgrades the connection on its side.
+        try:
+            async with self._session.ws_connect(url) as ws:
+                hello = await ws.receive_json(timeout=5)
+                if hello.get("type") != "auth_required":
+                    log.warning(
+                        "ha_client: ws_command(%r) unexpected greeting %r",
+                        type_,
+                        hello.get("type"),
+                    )
+                    return None
+                await ws.send_json({"type": "auth", "access_token": self._token})
+                auth_ack = await ws.receive_json(timeout=5)
+                if auth_ack.get("type") != "auth_ok":
+                    log.warning(
+                        "ha_client: ws_command(%r) auth rejected (%r)",
+                        type_,
+                        auth_ack.get("type"),
+                    )
+                    return None
+                await ws.send_json({"id": 1, "type": type_, **fields})
+                reply = await ws.receive_json(timeout=10)
+                if not reply.get("success", False):
+                    err = (reply.get("error") or {}).get("message")
+                    log.warning(
+                        "ha_client: ws_command(%r) failed: %s",
+                        type_,
+                        err or reply,
+                    )
+                    return None
+                # ``result`` may legitimately be a list, dict, or scalar
+                # — wrap into a dict for the typed signature, callers
+                # that expect a list reach in via ``["result"]``.
+                return {"result": reply.get("result")}
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            log.warning("ha_client: ws_command(%r) failed: %s", type_, exc)
+            return None
+
+    async def list_auth_users(self) -> list[dict]:
+        """``config/auth/list`` over WS — the canonical HA users list.
+
+        Returns each user's ``{id, username, name, is_owner,
+        system_generated, ...}``. The wizard filters to non-system
+        accounts; the picture-lifter walks ``person.*`` states by
+        matching ``attributes.user_id`` against ``id``. Empty list on
+        transport / auth error so callers degrade gracefully.
+        """
+        reply = await self.ws_command("config/auth/list")
+        if reply is None:
+            return []
+        result = reply.get("result")
+        return result if isinstance(result, list) else []
+
     async def get_config(self) -> dict | None:
         """``GET /api/config`` — instance location / time zone / currency."""
         try:

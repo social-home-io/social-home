@@ -35,6 +35,8 @@ class _FakeHaClient:
         call_service_response: dict | None = None,
         fire_event_result: bool = True,
         stt_response: dict | None = None,
+        auth_users: list[dict] | None = None,
+        path_bytes: dict[str, bytes] | None = None,
     ) -> None:
         self._verify_token_response = verify_token_response
         self._states = states if states is not None else []
@@ -43,7 +45,17 @@ class _FakeHaClient:
         self._call_service_response = call_service_response
         self._fire_event_result = fire_event_result
         self._stt_response = stt_response
+        self._auth_users = auth_users if auth_users is not None else []
+        self._path_bytes = path_bytes or {}
         self.calls: list[tuple] = []
+
+    async def list_auth_users(self) -> list[dict]:
+        self.calls.append(("list_auth_users",))
+        return self._auth_users
+
+    async def fetch_path_bytes(self, path: str) -> bytes | None:
+        self.calls.append(("fetch_path_bytes", path))
+        return self._path_bytes.get(path)
 
     async def verify_token(self, token: str) -> dict | None:
         self.calls.append(("verify_token", token))
@@ -125,13 +137,20 @@ async def test_authenticate_no_headers():
     assert await adapter.authenticate(_FakeRequest()) is None
 
 
-async def test_authenticate_ingress_user_looks_up_person_entity():
-    state = {
-        "entity_id": "person.pascal",
-        "attributes": {"friendly_name": "Pascal"},
-        "state": "home",
-    }
-    client = _FakeHaClient(state_by_entity={"person.pascal": state})
+async def test_authenticate_ingress_user_resolves_via_auth_list():
+    """X-Remote-User-Name → ``config/auth/list`` lookup, no ``person.*``
+    round-trip. The auth username and the person entity slug are
+    unrelated by HA's contract (#297)."""
+    client = _FakeHaClient(
+        auth_users=[
+            {
+                "id": "abc123",
+                "username": "pascal",
+                "name": "Pascal V",
+                "is_owner": True,
+            },
+        ],
+    )
     adapter = _build_adapter(client=client)
 
     user = await adapter.authenticate(
@@ -143,7 +162,11 @@ async def test_authenticate_ingress_user_looks_up_person_entity():
         ),
     )
     assert user is not None and user.username == "pascal"
-    assert ("get_state", "person.pascal") in client.calls
+    assert user.display_name == "Pascal V"
+    assert ("list_auth_users",) in client.calls
+    # No ``person.*`` lookups on the auth path — those happen only when
+    # the avatar lifter explicitly walks via user_id.
+    assert not any(c[0] == "get_state" for c in client.calls)
 
 
 async def test_authenticate_bearer_rejected_without_local_credentials():
@@ -280,33 +303,55 @@ async def test_local_password_wrong_returns_none(tmp_path):
 # ─── User listing ────────────────────────────────────────────────────────
 
 
-async def test_list_external_users_filters_person_entities():
-    states = [
-        {"entity_id": "person.pascal", "attributes": {"friendly_name": "Pascal"}},
-        {"entity_id": "light.kitchen", "attributes": {}},
-        {"entity_id": "person.alex", "attributes": {}},
+async def test_list_external_users_reads_auth_list():
+    """The directory now sources users from ``config/auth/list`` rather
+    than ``person.*`` states — the auth username is what HA forwards in
+    ingress headers, so identity walks through that field, not the
+    derived person entity slug (#297)."""
+    auth_users = [
+        {
+            "id": "abc",
+            "username": "pascal",
+            "name": "Pascal V",
+            "is_owner": True,
+        },
+        {
+            "id": "def",
+            "username": "maria",
+            "name": "Maria",
+            "is_owner": False,
+        },
+        {
+            "id": "sys",
+            "username": "Home Assistant Cloud",
+            "name": "Cloud",
+            "system_generated": True,
+        },
     ]
-    adapter = _build_adapter(client=_FakeHaClient(states=states))
+    adapter = _build_adapter(client=_FakeHaClient(auth_users=auth_users))
     users = await adapter.list_external_users()
-    assert [u.username for u in users] == ["pascal", "alex"]
+    # System-generated entries (cloud / mobile-app service accounts)
+    # are filtered out — the wizard wants real humans only.
+    assert [u.username for u in users] == ["pascal", "maria"]
+    assert users[0].display_name == "Pascal V"
 
 
 async def test_list_external_users_empty_on_client_error():
-    adapter = _build_adapter(client=_FakeHaClient(states=[]))
+    adapter = _build_adapter(client=_FakeHaClient(auth_users=[]))
     assert await adapter.list_external_users() == []
 
 
 async def test_get_external_user_found():
-    state = {"entity_id": "person.pascal", "attributes": {}}
-    adapter = _build_adapter(
-        client=_FakeHaClient(state_by_entity={"person.pascal": state}),
-    )
+    auth_users = [
+        {"id": "abc", "username": "pascal", "name": "Pascal V"},
+    ]
+    adapter = _build_adapter(client=_FakeHaClient(auth_users=auth_users))
     user = await adapter.get_external_user("pascal")
     assert user is not None and user.username == "pascal"
 
 
 async def test_get_external_user_not_found():
-    adapter = _build_adapter(client=_FakeHaClient())
+    adapter = _build_adapter(client=_FakeHaClient(auth_users=[]))
     assert await adapter.get_external_user("nobody") is None
 
 

@@ -29,6 +29,43 @@ log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class HaUser:
+    """A Home Assistant user record as returned by Supervisor ``/auth/list``.
+
+    Carries the **auth-provider username** (the credential the operator
+    types at the HA login screen) plus the **display name** HA renders
+    for the person — distinct concepts that the previous code path
+    conflated by deriving an entity slug from the username and looking
+    up ``person.<username>`` in the state machine. Issue #297 documents
+    the symptom; the fix is to stop guessing the slug and trust the
+    fields ``/auth/list`` already returns.
+    """
+
+    username: str
+    name: str
+    is_owner: bool
+
+    @classmethod
+    def from_dict(cls, data: dict) -> HaUser | None:
+        """Return a :class:`HaUser` from the Supervisor payload, or
+        ``None`` when the entry is system-generated or missing the
+        username field. Supervisor includes service accounts (e.g. the
+        cloud / mobile-app bridges) in ``/auth/list`` with
+        ``system_generated: true``; those are uninteresting to the
+        provisioning wizard."""
+        if data.get("system_generated", False):
+            return None
+        username = data.get("username")
+        if not username:
+            return None
+        return cls(
+            username=str(username),
+            name=str(data.get("name") or username),
+            is_owner=bool(data.get("is_owner", False)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AddonInfo:
     """Subset of ``GET /addons/self/info`` that we actually consume.
 
@@ -80,12 +117,13 @@ class SupervisorClient:
             "Content-Type": "application/json",
         }
 
-    async def get_owner_username(self) -> str | None:
-        """Return the non-system HA owner, or ``None``.
+    async def list_users(self) -> list[HaUser]:
+        """Return every non-system HA user from ``/auth/list``.
 
-        Uses ``GET /auth/list``. The response envelope is
-        ``{"data": {"users": [...]}}`` as of HA 2024+; the older
-        ``{"users": [...]}`` shape is tolerated.
+        Supervisor's response envelope is ``{"data": {"users": [...]}}``
+        as of HA 2024+; the older ``{"users": [...]}`` shape is tolerated.
+        Filters out ``system_generated: true`` entries (cloud / mobile-app
+        service accounts) — the wizard wants real human accounts only.
         """
         try:
             async with self._session.get(
@@ -96,21 +134,37 @@ class SupervisorClient:
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             log.warning("supervisor: /auth/list failed: %s", exc)
-            return None
+            return []
+        users_raw = data.get("data", data).get("users", [])
+        out: list[HaUser] = []
+        for entry in users_raw:
+            user = HaUser.from_dict(entry)
+            if user is not None:
+                out.append(user)
+        return out
 
-        users = data.get("data", data).get("users", [])
-        owner = next(
-            (
-                u
-                for u in users
-                if u.get("is_owner") and not u.get("system_generated", False)
-            ),
-            None,
-        )
-        if not owner:
-            log.warning("supervisor: no owner found in /auth/list")
-            return None
-        return owner.get("username")
+    async def get_owner(self) -> HaUser | None:
+        """Return the HA owner (``is_owner: true``) or ``None``.
+
+        Carries username + display name so the provisioning wizard can
+        mirror the admin without a ``person.*`` round-trip — see #297.
+        """
+        for user in await self.list_users():
+            if user.is_owner:
+                return user
+        log.warning("supervisor: no owner found in /auth/list")
+        return None
+
+    async def get_owner_username(self) -> str | None:
+        """Back-compat shim returning just the owner's username.
+
+        Bootstrap (``HaBootstrap.run``) and the admin-picture sync still
+        consume a bare string; switching them is a separate cleanup.
+        Wizard provisioning has moved to :meth:`get_owner` so it gets
+        the display name in the same round-trip.
+        """
+        owner = await self.get_owner()
+        return owner.username if owner else None
 
     async def get_self_info(self) -> AddonInfo | None:
         """Return ``GET /addons/self/info`` as a typed :class:`AddonInfo`,
@@ -159,4 +213,4 @@ class SupervisorClient:
             return False
 
 
-__all__ = ["AddonInfo", "SupervisorClient"]
+__all__ = ["AddonInfo", "HaUser", "SupervisorClient"]

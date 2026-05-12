@@ -8,6 +8,21 @@ from aiohttp import web
 from socialhome.platform.ha.client import HaClient, build_ha_client
 
 
+# pytest-homeassistant-custom-component (transitive when the venv is
+# shared with ha-integration) blocks sockets; aiohttp_server needs a
+# real port. CI doesn't install the plugin so this fixture is a no-op
+# there.
+try:
+    import pytest_socket  # noqa: F401
+
+    @pytest.fixture(autouse=True)
+    def _enable_sockets(socket_enabled):
+        """Re-enable sockets if the HA pytest plugin disabled them."""
+
+except ImportError:  # pragma: no cover - CI path
+    pass
+
+
 # ─── Fake HA server ──────────────────────────────────────────────────────
 
 
@@ -72,6 +87,33 @@ async def ha_server(aiohttp_server):
         await _record(request, {"byte_count": len(body)})
         return web.json_response({"result": "success", "text": "hi"})
 
+    async def ws_endpoint(request: web.Request) -> web.WebSocketResponse:
+        """Minimal HA WS handshake — replays the script the real
+        client expects: auth_required → auth_ok → command → result."""
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        await ws.send_json({"type": "auth_required"})
+        auth_msg = await ws.receive_json()
+        captured["ws_auth"] = auth_msg.get("access_token")
+        if captured.get("ws_reject_auth"):
+            await ws.send_json({"type": "auth_invalid"})
+            await ws.close()
+            return ws
+        await ws.send_json({"type": "auth_ok"})
+        command = await ws.receive_json()
+        captured["ws_command"] = command
+        reply = captured.get("ws_reply") or {
+            "id": command.get("id"),
+            "type": "result",
+            "success": True,
+            "result": [
+                {"id": "abc", "username": "alice", "name": "Alice", "is_owner": True},
+            ],
+        }
+        await ws.send_json(reply)
+        await ws.close()
+        return ws
+
     app = web.Application()
     app.router.add_get("/api/", api_root)
     app.router.add_get("/api/states", states_list)
@@ -80,6 +122,7 @@ async def ha_server(aiohttp_server):
     app.router.add_post(r"/api/services/{domain}/{service}", call_service)
     app.router.add_post(r"/api/events/{event_type}", fire_event)
     app.router.add_post(r"/api/stt/{entity_id}", stt)
+    app.router.add_get("/api/websocket", ws_endpoint)
     server = await aiohttp_server(app)
     return server, captured
 
@@ -141,6 +184,26 @@ async def test_get_states_sends_bearer_token(client, ha_server):
 
 async def test_get_state_handles_404(client):
     assert await client.get_state("person.missing") is None
+
+
+async def test_list_auth_users_handshakes_then_returns_result(client, ha_server):
+    """The WS one-shot helper sends the bearer in ``auth``, then issues
+    ``config/auth/list`` and returns the ``result`` array."""
+    _, captured = ha_server
+    users = await client.list_auth_users()
+    assert captured["ws_auth"] == "secret-token"
+    assert captured["ws_command"]["type"] == "config/auth/list"
+    assert users == [
+        {"id": "abc", "username": "alice", "name": "Alice", "is_owner": True},
+    ]
+
+
+async def test_list_auth_users_returns_empty_on_auth_reject(client, ha_server):
+    """``auth_invalid`` from HA Core → empty list, no exception bubbles
+    up. The wizard / picture lifter degrade gracefully."""
+    _, captured = ha_server
+    captured["ws_reject_auth"] = True
+    assert await client.list_auth_users() == []
 
 
 async def test_get_config_success(client):
