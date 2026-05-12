@@ -278,7 +278,9 @@ async def test_picture_proxy_returns_bytes(client, stub):
 
 async def test_picture_proxy_404_when_unknown(client, stub):
     stub.picture_response = None
-    r = await client.get("/api/gfs/g1/moments/users/u-nope/picture", headers=_auth(client._tok))
+    r = await client.get(
+        "/api/gfs/g1/moments/users/u-nope/picture", headers=_auth(client._tok)
+    )
     assert r.status == 404
 
 

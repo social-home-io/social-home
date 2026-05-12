@@ -801,9 +801,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         "/api/moments/public/follows/{gfs_id}/{user_id}",
         MomentPublicFollowDetailView,
     )
-    app.router.add_view(
-        "/api/gfs/{gfs_id}/moments/users", GfsUserDirectoryProxyView
-    )
+    app.router.add_view("/api/gfs/{gfs_id}/moments/users", GfsUserDirectoryProxyView)
     app.router.add_view(
         "/api/gfs/{gfs_id}/moments/users/{user_id}/picture",
         GfsUserPictureProxyView,

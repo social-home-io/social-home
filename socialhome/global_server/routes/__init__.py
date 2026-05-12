@@ -230,14 +230,10 @@ def register_routes(
         "/gfs/moments/users/{user_id}/deregister", GfsUserDeregisterView
     )
     app.router.add_view("/gfs/moments/users/{user_id}/follow", GfsUserFollowView)
-    app.router.add_view(
-        "/gfs/moments/users/{user_id}/unfollow", GfsUserUnfollowView
-    )
+    app.router.add_view("/gfs/moments/users/{user_id}/unfollow", GfsUserUnfollowView)
     app.router.add_view("/gfs/moments/publish", GfsMomentPublicPublishView)
     app.router.add_view("/gfs/moments/delete", GfsMomentPublicDeleteView)
-    app.router.add_view(
-        "/gfs/moments/users/{user_id}/picture", GfsUserPictureView
-    )
+    app.router.add_view("/gfs/moments/users/{user_id}/picture", GfsUserPictureView)
     app.router.add_view("/gfs/moments/users", GfsUserDirectoryView)
     app.router.add_view("/gfs/moments/users/{user_id}", GfsUserDetailView)
     app.router.add_view("/moments", GfsUserDirectoryHtmlView)

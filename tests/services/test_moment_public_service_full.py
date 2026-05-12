@@ -138,7 +138,9 @@ async def test_deregister_clears_local_even_when_gfs_returns_404(repos):
     assert await svc.is_registered(user_id="u1", gfs_id="g1") is False
     # The deregister still POSTs (so the GFS can clean up) before the
     # local row drops.
-    assert sess_404.posts and sess_404.posts[0][0].endswith("/gfs/moments/users/u1/deregister")
+    assert sess_404.posts and sess_404.posts[0][0].endswith(
+        "/gfs/moments/users/u1/deregister"
+    )
 
 
 async def test_list_registrations_round_trip(repos):
