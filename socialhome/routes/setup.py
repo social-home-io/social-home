@@ -270,18 +270,15 @@ class HaosCompleteSetupView(BaseView):
                 "Home Assistant reported no owner user.",
             )
         # ``owner`` is already an ``ExternalUser`` with the correct
-        # auth-provider username + display name; just flip ``is_admin``
-        # before mirroring into the local ``users`` table.
-        await _mirror_admin_user(
-            self.svc(db_key),
-            ExternalUser(
-                username=owner.username,
-                display_name=owner.display_name,
-                picture_url=owner.picture_url,
-                is_admin=True,
-                email=owner.email,
-            ),
-        )
+        # auth-provider username + display name + ``external_id`` (the
+        # HA ``user_id`` from ``config/auth/list``). Pass it through
+        # verbatim — ``_mirror_admin_user`` hardcodes ``is_admin=1`` in
+        # the INSERT so the dataclass flag is ignored anyway, and we
+        # must not drop ``external_id`` on the floor here: that's what
+        # ``_mirror_admin_user`` keys on to stamp ``source='ha'``, and
+        # a row with ``source='manual'`` makes the HA Users admin
+        # panel show the "Not added" toggle for the household owner.
+        await _mirror_admin_user(self.svc(db_key), owner)
         await _apply_household_name(self, household_name)
         await self.svc(setup_service_key).mark_complete()
         return web.json_response({"username": owner.username})
