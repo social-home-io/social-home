@@ -6,6 +6,12 @@ import { showToast } from '@/components/Toast'
 // the HA Supervisor ingress prefix when behind ingress, ``/``
 // otherwise). An absolute ``/api/me`` would resolve against the
 // document origin, bypassing ``<base href>`` and 404ing under ingress.
+//
+// Raw ``fetch`` / ``XMLHttpRequest`` sites outside this client (the
+// gallery upload XHR, the shared ``UploadProgress`` helper) do the
+// same thing inline — they just pass a relative URL with no leading
+// slash. Either form works; the difference is whose code is doing the
+// trim. See #303.
 const _rel = (p: string): string => p.replace(/^\/+/, '')
 
 /**

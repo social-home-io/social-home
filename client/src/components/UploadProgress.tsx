@@ -43,7 +43,12 @@ export async function uploadWithProgress(file: File): Promise<UploadResult> {
       }
     }
     xhr.onerror = () => { uploadProgress.value = null; reject(new Error('Upload failed')) }
-    xhr.open('POST', '/api/media/upload')
+    // Relative URL (no leading slash) so the browser resolves it
+    // against ``<base href>`` — under HA Supervisor ingress that's
+    // ``/api/hassio_ingress/<token>/``, so the upload lands on the
+    // add-on instead of HA Core. An absolute ``/api/...`` bypassed
+    // ``<base href>`` and 404'd (#303).
+    xhr.open('POST', 'api/media/upload')
     const token = localStorage.getItem('sh_token')
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     xhr.send(formData)

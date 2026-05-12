@@ -207,7 +207,14 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
       const fd = new FormData()
       fd.append('file', file)
       const xhr = new XMLHttpRequest()
-      xhr.open('POST', `/api/gallery/albums/${album.id}/items`, true)
+      // Raw XHR (not the ``api`` client) so we can wire
+      // ``xhr.upload.onprogress`` for the progress bar — ``fetch``
+      // doesn't expose upload-stream progress events. The URL is
+      // relative (no leading slash) so it resolves against
+      // ``<base href>`` — under HA Supervisor ingress that's the
+      // ``/api/hassio_ingress/<token>/`` prefix; an absolute
+      // ``/api/...`` would bypass it and 404 (#303).
+      xhr.open('POST', `api/gallery/albums/${album.id}/items`, true)
       xhr.withCredentials = true
       const tok = localStorage.getItem('sh_token')
       if (tok) xhr.setRequestHeader('Authorization', `Bearer ${tok}`)
