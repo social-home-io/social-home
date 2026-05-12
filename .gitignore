@@ -41,8 +41,6 @@ client/coverage/
 client/vite.config.ts.timestamp-*.mjs
 socialhome/static/*
 !socialhome/static/.gitkeep
-socialhome/global_server/static/*
-!socialhome/global_server/static/.gitkeep
 *.tsbuildinfo
 
 # IDE — track shared tasks + launch configs + recommended
