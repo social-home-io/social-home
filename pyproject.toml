@@ -83,15 +83,14 @@ source = "vcs"
 version-file = "socialhome/_version.py"
 
 [tool.hatch.build]
-# ``socialhome/static/`` and ``socialhome/global_server/static/`` are
-# gitignored — both are vite outputs, built per release from
-# ``client/`` (``pnpm run build`` runs the SPA + GFS configs back to
-# back). Hatchling defaults to skipping VCS-ignored files, which
-# would ship a wheel without either bundle. ``artifacts`` is the
-# documented escape hatch for "include this regardless of
-# .gitignore". The build pipeline (``.github/workflows/publish.yml``)
-# runs ``pnpm --dir client run build`` before ``python -m build`` so
-# both bundles are on disk by the time hatchling packages the wheel.
+# ``socialhome/static/`` is gitignored — it's the SPA bundle, built
+# per release from ``client/`` (``pnpm run build``). Hatchling
+# defaults to skipping VCS-ignored files, which would ship a wheel
+# without the SPA. ``artifacts`` is the documented escape hatch for
+# "include this regardless of .gitignore". The build pipeline
+# (``.github/workflows/publish.yml``) runs ``pnpm --dir client run
+# build`` before ``python -m build`` so the bundle is on disk by
+# the time hatchling packages the wheel.
 #
 # Setting this at the top-level ``[tool.hatch.build]`` (not
 # ``[tool.hatch.build.targets.wheel]``) covers both the wheel and the
@@ -99,9 +98,20 @@ version-file = "socialhome/_version.py"
 # then the wheel from that sdist — if the sdist drops the artifact,
 # the wheel-from-sdist build has nothing to include and the SPA
 # ships empty (which happened on the 2026.5.10 / 2026.5.11 releases).
+#
+# ``socialhome/global_server/static/`` mixes vite outputs (``admin.*``,
+# ``highlight_public_viewer.js``, ``hooks.module-*.js``) with
+# handcrafted SSR assets (``avatar_placeholder.svg``,
+# ``users_directory.{css,js}``). The vite outputs are gitignored
+# alongside the SPA (per ``.gitignore``) so the wheel needs explicit
+# artifacts entries for each; the handcrafted files stay tracked and
+# hatchling picks them up without an override.
 artifacts = [
     "socialhome/static/**/*",
-    "socialhome/global_server/static/**/*",
+    "socialhome/global_server/static/admin.css",
+    "socialhome/global_server/static/admin.js",
+    "socialhome/global_server/static/highlight_public_viewer.js",
+    "socialhome/global_server/static/hooks.module-*.js",
 ]
 
 [tool.pytest.ini_options]
