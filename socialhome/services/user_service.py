@@ -40,9 +40,11 @@ from ..repositories.user_repo import AbstractUserRepo
 
 _USERNAME_MAX_LENGTH = 32
 
-#: Largest side of a stored profile picture (square WebP). Matches the
-#: user-facing spec "≤ 400 px" caveat.
-PROFILE_PICTURE_MAX_DIMENSION = 256
+#: Largest side of a stored profile picture (square WebP). 384 px keeps
+#: avatars sharp at 3× retina (128 dp) so the UI never has to upscale —
+#: covers watch faces and TV apps too. The previous 256 px was a
+#: 2018-era target that was already getting upscaled in some surfaces.
+PROFILE_PICTURE_MAX_DIMENSION = 384
 
 #: Display-name / bio length caps applied by :meth:`patch_profile`.
 DISPLAY_NAME_MAX_LENGTH = 64
