@@ -56,7 +56,10 @@ function LoginGate({ onSuccess }: { onSuccess: () => void }) {
     setSubmitting(true)
     setErr(null)
     try {
-      const resp = await fetch('/admin/login', {
+      // Relative URL — resolves against ``<base href>`` so the request
+      // tracks the document base (drops the leading ``/`` so it doesn't
+      // bypass any future ingress prefix). Matches ``api()``'s strip.
+      const resp = await fetch('admin/login', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -151,7 +154,7 @@ function App() {
 
   const logout = async () => {
     try {
-      await fetch('/admin/logout', {
+      await fetch('admin/logout', {
         method: 'POST',
         credentials: 'same-origin',
       })

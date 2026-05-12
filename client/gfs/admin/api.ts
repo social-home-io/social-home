@@ -4,6 +4,16 @@
  * ``admin_ui/index.html`` so the call sites port over verbatim.
  * Surfaces a typed ``UnauthorizedError`` so the App component can
  * route back to the login gate without inspecting status codes.
+ *
+ * Path handling
+ * -------------
+ * Caller-supplied paths look absolute (``/admin/api/overview``) so the
+ * panel files read naturally. ``fetch`` is fed the **relative** form
+ * (``admin/api/overview``) so the browser resolves it against
+ * ``<base href>`` rather than the document origin. The two shapes
+ * resolve to the same URL on the standalone GFS deploy, and the
+ * relative form is what makes the UI portable to a path-prefixed
+ * reverse proxy / future ingress front.
  */
 
 export class UnauthorizedError extends Error {}
@@ -20,7 +30,7 @@ export async function api<T = unknown>(
     headers: { 'Content-Type': 'application/json' },
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
-  const resp = await fetch(path, opts)
+  const resp = await fetch(path.replace(/^\/+/, ''), opts)
   if (resp.status === 401) {
     throw new UnauthorizedError('Session expired')
   }

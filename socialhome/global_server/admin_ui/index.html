@@ -4,10 +4,17 @@
   <meta charset="utf-8" />
   <title>GFS Admin</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <link rel="stylesheet" href="/static/admin.css" />
+  <!--
+    Document base URL. The bundle references ``static/admin.css`` /
+    ``static/admin.js`` and ``fetch('admin/api/...')`` relative, so a
+    future deployment behind a path-prefixing reverse proxy can rewrite
+    ``href`` here without touching the JS or any individual call site.
+  -->
+  <base href="/" />
+  <link rel="stylesheet" href="static/admin.css" />
 </head>
 <body>
   <div id="root"></div>
-  <script type="module" src="/static/admin.js"></script>
+  <script type="module" src="static/admin.js"></script>
 </body>
 </html>

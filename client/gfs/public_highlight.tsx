@@ -300,15 +300,23 @@ function humanizeError(msg: string | null | undefined): string {
 }
 
 
+// Strip a leading ``/`` so caller paths like ``/gfs/highlights/...`` look
+// natural at the call site while the actual fetch resolves against
+// ``<base href>`` — keeping the public viewer portable to any
+// path-prefixed deployment instead of pinning the request to the
+// document origin.
+const _rel = (p: string): string => p.replace(/^\/+/, '')
+
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const r = await fetch(url)
+  const r = await fetch(_rel(url))
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json() as Promise<T>
 }
 
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const r = await fetch(url, {
+  const r = await fetch(_rel(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
