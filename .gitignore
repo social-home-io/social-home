@@ -41,6 +41,15 @@ client/coverage/
 client/vite.config.ts.timestamp-*.mjs
 socialhome/static/*
 !socialhome/static/.gitkeep
+# GFS bundle outputs from client/vite.gfs.config.ts. The directory
+# also contains handcrafted SSR assets (avatar_placeholder.svg,
+# users_directory.css/js) that stay tracked — gitignore the vite
+# outputs by name (or by hash-suffix glob) so they don't churn git
+# diffs on every release.
+socialhome/global_server/static/admin.css
+socialhome/global_server/static/admin.js
+socialhome/global_server/static/highlight_public_viewer.js
+socialhome/global_server/static/hooks.module-*.js
 *.tsbuildinfo
 
 # IDE — track shared tasks + launch configs + recommended

@@ -99,16 +99,19 @@ version-file = "socialhome/_version.py"
 # the wheel-from-sdist build has nothing to include and the SPA
 # ships empty (which happened on the 2026.5.10 / 2026.5.11 releases).
 #
-# ``socialhome/global_server/static/`` is NOT in this list because
-# the dir mixes vite outputs (``admin.{css,js}``,
+# ``socialhome/global_server/static/`` mixes vite outputs (``admin.*``,
 # ``highlight_public_viewer.js``, ``hooks.module-*.js``) with
 # handcrafted SSR assets (``avatar_placeholder.svg``,
-# ``users_directory.{css,js}``). The handcrafted files are tracked
-# in git, so hatchling picks them up without an artifact glob; the
-# vite outputs get overwritten on every ``pnpm run build`` and are
-# committed alongside in the release commit.
+# ``users_directory.{css,js}``). The vite outputs are gitignored
+# alongside the SPA (per ``.gitignore``) so the wheel needs explicit
+# artifacts entries for each; the handcrafted files stay tracked and
+# hatchling picks them up without an override.
 artifacts = [
     "socialhome/static/**/*",
+    "socialhome/global_server/static/admin.css",
+    "socialhome/global_server/static/admin.js",
+    "socialhome/global_server/static/highlight_public_viewer.js",
+    "socialhome/global_server/static/hooks.module-*.js",
 ]
 
 [tool.pytest.ini_options]
