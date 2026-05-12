@@ -123,6 +123,12 @@ async def test_landing_returns_200_when_token_active_and_author_online(client):
     assert resp.status == 200
     text = await resp.text()
     assert "Highlight coming soon" in text or "<html" in text
+    # ``<base href>`` anchors the relative ``static/...`` script src to
+    # the GFS root rather than the deep document URL — keeps the page
+    # portable to a path-prefixed deployment.
+    assert "<base href='/'>" in text
+    assert "src='static/highlight_public_viewer.js'" in text
+    assert "src='/static/highlight_public_viewer.js'" not in text
 
 
 async def test_landing_returns_410_when_token_revoked(client):

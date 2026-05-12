@@ -271,6 +271,11 @@ class HighlightPublicLandingView(GfsBaseView):
         body = (
             "<!doctype html><html lang='en'><head>"
             "<meta charset='utf-8'>"
+            # ``<base href>`` anchors the relative ``static/...`` script src
+            # below to the GFS root rather than the deep
+            # ``/highlight/<inst>/<hl>/<token>`` document URL. A future
+            # path-prefixed deployment rewrites this to the prefix.
+            "<base href='/'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>Highlight</title>"
             "<meta property='og:title' content='A highlight shared with you'>"
@@ -296,7 +301,7 @@ class HighlightPublicLandingView(GfsBaseView):
             "</head><body>"
             "<div id='root'></div>"
             f"<script id='boot' type='application/json'>{boot}</script>"
-            "<script type='module' src='/static/highlight_public_viewer.js'></script>"
+            "<script type='module' src='static/highlight_public_viewer.js'></script>"
             "</body></html>"
         )
         return web.Response(text=body, content_type="text/html", status=200)
