@@ -136,7 +136,7 @@ class SqliteUserRepo:
                 public_key, public_key_version, is_new_member,
                 preferences_json, email, phone, date_of_birth,
                 declared_age, is_minor, child_protection_enabled,
-                deleted_at, grace_until, created_at, source
+                deleted_at, grace_until, created_at, source, external_id
             ) VALUES(
                 ?,?,?,?,?,?,
                 ?,?,?,?,
@@ -144,7 +144,7 @@ class SqliteUserRepo:
                 ?,?,?,
                 ?,?,?,?,
                 ?,?,?,
-                ?,?,COALESCE(?, datetime('now')), ?
+                ?,?,COALESCE(?, datetime('now')), ?, ?
             )
             ON CONFLICT(username) DO UPDATE SET
                 display_name=excluded.display_name,
@@ -170,7 +170,8 @@ class SqliteUserRepo:
                 child_protection_enabled=excluded.child_protection_enabled,
                 deleted_at=excluded.deleted_at,
                 grace_until=excluded.grace_until,
-                source=excluded.source
+                source=excluded.source,
+                external_id=excluded.external_id
             """,
             (
                 user.username,
@@ -200,6 +201,7 @@ class SqliteUserRepo:
                 user.grace_until,
                 user.created_at,
                 user.source,
+                user.external_id,
             ),
         )
         return user
@@ -556,6 +558,7 @@ def _row_to_user(row: dict | None) -> User | None:
         created_at=row.get("created_at"),
         last_seen_at=row.get("last_seen_at"),
         source=row.get("source", "manual"),
+        external_id=row.get("external_id"),
     )
 
 

@@ -118,9 +118,17 @@ class User:
     last_seen_at: str | None = None  # ISO-8601 UTC
 
     # Provisioning source: 'manual' (standalone or explicit admin) vs 'ha'
-    # (mirrored from a Home Assistant person.* entity). Admins manage 'ha'
+    # (mirrored from a Home Assistant auth user). Admins manage 'ha'
     # rows via the HA Users admin panel.
     source: str = "manual"  # 'manual' | 'ha'
+
+    # Stable identifier from the external auth provider that owns this
+    # row, scoped by ``source``. For ``source='ha'`` this is the 32-hex
+    # HA ``user_id`` (``config/auth/list[].id``) — persisted so the
+    # picture lifter and future presence / device-tracker bridges can
+    # join via ``person.attributes.user_id`` without re-resolving the
+    # username. ``None`` for ``source='manual'``.
+    external_id: str | None = None
 
     def is_active(self) -> bool:
         return self.state == "active" and self.deleted_at is None

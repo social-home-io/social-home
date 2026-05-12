@@ -269,18 +269,27 @@ class HaosAdapter(PlatformAdapter):
         self,
         app: "web.Application",
     ) -> None:
-        owner = await self.users.get_owner()
-        if owner is None:
-            return
-        bytes_ = await self.fetch_entity_picture_bytes(owner.username)
-        if not bytes_:
-            return
         user_service = app.get(K.user_service_key)
         user_repo = app.get(K.user_repo_key)
         if user_service is None or user_repo is None:
             return
+        owner = await self.users.get_owner()
+        if owner is None:
+            return
         local = await user_repo.get(owner.username)
         if local is None:
+            return
+        # Prefer the id stored on the SH row (set at provisioning time
+        # by ``HaBootstrap`` / the wizard) so this sync doesn't repeat
+        # the username → id WS lookup. Fall back to the ExternalUser
+        # if a legacy row predates ``external_id`` — the directory
+        # still resolves by username in that case.
+        ha_user_id = local.external_id or owner.external_id
+        if ha_user_id:
+            bytes_ = await self.users.fetch_picture_bytes_by_id(ha_user_id)
+        else:
+            bytes_ = await self.users.fetch_picture_bytes(owner.username)
+        if not bytes_:
             return
         await user_service.set_picture(local.user_id, bytes_)
 

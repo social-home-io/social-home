@@ -288,13 +288,32 @@ class HaosCompleteSetupView(BaseView):
 
 
 async def _mirror_admin_user(db, external: ExternalUser) -> None:
-    """Insert the picked HA person into ``users`` as admin (idempotent)."""
+    """Insert the picked HA user into ``users`` as admin (idempotent).
+
+    Stamps ``source='ha'`` and persists the HA-side ``external_id``
+    when present so the picture lifter / future presence bridge can
+    walk to provider-side resources without re-running the
+    username→id lookup. Re-runs of the wizard refresh the
+    ``external_id`` to track HA-side rotations.
+    """
     user_id = f"uid-{external.username}"
+    has_external_id = external.external_id is not None
+    source = "ha" if has_external_id else "manual"
     await db.enqueue(
         """
-        INSERT INTO users(username, user_id, display_name, is_admin)
-        VALUES(?, ?, ?, 1)
-        ON CONFLICT(username) DO UPDATE SET is_admin=1
+        INSERT INTO users(username, user_id, display_name, is_admin,
+                          source, external_id)
+        VALUES(?, ?, ?, 1, ?, ?)
+        ON CONFLICT(username) DO UPDATE SET
+            is_admin=1,
+            source=excluded.source,
+            external_id=excluded.external_id
         """,
-        (external.username, user_id, external.display_name or external.username),
+        (
+            external.username,
+            user_id,
+            external.display_name or external.username,
+            source,
+            external.external_id,
+        ),
     )

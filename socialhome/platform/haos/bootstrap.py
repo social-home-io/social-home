@@ -93,6 +93,7 @@ class HaBootstrap:
                 await self._provision_admin(
                     username=owner.username,
                     display_name=owner.display_name,
+                    external_id=owner.external_id,
                 )
                 await self._generate_integration_token(owner.username)
                 await self._mark_done()
@@ -112,20 +113,29 @@ class HaBootstrap:
         *,
         username: str,
         display_name: str,
+        external_id: str | None,
     ) -> None:
-        """Insert or re-enable the HA owner as a SH admin."""
+        """Insert or re-enable the HA owner as a SH admin.
+
+        Persists ``external_id`` — the HA ``user_id`` from
+        ``config/auth/list[].id`` — so downstream joins (the
+        picture lifter; future presence / device-tracker bridges)
+        don't have to re-resolve username → id. The id is stable
+        across HA display-name renames that would otherwise change
+        the entity slug.
+        """
         existing = await self._db.fetchone(
             "SELECT user_id FROM users WHERE username=?",
             (username,),
         )
         if existing is not None:
             # Already provisioned — ensure is_admin=1 in case it was demoted
-            # and stamp source='ha' so the HA Users admin panel recognises
-            # the row.
+            # and stamp source='ha' + the latest external_id so the row
+            # tracks any HA-side rotation.
             await self._db.enqueue(
-                "UPDATE users SET is_admin=1, state='active', source='ha' "
-                "WHERE username=?",
-                (username,),
+                "UPDATE users SET is_admin=1, state='active', source='ha',"
+                " external_id=? WHERE username=?",
+                (external_id, username),
             )
             return
 
@@ -142,14 +152,15 @@ class HaBootstrap:
         await self._db.enqueue(
             """
             INSERT INTO users(user_id, username, display_name, is_admin,
-                              created_at, source)
-            VALUES(?, ?, ?, 1, ?, 'ha')
+                              created_at, source, external_id)
+            VALUES(?, ?, ?, 1, ?, 'ha', ?)
             """,
             (
                 user_id,
                 username,
                 display_name or username,
                 datetime.now(timezone.utc).isoformat(),
+                external_id,
             ),
         )
 

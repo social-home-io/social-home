@@ -51,12 +51,16 @@ def _auth_user_to_external(row: dict) -> ExternalUser | None:
         display_name=str(row.get("name") or username),
         # ``config/auth/list`` doesn't carry the picture URL — that
         # lives on the matching ``person.*`` entity. The avatar lifter
-        # in ``HaAdapter.fetch_entity_picture_bytes`` does the cross-
+        # in :meth:`HaUserDirectory.fetch_picture_bytes` does the cross-
         # reference via ``attributes.user_id`` so the wizard doesn't
         # need it on this code path.
         picture_url=None,
         is_admin=False,
         email=None,
+        # The HA-side identifier; persisted on the SH ``users`` row so
+        # downstream joins (picture lifter, future presence bridge)
+        # don't need to re-resolve username → id on every call.
+        external_id=str(row.get("id")) if row.get("id") else None,
     )
 
 
@@ -183,34 +187,38 @@ class HaUserDirectory:
     async def fetch_picture_bytes(self, username: str) -> bytes | None:
         """Resolve + download the picture for HA auth user ``username``.
 
-        Centralises the auth user → ``user_id`` → ``person.*`` join
-        that every "what does this human look like?" caller needs:
-
-        1. Look ``username`` up in ``config/auth/list`` to recover the
-           HA ``user_id`` (32-hex string).
-        2. Scan ``person.*`` entity states for one whose
-           ``attributes.user_id`` matches — that's the documented HA
-           join, resilient to display-name renames (which change the
-           entity slug but never the user_id).
-        3. ``GET`` ``entity_picture`` via the integration token.
-
-        Returns the raw bytes so the caller can run them through the
-        ImageProcessor pipeline. ``None`` for any missing link in the
-        chain (no auth user, no matching person, no picture attribute,
-        transport error). Lives on the directory rather than the
-        adapter so both ``HaAdapter`` and ``HaosAdapter`` share one
-        implementation — see #297 for the previous duplicated
-        ``person.<username>`` lookup that this replaces.
+        Convenience wrapper around :meth:`fetch_picture_bytes_by_id`
+        that resolves the username → HA user_id first. Prefer the
+        ``_by_id`` variant when the caller already holds the id
+        (e.g. from ``users.external_id`` on the local row) — that
+        path skips one WS round-trip.
         """
         target_id = await self._find_ha_user_id(username)
         if not target_id:
             return None
+        return await self.fetch_picture_bytes_by_id(target_id)
+
+    async def fetch_picture_bytes_by_id(self, ha_user_id: str) -> bytes | None:
+        """Download the ``person.*`` picture matching ``ha_user_id``.
+
+        The id → ``person.*`` join is HA's documented contract
+        (``person.attributes.user_id`` references
+        ``config/auth/list[].id``) and survives display-name renames
+        that shift the entity slug. Callers with the id on hand
+        (e.g. the admin-picture sync, which reads it off the local
+        ``users`` row) avoid the username→id WS lookup entirely.
+
+        Returns the raw bytes so the caller can run them through the
+        ImageProcessor pipeline. ``None`` for any missing link in the
+        chain (no matching person, no picture attribute, transport
+        error).
+        """
         for state in await self._adapter._client.get_states():
             entity_id = state.get("entity_id", "")
             if not entity_id.startswith("person."):
                 continue
             attrs: dict = state.get("attributes", {}) or {}
-            if attrs.get("user_id") != target_id:
+            if attrs.get("user_id") != ha_user_id:
                 continue
             entity_picture = attrs.get("entity_picture")
             if not entity_picture:
@@ -220,10 +228,10 @@ class HaUserDirectory:
 
     async def _find_ha_user_id(self, username: str) -> str | None:
         """Return the HA ``user_id`` for ``username`` (the auth
-        provider credential) or ``None``. The ``id`` field never
-        escapes the directory through ``ExternalUser`` — that type
-        intentionally stays platform-agnostic — so callers that need
-        it (the picture lifter) ask the directory for the join."""
+        provider credential) or ``None``. The ``id`` field is already
+        exposed via :attr:`ExternalUser.external_id`; this private
+        helper is kept for the by-username picture path where the
+        caller hasn't materialised an :class:`ExternalUser` yet."""
         for row in await self._adapter._client.list_auth_users():
             if row.get("username") == username:
                 user_id = row.get("id")

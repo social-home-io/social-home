@@ -70,9 +70,11 @@ class _FakeUsers:
         *,
         owner_username: str | None = "ha_owner",
         owner_display_name: str = "Social Home Test",
+        owner_external_id: str | None = "ha-id-stable",
     ) -> None:
         self._owner_username = owner_username
         self._owner_display_name = owner_display_name
+        self._owner_external_id = owner_external_id
 
     async def get_owner(self):
         if self._owner_username is None:
@@ -85,6 +87,7 @@ class _FakeUsers:
             picture_url=None,
             is_admin=False,
             email=None,
+            external_id=self._owner_external_id,
         )
 
 
@@ -143,9 +146,14 @@ async def test_provision_admin_idempotent(env):
     """Admin provisioned once; second call is a no-op (row count stays at 1)."""
     bs = _make_bootstrap(env)
 
-    await bs._provision_admin(username="ha_owner", display_name="HA Owner")
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-1",
+    )
     row = await env.db.fetchone(
-        "SELECT user_id, is_admin, display_name FROM users WHERE username=?",
+        "SELECT user_id, is_admin, display_name, external_id, source"
+        " FROM users WHERE username=?",
         ("ha_owner",),
     )
     assert row is not None
@@ -153,14 +161,30 @@ async def test_provision_admin_idempotent(env):
     # ``display_name`` is now the HA "name" field, not the username
     # (#297). The previous version fell back to username for both.
     assert row["display_name"] == "HA Owner"
+    # ``external_id`` carries the HA user_id so downstream joins
+    # (picture lifter, future presence bridge) don't re-run the
+    # username→id lookup.
+    assert row["external_id"] == "ha-id-1"
+    assert row["source"] == "ha"
 
-    await bs._provision_admin(username="ha_owner", display_name="HA Owner")
+    # A subsequent call refreshes ``external_id`` (HA-side rotation)
+    # and re-asserts is_admin without inserting a second row.
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-2",
+    )
     count = await env.db.fetchval(
         "SELECT COUNT(*) FROM users WHERE username=?",
         ("ha_owner",),
         default=0,
     )
     assert count == 1
+    refreshed = await env.db.fetchone(
+        "SELECT external_id FROM users WHERE username=?",
+        ("ha_owner",),
+    )
+    assert refreshed["external_id"] == "ha-id-2"
 
 
 async def test_config_flag_helpers(env):
@@ -175,7 +199,11 @@ async def test_config_flag_helpers(env):
 async def test_generate_integration_token_writes_file(env):
     """Token is persisted in api_tokens and written to disk (mode 0600)."""
     bs = _make_bootstrap(env)
-    await bs._provision_admin(username="ha_owner", display_name="HA Owner")
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-1",
+    )
 
     await bs._generate_integration_token("ha_owner")
 
