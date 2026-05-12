@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
-from socialhome.app_keys import config_key
+from socialhome.app_keys import platform_adapter_key
+from socialhome.platform.adapter import Capability
 
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+class _HaLikeAdapter:
+    """Stand-in adapter that declares ``HA_PERSON_DIRECTORY`` so the
+    ``/api/admin/users`` gate fires its 405 branch. The view returns
+    before touching any other adapter attribute, so the rest of the
+    Provider surface isn't needed.
+    """
+
+    capabilities = frozenset({Capability.HA_PERSON_DIRECTORY, Capability.PASSWORD_AUTH})
 
 
 async def test_create_user_happy_path(client):
@@ -105,12 +114,12 @@ async def test_create_user_non_admin_403(client):
     assert r.status == 403
 
 
-async def test_create_user_405_in_ha_mode(client):
-    """ha and haos modes use /api/admin/ha-users/.../provision instead."""
-    client.server.app[config_key] = replace(
-        client.server.app[config_key],
-        mode="ha",
-    )
+async def test_create_user_405_when_directory_is_ha_person_registry(client):
+    """Adapters that declare ``HA_PERSON_DIRECTORY`` route provisioning
+    through ``/api/admin/ha-users/.../provision`` instead of this
+    endpoint, so the view should refuse with 405 ``WRONG_MODE``.
+    """
+    client.server.app[platform_adapter_key] = _HaLikeAdapter()
     r = await client.post(
         "/api/admin/users",
         headers=_auth(client._tok),
