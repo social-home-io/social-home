@@ -389,6 +389,46 @@ async def test_haos_complete_persists_display_name(aiohttp_client, tmp_dir):
     assert row["display_name"] == "Social Home Test"
 
 
+async def test_haos_complete_stamps_source_ha_and_external_id(
+    aiohttp_client, tmp_dir,
+):
+    """Regression: the wizard MUST persist ``source='ha'`` + ``external_id``
+    on the admin row so the HA Users admin panel's sync toggle shows
+    "Active" for the household owner.
+
+    Earlier builds constructed a fresh ``ExternalUser`` inside
+    :class:`HaosCompleteSetupView` and dropped ``external_id`` on the
+    floor — the row landed with ``source='manual'`` and the toggle
+    rendered as "Not added" against the user who was clearly already
+    provisioned.
+    """
+    tc = await _build_standalone_app(aiohttp_client, tmp_dir)
+    adapter = _FakeHaosAdapter(
+        [
+            ExternalUser(
+                "socialhome",
+                "Social Home",
+                None,
+                is_admin=True,
+                external_id="abc123def" + "0" * 23,
+            ),
+        ],
+    )
+    tc._app[platform_adapter_key] = adapter
+    tc._app[config_key] = replace(tc._app[config_key], mode="haos")
+    r = await tc.post("/api/setup/haos/complete")
+    assert r.status == 200, await r.text()
+
+    db = tc._app[_db_key]
+    row = await db.fetchone(
+        "SELECT source, external_id FROM users WHERE username=?",
+        ("socialhome",),
+    )
+    assert row is not None
+    assert row["source"] == "ha"
+    assert row["external_id"] == "abc123def" + "0" * 23
+
+
 async def test_setup_locked_after_haos_completion(aiohttp_client, tmp_dir):
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
     adapter = _FakeHaosAdapter(
