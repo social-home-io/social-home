@@ -23,18 +23,54 @@ if TYPE_CHECKING:
     from aiohttp import web
 
 
-def _state_to_user(state: dict) -> ExternalUser:
-    """Convert an HA ``person.*`` state dict to :class:`ExternalUser`."""
-    entity_id: str = state.get("entity_id", "")
-    username = entity_id.removeprefix("person.")
-    attrs: dict = state.get("attributes", {})
+def _auth_user_to_external(row: dict) -> ExternalUser | None:
+    """Convert an HA ``config/auth/list`` row to :class:`ExternalUser`.
+
+    Returns ``None`` for rows the SH user pipeline can't / shouldn't
+    accept:
+
+    * ``system_generated: true`` — the Supervisor's own service
+      account, ``Home Assistant Content``, and the cloud / mobile-app
+      bridges. They carry ``username: null`` and never log in
+      through ingress.
+    * ``is_active: false`` — disabled HA accounts; SH shouldn't
+      surface them in the wizard picker or honour them when ingress
+      forwards their header.
+    * ``username: null`` — defensive belt-and-braces for any future
+      system row that omits the ``system_generated`` flag.
+    """
+    if row.get("system_generated", False):
+        return None
+    if row.get("is_active", True) is False:
+        return None
+    username = row.get("username")
+    if not username:
+        return None
     return ExternalUser(
-        username=username,
-        display_name=attrs.get("friendly_name") or username,
-        picture_url=attrs.get("entity_picture"),
+        username=str(username),
+        display_name=str(row.get("name") or username),
+        # ``config/auth/list`` doesn't carry the picture URL — that
+        # lives on the matching ``person.*`` entity. The avatar lifter
+        # in :meth:`HaUserDirectory.fetch_picture_bytes` does the cross-
+        # reference via ``attributes.user_id`` so the wizard doesn't
+        # need it on this code path.
+        picture_url=None,
         is_admin=False,
         email=None,
+        # The HA-side identifier; persisted on the SH ``users`` row so
+        # downstream joins (picture lifter, future presence bridge)
+        # don't need to re-resolve username → id on every call.
+        external_id=str(row.get("id")) if row.get("id") else None,
     )
+
+
+def _row_to_owner(row: dict) -> ExternalUser | None:
+    """Same as :func:`_auth_user_to_external`, but only returns the
+    row when it represents an HA *owner*. Used by the haos wizard to
+    pick the initial SH admin without iterating callers."""
+    if not row.get("is_owner", False):
+        return None
+    return _auth_user_to_external(row)
 
 
 class HaAuthProvider:
@@ -88,12 +124,25 @@ class HaAuthProvider:
 
 
 class HaUserDirectory:
-    """List / get principals from the HA ``person.*`` registry.
+    """List / get HA principals from ``config/auth/list`` (WS).
 
-    HA mode treats persons as read-only data — provisioning happens
-    via the steady-state ``/api/admin/ha-users`` routes which mirror
-    enabled persons into the local ``users`` table. ``enable`` /
-    ``disable`` raise :class:`NotImplementedError` so misuse is loud.
+    HA's auth users (``username`` + ``name`` + ``id``) are the
+    canonical identity surface. The previous implementation read
+    ``person.*`` states and derived ``ExternalUser.username`` from the
+    entity slug — which HA Core constructs from the user's
+    **display name**, not the auth-provider username (#297). On any
+    instance where the operator renamed their account after creation
+    the two diverge and the wizard / ingress-auth path 404s.
+
+    Switching to ``config/auth/list`` makes ``ExternalUser.username``
+    the authentic credential the operator types at the HA login
+    screen — the same string ingress forwards as
+    ``X-Remote-User-Name`` — so the rest of the SH user pipeline can
+    treat it as a stable key.
+
+    ``enable`` / ``disable`` still raise :class:`NotImplementedError`
+    because provisioning goes through the steady-state
+    ``/api/admin/ha-users`` routes.
     """
 
     __slots__ = ("_adapter",)
@@ -102,18 +151,92 @@ class HaUserDirectory:
         self._adapter = adapter
 
     async def list_users(self) -> list[ExternalUser]:
-        states = await self._adapter._client.get_states()
+        rows = await self._adapter._client.list_auth_users()
         out: list[ExternalUser] = []
-        for state in states:
-            entity_id: str = state.get("entity_id", "")
-            if not entity_id.startswith("person."):
-                continue
-            out.append(_state_to_user(state))
+        for row in rows:
+            user = _auth_user_to_external(row)
+            if user is not None:
+                out.append(user)
         return out
 
     async def get(self, username: str) -> ExternalUser | None:
-        state = await self._adapter._client.get_state(f"person.{username}")
-        return _state_to_user(state) if state else None
+        # ``config/auth/list`` doesn't accept a filter — the list is
+        # short (≤ tens of accounts on a typical household instance),
+        # and the WS round-trip is cached on the client side, so a
+        # linear scan over a recent list is essentially free. Match
+        # on the auth-provider username (the credential ingress
+        # forwards), not the display name.
+        for row in await self._adapter._client.list_auth_users():
+            if row.get("username") == username:
+                return _auth_user_to_external(row)
+        return None
+
+    async def get_owner(self) -> ExternalUser | None:
+        """First HA owner from the auth list, or ``None``.
+
+        Used by the haos wizard to pick the initial SH admin without
+        a separate Supervisor REST round-trip. An HA instance always
+        has exactly one owner.
+        """
+        for row in await self._adapter._client.list_auth_users():
+            user = _row_to_owner(row)
+            if user is not None:
+                return user
+        return None
+
+    async def fetch_picture_bytes(self, username: str) -> bytes | None:
+        """Resolve + download the picture for HA auth user ``username``.
+
+        Convenience wrapper around :meth:`fetch_picture_bytes_by_id`
+        that resolves the username → HA user_id first. Prefer the
+        ``_by_id`` variant when the caller already holds the id
+        (e.g. from ``users.external_id`` on the local row) — that
+        path skips one WS round-trip.
+        """
+        target_id = await self._find_ha_user_id(username)
+        if not target_id:
+            return None
+        return await self.fetch_picture_bytes_by_id(target_id)
+
+    async def fetch_picture_bytes_by_id(self, ha_user_id: str) -> bytes | None:
+        """Download the ``person.*`` picture matching ``ha_user_id``.
+
+        The id → ``person.*`` join is HA's documented contract
+        (``person.attributes.user_id`` references
+        ``config/auth/list[].id``) and survives display-name renames
+        that shift the entity slug. Callers with the id on hand
+        (e.g. the admin-picture sync, which reads it off the local
+        ``users`` row) avoid the username→id WS lookup entirely.
+
+        Returns the raw bytes so the caller can run them through the
+        ImageProcessor pipeline. ``None`` for any missing link in the
+        chain (no matching person, no picture attribute, transport
+        error).
+        """
+        for state in await self._adapter._client.get_states():
+            entity_id = state.get("entity_id", "")
+            if not entity_id.startswith("person."):
+                continue
+            attrs: dict = state.get("attributes", {}) or {}
+            if attrs.get("user_id") != ha_user_id:
+                continue
+            entity_picture = attrs.get("entity_picture")
+            if not entity_picture:
+                return None
+            return await self._adapter._client.fetch_path_bytes(entity_picture)
+        return None
+
+    async def _find_ha_user_id(self, username: str) -> str | None:
+        """Return the HA ``user_id`` for ``username`` (the auth
+        provider credential) or ``None``. The ``id`` field is already
+        exposed via :attr:`ExternalUser.external_id`; this private
+        helper is kept for the by-username picture path where the
+        caller hasn't materialised an :class:`ExternalUser` yet."""
+        for row in await self._adapter._client.list_auth_users():
+            if row.get("username") == username:
+                user_id = row.get("id")
+                return str(user_id) if user_id else None
+        return None
 
     async def is_enabled(self, username: str) -> bool:
         return (await self.get(username)) is not None

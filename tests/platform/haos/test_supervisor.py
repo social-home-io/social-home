@@ -24,33 +24,15 @@ except ImportError:  # pragma: no cover - CI path
 
 @pytest.fixture
 async def sv_server(aiohttp_server):
-    captured: dict = {"discovery": [], "auth_response": None}
-
-    async def auth_list(request: web.Request) -> web.Response:
-        captured["auth_header"] = request.headers.get("Authorization")
-        return web.json_response(
-            captured["auth_response"]
-            or {
-                "data": {
-                    "users": [
-                        {
-                            "username": "ha_owner",
-                            "is_owner": True,
-                            "system_generated": False,
-                        },
-                        {
-                            "username": "system",
-                            "is_owner": False,
-                            "system_generated": True,
-                        },
-                    ]
-                }
-            },
-        )
+    """In-process Supervisor fake. The discovery + addon-info endpoints
+    are all this client talks to now — user discovery moved to HA Core's
+    WS ``config/auth/list`` (see #297 / #298)."""
+    captured: dict = {"discovery": []}
 
     async def discovery(request: web.Request) -> web.Response:
         body = await request.json()
         captured["discovery"].append(body)
+        captured["discovery_header"] = request.headers.get("Authorization")
         return web.json_response({"result": "ok"})
 
     async def self_info(request: web.Request) -> web.Response:
@@ -69,7 +51,6 @@ async def sv_server(aiohttp_server):
         )
 
     app = web.Application()
-    app.router.add_get("/auth/list", auth_list)
     app.router.add_post("/discovery", discovery)
     app.router.add_get("/addons/self/info", self_info)
     server = await aiohttp_server(app)
@@ -87,25 +68,6 @@ async def client(sv_server):
         )
 
 
-async def test_get_owner_username_returns_non_system_owner(client, sv_server):
-    _, captured = sv_server
-    owner = await client.get_owner_username()
-    assert owner == "ha_owner"
-    assert captured["auth_header"] == "Bearer sv-token"
-
-
-async def test_get_owner_username_returns_none_when_no_owner(client, sv_server):
-    _, captured = sv_server
-    captured["auth_response"] = {
-        "data": {
-            "users": [
-                {"username": "system", "is_owner": False, "system_generated": True},
-            ]
-        }
-    }
-    assert await client.get_owner_username() is None
-
-
 async def test_push_discovery_true_on_2xx(client, sv_server):
     _, captured = sv_server
     ok = await client.push_discovery(
@@ -115,6 +77,7 @@ async def test_push_discovery_true_on_2xx(client, sv_server):
     assert captured["discovery"] == [
         {"service": "socialhome", "config": {"token": "abc"}},
     ]
+    assert captured["discovery_header"] == "Bearer sv-token"
 
 
 async def test_get_self_info_returns_typed_addon_info(client, sv_server):

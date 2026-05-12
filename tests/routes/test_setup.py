@@ -180,6 +180,15 @@ class _FakeUserDirectory:
     async def get(self, username):
         return self._by_user.get(username)
 
+    async def get_owner(self):
+        # First admin-flagged user, mirroring HaUserDirectory's "first
+        # row with is_owner=True" walk. Tests that need a specific
+        # owner pass that user first in the list.
+        for user in self._by_user.values():
+            if user.is_admin:
+                return user
+        return None
+
 
 class _FakeHaAdapter:
     """Stand-in for HaAdapter sufficient for the ha-mode setup route."""
@@ -283,14 +292,10 @@ async def test_ha_owner_unknown_username_422(aiohttp_client, tmp_dir):
 
 
 # ── haos (happy path) ───────────────────────────────────────────────────────
-
-
-class _FakeSupervisorClient:
-    def __init__(self, owner: str | None = "owner"):
-        self._owner = owner
-
-    async def get_owner_username(self):
-        return self._owner
+# Both ``haos/complete`` and ``ha/owner`` now resolve the owner via
+# ``adapter.users.get_owner()`` (HA Core WS ``config/auth/list``); the
+# supervisor REST ``/auth/list`` is no longer touched by the wizard
+# (#297 / #298).
 
 
 class _FakeHaosAdapter(_FakeHaAdapter):
@@ -302,9 +307,8 @@ class _FakeHaosAdapter(_FakeHaAdapter):
 async def test_haos_complete_happy_path(aiohttp_client, tmp_dir):
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
     adapter = _FakeHaosAdapter(
-        [ExternalUser("owner", "The Owner", None, is_admin=False)],
+        [ExternalUser("owner", "The Owner", None, is_admin=True)],
     )
-    adapter._supervisor_client = _FakeSupervisorClient("owner")
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r = await tc.post("/api/setup/haos/complete")
@@ -317,9 +321,8 @@ async def test_haos_complete_happy_path(aiohttp_client, tmp_dir):
 async def test_haos_complete_persists_household_name(aiohttp_client, tmp_dir):
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
     adapter = _FakeHaosAdapter(
-        [ExternalUser("owner", "The Owner", None, is_admin=False)],
+        [ExternalUser("owner", "The Owner", None, is_admin=True)],
     )
-    adapter._supervisor_client = _FakeSupervisorClient("owner")
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r = await tc.post(
@@ -334,9 +337,8 @@ async def test_haos_complete_persists_household_name(aiohttp_client, tmp_dir):
 async def test_haos_complete_household_name_too_long_422(aiohttp_client, tmp_dir):
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
     adapter = _FakeHaosAdapter(
-        [ExternalUser("owner", "The Owner", None, is_admin=False)],
+        [ExternalUser("owner", "The Owner", None, is_admin=True)],
     )
-    adapter._supervisor_client = _FakeSupervisorClient("owner")
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r = await tc.post(
@@ -348,9 +350,9 @@ async def test_haos_complete_household_name_too_long_422(aiohttp_client, tmp_dir
 
 
 async def test_haos_complete_no_owner_returns_422(aiohttp_client, tmp_dir):
+    """No HA user with ``is_owner=True`` → wizard 422s cleanly."""
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
     adapter = _FakeHaosAdapter([])
-    adapter._supervisor_client = _FakeSupervisorClient(None)
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r = await tc.post("/api/setup/haos/complete")
@@ -358,32 +360,40 @@ async def test_haos_complete_no_owner_returns_422(aiohttp_client, tmp_dir):
     assert (await r.json())["error"]["code"] == "NO_OWNER"
 
 
-async def test_haos_complete_owner_not_in_persons_422(aiohttp_client, tmp_dir):
+async def test_haos_complete_persists_display_name(aiohttp_client, tmp_dir):
+    """Display name comes straight from the auth list — instances whose
+    owner has a display name that differs from their auth username
+    provision cleanly (#297)."""
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
-    adapter = _FakeHaosAdapter([])  # supervisor returns 'owner' but no person.* entity
-    adapter._supervisor_client = _FakeSupervisorClient("owner")
+    adapter = _FakeHaosAdapter(
+        [
+            ExternalUser(
+                "socialhome",
+                "Social Home Test",
+                None,
+                is_admin=True,
+            ),
+        ],
+    )
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r = await tc.post("/api/setup/haos/complete")
-    assert r.status == 422
-
-
-async def test_haos_complete_missing_supervisor_client_503(aiohttp_client, tmp_dir):
-    tc = await _build_standalone_app(aiohttp_client, tmp_dir)
-    adapter = _FakeHaosAdapter([])
-    # No _supervisor_client wired — route surfaces 503.
-    tc._app[platform_adapter_key] = adapter
-    tc._app[config_key] = replace(tc._app[config_key], mode="haos")
-    r = await tc.post("/api/setup/haos/complete")
-    assert r.status == 503
+    assert r.status == 200, await r.text()
+    db = tc._app[_db_key]
+    row = await db.fetchone(
+        "SELECT username, display_name FROM users WHERE username=?",
+        ("socialhome",),
+    )
+    assert row is not None
+    assert row["username"] == "socialhome"
+    assert row["display_name"] == "Social Home Test"
 
 
 async def test_setup_locked_after_haos_completion(aiohttp_client, tmp_dir):
     tc = await _build_standalone_app(aiohttp_client, tmp_dir)
     adapter = _FakeHaosAdapter(
-        [ExternalUser("owner", "Owner", None, is_admin=False)],
+        [ExternalUser("owner", "Owner", None, is_admin=True)],
     )
-    adapter._supervisor_client = _FakeSupervisorClient("owner")
     tc._app[platform_adapter_key] = adapter
     tc._app[config_key] = replace(tc._app[config_key], mode="haos")
     r1 = await tc.post("/api/setup/haos/complete")

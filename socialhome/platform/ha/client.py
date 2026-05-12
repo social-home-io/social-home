@@ -1,10 +1,10 @@
-"""Home Assistant Core REST API client.
+"""Home Assistant Core REST + WebSocket API client.
 
 A thin wrapper around ``aiohttp.ClientSession`` that encapsulates
-authentication, base URL handling, and the REST call shapes used by
+authentication, base URL handling, and the call shapes used by
 :class:`HomeAssistantAdapter`. The adapter stays focused on translating
-between the platform protocol (`ExternalUser`, `InstanceConfig`, …) and
-HA's REST shapes; the wire details live here.
+between the platform protocol (``ExternalUser``, ``InstanceConfig``, …)
+and HA's wire shapes; the protocol details live here.
 
 Two deployment modes are supported via :func:`build_ha_client`:
 
@@ -15,13 +15,14 @@ Two deployment modes are supported via :func:`build_ha_client`:
   operator (``SH_HA_URL`` / ``SH_HA_TOKEN`` or ``[homeassistant] url=``
   / ``token=`` in the TOML).
 
-Both modes speak the same REST API — the Supervisor endpoint is a
-transparent proxy for ``/api/*`` into HA Core.
+Both modes speak the same API — the Supervisor endpoint is a
+transparent proxy for ``/api/*`` (and ``/api/websocket``) into HA Core.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import AsyncIterable, Mapping
 
 import aiohttp
@@ -29,10 +30,25 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 
-class HaClient:
-    """HTTP client for the Home Assistant Core REST API."""
+#: TTL for the cached ``config/auth/list`` reply. HA user accounts
+#: don't churn — adds happen via the HA UI by a human, the
+#: auth-provider username column is fixed at user creation — so a
+#: 30-second freshness window is plenty even on a busy ingress hot
+#: path. The cache lives on the :class:`HaClient` instance, which is
+#: a per-adapter singleton.
+_AUTH_LIST_TTL_SECONDS = 30
 
-    __slots__ = ("_session", "_base_url", "_token")
+
+class HaClient:
+    """HTTP + WS client for the Home Assistant Core API."""
+
+    __slots__ = (
+        "_session",
+        "_base_url",
+        "_token",
+        "_auth_list_cache",
+        "_auth_list_cached_at",
+    )
 
     def __init__(
         self,
@@ -43,6 +59,8 @@ class HaClient:
         self._session = session
         self._base_url = base_url.rstrip("/")
         self._token = token
+        self._auth_list_cache: list[dict] | None = None
+        self._auth_list_cached_at: float = 0.0
 
     @property
     def base_url(self) -> str:
@@ -126,6 +144,132 @@ class HaClient:
         except aiohttp.ClientError as exc:
             log.warning("ha_client: fetch_path_bytes(%r) failed: %s", path, exc)
             return None
+
+    async def ws_command(self, type_: str, **fields: object) -> dict | None:
+        """Open a one-shot WebSocket session, auth, send one command, return result.
+
+        HA Core exposes a handful of inspection APIs only over the WS
+        bus — ``config/auth/list`` (the authoritative list of HA users,
+        with their auth-provider usernames + display names + ids) is the
+        relevant one for #297. The REST surface has no equivalent, so
+        the wizard's "drop person.* lookup" needs WS access.
+
+        The handshake is short:
+
+        1. Server greets with ``{type: "auth_required"}``.
+        2. We reply ``{type: "auth", access_token: <bearer>}``.
+        3. Server confirms ``{type: "auth_ok"}`` (or ``auth_invalid`` →
+           we return ``None`` and log).
+        4. We send ``{id: 1, type, **fields}``.
+        5. Server replies ``{id: 1, type: "result", success: bool,
+           result?: ...}``.
+
+        The connection is closed after one command so the helper stays
+        stateless — no long-lived WS, no event subscriptions, no
+        re-auth on token rotation. Callers that need bulk traffic
+        should build a dedicated client.
+
+        Returns the ``result`` payload, or ``None`` on any failure
+        (handshake reject, transport error, non-success result).
+        """
+        url = f"{self._base_url}/api/websocket"
+        # ``http(s)://...`` → ``ws(s)://...`` so aiohttp's ws_connect
+        # picks the right scheme. The Supervisor proxy at
+        # ``http://supervisor/core/api/websocket`` works transparently
+        # because Supervisor upgrades the connection on its side.
+        try:
+            async with self._session.ws_connect(url) as ws:
+                hello = await ws.receive_json(timeout=5)
+                if hello.get("type") != "auth_required":
+                    log.warning(
+                        "ha_client: ws_command(%r) unexpected greeting %r",
+                        type_,
+                        hello.get("type"),
+                    )
+                    return None
+                await ws.send_json({"type": "auth", "access_token": self._token})
+                auth_ack = await ws.receive_json(timeout=5)
+                if auth_ack.get("type") != "auth_ok":
+                    log.warning(
+                        "ha_client: ws_command(%r) auth rejected (%r)",
+                        type_,
+                        auth_ack.get("type"),
+                    )
+                    return None
+                await ws.send_json({"id": 1, "type": type_, **fields})
+                reply = await ws.receive_json(timeout=10)
+                if not reply.get("success", False):
+                    err = (reply.get("error") or {}).get("message")
+                    log.warning(
+                        "ha_client: ws_command(%r) failed: %s",
+                        type_,
+                        err or reply,
+                    )
+                    return None
+                # ``result`` may legitimately be a list, dict, or scalar
+                # — wrap into a dict for the typed signature, callers
+                # that expect a list reach in via ``["result"]``.
+                return {"result": reply.get("result")}
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            log.warning("ha_client: ws_command(%r) failed: %s", type_, exc)
+            return None
+
+    async def list_auth_users(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """``config/auth/list`` over WS — the canonical HA users list.
+
+        Each row carries::
+
+            {
+              "id": "<32-hex>",
+              "username": "socialhome" | null,
+              "name": "Social Home Test",
+              "is_owner": false,
+              "is_active": true,
+              "local_only": false,
+              "system_generated": false,
+              "group_ids": ["system-admin"],
+              "credentials": [{"type": "homeassistant"}]
+            }
+
+        System accounts (Supervisor, Home Assistant Content, …) have
+        ``username: null`` and ``system_generated: true``; the auth /
+        wizard / provisioning code paths skip those.
+
+        The reply is cached for :data:`_AUTH_LIST_TTL_SECONDS` so the
+        ingress hot path doesn't pay a fresh WS handshake on every
+        request. Pass ``force_refresh=True`` after a user-management
+        change (token issuance, password rotation) to bust the cache;
+        the wizard / admin routes do.
+
+        Empty list on transport / auth error so callers degrade
+        gracefully.
+        """
+        if not force_refresh and self._auth_list_cache is not None:
+            age = time.monotonic() - self._auth_list_cached_at
+            if age < _AUTH_LIST_TTL_SECONDS:
+                return self._auth_list_cache
+        reply = await self.ws_command("config/auth/list")
+        if reply is None:
+            return []
+        result = reply.get("result")
+        users = result if isinstance(result, list) else []
+        self._auth_list_cache = users
+        self._auth_list_cached_at = time.monotonic()
+        return users
+
+    def invalidate_auth_list_cache(self) -> None:
+        """Drop the cached :meth:`list_auth_users` reply.
+
+        Called after an action that may have changed HA's user table
+        (admin enable/disable, password rotation, …) so the next read
+        reflects the new state without waiting out the TTL.
+        """
+        self._auth_list_cache = None
+        self._auth_list_cached_at = 0.0
 
     async def get_config(self) -> dict | None:
         """``GET /api/config`` — instance location / time zone / currency."""

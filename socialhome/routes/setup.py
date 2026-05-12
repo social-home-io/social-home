@@ -221,10 +221,14 @@ class HaOwnerSetupView(BaseView):
 
 
 class HaosCompleteSetupView(BaseView):
-    """``POST /api/setup/haos/complete`` — read the owner from Supervisor.
+    """``POST /api/setup/haos/complete`` — read the owner from HA Core.
 
     Idempotent. The SPA POSTs this silently on first load when
-    ``mode == 'haos'`` and redirects to the app afterwards.
+    ``mode == 'haos'`` and redirects to the app afterwards. The owner
+    record (``username``, display ``name``) comes from HA Core's WS
+    ``config/auth/list``; the Supervisor's REST ``/auth/list`` is
+    deliberately *not* a second source (#297 / #298 — same data,
+    smaller payload, kept the slug-vs-username confusion alive).
     """
 
     async def post(self) -> web.Response:
@@ -258,41 +262,58 @@ class HaosCompleteSetupView(BaseView):
                 "INTERNAL_ERROR",
                 "haos adapter is missing the INGRESS capability.",
             )
-        sv_client = getattr(adapter, "_supervisor_client", None)
-        if sv_client is None:
-            return error_response(
-                503,
-                "SUPERVISOR_UNAVAILABLE",
-                "Supervisor client not yet wired — try again after startup.",
-            )
-        owner = await sv_client.get_owner_username()
-        if not owner:
+        owner = await adapter.users.get_owner()
+        if owner is None:
             return error_response(
                 422,
                 "NO_OWNER",
-                "Home Assistant Supervisor reported no owner user.",
+                "Home Assistant reported no owner user.",
             )
-        external = await adapter.users.get(owner)
-        if external is None:
-            return error_response(
-                422,
-                "NO_OWNER",
-                f"Supervisor owner {owner!r} has no person.* entity in HA.",
-            )
-        await _mirror_admin_user(self.svc(db_key), external)
+        # ``owner`` is already an ``ExternalUser`` with the correct
+        # auth-provider username + display name; just flip ``is_admin``
+        # before mirroring into the local ``users`` table.
+        await _mirror_admin_user(
+            self.svc(db_key),
+            ExternalUser(
+                username=owner.username,
+                display_name=owner.display_name,
+                picture_url=owner.picture_url,
+                is_admin=True,
+                email=owner.email,
+            ),
+        )
         await _apply_household_name(self, household_name)
         await self.svc(setup_service_key).mark_complete()
-        return web.json_response({"username": owner})
+        return web.json_response({"username": owner.username})
 
 
 async def _mirror_admin_user(db, external: ExternalUser) -> None:
-    """Insert the picked HA person into ``users`` as admin (idempotent)."""
+    """Insert the picked HA user into ``users`` as admin (idempotent).
+
+    Stamps ``source='ha'`` and persists the HA-side ``external_id``
+    when present so the picture lifter / future presence bridge can
+    walk to provider-side resources without re-running the
+    username→id lookup. Re-runs of the wizard refresh the
+    ``external_id`` to track HA-side rotations.
+    """
     user_id = f"uid-{external.username}"
+    has_external_id = external.external_id is not None
+    source = "ha" if has_external_id else "manual"
     await db.enqueue(
         """
-        INSERT INTO users(username, user_id, display_name, is_admin)
-        VALUES(?, ?, ?, 1)
-        ON CONFLICT(username) DO UPDATE SET is_admin=1
+        INSERT INTO users(username, user_id, display_name, is_admin,
+                          source, external_id)
+        VALUES(?, ?, ?, 1, ?, ?)
+        ON CONFLICT(username) DO UPDATE SET
+            is_admin=1,
+            source=excluded.source,
+            external_id=excluded.external_id
         """,
-        (external.username, user_id, external.display_name or external.username),
+        (
+            external.username,
+            user_id,
+            external.display_name or external.username,
+            source,
+            external.external_id,
+        ),
     )

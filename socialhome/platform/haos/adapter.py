@@ -41,7 +41,6 @@ from ..ha.providers import (
     HaPushProvider,
     HaSTTProvider,
     HaUserDirectory,
-    _state_to_user,
 )
 from .bootstrap import HaBootstrap
 from .supervisor import SupervisorClient
@@ -94,6 +93,13 @@ class HaIngressAuthProvider:
 
 
 class HaosAdapter(PlatformAdapter):
+    # ``users`` is narrowed to ``HaUserDirectory`` here (vs the
+    # platform-agnostic ``UserDirectory`` protocol the base class
+    # exposes) so mypy lets us call ``get_owner`` / ``fetch_picture_bytes``
+    # — both HA-only concepts that don't belong on the shared
+    # protocol. Identical instance assigned at runtime.
+    users: HaUserDirectory
+
     """Platform adapter for HA add-on (Supervisor + Ingress).
 
     Constructed upfront in the app factory; the actual :class:`HaClient`
@@ -243,7 +249,8 @@ class HaosAdapter(PlatformAdapter):
             )
         await HaBootstrap(
             db=self._db,
-            supervisor_client=self._supervisor_client,
+            users=self.users,
+            supervisor=self._supervisor_client,
             data_dir=self._data_dir,
         ).run()
         # Best-effort: pull the newly-provisioned admin's HA avatar
@@ -262,18 +269,27 @@ class HaosAdapter(PlatformAdapter):
         self,
         app: "web.Application",
     ) -> None:
-        owner = await self._supervisor_client.get_owner_username()  # type: ignore[union-attr]
-        if not owner:
-            return
-        bytes_ = await self.fetch_entity_picture_bytes(owner)
-        if not bytes_:
-            return
         user_service = app.get(K.user_service_key)
         user_repo = app.get(K.user_repo_key)
         if user_service is None or user_repo is None:
             return
-        local = await user_repo.get(owner)
+        owner = await self.users.get_owner()
+        if owner is None:
+            return
+        local = await user_repo.get(owner.username)
         if local is None:
+            return
+        # Prefer the id stored on the SH row (set at provisioning time
+        # by ``HaBootstrap`` / the wizard) so this sync doesn't repeat
+        # the username → id WS lookup. Fall back to the ExternalUser
+        # if a legacy row predates ``external_id`` — the directory
+        # still resolves by username in that case.
+        ha_user_id = local.external_id or owner.external_id
+        if ha_user_id:
+            bytes_ = await self.users.fetch_picture_bytes_by_id(ha_user_id)
+        else:
+            bytes_ = await self.users.fetch_picture_bytes(owner.username)
+        if not bytes_:
             return
         await user_service.set_picture(local.user_id, bytes_)
 
@@ -289,13 +305,10 @@ class HaosAdapter(PlatformAdapter):
         self,
         username: str,
     ) -> bytes | None:
-        state = await self._client.get_state(f"person.{username}")
-        if state is None:
-            return None
-        attrs: dict = state.get("attributes", {}) or {}
-        entity_picture = attrs.get("entity_picture")
-        if not entity_picture:
-            return None
-        return await self._client.fetch_path_bytes(entity_picture)
+        """Delegate to :meth:`HaUserDirectory.fetch_picture_bytes`.
 
-    _state_to_user = staticmethod(_state_to_user)
+        The auth-user → user_id → ``person.*`` join lives on the
+        directory so both HA-flavoured adapters share one
+        implementation.
+        """
+        return await self.users.fetch_picture_bytes(username)

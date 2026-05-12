@@ -18,11 +18,19 @@ class _FakeHaClient:
         states: list[dict] | None = None,
         state_by_entity: dict[str, dict] | None = None,
         config_response: dict | None = None,
+        auth_users: list[dict] | None = None,
+        path_bytes: dict[str, bytes] | None = None,
     ) -> None:
         self._states = states or []
         self._state_by_entity = state_by_entity or {}
         self._config_response = config_response
+        self._auth_users = auth_users or []
+        self._path_bytes = path_bytes or {}
         self.calls: list[tuple] = []
+
+    async def list_auth_users(self):
+        self.calls.append(("list_auth_users",))
+        return self._auth_users
 
     async def verify_token(self, token):
         self.calls.append(("verify_token", token))
@@ -49,8 +57,9 @@ class _FakeHaClient:
     async def stream_stt(self, *a, **kw):
         return None
 
-    async def fetch_path_bytes(self, *a, **kw):
-        return None
+    async def fetch_path_bytes(self, path, *a, **kw):
+        self.calls.append(("fetch_path_bytes", path))
+        return self._path_bytes.get(path)
 
 
 class _FakeRequest:
@@ -119,9 +128,15 @@ async def test_ingress_auth_with_bearer_only_returns_none():
     assert user is None
 
 
-async def test_ingress_auth_with_header_resolves_person():
-    state = {"entity_id": "person.alice", "attributes": {"friendly_name": "Alice"}}
-    client = _FakeHaClient(state_by_entity={"person.alice": state})
+async def test_ingress_auth_with_header_resolves_via_auth_list():
+    """X-Remote-User-Name → ``config/auth/list`` lookup. The auth
+    username, not the person entity slug, is what HA ingress forwards
+    in the header (#297)."""
+    client = _FakeHaClient(
+        auth_users=[
+            {"id": "abc", "username": "alice", "name": "Alice", "is_owner": True},
+        ],
+    )
     adapter = _build_haos_adapter(ha_client=client)
     user = await adapter.auth.authenticate(
         _FakeRequest(
@@ -133,6 +148,7 @@ async def test_ingress_auth_with_header_resolves_person():
     )
     assert user is not None
     assert user.username == "alice"
+    assert user.display_name == "Alice"
 
 
 async def test_ingress_auth_username_without_hass_source_rejected():
@@ -140,8 +156,11 @@ async def test_ingress_auth_username_without_hass_source_rejected():
     ``X-Hass-Source: core.ingress`` marker did not come through Core's
     ingress proxy — the HAOS adapter must refuse to authenticate it
     regardless of whether the username exists locally."""
-    state = {"entity_id": "person.alice", "attributes": {"friendly_name": "Alice"}}
-    client = _FakeHaClient(state_by_entity={"person.alice": state})
+    client = _FakeHaClient(
+        auth_users=[
+            {"id": "abc", "username": "alice", "name": "Alice"},
+        ],
+    )
     adapter = _build_haos_adapter(ha_client=client)
     user = await adapter.auth.authenticate(
         _FakeRequest(headers={"X-Remote-User-Name": "alice"}),
@@ -237,17 +256,54 @@ async def test_get_federation_base_returns_none_for_blank_value():
 # ─── Picture fetch + extra services ─────────────────────────────────────────
 
 
-async def test_fetch_entity_picture_bytes_returns_none_without_state():
+async def test_fetch_entity_picture_bytes_returns_none_for_unknown_user():
+    """No matching auth user → no person to look up → ``None``."""
     adapter = _build_haos_adapter()
     assert await adapter.fetch_entity_picture_bytes("ghost") is None
 
 
 async def test_fetch_entity_picture_bytes_returns_none_without_attribute():
-    state = {"entity_id": "person.alice", "attributes": {}}
-    adapter = _build_haos_adapter(
-        ha_client=_FakeHaClient(state_by_entity={"person.alice": state}),
+    """User exists in ``config/auth/list`` but the matched person.* has
+    no ``entity_picture`` attribute — degrade silently."""
+    client = _FakeHaClient(
+        auth_users=[
+            {"id": "uid-alice", "username": "alice", "name": "Alice"},
+        ],
+        states=[
+            {
+                "entity_id": "person.alice_v2",
+                "attributes": {"user_id": "uid-alice"},
+            },
+        ],
     )
+    adapter = _build_haos_adapter(ha_client=client)
     assert await adapter.fetch_entity_picture_bytes("alice") is None
+
+
+async def test_fetch_entity_picture_bytes_walks_via_user_id():
+    """Auth username → user_id → person.* via ``attributes.user_id``.
+    Resilient to display-name renames that shift the entity slug
+    (#297). The picture URL is fetched through the integration token."""
+    client = _FakeHaClient(
+        auth_users=[
+            {"id": "uid-alice", "username": "alice", "name": "Alice"},
+        ],
+        states=[
+            # The matching person entity uses a slug derived from the
+            # display name, NOT the auth username — exactly the
+            # mismatch that broke the previous lookup.
+            {
+                "entity_id": "person.alice_v2",
+                "attributes": {
+                    "user_id": "uid-alice",
+                    "entity_picture": "/api/image/serve/alice-pic",
+                },
+            },
+        ],
+        path_bytes={"/api/image/serve/alice-pic": b"png-bytes"},
+    )
+    adapter = _build_haos_adapter(ha_client=client)
+    assert await adapter.fetch_entity_picture_bytes("alice") == b"png-bytes"
 
 
 async def test_get_extra_services_empty_before_startup():

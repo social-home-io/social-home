@@ -29,16 +29,19 @@ _UNSET = object()
 
 
 class _FakeSupervisor:
-    """In-process :class:`SupervisorClient` substitute for tests."""
+    """In-process :class:`SupervisorClient` substitute for tests.
+
+    Only the discovery-push + addon-info shape lives here now; user
+    discovery moved to :class:`_FakeUsers` (mirroring the production
+    split where HA Core's WS is the single source of identity).
+    """
 
     def __init__(
         self,
         *,
-        owner_username: str | None = "ha_admin",
         fail_discovery: bool = False,
         self_info: AddonInfo | None = _UNSET,  # type: ignore[assignment]
     ) -> None:
-        self.owner_username = owner_username
         self.fail_discovery = fail_discovery
         # ``None`` here means "Supervisor said no" — the bootstrap
         # logs and skips the push instead of guessing.
@@ -47,15 +50,62 @@ class _FakeSupervisor:
         )
         self.pushed_payloads: list[dict] = []
 
-    async def get_owner_username(self) -> str | None:
-        return self.owner_username
-
     async def get_self_info(self) -> AddonInfo | None:
         return self.self_info
 
     async def push_discovery(self, payload: dict) -> bool:
         self.pushed_payloads.append(payload)
         return not self.fail_discovery
+
+
+class _FakeUsers:
+    """In-process :class:`HaUserDirectory` substitute for bootstrap tests.
+
+    Only the methods the bootstrap actually calls live here —
+    ``get_owner()``. Anything else would be dead weight.
+    """
+
+    def __init__(
+        self,
+        *,
+        owner_username: str | None = "ha_owner",
+        owner_display_name: str = "Social Home Test",
+        owner_external_id: str | None = "ha-id-stable",
+    ) -> None:
+        self._owner_username = owner_username
+        self._owner_display_name = owner_display_name
+        self._owner_external_id = owner_external_id
+
+    async def get_owner(self):
+        if self._owner_username is None:
+            return None
+        from socialhome.platform.adapter import ExternalUser
+
+        return ExternalUser(
+            username=self._owner_username,
+            display_name=self._owner_display_name,
+            picture_url=None,
+            is_admin=False,
+            email=None,
+            external_id=self._owner_external_id,
+        )
+
+
+def _make_bootstrap(
+    env,
+    *,
+    users: _FakeUsers | None = None,
+    supervisor: _FakeSupervisor | None = None,
+) -> HaBootstrap:
+    """Tiny factory so individual tests stay focused on what they
+    actually exercise — caller passes only the collaborator they
+    want non-default."""
+    return HaBootstrap(
+        db=env.db,
+        users=users or _FakeUsers(),
+        supervisor=supervisor or _FakeSupervisor(),
+        data_dir=env.data_dir,
+    )
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────
@@ -94,28 +144,52 @@ async def env(tmp_dir):
 
 async def test_provision_admin_idempotent(env):
     """Admin provisioned once; second call is a no-op (row count stays at 1)."""
-    bs = HaBootstrap(env.db, _FakeSupervisor(), env.data_dir)
+    bs = _make_bootstrap(env)
 
-    await bs._provision_admin("ha_owner")
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-1",
+    )
     row = await env.db.fetchone(
-        "SELECT user_id, is_admin FROM users WHERE username=?",
+        "SELECT user_id, is_admin, display_name, external_id, source"
+        " FROM users WHERE username=?",
         ("ha_owner",),
     )
     assert row is not None
     assert row["is_admin"] == 1
+    # ``display_name`` is now the HA "name" field, not the username
+    # (#297). The previous version fell back to username for both.
+    assert row["display_name"] == "HA Owner"
+    # ``external_id`` carries the HA user_id so downstream joins
+    # (picture lifter, future presence bridge) don't re-run the
+    # username→id lookup.
+    assert row["external_id"] == "ha-id-1"
+    assert row["source"] == "ha"
 
-    await bs._provision_admin("ha_owner")
+    # A subsequent call refreshes ``external_id`` (HA-side rotation)
+    # and re-asserts is_admin without inserting a second row.
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-2",
+    )
     count = await env.db.fetchval(
         "SELECT COUNT(*) FROM users WHERE username=?",
         ("ha_owner",),
         default=0,
     )
     assert count == 1
+    refreshed = await env.db.fetchone(
+        "SELECT external_id FROM users WHERE username=?",
+        ("ha_owner",),
+    )
+    assert refreshed["external_id"] == "ha-id-2"
 
 
 async def test_config_flag_helpers(env):
     """_is_done / _mark_done round-trip through instance_config."""
-    bs = HaBootstrap(env.db, _FakeSupervisor(), env.data_dir)
+    bs = _make_bootstrap(env)
 
     assert await bs._is_done() is False
     await bs._mark_done()
@@ -124,8 +198,12 @@ async def test_config_flag_helpers(env):
 
 async def test_generate_integration_token_writes_file(env):
     """Token is persisted in api_tokens and written to disk (mode 0600)."""
-    bs = HaBootstrap(env.db, _FakeSupervisor(), env.data_dir)
-    await bs._provision_admin("ha_owner")
+    bs = _make_bootstrap(env)
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-1",
+    )
 
     await bs._generate_integration_token("ha_owner")
 
@@ -159,17 +237,19 @@ async def test_generate_integration_token_writes_file(env):
 
 async def test_run_provisions_admin_and_pushes_discovery(env):
     """First boot provisions the owner, mints a token, pushes discovery."""
-    sv = _FakeSupervisor(owner_username="ha_admin")
-    bs = HaBootstrap(env.db, sv, env.data_dir)
+    sv = _FakeSupervisor()
+    users = _FakeUsers(owner_username="ha_admin", owner_display_name="HA Admin")
+    bs = _make_bootstrap(env, users=users, supervisor=sv)
 
     await bs.run()
 
-    # Admin provisioned
+    # Admin provisioned with the HA display name (not the username).
     row = await env.db.fetchone(
-        "SELECT is_admin FROM users WHERE username=?",
+        "SELECT is_admin, display_name FROM users WHERE username=?",
         ("ha_admin",),
     )
     assert row is not None and row["is_admin"] == 1
+    assert row["display_name"] == "HA Admin"
 
     # Token persisted
     tokens = await env.db.fetchall(
@@ -199,11 +279,12 @@ async def test_run_provisions_admin_and_pushes_discovery(env):
 
 async def test_run_is_idempotent(env):
     """Second run skips provisioning but still pushes discovery."""
-    sv = _FakeSupervisor(owner_username="ha_admin")
-    bs = HaBootstrap(env.db, sv, env.data_dir)
+    sv = _FakeSupervisor()
+    users = _FakeUsers(owner_username="ha_admin")
+    bs = _make_bootstrap(env, users=users, supervisor=sv)
     await bs.run()
     # Second time around: still pushes discovery, does not duplicate users.
-    await HaBootstrap(env.db, sv, env.data_dir).run()
+    await _make_bootstrap(env, users=users, supervisor=sv).run()
 
     assert await env.db.fetchval("SELECT COUNT(*) FROM users") == 1
     assert (
@@ -218,9 +299,13 @@ async def test_run_is_idempotent(env):
 
 
 async def test_run_no_owner_skips_provisioning(env):
-    """If supervisor returns no owner, bootstrap skips provisioning entirely."""
-    sv = _FakeSupervisor(owner_username=None)
-    bs = HaBootstrap(env.db, sv, env.data_dir)
+    """If the directory returns no owner, bootstrap skips provisioning entirely."""
+    sv = _FakeSupervisor()
+    bs = _make_bootstrap(
+        env,
+        users=_FakeUsers(owner_username=None),
+        supervisor=sv,
+    )
 
     await bs.run()
 
@@ -232,8 +317,8 @@ async def test_run_no_owner_skips_provisioning(env):
 
 async def test_run_discovery_failure_does_not_raise(env):
     """A discovery push failure is logged, not raised."""
-    sv = _FakeSupervisor(owner_username="ha_admin", fail_discovery=True)
-    bs = HaBootstrap(env.db, sv, env.data_dir)
+    sv = _FakeSupervisor(fail_discovery=True)
+    bs = _make_bootstrap(env, supervisor=sv)
     # Should complete without raising even though push_discovery reports failure.
     await bs.run()
     # Still provisioned the owner regardless.
@@ -242,8 +327,8 @@ async def test_run_discovery_failure_does_not_raise(env):
 
 async def test_run_discovery_skipped_when_token_file_missing(env):
     """With the bootstrap flag already set, if the token file is absent, discovery is skipped cleanly."""
-    sv = _FakeSupervisor(owner_username="ha_admin")
-    bs = HaBootstrap(env.db, sv, env.data_dir)
+    sv = _FakeSupervisor()
+    bs = _make_bootstrap(env, supervisor=sv)
     await bs._mark_done()
 
     await bs.run()
@@ -253,8 +338,8 @@ async def test_run_discovery_skipped_when_token_file_missing(env):
 async def test_run_discovery_skipped_when_self_info_unavailable(env):
     """If ``/addons/self/info`` returns no hostname/port we don't push
     a half-formed payload — the integration would fail at ``_validate``."""
-    sv = _FakeSupervisor(owner_username="ha_admin", self_info=None)
-    bs = HaBootstrap(env.db, sv, env.data_dir)
+    sv = _FakeSupervisor(self_info=None)
+    bs = _make_bootstrap(env, supervisor=sv)
     await bs.run()
     # Owner was still provisioned + token was minted — we just
     # didn't advertise it this boot. A later boot with a working

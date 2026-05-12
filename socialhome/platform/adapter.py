@@ -76,8 +76,16 @@ class InstanceConfig:
 class ExternalUser:
     """A user as seen by the platform layer.
 
-    In ha / haos mode this maps to a ``person.*`` entity; in standalone
-    mode it maps to a row in ``platform_users``.
+    In ha / haos mode this maps to an HA auth account (the WS
+    ``config/auth/list`` row); in standalone mode it maps to a row in
+    ``platform_users``.
+
+    ``external_id`` is the provider's stable identifier for the
+    account — the 32-hex HA ``user_id`` for ``source='ha'`` rows,
+    ``None`` for standalone — so SH can join back to provider-side
+    resources (HA ``person.*`` entities via ``attributes.user_id``,
+    future zone / device-tracker bridges) without re-running the
+    username → id lookup.
     """
 
     username: str
@@ -85,6 +93,7 @@ class ExternalUser:
     picture_url: str | None
     is_admin: bool
     email: str | None = None
+    external_id: str | None = None
 
 
 # ── Capability ───────────────────────────────────────────────────────────────

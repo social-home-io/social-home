@@ -38,7 +38,6 @@ from .providers import (
     HaPushProvider,
     HaSTTProvider,
     HaUserDirectory,
-    _state_to_user,
 )
 
 if TYPE_CHECKING:
@@ -56,6 +55,14 @@ class HaAdapter(PlatformAdapter):
     shared ``aiohttp.ClientSession`` is available on the app. Tests can
     bypass that by injecting a pre-built ``ha_client`` kwarg.
     """
+
+    # Narrow the protocol-typed ``users`` field on the base class to
+    # the HA-specific subtype so mypy lets us call ``get_owner`` /
+    # ``fetch_picture_bytes`` — both genuinely HA-only operations
+    # (owner is an HA concept, the picture join walks HA's
+    # ``person.*`` registry). The runtime assignment in
+    # ``__init__`` is the same ``HaUserDirectory`` instance.
+    users: HaUserDirectory
 
     __slots__ = (
         "_ha_url",
@@ -282,25 +289,13 @@ class HaAdapter(PlatformAdapter):
         self,
         username: str,
     ) -> bytes | None:
-        """Resolve + download the ``person.<username>`` ``entity_picture``.
+        """Delegate to :meth:`HaUserDirectory.fetch_picture_bytes`.
 
-        Returns the raw bytes so the caller (e.g.
-        :meth:`UserService.set_picture`) can re-run them through the
-        ImageProcessor pipeline. ``None`` when the person has no
-        picture or HA is unreachable.
+        The join (auth user → user_id → ``person.*``) lives on the
+        directory so the same logic serves both ``HaAdapter`` and
+        ``HaosAdapter`` without duplication.
         """
-        state = await self._client.get_state(f"person.{username}")
-        if state is None:
-            return None
-        attrs: dict = state.get("attributes", {}) or {}
-        entity_picture = attrs.get("entity_picture")
-        if not entity_picture:
-            return None
-        return await self._client.fetch_path_bytes(entity_picture)
-
-    # Module-level ``_state_to_user`` is the canonical helper; preserve
-    # the historical class-attribute access path.
-    _state_to_user = staticmethod(_state_to_user)
+        return await self.users.fetch_picture_bytes(username)
 
 
 # Back-compat alias — old call sites and tests still import the

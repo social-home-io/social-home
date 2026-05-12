@@ -3,8 +3,6 @@
 A thin wrapper for the Supervisor-only endpoints used by
 :class:`HaBootstrap` when Social Home runs as a HA add-on:
 
-* ``GET /auth/list``  — discover the HA owner account so we can provision
-  them as the initial Social Home admin.
 * ``GET /addons/self/info`` — read our own add-on metadata so the
   discovery payload can advertise a reachable ``host`` + ``port`` for
   the integration. The Supervisor rewrites underscores in the slug
@@ -14,8 +12,17 @@ A thin wrapper for the Supervisor-only endpoints used by
 * ``POST /discovery`` — register the add-on with HA's discovery integration
   so the official ``socialhome`` HA integration can pick us up automatically.
 
-The Supervisor sets ``SUPERVISOR_URL`` / ``SUPERVISOR_TOKEN`` in the add-on
-environment.
+User discovery (the owner account, the picker for the wizard, the
+ingress-header → identity resolution) goes through HA Core's WS
+``config/auth/list`` instead — see
+:meth:`socialhome.platform.ha.client.HaClient.list_auth_users`.
+The Supervisor's REST ``/auth/list`` was a second source of identity
+data with a strictly smaller payload (no ``id``, no
+``credentials``) and the same envelope; keeping it forked invited
+the kind of slug-vs-username gotchas issue #297 documents.
+
+The Supervisor sets ``SUPERVISOR_URL`` / ``SUPERVISOR_TOKEN`` in the
+add-on environment.
 """
 
 from __future__ import annotations
@@ -79,38 +86,6 @@ class SupervisorClient:
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
-
-    async def get_owner_username(self) -> str | None:
-        """Return the non-system HA owner, or ``None``.
-
-        Uses ``GET /auth/list``. The response envelope is
-        ``{"data": {"users": [...]}}`` as of HA 2024+; the older
-        ``{"users": [...]}`` shape is tolerated.
-        """
-        try:
-            async with self._session.get(
-                f"{self._base_url}/auth/list",
-                headers=self._headers(),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-        except aiohttp.ClientError as exc:
-            log.warning("supervisor: /auth/list failed: %s", exc)
-            return None
-
-        users = data.get("data", data).get("users", [])
-        owner = next(
-            (
-                u
-                for u in users
-                if u.get("is_owner") and not u.get("system_generated", False)
-            ),
-            None,
-        )
-        if not owner:
-            log.warning("supervisor: no owner found in /auth/list")
-            return None
-        return owner.get("username")
 
     async def get_self_info(self) -> AddonInfo | None:
         """Return ``GET /addons/self/info`` as a typed :class:`AddonInfo`,

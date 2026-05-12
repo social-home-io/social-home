@@ -100,11 +100,26 @@ CREATE TABLE IF NOT EXISTS users (
     -- HA Users admin panel; 'manual' rows come from standalone mode or
     -- explicit admin creates.
     source                     TEXT NOT NULL DEFAULT 'manual'
-                               CHECK(source IN ('manual','ha'))
+                               CHECK(source IN ('manual','ha')),
+    -- Stable identifier from the external auth provider that owns
+    -- this row, scoped by ``source``. Today: the 32-hex HA user id
+    -- (``config/auth/list[].id``) for ``source='ha'`` rows, NULL
+    -- for ``'manual'``. Stored so the picture lifter (and any
+    -- future presence / device-tracker bridge) can walk
+    -- ``person.attributes.user_id`` without a second WS round-trip
+    -- to resolve the auth username, and so SH identity survives
+    -- HA-side display-name renames that would otherwise change the
+    -- entity slug we used to key on (#297).
+    external_id                TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_user_id     ON users(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_source      ON users(source);
 CREATE INDEX IF NOT EXISTS idx_users_state       ON users(state);
+-- Reverse lookup for the picture lifter / presence bridge — given an
+-- HA user_id from ``person.attributes.user_id``, find the SH row.
+-- Partial so ``manual`` rows (NULL external_id) don't bloat the index.
+CREATE INDEX IF NOT EXISTS idx_users_external_id
+    ON users(source, external_id) WHERE external_id IS NOT NULL;
 
 -- ── Profile pictures (§23) ──────────────────────────────────────────────
 -- One row = one household-level profile picture. Bytes are the WebP
