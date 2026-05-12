@@ -10,7 +10,6 @@
  */
 import { signal } from '@preact/signals'
 import { api } from '@/api'
-import { apiUrl } from '@/baseUrl'
 import { token } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
 import { Button } from './Button'
@@ -40,7 +39,7 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
       if (!file) return
       busy.value = true
       try {
-        const res = await fetch(apiUrl(`/api/calendars/${calendarId}/import_ics`), {
+        const res = await fetch(`api/calendars/${calendarId}/import_ics`, {
           method: 'POST',
           headers: {
             'Content-Type': 'text/calendar',

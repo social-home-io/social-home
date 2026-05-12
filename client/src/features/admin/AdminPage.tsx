@@ -15,7 +15,6 @@ import { useEffect, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
-import { apiUrl } from '@/baseUrl'
 import { currentUser } from '@/store/auth'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
@@ -234,7 +233,7 @@ function MembersTab() {
       + 'JSON file containing their posts, comments, DMs, tasks, calendar\n'
       + 'events, and media references. Use responsibly (§GDPR).')) return
     try {
-      const resp = await fetch(apiUrl(`/api/users/${u.user_id}/export`), {
+      const resp = await fetch(`api/users/${u.user_id}/export`, {
         headers: {
           Authorization: `Bearer ${localStorage.getItem('sh-token') || ''}`,
         },
@@ -816,7 +815,7 @@ function BackupTab() {
     // Use a plain anchor so the browser streams the download via the
     // standard Bearer-auth flow. `api` wraps JSON; this endpoint
     // returns a gzip tarball.
-    fetch(apiUrl('/api/backup/export'), {
+    fetch('api/backup/export', {
       headers: {
         Authorization: `Bearer ${localStorage.getItem('sh-token') || ''}`,
       },
@@ -846,7 +845,7 @@ function BackupTab() {
     setImporting(true)
     try {
       const body = await file.arrayBuffer()
-      const resp = await fetch(apiUrl('/api/backup/import'), {
+      const resp = await fetch("api/backup/import", {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${localStorage.getItem('sh-token') || ''}`,

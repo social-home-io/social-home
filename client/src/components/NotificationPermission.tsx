@@ -14,7 +14,13 @@ const subscribing = signal(false)
 async function registerPushSubscription(): Promise<void> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js')
+    // Relative URL — resolves against ``document.baseURI`` so the SW
+    // is loaded from the ingress prefix (``/api/hassio_ingress/<token>/sw.js``)
+    // when behind HA Supervisor ingress, and from ``/sw.js`` otherwise.
+    // The default scope (the script's directory) follows along: the
+    // worker controls the add-on's URL space without leaking onto HA
+    // Core paths.
+    const registration = await navigator.serviceWorker.register('sw.js')
     await navigator.serviceWorker.ready
     const subscription = await registration.pushManager.subscribe({
       userVisibleOnly: true,

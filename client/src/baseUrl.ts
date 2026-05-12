@@ -31,34 +31,10 @@
  * doesn't change mid-session).
  */
 
-/** Trailing-slash-terminated absolute document base, e.g.
- *  ``"http://homeassistant.local:8123/api/hassio_ingress/abc/"`` or
- *  ``"http://localhost:7123/"``. Always ends in ``/``. */
-const DOCUMENT_BASE = new URL('./', document.baseURI).toString()
-
 /** Path portion of the document base with leading ``/`` and trailing
  *  ``/``, e.g. ``"/api/hassio_ingress/abc/"`` or ``"/"``. Used by
  *  the router to strip the prefix before matching. */
-export const basePath: string = new URL(DOCUMENT_BASE).pathname
-
-/** Build an absolute HTTP URL anchored on ``document.baseURI``.
- *
- *  Accepts both leading-``/`` paths (legacy callers) and bare
- *  segments. ``new URL`` would otherwise treat a leading-``/`` path
- *  as origin-rooted (ignoring the base), so strip it first. */
-export function apiUrl(path: string): string {
-  return new URL(path.replace(/^\/+/, ''), DOCUMENT_BASE).toString()
-}
-
-/** Build a ``ws://`` or ``wss://`` URL anchored on the document base.
- *
- *  ``new URL`` doesn't accept a ``ws://`` base, so we resolve against
- *  the HTTP base first, then rewrite the protocol. */
-export function wsUrl(path: string): string {
-  const u = new URL(path.replace(/^\/+/, ''), DOCUMENT_BASE)
-  u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-  return u.toString()
-}
+export const basePath: string = new URL('./', document.baseURI).pathname
 
 /** Strip ``basePath`` from a pathname for client-side router matching.
  *

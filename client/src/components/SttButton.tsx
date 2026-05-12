@@ -13,7 +13,6 @@
  */
 import { signal } from '@preact/signals'
 import { token } from '@/store/auth'
-import { wsUrl } from '@/baseUrl'
 
 const TARGET_SAMPLE_RATE = 16000
 
@@ -95,7 +94,10 @@ export function SttButton({ onText, language = 'en', disabled, className }: SttB
     })
 
     const tok = token.value ? `?token=${encodeURIComponent(token.value)}` : ''
-    const ws = new WebSocket(`${wsUrl('api/stt/stream')}${tok}`)
+    // Relative URL — resolves against ``document.baseURI`` so the
+    // ingress prefix is honoured. Modern browsers auto-convert
+    // ``http``/``https`` → ``ws``/``wss``.
+    const ws = new WebSocket(`api/stt/stream${tok}`)
     ws.binaryType = 'arraybuffer'
 
     active = { ws, ctx, stream, worklet, source }

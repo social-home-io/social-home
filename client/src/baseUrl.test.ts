@@ -5,33 +5,12 @@ import { describe, it, expect } from 'vitest'
 // directly; the prefixed path is exercised by the helpers'
 // own logic (``addBase`` / ``stripBase`` are pure functions that
 // don't read from ``document``).
-import { apiUrl, wsUrl, basePath, addBase, stripBase } from './baseUrl'
+import { basePath, addBase, stripBase } from './baseUrl'
 
 describe('baseUrl', () => {
   describe('basePath (no-prefix, JSDOM default)', () => {
     it('is /', () => {
       expect(basePath).toBe('/')
-    })
-  })
-
-  describe('apiUrl', () => {
-    it('anchors leading-/ paths to the document base', () => {
-      expect(apiUrl('/api/me')).toBe('http://localhost:3000/api/me')
-    })
-    it('also accepts bare segments', () => {
-      expect(apiUrl('api/me')).toBe('http://localhost:3000/api/me')
-    })
-    it('preserves query strings', () => {
-      expect(apiUrl('/api/me?x=1')).toBe('http://localhost:3000/api/me?x=1')
-    })
-  })
-
-  describe('wsUrl', () => {
-    it('rewrites http -> ws on the resolved URL', () => {
-      expect(wsUrl('/api/ws')).toBe('ws://localhost:3000/api/ws')
-    })
-    it('also accepts bare segments', () => {
-      expect(wsUrl('api/ws')).toBe('ws://localhost:3000/api/ws')
     })
   })
 

@@ -52,6 +52,25 @@ describe('renderMarkdown', () => {
     const html = renderMarkdown('Hello <iframe src="http://evil"></iframe>')
     expect(html).not.toContain('<iframe')
   })
+
+  it('strips the leading slash from /api/ image sources for ingress', () => {
+    // Server-rendered Page markdown can carry ``![](/api/media/<token>)``;
+    // an absolute path bypasses ``<base href>``, which under HA Supervisor
+    // ingress would 404 against HA Core's origin. The DOMPurify hook
+    // rewrites the slash off so the URL resolves relative to the document
+    // base — see ``markdown.ts``.
+    const html = renderMarkdown('![](/api/media/abc?token=x)')
+    expect(html).toContain('src="api/media/abc?token=x"')
+    expect(html).not.toContain('src="/api/media/')
+  })
+
+  it('leaves non-/api absolute URLs untouched', () => {
+    const html = renderMarkdown('[x](/feed)')
+    // ``/feed`` is a local nav link; the IngressLocationProvider's click
+    // interceptor handles the prefix at navigation time. Only ``/api/``
+    // bodies need the URL surgery (they hit ``fetch``, not the router).
+    expect(html).toContain('href="/feed"')
+  })
 })
 
 describe('extractHeadings', () => {

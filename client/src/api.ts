@@ -1,6 +1,12 @@
 import { token } from '@/store/auth'
 import { showToast } from '@/components/Toast'
-import { apiUrl } from '@/baseUrl'
+
+// Strip the leading ``/`` from a caller-supplied path so ``fetch``
+// resolves it against ``document.baseURI`` (which the backend sets to
+// the HA Supervisor ingress prefix when behind ingress, ``/``
+// otherwise). An absolute ``/api/me`` would resolve against the
+// document origin, bypassing ``<base href>`` and 404ing under ingress.
+const _rel = (p: string): string => p.replace(/^\/+/, '')
 
 /**
  * Error thrown by ``ApiClient`` for non-2xx responses. Carries the HTTP
@@ -58,7 +64,7 @@ class ApiClient {
   async get<T = any>(path: string, params?: Record<string, string>): Promise<T> {
     const url = params ? `${path}?${new URLSearchParams(params)}` : path
     const res = await this._handle(
-      await fetch(apiUrl(url), { headers: this.headers() }),
+      await fetch(_rel(url), { headers: this.headers() }),
       path,
     )
     return res.json()
@@ -66,7 +72,7 @@ class ApiClient {
 
   async post<T = any>(path: string, body?: unknown): Promise<T> {
     const res = await this._handle(
-      await fetch(apiUrl(path), {
+      await fetch(_rel(path), {
         method: 'POST', headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -77,7 +83,7 @@ class ApiClient {
 
   async put<T = any>(path: string, body?: unknown): Promise<T> {
     const res = await this._handle(
-      await fetch(apiUrl(path), {
+      await fetch(_rel(path), {
         method: 'PUT', headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -88,7 +94,7 @@ class ApiClient {
 
   async patch<T = any>(path: string, body?: unknown): Promise<T> {
     const res = await this._handle(
-      await fetch(apiUrl(path), {
+      await fetch(_rel(path), {
         method: 'PATCH', headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -99,7 +105,7 @@ class ApiClient {
 
   async delete(path: string): Promise<void> {
     await this._handle(
-      await fetch(apiUrl(path), { method: 'DELETE', headers: this.headers() }),
+      await fetch(_rel(path), { method: 'DELETE', headers: this.headers() }),
       path,
     )
   }
@@ -109,7 +115,7 @@ class ApiClient {
       ? { Authorization: `Bearer ${token.value}` }
       : {}
     const res = await this._handle(
-      await fetch(apiUrl(path), {
+      await fetch(_rel(path), {
         method: 'POST',
         headers,
         body,

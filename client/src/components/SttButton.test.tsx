@@ -87,7 +87,9 @@ describe('SttButton', () => {
     fireEvent.mouseDown(btn)
     await waitFor(() => expect(FakeWebSocket.instances.length).toBe(1))
     const ws = FakeWebSocket.instances[0]
-    expect(ws.url).toContain('/api/stt/stream')
+    // Relative URL — modern browsers resolve it against the document
+    // base (and auto-rewrite ``http``/``https`` → ``ws``/``wss``).
+    expect(ws.url).toContain('api/stt/stream')
 
     await waitFor(() => {
       const starts = ws.sent.filter(s => typeof s === 'string') as string[]

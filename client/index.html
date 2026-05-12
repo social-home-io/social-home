@@ -20,6 +20,12 @@
   <meta name="theme-color" content="#161821" media="(prefers-color-scheme: dark)" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- Relative href so the browser resolves it against ``<base href>`` — under
+       HA Supervisor ingress the manifest comes from
+       ``/api/hassio_ingress/<token>/manifest.json`` rather than HA Core's
+       ``/manifest.json``. ``start_url`` / ``scope`` inside the manifest are
+       likewise relative, so they pick up the same ingress prefix. -->
+  <link rel="manifest" href="manifest.json" />
   <title>Social Home</title>
   <!--
     Pre-paint theme bootstrap. Runs synchronously before any module

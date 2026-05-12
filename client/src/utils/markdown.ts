@@ -27,6 +27,28 @@ marked.use({
   pedantic:  false,
 })
 
+// Strip the leading ``/`` from ``src`` / ``href`` attributes that
+// point at one of our own ``/api/...`` paths so the browser resolves
+// them against ``<base href>`` instead of the origin. Under HA
+// Supervisor ingress the document base is
+// ``/api/hassio_ingress/<token>/`` and an absolute ``/api/media/foo``
+// would bypass it entirely (HTML resolves leading-``/`` against the
+// **origin**, not the base) — every embedded image in a Page body
+// would 404. Stripping the slash makes it ``api/media/foo``, which
+// resolves correctly under any deployment shape (standalone +
+// ingress + Vite dev). Registered once at module load; DOMPurify
+// hooks are global so this runs for every ``DOMPurify.sanitize``
+// call across the app, which is what we want.
+DOMPurify.addHook('uponSanitizeAttribute', (_node, data) => {
+  if (
+    (data.attrName === 'src' || data.attrName === 'href') &&
+    typeof data.attrValue === 'string' &&
+    data.attrValue.startsWith('/api/')
+  ) {
+    data.attrValue = data.attrValue.slice(1)
+  }
+})
+
 const WIKILINK_RE = /\[\[([^\]|]+)\]\]/g
 
 const ALLOWED_TAGS = [
@@ -65,7 +87,10 @@ export function renderMarkdown(src: string): string {
   return DOMPurify.sanitize(rawHtml, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
-    ALLOWED_URI_REGEXP: /^(?:https?|mailto|\/|#)/i,
+    // ``api/`` is permitted after the ``uponSanitizeAttribute`` hook
+    // above rewrites ``/api/...`` → ``api/...`` for ingress-correctness;
+    // without it DOMPurify rejects the relative URL and drops the img.
+    ALLOWED_URI_REGEXP: /^(?:https?|mailto|\/|#|api\/)/i,
     FORBID_TAGS:      ['style', 'script', 'iframe', 'object', 'embed'],
     FORBID_ATTR:      ['style', 'onerror', 'onload', 'onclick'],
     USE_PROFILES:     { html: true },
