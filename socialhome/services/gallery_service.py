@@ -402,10 +402,10 @@ class GalleryService:
             thumb_bytes = await proc.generate_thumbnail(out_bytes)
             thumb_name = f"{uuid.uuid4().hex}.webp"
             self._save_to_disk(thumb_name, thumb_bytes)
-            thumbnail_url = f"/api/media/{thumb_name}"
+            thumbnail_url = f"api/media/{thumb_name}"
         except ValueError as exc:
             log.warning("gallery: photo thumbnail failed, using primary: %s", exc)
-            thumbnail_url = f"/api/media/{out_name}"
+            thumbnail_url = f"api/media/{out_name}"
 
         w, h = self._read_dims(self._media_dir / out_name)
         return GalleryItem(
@@ -413,7 +413,7 @@ class GalleryService:
             album_id=album_id,
             uploaded_by=uploader_user_id,
             item_type="photo",
-            url=f"/api/media/{out_name}",
+            url=f"api/media/{out_name}",
             thumbnail_url=thumbnail_url,
             width=w,
             height=h,
@@ -450,8 +450,8 @@ class GalleryService:
             album_id=album_id,
             uploaded_by=uploader_user_id,
             item_type="video",
-            url=f"/api/media/{out_name}",
-            thumbnail_url=f"/api/media/{thumb_name}",
+            url=f"api/media/{out_name}",
+            thumbnail_url=f"api/media/{thumb_name}",
             width=VIDEO_MAX_DIMENSION,
             height=int(VIDEO_MAX_DIMENSION * 9 / 16),
             duration_s=None,

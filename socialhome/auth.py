@@ -81,6 +81,14 @@ _DEFAULT_PUBLIC_PATHS: tuple[str, ...] = (
 _DEFAULT_PUBLIC_PATH_PATTERNS: tuple[str, ...] = (
     r"^/api/spaces/[^/]+/calendar/export\.ics$",
     r"^/$",
+    # SPA catchall — any non-``/api``, non-``/healthz``,
+    # non-``/federation``, non-``/.well-known``, non-``/assets``,
+    # non-``/manifest.json``, non-``/sw.js`` path is owned by the
+    # SPA and renders ``index.html`` (see ``routes.spa.SpaCatchallView``).
+    # ``/{name}.{ext}`` paths the SPA might own — e.g. a hypothetical
+    # ``/robots.txt`` — are intentionally NOT matched so a missing
+    # asset surfaces as 404 instead of an HTML shell.
+    r"^/(?!api/|healthz$|federation/|\.well-known/|assets/|manifest\.json$|sw\.js$)[^.]+$",
 )
 
 

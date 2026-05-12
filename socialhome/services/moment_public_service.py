@@ -375,7 +375,7 @@ def _picture_url(user) -> str | None:
     pic_hash = getattr(user, "picture_hash", None)
     user_id = getattr(user, "user_id", None)
     if pic_hash and user_id:
-        return f"/api/users/{user_id}/picture?v={pic_hash}"
+        return f"api/users/{user_id}/picture?v={pic_hash}"
     return None
 
 

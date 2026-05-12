@@ -150,7 +150,7 @@ async def test_create_then_get_item(env):
     got = await repo.get_item("it-1")
     assert got is not None
     assert got.album_id == "alb-1"
-    assert got.url.startswith("/api/media/")
+    assert got.url.startswith("api/media/")
 
 
 async def test_list_items_orders_by_sort_then_created(env):
@@ -184,7 +184,7 @@ async def test_get_first_item_thumbnail(env):
     await repo.create_item(_item("it-1"))
     url = await repo.get_first_item_thumbnail("alb-1")
     assert url is not None
-    assert url.startswith("/api/media/")
+    assert url.startswith("api/media/")
 
 
 async def test_get_first_item_thumbnail_empty_album(env):

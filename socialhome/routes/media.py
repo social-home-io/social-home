@@ -145,7 +145,7 @@ class MediaUploadView(BaseView):
         dest = media_dir / out_name
         dest.write_bytes(out_bytes)
 
-        url = f"/api/media/{out_name}"
+        url = f"api/media/{out_name}"
         # The composer needs a URL it can drop straight into ``<img src>``
         # for the local preview — that requires the short-lived
         # signature. We return both forms: ``url`` is the canonical one

@@ -99,7 +99,7 @@ class CalendarInviteesView(BaseView):
                             "display_name": m.display_name,
                             "picture_hash": m.picture_hash,
                             "picture_url": (
-                                f"/api/users/{m.user_id}/picture?v={m.picture_hash}"
+                                f"api/users/{m.user_id}/picture?v={m.picture_hash}"
                                 if m.picture_hash
                                 else None
                             ),

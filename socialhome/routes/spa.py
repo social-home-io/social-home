@@ -144,6 +144,29 @@ class SpaServiceWorkerView(_SpaFileView):
     _extra_headers = {"Service-Worker-Allowed": "/"}  # noqa: RUF012
 
 
+class SpaCatchallView(SpaIndexView):
+    """Serves the SPA shell for any non-``/api/`` GET path.
+
+    Without this, refreshing the browser on a deep URL (``/feed``,
+    ``/spaces/abc``, etc.) — including the prefixed-form
+    ``/api/hassio_ingress/<token>/feed`` that HA Ingress proxies as
+    ``GET /feed`` on the add-on side — returns 404. The SPA's own
+    ``preact-iso`` router can't claim a path the backend doesn't
+    serve, so the standard "single-page-app fallback" pattern is to
+    serve the shell for every unmatched path and let the client
+    router pick the right view.
+
+    ``/api/`` and friends are protected because the catchall is
+    registered **last**, after every concrete route. Anything matched
+    by an earlier handler (``SpaIndexView`` at ``/``, ``/manifest.json``,
+    ``/sw.js``, ``/assets/{file}``, every ``/api/...``) is served by
+    that handler; everything else falls through to here and gets the
+    SPA shell. The auth middleware's public-path list mirrors this
+    exclusion set (see ``_DEFAULT_PUBLIC_PATH_PATTERNS`` in
+    ``socialhome/auth.py``) so the catchall stays unauthenticated.
+    """
+
+
 def mount_spa(app: web.Application, static_dir: Path | None = None) -> bool:
     """Wire SPA routes onto ``app``.
 
@@ -180,6 +203,10 @@ def mount_spa(app: web.Application, static_dir: Path | None = None) -> bool:
     app.router.add_view("/manifest.json", SpaManifestView)
     app.router.add_view("/sw.js", SpaServiceWorkerView)
     app.router.add_view("/", SpaIndexView)
+    # Registered LAST so every more-specific route (``/api/...``,
+    # ``/healthz``, ``/manifest.json``, ``/sw.js``, ``/assets/...``,
+    # ``/``) wins over the catchall.
+    app.router.add_view("/{tail:.+}", SpaCatchallView)
 
     log.info("SPA bundle mounted from %s", static_dir)
     return True

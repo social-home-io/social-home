@@ -77,12 +77,20 @@ class MediaUrlSigner:
         Existing query params are preserved. ``path`` may already carry
         a query string (e.g. ``/api/users/{id}/picture?v=<hash>``); the
         signature covers only the path portion before ``?``.
+
+        Accepts both leading-slash (``/api/...``, legacy + request-side
+        canonical) and bare (``api/...``, ingress-safe relative form
+        the SPA renders from) inputs. The HMAC is computed on the
+        leading-slash form regardless so a URL signed in the relative
+        form still verifies on the server, where ``request.path``
+        always has the slash.
         """
         if now is None:
             now = int(time.time())
         exp = now + int(ttl)
         canonical = path.split("?", 1)[0]
-        sig = self._compute(canonical, exp)
+        hmac_path = canonical if canonical.startswith("/") else "/" + canonical
+        sig = self._compute(hmac_path, exp)
         sep = "&" if "?" in path else "?"
         return f"{path}{sep}exp={exp}&sig={sig}"
 
@@ -167,17 +175,19 @@ def sign_media_urls_in(
     so HA-served avatars or federation URLs don't get corrupted.
     """
     fields = _SIGNABLE_URL_FIELDS | frozenset(extra_fields)
+
+    def _is_our_url(u: object) -> bool:
+        # Both forms are legitimate inputs: ``/api/...`` is the legacy /
+        # request-side canonical, ``api/...`` is the ingress-safe relative
+        # form emitted by ``_picture_url`` and the gallery URL helpers.
+        return isinstance(u, str) and (u.startswith("/api/") or u.startswith("api/"))
+
     if isinstance(payload, dict):
         for k, v in payload.items():
-            if k in fields and isinstance(v, str) and v.startswith("/api/"):
+            if k in fields and _is_our_url(v):
                 payload[k] = signer.sign(v)
             elif k in _SIGNABLE_URL_LIST_FIELDS and isinstance(v, list):
-                payload[k] = [
-                    signer.sign(u)
-                    if isinstance(u, str) and u.startswith("/api/")
-                    else u
-                    for u in v
-                ]
+                payload[k] = [signer.sign(u) if _is_our_url(u) else u for u in v]
             else:
                 sign_media_urls_in(v, signer, extra_fields=extra_fields)
     elif isinstance(payload, list):
@@ -193,7 +203,11 @@ def sign_media_urls_in(
 #: ``?exp=&sig=…`` (or other query) attached to the URL is captured
 #: too so the rewriter can replace it cleanly.
 _BODY_MEDIA_RE = re.compile(
-    r"/api/media/[A-Za-z0-9._-]+(?:\?[^)\s\"'<>]*)?",
+    # Match both leading-slash (legacy + user-pasted) and bare
+    # (new — relative for ingress-safe ``<base href>`` resolution)
+    # forms. The leading ``/`` is optional so authoring tools that
+    # paste a canonical URL still sign correctly.
+    r"/?api/media/[A-Za-z0-9._-]+(?:\?[^)\s\"'<>]*)?",
 )
 
 

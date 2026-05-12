@@ -415,7 +415,7 @@ class RealtimeService:
         ``picture_url`` directly so they don't have to know the
         signing scheme)."""
         picture_url = (
-            f"/api/users/{event.user_id}/picture?v={event.picture_hash}"
+            f"api/users/{event.user_id}/picture?v={event.picture_hash}"
             if event.picture_hash
             else None
         )

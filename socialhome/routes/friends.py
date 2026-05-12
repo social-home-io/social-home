@@ -52,7 +52,7 @@ def _local_user_to_dict(u, *, online_svc=None) -> dict:
         "display_name": u.display_name,
         "picture_hash": u.picture_hash,
         "picture_url": (
-            f"/api/users/{u.user_id}/picture?v={u.picture_hash}"
+            f"api/users/{u.user_id}/picture?v={u.picture_hash}"
             if u.picture_hash
             else None
         ),
@@ -73,7 +73,7 @@ def _remote_user_to_dict(ru) -> dict:
         "display_name": ru.display_name,
         "picture_hash": ru.picture_hash,
         "picture_url": (
-            f"/api/users/{ru.user_id}/picture?v={ru.picture_hash}"
+            f"api/users/{ru.user_id}/picture?v={ru.picture_hash}"
             if ru.picture_hash
             else None
         ),

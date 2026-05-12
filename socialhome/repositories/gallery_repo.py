@@ -208,8 +208,8 @@ class SqliteGalleryRepo:
             album_id=r["album_id"],
             uploaded_by=r["uploaded_by"],
             item_type=r["item_type"],
-            url=f"/api/media/{r['filename']}",
-            thumbnail_url=f"/api/media/{r['thumbnail_filename']}",
+            url=f"api/media/{r['filename']}",
+            thumbnail_url=f"api/media/{r['thumbnail_filename']}",
             width=int(r["width"]),
             height=int(r["height"]),
             duration_s=r.get("duration_s"),
@@ -380,4 +380,4 @@ class SqliteGalleryRepo:
             "ORDER BY sort_order, created_at LIMIT 1",
             (album_id,),
         )
-        return f"/api/media/{row['thumbnail_filename']}" if row else None
+        return f"api/media/{row['thumbnail_filename']}" if row else None

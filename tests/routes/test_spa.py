@@ -110,17 +110,17 @@ async def test_healthz_not_shadowed_by_spa(spa_client):
     assert body["status"] == "ok"
 
 
-async def test_unknown_top_level_path_not_served_by_spa(spa_client):
-    """No catchall — ``/feed`` is not served as HTML.
-
-    Without a token the auth middleware 401s before routing (``/feed``
-    isn't in the public-paths list). With a token it would 404 — what
-    we care about is that the SPA mount didn't grow a fallback that
-    turns every URL into ``index.html``.
-    """
+async def test_unknown_top_level_path_served_as_spa_shell(spa_client):
+    """SPA catchall: any non-``/api/`` GET serves ``index.html`` so a
+    hard refresh on a deep URL (``/feed``, ``/spaces/abc``, the
+    ingress-prefixed ``/api/hassio_ingress/<token>/feed`` after HA
+    Core strips the prefix) renders the SPA shell instead of 404.
+    ``preact-iso`` then picks the right view client-side."""
     resp = await spa_client.get("/feed")
-    assert resp.status in (401, 404)
-    assert resp.content_type != "text/html"
+    assert resp.status == 200
+    assert resp.content_type == "text/html"
+    body = await resp.text()
+    assert "<title>spa</title>" in body
 
 
 # ── Missing-build fallback ────────────────────────────────────────────────

@@ -52,9 +52,7 @@ class AbstractPresenceRepo(Protocol):
 def _to_presence(row) -> PersonPresence:
     picture_hash = row["picture_hash"]
     picture_url = (
-        f"/api/users/{row['user_id']}/picture?v={picture_hash}"
-        if picture_hash
-        else None
+        f"api/users/{row['user_id']}/picture?v={picture_hash}" if picture_hash else None
     )
     return PersonPresence(
         username=row["username"],
