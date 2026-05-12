@@ -38,8 +38,9 @@ async def test_upload_raw_png_creates_item(client):
     assert r.status == 201
     body = await r.json()
     assert body["item_type"] == "photo"
-    assert body["url"].startswith("/api/media/")
-    assert body["thumbnail_url"].startswith("/api/media/")
+    # Server-emitted URLs are relative — see PR #291 (ingress).
+    assert body["url"].startswith("api/media/")
+    assert body["thumbnail_url"].startswith("api/media/")
 
 
 async def test_upload_with_caption_query_param(client):

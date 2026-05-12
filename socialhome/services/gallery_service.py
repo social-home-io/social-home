@@ -585,13 +585,22 @@ class GalleryService:
         / SpacePostCreated. Idempotent: an edit that doesn't change the
         media URLs is a no-op (skips churning rows + events).
         """
+
         # Only image / video posts contribute media. Text, file, and
-        # poll posts skip this path entirely.
+        # poll posts skip this path entirely. Normalise the URL form for
+        # the diff below: the repo always reconstructs items as
+        # ``api/media/{filename}`` (no leading slash); a post carrying
+        # ``/api/media/{filename}`` from a legacy code path would
+        # otherwise look "different" and churn the system album on a
+        # plain text edit.
+        def _normalise(u: str) -> str:
+            return u[1:] if u.startswith("/api/") else u
+
         urls: list[tuple[str, str]] = []  # [(url, item_type), ...]
         if post.type is PostType.IMAGE:
-            urls = [(u, "photo") for u in post.image_urls if u]
+            urls = [(_normalise(u), "photo") for u in post.image_urls if u]
         elif post.type is PostType.VIDEO and post.media_url:
-            urls = [(post.media_url, "video")]
+            urls = [(_normalise(post.media_url), "video")]
         if not urls:
             # Either text-only post or a previously-image post that
             # had its media stripped on edit. Drop any orphans.

@@ -236,8 +236,9 @@ async def test_upload_photo_full_pipeline(env):
         uploader_user_id="a-id",
     )
     assert item.item_type == "photo"
-    assert item.url.startswith("/api/media/")
-    assert item.thumbnail_url.startswith("/api/media/")
+    # Server-emitted URLs are relative — see PR #291 (ingress).
+    assert item.url.startswith("api/media/")
+    assert item.thumbnail_url.startswith("api/media/")
     refreshed = await repo.get_album(a.id)
     assert refreshed.item_count == 1
 
@@ -352,7 +353,7 @@ async def test_get_album_resolves_cover_from_explicit_item(env):
     )
     got = await svc.get_album(a.id, actor_user_id="a-id")
     assert got.cover_url is not None
-    assert got.cover_url.startswith("/api/media/")
+    assert got.cover_url.startswith("api/media/")
 
 
 async def test_get_album_falls_back_to_first_item_thumbnail(env):
