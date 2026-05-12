@@ -488,8 +488,8 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 | DELETE / PATCH | `/api/moments/public/registrations/{gfs_id}` | Deregister / flip `default_share`. |
 | GET / POST | `/api/moments/public/follows` | List / follow public author. |
 | DELETE | `/api/moments/public/follows/{gfs_id}/{user_id}` | Unfollow. |
-| GET | `/api/gfs/{gfs_id}/users` | Proxy GFS directory; passes `?q=<substr>` through. |
-| GET | `/api/gfs/{gfs_id}/users/{user_id}/picture` | Proxy GFS-mirrored avatar bytes (used by Discover cards). |
+| GET | `/api/gfs/{gfs_id}/moments/users` | Proxy GFS directory; passes `?q=<substr>` through. |
+| GET | `/api/gfs/{gfs_id}/moments/users/{user_id}/picture` | Proxy GFS-mirrored avatar bytes (used by Discover cards). |
 
 ## HFS — Child protection
 
@@ -593,14 +593,14 @@ Bearer auth (the integration holds the auto-provisioned token).
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/gfs/users/register` | Opt a user into the public directory. Body carries `username`, `display_name`, `bio` (≤280 chars), `picture_url`, `home_instance_pk`. |
-| POST | `/gfs/users/{user_id}/deregister` | Pull a registration. |
-| POST | `/gfs/users/{user_id}/picture` | Push avatar bytes (signed; `mime` ∈ `image/{jpeg,png,webp}`, ≤256 KiB, base64-encoded). Idempotent on `digest`. |
-| POST | `/gfs/users/{user_id}/follow` | Record a follower. Returns the followed user's directory entry incl. `home_instance_pk`. |
-| POST | `/gfs/users/{user_id}/unfollow` | Drop a follower. |
-| GET | `/gfs/users` | JSON directory; `?q=<substr>` filters `display_name`/`username` (`LIKE '%q%'`), `?limit=` caps at 200. |
-| GET | `/gfs/users/{user_id}` | Single-user JSON detail incl. `follower_count`. |
-| GET | `/gfs/users/{user_id}/picture` | Anon avatar fetch with `Cache-Control: public, max-age=86400, immutable` and ETag = digest. |
+| POST | `/gfs/moments/users/register` | Opt a user into the public directory. Body carries `username`, `display_name`, `bio` (≤280 chars), `picture_url`, `home_instance_pk`. |
+| POST | `/gfs/moments/users/{user_id}/deregister` | Pull a registration. |
+| POST | `/gfs/moments/users/{user_id}/picture` | Push avatar bytes (signed; `mime` ∈ `image/{jpeg,png,webp}`, ≤256 KiB, base64-encoded). Idempotent on `digest`. |
+| POST | `/gfs/moments/users/{user_id}/follow` | Record a follower. Returns the followed user's directory entry incl. `home_instance_pk`. |
+| POST | `/gfs/moments/users/{user_id}/unfollow` | Drop a follower. |
+| GET | `/gfs/moments/users` | JSON directory; `?q=<substr>` filters `display_name`/`username` (`LIKE '%q%'`), `?limit=` caps at 200. |
+| GET | `/gfs/moments/users/{user_id}` | Single-user JSON detail incl. `follower_count`. |
+| GET | `/gfs/moments/users/{user_id}/picture` | Anon avatar fetch with `Cache-Control: public, max-age=86400, immutable` and ETag = digest. |
 
 ## GFS — Push WebSocket (GFS → SH)
 
@@ -671,7 +671,7 @@ sync. The GFS holds no PeerConnection.
 | GET | `/` | Operator landing page. |
 | GET | `/spaces/{slug}` | Public space detail. |
 | GET | `/join/{gfs_token}` | Landing page for an invitation link. |
-| GET | `/moments` | Public-Momentum directory (SPA shell). Loads `/static/users_directory.js`, which fetches `GET /gfs/users` and renders cards + search. |
+| GET | `/moments` | Public-Momentum directory (SPA shell). Loads `/static/users_directory.js`, which fetches `GET /gfs/moments/users` and renders cards + search. |
 | GET | `/moments/{user_id}` | Per-user landing — avatar + display_name + bio + follower count + "Follow on your Social Home" deeplink. |
 
 These pages are server-rendered HTML and require no auth.

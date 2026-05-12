@@ -18,7 +18,7 @@ Routes:
 * ``POST   /api/moments/public/follows`` — body
   ``{gfs_id, followed_user_id}``; signs + posts to the GFS.
 * ``DELETE /api/moments/public/follows/{gfs_id}/{user_id}``.
-* ``GET    /api/gfs/{gfs_id}/users`` — proxy the GFS directory.
+* ``GET    /api/gfs/{gfs_id}/moments/users`` — proxy the GFS directory.
 """
 
 from __future__ import annotations

@@ -69,13 +69,16 @@ verifies the author's signature directly.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST   | `/gfs/users/register` | Signed body — register a user. |
-| POST   | `/gfs/users/{user_id}/deregister` | Signed body — drop a registration. |
-| POST   | `/gfs/users/{user_id}/follow` | Signed body — record a follower. |
-| POST   | `/gfs/users/{user_id}/unfollow` | Signed body — drop a follower. |
+| POST   | `/gfs/moments/users/register` | Signed body — register a user. |
+| POST   | `/gfs/moments/users/{user_id}/deregister` | Signed body — drop a registration. |
+| POST   | `/gfs/moments/users/{user_id}/follow` | Signed body — record a follower. |
+| POST   | `/gfs/moments/users/{user_id}/unfollow` | Signed body — drop a follower. |
+| POST   | `/gfs/moments/users/{user_id}/picture` | Signed body — push avatar bytes. |
 | POST   | `/gfs/moments/publish` | Signed envelope — fan out to followers. |
 | POST   | `/gfs/moments/delete` | Signed tombstone — fan out the delete. |
-| GET    | `/gfs/users` | Public JSON directory. |
+| GET    | `/gfs/moments/users` | Public JSON directory. |
+| GET    | `/gfs/moments/users/{user_id}` | Public JSON per-user detail. |
+| GET    | `/gfs/moments/users/{user_id}/picture` | Public avatar bytes. |
 | GET    | `/moments` | Public HTML directory. |
 | GET    | `/moments/{user_id}` | Per-user public HTML landing. |
 
@@ -90,7 +93,7 @@ verifies the author's signature directly.
 | GET    | `/api/moments/public/follows` | Caller's GFS follows. |
 | POST   | `/api/moments/public/follows` | Follow another author. |
 | DELETE | `/api/moments/public/follows/{gfs_id}/{user_id}` | Unfollow. |
-| GET    | `/api/gfs/{gfs_id}/users` | Proxy the GFS directory. |
+| GET    | `/api/gfs/{gfs_id}/moments/users` | Proxy the GFS directory. |
 
 ## Sequence: discover + follow
 
@@ -100,9 +103,9 @@ sequenceDiagram
   participant G as GFS
   participant A as Author SH
 
-  B->>G: GET /gfs/users (anonymous)
+  B->>G: GET /gfs/moments/users (anonymous)
   G-->>B: directory listing (incl. home_instance_pk per user)
-  B->>G: POST /gfs/users/{user_id}/follow (signed by B's instance)
+  B->>G: POST /gfs/moments/users/{user_id}/follow (signed by B's instance)
   G->>G: persist gfs_moment_follows row
   G->>B: response carries the author's directory entry
   B->>B: cache row in moment_public_follows (with home_instance_pk)
@@ -204,17 +207,17 @@ identical bytes-for-bytes to the sender's canonical encoding.
 
 * **Anon landing** at `/moments` (SPA shell) and `/moments/{user_id}`
   (per-user detail) — both rendered by the GFS itself; the JS at
-  `/static/users_directory.js` fetches `GET /gfs/users` and renders
-  cards with avatar + name + bio + handle.
-* **Per-user detail JSON** at `GET /gfs/users/{user_id}` — adds
-  `follower_count` to the registration shape so the detail page
-  can show social proof.
-* **Server-side filter** `GET /gfs/users?q=<substr>` matches
+  `/static/users_directory.js` fetches `GET /gfs/moments/users` and
+  renders cards with avatar + name + bio + handle.
+* **Per-user detail JSON** at `GET /gfs/moments/users/{user_id}` —
+  adds `follower_count` to the registration shape so the detail
+  page can show social proof.
+* **Server-side filter** `GET /gfs/moments/users?q=<substr>` matches
   `display_name` and `username` (`LIKE '%q%'`). Capped at 200
   rows; the SH-side proxy passes `q` through.
 * **In-app Discover** at `/momentum/public/discover` — fetches
-  `GET /api/gfs/{gfs_id}/users` (SH proxy), rendering avatar via
-  `GET /api/gfs/{gfs_id}/users/{user_id}/picture` so the UI
+  `GET /api/gfs/{gfs_id}/moments/users` (SH proxy), rendering avatar
+  via `GET /api/gfs/{gfs_id}/moments/users/{user_id}/picture` so the UI
   renders even when the home instance is NAT-shielded.
 * **Profile sync** — `UserProfileUpdated` (published from
   `UserService.patch_profile` and `set_picture`) is consumed by

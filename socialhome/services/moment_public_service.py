@@ -106,7 +106,7 @@ class MomentPublicService:
         signed = self._sign_body(body)
         try:
             async with self._client().post(
-                f"{conn.inbox_url}/gfs/users/register",
+                f"{conn.inbox_url}/gfs/moments/users/register",
                 json=signed,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
@@ -144,7 +144,7 @@ class MomentPublicService:
         signed = self._sign_body(body)
         try:
             async with self._client().post(
-                f"{conn.inbox_url}/gfs/users/{user_id}/deregister",
+                f"{conn.inbox_url}/gfs/moments/users/{user_id}/deregister",
                 json=signed,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
@@ -193,7 +193,7 @@ class MomentPublicService:
         signed = self._sign_body(body)
         try:
             async with self._client().post(
-                f"{conn.inbox_url}/gfs/users/{followed_user_id}/follow",
+                f"{conn.inbox_url}/gfs/moments/users/{followed_user_id}/follow",
                 json=signed,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
@@ -230,7 +230,7 @@ class MomentPublicService:
         signed = self._sign_body(body)
         try:
             async with self._client().post(
-                f"{conn.inbox_url}/gfs/users/{followed_user_id}/unfollow",
+                f"{conn.inbox_url}/gfs/moments/users/{followed_user_id}/unfollow",
                 json=signed,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
@@ -258,7 +258,7 @@ class MomentPublicService:
         don't ship in full.
         """
         conn = await self._require_active_gfs(gfs_id)
-        url = f"{conn.inbox_url}/gfs/users"
+        url = f"{conn.inbox_url}/gfs/moments/users"
         if q:
             url = f"{url}?q={q}"
         try:
@@ -291,7 +291,7 @@ class MomentPublicService:
         conn = await self._require_active_gfs(gfs_id)
         try:
             async with self._client().get(
-                f"{conn.inbox_url}/gfs/users/{user_id}/picture",
+                f"{conn.inbox_url}/gfs/moments/users/{user_id}/picture",
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status == 404:
@@ -325,7 +325,7 @@ class MomentPublicService:
         signed = self._sign_body(body)
         try:
             async with self._client().post(
-                f"{conn.inbox_url}/gfs/users/{user_id}/picture",
+                f"{conn.inbox_url}/gfs/moments/users/{user_id}/picture",
                 json=signed,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:

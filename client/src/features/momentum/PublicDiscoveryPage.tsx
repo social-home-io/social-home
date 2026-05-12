@@ -192,7 +192,7 @@ function discoveryAvatarUrl(u: MomentPublicDirectoryUser): string | null {
   if (u.picture_digest) {
     const gfs = selectedGfs.value
     if (gfs) {
-      return `/api/gfs/${encodeURIComponent(gfs)}/users/${encodeURIComponent(
+      return `/api/gfs/${encodeURIComponent(gfs)}/moments/users/${encodeURIComponent(
         u.user_id,
       )}/picture?v=${encodeURIComponent(u.picture_digest)}`
     }
