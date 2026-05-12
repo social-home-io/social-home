@@ -205,6 +205,8 @@ from .shopping import (
     ShoppingItemCompleteView,
     ShoppingItemDetailView,
     ShoppingItemUncompleteView,
+    ShoppingStoresOrderView,
+    ShoppingStoresView,
 )
 from .bot_bridge import (
     BotBridgeConversationPostView,
@@ -589,7 +591,12 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
 
     # ── Shopping ────────────────────────────────────────────────────────
     app.router.add_view("/api/shopping", ShoppingCollectionView)
+    # ``stores`` is a literal segment — register before ``{id}`` so
+    # aiohttp doesn't match it as a UUID. ``clear-completed`` already
+    # follows the same rule.
     app.router.add_view("/api/shopping/clear-completed", ShoppingClearCompletedView)
+    app.router.add_view("/api/shopping/stores", ShoppingStoresView)
+    app.router.add_view("/api/shopping/stores/order", ShoppingStoresOrderView)
     app.router.add_view("/api/shopping/{id}", ShoppingItemDetailView)
     app.router.add_view("/api/shopping/{id}/complete", ShoppingItemCompleteView)
     app.router.add_view("/api/shopping/{id}/uncomplete", ShoppingItemUncompleteView)

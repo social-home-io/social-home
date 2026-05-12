@@ -305,9 +305,21 @@ Same CRUD shape:
 ```
 /api/stickies[/{id}]
 /api/shopping[/{id}]          POST /complete, /uncomplete, /clear-completed
+                              PATCH /{id} (text, store)
+                              GET  /stores                store catalogue
+                              PUT  /stores/order          drag-defined trip order
 /api/bazaar[/{id}]            /{id}/bids[/{bid_id}]  POST /accept, /reject
 /api/gallery/albums[/{id}]    /{id}/items[/{iid}]
 ```
+
+`/api/shopping`: items optionally carry a free-form `store` name; the
+server auto-upserts a `shopping_stores` row on first sighting so the
+SPA can render the list grouped by store in the household's
+drag-defined trip order. `PATCH /api/shopping/{id}` is tri-state on
+`store` — omitted = keep, `null` = clear, string = set. `PUT
+/api/shopping/stores/order` accepts `{"order": ["Bakery", "Aldi", …]}`;
+unknown names are dropped, missing names retain their relative order
+past the explicitly-ordered tail.
 
 ### Highlights (§Highlights)
 

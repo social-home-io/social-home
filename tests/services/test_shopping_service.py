@@ -125,6 +125,123 @@ async def test_shopping_publishes_bus_events(env):
     assert added_events[0].created_by == "u1"
 
 
+async def test_shopping_add_with_store_event_carries_store(env):
+    """ShoppingItemAdded.store carries the cleaned store name so the
+    WS frame can include it without a second fetch."""
+    from socialhome.domain.events import ShoppingItemAdded
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = ShoppingService(env.shopping_repo, bus)
+    captured: list = []
+    bus.subscribe(ShoppingItemAdded, lambda e: captured.append(e))
+
+    await svc.add_item("Bread", created_by="u1", store="Bakery")
+
+    assert len(captured) == 1
+    assert captured[0].text == "Bread"
+    assert captured[0].store == "Bakery"
+
+
+async def test_shopping_add_store_is_trimmed_and_clamped(env):
+    """Service strips whitespace and clamps store to 80 chars."""
+    long_name = "A" * 200
+    item = await env.shopping_svc.add_item(
+        "Milk",
+        created_by="u1",
+        store=f"  {long_name}  ",
+    )
+    assert item.store == "A" * 80
+
+
+async def test_shopping_add_blank_store_collapses_to_none(env):
+    """A blank / whitespace-only store collapses to None."""
+    item = await env.shopping_svc.add_item("Milk", created_by="u1", store="   ")
+    assert item.store is None
+
+
+async def test_shopping_update_item_sets_store_and_emits_event(env):
+    """update_item changes text + store and fires ShoppingItemUpdated."""
+    from socialhome.domain.events import ShoppingItemUpdated
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = ShoppingService(env.shopping_repo, bus)
+    captured: list = []
+    bus.subscribe(ShoppingItemUpdated, lambda e: captured.append(e))
+
+    item = await svc.add_item("Milk", created_by="u1", store="Aldi")
+    updated = await svc.update_item(item.id, text="Whole Milk", store="Whole Foods")
+
+    assert updated.text == "Whole Milk"
+    assert updated.store == "Whole Foods"
+    assert len(captured) == 1
+    assert captured[0].item_id == item.id
+    assert captured[0].text == "Whole Milk"
+    assert captured[0].store == "Whole Foods"
+
+
+async def test_shopping_update_item_clear_store(env):
+    """update_item(store=None) clears the field on disk."""
+    item = await env.shopping_svc.add_item("Milk", created_by="u1", store="Aldi")
+    updated = await env.shopping_svc.update_item(item.id, store=None)
+    assert updated.store is None
+
+
+async def test_shopping_update_item_keep_store_with_sentinel(env):
+    """Omitting ``store`` (UNSET_FIELD default) keeps the existing value."""
+    item = await env.shopping_svc.add_item("Milk", created_by="u1", store="Aldi")
+    updated = await env.shopping_svc.update_item(item.id, text="Whole Milk")
+    assert updated.text == "Whole Milk"
+    assert updated.store == "Aldi"
+
+
+async def test_shopping_update_item_empty_text_rejected(env):
+    """Whitespace-only text raises ValueError."""
+    item = await env.shopping_svc.add_item("Milk", created_by="u1")
+    with pytest.raises(ValueError):
+        await env.shopping_svc.update_item(item.id, text="   ")
+
+
+async def test_shopping_update_item_missing_raises(env):
+    """Unknown id raises KeyError → 404 at the route layer."""
+    with pytest.raises(KeyError):
+        await env.shopping_svc.update_item("nope", text="x")
+
+
+async def test_shopping_reorder_stores_emits_event(env):
+    """reorder_stores broadcasts ShoppingStoresReordered with the
+    canonical post-reorder name sequence."""
+    from socialhome.domain.events import ShoppingStoresReordered
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = ShoppingService(env.shopping_repo, bus)
+    captured: list = []
+    bus.subscribe(ShoppingStoresReordered, lambda e: captured.append(e))
+
+    await svc.add_item("Bread", created_by="u1", store="Bakery")
+    await svc.add_item("Milk", created_by="u1", store="Aldi")
+    await svc.add_item("Apples", created_by="u1", store="Whole Foods")
+
+    result = await svc.reorder_stores(["Whole Foods", "Bakery", "Aldi"])
+    names = [s.name for s in result]
+    assert names == ["Whole Foods", "Bakery", "Aldi"]
+
+    assert len(captured) == 1
+    assert captured[0].order == ("Whole Foods", "Bakery", "Aldi")
+
+
+async def test_shopping_list_stores_returns_catalogue(env):
+    """list_stores returns rows in canonical sort_order."""
+    await env.shopping_svc.add_item("Bread", created_by="u1", store="Bakery")
+    await env.shopping_svc.add_item("Milk", created_by="u1", store="Aldi")
+
+    stores = await env.shopping_svc.list_stores()
+    assert [s.name for s in stores] == ["Bakery", "Aldi"]
+    assert [s.sort_order for s in stores] == [0, 1]
+
+
 async def test_shopping_uncomplete_and_list(env):
     """uncomplete_item restores the item; list with include_completed shows all."""
     i1 = await env.shopping_svc.add_item("A", created_by="u1")

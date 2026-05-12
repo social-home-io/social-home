@@ -104,3 +104,133 @@ async def test_clear_completed(env):
     assert await env.repo.get(i3.id) is not None
     # Completed items are gone
     assert await env.repo.get(i1.id) is None
+
+
+# ─── Store column + catalogue ─────────────────────────────────────────────
+
+
+async def test_add_with_store_persists_and_creates_catalogue_row(env):
+    """add(store=…) persists the field AND auto-upserts a catalogue row."""
+    item = await env.repo.add("Milk", created_by="uid-alice", store="Aldi")
+    assert item.store == "Aldi"
+
+    fetched = await env.repo.get(item.id)
+    assert fetched.store == "Aldi"
+
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Aldi"]
+    assert stores[0].sort_order == 0
+
+
+async def test_add_without_store_leaves_catalogue_empty(env):
+    """Plain add (no store) does NOT seed the catalogue."""
+    await env.repo.add("Eggs", created_by="uid-alice")
+    assert await env.repo.list_stores() == []
+
+
+async def test_touch_store_assigns_increasing_sort_order(env):
+    """Each new store gets MAX(sort_order)+1; re-touching is idempotent."""
+    await env.repo.touch_store("Aldi")
+    await env.repo.touch_store("Bakery")
+    await env.repo.touch_store("Whole Foods")
+    # Idempotent — re-touching Aldi MUST NOT bump its order.
+    await env.repo.touch_store("Aldi")
+
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Aldi", "Bakery", "Whole Foods"]
+    assert [s.sort_order for s in stores] == [0, 1, 2]
+
+
+async def test_touch_store_ignores_empty(env):
+    """Empty / whitespace-only names don't create catalogue rows."""
+    await env.repo.touch_store("")
+    assert await env.repo.list_stores() == []
+
+
+async def test_update_item_text_only_keeps_store(env):
+    """update_item(text=…) without store sentinel leaves the store alone."""
+    item = await env.repo.add("Milk", created_by="uid-alice", store="Aldi")
+    updated = await env.repo.update_item(item.id, text="Whole Milk")
+    assert updated.text == "Whole Milk"
+    assert updated.store == "Aldi"
+
+
+async def test_update_item_clears_store_with_none(env):
+    """update_item(store=None) clears the field."""
+    item = await env.repo.add("Milk", created_by="uid-alice", store="Aldi")
+    updated = await env.repo.update_item(item.id, store=None)
+    assert updated.store is None
+    fetched = await env.repo.get(item.id)
+    assert fetched.store is None
+
+
+async def test_update_item_sets_new_store_and_upserts_catalogue(env):
+    """update_item with a brand-new store auto-creates the catalogue row."""
+    item = await env.repo.add("Milk", created_by="uid-alice", store="Aldi")
+    await env.repo.update_item(item.id, store="Whole Foods")
+
+    stores = await env.repo.list_stores()
+    names = [s.name for s in stores]
+    assert "Aldi" in names
+    assert "Whole Foods" in names
+    # Whole Foods was added last, so it gets the tail order.
+    whole_foods = next(s for s in stores if s.name == "Whole Foods")
+    aldi = next(s for s in stores if s.name == "Aldi")
+    assert whole_foods.sort_order > aldi.sort_order
+
+
+async def test_update_item_unknown_returns_none(env):
+    """update_item on an unknown id returns None (route maps to 404)."""
+    assert await env.repo.update_item("nope") is None
+
+
+async def test_reorder_stores_applies_input_order(env):
+    """reorder_stores assigns sort_order = index for each named store."""
+    await env.repo.touch_store("Aldi")
+    await env.repo.touch_store("Bakery")
+    await env.repo.touch_store("Whole Foods")
+
+    await env.repo.reorder_stores(["Whole Foods", "Bakery", "Aldi"])
+
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Whole Foods", "Bakery", "Aldi"]
+    assert [s.sort_order for s in stores] == [0, 1, 2]
+
+
+async def test_reorder_stores_ignores_unknown_names(env):
+    """Unknown names in the input are silently dropped."""
+    await env.repo.touch_store("Aldi")
+    await env.repo.touch_store("Bakery")
+
+    await env.repo.reorder_stores(["Bakery", "Ghost Store", "Aldi"])
+
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Bakery", "Aldi"]
+
+
+async def test_reorder_stores_keeps_missing_names_past_tail(env):
+    """Catalogue rows the input forgot retain their relative order past
+    the explicitly-ordered tail."""
+    await env.repo.touch_store("Aldi")
+    await env.repo.touch_store("Bakery")
+    await env.repo.touch_store("Whole Foods")
+
+    await env.repo.reorder_stores(["Whole Foods"])
+
+    stores = await env.repo.list_stores()
+    # "Whole Foods" first; the other two keep their original sort
+    # (Aldi was touched before Bakery) tucked past it.
+    assert [s.name for s in stores] == ["Whole Foods", "Aldi", "Bakery"]
+    assert [s.sort_order for s in stores] == [0, 1, 2]
+
+
+async def test_reorder_stores_dedupes_input(env):
+    """A name listed twice in the input is only positioned by its first
+    occurrence — defends against a buggy client posting duplicates."""
+    await env.repo.touch_store("Aldi")
+    await env.repo.touch_store("Bakery")
+
+    await env.repo.reorder_stores(["Aldi", "Bakery", "Aldi"])
+
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Aldi", "Bakery"]

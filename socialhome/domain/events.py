@@ -710,6 +710,7 @@ class ShoppingItemAdded(DomainEvent):
     text: str
     created_by: str
     created_at: str
+    store: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 
@@ -719,6 +720,20 @@ class ShoppingItemToggled(DomainEvent):
 
     item_id: str
     completed: bool
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class ShoppingItemUpdated(DomainEvent):
+    """An item's text or store was edited (inline-edit / wizard).
+
+    Carries the full post-edit values so the SPA / paired tabs can
+    patch their cached row without re-querying.
+    """
+
+    item_id: str
+    text: str
+    store: str | None
     occurred_at: datetime = field(default_factory=_now)
 
 
@@ -735,6 +750,18 @@ class ShoppingItemsCleared(DomainEvent):
     """All completed items were bulk-cleared; carries the count removed."""
 
     count: int
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class ShoppingStoresReordered(DomainEvent):
+    """The household drag-reordered the shopping-store catalogue.
+
+    ``order`` is the canonical sequence of store names — every other
+    SPA tab patches its local store ordering to match.
+    """
+
+    order: tuple[str, ...]
     occurred_at: datetime = field(default_factory=_now)
 
 

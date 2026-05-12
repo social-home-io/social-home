@@ -64,7 +64,8 @@ anything below contradicts the file, the file wins.
 | `schedule_slots` / `schedule_responses` / `schedule_poll_meta` | Household-feed Doodle-style schedule polls. |
 | `bazaar_listings` / `bazaar_bids` / `bazaar_offers` | Household-feed marketplace: fixed-price, offer, bid-from, negotiable, and auction modes. Bids vs offers are distinct concepts. |
 | `saved_bazaar_listings` | Per-user saved listings. |
-| `shopping_list_items` | Single shared household shopping list (§23.120). |
+| `shopping_list_items` | Single shared household shopping list (§23.120). Each item optionally carries a free-form `store` name (auto-upserts a `shopping_stores` row on first sighting) so the SPA can render the list grouped by shop in trip order. |
+| `shopping_stores` | Household's store catalogue + drag-defined "trip order". One row per `name` (PK), with `sort_order` driving the section order in the grouped shopping view. Auto-populated from `shopping_list_items.store`; rows are NOT removed when their last referencing item is deleted so the household keeps its order across empty lists. |
 | `household_theme` | Single-row (`id='default'`) household theme settings — primary/accent colour, surface, mode (`light`/`dark`/`auto`), font, density, corner radius. |
 | `stickies` | Household + space sticky notes. `space_id IS NULL` means household-level. |
 

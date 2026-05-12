@@ -78,6 +78,8 @@ from ..domain.events import (
     ShoppingItemRemoved,
     ShoppingItemsCleared,
     ShoppingItemToggled,
+    ShoppingItemUpdated,
+    ShoppingStoresReordered,
     SpaceConfigChanged,
     SpaceJoinApproved,
     SpaceJoinDenied,
@@ -255,8 +257,13 @@ class RealtimeService:
         self._bus.subscribe(UserWentOffline, self._on_user_went_offline)
         self._bus.subscribe(ShoppingItemAdded, self._on_shopping_added)
         self._bus.subscribe(ShoppingItemToggled, self._on_shopping_toggled)
+        self._bus.subscribe(ShoppingItemUpdated, self._on_shopping_updated)
         self._bus.subscribe(ShoppingItemRemoved, self._on_shopping_removed)
         self._bus.subscribe(ShoppingItemsCleared, self._on_shopping_cleared)
+        self._bus.subscribe(
+            ShoppingStoresReordered,
+            self._on_shopping_stores_reordered,
+        )
         self._bus.subscribe(NotificationCreated, self._on_notification_new)
         self._bus.subscribe(
             NotificationReadChanged,
@@ -1255,6 +1262,7 @@ class RealtimeService:
                 "completed": False,
                 "created_by": event.created_by,
                 "created_at": event.created_at,
+                "store": event.store,
             }
         )
 
@@ -1264,6 +1272,20 @@ class RealtimeService:
                 "type": "shopping_list.item_updated",
                 "id": event.item_id,
                 "completed": event.completed,
+            }
+        )
+
+    async def _on_shopping_updated(self, event: ShoppingItemUpdated) -> None:
+        # Same frame type as the toggle broadcast — the client store
+        # patches whatever keys are present, leaving the rest of the
+        # cached row untouched. Carrying the new ``text`` + ``store``
+        # lets every connected tab reflect an inline edit live.
+        await self._broadcast_household(
+            {
+                "type": "shopping_list.item_updated",
+                "id": event.item_id,
+                "text": event.text,
+                "store": event.store,
             }
         )
 
@@ -1280,6 +1302,20 @@ class RealtimeService:
             {
                 "type": "shopping_list.cleared",
                 "count": event.count,
+            }
+        )
+
+    async def _on_shopping_stores_reordered(
+        self,
+        event: ShoppingStoresReordered,
+    ) -> None:
+        # Push the canonical post-reorder name sequence; clients re-sort
+        # their local ``stores`` signal by index in this list. ``sort_order``
+        # itself isn't on the wire — the index in ``order`` is the order.
+        await self._broadcast_household(
+            {
+                "type": "shopping_list.stores_reordered",
+                "order": list(event.order),
             }
         )
 
