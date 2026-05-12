@@ -242,6 +242,7 @@ def _vevent_to_create(component: Any) -> CalendarEventCreate:
     end_dt = _as_datetime(end_val) if end_val is not None else start_dt
 
     description = str(component.get("description") or "").strip() or None
+    location = str(component.get("location") or "").strip() or None
 
     rrule_field = component.get("rrule")
     rrule_str: str | None = None
@@ -257,6 +258,7 @@ def _vevent_to_create(component: Any) -> CalendarEventCreate:
         all_day=all_day,
         description=description,
         rrule=rrule_str,
+        location=location,
     )
 
 

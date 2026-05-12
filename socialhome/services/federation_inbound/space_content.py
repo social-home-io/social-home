@@ -306,6 +306,7 @@ class SpaceContentInboundHandlers:
             log.debug("SPACE_CALENDAR_EVENT_* missing required field")
             return
         cover = p.get("cover_url")
+        location = p.get("location")
         ev = CalendarEvent(
             id=event_id,
             calendar_id=calendar_id,
@@ -319,6 +320,7 @@ class SpaceContentInboundHandlers:
             mirrored_from=p.get("mirrored_from"),
             rrule=p.get("rrule"),
             cover_url=cover if isinstance(cover, str) and cover else None,
+            location=location if isinstance(location, str) and location else None,
         )
         is_new = await self._calendar_repo.get_event(event_id) is None
         await self._calendar_repo.save_event(space_id, ev)

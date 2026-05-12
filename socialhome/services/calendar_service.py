@@ -56,6 +56,11 @@ _UNSET: object = object()
 # field as-is" when invoking ``update_event``. Resolves to the same
 # sentinel object so identity comparison (``is _UNSET``) works.
 UNSET_COVER: object = _UNSET
+#: Same shape as ``UNSET_COVER`` for the ``location`` field. The
+#: route layer hands this in when the request body omits ``location``
+#: so the service knows "leave the existing value alone" — an explicit
+#: ``None`` from the client still clears it.
+UNSET_LOCATION: object = _UNSET
 
 
 def _clean_cover_url(value: str | None) -> str | None:
@@ -70,6 +75,27 @@ def _clean_cover_url(value: str | None) -> str | None:
     if not value:
         return None
     return strip_signature_query(value)
+
+
+#: Upper bound on the ``location`` text so a hostile client can't push
+#: a 1 MB blob into every event row. Matches the iCal RFC 5545
+#: practical-limit guidance (line folding kicks in long before this).
+_LOCATION_MAX = 500
+
+
+def _clean_location(value: str | None) -> str | None:
+    """Normalise a location string from the client.
+
+    Trims surrounding whitespace, collapses an empty string to ``None``
+    (so blank input doesn't store as a literal empty value), and
+    truncates anything past :data:`_LOCATION_MAX` characters.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    return trimmed[:_LOCATION_MAX]
 
 
 class CalendarService:
@@ -249,6 +275,7 @@ class CalendarService:
         rrule: str | None = None,
         rsvp_enabled: bool = False,
         cover_url: str | None = None,
+        location: str | None = None,
     ) -> CalendarEvent:
         await self._require_calendar_enabled()
         summary = summary.strip()
@@ -286,6 +313,7 @@ class CalendarService:
             rrule=rrule,
             rsvp_enabled=rsvp_enabled,
             cover_url=_clean_cover_url(cover_url),
+            location=_clean_location(location),
         )
         saved = await self._repo.save_event(event)
         if self._bus is not None:
@@ -359,13 +387,14 @@ class CalendarService:
         rrule: str | None = None,
         rsvp_enabled: bool | None = None,
         cover_url: object = _UNSET,
+        location: object = _UNSET,
     ) -> CalendarEvent:
         """Partial-update an existing event. Only fields the caller
         supplies are overwritten; the rest retain their current values.
 
-        ``cover_url`` is special: the default ``_UNSET`` sentinel means
-        "no change", explicit ``None`` clears the cover, and a string
-        sets it. The other fields use ``None``/``"no change"`` directly
+        ``cover_url`` and ``location`` use the ``_UNSET`` sentinel for
+        "no change" so an explicit ``None`` from the client still clears
+        the field. The other fields use ``None``/``"no change"`` directly
         because none of them have an ambiguous-clear shape.
         """
         existing = await self._repo.get_event(event_id)
@@ -386,6 +415,11 @@ class CalendarService:
             # the field is present in the body — assert + cast here.
             assert cover_url is None or isinstance(cover_url, str)
             new_cover = _clean_cover_url(cover_url)
+        if location is _UNSET:
+            new_location = existing.location
+        else:
+            assert location is None or isinstance(location, str)
+            new_location = _clean_location(location)
         if attendees is not None:
             attendee_tuple, instance_for_user = await self._validate_attendees(
                 attendees,
@@ -410,6 +444,7 @@ class CalendarService:
                 rsvp_enabled if rsvp_enabled is not None else existing.rsvp_enabled
             ),
             cover_url=new_cover,
+            location=new_location,
         )
         await self._repo.save_event(updated)
         if self._bus is not None:
@@ -614,6 +649,7 @@ def _personal_event_payload(event: CalendarEvent, calendar: Calendar) -> dict:
         "rrule": event.rrule,
         "rsvp_enabled": event.rsvp_enabled,
         "cover_url": event.cover_url,
+        "location": event.location,
     }
 
 
@@ -728,6 +764,7 @@ class SpaceCalendarService:
         rrule: str | None = None,
         capacity: int | None = None,
         cover_url: str | None = None,
+        location: str | None = None,
     ) -> CalendarEvent:
         """Create a space-scoped calendar event.
 
@@ -761,6 +798,7 @@ class SpaceCalendarService:
             rrule=rrule,
             capacity=capacity,
             cover_url=_clean_cover_url(cover_url),
+            location=_clean_location(location),
         )
         saved = await self._repo.save_event(space_id, event)
         if self._bus is not None:
@@ -858,12 +896,13 @@ class SpaceCalendarService:
         capacity: int | None = None,
         clear_capacity: bool = False,
         cover_url: object = _UNSET,
+        location: object = _UNSET,
     ) -> CalendarEvent:
         """Partial-update a space event. Emits CalendarEventUpdated.
 
-        ``cover_url`` follows the same sentinel discipline as the
-        personal calendar's ``update_event``: ``_UNSET`` = no change,
-        explicit ``None`` clears the cover, a string sets it.
+        ``cover_url`` and ``location`` follow the same sentinel
+        discipline as the personal calendar's ``update_event``: ``_UNSET``
+        = no change, explicit ``None`` clears the field, a string sets it.
         """
         result = await self._repo.get_event(event_id)
         if result is None:
@@ -893,6 +932,11 @@ class SpaceCalendarService:
             # the field is present in the body — assert + cast here.
             assert cover_url is None or isinstance(cover_url, str)
             new_cover = _clean_cover_url(cover_url)
+        if location is _UNSET:
+            new_location = existing.location
+        else:
+            assert location is None or isinstance(location, str)
+            new_location = _clean_location(location)
         updated = replace(
             existing,
             summary=new_summary,
@@ -906,6 +950,7 @@ class SpaceCalendarService:
             rrule=rrule if rrule is not None else existing.rrule,
             capacity=new_capacity,
             cover_url=new_cover,
+            location=new_location,
         )
         await self._repo.save_event(space_id, updated)
         await self._publish_federation_event_saved(
@@ -1449,6 +1494,7 @@ class SpaceCalendarService:
             "created_by": event.created_by,
             "rrule": event.rrule,
             "cover_url": event.cover_url,
+            "location": event.location,
         }
         await self._federation.broadcast_to_space_members(
             space_id,

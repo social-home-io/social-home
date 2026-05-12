@@ -4190,6 +4190,33 @@ a.sh-friends-member-chip:hover {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+/* Faint "has-location" pin on the compact row — sits next to the
+ * time so the eye picks it up while scanning a day. The full
+ * location + maps link lives in the expanded ``.sh-event-detail``. */
+.sh-event-row-locpin {
+  flex-shrink: 0;
+  font-size: var(--sh-font-size-sm);
+  opacity: 0.7;
+  line-height: 1;
+}
+/* Expanded-event location row + the EventPostCard variant. The link
+ * inherits text colour from the surrounding card but underlines on
+ * hover so it reads as tap-actionable without screaming about it. */
+.sh-event-location-row {
+  margin: 0 0 var(--sh-space-2);
+}
+.sh-event-location,
+.sh-event-card-location-link {
+  color: inherit;
+  text-decoration: none;
+  word-break: break-word;
+}
+.sh-event-location:hover,
+.sh-event-card-location-link:hover,
+.sh-event-location:focus-visible,
+.sh-event-card-location-link:focus-visible {
+  text-decoration: underline;
+}
 /* Owner-name byline that surfaces only when 2+ calendars are
  * overlaid. Pairs with the per-event ``--cal-hue`` left edge so
  * ownership is communicated by both colour AND text — important for

@@ -45,6 +45,7 @@ const endDate = signal('')
 const endTime = signal('')
 const allDay = signal(false)
 const description = signal('')
+const location = signal('')
 const limitAttendance = signal(false)
 const capacity = signal('')
 /** Cover image (canonical ``/api/media/{filename}``). Submitted to
@@ -116,6 +117,7 @@ interface EditableEvent {
   attendees?: string[]
   rsvp_enabled?: boolean
   cover_url?: string | null
+  location?: string | null
 }
 
 /** Open the dialog in edit mode — pre-populate every field from
@@ -133,6 +135,7 @@ export function openEditEventDialog(
   spaceId.value = null
   summary.value = ev.summary
   description.value = ev.description ?? ''
+  location.value = ev.location ?? ''
   const start = new Date(ev.start)
   const end = new Date(ev.end)
   startDate.value = start.toISOString().slice(0, 10)
@@ -155,6 +158,7 @@ function reset() {
   editingEventId.value = null
   summary.value = ''
   description.value = ''
+  location.value = ''
   const now = new Date()
   startDate.value = now.toISOString().slice(0, 10)
   startTime.value = now.toTimeString().slice(0, 5)
@@ -213,6 +217,15 @@ export function CalendarEventDialog({ onCreated }: {
         body.cover_url = coverUrl.value || null
       } else if (coverUrl.value) {
         body.cover_url = coverUrl.value
+      }
+      // Location follows the same tri-state on edit. The trimmed
+      // empty string is treated as "clear" so wiping the input clears
+      // the field on the server.
+      const trimmedLocation = location.value.trim()
+      if (editingEventId.value) {
+        body.location = trimmedLocation || null
+      } else if (trimmedLocation) {
+        body.location = trimmedLocation
       }
       if (limitAttendance.value && capacity.value) {
         body.capacity = parseInt(capacity.value, 10)
@@ -395,6 +408,18 @@ export function CalendarEventDialog({ onCreated }: {
             />
           </label>
         )}
+        <label>
+          {t('event.dialog.location')}
+          <input
+            type="text"
+            value={location.value}
+            placeholder={t('event.dialog.location_placeholder')}
+            onInput={(e) =>
+              (location.value = (e.target as HTMLInputElement).value)
+            }
+            maxLength={500}
+          />
+        </label>
         <label>
           {t('event.dialog.description')}
           <textarea

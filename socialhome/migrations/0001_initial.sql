@@ -1412,6 +1412,10 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     -- URL). Renders at the top of EventPostCard on the feed and as a
     -- thumbnail in the calendar list view. NULL = no cover.
     cover_url       TEXT,
+    -- Free-form location (venue, address, room name, conference URL).
+    -- Mirrors the iCal ``LOCATION:`` property; surfaces under the event
+    -- title on the card and is emitted on ICS export.
+    location        TEXT,
     -- Origin of the row. ``local`` = authored on this instance (default).
     -- ``remote_invite`` = federated in via PERSONAL_CALENDAR_EVENT_CREATED;
     -- the row mirrors an event hosted on a paired peer instance. The
@@ -1460,6 +1464,10 @@ CREATE TABLE IF NOT EXISTS space_calendar_events (
     -- Same as ``calendar_events.cover_url`` — optional image for the
     -- event card on the space feed.
     cover_url              TEXT,
+    -- Free-form location (venue, address, room name, conference URL).
+    -- Same semantics as ``calendar_events.location``; emitted on ICS
+    -- export and federated alongside the rest of the event payload.
+    location               TEXT,
     created_at             TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at             TEXT NOT NULL DEFAULT (datetime('now'))
 );

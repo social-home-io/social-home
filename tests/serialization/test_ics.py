@@ -47,6 +47,16 @@ def test_serialize_event_escapes_special_chars():
     assert "with\\, semi\\; and\\nnewline" in payload
 
 
+def test_serialize_event_emits_location_when_set():
+    payload = serialize_event(_ev(location="Pier 39, San Francisco")).decode("utf-8")
+    assert "LOCATION:Pier 39\\, San Francisco" in payload
+
+
+def test_serialize_event_omits_location_when_unset():
+    payload = serialize_event(_ev()).decode("utf-8")
+    assert "LOCATION:" not in payload
+
+
 def test_serialize_event_all_day_emits_value_date():
     payload = serialize_event(
         _ev(

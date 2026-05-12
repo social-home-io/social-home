@@ -47,6 +47,7 @@ SUMMARY:School concert
 DTSTART:20260512T160000Z
 DTEND:20260512T180000Z
 DESCRIPTION:Spring program
+LOCATION:Main Auditorium
 END:VEVENT
 END:VCALENDAR
 """
@@ -109,6 +110,7 @@ async def test_import_ics_single_vevent_parses_summary_and_times():
     assert events[0].summary == "School concert"
     assert not events[0].all_day
     assert events[0].description == "Spring program"
+    assert events[0].location == "Main Auditorium"
 
 
 async def test_import_ics_multi_vevent_returns_all_events():

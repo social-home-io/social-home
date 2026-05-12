@@ -1327,6 +1327,7 @@ async def test_create_event_publishes_federation_event(space_cal_env):
         end=(now + timedelta(hours=2)).isoformat(),
         created_by="uid-alice",
         cover_url="https://cdn.example/cover.jpg",
+        location="Pier 39",
     )
     created_calls = [
         c for c in fed.calls if c[1].value == "space_calendar_event_created"
@@ -1342,6 +1343,25 @@ async def test_create_event_publishes_federation_event(space_cal_env):
     assert payload["end"] == (now + timedelta(hours=2)).isoformat()
     assert payload["created_by"] == "uid-alice"
     assert payload["cover_url"] == "https://cdn.example/cover.jpg"
+    assert payload["location"] == "Pier 39"
+    # Stored event surfaces the field through the read path too.
+    assert event.location == "Pier 39"
+
+
+async def test_update_event_clears_location_on_explicit_none(space_cal_env):
+    env = space_cal_env
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = await env.space_cal_svc.create_event(
+        space_id="sp-cal",
+        summary="Drinks",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="uid-alice",
+        location="Hotel bar",
+    )
+    assert event.location == "Hotel bar"
+    updated = await env.space_cal_svc.update_event(event.id, location=None)
+    assert updated.location is None
 
 
 async def test_update_event_publishes_federation_event(space_cal_env):

@@ -26,6 +26,7 @@ import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { CapacityStrip } from '@/components/CapacityStrip'
 import { EventOverflowMenu } from '@/components/EventOverflowMenu'
+import { LocationLink } from '@/components/LocationLink'
 import { showToast } from '@/components/Toast'
 import { t } from '@/i18n/i18n'
 import { currentUser } from '@/store/auth'
@@ -138,6 +139,14 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
           </span>
         )}
       </div>
+      {event.location && (
+        <div class="sh-event-card-location">
+          <LocationLink
+            value={event.location}
+            className="sh-event-card-location-link"
+          />
+        </div>
+      )}
 
       <CapacityStrip counts={counts} capacity={event.capacity} myStatus={myStatus} />
 
