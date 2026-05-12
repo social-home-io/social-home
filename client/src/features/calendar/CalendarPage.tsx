@@ -12,6 +12,7 @@ import {
 } from '@/components/CalendarEventDialog'
 import { CapacityStrip } from '@/components/CapacityStrip'
 import { EventOverflowMenu } from '@/components/EventOverflowMenu'
+import { LocationLink } from '@/components/LocationLink'
 import { HostApprovalQueue } from '@/components/HostApprovalQueue'
 import { ReminderPicker } from '@/components/ReminderPicker'
 import { showToast } from '@/components/Toast'
@@ -533,6 +534,18 @@ export default function CalendarPage() {
                 )}
                 <time>{new Date(e.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</time>
                 {e.all_day && <span class="sh-badge">All day</span>}
+                {e.location && (
+                  // Compact "where" hint on the collapsed row. The full
+                  // location + maps link only renders inside the expanded
+                  // detail to keep the row visually quiet.
+                  <span
+                    class="sh-event-row-locpin"
+                    aria-label={`Location: ${e.location}`}
+                    title={e.location}
+                  >
+                    📍
+                  </span>
+                )}
               </div>
               {selectedEvent.value?.id === e.id && (() => {
                 // RSVP visibility: only when explicitly enabled
@@ -551,8 +564,11 @@ export default function CalendarPage() {
                 return (
                 <div class="sh-event-detail">
                   {e.location && (
-                    <p class="sh-event-location" aria-label="Location">
-                      📍 {e.location}
+                    <p class="sh-event-location-row">
+                      <LocationLink
+                        value={e.location}
+                        className="sh-event-location"
+                      />
                     </p>
                   )}
                   {e.description && <p>{e.description}</p>}
