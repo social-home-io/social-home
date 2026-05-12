@@ -354,6 +354,18 @@ export interface ShoppingItem {
   created_by: string
   created_at: string
   completed_at?: string | null
+  /** Free-form store / shop name (``"Aldi"``, ``"Bakery"``, …). The
+   *  SPA groups items by this when "Group by store" is on; ``null``
+   *  / undefined lands in the trailing "No store" section. */
+  store?: string | null
+}
+
+/** A row in the household's shopping-store catalogue. Carries only
+ *  what the SPA needs for the grouped view: the name and the
+ *  household-defined position in the list. */
+export interface ShoppingStore {
+  name: string
+  sort_order: number
 }
 
 export interface CalendarEvent {

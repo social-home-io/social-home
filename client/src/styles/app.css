@@ -5080,6 +5080,18 @@ a.sh-friends-member-chip:hover {
 
 /* Shopping */
 .sh-shopping { display: flex; flex-direction: column; gap: var(--sh-space-md); }
+.sh-shopping-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-sm);
+  flex-wrap: wrap;
+}
+.sh-shopping-grouptoggle {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
 .sh-shopping-add { display: flex; gap: var(--sh-space-sm); }
 .sh-shopping-add input { flex: 1; }
 .sh-shopping-suggest {
@@ -5163,6 +5175,123 @@ a.sh-friends-member-chip:hover {
   .sh-shopping-item__delete { opacity: 1; }  /* no hover on touch */
   .sh-shopping-item__meta { display: none; } /* keep rows compact */
 }
+
+/* Per-store group section header + body. Each card mirrors the
+ * tape-style "card" surface used by tasks / stickies; the drag
+ * handle + nudge arrows let mobile users reorder without dragging. */
+.sh-shopping-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  margin-top: var(--sh-space-md);
+}
+.sh-shopping-group:first-of-type { margin-top: 0; }
+.sh-shopping-group--dragging { opacity: 0.6; }
+.sh-shopping-group__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xs) var(--sh-space-md);
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  border-radius: var(--sh-radius-md);
+  cursor: grab;
+}
+.sh-shopping-group__header:active { cursor: grabbing; }
+.sh-shopping-group--unassigned .sh-shopping-group__header {
+  background: color-mix(in srgb, var(--sh-muted, #807766) 10%, transparent);
+  cursor: default;
+}
+.sh-shopping-group__drag {
+  color: var(--sh-text-muted);
+  font: 600 14px/1 ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: -2px;
+  cursor: grab;
+}
+.sh-shopping-group__name {
+  flex: 1;
+  margin: 0;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  font-size: var(--sh-font-size-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.sh-shopping-group__count {
+  font: 500 calc(var(--sh-font-size-xs) - 1px) / 1
+        ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sh-text-muted);
+  white-space: nowrap;
+}
+.sh-shopping-group__nudge {
+  display: inline-flex;
+  gap: 2px;
+}
+.sh-shopping-group__nudge-btn {
+  background: transparent;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  color: var(--sh-text-muted);
+  font-size: 11px;
+  line-height: 1;
+}
+.sh-shopping-group__nudge-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  color: var(--sh-primary);
+}
+.sh-shopping-group__nudge-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Store pill on the flat (ungrouped) item row. Same mono-byline
+ * shape as the "+ user" meta to read as paired metadata, with the
+ * calendar-location pin glyph for instant recognition. */
+.sh-shopping-store-pill {
+  font: 500 calc(var(--sh-font-size-xs) - 1px) / 1.2
+        ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 10%, transparent);
+  border-radius: var(--sh-radius-full);
+  padding: 2px 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Inline editor — text + store + Save / Cancel laid out on one row
+ * (wraps on mobile). The row's background gets a faint focus ring
+ * so it's clear which row is in edit mode. */
+.sh-shopping-item--edit {
+  background: color-mix(in srgb, var(--sh-primary) 6%, transparent);
+  border-radius: var(--sh-radius-sm);
+}
+.sh-shopping-edit {
+  display: flex;
+  gap: var(--sh-space-sm);
+  flex-wrap: wrap;
+  width: 100%;
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+  align-items: center;
+}
+.sh-shopping-edit__text { flex: 2 1 200px; }
+.sh-shopping-edit__store { flex: 1 1 140px; }
+.sh-shopping-edit__cancel { flex-shrink: 0; }
+
+/* Click affordance on the item text — only meaningful for the
+ * not-completed row (clicking on a done row's text could be
+ * ambiguous with the toggle); the parent ``.sh-item--done`` rule
+ * already neutralises the cursor. */
+.sh-shopping-item__text {
+  cursor: pointer;
+}
+.sh-item--done .sh-shopping-item__text { cursor: default; }
 
 /* Pages — Markdown toolbar */
 .sh-md-toolbar {

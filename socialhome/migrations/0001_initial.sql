@@ -1935,8 +1935,35 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
     completed     INTEGER NOT NULL DEFAULT 0 CHECK(completed IN (0,1)),
     created_by    TEXT NOT NULL,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at  TEXT
+    completed_at  TEXT,
+    -- Free-form store / shop name where this item is meant to be
+    -- bought (e.g. "Aldi", "Bakery", "Pharmacy"). Auto-upserts a row
+    -- in ``shopping_stores`` on first sighting so the household keeps
+    -- its drag-defined "trip order" even when every item in that
+    -- store has been bought + cleared. NULL = unassigned; the SPA
+    -- groups those rows under a trailing "No store" section.
+    store         TEXT
 );
+-- Reverse lookup for the grouped-by-store rendering: pull every item
+-- in one store with one indexed scan. Partial so unassigned rows
+-- (NULL store) don't bloat the index.
+CREATE INDEX IF NOT EXISTS idx_shopping_items_store
+    ON shopping_list_items(store) WHERE store IS NOT NULL;
+
+-- Household-wide store catalogue. Auto-populated from
+-- ``shopping_list_items.store`` on first use; the only durable state
+-- on this table is ``sort_order`` (the user's drag-to-reorder),
+-- which is why we don't delete rows when an item that references the
+-- store goes away — the family keeps its trip order across empty
+-- lists. Free-form ``name`` is the PK so an item insert can reference
+-- the catalogue without a JOIN at write time.
+CREATE TABLE IF NOT EXISTS shopping_stores (
+    name        TEXT PRIMARY KEY,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_shopping_stores_order
+    ON shopping_stores(sort_order);
 
 -- ── Space themes / links / household theme ────────────────────────────────
 
