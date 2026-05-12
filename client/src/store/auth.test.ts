@@ -8,7 +8,7 @@ describe('auth store', () => {
     localStorage.clear()
   })
 
-  it('isAuthed is false when no token or user', () => {
+  it('isAuthed is false when no user is loaded', () => {
     expect(isAuthed.value).toBe(false)
   })
 
@@ -18,9 +18,12 @@ describe('auth store', () => {
     expect(localStorage.getItem('sh_token')).toBe('abc')
   })
 
-  it('isAuthed is true when both token and user are set', () => {
-    setToken('tok')
+  it('isAuthed is true when currentUser is set (token-independent)', () => {
+    // In haos mode the SPA never carries a token — ingress headers
+    // stand in. ``isAuthed`` reflects "we have a user record" rather
+    // than "we have a token AND a user record".
     currentUser.value = { user_id: 'u1', username: 'a', display_name: 'A', is_admin: false, picture_url: null, picture_hash: null, bio: null, is_new_member: false }
+    expect(token.value).toBe(null)
     expect(isAuthed.value).toBe(true)
   })
 
@@ -33,12 +36,27 @@ describe('auth store', () => {
     expect(localStorage.getItem('sh_token')).toBe(null)
   })
 
-  it('loadCurrentUser is a no-op when no token is stashed', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+  it('loadCurrentUser still fetches /api/me without a token (ingress mode)', async () => {
+    // No token stashed — under haos, ingress headers added by HA
+    // Supervisor authenticate the request. The api client must still
+    // fire the fetch (without ``Authorization``); the backend's
+    // ``HaIngressStrategy`` accepts the ingress headers as the
+    // handshake. Verify by mocking a 200 and asserting fetch happens.
+    const u = {
+      user_id: 'u1', username: 'haos', display_name: 'HAOS',
+      is_admin: true, picture_url: null, picture_hash: null,
+      bio: null, is_new_member: false,
+    }
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => u,
+    } as any)
     const me = await loadCurrentUser()
-    expect(me).toBeNull()
-    expect(currentUser.value).toBeNull()
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(me).toEqual(u)
+    expect(currentUser.value).toEqual(u)
+    const called = fetchSpy.mock.calls[0]!
+    const headers = (called[1] as any)?.headers as Record<string, string>
+    expect(headers.Authorization).toBeUndefined()
     fetchSpy.mockRestore()
   })
 
@@ -76,5 +94,22 @@ describe('auth store', () => {
     expect(me).toBeNull()
     expect(currentUser.value).toBeNull()
     fetchSpy.mockRestore()
+  })
+
+  it('loadCurrentUser leaves currentUser null on 401 without a token (no toast)', async () => {
+    // The "Session expired" toast is keyed on having had a token; an
+    // ingress probe that 401s should stay quiet so the App shell can
+    // render the dedicated IngressAuthFailed page instead.
+    const showToastModule = await import('@/components/Toast')
+    const toastSpy = vi.spyOn(showToastModule, 'showToast')
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false, status: 401, json: async () => ({}),
+    } as any)
+    const me = await loadCurrentUser()
+    expect(me).toBeNull()
+    expect(currentUser.value).toBeNull()
+    expect(toastSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+    toastSpy.mockRestore()
   })
 })
