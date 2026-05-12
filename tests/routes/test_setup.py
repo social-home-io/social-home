@@ -390,7 +390,8 @@ async def test_haos_complete_persists_display_name(aiohttp_client, tmp_dir):
 
 
 async def test_haos_complete_stamps_source_ha_and_external_id(
-    aiohttp_client, tmp_dir,
+    aiohttp_client,
+    tmp_dir,
 ):
     """Regression: the wizard MUST persist ``source='ha'`` + ``external_id``
     on the admin row so the HA Users admin panel's sync toggle shows
