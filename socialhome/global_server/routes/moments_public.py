@@ -13,7 +13,7 @@ Three surfaces:
 * **Public discovery** ``GET /gfs/users`` (JSON, w/ ``?q=``),
   ``GET /gfs/users/{user_id}`` (per-user JSON),
   ``GET /gfs/users/{user_id}/picture`` (avatar bytes).
-* **Public landing** ``GET /users`` and ``GET /users/{user_id}``
+* **Public landing** ``GET /moments`` and ``GET /moments/{user_id}``
   (HTML SPA shells) — anon-browseable directory + per-user pages.
 
 All signed endpoints reuse :func:`_rtc_authenticate` so the same
@@ -368,7 +368,7 @@ _USER_DETAIL_HTML = """<!doctype html>
 </head>
 <body>
 <main id="user-detail" data-user="{user_id}" data-mode="detail">
-<a class="back" href="/users">&larr; Directory</a>
+<a class="back" href="/moments">&larr; Directory</a>
 <article class="card detail">
   <img class="avatar" alt="" src="{picture_src}">
   <h1>{display_name}</h1>
@@ -386,14 +386,14 @@ _USER_DETAIL_HTML = """<!doctype html>
 
 
 class GfsUserDirectoryHtmlView(GfsBaseView):
-    """``GET /users`` — anon-browseable directory SPA shell."""
+    """``GET /moments`` — anon-browseable directory SPA shell."""
 
     async def get(self) -> web.Response:
         return web.Response(text=_DIRECTORY_HTML, content_type="text/html")
 
 
 class GfsUserDetailHtmlView(GfsBaseView):
-    """``GET /users/{user_id}`` — per-user landing with Follow CTA."""
+    """``GET /moments/{user_id}`` — per-user landing with Follow CTA."""
 
     async def get(self) -> web.Response:
         registry = self.svc(K.gfs_moment_public_registry_key)

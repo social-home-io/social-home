@@ -671,8 +671,8 @@ sync. The GFS holds no PeerConnection.
 | GET | `/` | Operator landing page. |
 | GET | `/spaces/{slug}` | Public space detail. |
 | GET | `/join/{gfs_token}` | Landing page for an invitation link. |
-| GET | `/users` | Public-Momentum directory (SPA shell). Loads `/static/users_directory.js`, which fetches `GET /gfs/users` and renders cards + search. |
-| GET | `/users/{user_id}` | Per-user landing — avatar + display_name + bio + follower count + "Follow on your Social Home" deeplink. |
+| GET | `/moments` | Public-Momentum directory (SPA shell). Loads `/static/users_directory.js`, which fetches `GET /gfs/users` and renders cards + search. |
+| GET | `/moments/{user_id}` | Per-user landing — avatar + display_name + bio + follower count + "Follow on your Social Home" deeplink. |
 
 These pages are server-rendered HTML and require no auth.
 

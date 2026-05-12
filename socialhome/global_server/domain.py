@@ -175,7 +175,7 @@ class GfsUserRegistration:
     Lives only on the GFS. Carries the routing fields the broker
     needs (``instance_id``, ``home_instance_pk``) plus the
     user-supplied directory metadata (``display_name``,
-    ``picture_url``) shown by the public ``/users`` listing.
+    ``picture_url``) shown by the public ``/moments`` listing.
     """
 
     user_id: str

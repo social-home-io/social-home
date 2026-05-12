@@ -1,7 +1,7 @@
 // Public Momentum directory bootstrap. Runs on the GFS landing
-// at ``/users``; renders cards from ``GET /gfs/users`` and supports
-// substring search. Vanilla JS — no Preact — to keep the public
-// surface tiny.
+// at ``/moments``; renders cards from ``GET /gfs/users`` and
+// supports substring search. Vanilla JS — no Preact — to keep
+// the public surface tiny.
 "use strict";
 
 (function () {
@@ -46,7 +46,7 @@
     list.innerHTML = filtered
       .map(function (u) {
         return (
-          '<li class="card"><a href="/users/' +
+          '<li class="card"><a href="/moments/' +
           encodeURIComponent(u.user_id) +
           '">' +
           '<img class="avatar" alt="" loading="lazy" src="' +

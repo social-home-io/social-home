@@ -232,8 +232,8 @@ def register_routes(
     app.router.add_view("/gfs/users/{user_id}/picture", GfsUserPictureView)
     app.router.add_view("/gfs/users", GfsUserDirectoryView)
     app.router.add_view("/gfs/users/{user_id}", GfsUserDetailView)
-    app.router.add_view("/users", GfsUserDirectoryHtmlView)
-    app.router.add_view("/users/{user_id}", GfsUserDetailHtmlView)
+    app.router.add_view("/moments", GfsUserDirectoryHtmlView)
+    app.router.add_view("/moments/{user_id}", GfsUserDetailHtmlView)
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.

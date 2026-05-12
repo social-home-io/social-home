@@ -299,7 +299,7 @@ async def test_users_html_directory_renders(client, author):
             },
         ),
     )
-    resp = await client.get("/users")
+    resp = await client.get("/moments")
     assert resp.status == 200
     assert resp.content_type == "text/html"
     text = await resp.text()
@@ -310,7 +310,7 @@ async def test_users_html_directory_renders(client, author):
 
 
 async def test_users_html_directory_empty_state(client):
-    resp = await client.get("/users")
+    resp = await client.get("/moments")
     assert resp.status == 200
     text = await resp.text()
     assert "No registered users yet" in text

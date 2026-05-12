@@ -76,7 +76,8 @@ verifies the author's signature directly.
 | POST   | `/gfs/moments/publish` | Signed envelope — fan out to followers. |
 | POST   | `/gfs/moments/delete` | Signed tombstone — fan out the delete. |
 | GET    | `/gfs/users` | Public JSON directory. |
-| GET    | `/users` | Public HTML directory. |
+| GET    | `/moments` | Public HTML directory. |
+| GET    | `/moments/{user_id}` | Per-user public HTML landing. |
 
 ### SH-side (auth-gated)
 
@@ -183,7 +184,7 @@ identical bytes-for-bytes to the sender's canonical encoding.
   directory landing renders cards without joining
   `gfs_user_pictures`.
 * `gfs_user_pictures` (GFS) — avatar bytes mirrored from the home
-  instance so the anon `/users` SPA + `/users/{id}` detail page
+  instance so the anon `/moments` SPA + `/moments/{id}` detail page
   can serve `<img src="…/picture?v=<digest>">` without round-
   tripping to the (often NAT-shielded) household.
 * `gfs_moment_follows` (GFS) — follower graph keyed by
@@ -201,7 +202,7 @@ identical bytes-for-bytes to the sender's canonical encoding.
 
 ## Public directory + profile sync
 
-* **Anon landing** at `/users` (SPA shell) and `/users/{user_id}`
+* **Anon landing** at `/moments` (SPA shell) and `/moments/{user_id}`
   (per-user detail) — both rendered by the GFS itself; the JS at
   `/static/users_directory.js` fetches `GET /gfs/users` and renders
   cards with avatar + name + bio + handle.

@@ -148,7 +148,7 @@ async def test_user_detail_404_for_unknown(client):
 
 async def test_user_detail_html_renders_with_follow_cta(client, author):
     await _register(client, author, bio="Hello world")
-    resp = await client.get("/users/u-author")
+    resp = await client.get("/moments/u-author")
     text = await resp.text()
     assert resp.status == 200
     assert resp.content_type == "text/html"
