@@ -25,7 +25,6 @@ from aiohttp.multipart import BodyPartReader
 
 from ..app_keys import (
     auth_audit_log_repo_key,
-    config_key,
     data_export_service_key,
     media_signer_key,
     password_reset_repo_key,
@@ -38,6 +37,7 @@ from ..app_keys import (
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
 from ..domain.user import _picture_url
 from ..media_signer import sign_media_urls_in
+from ..platform.adapter import Capability
 from ..security import error_response, sanitise_for_api
 from ..services.user_service import _UNSET
 from .base import BaseView
@@ -193,21 +193,23 @@ class MePictureRefreshFromHaView(BaseView):
     """POST /api/me/picture/refresh-from-ha — import the HA ``person.*``
     entity_picture as the caller's avatar.
 
-    HA mode only; standalone returns 501. No background sync loop by
+    Available on any platform whose adapter declares the
+    ``HA_PERSON_DIRECTORY`` capability (HA Core + HAOS today); the
+    standalone adapter returns 501. No background sync loop by
     design — users trigger a refresh manually when their HA avatar
     changes.
     """
 
     async def post(self) -> web.Response:
         ctx = self.user
-        config = self.svc(config_key)
-        if config.mode != "ha":
+        adapter = self.svc(platform_adapter_key)
+        if Capability.HA_PERSON_DIRECTORY not in adapter.capabilities:
             return error_response(
                 501,
                 "NOT_IMPLEMENTED",
-                "HA avatar refresh is only available in HA mode.",
+                "HA avatar refresh is only available when the user "
+                "directory is HA's person registry.",
             )
-        adapter = self.svc(platform_adapter_key)
         fetcher = getattr(adapter, "fetch_entity_picture_bytes", None)
         if fetcher is None:
             return error_response(
@@ -365,23 +367,26 @@ class TokenDetailView(BaseView):
 
 
 class AdminUserCollectionView(BaseView):
-    """``POST /api/admin/users`` — standalone-mode admin user creation.
+    """``POST /api/admin/users`` — admin user creation on platforms
+    that own their own user table.
 
-    Returns 405 in ha/haos modes (provisioning there goes through
-    ``POST /api/admin/ha-users/{username}/provision``). The body is
-    ``{username, password, display_name?, is_admin?}``.
+    Returns 405 when the adapter declares ``HA_PERSON_DIRECTORY`` —
+    on those platforms users come from HA's ``person.*`` registry and
+    provisioning goes through ``POST /api/admin/ha-users/{username}/provision``.
+    The body is ``{username, password, display_name?, is_admin?}``.
     """
 
     async def post(self) -> web.Response:
         ctx = self.user
         if ctx is None or not ctx.is_admin:
             return error_response(403, "FORBIDDEN", "Admin only.")
-        config = self.svc(config_key)
-        if config.mode != "standalone":
+        adapter = self.svc(platform_adapter_key)
+        if Capability.HA_PERSON_DIRECTORY in adapter.capabilities:
             return error_response(
                 405,
                 "WRONG_MODE",
-                "Use /api/admin/ha-users/{username}/provision in ha/haos modes.",
+                "Use /api/admin/ha-users/{username}/provision when the "
+                "user directory is HA's person registry.",
             )
         body = await self.body()
         username = str(body.get("username") or "").strip()
@@ -400,7 +405,6 @@ class AdminUserCollectionView(BaseView):
             )
         display_name = str(body.get("display_name") or username)
         is_admin = bool(body.get("is_admin"))
-        adapter = self.svc(platform_adapter_key)
         # Reject duplicates loudly so the SPA can surface a clean
         # message rather than a generic 422 from the UNIQUE
         # constraint downstream.
