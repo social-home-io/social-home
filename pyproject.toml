@@ -82,16 +82,26 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "socialhome/_version.py"
 
-[tool.hatch.build.targets.wheel]
-# ``socialhome/static/`` is gitignored (vite output — built per release
-# from ``client/``). Hatchling defaults to skipping VCS-ignored files,
-# which would ship a wheel without the SPA. ``artifacts`` is the
-# documented escape hatch for "include this regardless of .gitignore".
-# The build pipeline (``.github/workflows/publish.yml``) runs
-# ``pnpm --dir client run build`` before ``python -m build`` so the
-# bundle is on disk by the time hatchling packages the wheel.
+[tool.hatch.build]
+# ``socialhome/static/`` and ``socialhome/global_server/static/`` are
+# gitignored — both are vite outputs, built per release from
+# ``client/`` (``pnpm run build`` runs the SPA + GFS configs back to
+# back). Hatchling defaults to skipping VCS-ignored files, which
+# would ship a wheel without either bundle. ``artifacts`` is the
+# documented escape hatch for "include this regardless of
+# .gitignore". The build pipeline (``.github/workflows/publish.yml``)
+# runs ``pnpm --dir client run build`` before ``python -m build`` so
+# both bundles are on disk by the time hatchling packages the wheel.
+#
+# Setting this at the top-level ``[tool.hatch.build]`` (not
+# ``[tool.hatch.build.targets.wheel]``) covers both the wheel and the
+# sdist. ``python -m build`` defaults to building the sdist first and
+# then the wheel from that sdist — if the sdist drops the artifact,
+# the wheel-from-sdist build has nothing to include and the SPA
+# ships empty (which happened on the 2026.5.10 / 2026.5.11 releases).
 artifacts = [
     "socialhome/static/**/*",
+    "socialhome/global_server/static/**/*",
 ]
 
 [tool.pytest.ini_options]
