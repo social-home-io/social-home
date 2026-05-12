@@ -74,7 +74,12 @@ function ResetForm({ token }: { token: string }) {
     setBusy(true)
     setError(null)
     try {
-      const res = await fetch('/api/auth/redeem-password-reset', {
+      // Raw ``fetch`` (not the ``api`` client) so the 204/410/422/429
+      // status checks below can branch without ``api.post`` calling
+      // ``res.json()`` on the empty 204 body. Relative URL (no leading
+      // slash) so the browser resolves it against ``<base href>`` —
+      // bare ``/api/...`` would bypass the ingress prefix (#303).
+      const res = await fetch('api/auth/redeem-password-reset', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ token, new_password: password }),

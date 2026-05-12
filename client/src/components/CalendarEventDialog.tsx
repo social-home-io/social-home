@@ -570,15 +570,13 @@ function CoverPicker() {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch('/api/media/upload', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('sh_token') ?? ''}`,
-        },
-        body: fd,
-      })
-      if (!res.ok) throw new Error(`upload failed (${res.status})`)
-      const data = await res.json()
+      // ``api.upload`` handles base-href + bearer auth uniformly.
+      // The previous raw ``fetch('/api/media/upload', …)`` bypassed
+      // ``<base href>`` and 404'd under HAOS ingress (#303).
+      const data = await api.upload<{ url: string; signed_url?: string }>(
+        '/api/media/upload',
+        fd,
+      )
       coverUrl.value = data.url
       coverPreview.value = data.signed_url || data.url
     } catch (err) {

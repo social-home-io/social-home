@@ -52,7 +52,12 @@ export function EventOverflowMenu({
           {children}
           <a
             role="menuitem"
-            href={`/api/calendars/events/${eventId}/export.ics`}
+            // Relative URL (no leading slash) so the browser resolves
+            // it against ``<base href>``. ``download`` makes the
+            // browser fetch the URL directly (not the SPA router), so
+            // an absolute ``/api/...`` would skip the HA Supervisor
+            // ingress prefix and 404. Same class as #303.
+            href={`api/calendars/events/${eventId}/export.ics`}
             download
             onMouseDown={(e) => e.preventDefault()}
             onClick={close}
