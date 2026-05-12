@@ -181,7 +181,7 @@ export interface MomentPublicFollow {
   created_at:            string
 }
 
-/** Entry in a GFS public-user directory (``GET /api/gfs/{id}/users``). */
+/** Entry in a GFS public-user directory (``GET /api/gfs/{id}/moments/users``). */
 export interface MomentPublicDirectoryUser {
   user_id:           string
   instance_id:       string

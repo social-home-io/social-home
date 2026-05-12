@@ -3,16 +3,16 @@
 Three surfaces:
 
 * **Signed wire endpoints** for instance-side mutations:
-  - ``POST /gfs/users/register`` — opt a user into the directory.
-  - ``POST /gfs/users/{user_id}/deregister`` — remove a registration.
-  - ``POST /gfs/users/{user_id}/picture`` — push avatar bytes.
-  - ``POST /gfs/users/{user_id}/follow`` — record a follower.
-  - ``POST /gfs/users/{user_id}/unfollow`` — drop a follower.
+  - ``POST /gfs/moments/users/register`` — opt a user into the directory.
+  - ``POST /gfs/moments/users/{user_id}/deregister`` — remove a registration.
+  - ``POST /gfs/moments/users/{user_id}/picture`` — push avatar bytes.
+  - ``POST /gfs/moments/users/{user_id}/follow`` — record a follower.
+  - ``POST /gfs/moments/users/{user_id}/unfollow`` — drop a follower.
   - ``POST /gfs/moments/publish`` — fan out a signed moment envelope.
   - ``POST /gfs/moments/delete`` — fan out a tombstone.
-* **Public discovery** ``GET /gfs/users`` (JSON, w/ ``?q=``),
-  ``GET /gfs/users/{user_id}`` (per-user JSON),
-  ``GET /gfs/users/{user_id}/picture`` (avatar bytes).
+* **Public discovery** ``GET /gfs/moments/users`` (JSON, w/ ``?q=``),
+  ``GET /gfs/moments/users/{user_id}`` (per-user JSON),
+  ``GET /gfs/moments/users/{user_id}/picture`` (avatar bytes).
 * **Public landing** ``GET /moments`` and ``GET /moments/{user_id}``
   (HTML SPA shells) — anon-browseable directory + per-user pages.
 
@@ -50,7 +50,7 @@ _MAX_BIO_LEN = 280
 
 
 class GfsUserRegisterView(GfsBaseView):
-    """``POST /gfs/users/register`` — record a public-Momentum opt-in."""
+    """``POST /gfs/moments/users/register`` — record a public-Momentum opt-in."""
 
     async def post(self) -> web.Response:
         result = await _rtc_authenticate(self)
@@ -101,7 +101,7 @@ class GfsUserRegisterView(GfsBaseView):
 
 
 class GfsUserDeregisterView(GfsBaseView):
-    """``POST /gfs/users/{user_id}/deregister`` — pull a registration."""
+    """``POST /gfs/moments/users/{user_id}/deregister`` — pull a registration."""
 
     async def post(self) -> web.Response:
         result = await _rtc_authenticate(self)
@@ -120,7 +120,7 @@ class GfsUserDeregisterView(GfsBaseView):
 
 
 class GfsUserFollowView(GfsBaseView):
-    """``POST /gfs/users/{user_id}/follow`` — record a follower."""
+    """``POST /gfs/moments/users/{user_id}/follow`` — record a follower."""
 
     async def post(self) -> web.Response:
         result = await _rtc_authenticate(self)
@@ -170,7 +170,7 @@ class GfsUserFollowView(GfsBaseView):
 
 
 class GfsUserUnfollowView(GfsBaseView):
-    """``POST /gfs/users/{user_id}/unfollow`` — drop a follower."""
+    """``POST /gfs/moments/users/{user_id}/unfollow`` — drop a follower."""
 
     async def post(self) -> web.Response:
         result = await _rtc_authenticate(self)
@@ -220,7 +220,7 @@ class GfsMomentPublicDeleteView(GfsBaseView):
 
 
 class GfsUserDirectoryView(GfsBaseView):
-    """``GET /gfs/users`` — JSON listing of active registrations.
+    """``GET /gfs/moments/users`` — JSON listing of active registrations.
 
     Optional query params:
     * ``q`` — substring filter on ``display_name`` / ``username``.
@@ -244,7 +244,7 @@ class GfsUserDirectoryView(GfsBaseView):
 
 
 class GfsUserDetailView(GfsBaseView):
-    """``GET /gfs/users/{user_id}`` — single-user directory detail JSON."""
+    """``GET /gfs/moments/users/{user_id}`` — single-user directory detail JSON."""
 
     async def get(self) -> web.Response:
         registry = self.svc(K.gfs_moment_public_registry_key)
@@ -259,7 +259,7 @@ class GfsUserDetailView(GfsBaseView):
 
 
 class GfsUserPictureView(GfsBaseView):
-    """``/gfs/users/{user_id}/picture`` — avatar bytes.
+    """``/gfs/moments/users/{user_id}/picture`` — avatar bytes.
 
     * ``POST`` (signed) — instance-side push. Body carries
       ``{mime, digest, bytes_b64}`` plus the standard ``instance_id``
@@ -405,7 +405,7 @@ class GfsUserDetailHtmlView(GfsBaseView):
         cfg = self.request.app[K.gfs_config_key]
         gfs_id = cfg.instance_id
         picture_src = (
-            f"/gfs/users/{user_id}/picture?v={reg.picture_digest}"
+            f"/gfs/moments/users/{user_id}/picture?v={reg.picture_digest}"
             if reg.picture_digest
             else "/static/avatar_placeholder.svg"
         )

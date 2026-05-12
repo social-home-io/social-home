@@ -68,7 +68,7 @@ async def _register(client, author, *, bio: str | None = None):
             "home_instance_pk": "ab" * 32,
         },
     )
-    resp = await client.post("/gfs/users/register", json=body)
+    resp = await client.post("/gfs/moments/users/register", json=body)
     assert resp.status == 201, await resp.text()
 
 
@@ -77,7 +77,7 @@ async def _register(client, author, *, bio: str | None = None):
 
 async def test_register_persists_bio(client, author):
     await _register(client, author, bio="Mountain biker")
-    listing = await (await client.get("/gfs/users")).json()
+    listing = await (await client.get("/gfs/moments/users")).json()
     me = next(u for u in listing["users"] if u["user_id"] == "u-author")
     assert me["bio"] == "Mountain biker"
     assert me["display_name"] == "Alice In Bern"
@@ -95,7 +95,7 @@ async def test_register_rejects_oversize_bio(client, author):
             "home_instance_pk": "ab" * 32,
         },
     )
-    resp = await client.post("/gfs/users/register", json=body)
+    resp = await client.post("/gfs/moments/users/register", json=body)
     assert resp.status == 422
 
 
@@ -122,9 +122,9 @@ async def test_directory_supports_search_query(client, author):
             "home_instance_pk": "cd" * 32,
         },
     )
-    await client.post("/gfs/users/register", json=body)
+    await client.post("/gfs/moments/users/register", json=body)
 
-    resp = await client.get("/gfs/users?q=bern")
+    resp = await client.get("/gfs/moments/users?q=bern")
     listing = await resp.json()
     assert {u["user_id"] for u in listing["users"]} == {"u-author"}
 
@@ -134,7 +134,7 @@ async def test_directory_supports_search_query(client, author):
 
 async def test_user_detail_returns_follower_count(client, author):
     await _register(client, author)
-    resp = await client.get("/gfs/users/u-author")
+    resp = await client.get("/gfs/moments/users/u-author")
     out = await resp.json()
     assert resp.status == 200
     assert out["user_id"] == "u-author"
@@ -142,7 +142,7 @@ async def test_user_detail_returns_follower_count(client, author):
 
 
 async def test_user_detail_404_for_unknown(client):
-    resp = await client.get("/gfs/users/u-nope")
+    resp = await client.get("/gfs/moments/users/u-nope")
     assert resp.status == 404
 
 
@@ -178,7 +178,7 @@ async def test_picture_upload_and_fetch_round_trip(client, author):
     await _register(client, author)
     raw = _PNG_HEADER + b"abcdef"
     resp = await client.post(
-        "/gfs/users/u-author/picture",
+        "/gfs/moments/users/u-author/picture",
         json=_signed_picture_body(author, bytes_=raw),
     )
     out = await resp.json()
@@ -186,11 +186,11 @@ async def test_picture_upload_and_fetch_round_trip(client, author):
     assert out["digest"] == hashlib.sha256(raw).hexdigest()
 
     # Detail page now reports a digest.
-    detail = await (await client.get("/gfs/users/u-author")).json()
+    detail = await (await client.get("/gfs/moments/users/u-author")).json()
     assert detail["picture_digest"] == out["digest"]
 
     # Anon fetch streams bytes with strong-cache headers.
-    pic = await client.get("/gfs/users/u-author/picture")
+    pic = await client.get("/gfs/moments/users/u-author/picture")
     assert pic.status == 200
     assert pic.headers["Cache-Control"].startswith("public")
     assert pic.headers["ETag"] == f'"{out["digest"]}"'
@@ -219,7 +219,7 @@ async def test_picture_upload_rejects_other_instance(client, author):
             "bytes_b64": base64.b64encode(b"x").decode("ascii"),
         },
     )
-    resp = await client.post("/gfs/users/u-author/picture", json=body)
+    resp = await client.post("/gfs/moments/users/u-author/picture", json=body)
     assert resp.status == 403
 
 
@@ -227,7 +227,7 @@ async def test_picture_upload_rejects_oversize(client, author):
     await _register(client, author)
     huge = b"x" * (256 * 1024 + 1)
     resp = await client.post(
-        "/gfs/users/u-author/picture",
+        "/gfs/moments/users/u-author/picture",
         json=_signed_picture_body(author, bytes_=huge),
     )
     assert resp.status == 413
@@ -236,7 +236,7 @@ async def test_picture_upload_rejects_oversize(client, author):
 async def test_picture_upload_rejects_bad_mime(client, author):
     await _register(client, author)
     resp = await client.post(
-        "/gfs/users/u-author/picture",
+        "/gfs/moments/users/u-author/picture",
         json=_signed_picture_body(author, bytes_=b"x", mime="application/octet-stream"),
     )
     assert resp.status == 422
@@ -244,5 +244,5 @@ async def test_picture_upload_rejects_bad_mime(client, author):
 
 async def test_picture_fetch_404_when_unset(client, author):
     await _register(client, author)
-    resp = await client.get("/gfs/users/u-author/picture")
+    resp = await client.get("/gfs/moments/users/u-author/picture")
     assert resp.status == 404
