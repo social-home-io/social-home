@@ -90,7 +90,7 @@ async def test_register_signs_body_and_persists_local_row(repos):
     svc = _make_service(repos, session=sess)
     reg = await svc.register(user_id="u1", gfs_id="g1", default_share=True)
     assert reg.user_id == "u1" and reg.gfs_id == "g1"
-    assert sess.posts and sess.posts[0][0].endswith("/gfs/users/register")
+    assert sess.posts and sess.posts[0][0].endswith("/gfs/moments/users/register")
     body = sess.posts[0][1]
     assert body["user_id"] == "u1"
     assert body["instance_id"] == "inst-self"
@@ -138,7 +138,9 @@ async def test_deregister_clears_local_even_when_gfs_returns_404(repos):
     assert await svc.is_registered(user_id="u1", gfs_id="g1") is False
     # The deregister still POSTs (so the GFS can clean up) before the
     # local row drops.
-    assert sess_404.posts and sess_404.posts[0][0].endswith("/gfs/users/u1/deregister")
+    assert sess_404.posts and sess_404.posts[0][0].endswith(
+        "/gfs/moments/users/u1/deregister"
+    )
 
 
 async def test_list_registrations_round_trip(repos):

@@ -242,7 +242,7 @@ async def test_follow_unauthenticated_returns_401(client):
 
 
 async def test_directory_proxy_returns_users(client, stub):
-    r = await client.get("/api/gfs/g1/users", headers=_auth(client._tok))
+    r = await client.get("/api/gfs/g1/moments/users", headers=_auth(client._tok))
     assert r.status == 200
     body = await r.json()
     assert body == {"users": [{"user_id": "u-remote", "display_name": "Bob"}]}
@@ -251,12 +251,12 @@ async def test_directory_proxy_returns_users(client, stub):
 
 async def test_directory_proxy_failure_maps_to_502(client, stub):
     stub.directory_raises = MomentPublicError("GFS down")
-    r = await client.get("/api/gfs/g1/users", headers=_auth(client._tok))
+    r = await client.get("/api/gfs/g1/moments/users", headers=_auth(client._tok))
     assert r.status == 502
 
 
 async def test_directory_proxy_passes_search_query(client, stub):
-    r = await client.get("/api/gfs/g1/users?q=bern", headers=_auth(client._tok))
+    r = await client.get("/api/gfs/g1/moments/users?q=bern", headers=_auth(client._tok))
     assert r.status == 200
     assert stub.directory_calls == [("g1", "bern")]
 
@@ -266,7 +266,7 @@ async def test_directory_proxy_passes_search_query(client, stub):
 
 async def test_picture_proxy_returns_bytes(client, stub):
     r = await client.get(
-        "/api/gfs/g1/users/u-remote/picture", headers=_auth(client._tok)
+        "/api/gfs/g1/moments/users/u-remote/picture", headers=_auth(client._tok)
     )
     assert r.status == 200
     assert r.headers["ETag"] == '"abc"'
@@ -278,13 +278,15 @@ async def test_picture_proxy_returns_bytes(client, stub):
 
 async def test_picture_proxy_404_when_unknown(client, stub):
     stub.picture_response = None
-    r = await client.get("/api/gfs/g1/users/u-nope/picture", headers=_auth(client._tok))
+    r = await client.get(
+        "/api/gfs/g1/moments/users/u-nope/picture", headers=_auth(client._tok)
+    )
     assert r.status == 404
 
 
 async def test_picture_proxy_failure_maps_to_502(client, stub):
     stub.picture_raises = MomentPublicError("GFS down")
     r = await client.get(
-        "/api/gfs/g1/users/u-remote/picture", headers=_auth(client._tok)
+        "/api/gfs/g1/moments/users/u-remote/picture", headers=_auth(client._tok)
     )
     assert r.status == 502

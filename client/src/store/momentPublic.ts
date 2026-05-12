@@ -104,7 +104,7 @@ export async function unfollowUser(
 export async function fetchGfsDirectory(
   gfsId: string,
 ): Promise<MomentPublicDirectoryUser[]> {
-  const data = (await api.get(`/api/gfs/${gfsId}/users`)) as {
+  const data = (await api.get(`/api/gfs/${gfsId}/moments/users`)) as {
     users?: MomentPublicDirectoryUser[]
   }
   return data.users ?? []
