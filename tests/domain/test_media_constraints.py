@@ -23,7 +23,9 @@ from socialhome.domain.media_constraints import (
 
 def test_image_constants_sensible():
     """Image protocol constants have reasonable values."""
-    assert IMAGE_MAX_DIMENSION == 2048
+    # 2560 px = 1:1 fit for the short edge of an iPad Pro 12.9 /
+    # 14"-16" retina MacBook so full-bleed photos aren't upscaled.
+    assert IMAGE_MAX_DIMENSION == 2560
     assert 1 <= IMAGE_WEBP_QUALITY <= 100
     assert IMAGE_MAX_UPLOAD_BYTES > 0
     assert IMAGE_OUTPUT_MIME == "image/webp"
@@ -33,11 +35,12 @@ def test_image_constants_sensible():
 
 def test_video_constants_sensible():
     """Video protocol constants have reasonable values."""
-    assert VIDEO_MAX_DIMENSION == 1280
+    # 1920 px = true 1080p — what flagship phones capture by default.
+    assert VIDEO_MAX_DIMENSION == 1920
     # CRF is a libvpx/libx264 "constant rate factor": 0 is lossless,
-    # ~50 is terrible. 20-32 is the useful range; we want aggressive
-    # compression for household clips.
-    assert 20 <= VIDEO_CRF <= 32
+    # ~50 is terrible. 24-25 is the industry sweet spot for "visually
+    # transparent" on consumer content; 20-28 is the useful range.
+    assert 20 <= VIDEO_CRF <= 28
     assert VIDEO_MAX_DURATION_SECONDS == 60
     # Opus bitrate — 64 kbps is speech-only, 128+ is overkill. Land
     # somewhere that's transparent for both speech and music.
@@ -49,8 +52,10 @@ def test_video_constants_sensible():
 
 def test_shared_constants():
     """Thumbnail and caption limits are set."""
-    assert THUMBNAIL_PX == 400
-    # Thumbnails are rendered ≤ 400 px so they deserve lower quality
-    # than the main image; any higher and the constant is redundant.
+    # 512 px keeps tablet/desktop grid thumbs sharp at 3× retina
+    # (~170 dp wide). 400 px was the phone-grid baseline.
+    assert THUMBNAIL_PX == 512
+    # Thumbnails are smaller than the main image so they deserve
+    # lower quality; any higher and the constant is redundant.
     assert 1 <= THUMBNAIL_WEBP_QUALITY < IMAGE_WEBP_QUALITY
     assert CAPTION_MAX == 300

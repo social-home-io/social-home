@@ -32,10 +32,10 @@ async def test_process_rejects_empty():
         await proc.process(b"", "empty.mp4")
 
 
-async def test_thumbnail_caps_longest_side_at_400():
-    """Video poster must be bounded by THUMBNAIL_PX (400), not the full
-    video encode dimension — a 1280 px poster for a 400 px tile is
-    ~5× the bytes for no UX gain.
+async def test_thumbnail_caps_longest_side_at_thumbnail_px():
+    """Video poster must be bounded by THUMBNAIL_PX, not the full
+    video encode dimension — emitting the full-resolution frame for a
+    grid tile is many times the bytes for no UX gain.
     """
     import io
     import av
