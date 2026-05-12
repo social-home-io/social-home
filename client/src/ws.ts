@@ -13,11 +13,16 @@ class WsManager {
   private retryDelay = 5000
 
   connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const url = token.value
-      ? `${proto}://${location.host}/api/ws?token=${encodeURIComponent(token.value)}`
-      : `${proto}://${location.host}/api/ws`
-    this.ws = new WebSocket(url)
+    // Relative URL — modern browsers (Chrome 116+, Firefox 124+,
+    // Safari 17+) resolve it against ``document.baseURI`` and
+    // auto-rewrite ``http`` → ``ws`` / ``https`` → ``wss``. Under HA
+    // Supervisor ingress the document base is
+    // ``/api/hassio_ingress/<token>/``, so the socket reaches the
+    // add-on through the same prefix without any string surgery here.
+    const path = token.value
+      ? `api/ws?token=${encodeURIComponent(token.value)}`
+      : 'api/ws'
+    this.ws = new WebSocket(path)
 
     this.ws.onopen = () => { this.retryDelay = 5000 }
 

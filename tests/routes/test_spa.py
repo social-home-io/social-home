@@ -24,7 +24,9 @@ def fake_spa(tmp_path: Path) -> Path:
     """A minimal valid SPA tree the mount can pick up."""
     static = tmp_path / "static"
     (static / "assets").mkdir(parents=True)
-    (static / "index.html").write_text("<!doctype html><title>spa</title>")
+    (static / "index.html").write_text(
+        '<!doctype html><head><base href="/" /><title>spa</title></head>'
+    )
     (static / "manifest.json").write_text('{"name":"Social Home"}')
     (static / "sw.js").write_text("// service worker")
     (static / "assets" / "app-deadbeef.js").write_text("console.log('app');")
@@ -108,17 +110,17 @@ async def test_healthz_not_shadowed_by_spa(spa_client):
     assert body["status"] == "ok"
 
 
-async def test_unknown_top_level_path_not_served_by_spa(spa_client):
-    """No catchall — ``/feed`` is not served as HTML.
-
-    Without a token the auth middleware 401s before routing (``/feed``
-    isn't in the public-paths list). With a token it would 404 — what
-    we care about is that the SPA mount didn't grow a fallback that
-    turns every URL into ``index.html``.
-    """
+async def test_unknown_top_level_path_served_as_spa_shell(spa_client):
+    """SPA catchall: any non-``/api/`` GET serves ``index.html`` so a
+    hard refresh on a deep URL (``/feed``, ``/spaces/abc``, the
+    ingress-prefixed ``/api/hassio_ingress/<token>/feed`` after HA
+    Core strips the prefix) renders the SPA shell instead of 404.
+    ``preact-iso`` then picks the right view client-side."""
     resp = await spa_client.get("/feed")
-    assert resp.status in (401, 404)
-    assert resp.content_type != "text/html"
+    assert resp.status == 200
+    assert resp.content_type == "text/html"
+    body = await resp.text()
+    assert "<title>spa</title>" in body
 
 
 # ── Missing-build fallback ────────────────────────────────────────────────
@@ -171,3 +173,59 @@ async def test_mount_spa_returns_true_when_present(tmp_path):
     (static / "index.html").write_text("ok")
     app = web.Application()
     assert spa_module.mount_spa(app, static_dir=static) is True
+
+
+# ── Ingress: <base href> substitution from X-Ingress-Path ──────────────────
+
+
+async def test_root_base_href_defaults_to_slash(spa_client):
+    """No ``X-Ingress-Path`` (standalone / HA-Core-direct) → ``<base href="/">``."""
+    resp = await spa_client.get("/")
+    body = await resp.text()
+    assert '<base href="/">' in body
+
+
+async def test_root_base_href_rewritten_from_ingress_path(spa_client):
+    """Supervisor stamps the prefix into ``X-Ingress-Path``; the SPA's
+    ``<base href>`` reflects it (trailing slash forced) so the SPA's
+    relative URLs (``./api/me``, ``./api/ws``, …) resolve under the
+    ingress-prefixed document URL."""
+    resp = await spa_client.get(
+        "/",
+        headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"},
+    )
+    body = await resp.text()
+    assert '<base href="/api/hassio_ingress/abc123/">' in body
+    # Sanity: the placeholder is gone.
+    assert '<base href="/">' not in body
+
+
+async def test_root_base_href_strips_trailing_slash_from_header(spa_client):
+    """If the header arrives with a trailing slash, we don't double up."""
+    resp = await spa_client.get(
+        "/",
+        headers={"X-Ingress-Path": "/api/hassio_ingress/abc123/"},
+    )
+    body = await resp.text()
+    assert '<base href="/api/hassio_ingress/abc123/">' in body
+    assert '<base href="/api/hassio_ingress/abc123//">' not in body
+
+
+async def test_root_substitution_logs_warning_when_placeholder_missing(
+    spa_client, monkeypatch, caplog
+):
+    """If a future build drops the ``<base href>`` placeholder we log a
+    warning and serve the HTML untouched — the SPA will still load."""
+    static_dir = spa_client.app[spa_module._static_dir_key]
+    (static_dir / "index.html").write_text(
+        "<!doctype html><title>no placeholder</title>"
+    )
+    with caplog.at_level("WARNING", logger=spa_module.__name__):
+        resp = await spa_client.get(
+            "/",
+            headers={"X-Ingress-Path": "/api/hassio_ingress/abc123"},
+        )
+    body = await resp.text()
+    assert resp.status == 200
+    assert "<title>no placeholder</title>" in body
+    assert any("no <base href> placeholder" in r.message for r in caplog.records)

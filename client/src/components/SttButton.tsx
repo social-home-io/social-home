@@ -93,9 +93,11 @@ export function SttButton({ onText, language = 'en', disabled, className }: SttB
       processorOptions: { targetRate: TARGET_SAMPLE_RATE, sourceRate: ctx.sampleRate },
     })
 
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const tok = token.value ? `?token=${encodeURIComponent(token.value)}` : ''
-    const ws = new WebSocket(`${proto}://${location.host}/api/stt/stream${tok}`)
+    // Relative URL — resolves against ``document.baseURI`` so the
+    // ingress prefix is honoured. Modern browsers auto-convert
+    // ``http``/``https`` → ``ws``/``wss``.
+    const ws = new WebSocket(`api/stt/stream${tok}`)
     ws.binaryType = 'arraybuffer'
 
     active = { ws, ctx, stream, worklet, source }

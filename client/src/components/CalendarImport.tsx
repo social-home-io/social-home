@@ -39,7 +39,7 @@ export function CalendarImport({ calendarId }: { calendarId: string }) {
       if (!file) return
       busy.value = true
       try {
-        const res = await fetch(`/api/calendars/${calendarId}/import_ics`, {
+        const res = await fetch(`api/calendars/${calendarId}/import_ics`, {
           method: 'POST',
           headers: {
             'Content-Type': 'text/calendar',

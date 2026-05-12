@@ -214,7 +214,9 @@ async def test_friends_signs_picture_url_for_remote_members(client):
     h = next(h for h in body["households"] if h["instance_id"] == "peer-pic")
     member = next(m for m in h["members"] if m["user_id"] == "ru-with-pic")
     pic = member["picture_url"]
-    assert pic.startswith("/api/users/ru-with-pic/picture?"), pic
+    # Relative path (no leading ``/``) so the SPA's ``<img src>``
+    # resolves against ``<base href>`` and stays ingress-safe.
+    assert pic.startswith("api/users/ru-with-pic/picture?"), pic
     assert "exp=" in pic
     assert "sig=" in pic
 

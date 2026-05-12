@@ -181,7 +181,9 @@ async def test_ws_user_profile_updated_carries_signed_picture_url(env):
     assert sock.sent
     frame = sock.sent[0]
     assert "user.profile_updated" in frame
-    assert "/api/users/u1/picture?v=deadbeef" in frame
+    # Picture URLs emit relative so the SPA's ``<img src>`` resolves
+    # against ``<base href>`` (ingress-safe).
+    assert "api/users/u1/picture?v=deadbeef" in frame
     assert "exp=" in frame
     assert "sig=" in frame
 

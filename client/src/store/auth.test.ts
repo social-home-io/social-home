@@ -58,7 +58,10 @@ describe('auth store', () => {
     expect(currentUser.value).toEqual(u)
     expect(isAuthed.value).toBe(true)
     const called = fetchSpy.mock.calls[0]!
-    expect(called[0]).toBe('/api/me')
+    // ``ApiClient`` strips the leading slash so ``fetch`` resolves the
+    // path against ``<base href>`` (the ingress prefix when behind HA
+    // Supervisor, ``/`` otherwise) — matching the production fetch.
+    expect(called[0]).toBe('api/me')
     const headers = (called[1] as any)?.headers as Record<string, string>
     expect(headers.Authorization).toBe('Bearer tok')
     fetchSpy.mockRestore()

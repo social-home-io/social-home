@@ -18,11 +18,21 @@ backend doesn't need a catchall for ``/feed`` / ``/spaces/abc`` /
 ``/setup``. Refreshing the browser on those URLs is the SPA author's
 responsibility (use hash routing, or sit the app behind a reverse
 proxy that rewrites to ``/index.html``).
+
+Ingress support: when the add-on runs behind HA Supervisor's ingress
+proxy the URL prefix is dynamic — ``/api/hassio_ingress/<token>/``
+in front of every request. Supervisor stamps the prefix into
+``X-Ingress-Path``. :class:`SpaIndexView` substitutes that into the
+``<base href>`` tag inside ``index.html`` at request time so every
+relative URL the SPA constructs (fetch, WebSocket, navigation)
+resolves against the ingress-prefixed document URL. When the header
+is absent (standalone / HA-Core-direct mode), the base stays ``/``.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from aiohttp import web
@@ -30,6 +40,11 @@ from aiohttp import web
 from .base import BaseView
 
 log = logging.getLogger(__name__)
+
+# Replaces the ``<base href="...">`` already present in
+# ``client/index.html``. The trailing ``/`` is required — relative URLs
+# in HTML resolve against ``<base>`` as a directory, not as a file.
+_BASE_HREF_RE = re.compile(r'<base href="[^"]*"\s*/?>')
 
 #: Default location of the built SPA. ``client/vite.config.ts`` writes
 #: here via ``build.outDir``; the production wheel ships the same tree
@@ -64,10 +79,50 @@ class _SpaFileView(BaseView):
 class SpaIndexView(_SpaFileView):
     """``GET /`` — serves ``static/index.html`` (no auth, no cache).
 
-    The SPA's own router takes over once the document loads.
+    Reads the ``X-Ingress-Path`` header (set by HA Supervisor when
+    the request is proxied through the ingress integration) and
+    rewrites the ``<base href>`` element inside ``index.html`` so
+    the SPA's relative URLs (``./api/me``, ``./api/ws``, …) resolve
+    against the ingress-prefixed document URL. When the header is
+    absent the base stays ``/``.
     """
 
     _filename = "index.html"
+
+    async def get(self) -> web.StreamResponse:
+        static_dir = self.request.app[_static_dir_key]
+        target = static_dir / self._filename
+        if not target.is_file():
+            raise web.HTTPNotFound()
+        ingress_path = self.request.headers.get("X-Ingress-Path", "").rstrip("/")
+        base_href = f"{ingress_path}/" if ingress_path else "/"
+        # ``index.html`` is small (a few KiB) — reading + substituting
+        # in-memory per request is cheaper than maintaining two copies
+        # on disk or a per-prefix cache that invalidates on every token
+        # rotation. ``Cache-Control: no-cache`` was already required
+        # (the bundle is content-hashed but the shell isn't).
+        html = target.read_text(encoding="utf-8")
+        substituted, count = _BASE_HREF_RE.subn(
+            f'<base href="{base_href}">',
+            html,
+            count=1,
+        )
+        if count == 0:
+            # The template is required to ship a ``<base href="/">``
+            # placeholder so the substitution is deterministic. If a
+            # future build drops it, fall back to serving the file
+            # as-is — the SPA will still load, just without the
+            # ingress-prefix rewrite.
+            log.warning(
+                "index.html has no <base href> placeholder; "
+                "ingress prefix injection skipped"
+            )
+            substituted = html
+        return web.Response(
+            text=substituted,
+            content_type="text/html",
+            headers={"Cache-Control": self._cache_control},
+        )
 
 
 class SpaManifestView(_SpaFileView):
@@ -87,6 +142,29 @@ class SpaServiceWorkerView(_SpaFileView):
 
     _filename = "sw.js"
     _extra_headers = {"Service-Worker-Allowed": "/"}  # noqa: RUF012
+
+
+class SpaCatchallView(SpaIndexView):
+    """Serves the SPA shell for any non-``/api/`` GET path.
+
+    Without this, refreshing the browser on a deep URL (``/feed``,
+    ``/spaces/abc``, etc.) — including the prefixed-form
+    ``/api/hassio_ingress/<token>/feed`` that HA Ingress proxies as
+    ``GET /feed`` on the add-on side — returns 404. The SPA's own
+    ``preact-iso`` router can't claim a path the backend doesn't
+    serve, so the standard "single-page-app fallback" pattern is to
+    serve the shell for every unmatched path and let the client
+    router pick the right view.
+
+    ``/api/`` and friends are protected because the catchall is
+    registered **last**, after every concrete route. Anything matched
+    by an earlier handler (``SpaIndexView`` at ``/``, ``/manifest.json``,
+    ``/sw.js``, ``/assets/{file}``, every ``/api/...``) is served by
+    that handler; everything else falls through to here and gets the
+    SPA shell. The auth middleware's public-path list mirrors this
+    exclusion set (see ``_DEFAULT_PUBLIC_PATH_PATTERNS`` in
+    ``socialhome/auth.py``) so the catchall stays unauthenticated.
+    """
 
 
 def mount_spa(app: web.Application, static_dir: Path | None = None) -> bool:
@@ -125,6 +203,10 @@ def mount_spa(app: web.Application, static_dir: Path | None = None) -> bool:
     app.router.add_view("/manifest.json", SpaManifestView)
     app.router.add_view("/sw.js", SpaServiceWorkerView)
     app.router.add_view("/", SpaIndexView)
+    # Registered LAST so every more-specific route (``/api/...``,
+    # ``/healthz``, ``/manifest.json``, ``/sw.js``, ``/assets/...``,
+    # ``/``) wins over the catchall.
+    app.router.add_view("/{tail:.+}", SpaCatchallView)
 
     log.info("SPA bundle mounted from %s", static_dir)
     return True

@@ -47,7 +47,7 @@ class ConversationCollectionView(BaseView):
                         "username": u.username,
                         "display_name": u.display_name,
                         "picture_url": (
-                            f"/api/users/{u.user_id}/picture?v={u.picture_hash}"
+                            f"api/users/{u.user_id}/picture?v={u.picture_hash}"
                             if u.picture_hash
                             else None
                         ),

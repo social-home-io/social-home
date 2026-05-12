@@ -2,6 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!--
+    Document base URL — rewritten by the backend's ``SpaIndexView``
+    (``socialhome/routes/spa.py``) when the request arrives behind
+    HA Supervisor's ingress proxy. The backend substitutes the
+    ``href`` with the ingress prefix (e.g.
+    ``/api/hassio_ingress/<token>/``) so the SPA's relative
+    fetch / WebSocket / navigation URLs resolve against the
+    correct document base. The fallback ``/`` is what every
+    non-ingress deployment sees.
+  -->
+  <base href="/" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
   <!-- Theme colours match tokens.css: paper (light) / paper-deep dark (dark). -->
@@ -9,6 +20,12 @@
   <meta name="theme-color" content="#161821" media="(prefers-color-scheme: dark)" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- Relative href so the browser resolves it against ``<base href>`` — under
+       HA Supervisor ingress the manifest comes from
+       ``/api/hassio_ingress/<token>/manifest.json`` rather than HA Core's
+       ``/manifest.json``. ``start_url`` / ``scope`` inside the manifest are
+       likewise relative, so they pick up the same ingress prefix. -->
+  <link rel="manifest" href="manifest.json" />
   <title>Social Home</title>
   <!--
     Pre-paint theme bootstrap. Runs synchronously before any module

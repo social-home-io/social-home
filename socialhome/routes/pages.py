@@ -63,7 +63,7 @@ def _page_dict(page, *, signer: MediaUrlSigner | None = None) -> dict:
     if signer is not None:
         if content:
             content = sign_media_urls_in_markdown(content, signer)
-        if cover and cover.startswith("/api/"):
+        if cover and (cover.startswith("/api/") or cover.startswith("api/")):
             cover = signer.sign(cover)
     return {
         "id": page.id,

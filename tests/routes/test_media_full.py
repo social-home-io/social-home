@@ -66,7 +66,8 @@ async def test_media_upload_image(client):
     assert r.status == 201
     body = await r.json()
     assert "url" in body
-    assert body["url"].startswith("/api/media/")
+    # Server-emitted URL is relative — see PR #291 (ingress).
+    assert body["url"].startswith("api/media/")
     assert body["filename"].endswith(".webp")
 
 

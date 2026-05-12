@@ -256,7 +256,15 @@ class DisplayableUser:
 
 
 def _picture_url(user_id: str, picture_hash: str | None) -> str | None:
-    """Build the cache-busting URL the frontend uses to fetch the WebP."""
+    """Build the cache-busting URL the frontend uses to fetch the WebP.
+
+    Returned **without** a leading slash so the SPA's ``<img src>``
+    resolves it against ``document.baseURI`` (which the backend sets
+    to the HA Supervisor ingress prefix when behind ingress, ``/``
+    otherwise). An absolute path would bypass the base and 404 under
+    ingress. See ``client/src/baseUrl.ts`` for the matching client
+    helpers used for ``fetch`` and ``WebSocket`` URLs.
+    """
     if not picture_hash:
         return None
-    return f"/api/users/{user_id}/picture?v={picture_hash}"
+    return f"api/users/{user_id}/picture?v={picture_hash}"

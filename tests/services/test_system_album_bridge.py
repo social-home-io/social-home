@@ -109,7 +109,8 @@ async def test_image_post_creates_household_system_album(env):
     assert sys_album.is_system is True
     assert sys_album.owner_user_id is None
     items = await env["repo"].list_items_by_source_post(p.id)
-    assert {it.url for it in items} == {"/api/media/a.webp", "/api/media/b.webp"}
+    # Repo reconstructs URLs as relative (no leading slash) — see PR #291.
+    assert {it.url for it in items} == {"api/media/a.webp", "api/media/b.webp"}
     assert all(it.source_post_id == p.id for it in items)
 
 
@@ -123,7 +124,7 @@ async def test_video_post_creates_one_video_item(env):
     items = await env["repo"].list_items_by_source_post(p.id)
     assert len(items) == 1
     assert items[0].item_type == "video"
-    assert items[0].url == "/api/media/clip.webm"
+    assert items[0].url == "api/media/clip.webm"
 
 
 async def test_text_post_does_not_touch_gallery(env):
@@ -156,7 +157,7 @@ async def test_edit_adds_image(env):
     )
     await env["bus"].publish(PostEdited(post=edited))
     items = await env["repo"].list_items_by_source_post(p.id)
-    assert {it.url for it in items} == {"/api/media/a.webp", "/api/media/b.webp"}
+    assert {it.url for it in items} == {"api/media/a.webp", "api/media/b.webp"}
 
 
 async def test_edit_removes_image(env):
@@ -165,7 +166,7 @@ async def test_edit_removes_image(env):
     edited = _post(pid=p.id, image_urls=("/api/media/a.webp",))
     await env["bus"].publish(PostEdited(post=edited))
     items = await env["repo"].list_items_by_source_post(p.id)
-    assert {it.url for it in items} == {"/api/media/a.webp"}
+    assert {it.url for it in items} == {"api/media/a.webp"}
 
 
 async def test_edit_text_only_no_churn(env):

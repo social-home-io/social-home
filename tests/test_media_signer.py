@@ -99,6 +99,38 @@ def test_sign_preserves_existing_query_string(signer: MediaUrlSigner) -> None:
     assert signer.verify("/api/users/u1/picture", exp, sig, now=1_000_000)
 
 
+def test_sign_relative_url_verifies_against_request_path(
+    signer: MediaUrlSigner,
+) -> None:
+    """A URL signed in the relative (ingress-safe) form ``api/...``
+    still verifies on the server, where ``request.path`` carries a
+    leading slash. Sign computes the HMAC on the leading-slash form
+    regardless of input shape; the output keeps the input's shape so
+    the SPA's ``<base href>`` resolves it correctly. Regression for
+    #290's relative-emission change."""
+    relative_signed = signer.sign("api/media/abc.webp", now=1_000_000)
+    absolute_signed = signer.sign("/api/media/abc.webp", now=1_000_000)
+    # Same HMAC under the hood — only the path-prefix shape differs.
+    rel_sig = relative_signed.split("sig=")[1]
+    abs_sig = absolute_signed.split("sig=")[1]
+    assert rel_sig == abs_sig
+    # Server-side verify uses ``request.path`` which always has the slash.
+    exp = relative_signed.split("exp=")[1].split("&")[0]
+    assert signer.verify("/api/media/abc.webp", exp, rel_sig, now=1_000_000)
+
+
+def test_sign_media_urls_in_signs_relative_picture_url(
+    signer: MediaUrlSigner,
+) -> None:
+    """``_picture_url`` now emits ``api/users/...`` (no leading slash);
+    the payload signer must still recognise + sign it."""
+    payload = {"user_id": "u1", "picture_url": "api/users/u1/picture?v=hash"}
+    sign_media_urls_in(payload, signer)
+    assert payload["picture_url"].startswith("api/users/u1/picture?v=hash")
+    assert "exp=" in payload["picture_url"]
+    assert "sig=" in payload["picture_url"]
+
+
 def test_signing_key_too_short_rejected() -> None:
     """Keys < 16 bytes are rejected at construction time."""
     with pytest.raises(ValueError, match="at least 16 bytes"):
