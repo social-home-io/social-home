@@ -98,6 +98,35 @@ def _clean_location(value: str | None) -> str | None:
     return trimmed[:_LOCATION_MAX]
 
 
+#: Default colours for freshly-created household calendars. The
+#: service walks this list in order and picks the first hue not yet
+#: taken by an existing calendar so members get visually distinct
+#: chips on the first overlay-on moment. The hex values mirror the
+#: SPA's chip palette (``_CAL_HUES`` in
+#: ``client/src/features/calendar/CalendarPage.tsx``); the first four
+#: are the SH design tokens (``--sh-primary`` / ``--sh-success`` /
+#: ``--sh-warning`` / ``--sh-danger``) flattened to literal hex so a
+#: backend caller can persist them without a CSS context.
+_DEFAULT_CALENDAR_PALETTE: tuple[str, ...] = (
+    "#D2542A",  # terracotta — --sh-primary
+    "#1F4438",  # moss      — --sh-success
+    "#C8902F",  # honey     — --sh-warning
+    "#EF4444",  # red       — --sh-danger
+    "#7B5BA8",  # plum
+    "#3F7B8C",  # dusty teal
+    "#A89344",  # ochre
+    "#5C7B5A",  # sage
+    "#9B5B3F",  # cinnamon
+    "#34688D",  # navy
+    "#7C9D5F",  # olive
+    "#B57E47",  # amber
+    "#5B8E8E",  # slate teal
+    "#8C5777",  # rose-plum
+    "#46735A",  # pine
+    "#BC6C68",  # brick rose
+)
+
+
 class CalendarService:
     """Personal calendar operations."""
 
@@ -218,17 +247,36 @@ class CalendarService:
         name = name.strip()
         if not name:
             raise ValueError("calendar name must not be empty")
+        if color is None:
+            color = await self._next_default_color()
         calendar = Calendar(
             id=uuid.uuid4().hex,
             name=name,
             owner_username=owner_username,
-            # Default left as the schema sentinel ('#4A90E2') so the SPA's
-            # ``resolveCalendarColor`` falls through to the warm hash-derived
-            # palette — having every fresh calendar paint a cold-blue chip
-            # was a recurring "feels generic" complaint.
-            color=color or "#4A90E2",
+            color=color,
         )
         return await self._repo.save_calendar(calendar)
+
+    async def _next_default_color(self) -> str:
+        """Pick the next default colour for a freshly-created calendar.
+
+        Cycles through :data:`_DEFAULT_CALENDAR_PALETTE` so each
+        household member's calendar picks a distinct hue on first
+        creation. When a hue is still free, it wins; once the palette
+        is exhausted the choice falls back to ``count % palette_len``
+        so colours wrap predictably rather than collide with the most
+        recent pick. The previous default (``#4A90E2`` blue) painted
+        every fresh calendar with the same cold chip, which made the
+        first "overlay everyone" moment feel generic — a documented
+        family complaint in the UX review.
+        """
+        existing = await self._repo.list_all_calendars()
+        used = {c.color for c in existing}
+        for hue in _DEFAULT_CALENDAR_PALETTE:
+            if hue not in used:
+                return hue
+        # Palette wrap — at most one collision per cycle past the first 16.
+        return _DEFAULT_CALENDAR_PALETTE[len(existing) % len(_DEFAULT_CALENDAR_PALETTE)]
 
     async def get_calendar(self, calendar_id: str) -> Calendar:
         result = await self._repo.get_calendar(calendar_id)
