@@ -1,5 +1,6 @@
 import type { JSX } from 'preact'
-import { LocationProvider, Router } from 'preact-iso'
+import { Router } from 'preact-iso'
+import { IngressLocationProvider as LocationProvider } from '@/router/IngressLocationProvider'
 import { useComputed, signal } from '@preact/signals'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'

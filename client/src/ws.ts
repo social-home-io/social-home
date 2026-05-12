@@ -1,4 +1,5 @@
 import { token } from '@/store/auth'
+import { wsUrl } from '@/baseUrl'
 
 export interface WsEvent {
   type: string
@@ -13,10 +14,14 @@ class WsManager {
   private retryDelay = 5000
 
   connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    // Anchor on ``document.baseURI`` so the URL is correct under HA
+    // Supervisor ingress (where the document base is
+    // ``/api/hassio_ingress/<token>/`` and the WebSocket needs to
+    // reach the add-on through the same ingress prefix).
+    const base = wsUrl('api/ws')
     const url = token.value
-      ? `${proto}://${location.host}/api/ws?token=${encodeURIComponent(token.value)}`
-      : `${proto}://${location.host}/api/ws`
+      ? `${base}?token=${encodeURIComponent(token.value)}`
+      : base
     this.ws = new WebSocket(url)
 
     this.ws.onopen = () => { this.retryDelay = 5000 }

@@ -1,5 +1,6 @@
 import { token } from '@/store/auth'
 import { showToast } from '@/components/Toast'
+import { apiUrl } from '@/baseUrl'
 
 /**
  * Error thrown by ``ApiClient`` for non-2xx responses. Carries the HTTP
@@ -20,8 +21,6 @@ export class ApiError extends Error {
 }
 
 class ApiClient {
-  private base = ''
-
   private headers(): HeadersInit {
     return {
       'Content-Type': 'application/json',
@@ -59,7 +58,7 @@ class ApiClient {
   async get<T = any>(path: string, params?: Record<string, string>): Promise<T> {
     const url = params ? `${path}?${new URLSearchParams(params)}` : path
     const res = await this._handle(
-      await fetch(url, { headers: this.headers() }),
+      await fetch(apiUrl(url), { headers: this.headers() }),
       path,
     )
     return res.json()
@@ -67,7 +66,7 @@ class ApiClient {
 
   async post<T = any>(path: string, body?: unknown): Promise<T> {
     const res = await this._handle(
-      await fetch(path, {
+      await fetch(apiUrl(path), {
         method: 'POST', headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -78,7 +77,7 @@ class ApiClient {
 
   async put<T = any>(path: string, body?: unknown): Promise<T> {
     const res = await this._handle(
-      await fetch(path, {
+      await fetch(apiUrl(path), {
         method: 'PUT', headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -89,7 +88,7 @@ class ApiClient {
 
   async patch<T = any>(path: string, body?: unknown): Promise<T> {
     const res = await this._handle(
-      await fetch(path, {
+      await fetch(apiUrl(path), {
         method: 'PATCH', headers: this.headers(),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -100,7 +99,7 @@ class ApiClient {
 
   async delete(path: string): Promise<void> {
     await this._handle(
-      await fetch(path, { method: 'DELETE', headers: this.headers() }),
+      await fetch(apiUrl(path), { method: 'DELETE', headers: this.headers() }),
       path,
     )
   }
@@ -110,7 +109,7 @@ class ApiClient {
       ? { Authorization: `Bearer ${token.value}` }
       : {}
     const res = await this._handle(
-      await fetch(path, {
+      await fetch(apiUrl(path), {
         method: 'POST',
         headers,
         body,

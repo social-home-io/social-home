@@ -2,6 +2,17 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!--
+    Document base URL — rewritten by the backend's ``SpaIndexView``
+    (``socialhome/routes/spa.py``) when the request arrives behind
+    HA Supervisor's ingress proxy. The backend substitutes the
+    ``href`` with the ingress prefix (e.g.
+    ``/api/hassio_ingress/<token>/``) so the SPA's relative
+    fetch / WebSocket / navigation URLs resolve against the
+    correct document base. The fallback ``/`` is what every
+    non-ingress deployment sees.
+  -->
+  <base href="/" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="light dark" />
   <!-- Theme colours match tokens.css: paper (light) / paper-deep dark (dark). -->
