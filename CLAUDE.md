@@ -159,15 +159,23 @@ The spec is the source of truth — if code and spec disagree, fix the code.
 
 ### Releases
 
-- CalVer (`YYYY.M.D`). Triggered by pushing a `*.*.*` git tag or
-  publishing a GitHub Release. `.github/workflows/publish.yml` runs
-  three jobs in parallel: PyPI (via OIDC trusted publishing), core
-  Docker image to `ghcr.io/social-home-io/socialhome`, and GFS
-  Docker image to `ghcr.io/social-home-io/gfs`. Each Docker push
-  gets four tags: pinned (`:2026.5.10`), month track (`:2026.5`),
-  year track (`:2026`), and `:latest`.
-- Bump the version in `pyproject.toml` to match the tag before
-  tagging — no `v` prefix.
+- CalVer (`YYYY.M.D`). Cut by publishing a GitHub Release —
+  `gh release create 2026.5.12 --target main --title 2026.5.12 --notes …`
+  or the web UI. The release event creates the underlying tag
+  AND fires `release.published`; `.github/workflows/publish.yml`
+  picks that up and runs three jobs in parallel: PyPI (via OIDC
+  trusted publishing), core Docker image to
+  `ghcr.io/social-home-io/socialhome`, and GFS Docker image to
+  `ghcr.io/social-home-io/gfs`. Each Docker push gets four tags:
+  pinned (`:2026.5.10`), month track (`:2026.5`), year track
+  (`:2026`), and `:latest`.
+- Bare `git tag && git push --tags` does NOT publish anymore —
+  the publish workflow only listens for `release.published` so
+  that operators always go through the release UI / CLI (and so
+  the pipeline never runs twice for the same release).
+- The version is dynamic via `hatch-vcs` — do NOT edit the
+  version field in `pyproject.toml`. The tag IS the version.
+  No `v` prefix.
 
 ### Encryption-First Rule (§25.8.21)
 
