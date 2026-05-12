@@ -177,6 +177,41 @@ async def test_create_calendar_empty_name_rejected(env):
         await env.cal_svc.create_calendar(name="  ", owner_username="x")
 
 
+async def test_create_calendar_cycles_default_palette(env):
+    """Successive default-coloured calendars walk the SH palette so each
+    new household member gets a visually distinct chip on the first
+    overlay-on moment."""
+    for username in ("anna", "bo", "cleo"):
+        await env.db.enqueue(
+            "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+            (username, f"uid-{username}", username.title()),
+        )
+    a = await env.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    b = await env.cal_svc.create_calendar(name="Bo", owner_username="bo")
+    c = await env.cal_svc.create_calendar(name="Cleo", owner_username="cleo")
+    # All three picks are distinct hues from the documented palette.
+    assert a.color != b.color
+    assert b.color != c.color
+    assert a.color != c.color
+    # First slot is terracotta (--sh-primary), second moss (--sh-success).
+    assert a.color == "#D2542A"
+    assert b.color == "#1F4438"
+
+
+async def test_create_calendar_explicit_color_wins(env):
+    """An explicit color from the caller skips the palette cycle."""
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("anna", "uid-anna", "Anna"),
+    )
+    cal = await env.cal_svc.create_calendar(
+        name="Custom",
+        owner_username="anna",
+        color="#123456",
+    )
+    assert cal.color == "#123456"
+
+
 async def test_get_nonexistent_calendar(env):
     """Getting a nonexistent calendar raises KeyError."""
     with pytest.raises(KeyError):
