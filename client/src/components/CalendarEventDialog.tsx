@@ -15,6 +15,7 @@ import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import { currentUser } from '@/store/auth'
 import { householdUsers } from '@/store/householdUsers'
+import { resolveCalendarColor } from '@/utils/calendar'
 import {
   calendarInvitees,
   loadCalendarInvitees,
@@ -24,13 +25,26 @@ interface DialogCalendarSummary {
   id: string
   name: string
   owner_username: string
+  color?: string | null
 }
 
 const open = signal(false)
-/** The calendar the event will be written to. Defaults to the caller's
- *  own calendar; the dialog's "For:" selector lets the caller redirect
- *  the event onto another household member's calendar. */
+/** Single-target calendar id — used in edit mode and as the fallback /
+ *  default when ``targetCalendarIds`` is empty. Defaults to the
+ *  caller's own calendar. */
 const calendarId = signal('')
+/** Multi-select target set used by the create flow. The first thing
+ *  the dialog asks: "Which calendars should this land on?". Each
+ *  picked id triggers a separate ``POST /api/calendars/{id}/events`` so
+ *  one event can land on several household members' calendars at once
+ *  (e.g. the dentist visit goes on both kids' calendars). The set is
+ *  always seeded with the default ``calendarId`` so the simple "create
+ *  on my calendar" path needs no extra clicks.
+ *
+ *  Edit mode keeps the single-calendar select (``targetCalendarIds``
+ *  stays empty) — moving an event between calendars is a separate
+ *  action from picking N targets at create time. */
+const targetCalendarIds = signal<Set<string>>(new Set())
 /** Full household calendar list, populated by ``openEventDialog``. The
  *  dialog renders the "For:" selector when this has 2+ entries. */
 const householdCalendars = signal<DialogCalendarSummary[]>([])
@@ -87,6 +101,11 @@ export function openEventDialog(
 ) {
   reset()
   calendarId.value = calId
+  // Seed the multi-select with the caller's own calendar so the simple
+  // path is a one-click create. The chip row shows up at the top of
+  // the form for the user to pick additional household members'
+  // calendars before filling out the rest.
+  targetCalendarIds.value = new Set([calId])
   householdCalendars.value = available
   spaceId.value = null
   open.value = true
@@ -131,6 +150,9 @@ export function openEditEventDialog(
   reset()
   editingEventId.value = ev.id
   calendarId.value = ev.calendar_id
+  // Edit mode keeps the single-target select — empty set short-circuits
+  // the multi-create path on submit.
+  targetCalendarIds.value = new Set()
   householdCalendars.value = available
   spaceId.value = null
   summary.value = ev.summary
@@ -173,6 +195,7 @@ function reset() {
   coverUrl.value = ''
   coverPreview.value = ''
   coverUploading.value = false
+  targetCalendarIds.value = new Set()
 }
 
 export function CalendarEventDialog({ onCreated }: {
@@ -254,19 +277,64 @@ export function CalendarEventDialog({ onCreated }: {
           body,
         )
         showToast('Event updated', 'success')
-      } else {
-        const url = isSpace
-          ? `/api/spaces/${spaceId.value}/calendar/events`
-          : `/api/calendars/${calendarId.value}/events`
-        await api.post(url, body)
+      } else if (isSpace) {
+        await api.post(
+          `/api/spaces/${spaceId.value}/calendar/events`,
+          body,
+        )
         showToast(t('event.dialog.created'), 'success')
+      } else {
+        // Multi-target create: fan out one POST per picked calendar.
+        // Empty set (e.g. when the dialog opened without a list) falls
+        // back to the single ``calendarId`` for back-compat. Cap to 1
+        // implicit target when nothing's selected so the user still
+        // gets an event.
+        const targets = targetCalendarIds.value.size > 0
+          ? Array.from(targetCalendarIds.value)
+          : [calendarId.value]
+        // POST in parallel so a four-kid drop-on-everyone is one
+        // round-trip wall-clock. Failures are individually toasted so
+        // a partial success still surfaces useful state.
+        const results = await Promise.allSettled(
+          targets.map(id => api.post(
+            `/api/calendars/${id}/events`,
+            body,
+          )),
+        )
+        const ok = results.filter(r => r.status === 'fulfilled').length
+        const failed = results.length - ok
+        if (failed > 0 && ok === 0) {
+          throw new Error(
+            (results.find(r => r.status === 'rejected') as PromiseRejectedResult)
+              .reason?.message
+              ?? t('event.dialog.failed'),
+          )
+        }
+        if (failed > 0) {
+          showToast(
+            `Created on ${ok} calendar${ok === 1 ? '' : 's'}, ${failed} failed`,
+            'error',
+          )
+        } else if (ok > 1) {
+          showToast(`Event created on ${ok} calendars`, 'success')
+        } else {
+          showToast(t('event.dialog.created'), 'success')
+        }
       }
       open.value = false
       // Pass the target calendar id so the page can ensure it's
       // visible — without this, an event Maria creates for Pascal
       // doesn't appear on her view (his chip is still off) and the
-      // create feels like it didn't take.
-      onCreated?.(isSpace ? null : calendarId.value)
+      // create feels like it didn't take. For the multi-target case
+      // we pass the first picked id; the page also reloads events so
+      // anything that landed on a currently-hidden calendar will
+      // still be visible after the auto-toggle on this one.
+      const reportId = isSpace
+        ? null
+        : (targetCalendarIds.value.size > 0
+            ? Array.from(targetCalendarIds.value)[0]
+            : calendarId.value)
+      onCreated?.(reportId)
     } catch (e) {
       const msg = (e as Error)?.message || t('event.dialog.failed')
       showToast(msg, 'error')
@@ -279,74 +347,11 @@ export function CalendarEventDialog({ onCreated }: {
     <Modal open={open.value} onClose={() => (open.value = false)}
            title={editingEventId.value ? 'Edit event' : t('event.dialog.title')}>
       <div class="sh-form">
-        {!isSpace && householdCalendars.value.length > 1 && (() => {
-          const me = currentUser.value?.username
-          // Disambiguate when the same owner has multiple calendars —
-          // suffix with the calendar name. Single-calendar owners
-          // stay terse ("Pascal" vs "Pascal · Work").
-          const ownerCount = new Map<string, number>()
-          for (const c of householdCalendars.value) {
-            ownerCount.set(c.owner_username,
-              (ownerCount.get(c.owner_username) ?? 0) + 1)
-          }
-          const selected = householdCalendars.value
-            .find(c => c.id === calendarId.value)
-          const targetIsMine = selected?.owner_username === me
-          let targetLabel: string | null = null
-          if (selected && !targetIsMine) {
-            targetLabel = selected.owner_username
-            for (const u of householdUsers.value.values()) {
-              if (u.username === selected.owner_username) {
-                targetLabel = u.display_name || u.username
-                break
-              }
-            }
-          }
-          return (
-            <label>
-              Add to calendar
-              <select
-                value={calendarId.value}
-                onChange={(ev) => {
-                  calendarId.value = (ev.target as HTMLSelectElement).value
-                }}
-              >
-                {householdCalendars.value.map(c => {
-                  const mine = c.owner_username === me
-                  let ownerLabel = c.owner_username
-                  for (const u of householdUsers.value.values()) {
-                    if (u.username === c.owner_username) {
-                      ownerLabel = u.display_name || u.username
-                      break
-                    }
-                  }
-                  const ambiguous = (ownerCount.get(c.owner_username) ?? 1) > 1
-                  const base = mine
-                    ? 'My calendar'
-                    : `${ownerLabel}'s calendar`
-                  return (
-                    <option key={c.id} value={c.id}>
-                      {ambiguous ? `${base} · ${c.name}` : base}
-                    </option>
-                  )
-                })}
-              </select>
-              {targetLabel ? (
-                <small class="sh-form-help">
-                  This event lands directly on {targetLabel}'s calendar —
-                  no invite, no RSVP. Use the picker below to invite
-                  someone from another household.
-                </small>
-              ) : (
-                <small class="sh-form-help">
-                  Pick another household member to drop the event on
-                  their calendar instead. Cross-household friends are
-                  invited via the picker below.
-                </small>
-              )}
-            </label>
-          )
-        })()}
+        {!isSpace && householdCalendars.value.length > 1 && (
+          editingEventId.value
+            ? <EditCalendarSelect />
+            : <CreateCalendarPicker />
+        )}
         <label>
           {t('event.dialog.summary')} *
           <input
@@ -449,8 +454,8 @@ export function CalendarEventDialog({ onCreated }: {
                   No paired households yet. Pair a household from{' '}
                   <a href="/settings/connections">Settings → Connections</a>{' '}
                   to invite friends from another home. (Household members
-                  don't need invites — pick their calendar in the "For:"
-                  selector above.)
+                  don't need invites — drop the event on their calendar
+                  via the picker above.)
                 </p>
               ) : (
                 instances.map(inst => (
@@ -550,6 +555,155 @@ export function CalendarEventDialog({ onCreated }: {
         </div>
       </div>
     </Modal>
+  )
+}
+
+/** Resolve a calendar owner's friendly display name via the cached
+ *  household user map. Falls back to the bare username when the cache
+ *  hasn't loaded yet (rare — the page kicks off ``loadHouseholdUsers``
+ *  on mount). */
+function ownerDisplayName(owner_username: string): string {
+  for (const u of householdUsers.value.values()) {
+    if (u.username === owner_username) {
+      return u.display_name || u.username
+    }
+  }
+  return owner_username
+}
+
+/** Owner avatar URL — same lookup table as the display name resolver
+ *  above. ``null`` if the user isn't in the cache or has no picture. */
+function ownerPictureUrl(owner_username: string): string | null {
+  for (const u of householdUsers.value.values()) {
+    if (u.username === owner_username) {
+      return u.picture_url ?? null
+    }
+  }
+  return null
+}
+
+/** Edit-mode single-target calendar selector. Kept as a native
+ *  ``<select>`` — moving an existing event between calendars is a
+ *  rare operation and the dropdown handles ten-plus options gracefully
+ *  whereas a chip grid would dominate the form. */
+function EditCalendarSelect() {
+  const me = currentUser.value?.username
+  const ownerCount = new Map<string, number>()
+  for (const c of householdCalendars.value) {
+    ownerCount.set(c.owner_username,
+      (ownerCount.get(c.owner_username) ?? 0) + 1)
+  }
+  return (
+    <label>
+      Move to calendar
+      <select
+        value={calendarId.value}
+        onChange={(ev) => {
+          calendarId.value = (ev.target as HTMLSelectElement).value
+        }}
+      >
+        {householdCalendars.value.map(c => {
+          const mine = c.owner_username === me
+          const ownerLabel = ownerDisplayName(c.owner_username)
+          const ambiguous = (ownerCount.get(c.owner_username) ?? 1) > 1
+          const base = mine ? 'My calendar' : `${ownerLabel}'s calendar`
+          return (
+            <option key={c.id} value={c.id}>
+              {ambiguous ? `${base} · ${c.name}` : base}
+            </option>
+          )
+        })}
+      </select>
+    </label>
+  )
+}
+
+/** Create-mode multi-target calendar picker — the very first question
+ *  the dialog asks: "Whose calendar(s) does this land on?". Renders one
+ *  avatar chip per household calendar; tap toggles inclusion. The chip
+ *  for the caller's own calendar starts pre-selected so a fast
+ *  "create on my calendar" flow needs zero extra clicks.
+ *
+ *  Multi-select intentionally allows a single chore-of-the-week event
+ *  to drop onto each kid's calendar in one go — the alternative was
+ *  three trips through the dialog and three deletes if the user
+ *  changes their mind.
+ */
+function CreateCalendarPicker() {
+  const me = currentUser.value?.username
+  const picked = targetCalendarIds.value
+  // Sort: own calendars first, then alphabetic. Matches the strip on
+  // the parent page so identity reads consistently.
+  const sorted = [...householdCalendars.value].sort((a, b) => {
+    const am = a.owner_username === me ? 0 : 1
+    const bm = b.owner_username === me ? 0 : 1
+    if (am !== bm) return am - bm
+    return ownerDisplayName(a.owner_username)
+      .localeCompare(ownerDisplayName(b.owner_username))
+  })
+  const ownerCount = new Map<string, number>()
+  for (const c of sorted) {
+    ownerCount.set(c.owner_username,
+      (ownerCount.get(c.owner_username) ?? 0) + 1)
+  }
+  const toggle = (id: string) => {
+    const next = new Set(targetCalendarIds.value)
+    if (next.has(id)) {
+      // Never let the user clear every chip — at least one target
+      // must stay picked or the submit button has nowhere to write.
+      if (next.size === 1) return
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    targetCalendarIds.value = next
+  }
+  const pickedCount = picked.size
+  return (
+    <div>
+      <span class="sh-form-label">Add to calendar</span>
+      <p class="sh-cal-target-help">
+        {pickedCount > 1
+          ? `Lands on ${pickedCount} calendars — tap a chip to deselect.`
+          : 'Tap another household member to drop the event on their calendar too.'}
+      </p>
+      <div class="sh-cal-target-picker">
+        {sorted.map(c => {
+          const mine = c.owner_username === me
+          const ambiguous = (ownerCount.get(c.owner_username) ?? 1) > 1
+          const ownerLabel = ownerDisplayName(c.owner_username)
+          const headline = mine ? 'You' : ownerLabel
+          const isPicked = picked.has(c.id)
+          const hue = resolveCalendarColor(c)
+          return (
+            <button
+              key={c.id}
+              type="button"
+              class={
+                isPicked
+                  ? 'sh-cal-target-chip sh-cal-target-chip--picked'
+                  : 'sh-cal-target-chip'
+              }
+              aria-pressed={isPicked}
+              style={{ '--cal-hue': hue } as Record<string, string>}
+              onClick={() => toggle(c.id)}
+            >
+              <Avatar
+                name={ownerLabel}
+                src={ownerPictureUrl(c.owner_username)}
+                size={28}
+              />
+              <span class="sh-cal-target-chip__name">
+                <span>{headline}</span>
+                {ambiguous && (
+                  <span class="sh-cal-target-chip__sub">{c.name}</span>
+                )}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
   )
 }
 

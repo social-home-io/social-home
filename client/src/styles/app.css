@@ -4030,6 +4030,269 @@ a.sh-friends-member-chip:hover {
   opacity: 0.4;
 }
 
+/* Calendar filter strip — presence-strip-style polaroid pins, one per
+ * household member. Each pin owns every calendar that member created;
+ * clicking toggles the whole batch on / off. Reuses the same visual
+ * vocabulary as `.sh-presence-strip` so the calendar reads as the same
+ * surface family as the feed.
+ *
+ * The card carries the calendar's hue via the inline ``--cal-hue``
+ * custom property: washi tape, status dot and (when ON) the outline all
+ * pick that hue up so colour identity stays consistent with the event
+ * left-edge in the day-group rows. */
+.sh-cal-strip-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+}
+.sh-cal-strip {
+  margin: 0;
+  padding: 4px 4px 8px;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: thin;
+}
+.sh-cal-strip-inner {
+  display: flex;
+  gap: var(--sh-space-md);
+  padding: 14px 4px 6px;
+  width: max-content;
+}
+.sh-cal-strip-pin {
+  position: relative;
+  width: 124px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 16px 10px 12px;
+  background: var(--sh-bg-tertiary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  box-shadow: var(--sh-shadow-pinned);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  transform: rotate(var(--sh-pin-rot, 0deg));
+  opacity: 0.55;
+  transition:
+    transform var(--sh-transition-normal),
+    box-shadow var(--sh-transition-fast),
+    opacity var(--sh-transition-fast),
+    border-color var(--sh-transition-fast);
+}
+.sh-cal-strip-pin:hover,
+.sh-cal-strip-pin:focus-visible {
+  transform: rotate(0deg) translateY(-2px);
+  z-index: 2;
+  opacity: 1;
+}
+.sh-cal-strip-pin:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 3px;
+}
+.sh-cal-strip-pin--on {
+  opacity: 1;
+  border-color: var(--cal-hue);
+  box-shadow:
+    var(--sh-shadow-pinned),
+    inset 0 -3px 0 0 color-mix(in srgb, var(--cal-hue) 65%, transparent);
+  background: color-mix(in srgb, var(--cal-hue) 6%, var(--sh-bg-tertiary));
+}
+.sh-cal-strip-pin--partial {
+  opacity: 0.85;
+  border-color: color-mix(in srgb, var(--cal-hue) 55%, var(--sh-border));
+}
+.sh-cal-strip-tape {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  width: 56px;
+  height: 14px;
+  border-radius: 2px;
+  transform: translateX(-50%) rotate(-3deg);
+  background: color-mix(in srgb, var(--cal-hue, var(--sh-warning)) 28%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  pointer-events: none;
+}
+.sh-cal-strip-pin--on .sh-cal-strip-tape {
+  background: color-mix(in srgb, var(--cal-hue) 65%, transparent);
+}
+.sh-cal-strip-name {
+  font-weight: 600;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  margin-top: 4px;
+}
+.sh-cal-strip-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.sh-cal-strip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--sh-radius-full);
+  background: var(--cal-hue, var(--sh-text-muted));
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+.sh-cal-strip-state {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  border-radius: var(--sh-radius-full);
+  border: 1px solid transparent;
+  line-height: 1.2;
+}
+.sh-cal-strip-state--on {
+  color: var(--cal-hue);
+  background: color-mix(in srgb, var(--cal-hue) 14%, transparent);
+  border-color: color-mix(in srgb, var(--cal-hue) 35%, transparent);
+}
+.sh-cal-strip-state--partial {
+  color: var(--sh-text);
+  background: color-mix(in srgb, var(--cal-hue) 8%, transparent);
+  border-color: color-mix(in srgb, var(--cal-hue) 22%, transparent);
+}
+.sh-cal-strip-state--off {
+  color: var(--sh-text-muted);
+  background: transparent;
+  border-color: var(--sh-border);
+}
+.sh-cal-strip-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-sm);
+  padding: 0 4px;
+  flex-wrap: wrap;
+}
+.sh-cal-strip-actions__primary {
+  margin-left: auto;
+}
+.sh-cal-strip-wrap--actions-only .sh-cal-strip-actions {
+  justify-content: flex-end;
+}
+.sh-cal-strip-quick {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+}
+.sh-cal-strip-quick__btn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  color: var(--sh-text-muted);
+  border-radius: var(--sh-radius-full);
+  cursor: pointer;
+  transition: color var(--sh-transition-fast),
+              background var(--sh-transition-fast),
+              border-color var(--sh-transition-fast);
+}
+.sh-cal-strip-quick__btn:hover {
+  color: var(--sh-text);
+  background: var(--sh-bg-secondary);
+  border-color: var(--sh-border);
+}
+
+/* Target-calendar picker in the event dialog — multi-select avatar
+ * chip row carrying the same identity language as the filter strip
+ * above. Each chip selects one household-member calendar; the event
+ * gets duplicated onto every picked one on submit. */
+.sh-cal-target-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+.sh-cal-target-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px 6px 6px;
+  min-height: 40px;
+  border-radius: var(--sh-radius-full);
+  border: 2px solid var(--sh-border);
+  background: var(--sh-bg);
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-sm);
+  cursor: pointer;
+  transition: background var(--sh-transition-fast),
+              border-color var(--sh-transition-fast),
+              color var(--sh-transition-fast),
+              transform var(--sh-transition-fast),
+              box-shadow var(--sh-transition-fast);
+}
+.sh-cal-target-chip:hover {
+  background: var(--sh-bg-secondary);
+  transform: translateY(-1px);
+}
+.sh-cal-target-chip--picked {
+  background: color-mix(in srgb, var(--cal-hue) 18%, var(--sh-bg));
+  border-color: var(--cal-hue);
+  color: var(--sh-text);
+  font-weight: 600;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--cal-hue) 25%, transparent);
+}
+.sh-cal-target-chip--picked::after {
+  content: '✓';
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--cal-hue);
+  border-radius: var(--sh-radius-full);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.sh-cal-target-chip__name {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+  text-align: left;
+}
+.sh-cal-target-chip__sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--sh-text-muted);
+}
+.sh-cal-target-help {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  margin: 0 0 var(--sh-space-xs);
+}
+
 /* Attendee picker on the household event dialog — household-member
  * chips with avatar + name; toggle to invite. */
 .sh-attendee-picker {
@@ -4308,6 +4571,20 @@ a.sh-friends-member-chip:hover {
   }
   .sh-calendar-picker::-webkit-scrollbar { display: none; }
   .sh-calendar-picker__chip { flex-shrink: 0; }
+  /* Filter strip — keep pins compact on phones so 4–5 family
+   * members fit on screen at once without horizontal scroll. */
+  .sh-cal-strip {
+    /* Mirror the calendar-picker fade-edge trick so a long member list
+     * doesn't bleed under the chrome on narrow screens. */
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+            mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+  }
+  .sh-cal-strip-inner { gap: var(--sh-space-sm); }
+  .sh-cal-strip-pin {
+    width: 96px;
+    padding: 12px 6px 8px;
+  }
+  .sh-cal-target-chip { font-size: var(--sh-font-size-xs); }
   .sh-calendar-day-group { padding: var(--sh-space-sm); }
   .sh-event-header {
     /* Owner chip wraps under the title on narrow viewports — keeps the

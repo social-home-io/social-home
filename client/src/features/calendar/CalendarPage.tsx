@@ -10,6 +10,7 @@ import {
   openEventDialog,
   openEditEventDialog,
 } from '@/components/CalendarEventDialog'
+import { CalendarFilterStrip } from '@/components/CalendarFilterStrip'
 import { CapacityStrip } from '@/components/CapacityStrip'
 import { EventOverflowMenu } from '@/components/EventOverflowMenu'
 import { LocationLink } from '@/components/LocationLink'
@@ -20,8 +21,9 @@ import { currentUser } from '@/store/auth'
 import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { events, rsvpCounts, myRsvpStatus, activeCalendarScope } from '@/store/calendar'
 import {
-  advanceDate, dateRangeForMode, formatDayLabel, formatRangeHeading,
-  groupEventsByDay, type CalendarViewMode,
+  advanceDate, calendarHue, dateRangeForMode, formatDayLabel,
+  formatRangeHeading, groupEventsByDay, resolveCalendarColor,
+  type CalendarViewMode,
 } from '@/utils/calendar'
 import { t } from '@/i18n/i18n'
 import { confirmDialog } from '@/components/confirm'
@@ -75,50 +77,6 @@ const currentDate = signal(new Date())
 const selectedEvent = signal<CalendarEvent | null>(null)
 const rsvpPending = signal<string | null>(null)
 
-/** Deterministic colour per calendar id — picks one of 16 hand-tuned
- *  earth-tone hues so two members rarely collide visually. The same
- *  id always lands on the same colour across reloads / sessions.
- *  16 is enough for any realistic household; if a household ever has
- *  17+ calendars the chip names still disambiguate. */
-const _CAL_HUES = [
-  'var(--sh-primary)',  // terracotta
-  'var(--sh-success)',  // moss
-  'var(--sh-warning)',  // honey
-  'var(--sh-danger)',   // brick
-  '#7B5BA8',            // plum
-  '#3F7B8C',            // dusty teal
-  '#A89344',            // ochre
-  '#5C7B5A',            // sage
-  '#9B5B3F',            // cinnamon
-  '#34688D',            // navy
-  '#7C9D5F',            // olive
-  '#B57E47',            // amber
-  '#5B8E8E',            // slate teal
-  '#8C5777',            // rose-plum
-  '#46735A',            // pine
-  '#BC6C68',            // brick rose
-] as const
-function calendarHue(calId: string): string {
-  // Tiny string-hash → pick a hue. djb2-flavoured.
-  let h = 5381
-  for (let i = 0; i < calId.length; i++) {
-    h = ((h << 5) + h + calId.charCodeAt(i)) | 0
-  }
-  return _CAL_HUES[Math.abs(h) % _CAL_HUES.length]
-}
-
-/** Resolve the chip dot colour. The DB column wins when the owner has
- *  picked one. Both legacy "default-blue" sentinels (``#4A90E2`` from the
- *  schema, ``#2196F3`` from an earlier service default) are treated as
- *  "unset" so the warm hash-derived palette takes over — leaving every
- *  fresh calendar a cold-blue chip read as generic and stale against
- *  the hearth surface. */
-const _UNSET_CAL_COLORS = new Set(['#4a90e2', '#2196f3'])
-function resolveCalendarColor(c: CalendarSummary): string {
-  if (c.color && !_UNSET_CAL_COLORS.has(c.color.toLowerCase())) return c.color
-  return calendarHue(c.id)
-}
-
 async function loadEvents() {
   const ids = Array.from(visibleCalendarIds.value)
   if (ids.length === 0) {
@@ -164,21 +122,6 @@ async function ensureHouseholdCalendar(): Promise<string> {
   visibleCalendarIds.value = next
   activeCalendarScope.value = next
   return cal.id
-}
-
-function toggleCalendarVisible(calId: string) {
-  const next = new Set(visibleCalendarIds.value)
-  if (next.has(calId)) {
-    if (next.size === 1) return  // never let the user hide everything
-    next.delete(calId)
-  } else {
-    next.add(calId)
-  }
-  visibleCalendarIds.value = next
-  activeCalendarScope.value = next
-  const uid = currentUser.value?.user_id
-  if (uid) saveVisibilityPrefs(uid, next)
-  void loadEvents()
 }
 
 function showAllCalendars() {
@@ -356,11 +299,26 @@ export default function CalendarPage() {
   const grouped = groupEventsByDay(events.value)
   const dayKeys = Object.keys(grouped).sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
 
+  const setVisible = (next: Set<string>) => {
+    visibleCalendarIds.value = next
+    activeCalendarScope.value = next
+    const uid = currentUser.value?.user_id
+    if (uid) saveVisibilityPrefs(uid, next)
+    void loadEvents()
+  }
+
   return (
     <div class="sh-calendar">
-      <div class="sh-page-header">
-        <Button onClick={handleNewEvent}>+ New event</Button>
-      </div>
+      <CalendarFilterStrip
+        calendars={calendars.value}
+        visibleCalendarIds={visibleCalendarIds.value}
+        onChange={setVisible}
+        onShowAll={showAllCalendars}
+        onShowOnlyMine={showOnlyMine}
+        primaryAction={
+          <Button onClick={handleNewEvent}>+ New event</Button>
+        }
+      />
 
       <div class="sh-calendar-controls">
         <div class="sh-calendar-nav">
@@ -373,72 +331,6 @@ export default function CalendarPage() {
                   onClick={() => navigateDate(1)}>&#8250;</Button>
           <Button variant="secondary" onClick={() => { currentDate.value = new Date() }}>Today</Button>
         </div>
-        {calendars.value.length > 1 && (
-          <div class="sh-calendar-picker"
-               role="group"
-               aria-label="Visible calendars">
-            <button
-              type="button"
-              class="sh-calendar-picker__quick"
-              onClick={showOnlyMine}
-            >
-              Just me
-            </button>
-            <button
-              type="button"
-              class="sh-calendar-picker__quick"
-              onClick={showAllCalendars}
-            >
-              Show all
-            </button>
-            {(() => {
-              // Count own-calendars to decide whether the "My calendar"
-              // chip label needs disambiguation. With one own-calendar
-              // the friendly "My calendar" reads cleanly; with two or
-              // more (e.g. Personal + Work) every chip would read "My
-              // calendar" identically — fall back to the calendar's
-              // name so the user can tell them apart.
-              const myCalendarCount = calendars.value.filter(
-                c => c.owner_username === currentUser.value?.username,
-              ).length
-              return calendars.value.map(c => {
-              // householdUsers is keyed by user_id; the calendar
-              // carries the owner's username, so iterate to map back.
-              let ownerLabel = c.owner_username
-              for (const u of householdUsers.value.values()) {
-                if (u.username === c.owner_username) {
-                  ownerLabel = u.display_name || u.username
-                  break
-                }
-              }
-              const mine = c.owner_username === currentUser.value?.username
-              const checked = visibleCalendarIds.value.has(c.id)
-              const hue = resolveCalendarColor(c)
-              const chipLabel = mine
-                ? (myCalendarCount > 1 ? c.name : 'My calendar')
-                : `${ownerLabel}'s`
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  class={
-                    checked
-                      ? 'sh-calendar-picker__chip sh-calendar-picker__chip--on'
-                      : 'sh-calendar-picker__chip'
-                  }
-                  aria-pressed={checked}
-                  aria-label={`${chipLabel} (${c.name}): ${checked ? 'visible' : 'hidden'}`}
-                  style={{ '--cal-hue': hue } as Record<string, string>}
-                  onClick={() => toggleCalendarVisible(c.id)}
-                >
-                  <span class="sh-calendar-picker__dot" aria-hidden="true" />
-                  <span>{chipLabel}</span>
-                </button>
-              )
-              })
-            })()}
-          </div>
-        )}
         <div class="sh-calendar-views" role="tablist">
           {(['month', 'week', 'day'] as CalendarViewMode[]).map(mode => (
             <button
