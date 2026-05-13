@@ -19,10 +19,18 @@
  */
 import { signal } from '@preact/signals'
 import { ws } from '@/ws'
+import { householdDisplayName } from '@/store/householdUsers'
 
 interface TypingState {
   scope: string
-  display: string
+  /** ``user_id`` from the WS frame. We resolve this to a friendly
+   *  display name at render time via :func:`householdDisplayName` so a
+   *  late ``user.profile_updated`` (avatar change, rename) is reflected
+   *  without rebroadcasting the typing event. ``sender_username`` from
+   *  the frame is kept as a fallback for users not yet in the
+   *  household cache (e.g. cross-household friends). */
+  userId: string
+  fallbackName: string
   ts: number
 }
 
@@ -41,7 +49,8 @@ if (typeof window !== 'undefined') {
     const map = new Map(typingUsers.value)
     map.set(`${cid}|${uid}`, {
       scope: cid,
-      display: data.sender_username || uid,
+      userId: uid,
+      fallbackName: data.sender_username || uid,
       ts: Date.now(),
     })
     typingUsers.value = map
@@ -62,7 +71,8 @@ if (typeof window !== 'undefined') {
     const map = new Map(typingUsers.value)
     map.set(`${scope}|${uid}`, {
       scope,
-      display: data.sender_username || uid,
+      userId: uid,
+      fallbackName: data.sender_username || uid,
       ts: Date.now(),
     })
     typingUsers.value = map
@@ -98,13 +108,38 @@ export function sendTyping(
   }
 }
 
-export function TypingIndicator({ scope }: { scope?: string }) {
+interface TypingIndicatorProps {
+  scope?: string
+  /** When ``true`` the indicator renders as a chat-bubble row,
+   *  styled to sit at the bottom of a messages list (DM thread).
+   *  Default ``false`` keeps the older inline-pill render that
+   *  comment threads still use. */
+  bubble?: boolean
+}
+
+export function TypingIndicator({ scope, bubble }: TypingIndicatorProps) {
   const all = Array.from(typingUsers.value.values())
   const users = scope ? all.filter(s => s.scope === scope) : all
   if (users.length === 0) return null
-  const names = users.map(s => s.display)
-  const label = names.length === 1 ? `${names[0]} is typing` :
-    names.length === 2 ? `${names[0]} and ${names[1]} are typing` :
-    `${names.length} people are typing`
-  return <div class="sh-typing" aria-live="polite"><span class="sh-typing-dots">•••</span> {label}</div>
+  // Resolve friendly display names lazily so a profile rename shows up
+  // without rebroadcasting the typing frame. ``householdDisplayName``
+  // already falls back to the username, and the WS-frame
+  // ``fallbackName`` covers the cross-household case where the user
+  // isn't in the local household cache yet.
+  const names = users.map(s => {
+    const friendly = householdDisplayName(s.userId)
+    // ``householdDisplayName`` returns the bare user_id when the user
+    // isn't cached; prefer the WS-provided username in that case.
+    return friendly && friendly !== s.userId ? friendly : s.fallbackName
+  })
+  const label = names.length === 1 ? `${names[0]} is typing`
+    : names.length === 2 ? `${names[0]} and ${names[1]} are typing`
+    : `${names.length} people are typing`
+  const cls = bubble ? 'sh-typing sh-typing--bubble' : 'sh-typing'
+  return (
+    <div class={cls} aria-live="polite">
+      <span class="sh-typing-dots" aria-hidden="true">•••</span>
+      <span class="sh-typing-label">{label}</span>
+    </div>
+  )
 }

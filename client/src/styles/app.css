@@ -3030,6 +3030,21 @@ a.sh-friends-member-chip:hover {
   background: var(--sh-primary-soft);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--sh-primary) 20%, transparent);
 }
+/* In-flight send — the input is disabled, the Button shows a spinner.
+ * The composer dims slightly + glows in the hearth hue so the cue is
+ * felt even when the user's focus is on a different surface (e.g. the
+ * SttButton popover, the messages list). Same vocabulary as
+ * ``--dragging`` above — small token that reads as "the form is busy
+ * with something". */
+.sh-composer--sending {
+  border-color: color-mix(in srgb, var(--sh-primary) 55%, var(--sh-border));
+  background: color-mix(in srgb, var(--sh-primary) 4%, var(--sh-bg));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sh-primary) 12%, transparent);
+}
+.sh-composer--sending input {
+  cursor: progress;
+  opacity: 0.7;
+}
 /* MediaDropzone — drop-target affordance shared across the post,
  * highlight, and momentum composers. */
 .sh-mediadrop {
@@ -3496,12 +3511,31 @@ a.sh-friends-member-chip:hover {
 .sh-thread {
   display: flex;
   flex-direction: column;
+  /* Desktop: 120px reserves the topbar + the ``.sh-main`` vertical
+   * padding so the thread fills exactly the remaining viewport. On
+   * mobile we also have a 56-84 px bottom tab bar (``.sh-mobile-nav``)
+   * outside ``.sh-thread``'s flex flow — overridden below in the
+   * ``max-width: 768px`` block so the composer + newest message
+   * never slide under it. */
   height: calc(100vh - 120px);
   background: var(--sh-bg);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-lg);
   overflow: hidden;
   box-shadow: var(--sh-shadow-sm);
+}
+@media (max-width: 768px) {
+  .sh-thread {
+    /* The mobile tab bar (``.sh-mobile-nav``) is ``position: fixed``
+     * outside the document flow, so the ``100vh`` based thread height
+     * runs straight through it and the newest message + composer get
+     * hidden behind the bar. Subtract the 84 px bar height + the
+     * home-indicator inset so the bottom of the thread sits flush
+     * with the top of the tab bar in every iOS / Android viewport. */
+    height: calc(
+      100dvh - 120px - 84px - env(safe-area-inset-bottom, 0)
+    );
+  }
 }
 .sh-thread-header {
   display: flex;
@@ -3793,7 +3827,9 @@ a.sh-friends-member-chip:hover {
 .sh-message--mine .sh-receipt--delivered { color: rgba(255,255,255,0.7); }
 .sh-message--mine .sh-receipt--sent      { color: rgba(255,255,255,0.5); }
 
-/* Typing indicator */
+/* Typing indicator — default (inline pill) shape used by comment
+ * threads. The bubble variant below sits at the bottom of a DM
+ * thread's messages list so it reads as a chat preview row. */
 .sh-typing {
   display: inline-flex;
   align-items: center;
@@ -3801,6 +3837,31 @@ a.sh-friends-member-chip:hover {
   color: var(--sh-text-muted);
   font-size: var(--sh-font-size-xs);
   padding: var(--sh-space-xs) var(--sh-space-md);
+}
+.sh-typing-label { display: inline-block; }
+/* Bubble variant — soft cream pill, sits as the last row of a
+ * messages list so the user reads it the same way iMessage / WhatsApp
+ * present "is typing" at the bottom of the scroll area. The cream
+ * background + thin border anchors it as a peer-side bubble (left-
+ * aligned in a flex column). */
+.sh-typing--bubble {
+  align-self: flex-start;
+  max-width: 70%;
+  padding: 8px 14px;
+  background: var(--sh-bg-tertiary);
+  border: 1px solid var(--sh-border);
+  border-radius: 18px 18px 18px 4px;
+  box-shadow: var(--sh-shadow-xs);
+  margin-top: 4px;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text);
+  /* Subtle entrance: fade-in + slight rise so the bubble doesn't pop
+   * into existence whenever the typing window starts. */
+  animation: sh-typing-fade-in 200ms ease-out;
+}
+@keyframes sh-typing-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 .sh-typing-dots {
   display: inline-flex;
