@@ -1,0 +1,103 @@
+name: Release — draft
+
+# Manual entry point for cutting a release. The workflow computes
+# today's CalVer tag (``YYYY.M.D`` with a ``.N`` suffix when there's
+# already a same-day release), asks GitHub to auto-generate the notes
+# from merged PRs since the last published release, and opens a
+# **draft** release for the operator to polish.
+#
+# Publishing the draft (in the GitHub UI or via ``gh release edit
+# <tag> --draft=false``) is what creates the underlying CalVer tag
+# AND fires ``release.published``, which is the single trigger for
+# ``publish.yml`` (PyPI + Docker images). Drafts do not create tags
+# and do not trigger ``publish.yml`` — so this workflow is safe to
+# re-run; just delete the stale draft from the Releases UI first.
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Release date (YYYY-MM-DD). Defaults to today UTC."
+        required: false
+        type: string
+
+permissions:
+  contents: write  # creating a draft release needs write
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next CalVer tag
+        id: ver
+        env:
+          INPUT_DATE: ${{ inputs.date }}
+        run: |
+          set -euo pipefail
+          d="${INPUT_DATE:-$(date -u +%Y-%m-%d)}"
+          y=$(date -d "$d" +%Y)
+          m=$(date -d "$d" +%-m)   # %-m / %-d strip leading zeros so we get
+          day=$(date -d "$d" +%-d) # 2026.5.13 not 2026.05.13
+          base="${y}.${m}.${day}"
+          existing=$(git tag -l "${base}" "${base}.*" | sort -V || true)
+          if [ -z "$existing" ]; then
+            version="$base"
+          else
+            highest=$(echo "$existing" | tail -n 1)
+            if [ "$highest" = "$base" ]; then
+              version="${base}.1"
+            else
+              n="${highest##*.}"
+              version="${base}.$((n + 1))"
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Computed version: \`$version\`"
+            echo
+            echo "### Existing same-day tags"
+            if [ -z "$existing" ]; then
+              echo "_(none — this is the first release of the day)_"
+            else
+              echo '```'
+              echo "$existing"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create draft release with auto-generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Anchor the auto-generated diff to the most recent published
+          # release. ``gh release view`` with no arg returns the latest
+          # non-draft release, so this stays correct even after a CalVer
+          # rollover where lexical tag sorting would otherwise misorder
+          # ``2026.5.13`` vs ``2026.5.9``.
+          prev=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          args=(
+            "$VERSION"
+            --target main
+            --title "$VERSION"
+            --generate-notes
+            --draft
+          )
+          if [ -n "$prev" ]; then
+            args+=(--notes-start-tag "$prev")
+          fi
+          gh release create "${args[@]}"
+          url=$(gh release view "$VERSION" --json url -q .url)
+          {
+            echo
+            echo "### Draft release"
+            echo "Ready to review: $url"
+            echo
+            echo "Polish the notes in the UI, then click **Publish release**."
+            echo "That's what creates the \`$VERSION\` tag and fires \`release.published\` — \`publish.yml\` picks it up from there."
+          } >> "$GITHUB_STEP_SUMMARY"

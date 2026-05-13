@@ -1,0 +1,40 @@
+# Configures GitHub's "Generate release notes" — consumed by the
+# ``release-draft`` workflow's ``--generate-notes`` call (and by the
+# web UI's "Generate release notes" button).
+#
+# Categorisation is label-driven. Prefer adding one of the labels
+# below to every PR; the catch-all ``"*"`` row keeps unlabelled PRs
+# from silently disappearing from the notes.
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - dependencies
+    authors:
+      - dependabot
+      - dependabot[bot]
+  categories:
+    - title: Breaking changes
+      labels:
+        - breaking
+        - breaking-change
+    - title: Features
+      labels:
+        - feat
+        - feature
+        - enhancement
+    - title: Fixes
+      labels:
+        - fix
+        - bug
+        - bugfix
+    - title: Security
+      labels:
+        - security
+    - title: Docs
+      labels:
+        - docs
+        - documentation
+    - title: Other changes
+      labels:
+        - "*"
