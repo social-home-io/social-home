@@ -95,6 +95,13 @@ async def test_view_and_reaction_round_trip(db, repo):
     await repo.mark_viewed(frame.id, "u2")
     views = await repo.list_views_for_frame(frame.id)
     assert len(views) == 1 and views[0].viewer_user_id == "u2"
+    # ``viewed_at`` must round-trip as a tz-aware ISO 8601 string so the
+    # SPA's relative-time helper resolves it as UTC. The earlier SQLite
+    # ``datetime('now')`` shape was naive (no ``T``, no ``Z``) and got
+    # parsed as the viewer's local time in browsers — fresh views read
+    # as "{tz-offset}h ago" everywhere east of UTC.
+    assert "T" in views[0].viewed_at
+    assert views[0].viewed_at.endswith("+00:00") or views[0].viewed_at.endswith("Z")
 
     await repo.set_reaction(frame.id, "u2", "🔥")
     rs = await repo.list_reactions_for_frame(frame.id)

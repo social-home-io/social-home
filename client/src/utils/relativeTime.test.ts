@@ -60,3 +60,34 @@ describe('relativeDocsTime', () => {
     expect(relativeDocsTime('not-a-date')).toBe('not-a-date')
   })
 })
+
+describe('SQLite naive-UTC normalisation', () => {
+  // Naive shape ``YYYY-MM-DD HH:MM:SS`` from SQLite's ``datetime('now')``
+  // — no ``T``, no ``Z``. Without normalisation Date.parse would treat
+  // it as the viewer's local time, so a fresh "just now" stamp would
+  // read as "{tz-offset}h ago" everywhere east of UTC. The Highlights
+  // seen-by sheet was the surface that surfaced this for the user.
+  it('treats a same-second naive timestamp as "just now"', () => {
+    const nowSqlite = '2026-05-08 13:00:00'
+    expect(relativeDocsTime(nowSqlite)).toBe('just now')
+    expect(relativeChatTime(nowSqlite)).toBe('now')
+  })
+
+  it('does not mis-attribute a few-minute-old naive timestamp as hours old', () => {
+    // 30 seconds ago in UTC.
+    const naive = '2026-05-08 12:59:30'
+    expect(relativeDocsTime(naive)).toBe('just now')
+  })
+
+  it('still respects the fractional-seconds shape', () => {
+    expect(relativeDocsTime('2026-05-08 13:00:00.000')).toBe('just now')
+  })
+
+  it('leaves a real-UTC ISO string with offset alone', () => {
+    expect(relativeDocsTime('2026-05-08T13:00:00+00:00')).toBe('just now')
+  })
+
+  it('echoes garbage that looks vaguely like a timestamp', () => {
+    expect(relativeDocsTime('not-a-date')).toBe('not-a-date')
+  })
+})

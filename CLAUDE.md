@@ -402,6 +402,16 @@ perfect?" Incremental accuracy beats big bang rewrites.
 - Never write SQL directly in a service — extract it into the matching
   `Abstract*Repo` + `Sqlite*Repo` (the documented exceptions are
   `backup_service` and `data_export_service`, which dump whole tables)
+- Never use SQLite's bare `datetime('now')` (or pass naive Python
+  `datetime.now()` without `timezone.utc`) for any timestamp the SPA
+  reads. The naive shape `"YYYY-MM-DD HH:MM:SS"` parses as the
+  viewer's **local** time in browsers, so "just now" reads as
+  "{tz-offset}h ago" everywhere east of UTC. Use `SQL_UTC_NOW` from
+  `db.timestamps` inside an SQL string, or `utc_now_iso()` from the
+  same module as a Python parameter — both yield a tz-aware ISO 8601
+  string the SPA can diff against `Date.now()` correctly. Audit
+  fields the SPA never renders (e.g. `applied_at` in the migrations
+  table) are the only documented exception.
 - Never declare a row-shaped `@dataclass` in `repositories/` — it belongs
   in `domain/`. Re-export from the repo module if existing imports need it
 - Never declare a service constructor that takes `db: AsyncDatabase`

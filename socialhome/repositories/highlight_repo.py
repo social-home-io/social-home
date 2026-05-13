@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
+from ..db.timestamps import SQL_UTC_NOW
 from ..domain.highlight import (
     Highlight,
     HighlightAudience,
@@ -307,10 +308,15 @@ class SqliteHighlightRepo:
     # ── Views ───────────────────────────────────────────────────────────
 
     async def mark_viewed(self, frame_id: str, viewer_user_id: str) -> None:
+        # ``viewed_at`` is rendered by the SPA via ``relativeDocsTime``
+        # ("2h ago"). Use the ``SQL_UTC_NOW`` helper so the row carries
+        # a tz-aware ISO 8601 string — see ``db.timestamps`` for the
+        # background on why SQLite's bare ``datetime('now')`` is
+        # ambiguous to browser ``Date.parse``.
         await self._db.enqueue(
-            """
+            f"""
             INSERT INTO highlight_frame_views(frame_id, viewer_user_id, viewed_at)
-            VALUES(?, ?, datetime('now'))
+            VALUES(?, ?, {SQL_UTC_NOW})
             ON CONFLICT(frame_id, viewer_user_id) DO NOTHING
             """,
             (frame_id, viewer_user_id),
