@@ -144,3 +144,50 @@ export function advanceDate(
   else next.setDate(next.getDate() + direction)
   return next
 }
+
+/** Deterministic colour per calendar id — picks one of 16 hand-tuned
+ *  earth-tone hues so two members rarely collide visually. The same id
+ *  always lands on the same colour across reloads / sessions. 16 is
+ *  enough for any realistic household; if a household ever has 17+
+ *  calendars the chip names still disambiguate. */
+const _CAL_HUES = [
+  'var(--sh-primary)',  // terracotta
+  'var(--sh-success)',  // moss
+  'var(--sh-warning)',  // honey
+  'var(--sh-danger)',   // brick
+  '#7B5BA8',            // plum
+  '#3F7B8C',            // dusty teal
+  '#A89344',            // ochre
+  '#5C7B5A',            // sage
+  '#9B5B3F',            // cinnamon
+  '#34688D',            // navy
+  '#7C9D5F',            // olive
+  '#B57E47',            // amber
+  '#5B8E8E',            // slate teal
+  '#8C5777',            // rose-plum
+  '#46735A',            // pine
+  '#BC6C68',            // brick rose
+] as const
+
+export function calendarHue(calId: string): string {
+  // Tiny string-hash → pick a hue. djb2-flavoured.
+  let h = 5381
+  for (let i = 0; i < calId.length; i++) {
+    h = ((h << 5) + h + calId.charCodeAt(i)) | 0
+  }
+  return _CAL_HUES[Math.abs(h) % _CAL_HUES.length]
+}
+
+/** Resolve the chip dot colour. The DB column wins when the owner has
+ *  picked one. Both legacy "default-blue" sentinels (``#4A90E2`` from the
+ *  schema, ``#2196F3`` from an earlier service default) are treated as
+ *  "unset" so the warm hash-derived palette takes over — leaving every
+ *  fresh calendar a cold-blue chip read as generic and stale against
+ *  the hearth surface. */
+const _UNSET_CAL_COLORS = new Set(['#4a90e2', '#2196f3'])
+export function resolveCalendarColor(
+  c: { id: string; color?: string | null },
+): string {
+  if (c.color && !_UNSET_CAL_COLORS.has(c.color.toLowerCase())) return c.color
+  return calendarHue(c.id)
+}

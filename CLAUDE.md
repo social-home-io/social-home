@@ -193,6 +193,38 @@ References:
 - `socialhome/auth.py` — `HaIngressStrategy` is the backend
   authentication strategy that accepts the ingress headers
 
+### Visually verifying UI changes
+
+Every change that touches SPA chrome — layout, components, CSS,
+copy — **must be visually verified on both desktop and mobile
+viewports** using the `chrome-devtools-mcp:chrome-devtools` skill
+before the PR is opened. Type-checking and Vitest cover code
+correctness, not visual correctness — a button can pass `tsc` +
+tests and still bleed off-screen on a 360 px phone or stack
+vertically on desktop. Walk through the touched surface in both
+shapes:
+
+- **Desktop** at the default ~1280×720 viewport — confirm the
+  layout reads as designed, nothing overflows the column, hover
+  states do what they say, focus rings land where keyboard users
+  expect them.
+- **Mobile** at ~390×844 (iPhone 14 / Pixel-class) — confirm the
+  strip / chip / form wraps correctly, tap targets stay ≥ 36 px
+  tall, horizontal scroll doesn't appear on body content, text
+  doesn't get clipped, sticky chrome doesn't cover the active
+  control.
+
+The skill spins up Chrome via MCP and exposes `navigate_page` /
+`resize_page` / `take_screenshot` / `take_snapshot`. Use it
+against the local dev server (`pnpm dev` in `client/`); use
+`resize_page` to flip between desktop and mobile sizes, take a
+screenshot of each touched surface, and read the DOM snapshot for
+anything keyboard-focusable. If the dev server can't be reached
+(sandbox, offline), say so explicitly in the PR description rather
+than claiming visual verification — the missing screenshots are
+themselves the signal that a reviewer should reproduce locally
+before merging.
+
 ### Federation & Security
 
 - Every inbound federation event MUST pass through the §24.11 validation pipeline:
