@@ -28,6 +28,14 @@ jobs:
         # §27.5 — 90% branch coverage gate. Ratchet upward as modules
         # get more tests; never lower this number — add missing tests
         # instead.
+        #
+        # ``pytest-xdist`` parallelism comes from
+        # ``[tool.pytest.ini_options].addopts = "-n auto"`` in
+        # ``pyproject.toml`` — runs across every available runner core
+        # without an extra CLI flag here. ``coverage`` is already
+        # ``parallel = true`` in ``[tool.coverage.run]`` so the
+        # per-worker ``.coverage.*`` files merge cleanly when
+        # ``pytest-cov`` finalises.
         run: |
           pytest --cov=socialhome --cov-branch --cov-fail-under=90 --tb=short -q
 
