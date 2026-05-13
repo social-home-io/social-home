@@ -25,6 +25,9 @@ Reference material for running and understanding Social Home.
 - **[protocol/](./protocol/)** — The federation protocol, feature by
   feature. Start with [protocol/README.md](./protocol/README.md) for the
   HFS ↔ GFS architecture overview.
+- **[claude-plugins.md](./claude-plugins.md)** — The Claude Code
+  plugin stack this repo ships in `.claude/settings.json`, and what
+  each plugin contributes to the development workflow.
 
 ## Glossary
 

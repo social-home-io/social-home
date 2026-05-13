@@ -19,7 +19,7 @@ import { JoinRequestList } from '@/components/JoinRequestList'
 import { ModerationQueue } from '@/components/ModerationQueue'
 import { SpaceLocationCard } from '@/components/SpaceLocationCard'
 import { SpaceMemberList } from '@/components/SpaceMemberList'
-import { Gallery } from '@/components/Gallery'
+import GalleryPage from '@/features/gallery/GalleryPage'
 import { Button } from '@/components/Button'
 import { PostCard } from '@/components/PostCard'
 import { Composer } from '@/components/Composer'
@@ -488,7 +488,7 @@ export default function SpaceFeedPage() {
       )}
 
       {activeTab.value === 'gallery' && (
-        <Gallery spaceId={spaceId} />
+        <GalleryPage spaceId={spaceId} />
       )}
 
       {activeTab.value === 'map' && s?.features?.location && (

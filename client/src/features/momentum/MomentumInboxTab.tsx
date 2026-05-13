@@ -16,6 +16,7 @@ import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
+import { openLightbox } from '@/components/ImageLightbox'
 import { openMomentumComposer } from '@/components/MomentumComposerDialog'
 import { MomentumInboxSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
@@ -240,13 +241,29 @@ function MomentRow({
         )}
 
         {m.media_type === 'image' && m.media_url && (
-          <img
-            src={m.media_url}
-            alt={m.content ? '' : `Photo from ${authorName}`}
-            loading="lazy"
-            class="sh-momentum-row-media"
-            onClick={(ev) => ev.stopPropagation()}
-          />
+          <button
+            type="button"
+            class="sh-momentum-row-media-button"
+            aria-label="Open photo full-size"
+            onClick={(ev) => {
+              ev.preventDefault()
+              ev.stopPropagation()
+              openLightbox({
+                items: [{
+                  url:       m.media_url!,
+                  item_type: 'photo',
+                  caption:   m.content || null,
+                }],
+              })
+            }}
+          >
+            <img
+              src={m.media_url}
+              alt={m.content ? '' : `Photo from ${authorName}`}
+              loading="lazy"
+              class="sh-momentum-row-media"
+            />
+          </button>
         )}
         {m.media_type === 'video' && m.media_url && (
           <video

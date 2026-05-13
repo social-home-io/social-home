@@ -1,7 +1,10 @@
 /**
  * FileRenderer — file & video post rendering (§23.51).
  * Renders file attachments, videos, and images within PostCard.
- * Images are click-to-zoom via :mod:`Lightbox`.
+ * Images are click-to-zoom via the global :mod:`ImageLightbox`
+ * overlay (mounted once in :mod:`App`), so the prev/next + keyboard
+ * + download + copy-reference UX matches the gallery and multi-image
+ * posts.
  *
  * URLs flowing in here are already short-lived signed (server-side
  * ``MediaUrlSigner`` appends ``?exp=&sig=`` at serialization), so the
@@ -9,8 +12,7 @@
  * ``<a download>`` without needing an ``Authorization`` header. See
  * ``socialhome.media_signer`` and ``socialhome.auth.SignedMediaStrategy``.
  */
-import { useState } from 'preact/hooks'
-import { Lightbox } from './Lightbox'
+import { openLightbox } from './ImageLightbox'
 
 interface FileAttachment {
   url: string
@@ -52,19 +54,15 @@ export function VideoRenderer({ src, poster }: { src: string; poster?: string })
 }
 
 export function ImageRenderer({ src, alt }: { src: string; alt?: string }) {
-  const [zoomed, setZoomed] = useState(false)
   return (
-    <>
-      <button type="button" class="sh-image-wrapper"
-              aria-label="Open image full-size"
-              onClick={() => setZoomed(true)}>
-        <img class="sh-image" src={src} alt={alt || 'Post image'}
-             loading="lazy" />
-      </button>
-      {zoomed && (
-        <Lightbox src={src} alt={alt} onClose={() => setZoomed(false)} />
-      )}
-    </>
+    <button type="button" class="sh-image-wrapper"
+            aria-label="Open image full-size"
+            onClick={() => openLightbox({
+              items: [{ url: src, item_type: 'photo', caption: alt }],
+            })}>
+      <img class="sh-image" src={src} alt={alt || 'Post image'}
+           loading="lazy" />
+    </button>
   )
 }
 
