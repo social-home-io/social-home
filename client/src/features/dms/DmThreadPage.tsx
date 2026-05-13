@@ -184,6 +184,7 @@ export default function DmThreadPage() {
   // effect to the wrong slot — the scroll then silently never
   // fires. ***
   const messageCount = messages.value.length
+  const isLoading = loading.value
   useEffect(() => {
     const el = messagesScrollRef.current
     if (!el) return
@@ -201,6 +202,26 @@ export default function DmThreadPage() {
       })
     })
   }, [messageCount])
+
+  // Force a scroll-to-bottom on every chat open — covers the case
+  // where the user revisits a chat whose ``messages.value.length``
+  // hasn't changed since last time (e.g. /dms → click same thread
+  // again). The ``messageCount`` effect above would skip because
+  // its dep didn't change, but we always want the latest message
+  // to be the first thing visible after a fresh open. Also resets
+  // the follow-bottom flag so a re-open doesn't preserve a
+  // mid-scroll position from the previous visit.
+  useEffect(() => {
+    if (isLoading) return
+    stickToBottom.current = true
+    const el = messagesScrollRef.current
+    if (!el) return
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+      })
+    })
+  }, [convId, isLoading])
 
   // The ``messageCount`` effect above re-scrolls when a new message
   // row lands, but the typing indicator is rendered inside the same
@@ -441,9 +462,10 @@ export default function DmThreadPage() {
   return (
     <div class="sh-thread">
       <div class="sh-thread-header">
-        {/* Mobile-only back arrow. Desktop already has the sidebar.
-         * Hidden via CSS on ≥769 px so it doesn't fight with the
-         * desktop "Chats" sidebar link for the same affordance. */}
+        {/* Back chevron — visible on every viewport since the
+         * full-bleed chat hides both the mobile bottom tab bar and
+         * the desktop card outline. Users reach for an in-chat
+         * back affordance regardless of screen size. */}
         <a
           class="sh-thread-back"
           href="/dms"
