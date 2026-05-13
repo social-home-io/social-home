@@ -402,16 +402,24 @@ perfect?" Incremental accuracy beats big bang rewrites.
 - Never write SQL directly in a service — extract it into the matching
   `Abstract*Repo` + `Sqlite*Repo` (the documented exceptions are
   `backup_service` and `data_export_service`, which dump whole tables)
-- Never use SQLite's bare `datetime('now')` (or pass naive Python
-  `datetime.now()` without `timezone.utc`) for any timestamp the SPA
-  reads. The naive shape `"YYYY-MM-DD HH:MM:SS"` parses as the
-  viewer's **local** time in browsers, so "just now" reads as
-  "{tz-offset}h ago" everywhere east of UTC. Use `SQL_UTC_NOW` from
-  `db.timestamps` inside an SQL string, or `utc_now_iso()` from the
-  same module as a Python parameter — both yield a tz-aware ISO 8601
-  string the SPA can diff against `Date.now()` correctly. Audit
-  fields the SPA never renders (e.g. `applied_at` in the migrations
-  table) are the only documented exception.
+- **All database timestamps are stored as UTC, without timezone
+  designator.** The canonical shape is what SQLite's `datetime('now')`
+  emits — `"YYYY-MM-DD HH:MM:SS"`. Use `datetime('now')` directly in
+  SQL strings for "now" values; if a Python caller computes the
+  timestamp, format it as the same naive UTC shape
+  (`datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")`) so
+  the column stays uniform. Never store a local-time value, never
+  store a timestamp with an attached offset (`...+02:00`,
+  `...Z`, etc.) — uniformity is what lets us sort, range-query and
+  reason about timestamps without per-row format checks. Conversion
+  to the viewer's locale happens at the **SPA boundary**: relative
+  labels go through `client/src/utils/relativeTime.ts:parseDelta`
+  (which already normalises the naive shape to UTC ISO 8601 before
+  `Date.parse`), and absolute renders go through
+  `toLocaleString(undefined, ...)`. Never convert in the repo, the
+  service or the route. A handful of older Python writes still emit
+  the tz-aware shape (`...+00:00`); the SPA normaliser handles
+  both, but new code should write the naive UTC shape.
 - Never declare a row-shaped `@dataclass` in `repositories/` — it belongs
   in `domain/`. Re-export from the repo module if existing imports need it
 - Never declare a service constructor that takes `db: AsyncDatabase`
