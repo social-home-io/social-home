@@ -165,13 +165,65 @@ export default function DmThreadPage() {
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const stickToBottom = useRef(true)
 
-  // Tag the body so the mobile layout can hide the bottom tab bar and
+  // Tag the body so the layout can hide the bottom tab bar and
   // full-bleed the thread — the chat surface should claim the whole
-  // viewport on small screens. The class is scoped to the DM thread
-  // route via the useEffect lifecycle.
+  // viewport. The class is scoped to the DM thread route via the
+  // useEffect lifecycle.
   useEffect(() => {
     document.body.classList.add('sh-dm-thread-open')
     return () => document.body.classList.remove('sh-dm-thread-open')
+  }, [])
+
+  // Scroll the messages list to the bottom whenever the page first
+  // settles after a load (so opening a chat shows the most recent
+  // messages, like every other chat app) or whenever a new message
+  // lands while the user is already at the bottom. *** This hook
+  // must live ABOVE the ``if (loading.value) return`` early-return
+  // below, otherwise the hook count differs between the loading
+  // skeleton render and the settled render and Preact assigns the
+  // effect to the wrong slot — the scroll then silently never
+  // fires. ***
+  const messageCount = messages.value.length
+  useEffect(() => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    if (!stickToBottom.current) return
+    // Two frames: first to let the new bubble render, second so the
+    // scroll happens *after* the layout settles. Without the rAF the
+    // assignment runs before the bubble's height is accounted for and
+    // the scroll lands a few px short. ``behavior: 'auto'`` forces an
+    // instant jump even though the container has ``scroll-behavior:
+    // smooth`` in CSS — opening a chat should land at the bottom
+    // immediately, not glide there over half a second.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+      })
+    })
+  }, [messageCount])
+
+  // The ``messageCount`` effect above re-scrolls when a new message
+  // row lands, but the typing indicator is rendered inside the same
+  // container *without* changing ``messages.value.length`` — it's
+  // driven by a separate signal in ``TypingIndicator``. Without an
+  // observer the indicator can mount just below the viewport and
+  // the user never sees it. A ``MutationObserver`` on the container
+  // catches that case (and any other DOM growth — long messages
+  // finishing layout, delivery-tick re-renders) and re-pins the
+  // scroll to the bottom when the user was already there.
+  // (Same rules-of-hooks caveat as above — must live above the
+  // loading-skeleton early return.)
+  useEffect(() => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    const mo = new MutationObserver(() => {
+      if (!stickToBottom.current) return
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+      })
+    })
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
+    return () => mo.disconnect()
   }, [])
 
   useEffect(() => {
@@ -369,29 +421,6 @@ export default function DmThreadPage() {
   if (loading.value) return <DmThreadSkeleton />
   const myUserId = currentUser.value?.user_id
 
-  // Scroll the messages list to the bottom whenever the page first
-  // settles after a load (so opening a chat shows the most recent
-  // messages, like every other chat app) or whenever a new message
-  // lands while the user is already at the bottom.
-  const messageCount = messages.value.length
-  useEffect(() => {
-    const el = messagesScrollRef.current
-    if (!el) return
-    if (!stickToBottom.current) return
-    // Two frames: first to let the new bubble render, second so the
-    // scroll happens *after* the layout settles. Without the rAF the
-    // assignment runs before the bubble's height is accounted for and
-    // the scroll lands a few px short. ``behavior: 'auto'`` forces an
-    // instant jump even though the container has ``scroll-behavior:
-    // smooth`` in CSS — opening a chat should land at the bottom
-    // immediately, not glide there over half a second.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-      })
-    })
-  }, [messageCount])
-
   const handleScroll = () => {
     const el = messagesScrollRef.current
     if (!el) return
@@ -400,28 +429,6 @@ export default function DmThreadPage() {
     const dist = el.scrollHeight - (el.scrollTop + el.clientHeight)
     stickToBottom.current = dist < 80
   }
-
-  // The ``messageCount`` effect above re-scrolls when a new message
-  // row lands, but the typing indicator is rendered inside the same
-  // container *without* changing ``messages.value.length`` — it's
-  // driven by a separate signal in ``TypingIndicator``. Without an
-  // observer the indicator can mount just below the viewport and
-  // the user never sees it. A ``MutationObserver`` on the container
-  // catches that case (and any other DOM growth — long messages
-  // finishing layout, delivery-tick re-renders) and re-pins the
-  // scroll to the bottom when the user was already there.
-  useEffect(() => {
-    const el = messagesScrollRef.current
-    if (!el) return
-    const mo = new MutationObserver(() => {
-      if (!stickToBottom.current) return
-      requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-      })
-    })
-    mo.observe(el, { childList: true, subtree: true, characterData: true })
-    return () => mo.disconnect()
-  }, [])
 
   const status = statusLine(threadMembers.value)
   // Compact status modifier for the dot in the header: 'online' → green,

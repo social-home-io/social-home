@@ -3544,55 +3544,56 @@ a.sh-friends-member-chip:hover {
       100dvh - 120px - 84px - env(safe-area-inset-bottom, 0)
     );
   }
-  /* When the user is INSIDE a single chat (``body.sh-dm-thread-open``
-   * is set by :class:`DmThreadPage`), the chat surface claims the
-   * whole viewport below the sticky topbar: bottom tab bar hidden,
-   * page padding zeroed, thread edge-to-edge with no border /
-   * radius. The composer is the natural last child of the flex
-   * column so it stays pinned at the bottom of the visual viewport
-   * — modern mobile browsers shrink ``100dvh`` when the soft
-   * keyboard opens, which pushes the message list up and keeps the
-   * composer hugging the keyboard without a single line of JS. The
-   * typing indicator rides as the last bubble inside ``.sh-messages``
-   * so it never disappears behind the keyboard either. */
-  body.sh-dm-thread-open .sh-main {
-    padding: 0;
-    padding-bottom: 0;
-    max-width: none;
-  }
   body.sh-dm-thread-open .sh-mobile-nav {
     display: none;
   }
-  body.sh-dm-thread-open .sh-thread {
-    /* 56 px ≈ the mobile topbar's natural height (sticky, in document
-     * flow). Subtracting it gives the chat the rest of the viewport. */
-    height: calc(100dvh - 56px);
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-  }
   body.sh-dm-thread-open .sh-thread > .sh-composer {
-    margin-bottom: 0;
-    border-radius: 0;
-    border-left: 0;
-    border-right: 0;
-    border-bottom: 0;
-    padding: var(--sh-space-xs) var(--sh-space-sm);
     /* Honour the home-indicator inset so the composer doesn't sit
      * directly under the bar on iPhones. */
     padding-bottom: max(var(--sh-space-xs), env(safe-area-inset-bottom));
-  }
-  body.sh-dm-thread-open .sh-messages {
-    /* Tighter padding so bubbles claim more of the narrow viewport
-     * — chat is the page, the gutter shouldn't eat 24 px on each
-     * side. */
-    padding: var(--sh-space-sm);
   }
   body.sh-dm-thread-open .sh-message {
     /* Bubbles can flow wider on phones since the column is narrow to
      * begin with. */
     max-width: 88%;
   }
+}
+
+/* When the user is INSIDE a single chat (``body.sh-dm-thread-open``
+ * is set by :class:`DmThreadPage`), the chat claims the whole space
+ * below the sticky topbar on every viewport — full-bleed on phones
+ * AND desktop. The composer is the natural last child of the flex
+ * column so it stays pinned at the bottom of the visual viewport.
+ * Modern browsers shrink ``100dvh`` when the soft keyboard opens,
+ * which pushes the message list up and keeps the composer hugging
+ * the keyboard with no JS. The typing indicator rides as the last
+ * bubble inside ``.sh-messages`` so it never disappears behind the
+ * keyboard either. */
+body.sh-dm-thread-open .sh-main {
+  padding: 0;
+  padding-bottom: 0;
+  max-width: none;
+}
+body.sh-dm-thread-open .sh-thread {
+  /* 56 px ≈ the topbar's natural height (sticky, in document flow);
+   * subtracting it gives the chat the rest of the viewport. */
+  height: calc(100dvh - 56px);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+body.sh-dm-thread-open .sh-thread > .sh-composer {
+  margin-bottom: 0;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  padding: var(--sh-space-xs) var(--sh-space-sm);
+}
+body.sh-dm-thread-open .sh-messages {
+  /* Tighter padding so bubbles claim more of the viewport — chat
+   * is the page, the gutter shouldn't eat 24 px on each side. */
+  padding: var(--sh-space-sm) var(--sh-space-md);
 }
 
 /* Chat-bar composer — single row of [input ……………… mic send] so most
