@@ -157,6 +157,22 @@ export default function DmThreadPage() {
   // sending. Uncontrolled input + ref keeps the existing FormData send
   // path untouched.
   const composerInputRef = useRef<HTMLInputElement | null>(null)
+  // Scrolling container for the messages list. We pin the view to the
+  // bottom on first load, and auto-stick to bottom on new messages
+  // when the user is already there (so an active conversation
+  // follows itself without yanking a reader who scrolled up to
+  // read older context).
+  const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+  const stickToBottom = useRef(true)
+
+  // Tag the body so the mobile layout can hide the bottom tab bar and
+  // full-bleed the thread — the chat surface should claim the whole
+  // viewport on small screens. The class is scoped to the DM thread
+  // route via the useEffect lifecycle.
+  useEffect(() => {
+    document.body.classList.add('sh-dm-thread-open')
+    return () => document.body.classList.remove('sh-dm-thread-open')
+  }, [])
 
   useEffect(() => {
     loading.value = true
@@ -353,6 +369,60 @@ export default function DmThreadPage() {
   if (loading.value) return <DmThreadSkeleton />
   const myUserId = currentUser.value?.user_id
 
+  // Scroll the messages list to the bottom whenever the page first
+  // settles after a load (so opening a chat shows the most recent
+  // messages, like every other chat app) or whenever a new message
+  // lands while the user is already at the bottom.
+  const messageCount = messages.value.length
+  useEffect(() => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    if (!stickToBottom.current) return
+    // Two frames: first to let the new bubble render, second so the
+    // scroll happens *after* the layout settles. Without the rAF the
+    // assignment runs before the bubble's height is accounted for and
+    // the scroll lands a few px short. ``behavior: 'auto'`` forces an
+    // instant jump even though the container has ``scroll-behavior:
+    // smooth`` in CSS — opening a chat should land at the bottom
+    // immediately, not glide there over half a second.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+      })
+    })
+  }, [messageCount])
+
+  const handleScroll = () => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    // 80 px of slack — anything closer counts as "the user is at
+    // the bottom and wants to keep following".
+    const dist = el.scrollHeight - (el.scrollTop + el.clientHeight)
+    stickToBottom.current = dist < 80
+  }
+
+  // The ``messageCount`` effect above re-scrolls when a new message
+  // row lands, but the typing indicator is rendered inside the same
+  // container *without* changing ``messages.value.length`` — it's
+  // driven by a separate signal in ``TypingIndicator``. Without an
+  // observer the indicator can mount just below the viewport and
+  // the user never sees it. A ``MutationObserver`` on the container
+  // catches that case (and any other DOM growth — long messages
+  // finishing layout, delivery-tick re-renders) and re-pins the
+  // scroll to the bottom when the user was already there.
+  useEffect(() => {
+    const el = messagesScrollRef.current
+    if (!el) return
+    const mo = new MutationObserver(() => {
+      if (!stickToBottom.current) return
+      requestAnimationFrame(() => {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+      })
+    })
+    mo.observe(el, { childList: true, subtree: true, characterData: true })
+    return () => mo.disconnect()
+  }, [])
+
   const status = statusLine(threadMembers.value)
   // Compact status modifier for the dot in the header: 'online' → green,
   // 'idle' → amber, anything else → no dot.
@@ -364,6 +434,14 @@ export default function DmThreadPage() {
   return (
     <div class="sh-thread">
       <div class="sh-thread-header">
+        {/* Mobile-only back arrow. Desktop already has the sidebar.
+         * Hidden via CSS on ≥769 px so it doesn't fight with the
+         * desktop "Chats" sidebar link for the same affordance. */}
+        <a
+          class="sh-thread-back"
+          href="/dms"
+          aria-label="Back to chats"
+        >‹</a>
         <div class="sh-thread-header-status" aria-live="polite">
           {headerDot && (
             <span class={`sh-thread-header-dot sh-thread-header-dot--${headerDot}`}
@@ -372,7 +450,14 @@ export default function DmThreadPage() {
           {status && <span class="sh-thread-header-status-line">{status}</span>}
         </div>
         <CallButton convId={convId} />
-        <a class="sh-link" href={`/dms/${convId}/calls`}>History</a>
+        <a
+          class="sh-thread-history"
+          href={`/dms/${convId}/calls`}
+          title="Call history"
+          aria-label="Call history"
+        >
+          <span aria-hidden="true">🕘</span>
+        </a>
       </div>
       {gaps.value.length > 0 && (
         <div class="sh-dm-gap-banner" role="status" aria-live="polite">
@@ -385,7 +470,7 @@ export default function DmThreadPage() {
           </span>
         </div>
       )}
-      <div class="sh-messages">
+      <div class="sh-messages" ref={messagesScrollRef} onScroll={handleScroll}>
         {messages.value.map(m => {
           if (m.type === 'call_event') {
             return <CallEventRow key={m.id} m={m} onCallBack={startCall} />
@@ -509,8 +594,16 @@ export default function DmThreadPage() {
             }}
           />
         )}
-        <Button type="submit" loading={sending.value}>
-          {sending.value ? 'Sending' : 'Send'}
+        <Button
+          type="submit"
+          loading={sending.value}
+          aria-label={sending.value ? 'Sending message' : 'Send message'}
+        >
+          {/* Compact paper-plane icon so the composer reads as a chat
+           *  bar (most of the row goes to the text input) rather than
+           *  a form with a wide CTA. Loading spinner replaces the
+           *  glyph via the ``Button`` component's ``loading`` prop. */}
+          <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
         </Button>
       </form>
     </div>
