@@ -14085,6 +14085,40 @@ a.sh-btn--ghost:hover {
   max-height: 480px;
   border-radius: var(--sh-radius-sm);
 }
+/* Button wrappers around the media that hand the click off to the
+   global ImageLightbox — strip the default button chrome so the
+   visual stays "just an image". */
+.sh-momentum-row-media-button,
+.sh-momentum-detail-media-button {
+  display: block;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: 0;
+  cursor: zoom-in;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: var(--sh-radius-md);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.sh-momentum-row-media-button:focus-visible,
+.sh-momentum-detail-media-button:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 3px;
+}
+.sh-momentum-row-media-button:hover img,
+.sh-momentum-detail-media-button:hover img {
+  filter: brightness(0.96);
+}
+.sh-momentum-row-media-button img,
+.sh-momentum-detail-media-button img {
+  display: block;
+}
+/* Embedded images in rendered markdown bodies show the zoom cursor
+   so the user knows they're clickable. */
+.sh-markdown img {
+  cursor: zoom-in;
+}
 .sh-momentum-reactions {
   display: flex;
   flex-direction: column;

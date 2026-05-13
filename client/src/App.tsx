@@ -24,6 +24,7 @@ import { OnboardingFlow } from '@/components/OnboardingFlow'
 import { SpaceCreateDialog } from '@/components/SpaceCreateDialog'
 import { NewDmDialog } from '@/components/NewDmDialog'
 import { CommentOverlay } from '@/components/CommentOverlay'
+import { ImageLightbox } from '@/components/ImageLightbox'
 import { StickyDialog } from '@/components/StickyDialog'
 import { HighlightPickerDialog } from '@/components/HighlightPickerDialog'
 import { CallTypePickerDialog } from '@/components/CallTypePickerDialog'
@@ -347,6 +348,7 @@ export function App() {
           <SpaceCreateDialog />
           <NewDmDialog />
           <CommentOverlay />
+          <ImageLightbox />
           <StickyDialog />
           <SpaceInviteDialog />
           <RejectReasonDialog />

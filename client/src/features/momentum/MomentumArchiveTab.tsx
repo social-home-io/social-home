@@ -12,6 +12,7 @@ import { signal, computed } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
+import { openLightbox } from '@/components/ImageLightbox'
 import { MomentumArchiveSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import {
@@ -177,12 +178,29 @@ export default function MomentumArchiveTab() {
                       </p>
                     )}
                     {m.media_type === 'image' && m.media_url && (
-                      <img
-                        src={m.media_url}
-                        alt={m.content ? '' : `Photo from ${householdDisplayName(m.author_user_id)}`}
-                        loading="lazy"
-                        class="sh-momentum-row-media"
-                      />
+                      <button
+                        type="button"
+                        class="sh-momentum-row-media-button"
+                        aria-label="Open photo full-size"
+                        onClick={(ev) => {
+                          ev.preventDefault()
+                          ev.stopPropagation()
+                          openLightbox({
+                            items: [{
+                              url:       m.media_url!,
+                              item_type: 'photo',
+                              caption:   m.content || null,
+                            }],
+                          })
+                        }}
+                      >
+                        <img
+                          src={m.media_url}
+                          alt={m.content ? '' : `Photo from ${householdDisplayName(m.author_user_id)}`}
+                          loading="lazy"
+                          class="sh-momentum-row-media"
+                        />
+                      </button>
                     )}
                     {m.media_type === 'video' && m.media_url && (
                       <span class="sh-momentum-row-media sh-momentum-row-media--video">

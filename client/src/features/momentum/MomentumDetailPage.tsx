@@ -11,6 +11,7 @@ import { useLocation, useRoute } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
+import { openLightbox } from '@/components/ImageLightbox'
 import {
   MomentumComposerDialog,
   openMomentumComposer,
@@ -164,8 +165,25 @@ export default function MomentumDetailPage() {
             </p>
           )}
           {mm.media_type === 'image' && mm.media_url && (
-            <img src={mm.media_url} alt="" loading="lazy"
-              class="sh-momentum-row-media" />
+            <button
+              type="button"
+              class="sh-momentum-row-media-button"
+              aria-label="Open photo full-size"
+              onClick={(ev) => {
+                ev.preventDefault()
+                ev.stopPropagation()
+                openLightbox({
+                  items: [{
+                    url:       mm.media_url!,
+                    item_type: 'photo',
+                    caption:   mm.content || null,
+                  }],
+                })
+              }}
+            >
+              <img src={mm.media_url} alt="" loading="lazy"
+                class="sh-momentum-row-media" />
+            </button>
           )}
           {mm.media_type === 'video' && mm.media_url && (
             <video src={mm.media_url} controls muted preload="metadata"
@@ -223,11 +241,24 @@ export default function MomentumDetailPage() {
         </p>
       )}
       {m.media_type === 'image' && m.media_url && (
-        <img
-          src={m.media_url}
-          alt={m.content ? '' : `Photo from ${householdDisplayName(m.author_user_id)}`}
-          class="sh-momentum-detail-media"
-        />
+        <button
+          type="button"
+          class="sh-momentum-detail-media-button"
+          aria-label="Open photo full-size"
+          onClick={() => openLightbox({
+            items: [{
+              url:       m.media_url!,
+              item_type: 'photo',
+              caption:   m.content || null,
+            }],
+          })}
+        >
+          <img
+            src={m.media_url}
+            alt={m.content ? '' : `Photo from ${householdDisplayName(m.author_user_id)}`}
+            class="sh-momentum-detail-media"
+          />
+        </button>
       )}
       {m.media_type === 'video' && m.media_url && (
         <video src={m.media_url} controls class="sh-momentum-detail-media" />
