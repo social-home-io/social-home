@@ -170,14 +170,11 @@ export function CalendarFilterStrip({
             const partial = !on && card.calendarIds.some(id =>
               visibleCalendarIds.has(id),
             )
-            const sub = card.calendarIds.length > 1
-              ? `${card.calendarIds.length} calendars`
-              : (card.isMine ? 'My calendar' : 'Calendar')
-            const stateLabel = on
-              ? 'showing'
-              : partial
-                ? 'partial'
-                : 'hidden'
+            // Pin state is conveyed visually by the ``--on`` / ``--partial``
+            // modifier classes (colour saturation + tape hue + opacity).
+            // The aria-label keeps a screen-reader-friendly text version of
+            // the same state.
+            const stateLabel = on ? 'showing' : partial ? 'partial' : 'hidden'
             return (
               <button
                 key={card.ownerKey}
@@ -203,26 +200,6 @@ export function CalendarFilterStrip({
                 />
                 <span class="sh-cal-strip-name">
                   {card.isMine ? 'You' : card.displayName}
-                </span>
-                <span class="sh-cal-strip-sub">
-                  <span
-                    class="sh-cal-strip-dot"
-                    aria-hidden="true"
-                  />
-                  {sub}
-                </span>
-                <span
-                  class={
-                    'sh-cal-strip-state'
-                    + (on
-                        ? ' sh-cal-strip-state--on'
-                        : partial
-                          ? ' sh-cal-strip-state--partial'
-                          : ' sh-cal-strip-state--off')
-                  }
-                  aria-hidden="true"
-                >
-                  {on ? 'showing' : partial ? 'partial' : 'hidden'}
                 </span>
               </button>
             )
