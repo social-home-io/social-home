@@ -235,12 +235,20 @@ References:
 
 ### Releases
 
-- CalVer (`YYYY.M.D`). Cut by publishing a GitHub Release —
+- CalVer (`YYYY.M.D`). The preferred path is the **Release — draft**
+  workflow (`.github/workflows/release-draft.yml`): Actions →
+  *Release — draft* → *Run workflow*. The workflow computes the
+  next `YYYY.M.D[.N]` tag (bumping `.N` when a same-day release
+  already exists), asks GitHub to auto-generate the notes from
+  merged PRs since the last published release, and opens a
+  **draft** release for an operator to polish. Publishing the
+  draft from the UI is what creates the tag and fires
+  `release.published`. Cutting by hand still works —
   `gh release create 2026.5.12 --target main --title 2026.5.12 --notes …`
-  or the web UI. The release event creates the underlying tag
-  AND fires `release.published`; `.github/workflows/publish.yml`
-  picks that up and runs three jobs in parallel: PyPI (via OIDC
-  trusted publishing), core Docker image to
+  — for one-off / out-of-band releases.
+- `.github/workflows/publish.yml` listens for `release.published`
+  and runs three jobs in parallel: PyPI (via OIDC trusted
+  publishing), core Docker image to
   `ghcr.io/social-home-io/socialhome`, and GFS Docker image to
   `ghcr.io/social-home-io/gfs`. Each Docker push gets four tags:
   pinned (`:2026.5.10`), month track (`:2026.5`), year track
@@ -252,6 +260,37 @@ References:
 - The version is dynamic via `hatch-vcs` — do NOT edit the
   version field in `pyproject.toml`. The tag IS the version.
   No `v` prefix.
+
+### PR labels (drive the changelog)
+
+The auto-generated release notes group PRs by label
+(`.github/release.yml`), so **every PR needs at least one of**:
+
+| Label | Bucket | When to use |
+|---|---|---|
+| `breaking` | Breaking changes | API / config / schema change that needs migration on the user's side |
+| `feat` | Features | New user-visible capability |
+| `fix` | Fixes | Bug fix, regression repair, edge-case hardening |
+| `security` | Security | Vulnerability fix, hardening pass on auth / crypto / federation |
+| `docs` | Docs | Docs-only change (the matching-doc-update rule above) |
+| `chore` | Other changes | Tooling, devcontainer, CI, dependency bump, refactor with no behaviour change |
+
+The label drives **which bucket** the PR lands in; the PR title
+is what shows up underneath. So a tight, user-facing title beats a
+mechanical conventional-commit prefix — write *"Pictures are
+click-to-zoom in the gallery again"*, not *"fix(spa): mount the
+ImageLightbox overlay"*.
+
+Two automatic exclusions: PRs from `dependabot` and PRs tagged
+`skip-changelog` or `dependencies` are dropped from the release
+notes entirely. Use `skip-changelog` for trivial back-end cleanup
+that has no user-visible effect.
+
+When opening a PR with `gh pr create`, attach the label with
+`--label fix` (or `feat`, `chore`, …). The reviewer should bounce
+a PR that's missing a category label — an unlabelled PR still
+lands in *Other changes* via the catch-all, but the bucket loses
+its meaning fast if "Other" becomes the default.
 
 ### Encryption-First Rule (§25.8.21)
 
