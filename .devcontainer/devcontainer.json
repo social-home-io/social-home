@@ -10,78 +10,34 @@
 			"version": "lts"
 		},
 		"ghcr.io/devcontainers/features/github-cli:1": {},
-		// uv is the Python package manager — an order of magnitude
-		// faster than pip with stricter defaults. The feature drops
-		// the static binary on PATH at container build time so the
-		// postCreate flow below can use ``uv`` directly.
 		"ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
 		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
-		// Google Chrome + Xvfb give the chrome-devtools-mcp plugin
-		// the environment it expects: the .deb lays Chrome down at
-		// ``/opt/google/chrome/chrome`` (the path the plugin hard-
-		// codes) and Xvfb provides a headful display target inside
-		// a container that has no Xorg. The postCreate step below
-		// diverts the real chrome binary and replaces it with the
-		// wrapper at ``.devcontainer/chrome-wrapper.sh`` so every
-		// invocation runs with ``--no-sandbox`` (the container
-		// can't ``CLONE_NEWUSER``) and routes shared memory through
-		// ``/tmp``. Xvfb is started by ``postStartCommand`` on
-		// ``:99``; ``DISPLAY`` in ``containerEnv`` points the MCP
-		// plugin (and any shell) at it.
-		"ghcr.io/devcontainers-extra/features/google-chrome:1": {},
+		// ``chromium-driver`` pulls in Debian's ``chromium`` package, which
+		// lands the launcher at ``/usr/bin/chromium``. That launcher is a
+		// shell wrapper that sources ``/etc/chromium.d/*.conf`` for extra
+		// flags, so the ``--no-sandbox`` + ``--disable-dev-shm-usage`` pair
+		// the chrome-devtools-mcp plugin needs inside an unprivileged
+		// container is dropped in via ``postCreateCommand`` below rather
+		// than via a custom dpkg-divert wrapper. ``xvfb`` provides the
+		// headful display target the plugin opens via ``DISPLAY=:99``.
 		"ghcr.io/devcontainers-extra/features/apt-packages:1": {
-			"packages": "xvfb"
+			"packages": "xvfb chromium-driver"
 		}
 	},
 
-	// One-time setup after the container is created.
-	//
-	// The base image ships Python at a root-owned site-packages
-	// path that the ``vscode`` user can't write to, so we use a
-	// project-local virtualenv at ``.venv/``. uv creates the venv
-	// from the system Python on PATH and installs the editable
-	// project + dev extras into it; VS Code points at
-	// ``${workspaceFolder}/.venv/bin/python`` as the default
-	// interpreter, and the run/debug tasks invoke that interpreter
-	// explicitly.
-	//
-	// ``UV_VENV_CLEAR=1`` (containerEnv) recreates the venv from
-	// scratch on every rebuild so a stale dev container can never
-	// linger with a half-broken interpreter. ``--refresh`` on the
-	// ``uv pip install`` re-checks PyPI for the latest matching
-	// version (defeats uv's package metadata cache, which can
-	// hold a stale view of versions across container rebuilds —
-	// no env-var equivalent because we don't want every ad-hoc
-	// install hitting the network).
-	//
-	// 1. Divert the real Google Chrome binary aside and install the
-	//    devcontainer wrapper at ``/opt/google/chrome/chrome``.
-	//    ``dpkg-divert`` is used so a future ``apt-get upgrade`` of
-	//    ``google-chrome-stable`` reinstalls to ``chrome.real`` and
-	//    leaves the wrapper intact. The ``[ -f .real ] || ...`` guard
-	//    keeps the step idempotent across container rebuilds.
-	// 2. Create / recreate the project venv at ``.venv/`` from the
-	//    system Python on PATH (whichever 3.14 the image ships).
-	// 3. Install the Python project in editable mode + dev extras.
-	//    uv auto-detects the in-tree venv and installs there.
-	// 4. Wire up the pre-commit hooks so ``git commit`` runs ruff +
-	//    mypy + frontend ESLint + tsc on staged files.
-	// 5. Install pnpm globally (Node feature ships npm; we use pnpm
-	//    for the frontend per ``client/package.json``).
-	// 6. Install the frontend deps so ``pnpm run dev`` works on
-	//    first launch without manual steps.
-	"postCreateCommand": "([ -f /opt/google/chrome/chrome.real ] || sudo dpkg-divert --add --rename --divert /opt/google/chrome/chrome.real /opt/google/chrome/chrome) && sudo install -m 0755 .devcontainer/chrome-wrapper.sh /opt/google/chrome/chrome && uv venv .venv --seed && uv pip install --refresh -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	// One-time setup after the container is created (chromium flags
+	// config, venv, Python deps, pre-commit hooks, pnpm, frontend
+	// deps) — see ``.devcontainer/post-create.sh`` for the per-step
+	// breakdown. Kept as a script so quoting is straightforward and
+	// ``set -e`` aborts on the first failure.
+	"postCreateCommand": ".devcontainer/post-create.sh",
 
-	// Xvfb needs to be (re)started every time the container starts —
-	// it's a foreground process with no init system behind it. The
-	// ``pgrep`` guard makes it a no-op when Xvfb is already running
-	// (e.g. on subsequent VS Code window attaches that don't restart
-	// the container). ``-nolisten tcp`` keeps the X socket purely
-	// local. The chrome-devtools-mcp plugin reads ``$DISPLAY`` from
-	// ``containerEnv`` below, not from a login shell, so the value
-	// has to live on the container's environment, not just
-	// ``~/.bashrc``.
-	"postStartCommand": "pgrep -x Xvfb >/dev/null 2>&1 || (Xvfb :99 -screen 0 1280x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &)",
+	// (Re)start Xvfb on every container boot — see
+	// ``.devcontainer/post-start.sh``. The chrome-devtools-mcp
+	// plugin reads ``$DISPLAY`` from ``containerEnv`` below, not
+	// from a login shell, so the value has to live on the
+	// container's environment, not just ``~/.bashrc``.
+	"postStartCommand": ".devcontainer/post-start.sh",
 	"containerEnv": {
 		// Always recreate the venv on rebuild instead of prompting
 		// to replace an existing one. Equivalent to ``--clear`` on
@@ -101,7 +57,18 @@
 		// chrome-devtools-mcp plugin runs out of the container's
 		// environment, not a login shell, so the value lives here
 		// rather than in ``~/.bashrc``.
-		"DISPLAY": ":99"
+		"DISPLAY": ":99",
+		// chrome-devtools-mcp delegates browser discovery to
+		// Puppeteer, which honours ``PUPPETEER_EXECUTABLE_PATH``
+		// before falling back to bundled Chrome. Pointing it at the
+		// system Chromium installed by ``chromium-driver`` skips the
+		// Puppeteer download and uses the in-image binary. The
+		// upstream ``CHROME_PATH`` is the historical name and is
+		// honoured by other tooling (e.g. puppeteer-core, some
+		// Karma launchers) — set both so any downstream consumer
+		// sees the same binary.
+		"PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium",
+		"CHROME_PATH": "/usr/bin/chromium"
 	},
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
