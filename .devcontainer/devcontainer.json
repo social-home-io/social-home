@@ -15,7 +15,23 @@
 		// the static binary on PATH at container build time so the
 		// postCreate flow below can use ``uv`` directly.
 		"ghcr.io/jsburckhardt/devcontainer-features/uv:1": {},
-		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+		"ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
+		// Google Chrome + Xvfb give the chrome-devtools-mcp plugin
+		// the environment it expects: the .deb lays Chrome down at
+		// ``/opt/google/chrome/chrome`` (the path the plugin hard-
+		// codes) and Xvfb provides a headful display target inside
+		// a container that has no Xorg. The postCreate step below
+		// diverts the real chrome binary and replaces it with the
+		// wrapper at ``.devcontainer/chrome-wrapper.sh`` so every
+		// invocation runs with ``--no-sandbox`` (the container
+		// can't ``CLONE_NEWUSER``) and routes shared memory through
+		// ``/tmp``. Xvfb is started by ``postStartCommand`` on
+		// ``:99``; ``DISPLAY`` in ``containerEnv`` points the MCP
+		// plugin (and any shell) at it.
+		"ghcr.io/devcontainers-extra/features/google-chrome:1": {},
+		"ghcr.io/devcontainers-extra/features/apt-packages:1": {
+			"packages": "xvfb"
+		}
 	},
 
 	// One-time setup after the container is created.
@@ -38,17 +54,34 @@
 	// no env-var equivalent because we don't want every ad-hoc
 	// install hitting the network).
 	//
-	// 1. Create / recreate the project venv at ``.venv/`` from the
+	// 1. Divert the real Google Chrome binary aside and install the
+	//    devcontainer wrapper at ``/opt/google/chrome/chrome``.
+	//    ``dpkg-divert`` is used so a future ``apt-get upgrade`` of
+	//    ``google-chrome-stable`` reinstalls to ``chrome.real`` and
+	//    leaves the wrapper intact. The ``[ -f .real ] || ...`` guard
+	//    keeps the step idempotent across container rebuilds.
+	// 2. Create / recreate the project venv at ``.venv/`` from the
 	//    system Python on PATH (whichever 3.14 the image ships).
-	// 2. Install the Python project in editable mode + dev extras.
+	// 3. Install the Python project in editable mode + dev extras.
 	//    uv auto-detects the in-tree venv and installs there.
-	// 3. Wire up the pre-commit hooks so ``git commit`` runs ruff +
+	// 4. Wire up the pre-commit hooks so ``git commit`` runs ruff +
 	//    mypy + frontend ESLint + tsc on staged files.
-	// 4. Install pnpm globally (Node feature ships npm; we use pnpm
+	// 5. Install pnpm globally (Node feature ships npm; we use pnpm
 	//    for the frontend per ``client/package.json``).
-	// 5. Install the frontend deps so ``pnpm run dev`` works on
+	// 6. Install the frontend deps so ``pnpm run dev`` works on
 	//    first launch without manual steps.
-	"postCreateCommand": "uv venv .venv --seed && uv pip install --refresh -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+	"postCreateCommand": "([ -f /opt/google/chrome/chrome.real ] || sudo dpkg-divert --add --rename --divert /opt/google/chrome/chrome.real /opt/google/chrome/chrome) && sudo install -m 0755 .devcontainer/chrome-wrapper.sh /opt/google/chrome/chrome && uv venv .venv --seed && uv pip install --refresh -e '.[dev]' && .venv/bin/pre-commit install && npm install -g pnpm && cd client && pnpm install",
+
+	// Xvfb needs to be (re)started every time the container starts —
+	// it's a foreground process with no init system behind it. The
+	// ``pgrep`` guard makes it a no-op when Xvfb is already running
+	// (e.g. on subsequent VS Code window attaches that don't restart
+	// the container). ``-nolisten tcp`` keeps the X socket purely
+	// local. The chrome-devtools-mcp plugin reads ``$DISPLAY`` from
+	// ``containerEnv`` below, not from a login shell, so the value
+	// has to live on the container's environment, not just
+	// ``~/.bashrc``.
+	"postStartCommand": "pgrep -x Xvfb >/dev/null 2>&1 || (Xvfb :99 -screen 0 1280x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &)",
 	"containerEnv": {
 		// Always recreate the venv on rebuild instead of prompting
 		// to replace an existing one. Equivalent to ``--clear`` on
@@ -63,7 +96,12 @@
 		// inside the workspace puts both on the same FS, so
 		// hardlinks work and the warning goes away.
 		"UV_LINK_MODE": "hardlink",
-		"UV_CACHE_DIR": "${containerWorkspaceFolder}/.uv-cache"
+		"UV_CACHE_DIR": "${containerWorkspaceFolder}/.uv-cache",
+		// Xvfb runs on display :99 (see ``postStartCommand``). The
+		// chrome-devtools-mcp plugin runs out of the container's
+		// environment, not a login shell, so the value lives here
+		// rather than in ``~/.bashrc``.
+		"DISPLAY": ":99"
 	},
 
 	// 8099 = aiohttp backend (``python -m socialhome``).
