@@ -1,181 +1,108 @@
 ---
 name: chrome-devtools-setup
-description: Bootstrap the chrome-devtools-mcp plugin (and its underlying browser) in this Debian-trixie devcontainer. The plugin expects ``/opt/google/chrome/chrome``; the container ships ``/usr/bin/chromium``; chromium needs ``--no-sandbox`` because the unprivileged user-namespace clone path isn't enabled here; and the plugin defaults to a headful launch so it also needs an X server (Xvfb) on ``$DISPLAY``. Once these four pieces line up, ``mcp__plugin_chrome-devtools-mcp_chrome-devtools__*`` calls work end-to-end. Use this skill when (a) a chrome-devtools-mcp call fails with "Could not find Google Chrome" / "Missing X server" / "Operation not permitted" / immediately closes the page; (b) the devcontainer has just been rebuilt; (c) you want to take a screenshot or interact with a local web service from inside the agent.
----
+description: Troubleshoot the chrome-devtools-mcp plugin in this Debian-trixie devcontainer. The devcontainer bakes in Debian's ``chromium`` (via the ``chromium-driver`` apt package, landing the launcher at ``/usr/bin/chromium``), the ``--no-sandbox`` + ``--disable-dev-shm-usage`` flags via ``/etc/chromium.d/devcontainer.conf``, ``PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium`` so chrome-devtools-mcp / Puppeteer skip their bundled-Chrome download, and Xvfb on ``DISPLAY=:99`` so the headful browser has an X server. Once those four pieces line up, ``mcp__plugin_chrome-devtools-mcp_chrome-devtools__*`` calls work end-to-end. Use this skill when (a) a chrome-devtools-mcp call still fails after a fresh devcontainer build with "Could not find Chrome" / "Missing X server" / "Operation not permitted" / immediately closes the page; (b) you need a screenshot from a local web service via the headless chromium fallback.
 
-## When to invoke this skill
+## How the bootstrap is wired now
 
-Run this skill the first time chrome-devtools-mcp errors out on a
-fresh devcontainer, or whenever you see one of these symptoms:
+The four prerequisites are part of ``.devcontainer/devcontainer.json`` —
+nothing to run by hand on a fresh container:
 
-- ``Could not find Google Chrome executable for channel 'stable' at /opt/google/chrome/chrome.``
-- ``Missing X server to start the headful browser.``
-- ``Failed to move to new namespace: PID namespaces supported, Network namespace supported, but failed: errno = Operation not permitted``
-- ``Protocol error (Target.setDiscoverTargets): Target closed`` (browser launches and immediately exits)
+1. ``ghcr.io/devcontainers-extra/features/apt-packages:1`` with
+   ``packages: "xvfb chromium-driver"`` installs Debian's
+   ``chromium`` (pulled in by ``chromium-driver``), landing the
+   launcher at ``/usr/bin/chromium``, plus ``/usr/bin/Xvfb`` and
+   ``xvfb-run``.
+2. ``postCreateCommand`` drops
+   ``/etc/chromium.d/devcontainer.conf`` containing
+   ``CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox
+   --disable-dev-shm-usage"``. Debian's ``/usr/bin/chromium``
+   launcher sources every ``/etc/chromium.d/*.conf`` and appends
+   ``$CHROMIUM_FLAGS`` to argv, so every Chromium launch — including
+   the one chrome-devtools-mcp / Puppeteer spawn — picks the flags
+   up. ``--no-sandbox`` because the container can't
+   ``CLONE_NEWUSER``; ``--disable-dev-shm-usage`` because
+   ``/dev/shm`` is tiny in containers.
+3. ``postStartCommand`` starts ``Xvfb :99`` if it isn't already
+   running, and ``containerEnv`` exports ``DISPLAY=:99`` for every
+   process — including the out-of-process MCP plugin.
+4. ``containerEnv`` exports ``PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium``
+   (and ``CHROME_PATH`` as the historical alias) so chrome-devtools-mcp
+   uses the in-image Chromium instead of trying to download its own.
 
-Once the setup steps below succeed, ``new_page`` /
-``take_screenshot`` / ``evaluate_script`` calls will work and
-you don't need this skill again until the container is rebuilt.
+So the canonical state after a clean rebuild is:
 
-## What's wrong out-of-the-box
+- ``/usr/bin/chromium`` → Debian launcher (shell script) that picks up
+  ``/etc/chromium.d/devcontainer.conf``.
+- ``/etc/chromium.d/devcontainer.conf`` → one-line ``CHROMIUM_FLAGS``
+  export.
+- ``Xvfb`` running on ``:99``.
+- ``DISPLAY=:99`` and ``PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium``
+  in the container environment.
 
-The chrome-devtools-mcp plugin (npm package) was written for
-desktop developers running real Chrome. In this devcontainer:
-
-1. **Wrong binary path.** The plugin hard-codes
-   ``/opt/google/chrome/chrome``. We have ``/usr/bin/chromium``.
-2. **Sandbox can't initialise.** Chromium's setuid sandbox
-   tries to ``CLONE_NEWUSER`` and fails — Debian's container
-   images don't enable unprivileged userns. The browser exits
-   immediately on first launch.
-3. **Headful by default.** The plugin asks for a headful
-   browser; the container has no Xorg + no ``$DISPLAY``.
-4. **D-Bus warnings (cosmetic).** Chromium logs ``Failed to
-   connect to socket /run/dbus/system_bus_socket`` — harmless,
-   it falls through, but it clutters the output.
-
-The setup below resolves (1)–(3) once and for all. (4) we just
-ignore.
-
-## Setup steps
-
-You have ``sudo`` available — the container's ``vscode`` user is
-in the sudoers file. Each step is idempotent.
-
-### 1. Install Xvfb (virtual X server)
-
-```bash
-sudo apt-get install -y xvfb
-```
-
-This adds ``/usr/bin/Xvfb`` plus the ``xvfb-run`` wrapper.
-
-### 2. Symlink chromium → chrome with a launch wrapper
-
-The plugin expects ``/opt/google/chrome/chrome``. We can't change
-that — but we can give it a wrapper that adds ``--no-sandbox``
-(plus a couple of container-friendly flags):
-
-```bash
-sudo mkdir -p /opt/google/chrome
-sudo tee /opt/google/chrome/chrome > /dev/null <<'EOF'
-#!/bin/bash
-exec /usr/bin/chromium \
-    --no-sandbox \
-    --disable-dev-shm-usage \
-    "$@"
-EOF
-sudo chmod +x /opt/google/chrome/chrome
-```
-
-``--no-sandbox`` is safe in this devcontainer — we trust the
-pages we're inspecting (our own local services). ``/dev/shm``
-is small in containers, so we route shared memory to ``/tmp``
-to avoid OOM-style crashes when chrome opens a heavy page.
-
-### 3. Start Xvfb on ``:99`` (foreground process; one-time / per session)
-
-```bash
-sudo mkdir -p /tmp/.X11-unix
-sudo chmod 1777 /tmp/.X11-unix
-Xvfb :99 -screen 0 1280x900x24 -nolisten tcp &
-export DISPLAY=:99
-```
-
-Add ``DISPLAY=:99`` to ``~/.bashrc`` if you want it to stick across
-new shells:
-
-```bash
-echo 'export DISPLAY=:99' >> ~/.bashrc
-```
-
-### 4. Sanity-check the chrome binary
-
-```bash
-DISPLAY=:99 /opt/google/chrome/chrome --version
-```
-
-Should print something like ``Chromium 148.0.x``. If you get a
-sandbox error here, the wrapper at ``/opt/google/chrome/chrome``
-isn't being used — re-run step 2.
-
-## Calling the plugin
-
-Once the four prereqs are in place, the plugin tools work:
+## Verifying the plugin works
 
 ```
-mcp__plugin_chrome-devtools-mcp_chrome-devtools__new_page url=http://127.0.0.1:18765/
+mcp__plugin_chrome-devtools-mcp_chrome-devtools__new_page url=http://127.0.0.1:8099/
 mcp__plugin_chrome-devtools-mcp_chrome-devtools__take_snapshot
 mcp__plugin_chrome-devtools-mcp_chrome-devtools__take_screenshot filePath=/tmp/page.png
-mcp__plugin_chrome-devtools-mcp_chrome-devtools__list_pages
 ```
 
-The plugin auto-attaches to the chromium process spawned via the
-wrapper at ``/opt/google/chrome/chrome``; you don't need to keep
-the chrome process around between tool calls — the plugin manages
-the browser lifecycle.
+If those work, you're done. The plugin manages the browser lifecycle
+itself — you don't need to keep a chrome process around between calls.
+
+## Troubleshooting
+
+If something is still wrong after a fresh container build, check each
+piece in isolation:
+
+- ``ls -l /usr/bin/chromium /etc/chromium.d/devcontainer.conf``
+  → both must exist; ``cat`` the second to confirm it sets
+  ``CHROMIUM_FLAGS`` with ``--no-sandbox --disable-dev-shm-usage``.
+- ``pgrep -a Xvfb`` → must show one ``Xvfb :99 ...`` line. If empty,
+  ``Xvfb :99 -screen 0 1280x900x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &``
+  starts it; check ``/tmp/xvfb.log`` if it dies.
+- ``echo "$DISPLAY"`` → must be ``:99``; ``echo
+  "$PUPPETEER_EXECUTABLE_PATH"`` → must be ``/usr/bin/chromium``. If
+  either is missing, the MCP plugin inherits whatever env was at
+  devcontainer create time — rebuilding the container picks up
+  ``containerEnv``.
+- ``DISPLAY=:99 /usr/bin/chromium --version`` → must print a
+  Chromium version. ``Operation not permitted`` means the flags
+  config isn't being sourced — re-run the ``tee
+  /etc/chromium.d/devcontainer.conf`` recipe from
+  ``.devcontainer/devcontainer.json``'s ``postCreateCommand``.
+- ``Could not find Chrome`` from the plugin → Puppeteer didn't see
+  ``PUPPETEER_EXECUTABLE_PATH``. Confirm the env is exported in the
+  process tree that launched the MCP plugin (``cat
+  /proc/$(pgrep -f chrome-devtools-mcp)/environ | tr '\0' '\n' | grep
+  -i chrome``) and rebuild the container if not.
+- ``Target closed`` immediately after ``new_page`` → the browser
+  crashed. Re-run ``DISPLAY=:99 /usr/bin/chromium --version``
+  to surface the underlying error.
 
 ## Direct fallback — chromium without the plugin
 
-When the plugin still misbehaves (or when you only need a
-screenshot, not interactive control), call chromium directly. This
-works regardless of whether steps 2–4 above succeeded, since it
-doesn't need a display:
+When the plugin still misbehaves (or when you only need a screenshot,
+not interactive control), call Chromium directly in headless mode. This
+works even when ``Xvfb`` is down, because it doesn't need a display:
 
 ```bash
 /usr/bin/chromium \
   --headless --no-sandbox --disable-gpu --hide-scrollbars \
   --window-size=1280,2400 \
   --screenshot=/tmp/page.png \
-  http://127.0.0.1:18765/
+  http://127.0.0.1:8099/
 ```
 
 For static HTML inspection (no JS) plain ``curl`` is faster:
 
 ```bash
-curl -s http://127.0.0.1:18765/ -o /tmp/page.html
+curl -s http://127.0.0.1:8099/ -o /tmp/page.html
 ```
-
-## Troubleshooting
-
-- ``Operation not permitted`` from chrome → the wrapper at
-  ``/opt/google/chrome/chrome`` either doesn't exist or isn't
-  executable. ``ls -l /opt/google/chrome/chrome`` should show
-  ``-rwxr-xr-x ... root root``; re-run step 2.
-- ``Missing X server`` from the plugin → ``$DISPLAY`` isn't
-  exported in the shell the plugin reads from. The plugin runs
-  out-of-process so ``DISPLAY=:99 some-mcp-tool ...`` doesn't
-  reach it; you need ``export DISPLAY=:99`` in the parent shell
-  *before* the agent starts the chrome session, OR add it to
-  ``~/.bashrc`` (step 3) and start a fresh shell.
-- ``Target closed`` immediately after ``new_page`` → browser
-  process crashed. Check ``ps aux | grep chrom`` — if it's gone,
-  re-run ``DISPLAY=:99 /opt/google/chrome/chrome --version`` to
-  get the underlying error.
-- ``Could not find Google Chrome`` after a devcontainer rebuild
-  → the rebuild wiped ``/opt/google/chrome/``. Re-run step 2.
-- The plugin says nothing's wrong but every screenshot is blank
-  → the headless fallback (Option B above) was used instead of
-  the wrapper; the wrapper expects to be called via ``$DISPLAY``
-  and produces correctly-rendered pages. Re-export
-  ``DISPLAY=:99`` and retry.
 
 ## Files this skill touches
 
-- ``/opt/google/chrome/chrome`` (wrapper script — added by step 2).
-- ``/tmp/.X11-unix/`` (X socket dir — created by step 3).
-- ``~/.bashrc`` (only if you opt into the persistent ``DISPLAY``
-  export).
-
-Nothing in the project tree is modified; this is an
-environment-bootstrap skill.
-
-## Why not bake this into the Dockerfile?
-
-The devcontainer image is shared with non-AI users; pre-installing
-xvfb + the chrome wrapper in the image isn't strictly required for
-human developers (they have a real browser on their host). The
-trade-off is having one skill that's idempotent and runs in
-seconds vs. shipping infrastructure most users won't use. If we
-ever decide to bake it in, the recipe is in the four steps above —
-they translate directly to a ``RUN`` block.
+This skill is read-only when the bootstrap works correctly — the
+infrastructure now lives in ``.devcontainer/devcontainer.json``.
+Manual recovery only touches ``/etc/chromium.d/`` and
+``/tmp/.X11-unix/`` and never anything inside the project tree.
