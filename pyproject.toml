@@ -41,6 +41,11 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-aiohttp>=1",    # provides ``aiohttp_server`` / ``aiohttp_client`` fixtures
     "pytest-cov>=4",
+    # ``pytest-xdist`` runs the suite across all available CPU cores
+    # via ``-n auto``. The default addopts in ``[tool.pytest.ini_options]``
+    # opt in, so ``pytest tests/`` is parallel without extra flags —
+    # CI and local runs share the same speed.
+    "pytest-xdist>=3",
     "aiohttp[speedups]",
     "freezegun",
     "mypy>=1.10",
@@ -117,6 +122,14 @@ artifacts = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# ``-n auto`` (pytest-xdist) shards the suite across every available
+# CPU core. Tests are written for in-memory ``tmp_path`` fixtures and
+# fresh ``aiohttp`` clients per test, so they don't share mutable
+# state — parallel-safe by construction. ``--dist=loadfile`` keeps
+# tests from the same file on the same worker, which avoids the
+# rare case where a module-level fixture isn't reset between runs.
+# Disable with ``-p no:xdist`` for noisier output during debugging.
+addopts = "-n auto --dist=loadfile"
 markers = [
     "security: spec §27 release-blocker protocol/security test",
     "integration: real DB / real aiohttp client (§27.5)",

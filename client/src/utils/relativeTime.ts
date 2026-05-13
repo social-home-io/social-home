@@ -34,8 +34,30 @@ interface ParsedDelta {
   yesterday: boolean
 }
 
+/** Normalise the raw server timestamp before handing it to ``Date.parse``.
+ *
+ *  Several backend paths still store ``viewed_at`` / ``last_seen_at`` /
+ *  similar via SQLite's ``datetime('now')``, which produces the naive
+ *  shape ``"2026-05-13 18:34:56"`` (UTC value, but no ``T``, no ``Z``,
+ *  no offset). JS's ``Date.parse`` interprets that local-format string
+ *  as the **viewer's local time**, so a fresh "just now" stamp can
+ *  read as "2h ago" for anyone in a positive UTC offset (e.g. CEST).
+ *
+ *  We detect the naive shape with a tight regex (date + space + time,
+ *  no trailing zone) and synthesise a proper UTC ISO 8601 string by
+ *  swapping the space for ``T`` and appending ``Z``. Strings that
+ *  already carry a zone designator (``Z`` / ``±HH:MM``) or the ISO
+ *  ``T`` separator are passed through untouched, so backend rows that
+ *  do the right thing keep working.
+ */
+const NAIVE_SQLITE_TS = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/
+function normaliseTimestamp(iso: string): string {
+  if (NAIVE_SQLITE_TS.test(iso)) return iso.replace(' ', 'T') + 'Z'
+  return iso
+}
+
 function parseDelta(iso: string): ParsedDelta | null {
-  const t = Date.parse(iso)
+  const t = Date.parse(normaliseTimestamp(iso))
   if (Number.isNaN(t)) return null
   const now = Date.now()
   const diff = now - t

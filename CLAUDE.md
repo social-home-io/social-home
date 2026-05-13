@@ -434,6 +434,21 @@ perfect?" Incremental accuracy beats big bang rewrites.
 - Never write SQL directly in a service — extract it into the matching
   `Abstract*Repo` + `Sqlite*Repo` (the documented exceptions are
   `backup_service` and `data_export_service`, which dump whole tables)
+- **Database timestamps: store UTC, never a local time.** Two
+  shapes co-exist in the codebase — SQLite's bare `datetime('now')`
+  emits the naive shape `"YYYY-MM-DD HH:MM:SS"`, and Python's
+  `datetime.now(timezone.utc).isoformat()` emits the tz-aware shape
+  `"…+00:00"`. Both are UTC, both are fine; pick whichever the
+  file you're editing already uses so a single column doesn't mix.
+
+  Conversion to the viewer's locale is the **SPA's job** — it
+  happens at the boundary, never in the repo / service / route.
+  Relative labels flow through
+  `client/src/utils/relativeTime.ts:parseDelta`, which already
+  treats naive strings as UTC before parsing; absolute renders use
+  `toLocaleString(undefined, ...)`. Federation wire payloads keep
+  their tz-aware ISO 8601 shape — that's a protocol-level field
+  separate from any DB column.
 - Never declare a row-shaped `@dataclass` in `repositories/` — it belongs
   in `domain/`. Re-export from the repo module if existing imports need it
 - Never declare a service constructor that takes `db: AsyncDatabase`
