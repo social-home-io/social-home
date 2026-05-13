@@ -11,11 +11,24 @@ import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
 import { openCallTypePicker } from '@/components/CallTypePickerDialog'
+import { EmojiPickButton } from '@/components/EmojiPickButton'
+import {
+  EmojiAutocomplete,
+  checkForEmojiTrigger,
+  closeEmojiAutocomplete,
+  handleEmojiAutocompleteKey,
+} from '@/components/EmojiAutocomplete'
+import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
 
 const messages = signal<Message[]>([])
 const loading = signal(true)
+/** Cap how tall the composer textarea is allowed to grow before it
+ *  starts to scroll internally. ~6 lines at the default font; matches
+ *  WhatsApp's ceiling so a very long draft doesn't eat half the chat
+ *  while the user is still typing. */
+const MAX_COMPOSER_HEIGHT_PX = 160
 /** True while a ``POST /api/conversations/{id}/messages`` is in
  *  flight. Disables the Send button + locks the input so the user
  *  can't double-submit a slow request (which previously fired off
@@ -156,7 +169,7 @@ export default function DmThreadPage() {
   // its final transcript here so the user can review + edit before
   // sending. Uncontrolled input + ref keeps the existing FormData send
   // path untouched.
-  const composerInputRef = useRef<HTMLInputElement | null>(null)
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
   // Scrolling container for the messages list. We pin the view to the
   // bottom on first load, and auto-stick to bottom on new messages
   // when the user is already there (so an active conversation
@@ -355,10 +368,124 @@ export default function DmThreadPage() {
 
   let typingTimer: ReturnType<typeof setTimeout> | null = null
 
-  const handleInput = () => {
+  /** Grow the composer textarea to fit its content up to a hard cap,
+   *  then scroll internally. Called on every input event + after send
+   *  / reset to land the height back at one line. ``scrollHeight`` is
+   *  the layout height required to show all content; assigning ``auto``
+   *  first lets it shrink when the user deletes lines. */
+  const autoResize = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`
+  }
+
+  /** Replace ``ta.value[start:end]`` with ``emoji`` and place the caret
+   *  immediately after the inserted glyph. Shared by the
+   *  ``:shortcode`` autocomplete (range = the typed token) and the
+   *  ``EmojiPickButton`` (range = current caret position). */
+  const spliceEmojiIntoTextarea = (emoji: string, range: [number, number]) => {
+    const ta = composerInputRef.current
+    if (!ta) return
+    const [start, end] = range
+    const before = ta.value.slice(0, start)
+    const after = ta.value.slice(end)
+    ta.value = before + emoji + after
+    autoResize(ta)
+    requestAnimationFrame(() => {
+      if (!composerInputRef.current) return
+      composerInputRef.current.focus()
+      const pos = (before + emoji).length
+      composerInputRef.current.setSelectionRange(pos, pos)
+    })
+  }
+
+  /** Picker-button entry point — inserts at the current caret position. */
+  const insertEmojiAtCursor = (emoji: string) => {
+    const ta = composerInputRef.current
+    if (!ta) return
+    const pos = ta.selectionStart ?? ta.value.length
+    spliceEmojiIntoTextarea(emoji, [pos, pos])
+  }
+
+  /** Slack-style ``:foo:`` → glyph: scan the textarea value for closed
+   *  shortcode tokens (``:heart:``, ``:smile:``, …) and replace each
+   *  one with the matching emoji glyph in place. Runs on every input
+   *  event so the user gets immediate feedback the moment they type
+   *  the closing colon. Returns the column-shift the caret should
+   *  receive (number of characters removed before the caret). */
+  const convertShortcodes = (ta: HTMLTextAreaElement) => {
+    const before = ta.value
+    const caret = ta.selectionStart ?? before.length
+    let shiftBeforeCaret = 0
+    const next = before.replace(
+      /(^|[^a-zA-Z0-9_]):([a-zA-Z0-9_+-]+):/g,
+      (match, lead: string, code: string, offset: number) => {
+        const glyph = emojiByShortcode(code)
+        if (!glyph) return match
+        const removed = match.length - (lead.length + glyph.length)
+        // Only the bytes BEFORE the caret shift its position. Tokens
+        // that sit *after* the caret are still substituted but don't
+        // move the caret.
+        if (offset + match.length <= caret) shiftBeforeCaret += removed
+        return lead + glyph
+      },
+    )
+    if (next === before) return
+    ta.value = next
+    autoResize(ta)
+    const newCaret = Math.max(0, caret - shiftBeforeCaret)
+    ta.setSelectionRange(newCaret, newCaret)
+  }
+
+  const handleInput = (e: Event) => {
+    const ta = e.currentTarget as HTMLTextAreaElement
+    autoResize(ta)
+    convertShortcodes(ta)
+    // Slack-style ``:partial`` autocomplete — fires after the
+    // close-colon substitution above so a fully-typed ``:heart:`` never
+    // opens the dropdown (the glyph is already in place).
+    checkForEmojiTrigger(
+      ta.value,
+      ta.selectionStart ?? 0,
+      ta,
+      spliceEmojiIntoTextarea,
+    )
     if (typingTimer) return
     sendTyping(convId)
     typingTimer = setTimeout(() => { typingTimer = null }, 2000)
+  }
+
+  /** Send-on-Enter behaviour, branched by pointer kind:
+   *
+   *  - Desktop ``(pointer: fine)``: Enter submits, Shift+Enter inserts
+   *    a newline. Same as Slack / Discord and WhatsApp Web.
+   *  - Mobile ``(pointer: coarse)``: Enter inserts a newline, the user
+   *    must tap the Send button to send. Matches WhatsApp on iOS /
+   *    Android — the on-screen keyboard's Return key is for
+   *    line-breaks, not for sending half-typed thoughts by accident.
+   *
+   *  IME composition (``isComposing``) bypasses the override entirely
+   *  so Enter still confirms a Japanese / Chinese candidate the way
+   *  the user expects.
+   *
+   *  When the ``:foo`` emoji autocomplete is open we hand the key off
+   *  to it first so Enter / Tab / arrow keys drive the dropdown rather
+   *  than the form submit.
+   */
+  const handleComposerKeyDown = (e: KeyboardEvent) => {
+    if (handleEmojiAutocompleteKey(e)) {
+      e.preventDefault()
+      return
+    }
+    if (e.key !== 'Enter') return
+    if (e.shiftKey) return  // explicit "give me a newline"
+    if (e.isComposing) return  // IME — let the input swallow Enter
+    const coarsePointer =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(pointer: coarse)').matches
+    if (coarsePointer) return  // touch → newline, send via button
+    e.preventDefault()
+    const ta = e.currentTarget as HTMLTextAreaElement
+    ta.form?.requestSubmit()
   }
 
   const handleSend = async (e: Event) => {
@@ -376,6 +503,19 @@ export default function DmThreadPage() {
     // failure we restore the draft so nothing is silently lost.
     const draft = content
     form.reset()
+    // ``form.reset()`` clears the value but leaves the explicit
+    // ``style.height`` from a previous autoResize call, so the
+    // composer would stay tall after sending a multi-line draft.
+    // Wait one frame so the cleared value has settled through
+    // layout, then re-run ``autoResize`` on the empty textarea —
+    // its ``scrollHeight`` is now the natural one-line height and
+    // the composer collapses back down. Without the rAF the
+    // ``scrollHeight`` read still returns the pre-reset content's
+    // dimensions and the bar stays inflated.
+    const ta0 = composerInputRef.current
+    if (ta0) {
+      requestAnimationFrame(() => autoResize(ta0))
+    }
     const restoredReply = replyTo.value
     replyTo.value = null
     try {
@@ -387,10 +527,11 @@ export default function DmThreadPage() {
       messages.value = data.reverse()
     } catch (err: unknown) {
       // Restore the draft so the user can retry without re-typing.
-      const input = (form.elements.namedItem('content') as HTMLInputElement | null)
-      if (input) {
-        input.value = draft
-        input.focus()
+      const ta = (form.elements.namedItem('content') as HTMLTextAreaElement | null)
+      if (ta) {
+        ta.value = draft
+        autoResize(ta)
+        ta.focus()
       }
       replyTo.value = restoredReply
       showToast(
@@ -598,16 +739,19 @@ export default function DmThreadPage() {
         }
         onSubmit={handleSend}
       >
-        <input
+        <textarea
           ref={composerInputRef}
           name="content"
           placeholder={sending.value ? 'Sending…' : 'Type a message...'}
           autocomplete="off"
+          rows={1}
           // Lock the input while the POST is in flight so a fast
           // typist can't keep adding to a message that's already
           // being delivered.
           disabled={sending.value}
           onInput={handleInput}
+          onKeyDown={handleComposerKeyDown}
+          onBlur={() => closeEmojiAutocomplete()}
         />
         {hasCapability('stt') && (
           <SttButton
@@ -617,12 +761,18 @@ export default function DmThreadPage() {
               const cur = input.value
               const sep = cur && !/\s$/.test(cur) ? ' ' : ''
               input.value = cur + sep + t
+              autoResize(input)
               // Nudge the typing indicator + any input listeners.
               input.dispatchEvent(new Event('input', { bubbles: true }))
               input.focus()
             }}
           />
         )}
+        <EmojiPickButton
+          openKey="dm-composer"
+          onInsert={insertEmojiAtCursor}
+          ariaLabel="Insert emoji into message"
+        />
         <Button
           type="submit"
           loading={sending.value}
@@ -635,6 +785,12 @@ export default function DmThreadPage() {
           <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
         </Button>
       </form>
+      {/* Module-singleton popover for the ``:foo`` autocomplete the
+       *  textarea triggers via ``checkForEmojiTrigger``. Mounting it
+       *  inside the thread (rather than at app root) is fine — the
+       *  popover positions itself absolutely against the input's
+       *  bounding rect, not the parent. */}
+      <EmojiAutocomplete />
     </div>
   )
 }

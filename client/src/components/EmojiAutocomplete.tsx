@@ -30,6 +30,13 @@ interface AutocompleteState {
   /** Pixel position of the popover (anchored to the input's bounding box). */
   top: number
   left: number
+  /** ``'below'`` places the popover under the anchor (the default,
+   *  for top-of-page inputs). ``'above'`` flips it above the anchor —
+   *  used when the input is near the viewport bottom (chat composer)
+   *  where a popover below would render off-screen. CSS handles the
+   *  ``translateY(-100%)`` to anchor the popover's bottom edge at the
+   *  stored ``top`` in that case. */
+  placement: 'below' | 'above'
   /** ``[startInclusive, endExclusive]`` byte range in the input that
    *  the chosen emoji replaces (the ``:foo`` token, including the
    *  leading colon). */
@@ -48,6 +55,12 @@ interface AutocompleteState {
 const state = signal<AutocompleteState | null>(null)
 
 const MAX_RESULTS = 8
+
+/** Upper bound on the popover height (8 rows × ~40 px row height +
+ *  borders). Used at trigger time to decide whether the popover fits
+ *  below the input; if not, we flip it above. Generous so we never
+ *  end up with a half-clipped popover even when results are dense. */
+const ESTIMATED_POPOVER_HEIGHT = 320
 
 /** Return true while the popover is open. Owners wire keyboard events
  *  through :func:`handleEmojiAutocompleteKey` only when this is true. */
@@ -93,9 +106,17 @@ export function checkForEmojiTrigger(
   }
   const rect = anchor.getBoundingClientRect()
   const start = cursorPos - token.length
+  // Flip the popover above the input when there isn't room below — the
+  // DM-thread composer is pinned to the visual viewport bottom, so the
+  // default "open downward" placement renders the popover off-screen.
+  const wouldOverflowBelow =
+    rect.bottom + ESTIMATED_POPOVER_HEIGHT + 8 > window.innerHeight
   state.value = {
-    top: rect.bottom + window.scrollY + 4,
+    top: wouldOverflowBelow
+      ? rect.top + window.scrollY - 4
+      : rect.bottom + window.scrollY + 4,
     left: rect.left + window.scrollX,
+    placement: wouldOverflowBelow ? 'above' : 'below',
     range: [start, cursorPos],
     matches,
     active: 0,
@@ -158,7 +179,15 @@ export function EmojiAutocomplete() {
     <div
       class="sh-emoji-autocomplete"
       role="listbox"
-      style={{ top: `${s.top}px`, left: `${s.left}px` }}
+      style={{
+        top: `${s.top}px`,
+        left: `${s.left}px`,
+        // ``placement: 'above'`` anchors the popover's *bottom* at
+        // ``s.top`` instead of its top, so its bottom edge sits just
+        // above the input — preventing the chat-composer-pinned-to-
+        // viewport-bottom case from rendering the popover off-screen.
+        transform: s.placement === 'above' ? 'translateY(-100%)' : 'none',
+      }}
     >
       {s.matches.map((entry, idx) => (
         <button

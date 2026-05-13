@@ -34,7 +34,14 @@ async def test_ws_typing_event_routes_to_typing_service(client):
     # Connect as admin.
     ws = await _ws_connect(client)
     try:
-        await ws.send_str(json.dumps({"type": "typing", "conversation_id": "c-typing"}))
+        await ws.send_str(
+            json.dumps(
+                {
+                    "type": "typing",
+                    "data": {"conversation_id": "c-typing"},
+                },
+            ),
+        )
         # Give the handler a moment to dispatch.
         for _ in range(20):
             if typing.is_typing("c-typing", client._uid):
@@ -49,7 +56,7 @@ async def test_ws_typing_missing_conv_id_silent(client):
     """Typing payload without conversation_id should not crash the loop."""
     ws = await _ws_connect(client)
     try:
-        await ws.send_str(json.dumps({"type": "typing"}))
+        await ws.send_str(json.dumps({"type": "typing", "data": {}}))
         # Send a follow-up ping to verify the connection survived.
         await ws.send_str("ping")
         msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
@@ -98,13 +105,15 @@ async def test_ws_json_array_ignored(client):
 
 
 async def test_ws_typing_comment_household_scope(client):
-    """``{type: 'typing', post_id}`` routes to ``user_typing_on_comment``."""
+    """``{type:'typing', data:{post_id}}`` routes to ``user_typing_on_comment``."""
     from socialhome.app_keys import typing_service_key
 
     typing = client.server.app[typing_service_key]
     ws = await _ws_connect(client)
     try:
-        await ws.send_str(json.dumps({"type": "typing", "post_id": "post-1"}))
+        await ws.send_str(
+            json.dumps({"type": "typing", "data": {"post_id": "post-1"}}),
+        )
         for _ in range(20):
             if typing.is_typing_on_comment("post-1", client._uid):
                 break
@@ -126,8 +135,10 @@ async def test_ws_typing_comment_space_scope(client):
             json.dumps(
                 {
                     "type": "typing",
-                    "post_id": "post-2",
-                    "space_id": "space-x",
+                    "data": {
+                        "post_id": "post-2",
+                        "space_id": "space-x",
+                    },
                 }
             ),
         )
@@ -141,10 +152,10 @@ async def test_ws_typing_comment_space_scope(client):
 
 
 async def test_ws_typing_neither_id_silent(client):
-    """``{type: 'typing'}`` without post_id or conversation_id is a no-op."""
+    """``data`` without post_id or conversation_id is a no-op."""
     ws = await _ws_connect(client)
     try:
-        await ws.send_str(json.dumps({"type": "typing"}))
+        await ws.send_str(json.dumps({"type": "typing", "data": {}}))
         await ws.send_str("ping")
         msg = await asyncio.wait_for(ws.receive(), timeout=2.0)
         assert msg.data == "pong"

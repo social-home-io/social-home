@@ -2,6 +2,7 @@
  * ReactionPicker — emoji reaction selection (§23.45).
  */
 import { signal } from '@preact/signals'
+import { useEffect } from 'preact/hooks'
 import {
   ALL_EMOJI,
   ALL_EMOJI_WITH_KEYWORDS,
@@ -21,6 +22,33 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
     ? ALL_EMOJI_WITH_KEYWORDS.filter(e => emojiMatches(e, search.value)).map(e => e.emoji)
     : ALL_EMOJI
 
+  // Outside-click → close. Ignores clicks on the picker itself AND
+  // on the trigger button that opened the picker — the trigger
+  // already toggles open/close on its own ``onClick`` and double-
+  // firing here would either flicker the picker or leave it stuck
+  // open after a re-toggle. Triggers identify themselves via
+  // ``aria-haspopup="dialog"`` (set by :class:`EmojiPickButton` and
+  // the reaction-add button on post cards).
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      if (t.closest('.sh-reaction-picker')) return
+      if (t.closest('[aria-haspopup="dialog"]')) return
+      onClose()
+    }
+    // Escape also closes, matching every other modal-ish surface.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
   return (
     <div class="sh-reaction-picker" onClick={(e) => e.stopPropagation()}>
       <div class="sh-reaction-picker-header">
@@ -36,14 +64,14 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
       </div>
       <div class="sh-reaction-frequent">
         {FREQUENT_EMOJI.map(e => (
-          <button key={e} class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
+          <button key={e} type="button" class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
             {e}
           </button>
         ))}
       </div>
       <div class="sh-reaction-grid">
         {filtered.map(e => (
-          <button key={e} class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
+          <button key={e} type="button" class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
             {e}
           </button>
         ))}
