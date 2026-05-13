@@ -16,8 +16,8 @@ gap here at the WS upgrade.
 Inbound frames:
 
 * ``"ping"`` (text) -> ``"pong"`` keepalive.
-* JSON ``{"type":"typing","conversation_id":...}`` -> forwarded to the
-  TypingService which fans out a ``conversation.user_typing`` frame to
+* JSON ``{"type":"typing","data":{"conversation_id":...}}`` -> forwarded
+  to the TypingService which fans out a ``conversation.user_typing`` frame to
   the other members (local + remote via ``DM_USER_TYPING``).
 
 Anything else is ignored — outbound is the primary direction.
@@ -165,15 +165,22 @@ class WebSocketView(BaseView):
             typing_svc = self.request.app.get(K.typing_service_key)
             if typing_svc is None:
                 return
+            # The SPA's :class:`WsManager.send` wraps every outbound
+            # frame as ``{type, data: {...}}``; the fields the handlers
+            # below want live under ``data``. Server + SPA ship as a
+            # pair so no flat-shape fallback is needed.
+            body = payload.get("data") or {}
+            if not isinstance(body, dict):
+                return
             # Two scopes share the same inbound frame:
-            #   • DM:            {type: 'typing', conversation_id}
-            #   • Comment thread:{type: 'typing', post_id, space_id?}
+            #   • DM:            {type: 'typing', data: {conversation_id}}
+            #   • Comment thread:{type: 'typing', data: {post_id, space_id?}}
             # Branch on which id the client supplied — never both.
-            post_id = payload.get("post_id")
-            cid = payload.get("conversation_id")
+            post_id = body.get("post_id")
+            cid = body.get("conversation_id")
             try:
                 if post_id:
-                    space_id = payload.get("space_id")
+                    space_id = body.get("space_id")
                     await typing_svc.user_typing_on_comment(
                         post_id=str(post_id),
                         space_id=str(space_id) if space_id else None,

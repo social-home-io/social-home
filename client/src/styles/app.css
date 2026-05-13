@@ -3599,15 +3599,40 @@ body.sh-dm-thread-open .sh-messages {
 /* Chat-bar composer — single row of [input ……………… mic send] so most
  * of the surface goes to the text input. Applied to every DM thread
  * composer regardless of viewport: the long-form post composer
- * elsewhere keeps its column layout. */
+ * elsewhere keeps its column layout.
+ *
+ * ``align-items: flex-end`` keeps the Send button + mic anchored to
+ * the bottom of the row as the textarea grows upward through its
+ * 6-line cap; without this they centre on the textarea midline and
+ * "ride up" with the growing draft. */
 .sh-thread > .sh-composer {
   flex-direction: row;
-  align-items: center;
+  align-items: flex-end;
   gap: var(--sh-space-xs);
 }
-.sh-thread > .sh-composer > input {
+.sh-thread > .sh-composer > textarea {
   flex: 1;
   min-width: 0;
+  /* User can't drag-resize — height is driven by ``autoResize`` in JS,
+   * capped via ``max-height`` so a very long draft scrolls internally
+   * instead of pushing the message list off-screen. */
+  resize: none;
+  overflow-y: auto;
+  max-height: 160px;
+  /* Tight chat-bar look — matches the original ``<input>`` baseline
+   * (1.4 line-height puts a single line at ~36 px including padding,
+   * which lines up with the round Send button next to it). */
+  font: inherit;
+  line-height: 1.4;
+  padding: 8px 12px;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg-secondary);
+  color: var(--sh-text);
+}
+.sh-thread > .sh-composer > textarea:focus {
+  outline: none;
+  border-color: var(--sh-primary);
 }
 .sh-thread > .sh-composer > .sh-btn {
   /* Compact send pill — square-ish, big enough for a thumb tap but
