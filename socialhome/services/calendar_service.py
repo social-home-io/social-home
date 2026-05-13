@@ -30,6 +30,7 @@ from ..domain.events import (
     CalendarEventUpdated,
     SpaceMemberLeft,
     SpaceRsvpChanged,
+    UserProvisioned,
 )
 from ..domain.federation import FederationEventType, PairingStatus
 from ..infrastructure.event_bus import EventBus
@@ -306,6 +307,82 @@ class CalendarService:
         if result is None:
             raise KeyError(f"calendar {calendar_id!r} not found")
         await self._repo.delete_calendar(calendar_id)
+
+    # ── Default-calendar seeding ─────────────────────────────────────────
+    #
+    # The household-calendar surface in the SPA gates its member filter
+    # strip on ``cards.length >= 2`` distinct calendar owners. Calendars
+    # were historically lazy-created on the first "+ New event" click, so
+    # a freshly-provisioned member showed up with zero calendar rows and
+    # the strip stayed hidden until they manually created one. Seeding a
+    # default calendar at the moment the user row is born removes that
+    # footgun: every household member is represented in the strip as
+    # soon as they exist.
+
+    async def seed_default_calendar_for(
+        self,
+        username: str,
+        *,
+        name: str = "Calendar",
+    ) -> Calendar:
+        """Ensure ``username`` has at least one calendar row.
+
+        Idempotent — returns the user's first existing calendar if any,
+        otherwise creates a new "Calendar" with the next palette hue.
+        Bypasses :meth:`_require_calendar_enabled` deliberately: if the
+        household later turns the calendar feature on, every member
+        already has a calendar to overlay. A user provisioned while the
+        feature is off should not have to wait for someone to flip it
+        before their first row exists.
+        """
+        existing = await self._repo.list_calendars_for_user(username)
+        if existing:
+            return existing[0]
+        calendar = Calendar(
+            id=uuid.uuid4().hex,
+            name=name.strip() or "Calendar",
+            owner_username=username,
+            color=await self._next_default_color(),
+        )
+        return await self._repo.save_calendar(calendar)
+
+    async def backfill_default_calendars(
+        self,
+        usernames: list[str] | tuple[str, ...],
+    ) -> int:
+        """Seed a default calendar for each user that doesn't have one.
+
+        Returns the number of NEW calendars created — zero on the steady
+        state, non-zero on the boot after an upgrade past this change or
+        whenever a user was provisioned through a path that bypasses the
+        :class:`UserProvisioned` event (the bootstrap admin paths).
+        Called from :func:`app.on_startup` after the platform adapter's
+        own ``on_startup`` so headless admin provisioning is covered in
+        the same pass.
+        """
+        created = 0
+        for username in usernames:
+            existing = await self._repo.list_calendars_for_user(username)
+            if existing:
+                continue
+            await self.seed_default_calendar_for(username)
+            created += 1
+        return created
+
+    def wire(self) -> None:
+        """Subscribe to :class:`UserProvisioned` for live seeding.
+
+        Idempotent in the production wiring (called once at app
+        startup). A no-op when the service was constructed without a
+        bus — unit tests that don't exercise the seeding path skip
+        wiring entirely.
+        """
+        if self._bus is None:
+            return
+        self._bus.subscribe(UserProvisioned, self._on_user_provisioned)
+
+    async def _on_user_provisioned(self, event: UserProvisioned) -> None:
+        await self.seed_default_calendar_for(event.username)
 
     # ── Events ────────────────────────────────────────────────────────────
 

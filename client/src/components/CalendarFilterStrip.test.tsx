@@ -125,20 +125,19 @@ describe('CalendarFilterStrip', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('shows "{N} calendars" when an owner has more than one calendar', () => {
-    const { getByText } = render(
+  it('aria-label carries the state so screen readers know which pins are showing', () => {
+    const { container } = render(
       <CalendarFilterStrip
-        calendars={[
-          mkCal('c1', 'me'),
-          mkCal('c2', 'pa', 'Personal'),
-          mkCal('c3', 'pa', 'Work'),
-        ]}
+        calendars={[mkCal('c1', 'me'), mkCal('c2', 'pa')]}
         visibleCalendarIds={new Set(['c1'])}
         onChange={() => {}}
         onShowAll={() => {}}
         onShowOnlyMine={() => {}}
       />,
     )
-    expect(getByText('2 calendars')).toBeTruthy()
+    const pins = container.querySelectorAll('.sh-cal-strip-pin')
+    const labels = Array.from(pins).map(p => p.getAttribute('aria-label'))
+    expect(labels.some(l => l?.startsWith('Me') && l.includes('showing'))).toBe(true)
+    expect(labels.some(l => l?.startsWith('Pascal') && l.includes('hidden'))).toBe(true)
   })
 })

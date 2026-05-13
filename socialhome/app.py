@@ -1039,6 +1039,11 @@ def create_app(config: Config | None = None) -> web.Application:
     task_service = TaskService(task_repo, bus, user_repo=user_repo)
     space_task_service = SpaceTaskService(space_task_repo, bus)
     calendar_service = CalendarService(calendar_repo, bus)
+    # Subscribe to UserProvisioned so every freshly-created household
+    # member gets a default calendar row — without this, the household
+    # calendar's member-filter strip stays hidden until the new member
+    # manually clicks "+ New event" the first time.
+    calendar_service.wire()
     space_cal_service = SpaceCalendarService(space_cal_repo, bus)
     # Phase E: subscribe to SpaceMemberLeft so leaving a space drops
     # your RSVPs on its events.
@@ -1936,6 +1941,21 @@ def create_app(config: Config | None = None) -> web.Application:
         # Wire any extra services the adapter provides into the app dict.
         for key, svc in platform_adapter.get_extra_services().items():
             app[key] = svc
+
+        # 8. Default-calendar backfill. Runs after the adapter (so the
+        #    headless ``provision_admin`` path is included) and after the
+        #    HA bootstrap (so synced persons are visible). Idempotent —
+        #    a no-op on the steady state, picks up upgraders + any user
+        #    whose creation path bypassed the ``UserProvisioned`` event.
+        active_users = await user_service.list_active()
+        created = await calendar_service.backfill_default_calendars(
+            [u.username for u in active_users],
+        )
+        if created:
+            log.info(
+                "calendar: seeded %d default calendar(s) for existing users",
+                created,
+            )
 
     async def _on_shutdown(app: web.Application) -> None:  # noqa: RUF029
         """Tell every connected WebSocket client we're going away.

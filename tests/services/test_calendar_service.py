@@ -1641,3 +1641,100 @@ async def test_delete_event_publishes_calendar_event_deleted(env):
     )
     await svc.delete_event(event.id)
     assert any(isinstance(e, CalendarEventDeleted) for e in bus.events)
+
+
+# ── Default-calendar seeding ────────────────────────────────────────────
+
+
+async def test_seed_default_calendar_creates_row_when_missing(env):
+    """First call seeds a 'Calendar' row owned by the user."""
+    await _seed_user(env.db, "alice")
+    cal = await env.cal_svc.seed_default_calendar_for("alice")
+    assert cal.owner_username == "alice"
+    assert cal.name == "Calendar"
+    rows = await env.cal_repo.list_calendars_for_user("alice")
+    assert [c.id for c in rows] == [cal.id]
+
+
+async def test_seed_default_calendar_is_idempotent(env):
+    """Second call returns the existing row without creating a duplicate."""
+    await _seed_user(env.db, "bob")
+    first = await env.cal_svc.seed_default_calendar_for("bob")
+    second = await env.cal_svc.seed_default_calendar_for("bob")
+    assert first.id == second.id
+    rows = await env.cal_repo.list_calendars_for_user("bob")
+    assert len(rows) == 1
+
+
+async def test_seed_default_calendar_returns_existing_named_differently(env):
+    """A user who already has a calendar named 'Work' keeps that one —
+    we never silently add a second 'Calendar' row alongside it."""
+    await _seed_user(env.db, "carol")
+    work = await env.cal_svc.create_calendar(
+        name="Work",
+        owner_username="carol",
+        color="#123456",
+    )
+    seeded = await env.cal_svc.seed_default_calendar_for("carol")
+    assert seeded.id == work.id
+    assert seeded.name == "Work"
+    rows = await env.cal_repo.list_calendars_for_user("carol")
+    assert len(rows) == 1
+
+
+async def test_seed_default_calendar_bypasses_household_features_gate(env):
+    """Seeding must work even when calendar feature is currently disabled —
+    the row needs to exist so it's there when the household later turns
+    the feature on."""
+
+    class _DisabledHouseholdFeatures:
+        async def require_enabled(self, feature: str) -> None:
+            raise PermissionError(f"{feature} disabled")
+
+    await _seed_user(env.db, "dana")
+    env.cal_svc.attach_household_features(_DisabledHouseholdFeatures())
+    cal = await env.cal_svc.seed_default_calendar_for("dana")
+    assert cal.owner_username == "dana"
+
+
+async def test_backfill_default_calendars_only_creates_missing(env):
+    """Backfill skips users that already have a calendar; counts new rows."""
+    await _seed_user(env.db, "eve")
+    await _seed_user(env.db, "frank")
+    await _seed_user(env.db, "gina")
+    # Eve already has a calendar; Frank + Gina don't.
+    await env.cal_svc.create_calendar(name="Mine", owner_username="eve")
+    created = await env.cal_svc.backfill_default_calendars(["eve", "frank", "gina"])
+    assert created == 2
+    assert len(await env.cal_repo.list_calendars_for_user("eve")) == 1
+    assert len(await env.cal_repo.list_calendars_for_user("frank")) == 1
+    assert len(await env.cal_repo.list_calendars_for_user("gina")) == 1
+    # Re-run is a no-op.
+    again = await env.cal_svc.backfill_default_calendars(["eve", "frank", "gina"])
+    assert again == 0
+
+
+async def test_wire_subscribes_to_user_provisioned(env):
+    """``wire()`` registers a UserProvisioned handler that seeds on publish."""
+    from socialhome.domain.events import UserProvisioned
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = CalendarService(env.cal_repo, bus=bus)
+    svc.wire()
+    assert bus.handler_count(UserProvisioned) == 1
+
+    await _seed_user(env.db, "harry")
+    await bus.publish(
+        UserProvisioned(user_id="uid-harry", username="harry", is_admin=False),
+    )
+    rows = await env.cal_repo.list_calendars_for_user("harry")
+    assert len(rows) == 1
+    assert rows[0].name == "Calendar"
+
+
+async def test_wire_is_noop_without_bus(env):
+    """A bus-less service is constructed in unit tests that don't exercise
+    the seeding path; ``wire()`` must not crash on it."""
+    svc = CalendarService(env.cal_repo, bus=None)
+    svc.wire()  # no exception
