@@ -16,6 +16,12 @@ import { hasCapability } from '@/store/instance'
 
 const messages = signal<Message[]>([])
 const loading = signal(true)
+/** True while a ``POST /api/conversations/{id}/messages`` is in
+ *  flight. Disables the Send button + locks the input so the user
+ *  can't double-submit a slow request (which previously fired off
+ *  two copies of the same message). Mirrors the busy state to the
+ *  composer chrome so the user has a clear "it's on the way" cue. */
+const sending = signal(false)
 const readMessageIds = signal<Set<string>>(new Set())
 const deliveredMessageIds = signal<Set<string>>(new Set())
 const memberCount = signal<number>(0)
@@ -268,24 +274,42 @@ export default function DmThreadPage() {
 
   const handleSend = async (e: Event) => {
     e.preventDefault()
+    if (sending.value) return  // belt-and-braces guard for keyboard Enter
     const form = e.target as HTMLFormElement
     const content = new FormData(form).get('content') as string
     if (!content.trim()) return
     const reply_to_id = replyTo.value?.id ?? null
+    sending.value = true
+    // Optimistically clear the input + reply chip so the user gets the
+    // same "I pressed send, the message is gone" feedback iMessage /
+    // WhatsApp give. The Button's loading spinner + the input's
+    // ``disabled`` state make the in-flight state unambiguous. On
+    // failure we restore the draft so nothing is silently lost.
+    const draft = content
+    form.reset()
+    const restoredReply = replyTo.value
+    replyTo.value = null
     try {
       await api.post(`/api/conversations/${convId}/messages`, {
         content,
         ...(reply_to_id ? { reply_to_id } : {}),
       })
-      form.reset()
-      replyTo.value = null
       const data = await api.get(`/api/conversations/${convId}/messages`)
       messages.value = data.reverse()
     } catch (err: unknown) {
+      // Restore the draft so the user can retry without re-typing.
+      const input = (form.elements.namedItem('content') as HTMLInputElement | null)
+      if (input) {
+        input.value = draft
+        input.focus()
+      }
+      replyTo.value = restoredReply
       showToast(
         `Send failed: ${(err as Error)?.message ?? err}`,
         'error',
       )
+    } finally {
+      sending.value = false
     }
   }
 
@@ -428,8 +452,13 @@ export default function DmThreadPage() {
             </div>
           )
         })}
+        {/* In-thread typing indicator: rendered as the last "row" of
+         * the messages list so it reads like a chat-bubble preview
+         * (WhatsApp / iMessage), not a chrome strip above the
+         * composer where it used to disappear on first glance. The
+         * ``bubble`` prop opts into the bubble shape. */}
+        <TypingIndicator scope={convId} bubble />
       </div>
-      <TypingIndicator scope={convId} />
       {replyTo.value && (
         <div class="sh-composer-reply" role="status" aria-live="polite">
           <div class="sh-composer-reply-body">
@@ -448,12 +477,22 @@ export default function DmThreadPage() {
           >×</button>
         </div>
       )}
-      <form class="sh-composer" onSubmit={handleSend}>
+      <form
+        class={
+          'sh-composer'
+          + (sending.value ? ' sh-composer--sending' : '')
+        }
+        onSubmit={handleSend}
+      >
         <input
           ref={composerInputRef}
           name="content"
-          placeholder="Type a message..."
+          placeholder={sending.value ? 'Sending…' : 'Type a message...'}
           autocomplete="off"
+          // Lock the input while the POST is in flight so a fast
+          // typist can't keep adding to a message that's already
+          // being delivered.
+          disabled={sending.value}
           onInput={handleInput}
         />
         {hasCapability('stt') && (
@@ -470,7 +509,9 @@ export default function DmThreadPage() {
             }}
           />
         )}
-        <Button type="submit">Send</Button>
+        <Button type="submit" loading={sending.value}>
+          {sending.value ? 'Sending' : 'Send'}
+        </Button>
       </form>
     </div>
   )
