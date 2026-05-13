@@ -3315,7 +3315,15 @@ a.sh-friends-member-chip:hover {
   background: var(--sh-bg);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-lg);
-  overflow: hidden;
+  /* ``overflow: clip`` instead of the older ``overflow: hidden``: same
+   * rounded-corner clipping for child hover backgrounds, but ``clip``
+   * doesn't establish a scroll container — so the
+   * ``.sh-space-subheader`` first-child stays in normal flow on
+   * initial render instead of pinning itself to its sticky offset
+   * and stacking on top of the first chat row. The bug surfaced when
+   * a user had only a single conversation: the only row was completely
+   * hidden behind the sticky tab strip. */
+  overflow: clip;
   box-shadow: var(--sh-shadow-xs);
 }
 .sh-dm-row {
