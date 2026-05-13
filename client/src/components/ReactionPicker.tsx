@@ -36,14 +36,14 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
       </div>
       <div class="sh-reaction-frequent">
         {FREQUENT_EMOJI.map(e => (
-          <button key={e} class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
+          <button key={e} type="button" class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
             {e}
           </button>
         ))}
       </div>
       <div class="sh-reaction-grid">
         {filtered.map(e => (
-          <button key={e} class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
+          <button key={e} type="button" class="sh-emoji-btn" onClick={() => { onSelect(e); onClose() }}>
             {e}
           </button>
         ))}

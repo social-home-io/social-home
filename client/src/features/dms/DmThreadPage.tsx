@@ -11,6 +11,14 @@ import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
 import { openCallTypePicker } from '@/components/CallTypePickerDialog'
+import { EmojiPickButton } from '@/components/EmojiPickButton'
+import {
+  EmojiAutocomplete,
+  checkForEmojiTrigger,
+  closeEmojiAutocomplete,
+  handleEmojiAutocompleteKey,
+} from '@/components/EmojiAutocomplete'
+import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
 
@@ -370,8 +378,77 @@ export default function DmThreadPage() {
     el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`
   }
 
+  /** Replace ``ta.value[start:end]`` with ``emoji`` and place the caret
+   *  immediately after the inserted glyph. Shared by the
+   *  ``:shortcode`` autocomplete (range = the typed token) and the
+   *  ``EmojiPickButton`` (range = current caret position). */
+  const spliceEmojiIntoTextarea = (emoji: string, range: [number, number]) => {
+    const ta = composerInputRef.current
+    if (!ta) return
+    const [start, end] = range
+    const before = ta.value.slice(0, start)
+    const after = ta.value.slice(end)
+    ta.value = before + emoji + after
+    autoResize(ta)
+    requestAnimationFrame(() => {
+      if (!composerInputRef.current) return
+      composerInputRef.current.focus()
+      const pos = (before + emoji).length
+      composerInputRef.current.setSelectionRange(pos, pos)
+    })
+  }
+
+  /** Picker-button entry point — inserts at the current caret position. */
+  const insertEmojiAtCursor = (emoji: string) => {
+    const ta = composerInputRef.current
+    if (!ta) return
+    const pos = ta.selectionStart ?? ta.value.length
+    spliceEmojiIntoTextarea(emoji, [pos, pos])
+  }
+
+  /** Slack-style ``:foo:`` → glyph: scan the textarea value for closed
+   *  shortcode tokens (``:heart:``, ``:smile:``, …) and replace each
+   *  one with the matching emoji glyph in place. Runs on every input
+   *  event so the user gets immediate feedback the moment they type
+   *  the closing colon. Returns the column-shift the caret should
+   *  receive (number of characters removed before the caret). */
+  const convertShortcodes = (ta: HTMLTextAreaElement) => {
+    const before = ta.value
+    const caret = ta.selectionStart ?? before.length
+    let shiftBeforeCaret = 0
+    const next = before.replace(
+      /(^|[^a-zA-Z0-9_]):([a-zA-Z0-9_+-]+):/g,
+      (match, lead: string, code: string, offset: number) => {
+        const glyph = emojiByShortcode(code)
+        if (!glyph) return match
+        const removed = match.length - (lead.length + glyph.length)
+        // Only the bytes BEFORE the caret shift its position. Tokens
+        // that sit *after* the caret are still substituted but don't
+        // move the caret.
+        if (offset + match.length <= caret) shiftBeforeCaret += removed
+        return lead + glyph
+      },
+    )
+    if (next === before) return
+    ta.value = next
+    autoResize(ta)
+    const newCaret = Math.max(0, caret - shiftBeforeCaret)
+    ta.setSelectionRange(newCaret, newCaret)
+  }
+
   const handleInput = (e: Event) => {
-    autoResize(e.currentTarget as HTMLTextAreaElement)
+    const ta = e.currentTarget as HTMLTextAreaElement
+    autoResize(ta)
+    convertShortcodes(ta)
+    // Slack-style ``:partial`` autocomplete — fires after the
+    // close-colon substitution above so a fully-typed ``:heart:`` never
+    // opens the dropdown (the glyph is already in place).
+    checkForEmojiTrigger(
+      ta.value,
+      ta.selectionStart ?? 0,
+      ta,
+      spliceEmojiIntoTextarea,
+    )
     if (typingTimer) return
     sendTyping(convId)
     typingTimer = setTimeout(() => { typingTimer = null }, 2000)
@@ -389,8 +466,16 @@ export default function DmThreadPage() {
    *  IME composition (``isComposing``) bypasses the override entirely
    *  so Enter still confirms a Japanese / Chinese candidate the way
    *  the user expects.
+   *
+   *  When the ``:foo`` emoji autocomplete is open we hand the key off
+   *  to it first so Enter / Tab / arrow keys drive the dropdown rather
+   *  than the form submit.
    */
   const handleComposerKeyDown = (e: KeyboardEvent) => {
+    if (handleEmojiAutocompleteKey(e)) {
+      e.preventDefault()
+      return
+    }
     if (e.key !== 'Enter') return
     if (e.shiftKey) return  // explicit "give me a newline"
     if (e.isComposing) return  // IME — let the input swallow Enter
@@ -666,6 +751,7 @@ export default function DmThreadPage() {
           disabled={sending.value}
           onInput={handleInput}
           onKeyDown={handleComposerKeyDown}
+          onBlur={() => closeEmojiAutocomplete()}
         />
         {hasCapability('stt') && (
           <SttButton
@@ -682,6 +768,11 @@ export default function DmThreadPage() {
             }}
           />
         )}
+        <EmojiPickButton
+          openKey="dm-composer"
+          onInsert={insertEmojiAtCursor}
+          ariaLabel="Insert emoji into message"
+        />
         <Button
           type="submit"
           loading={sending.value}
@@ -694,6 +785,12 @@ export default function DmThreadPage() {
           <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
         </Button>
       </form>
+      {/* Module-singleton popover for the ``:foo`` autocomplete the
+       *  textarea triggers via ``checkForEmojiTrigger``. Mounting it
+       *  inside the thread (rather than at app root) is fine — the
+       *  popover positions itself absolutely against the input's
+       *  bounding rect, not the parent. */}
+      <EmojiAutocomplete />
     </div>
   )
 }
