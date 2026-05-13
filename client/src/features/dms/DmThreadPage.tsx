@@ -309,22 +309,36 @@ export default function DmThreadPage() {
     })
     const offNewMsg = ws.on('dm.message', (evt) => {
       const data = evt.data as { conversation_id?: string; message?: Message }
-      if (data.conversation_id === convId && data.message) {
-        const msg = data.message
-        if (!messages.value.some(m => m.id === msg.id)) {
-          messages.value = [...messages.value, msg]
+      if (data.conversation_id !== convId || !data.message) return
+      const msg = data.message
+      const mine = msg.sender_user_id === currentUser.value?.user_id
+      // Strip any optimistic ``tmp-…`` row from the sender that's still
+      // hanging around: the WS broadcast for our own send can race the
+      // POST response back, and ``handleSend``'s id-swap only fires
+      // once the response lands. Match on content (same sender + same
+      // text) to avoid leaving the temp bubble next to the canonical
+      // one. Other users' messages skip this branch entirely.
+      let next = messages.value
+      if (mine) {
+        next = next.filter(m =>
+          !(typeof m.id === 'string'
+            && m.id.startsWith('tmp-')
+            && m.content === msg.content),
+        )
+      }
+      if (!next.some(m => m.id === msg.id)) {
+        next = [...next, msg]
+        if (!mine && readReceiptsEnabled.value) {
           // Ack delivery as soon as the frame lands. The server upsert
           // is idempotent; a later ``read`` supersedes.
-          const mine = msg.sender_user_id === currentUser.value?.user_id
-          if (!mine && readReceiptsEnabled.value) {
-            api.post(
-              `/api/conversations/${convId}/messages/${msg.id}/delivered`,
-            ).catch(() => {})
-          }
+          api.post(
+            `/api/conversations/${convId}/messages/${msg.id}/delivered`,
+          ).catch(() => {})
         }
-        if (readReceiptsEnabled.value) {
-          api.post(`/api/conversations/${convId}/read`).catch(() => {})
-        }
+      }
+      if (next !== messages.value) messages.value = next
+      if (readReceiptsEnabled.value) {
+        api.post(`/api/conversations/${convId}/read`).catch(() => {})
       }
     })
     // Live-patch the thread-member roster on session-presence frames so
@@ -492,15 +506,42 @@ export default function DmThreadPage() {
     e.preventDefault()
     if (sending.value) return  // belt-and-braces guard for keyboard Enter
     const form = e.target as HTMLFormElement
-    const content = new FormData(form).get('content') as string
-    if (!content.trim()) return
+    const content = (new FormData(form).get('content') as string ?? '').trim()
+    if (!content) return
     const reply_to_id = replyTo.value?.id ?? null
     sending.value = true
-    // Optimistically clear the input + reply chip so the user gets the
-    // same "I pressed send, the message is gone" feedback iMessage /
-    // WhatsApp give. The Button's loading spinner + the input's
-    // ``disabled`` state make the in-flight state unambiguous. On
-    // failure we restore the draft so nothing is silently lost.
+
+    // **Optimistic append** — render the user's bubble immediately
+    // instead of waiting for the POST round-trip + a full message-list
+    // GET to repaint. The previous flow did two server round-trips
+    // *and* a full re-render of every bubble before the Send spinner
+    // stopped — on a busy thread that's hundreds of ms of dead time
+    // staring at "Sending…". Now the bubble flashes in on click,
+    // ``form.reset()`` clears the composer in the same frame, and the
+    // POST resolves in the background. The canonical row (real id,
+    // server timestamp) arrives via the WS broadcast a moment later
+    // and de-dupes by ``id`` (see ``offNewMsg`` above — it also strips
+    // any leftover ``tmp-`` row from the sender to avoid showing the
+    // bubble twice if the WS frame races the POST response).
+    const tempId = `tmp-${
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    }`
+    const myUid = currentUser.value?.user_id ?? ''
+    const optimistic: Message = {
+      id: tempId,
+      sender_user_id: myUid,
+      content,
+      type: 'text',
+      media_url: null,
+      reply_to_id,
+      deleted: false,
+      created_at: new Date().toISOString(),
+      edited_at: null,
+    }
+    messages.value = [...messages.value, optimistic]
+
     const draft = content
     form.reset()
     // ``form.reset()`` clears the value but leaves the explicit
@@ -519,14 +560,24 @@ export default function DmThreadPage() {
     const restoredReply = replyTo.value
     replyTo.value = null
     try {
-      await api.post(`/api/conversations/${convId}/messages`, {
+      const res = await api.post(`/api/conversations/${convId}/messages`, {
         content,
         ...(reply_to_id ? { reply_to_id } : {}),
-      })
-      const data = await api.get(`/api/conversations/${convId}/messages`)
-      messages.value = data.reverse()
+      }) as { id: string }
+      // Reconcile the optimistic row with the server-assigned id.
+      //  • If the WS broadcast already landed (real ``id`` in the list)
+      //    we just drop the temp.
+      //  • Otherwise we swap the temp's id for the real one so a
+      //    subsequent WS frame de-dupes naturally.
+      const list = messages.value
+      const realExists = list.some(m => m.id === res.id)
+      messages.value = realExists
+        ? list.filter(m => m.id !== tempId)
+        : list.map(m => m.id === tempId ? { ...m, id: res.id } : m)
     } catch (err: unknown) {
-      // Restore the draft so the user can retry without re-typing.
+      // Strip the optimistic row + restore the draft so the user
+      // can retry without re-typing.
+      messages.value = messages.value.filter(m => m.id !== tempId)
       const ta = (form.elements.namedItem('content') as HTMLTextAreaElement | null)
       if (ta) {
         ta.value = draft
