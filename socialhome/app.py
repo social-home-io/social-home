@@ -743,14 +743,16 @@ def _wire_federation_stack(
     )
     app[K.url_update_outbound_key] = url_update_outbound
 
-    # Capabilities advertisement — fan out our protocol_version +
-    # feature flag set to every confirmed peer at startup. Fires
-    # idempotently from the on-startup hook below; peers can then
-    # gate optional fields on what we actually understand.
+    # Capabilities advertisement — fan out our ``proto_version`` to
+    # every confirmed peer at startup AND on each newly-confirmed pair
+    # (via the bus subscription below), so peers paired mid-run also
+    # learn our version without waiting for the next restart.
     capabilities_outbound = CapabilitiesOutbound(
         federation_service=federation_service,
         federation_repo=federation_repo,
+        bus=bus,
     )
+    capabilities_outbound.wire()
     app[K.capabilities_outbound_key] = capabilities_outbound
 
     peer_directory_service = PeerDirectoryService(
