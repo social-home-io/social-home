@@ -13,7 +13,7 @@ export type SideNavIconName =
   | 'gallery' | 'pages' | 'stickies'
   | 'messages' | 'calls' | 'highlights' | 'momentum'
   | 'spaces' | 'bazaar' | 'corner'
-  | 'parent-control' | 'connections' | 'admin'
+  | 'parent-control' | 'connections' | 'admin' | 'person'
 
 interface Props {
   name: SideNavIconName
@@ -159,6 +159,16 @@ const GLYPHS: Record<SideNavIconName, JSX.Element> = {
   admin: (
     <svg {...COMMON}>
       <path d="M14.7 3.3 16 4.6l3.4-3.4 3 3-3.4 3.4 1.3 1.3-2 2-1.3-1.3-7 7L8 18l-2 1-1 2-2-3 2-1 1-2 2-2 7-7-1.3-1.3z" />
+    </svg>
+  ),
+  person: (
+    /* Head circle + shoulder arc — single-user silhouette, distinct
+     * from the multi-person ``presence`` glyph and the wrench-shape
+     * ``admin``. Reads as "your account" in the Settings sidebar
+     * group. */
+    <svg {...COMMON}>
+      <circle cx="12" cy="8" r="3.6" />
+      <path d="M5 20a7 7 0 0 1 14 0" />
     </svg>
   ),
 }

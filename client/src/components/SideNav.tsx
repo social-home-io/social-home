@@ -18,6 +18,7 @@ import { useLocation } from 'preact-iso'
 import { useComputed } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
+import { instanceConfig } from '@/store/instance'
 import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
 import { spaces, loadSpaces } from '@/store/spaces'
@@ -133,8 +134,15 @@ const BROWSE_GROUP: SideNavGroup = {
 
 const LOCAL_GROUP: SideNavGroup = {
   key: 'local',
-  label: 'Local',
+  label: 'Settings',
   items: [
+    // First-class entry to personal settings for every authenticated
+    // user (no ``gate``). Previously the only path was the identity
+    // strip at the bottom of the sidebar — visually unobvious enough
+    // that non-admins reported "I can't find where to change my
+    // profile". Lifting it into the sidebar group makes the path the
+    // same regardless of role.
+    { key: 'personal', label: 'Personal', href: '/settings', icon: 'person' },
     { key: 'parent-control', label: 'Parent Control', href: '/parent', icon: 'parent-control',
       gate: s => s.isGuardian },
     // Labelled "Federation" in the sidebar to disambiguate from the
@@ -180,6 +188,13 @@ export function SideNav() {
   const view = useComputed(() => {
     const user = currentUser.value
     const t = toggles.value
+    // The identity strip only renders outside haos mode. In haos mode
+    // the SH SPA is iframed under HA Core's left sidebar, which already
+    // shows the signed-in user — a second avatar in our sidebar
+    // doubles up. ha and standalone modes keep the strip; it's the
+    // user's only "who am I signed in as" cue when SH is the primary
+    // UI surface.
+    const isHaos = instanceConfig.value?.mode === 'haos'
     const state: SideNavState = {
       isAdmin: !!user?.is_admin,
       // null = still loading; treat as "not a guardian" so the link
@@ -209,10 +224,11 @@ export function SideNav() {
       local: { group: LOCAL_GROUP, items: filter(LOCAL_GROUP) },
       user,
       state,
+      isHaos,
     }
   })
 
-  const { main, local, user } = view.value
+  const { main, local, user, isHaos } = view.value
   const currentPath = loc.path
 
   const state = view.value.state
@@ -290,7 +306,7 @@ export function SideNav() {
           {renderGroup(local.group, local.items)}
         </>
       )}
-      {user && (
+      {user && !isHaos && (
         <a
           href="/settings"
           class="sh-sidenav-identity"
