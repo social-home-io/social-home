@@ -27,5 +27,6 @@ class HouseholdFeaturesView(BaseView):
             actor_is_admin=ctx.is_admin,
             household_name=body.get("household_name"),
             toggles=body.get("toggles"),
+            tz=body.get("tz"),
         )
         return self._json(asdict(feats))

@@ -258,6 +258,23 @@ class HaAdapter(PlatformAdapter):
             )
         self._ha_bridge = HaBridgeService(app[K.event_bus_key], self)
         self._ha_bridge.wire()
+        # Mirror HA Core's ``time_zone`` into ``household_features.tz``
+        # once at startup, so calendar events created without an
+        # explicit tz inherit the wall clock HA already owns.
+        # Operator-side changes in HA propagate to SH on the next
+        # restart — household timezones change rarely enough that this
+        # is the right cadence. A failed read leaves the previous value
+        # (initially ``'UTC'``) in place.
+        household_svc = app.get(K.household_features_service_key)
+        if household_svc is not None:
+            try:
+                cfg = await self._ha_client.get_config()
+            except Exception as exc:  # pragma: no cover
+                log.warning("ha_adapter: initial tz fetch failed: %s", exc)
+            else:
+                tz = (cfg or {}).get("time_zone")
+                if isinstance(tz, str) and tz.strip():
+                    await household_svc.set_tz_from_ha(tz.strip())
 
     async def on_cleanup(self, app: "web.Application") -> None:  # noqa: RUF029
         """No-op."""

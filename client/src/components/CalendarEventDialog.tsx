@@ -17,6 +17,11 @@ import { currentUser } from '@/store/auth'
 import { householdUsers } from '@/store/householdUsers'
 import { resolveCalendarColor } from '@/utils/calendar'
 import {
+  detectBrowserTz,
+  localPartsToUtcIso,
+  utcIsoToLocalParts,
+} from '@/utils/timezone'
+import {
   calendarInvitees,
   loadCalendarInvitees,
 } from '@/store/calendarInvitees'
@@ -137,7 +142,20 @@ interface EditableEvent {
   rsvp_enabled?: boolean
   cover_url?: string | null
   location?: string | null
+  /** IANA timezone the event was authored in. Used to pre-fill the
+   *  date / time inputs in the same wall clock the host saw at
+   *  create time — without this the inputs render in the viewer's
+   *  browser tz and the host can no longer tell what they actually
+   *  scheduled. */
+  tz?: string | null
 }
+
+/** IANA tz the dialog uses for the date / time inputs. Defaulted to
+ *  the viewer's browser zone for the new-event path so the form
+ *  reflects what the user is typing; the edit / open-event paths
+ *  override it from ``event.tz`` so the inputs stay anchored to the
+ *  host's wall clock. */
+const eventTz = signal<string>(detectBrowserTz())
 
 /** Open the dialog in edit mode — pre-populate every field from
  *  ``ev`` and PATCH instead of POST on submit. The same "For:" picker
@@ -158,12 +176,18 @@ export function openEditEventDialog(
   summary.value = ev.summary
   description.value = ev.description ?? ''
   location.value = ev.location ?? ''
-  const start = new Date(ev.start)
-  const end = new Date(ev.end)
-  startDate.value = start.toISOString().slice(0, 10)
-  startTime.value = start.toTimeString().slice(0, 5)
-  endDate.value = end.toISOString().slice(0, 10)
-  endTime.value = end.toTimeString().slice(0, 5)
+  // Anchor the date / time inputs to the event's originating tz so
+  // the host's wall clock survives the round-trip (UTC → form →
+  // UTC). Falls back to the viewer's browser tz when the event row
+  // pre-dates the tz column — same as the create-event default.
+  const tz = ev.tz || detectBrowserTz()
+  eventTz.value = tz
+  const startParts = utcIsoToLocalParts(ev.start, tz)
+  const endParts = utcIsoToLocalParts(ev.end, tz)
+  startDate.value = startParts.date
+  startTime.value = startParts.time
+  endDate.value = endParts.date
+  endTime.value = endParts.time
   allDay.value = ev.all_day
   attendees.value = new Set(ev.attendees ?? [])
   rsvpEnabled.value = !!ev.rsvp_enabled
@@ -181,12 +205,22 @@ function reset() {
   summary.value = ''
   description.value = ''
   location.value = ''
+  // New-event default: pre-fill in the viewer's browser tz. The
+  // backend resolves to the household tz at create time when this
+  // happens to match the household (the common case), so the user
+  // sees what they're typing without an extra picker step.
+  const tz = detectBrowserTz()
+  eventTz.value = tz
   const now = new Date()
-  startDate.value = now.toISOString().slice(0, 10)
-  startTime.value = now.toTimeString().slice(0, 5)
-  const end = new Date(now.getTime() + 3600000)
-  endDate.value = end.toISOString().slice(0, 10)
-  endTime.value = end.toTimeString().slice(0, 5)
+  const startParts = utcIsoToLocalParts(now.toISOString(), tz)
+  const endParts = utcIsoToLocalParts(
+    new Date(now.getTime() + 3600000).toISOString(),
+    tz,
+  )
+  startDate.value = startParts.date
+  startTime.value = startParts.time
+  endDate.value = endParts.date
+  endTime.value = endParts.time
   allDay.value = false
   limitAttendance.value = false
   capacity.value = ''
@@ -220,16 +254,29 @@ export function CalendarEventDialog({ onCreated }: {
     }
     submitting.value = true
     try {
+      // Translate the form's wall-clock inputs into UTC ISO using the
+      // active tz anchor. ``localPartsToUtcIso`` handles DST via the
+      // IANA database, so e.g. "19:00 on Mar 30 Berlin" emits
+      // 17:00Z (CEST is in effect), not the 18:00Z the legacy
+      // ``${time}:00Z`` would have produced. All-day events keep
+      // their conventional 00:00 / 23:59:59 day bounds in the
+      // event's tz.
+      const tz = eventTz.value
       const start = allDay.value
-        ? `${startDate.value}T00:00:00Z`
-        : `${startDate.value}T${startTime.value}:00Z`
+        ? localPartsToUtcIso(startDate.value, '00:00', tz)
+        : localPartsToUtcIso(startDate.value, startTime.value, tz)
       const end = allDay.value
-        ? `${endDate.value}T23:59:59Z`
-        : `${endDate.value}T${endTime.value}:00Z`
+        ? localPartsToUtcIso(endDate.value, '23:59', tz)
+        : localPartsToUtcIso(endDate.value, endTime.value, tz)
       const body: Record<string, unknown> = {
         summary: summary.value,
         start,
         end,
+        // IANA tz the form was anchored to. The backend stamps this
+        // onto the event so a viewer in a different zone still sees
+        // the host's intended wall clock with a "≈ HH:MM your time"
+        // hint via ``formatEventTime``.
+        tz,
         all_day: allDay.value,
         description: description.value || undefined,
       }

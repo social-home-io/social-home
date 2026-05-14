@@ -57,6 +57,14 @@ class HouseholdFeatures:
     """Household-wide feature toggles + post-type allowlist."""
 
     household_name: str = "Home"
+    #: IANA timezone name (``"Europe/Berlin"``) — the household's "home"
+    #: wall-clock anchor for the calendar. Falls back to ``"UTC"`` at
+    #: install. In ``ha`` and ``haos`` modes the HA REST adapter mirrors
+    #: ``core.config.time_zone`` here at startup; in ``standalone`` mode
+    #: the setup wizard collects it from the operator. Every personal /
+    #: space calendar event resolves through this column at the floor of
+    #: the event-creation fallback chain.
+    tz: str = "UTC"
     feat_feed: bool = True
     feat_pages: bool = True
     feat_tasks: bool = True

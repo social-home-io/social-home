@@ -52,6 +52,7 @@ class AbstractSpaceRepo(Protocol):
         space_id: str,
         cover_hash: str | None,
     ) -> None: ...
+    async def set_tz(self, space_id: str, tz: str) -> None: ...
     async def list_by_type(self, space_type: SpaceType) -> list[Space]: ...
     async def list_for_user(self, user_id: str) -> list[Space]: ...
     async def list_location_shared_spaces_for_user(
@@ -273,9 +274,9 @@ class SqliteSpaceRepo:
                 allow_post_transcript, allow_post_poll, allow_post_schedule,
                 allow_post_file, allow_post_bazaar,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
-                dissolved, about_markdown, cover_hash
+                dissolved, about_markdown, cover_hash, tz
             ) VALUES(
-                -- 42 placeholders, one per column listed above.
+                -- 43 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
@@ -289,7 +290,7 @@ class SqliteSpaceRepo:
                 ?, ?, ?,                      -- allow_post_transcript, allow_post_poll, allow_post_schedule
                 ?, ?,                         -- allow_post_file, allow_post_bazaar
                 ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
-                ?, ?, ?                       -- dissolved, about_markdown, cover_hash
+                ?, ?, ?, ?                    -- dissolved, about_markdown, cover_hash, tz
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -329,7 +330,8 @@ class SqliteSpaceRepo:
                 allow_here_mention=excluded.allow_here_mention,
                 dissolved=excluded.dissolved,
                 about_markdown=excluded.about_markdown,
-                cover_hash=excluded.cover_hash
+                cover_hash=excluded.cover_hash,
+                tz=excluded.tz
             """,
             (
                 space.id,
@@ -374,6 +376,7 @@ class SqliteSpaceRepo:
                 int(space.dissolved),
                 space.about_markdown,
                 space.cover_hash,
+                space.tz,
             ),
         )
         return space
@@ -386,6 +389,19 @@ class SqliteSpaceRepo:
         await self._db.enqueue(
             "UPDATE spaces SET cover_hash=? WHERE id=?",
             (cover_hash, space_id),
+        )
+
+    async def set_tz(self, space_id: str, tz: str) -> None:
+        """Set the space's IANA timezone anchor.
+
+        Space admins call this to anchor a space to a wall clock that
+        differs from the household tz — e.g. a federated multi-household
+        space whose canonical wall clock is "Europe/Berlin" even though
+        a co-host's local household runs in "America/New_York".
+        """
+        await self._db.enqueue(
+            "UPDATE spaces SET tz=? WHERE id=?",
+            (tz, space_id),
         )
 
     async def get(self, space_id: str) -> Space | None:
@@ -1256,6 +1272,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         dissolved=bool_col(row.get("dissolved", 0)),
         about_markdown=row.get("about_markdown"),
         cover_hash=row.get("cover_hash"),
+        tz=row.get("tz") or "UTC",
     )
 
 

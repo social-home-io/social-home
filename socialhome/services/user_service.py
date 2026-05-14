@@ -16,6 +16,7 @@ import json
 import secrets
 from dataclasses import replace
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..crypto import derive_user_id
 from ..domain.events import (
@@ -328,6 +329,28 @@ class UserService:
         return await self._pictures.get_user_picture(user_id)
 
     # ── Preferences ─────────────────────────────────────────────────────
+
+    async def set_tz(self, username: str, tz: str) -> User:
+        """Persist the user's IANA timezone.
+
+        Called from the SPA cold-start probe when the user logs in
+        and ``users.tz`` is still at the default — the SPA POSTs the
+        browser-detected zone so future personal calendar events
+        anchor to the user's local wall clock without an extra prompt.
+        Validates against the IANA database; an unknown name raises
+        :class:`ValueError`.
+        """
+        try:
+            ZoneInfo(tz)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown IANA timezone {tz!r}") from exc
+        user = await self._repo.get(username)
+        if user is None:
+            raise KeyError(f"user {username!r} not found")
+        if user.tz == tz:
+            return user
+        await self._repo.set_tz(username, tz)
+        return replace(user, tz=tz)
 
     async def patch_preferences(self, username: str, patch: dict) -> User:
         """Shallow-merge ``patch`` into ``users.preferences_json``.

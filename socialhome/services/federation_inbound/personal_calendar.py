@@ -133,6 +133,11 @@ class PersonalCalendarInboundHandlers:
                     recipient_user_id,
                 )
                 continue
+            # IANA wall-clock anchor — additive over the wire. The
+            # organiser's tz is what locally-rendered times anchor to;
+            # the SPA still annotates "≈ HH:MM your time" for the
+            # recipient. Old peers omit the field; default ``"UTC"``.
+            event_tz = str(p.get("tz") or "UTC")
             mirrored = CalendarEvent(
                 id=row_id,
                 calendar_id=cal_id,
@@ -150,6 +155,7 @@ class PersonalCalendarInboundHandlers:
                 origin="remote_invite",
                 remote_event_id=remote_event_id,
                 remote_instance_id=event.from_instance,
+                tz=event_tz,
             )
             if existing is not None:
                 # Re-save preserves the row id; ``replace`` on the
@@ -166,6 +172,7 @@ class PersonalCalendarInboundHandlers:
                     rsvp_enabled=bool(p.get("rsvp_enabled", False)),
                     cover_url=p.get("cover_url"),
                     location=p.get("location"),
+                    tz=event_tz,
                 )
             await self._calendar_repo.save_event(mirrored)
             # On first receipt, default the recipient's RSVP to

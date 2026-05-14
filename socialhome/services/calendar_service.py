@@ -16,6 +16,7 @@ import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..domain.calendar import (
     Calendar,
@@ -180,6 +181,45 @@ class CalendarService:
     async def _require_calendar_enabled(self) -> None:
         if self._household is not None:
             await self._household.require_enabled("calendar")
+
+    async def _resolve_personal_tz(
+        self,
+        explicit: str | None,
+        *,
+        owner_username: str,
+    ) -> str:
+        """Pick the IANA tz for a new personal calendar event.
+
+        Chain: explicit (from the request) → owner's ``users.tz`` →
+        household ``tz`` → ``"UTC"``. Each layer always returns a
+        concrete IANA name thanks to ``NOT NULL DEFAULT 'UTC'`` in
+        ``0002_calendar_timezone.sql``; once an admin / the user / the
+        SPA has touched the relevant row the resolution prefers the
+        more specific value over the household fallback.
+
+        Validation is best-effort: an unknown IANA name from the
+        request falls back to the next layer rather than 400'ing —
+        the SPA always sends a value detected by ``Intl`` so this is a
+        safety belt for hand-written API clients.
+        """
+        if explicit:
+            try:
+                ZoneInfo(explicit)
+                return explicit
+            except ZoneInfoNotFoundError:
+                log.warning(
+                    "calendar create_event got unknown tz %r — falling "
+                    "back to owner / household",
+                    explicit,
+                )
+        if self._user_repo is not None:
+            owner = await self._user_repo.get(owner_username)
+            if owner is not None and owner.tz and owner.tz != "UTC":
+                return owner.tz
+        if self._household is not None:
+            household = await self._household.get()
+            return household.tz
+        return "UTC"
 
     async def _validate_attendees(
         self,
@@ -401,6 +441,7 @@ class CalendarService:
         rsvp_enabled: bool = False,
         cover_url: str | None = None,
         location: str | None = None,
+        tz: str | None = None,
     ) -> CalendarEvent:
         await self._require_calendar_enabled()
         summary = summary.strip()
@@ -425,6 +466,10 @@ class CalendarService:
 
         attendee_tuple, instance_for_user = await self._validate_attendees(attendees)
 
+        event_tz = await self._resolve_personal_tz(
+            tz, owner_username=cal.owner_username
+        )
+
         event = CalendarEvent(
             id=uuid.uuid4().hex,
             calendar_id=calendar_id,
@@ -439,6 +484,7 @@ class CalendarService:
             rsvp_enabled=rsvp_enabled,
             cover_url=_clean_cover_url(cover_url),
             location=_clean_location(location),
+            tz=event_tz,
         )
         saved = await self._repo.save_event(event)
         if self._bus is not None:
@@ -513,6 +559,7 @@ class CalendarService:
         rsvp_enabled: bool | None = None,
         cover_url: object = _UNSET,
         location: object = _UNSET,
+        tz: str | None = None,
     ) -> CalendarEvent:
         """Partial-update an existing event. Only fields the caller
         supplies are overwritten; the rest retain their current values.
@@ -521,6 +568,10 @@ class CalendarService:
         "no change" so an explicit ``None`` from the client still clears
         the field. The other fields use ``None``/``"no change"`` directly
         because none of them have an ambiguous-clear shape.
+
+        ``tz`` is validated via ``ZoneInfo`` and only overwrites the
+        existing event tz when explicitly passed — leaving it absent
+        preserves the wall-clock anchor stamped at create time.
         """
         existing = await self._repo.get_event(event_id)
         if existing is None:
@@ -532,6 +583,14 @@ class CalendarService:
         new_end = _parse_iso(end) if end else existing.end
         if new_end < new_start:
             raise ValueError("event end must not be before start")
+        if tz is not None:
+            try:
+                ZoneInfo(tz)
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError(f"unknown IANA timezone {tz!r}") from exc
+            new_tz = tz
+        else:
+            new_tz = existing.tz
         if cover_url is _UNSET:
             new_cover = existing.cover_url
         else:
@@ -570,6 +629,7 @@ class CalendarService:
             ),
             cover_url=new_cover,
             location=new_location,
+            tz=new_tz,
         )
         await self._repo.save_event(updated)
         if self._bus is not None:
@@ -775,13 +835,17 @@ def _personal_event_payload(event: CalendarEvent, calendar: Calendar) -> dict:
         "rsvp_enabled": event.rsvp_enabled,
         "cover_url": event.cover_url,
         "location": event.location,
+        # IANA wall-clock anchor — old peers without this field ignore
+        # it on the inbound side (their importer uses ``dict.get("tz")``
+        # with a ``"UTC"`` fallback), so the field is additive.
+        "tz": event.tz,
     }
 
 
 class SpaceCalendarService:
     """Space calendar event operations."""
 
-    __slots__ = ("_repo", "_bus", "_federation")
+    __slots__ = ("_repo", "_bus", "_federation", "_space_repo", "_household")
 
     def __init__(
         self,
@@ -791,6 +855,10 @@ class SpaceCalendarService:
         self._repo = space_calendar_repo
         self._bus = bus
         self._federation = None
+        # Optional helpers used solely for the tz resolution chain at
+        # event create time. Tests that don't touch tz can skip both.
+        self._space_repo = None
+        self._household = None
 
     def attach_federation(self, federation_service) -> None:
         """Wire outbound federation for RSVPs.
@@ -801,6 +869,50 @@ class SpaceCalendarService:
         automatically reach every peer co-hosting the space.
         """
         self._federation = federation_service
+
+    def attach_household_features(self, svc) -> None:
+        """Wire :class:`HouseholdFeaturesService` so newly-created
+        space events fall back to the household tz when neither the
+        request nor the space row carries one."""
+        self._household = svc
+
+    def attach_space_repo(self, space_repo) -> None:
+        """Wire the space repo so event creation can read ``space.tz``
+        as the natural fallback before the household tz."""
+        self._space_repo = space_repo
+
+    async def _resolve_space_event_tz(
+        self,
+        explicit: str | None,
+        *,
+        space_id: str,
+    ) -> str:
+        """Pick the IANA tz for a new space calendar event.
+
+        Chain: explicit → ``space.tz`` → household ``tz`` → ``"UTC"``.
+        An unknown explicit IANA name falls back to the next layer and
+        logs a warning — the SPA always sends a value detected by
+        ``Intl`` so a malformed string here is a hand-rolled API
+        client's fault, not a normal flow.
+        """
+        if explicit:
+            try:
+                ZoneInfo(explicit)
+                return explicit
+            except ZoneInfoNotFoundError:
+                log.warning(
+                    "space calendar create_event got unknown tz %r — falling "
+                    "back to space / household",
+                    explicit,
+                )
+        if self._space_repo is not None:
+            space = await self._space_repo.get(space_id)
+            if space is not None and space.tz and space.tz != "UTC":
+                return space.tz
+        if self._household is not None:
+            household = await self._household.get()
+            return household.tz
+        return "UTC"
 
     def wire(self) -> None:
         """Phase E: subscribe to SpaceMemberLeft so a user leaving a
@@ -890,6 +1002,7 @@ class SpaceCalendarService:
         capacity: int | None = None,
         cover_url: str | None = None,
         location: str | None = None,
+        tz: str | None = None,
     ) -> CalendarEvent:
         """Create a space-scoped calendar event.
 
@@ -910,6 +1023,7 @@ class SpaceCalendarService:
             raise ValueError(f"invalid datetime: {exc}") from exc
         if end_dt < start_dt:
             raise ValueError("end must be at or after start")
+        event_tz = await self._resolve_space_event_tz(tz, space_id=space_id)
         event = CalendarEvent(
             id=uuid.uuid4().hex,
             calendar_id=space_id,  # space-scoped events use space_id as calendar_id
@@ -924,6 +1038,7 @@ class SpaceCalendarService:
             capacity=capacity,
             cover_url=_clean_cover_url(cover_url),
             location=_clean_location(location),
+            tz=event_tz,
         )
         saved = await self._repo.save_event(space_id, event)
         if self._bus is not None:
@@ -1022,12 +1137,15 @@ class SpaceCalendarService:
         clear_capacity: bool = False,
         cover_url: object = _UNSET,
         location: object = _UNSET,
+        tz: str | None = None,
     ) -> CalendarEvent:
         """Partial-update a space event. Emits CalendarEventUpdated.
 
         ``cover_url`` and ``location`` follow the same sentinel
         discipline as the personal calendar's ``update_event``: ``_UNSET``
         = no change, explicit ``None`` clears the field, a string sets it.
+        ``tz`` is validated against the IANA database and only overwrites
+        the existing event tz when explicitly passed.
         """
         result = await self._repo.get_event(event_id)
         if result is None:
@@ -1062,6 +1180,14 @@ class SpaceCalendarService:
         else:
             assert location is None or isinstance(location, str)
             new_location = _clean_location(location)
+        if tz is not None:
+            try:
+                ZoneInfo(tz)
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError(f"unknown IANA timezone {tz!r}") from exc
+            new_tz = tz
+        else:
+            new_tz = existing.tz
         updated = replace(
             existing,
             summary=new_summary,
@@ -1076,6 +1202,7 @@ class SpaceCalendarService:
             capacity=new_capacity,
             cover_url=new_cover,
             location=new_location,
+            tz=new_tz,
         )
         await self._repo.save_event(space_id, updated)
         await self._publish_federation_event_saved(
@@ -1587,6 +1714,7 @@ class SpaceCalendarService:
                 event.rrule,
                 window_start=event.start,
                 window_end=window_end,
+                tz=event.tz,
             )
         }
         if occ_dt not in starts:
@@ -1620,6 +1748,9 @@ class SpaceCalendarService:
             "rrule": event.rrule,
             "cover_url": event.cover_url,
             "location": event.location,
+            # IANA wall-clock anchor — additive on the wire. Old peers
+            # without this field ignore it on the inbound side.
+            "tz": event.tz,
         }
         await self._federation.broadcast_to_space_members(
             space_id,

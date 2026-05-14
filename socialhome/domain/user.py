@@ -108,6 +108,16 @@ class User:
     # Preferences are free-form JSON owned by the frontend.
     preferences_json: str = "{}"
 
+    # IANA timezone name (``"Europe/Berlin"``) — the user's personal
+    # wall-clock anchor for the SPA forms. Defaults to ``"UTC"`` at the
+    # schema level (``users.tz NOT NULL DEFAULT 'UTC'``); the SPA auto-
+    # detects the browser's resolved zone on first login and writes it
+    # via ``set_tz`` so the common case (user lives in the household)
+    # silently picks up the right value. Editable from the user
+    # settings page for the cross-TZ-user case (a household member who
+    # actually lives in a different zone than the household).
+    tz: str = "UTC"
+
     # Bookkeeping
     created_at: str | None = None  # ISO-8601 UTC
 

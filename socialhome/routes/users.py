@@ -130,6 +130,19 @@ class MeView(BaseView):
             )
             return web.json_response(_user_to_dict_signed(self.request, user))
 
+        # Timezone — used by the SPA's cold-start probe to mirror the
+        # browser's resolved zone into ``users.tz`` so calendar events
+        # default to the user's local wall clock without a separate
+        # settings step. Validated via ``ZoneInfo`` in the service.
+        if "tz" in body:
+            try:
+                user = await svc.set_tz(ctx.username, str(body["tz"]))
+            except ValueError as exc:
+                return error_response(422, "UNPROCESSABLE", str(exc))
+            except KeyError:
+                return error_response(404, "NOT_FOUND", "User not found.")
+            return web.json_response(_user_to_dict_signed(self.request, user))
+
         # Display-name + bio go through patch_profile so a
         # UserProfileUpdated event fires for WS + federation fan-out.
         display_name = body.get("display_name", _UNSET)

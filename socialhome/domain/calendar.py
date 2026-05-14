@@ -80,6 +80,18 @@ class CalendarEvent:
     #: confirmed peer).
     remote_instance_id: str | None = None
 
+    #: IANA timezone name (``"Europe/Berlin"``) that anchors the
+    #: event's wall clock. ``start`` / ``end`` stay UTC tz-aware (the
+    #: storage shape); ``tz`` is the *display* and *recurrence-expansion*
+    #: anchor so that "every Tuesday 19:00 Berlin" stays at 19:00 Berlin
+    #: across DST transitions. Defaults to ``"UTC"`` — the service layer
+    #: resolves the right value at *create time* by inheriting from the
+    #: parent space (space events) or the household (personal events),
+    #: so by the time a row exists this field is always a concrete
+    #: IANA name (the column has ``NOT NULL DEFAULT 'UTC'`` so reads
+    #: never see NULL either).
+    tz: str = "UTC"
+
 
 @dataclass(slots=True, frozen=True)
 class CalendarEventCreate:

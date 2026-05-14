@@ -15,6 +15,12 @@ export interface User {
   /** Free-form JSON blob owned by the frontend; parse via
    *  ``getPreferences()`` in ``@/utils/preferences``. */
   preferences_json?: string
+  /** IANA timezone anchor for this user's *personal* calendar events.
+   *  Defaults to ``"UTC"`` server-side; the SPA's cold-start probe
+   *  detects the browser's resolved zone via ``Intl`` on first login
+   *  and PATCHes ``/api/me`` so future personal events land in the
+   *  user's actual wall clock. Editable from the settings page. */
+  tz?: string
   is_new_member: boolean
 }
 
@@ -398,6 +404,13 @@ export interface CalendarEvent {
    *  Surfaces under the event title on the card and is emitted on ICS
    *  export. ``null`` means "no location". */
   location?: string | null
+  /** IANA timezone the host had in mind when they created the event
+   *  (``"Europe/Berlin"``, ``"America/New_York"``). The SPA renders
+   *  the event in this wall clock via ``formatEventTime`` and
+   *  annotates "≈ HH:MM your time" when the viewer's tz differs.
+   *  Defaults to ``"UTC"`` server-side so a missing field still
+   *  resolves consistently. */
+  tz?: string
 }
 
 /** Per-event reminder configured by a user (Phase D). */

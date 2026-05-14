@@ -29,7 +29,7 @@ anything below contradicts the file, the file wins.
 |---|---|
 | `instance_identity` | Single-row table (`id='self'`) with the HFS's long-term Ed25519 keypair, optional ML-DSA-65 PQ key, household lat/lon, and routing secret. |
 | `instance_config` | Generic key/value store for instance-level settings the platform adapter or services need to persist. |
-| `users` | Local household users — username, display name, profile picture hash, admin flag, theme, status, locale, child-protection fields, soft-delete state, `last_seen_at` (most recent WS disconnect — drives "Last seen X" rendering after a server restart, see `docs/protocol/presence.md` § Online status), `source` (`manual` vs `ha`), and `external_id` (provider-side stable id scoped by `source` — the 32-hex HA `user_id` for `source='ha'`; lets the picture lifter / future presence bridge join via `person.attributes.user_id` without re-resolving the username, and keeps SH identity stable across HA display-name renames). |
+| `users` | Local household users — username, display name, profile picture hash, admin flag, theme, status, locale, child-protection fields, soft-delete state, `last_seen_at` (most recent WS disconnect — drives "Last seen X" rendering after a server restart, see `docs/protocol/presence.md` § Online status), `source` (`manual` vs `ha`), `external_id` (provider-side stable id scoped by `source` — the 32-hex HA `user_id` for `source='ha'`; lets the picture lifter / future presence bridge join via `person.attributes.user_id` without re-resolving the username, and keeps SH identity stable across HA display-name renames), and `tz` (the user's personal IANA timezone, auto-detected from the browser on first login via a `PATCH /api/me` probe; falls back to the household tz when still `'UTC'`). |
 | `user_profile_pictures` | WebP bytes for household-level profile pictures, keyed by `user_id`. Separate table so `SELECT * FROM users` stays cheap. |
 | `remote_users` | Users on paired remote instances. Carries display name, alias, picture hash, public key, `deprovisioned_at`, and `synced_at`. Same `user_id` namespace as `users`. |
 | `api_tokens` | Per-user API tokens (HA mode and integrations). Stores `token_hash` only — the plaintext is shown to the user once. |
@@ -55,7 +55,7 @@ anything below contradicts the file, the file wins.
 
 | Table | Purpose |
 |---|---|
-| `household_features` | Single-row toggle table (`id='default'`) for which household-level features are on (feed, pages, tasks, stickies, calendar, bazaar, …) plus per-post-type allow flags. |
+| `household_features` | Single-row toggle table (`id='default'`) for which household-level features are on (feed, pages, tasks, stickies, calendar, bazaar, …) plus per-post-type allow flags. Also carries `tz` — the household's IANA wall-clock anchor (`'UTC'` at install; mirrored from HA Core's `time_zone` on startup in `ha` / `haos` mode; admin-editable in `standalone` mode). Calendar events created without an explicit `tz` resolve through this column at the floor of the fallback chain. |
 | `feed_posts` | Household-level posts. Type enum covers `text`, `image`, `video`, `transcript`, `poll`, `schedule`, `file`, `bazaar`. Holds reactions JSON, comment count, pinned, deleted, edited_at. |
 | `post_comments` | Threaded household post comments with `parent_id` self-reference. |
 | `saved_posts` / `feed_read_positions` | Per-user saved posts and last-read marker. |
@@ -73,7 +73,7 @@ anything below contradicts the file, the file wins.
 
 | Table | Purpose |
 |---|---|
-| `spaces` | Core space row — id (derived from space identity public key), name, owner, `space_type` (`private`/`household`/`public`/`global`), `join_mode`, retention, feature toggles, posts/pages/stickies/calendar/tasks access modes, public-discovery fields (lat/lon/radius), cover hash, `bot_enabled`, `min_age`, `target_audience`, `dissolved`, and `welcome_version`. |
+| `spaces` | Core space row — id (derived from space identity public key), name, owner, `space_type` (`private`/`household`/`public`/`global`), `join_mode`, retention, feature toggles, posts/pages/stickies/calendar/tasks access modes, public-discovery fields (lat/lon/radius), cover hash, `bot_enabled`, `min_age`, `target_audience`, `dissolved`, `welcome_version`, and `tz` (the space's IANA wall-clock anchor for calendar events; defaults to the household tz at create time, editable by space admins for federated multi-household spaces that pin to a different city). |
 | `space_members` | Local membership: `(space_id, user_id, role, joined_at, history_visible_from, location_share_enabled, space_display_name, picture_hash)`. Roles are `owner` / `admin` / `member` / `subscriber` (use the `SpaceRole` enum, not bare strings). |
 | `space_member_profile_pictures` | Per-space profile-picture override bytes, keyed by `(space_id, user_id)`. |
 | `space_remote_members` | Cross-household members admitted via `SPACE_PRIVATE_INVITE` (§D1b). Lets fan-out include the invitee's instance. |
@@ -101,7 +101,7 @@ anything below contradicts the file, the file wins.
 | `space_moderation_queue` | Pending mod actions — feature, action, payload, reviewer, status, expiry. |
 | `space_polls` / `space_poll_options` / `space_poll_votes` | Space-feed polls. Vote rows are encrypted in transit so the GFS never sees who voted what (§25.8.21). |
 | `space_schedule_slots` / `space_schedule_responses` / `space_schedule_poll_meta` | Space-scoped Doodle polls. |
-| `space_calendar_events` | Space calendar events. Holds RFC 5545 `rrule`, attendees JSON, `capacity`, `notify_before_minutes`, `location` (free-form). |
+| `space_calendar_events` | Space calendar events. Holds RFC 5545 `rrule`, attendees JSON, `capacity`, `notify_before_minutes`, `location` (free-form), and `tz` — the event's IANA wall-clock anchor (`'UTC'` default; resolved at create time from explicit request → `spaces.tz` → household `tz`). Recurrence expansion and reminder fire-at computation honour `tz` so a "weekly 19:00 Europe/Berlin" event stays at 19:00 Berlin across DST transitions. |
 | `space_calendar_rsvps` | Per-occurrence RSVPs — `(event_id, user_id, occurrence_at)` PK. Status: `going` / `maybe` / `declined` / `requested` / `waitlist`. |
 | `space_calendar_rsvp_reminders` | Pre-event reminder fan-out — `fire_at` partial index on un-sent + future. Driven by `infrastructure/calendar_reminder_scheduler.py`. |
 | `space_calendar_feed_tokens` | Per-`(user, space)` revocable tokens for the iCal `.ics` feed. The `token_hash` column holds a SHA-256 hash of the raw token (matching `api_tokens`); a leaked DB never exposes a live feed URL. Separate from API tokens so revoking one doesn't affect the other. |
@@ -209,7 +209,7 @@ themselves moments and link to the conversation root via
 | Table | Purpose |
 |---|---|
 | `calendars` | Personal + space calendars. Personal calendars are owned by a username; space calendars share lifecycle with their space. |
-| `calendar_events` | Personal calendar events with `rrule`, attendees, `mirrored_from` (when a space event is mirrored into a personal calendar). New columns: `origin` ∈ `{local, remote_invite}` distinguishes locally-authored rows from cross-household invite mirrors; `remote_event_id` + `remote_instance_id` link a mirror back to the organiser's row so RSVP responses propagate via `PERSONAL_CALENDAR_RSVP_UPDATED`; `location` carries free-form venue/address text emitted as the iCal `LOCATION:` line on export. |
+| `calendar_events` | Personal calendar events with `rrule`, attendees, `mirrored_from` (when a space event is mirrored into a personal calendar). New columns: `origin` ∈ `{local, remote_invite}` distinguishes locally-authored rows from cross-household invite mirrors; `remote_event_id` + `remote_instance_id` link a mirror back to the organiser's row so RSVP responses propagate via `PERSONAL_CALENDAR_RSVP_UPDATED`; `location` carries free-form venue/address text emitted as the iCal `LOCATION:` line on export; `tz` is the event's IANA wall-clock anchor (`'UTC'` default; resolved at create time from explicit request → `users.tz` → household `tz`) so the host's intended local time is preserved across DST and viewer-side timezone differences. |
 | `calendar_event_rsvps` | Personal-calendar RSVPs — cross-household invites only. PK `(event_id, user_id, occurrence_at)`. Status ∈ `{accepted, declined, tentative}`. Local household members never RSVP — the household is the unit of trust and members coordinate by writing directly to each other's calendars via the dialog's calendar selector. |
 
 ## Pages (household)
@@ -255,6 +255,4 @@ section above and the `Sqlite*Repo` that owns it. See `CLAUDE.md` →
 
 | File | Purpose |
 |---|---|
-| `0002_relax_space_invitations_fk.sql` | Drops the FK from `space_invitations.space_id → spaces.id`. The same row exists on both sides of a §D1b cross-household invite, but the invitee has no row in the local `spaces` table. |
-| `0003_relax_space_calendar_events_fk.sql` | Same class of fix for `space_calendar_events` (and its FK-children `space_calendar_rsvps` / `space_calendar_rsvp_reminders`) — peer households mirror events for spaces they don't own locally. |
-| `0004_relax_space_instances_fk.sql` | Same fix for `space_instances` so a peer can record `(remote_space_id, host_instance_id)` for outbound RSVP / future-write routing. |
+| `0002_calendar_timezone.sql` | Adds `tz TEXT NOT NULL DEFAULT 'UTC'` to `household_features`, `users`, `spaces`, `calendar_events`, `space_calendar_events`. Anchors every calendar event to an IANA wall-clock zone so recurrence expansion stays DST-correct and cross-household viewing can render both the host's wall clock and the viewer's local equivalent. Pre-existing rows backfill to `'UTC'`; the service layer resolves the right value at create time. |
