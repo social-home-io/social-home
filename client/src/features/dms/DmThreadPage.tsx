@@ -23,6 +23,7 @@ import {
 import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
+import { useTitle } from '@/store/pageTitle'
 import { normaliseTimestamp } from '@/utils/relativeTime'
 
 const messages = signal<Message[]>([])
@@ -284,35 +285,38 @@ export default function DmThreadPage() {
   // * **No unread anchor** → scroll-to-bottom, the existing behaviour.
   //   ``stickToBottom`` is set to true so an active conversation
   //   continues to auto-follow.
+  //
+  // ``useLayoutEffect`` (not ``useEffect``) so the scroll happens
+  // synchronously after Preact mutates the DOM but BEFORE the browser
+  // paints the new frame. The previous shape (``useEffect`` + double
+  // ``requestAnimationFrame``) ran AFTER paint, which let the user
+  // see a frame of the messages list at ``scrollTop=0`` for a few
+  // milliseconds before the scroll fired — the visible "flash to top
+  // then scroll down" the operator reported. With ``useLayoutEffect``
+  // the Preact render → scroll-positioning → paint sequence is one
+  // atomic step and the user sees the messages at the right position
+  // from the very first paint of the thread surface.
   const anchor = unreadAnchor.value
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isLoading) return
     const el = messagesScrollRef.current
     if (!el) return
     if (anchor) {
       stickToBottom.current = false
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const divider = el.querySelector('.sh-dm-unread-divider')
-          if (divider) {
-            divider.scrollIntoView({ block: 'start', behavior: 'auto' })
-          } else {
-            // Anchor message rendered but the divider somehow didn't
-            // (race with the messages map). Fall back to scrolling
-            // the message row itself into view.
-            const row = el.querySelector(`[data-msg-id="${anchor.message_id}"]`)
-            if (row) row.scrollIntoView({ block: 'start', behavior: 'auto' })
-          }
-        })
-      })
+      const divider = el.querySelector('.sh-dm-unread-divider')
+      if (divider) {
+        divider.scrollIntoView({ block: 'start', behavior: 'auto' })
+      } else {
+        // Anchor message rendered but the divider somehow didn't
+        // (race with the messages map). Fall back to scrolling
+        // the message row itself into view.
+        const row = el.querySelector(`[data-msg-id="${anchor.message_id}"]`)
+        if (row) row.scrollIntoView({ block: 'start', behavior: 'auto' })
+      }
       return
     }
     stickToBottom.current = true
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-      })
-    })
+    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
   }, [convId, isLoading, anchor?.message_id])
 
   // Restore the user's reading position immediately after a
@@ -821,6 +825,25 @@ export default function DmThreadPage() {
     }) as { call_id: string }
     location.route(`/calls/${r.call_id}`)
   }
+
+  // Page title: show the peer's display name in the TopBar (above
+  // the search box) so the user always knows whose chat they're in.
+  // ``useTitle`` must run unconditionally on every render to keep the
+  // rules-of-hooks invariant — placing it AFTER the ``loading.value``
+  // early-return below would skip the hook on the loading frame and
+  // crash. While the thread-member roster is still in flight we show
+  // "Chats" as a placeholder so the topbar isn't briefly blank on
+  // first entry.
+  const peerTitle = (() => {
+    const peers = threadMembers.value.filter(m => !m.is_self)
+    if (peers.length === 0) return 'Chats'
+    if (peers.length === 1) return peers[0].display_name
+    // Group DM: join the peers with " · " — same shape the inbox
+    // uses as the row-title fallback, so the topbar and the inbox
+    // entry agree on what to call the conversation.
+    return peers.map(p => p.display_name).join(' · ')
+  })()
+  useTitle(peerTitle)
 
   if (loading.value) return <DmThreadSkeleton />
   const myUserId = currentUser.value?.user_id
