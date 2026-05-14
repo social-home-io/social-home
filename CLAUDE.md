@@ -334,6 +334,45 @@ When adding a new federation event:
 - Never add a `"payload": plaintext_fallback` pattern
 - If `SpaceContentEncryption` is not configured, raise `RuntimeError` — never degrade silently
 
+### Federation protocol versioning
+
+Every confirmed peer carries a monotonic `proto_version: int` on its
+`remote_instances` row, exchanged at startup via
+`INSTANCE_CAPABILITIES_UPDATED`. Senders gate optional fields on
+`FederationService.peer_supports(instance_id, min_version=N)` so a v_N
+field never reaches a v_(N-1) peer that wouldn't know what to do with
+it. See [`docs/protocol/capabilities.md`](docs/protocol/capabilities.md)
+for the full design and version history.
+
+**When you add a federation surface that an older peer cannot
+fail-soft against** (a brand-new `FederationEventType`, a payload field
+whose default-if-missing would be silently wrong rather than just
+"unknown"):
+
+1. Bump `OURS` in
+   `socialhome/domain/federation_capabilities.py` to the next integer.
+2. Add a named constant on `FederationCapability` so call sites
+   reference the version by intent (`MIN_FOR_OCCURRENCE_OVERRIDE`)
+   instead of a magic number. Document what v_N adds in the
+   `OURS` docstring history list.
+3. Gate the outbound on
+   `peer_supports(peer_id, min_version=FederationCapability.X)` and
+   pick a degraded fallback for older peers (or skip the send entirely
+   if no safe fallback exists).
+4. Append a row to the version-history table in
+   `docs/protocol/capabilities.md`: what v_N changed, what an older
+   peer's fallback is.
+5. Update the demo harness in `.claude/skills/federation-demo/` so the
+   `verify` step asserts the new version round-tripped — federation
+   surfaces are easy to ship one-sided by accident.
+
+Adding new feature flags as a per-peer string set on top of the
+integer (`features TEXT NOT NULL DEFAULT '[]'`) is deliberately
+deferred until we have real evidence of selective deployments,
+asymmetric send/receive support, or third-party forks. Until then a
+single monotonic integer covers every case; bolting flags on later is
+a one-line additive migration.
+
 ### Keep docs in sync
 
 `docs/` is the public reference for the federation protocol and the

@@ -28,6 +28,11 @@ class FederationEventType(str, enum.Enum):
     PAIRING_INTRO_RELAY = "pairing_intro_relay"
     PAIRING_INTRO_AUTO = "pairing_intro_auto"
     PAIRING_INTRO_AUTO_ACK = "pairing_intro_auto_ack"
+    #: Fan-out at startup (and after the advertised capability set
+    #: changes) — carries ``{proto_version, features}`` so peers can
+    #: gate optional fields per receiver. See
+    #: :mod:`socialhome.domain.federation_capabilities`.
+    INSTANCE_CAPABILITIES_UPDATED = "instance_capabilities_updated"
     #: ``C → B`` carrying the same ack body as ``PAIRING_INTRO_AUTO_ACK``.
     #: B then forwards as ``PAIRING_INTRO_AUTO_ACK`` to A. Required because
     #: A has no confirmed pairing with C yet, so a direct C→A envelope
@@ -327,6 +332,14 @@ class RemoteInstance:
     status: PairingStatus = PairingStatus.CONFIRMED
     intro_relay_enabled: bool = True
     source: InstanceSource = InstanceSource.MANUAL
+    #: Monotonic protocol version the peer last advertised via
+    #: :data:`FederationEventType.INSTANCE_CAPABILITIES_UPDATED`. Senders
+    #: gate optional fields with
+    #: ``FederationService.peer_supports(instance_id, min_version=N)`` —
+    #: see :mod:`socialhome.domain.federation_capabilities` for the
+    #: known thresholds. Defaults to ``1`` (oldest known wire) so a
+    #: peer that hasn't sent an announcement yet is treated as the
+    #: most conservative shape.
     proto_version: int = 1
     # Post-quantum identity material advertised by the peer during
     # pairing. ``remote_pq_algorithm`` is non-None when the peer supports

@@ -1432,12 +1432,49 @@ def cmd_verify() -> None:
                     f"b: RSVP from {label} ({uid}) missing (got {sorted(going)})",
                 )
 
-    # 7. Crash check — every instance still alive (WebRTC didn't blow up).
+    # 7. Capability handshake — every confirmed inner-ring peer should
+    #    have announced their proto_version via
+    #    ``INSTANCE_CAPABILITIES_UPDATED`` at startup. After ``up`` + a
+    #    short settle window we expect each of a/b/c to see the others
+    #    at proto_version >= 2 (the version this build advertises). A
+    #    peer still pinned at 1 means the announcement never landed —
+    #    most likely the outbound didn't fire or the inbound handler is
+    #    not registered. The harness asserts the round-trip so future
+    #    additive-but-not-fail-soft features have a safety net.
+    for viewer in ("a", "b", "c"):
+        info = state["instances"][viewer]
+        s, conns = _request(
+            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+            token=info["token"],
+        )
+        _must(f"connections({viewer})", s, conns)
+        peers_by_id = {c["instance_id"]: c for c in conns}
+        for other in ("a", "b", "c"):
+            if other == viewer:
+                continue
+            other_iid = state["instances"][other]["instance_id"]
+            row = peers_by_id.get(other_iid)
+            if row is None:
+                failures.append(
+                    f"{viewer}: missing pairing connection row for {other}",
+                )
+                continue
+            pv = int(row.get("proto_version") or 1)
+            if pv < 2:
+                failures.append(
+                    f"{viewer}: peer {other} stuck at proto_version={pv} "
+                    f"(expected >= 2) — INSTANCE_CAPABILITIES_UPDATED "
+                    f"never landed?",
+                )
+            else:
+                print(f"  {viewer} sees {other} at proto_version={pv} ✓")
+
+    # 8. Crash check — every instance still alive (WebRTC didn't blow up).
     for label, info in state["instances"].items():
         if not _alive(info["pid"]):
             failures.append(f"{label}: process pid={info['pid']} is gone")
 
-    # 8. Log audit — scan each backend's stdout/stderr for unhandled
+    # 9. Log audit — scan each backend's stdout/stderr for unhandled
     #    exceptions, ERROR-level lines, federation-pipeline rejects.
     #    Anything we can't account for (i.e. doesn't match the
     #    benign-noise allow-list) becomes a verify failure so the

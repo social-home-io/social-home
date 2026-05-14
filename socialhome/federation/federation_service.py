@@ -389,6 +389,35 @@ class FederationService:
     def own_instance_id(self) -> str:
         return self._own_instance_id
 
+    async def peer_supports(self, instance_id: str, *, min_version: int) -> bool:
+        """``True`` iff the named peer's advertised ``proto_version`` is
+        at least ``min_version``.
+
+        Used by outbound senders to gate optional fields on what the
+        receiving peer actually understands — see
+        :mod:`socialhome.domain.federation_capabilities` for the
+        per-version thresholds. An unknown peer (not yet in
+        ``remote_instances``) returns ``False``; a peer that hasn't
+        sent its ``INSTANCE_CAPABILITIES_UPDATED`` envelope yet reads
+        as ``proto_version=1`` (the most conservative wire), so any
+        gate above v1 will return ``False`` until the announcement
+        arrives. The conservative default is "feature not supported"
+        so the sender omits the optional field.
+
+        Fail-soft: if the repo lookup raises we return ``False`` —
+        sending the legacy shape is always safer than crashing the
+        outbound path mid-fan-out.
+        """
+        if not instance_id or min_version <= 0:
+            return False
+        try:
+            peer = await self._federation_repo.get_instance(instance_id)
+        except Exception:  # pragma: no cover — defensive
+            return False
+        if peer is None:
+            return False
+        return peer.proto_version >= min_version
+
     @property
     def own_identity_seed(self) -> bytes:
         return self._own_identity_seed

@@ -120,8 +120,9 @@ def handlers(bus, repo):
     return h
 
 
-async def test_attach_registers_six_event_types(bus, repo):
-    """attach_to wires the six pairing events."""
+async def test_attach_registers_pairing_event_types(bus, repo):
+    """attach_to wires the pairing-family events (six pairing-lifecycle
+    events plus the proto_version capability announcement)."""
     h = PairingInboundHandlers(bus=bus, federation_repo=repo)
     fed = _FakeFederationService()
     h.attach_to(fed)
@@ -133,6 +134,7 @@ async def test_attach_registers_six_event_types(bus, repo):
         FederationEventType.PAIRING_ABORT,
         FederationEventType.UNPAIR,
         FederationEventType.URL_UPDATED,
+        FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
     }
 
 

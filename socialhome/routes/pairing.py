@@ -58,6 +58,11 @@ def _instance_dict(inst) -> dict:
         "reachable": reachable,
         "paired_at": getattr(inst, "paired_at", None),
         "source": (inst.source.value if hasattr(inst.source, "value") else inst.source),
+        # Monotonic protocol version the peer last advertised via
+        # INSTANCE_CAPABILITIES_UPDATED. Useful for an admin "is this
+        # peer behind?" panel and for the federation-demo harness to
+        # assert that the announcement round-tripped after pairing.
+        "proto_version": getattr(inst, "proto_version", 1),
         # Household coordinates are 4dp-truncated at the schema level
         # (§25). Safe to expose: they're per-household, not per-user, and
         # already shipped to/from peers via the pairing exchange.

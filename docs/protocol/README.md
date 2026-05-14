@@ -101,6 +101,7 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
 
 - **Handshake**
   - [Pairing](./pairing.md) — one-time QR-based identity + session key exchange.
+  - [Capabilities](./capabilities.md) — monotonic `proto_version` exchange so senders can gate optional fields on what the receiving peer's build actually understands.
 - **Spaces**
   - [Spaces](./spaces.md) — create/dissolve, membership events, per-space key exchange.
   - [Invites](./invites.md) — cross-household invites and join requests.

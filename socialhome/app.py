@@ -175,6 +175,7 @@ from .federation.peer_directory_handler import PeerDirectoryHandler
 from .federation.private_invite_handler import PrivateSpaceInviteHandler
 from .services.peer_directory_service import PeerDirectoryService
 from .services.profile_federation_outbound import ProfileFederationOutbound
+from .services.capabilities_outbound import CapabilitiesOutbound
 from .services.url_update_outbound import UrlUpdateOutbound
 from .services.space_member_profile_federation_outbound import (
     SpaceMemberProfileFederationOutbound,
@@ -741,6 +742,16 @@ def _wire_federation_stack(
         federation_repo=federation_repo,
     )
     app[K.url_update_outbound_key] = url_update_outbound
+
+    # Capabilities advertisement — fan out our protocol_version +
+    # feature flag set to every confirmed peer at startup. Fires
+    # idempotently from the on-startup hook below; peers can then
+    # gate optional fields on what we actually understand.
+    capabilities_outbound = CapabilitiesOutbound(
+        federation_service=federation_service,
+        federation_repo=federation_repo,
+    )
+    app[K.capabilities_outbound_key] = capabilities_outbound
 
     peer_directory_service = PeerDirectoryService(
         bus=bus,
@@ -1961,6 +1972,19 @@ def create_app(config: Config | None = None) -> web.Application:
                 "calendar: seeded %d default calendar(s) for existing users",
                 created,
             )
+
+        # 9. Advertise our protocol_version to every confirmed peer.
+        # Fire-and-forget — per-peer failures land in the outbox retry
+        # queue, and peers that haven't yet replayed our announcement
+        # default to ``proto_version=1``, so outbound senders gating on
+        # ``peer_supports(...)`` stay safe while the first exchange is
+        # in flight. Idempotent across restarts.
+        cap_outbound = app.get(K.capabilities_outbound_key)
+        if cap_outbound is not None:
+            try:
+                await cap_outbound.publish()
+            except Exception as exc:  # pragma: no cover
+                log.warning("capabilities outbound at startup failed: %s", exc)
 
     async def _on_shutdown(app: web.Application) -> None:  # noqa: RUF029
         """Tell every connected WebSocket client we're going away.
