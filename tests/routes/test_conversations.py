@@ -92,6 +92,41 @@ async def test_list_conversations_includes_member_preview(client):
     # appear so the inbox can render "Bob" without manual filtering.
     assert {m["username"] for m in row["members"]} == {"bob"}
     assert row["members"][0]["display_name"] == "Bob"
+    # Brand-new conversation: caller's read watermark is None.
+    assert "last_read_at" in row
+    assert row["last_read_at"] is None
+
+
+async def test_list_conversations_surfaces_caller_last_read_at(client):
+    """``last_read_at`` on each row reflects the caller's own watermark
+    — the SPA uses it to find the first-unread message in the loaded
+    window and anchor the entry scroll to a "New messages" divider."""
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"username": "bob"},
+        headers=_auth(client._admin_token),
+    )
+    conv_id = (await r.json())["id"]
+    # Post a message + mark-as-read to advance the watermark.
+    await client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "hello"},
+        headers=_auth(client._admin_token),
+    )
+    await client.post(
+        f"/api/conversations/{conv_id}/read",
+        json={},
+        headers=_auth(client._admin_token),
+    )
+    resp = await client.get(
+        "/api/conversations",
+        headers=_auth(client._admin_token),
+    )
+    rows = await resp.json()
+    row = next(r for r in rows if r["id"] == conv_id)
+    assert row["last_read_at"] is not None
+    # ISO 8601 shape — the SPA does Date.parse on this.
+    assert "T" in row["last_read_at"]
 
 
 async def test_list_conversations_group_dm_carries_all_peers(client):

@@ -3770,6 +3770,101 @@ body.sh-dm-thread-open .sh-messages {
     radial-gradient(circle at 85% 85%, color-mix(in srgb, var(--sh-success) 3%, transparent), transparent 45%),
     var(--sh-bg);
   scroll-behavior: smooth;
+  /* Anchor for the position: sticky jump-down chip below. */
+  position: relative;
+}
+/* "Loading older…" spinner that appears at the top of the messages
+ * list while a lazy-load page-back is in flight. Renders as a
+ * subtle in-flow row so the list doesn't reflow when it appears /
+ * disappears. */
+.sh-dm-load-older {
+  align-self: center;
+  padding: 6px 14px;
+  margin: 4px 0 8px;
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  background: color-mix(in srgb, var(--sh-bg-secondary) 60%, transparent);
+  border-radius: 999px;
+}
+/* "New messages" divider — Telegram/Signal style horizontal rule with
+ * a centred pill. Rendered immediately above the first-unread message
+ * on thread entry. Terracotta accent ties it to the primary action
+ * colour without competing with the chat bubbles. */
+.sh-dm-unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 6px;
+  color: var(--sh-primary);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.sh-dm-unread-divider::before,
+.sh-dm-unread-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--sh-primary) 35%, transparent);
+}
+.sh-dm-unread-divider__pill {
+  text-transform: uppercase;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 35%, transparent);
+  background: var(--sh-bg);
+}
+/* "↓ N new" chip that appears in the bottom-right of the messages
+ * container when the user has scrolled up reading history and new
+ * messages have arrived in the meantime. ``position: sticky`` + the
+ * containing-block on ``.sh-messages`` keeps it pinned to the
+ * scrollable area, never floating over the composer or back button. */
+.sh-dm-jump-down {
+  position: sticky;
+  align-self: flex-end;
+  bottom: 12px;
+  margin-top: -32px;          /* overlap the last message slightly so
+                                 the chip feels like it sits *over*
+                                 the conversation, not pushing it up. */
+  margin-right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: var(--sh-font-size-sm);
+  font-weight: 600;
+  color: var(--sh-bg);
+  background: var(--sh-primary);
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+  cursor: pointer;
+  z-index: 2;
+  transition: transform 120ms ease, background 120ms ease;
+}
+.sh-dm-jump-down:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--sh-primary) 85%, black);
+}
+.sh-dm-jump-down__count {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+}
+.sh-dm-jump-down__label {
+  /* Hide on the very narrowest viewports so the chip stays compact
+   * but the count is still legible. */
+  display: inline;
+}
+@media (max-width: 420px) {
+  .sh-dm-jump-down__label {
+    display: none;
+  }
+  .sh-dm-jump-down {
+    padding: 6px 10px;
+  }
 }
 .sh-day-header {
   align-self: center;
