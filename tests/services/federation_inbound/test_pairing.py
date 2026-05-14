@@ -75,6 +75,23 @@ class _FakeFederationRepo:
             source=inst.source,
         )
 
+    async def set_proto_version(self, instance_id: str, proto_version: int) -> None:
+        inst = self.instances.get(instance_id)
+        if inst is None:
+            return
+        self.instances[instance_id] = RemoteInstance(
+            id=inst.id,
+            display_name=inst.display_name,
+            remote_identity_pk=inst.remote_identity_pk,
+            key_self_to_remote=inst.key_self_to_remote,
+            key_remote_to_self=inst.key_remote_to_self,
+            remote_inbox_url=inst.remote_inbox_url,
+            local_inbox_id=inst.local_inbox_id,
+            status=inst.status,
+            source=inst.source,
+            proto_version=proto_version,
+        )
+
 
 def _event(event_type, payload, *, from_instance="peer-a", space_id=None):
     return FederationEvent(
@@ -345,3 +362,49 @@ async def test_url_updated_unknown_peer_is_noop(repo, handlers):
         )
     )
     assert "unknown-peer" not in repo.instances
+
+
+# ─── INSTANCE_CAPABILITIES_UPDATED ────────────────────────────────────────
+
+
+async def test_capabilities_updated_persists_proto_version(repo, handlers):
+    """Peer announces ``proto_version=2`` → repo row is updated so
+    later ``peer_supports`` calls see the new version."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 2},
+        )
+    )
+    assert repo.instances["peer-a"].proto_version == 2
+
+
+async def test_capabilities_updated_unknown_instance_is_noop(repo, handlers):
+    """Announcement from a peer we don't have a row for is dropped —
+    we have no row to attach the version to and don't want to
+    fabricate one (identity / keys are unknown)."""
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 2},
+            from_instance="ghost-peer",
+        )
+    )
+    assert "ghost-peer" not in repo.instances
+
+
+async def test_capabilities_updated_invalid_payload_keeps_existing(repo, handlers):
+    """Malformed announcement (non-int proto_version) is dropped —
+    we never overwrite the existing version with a worse one."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    # Seed an existing high version so the test catches an accidental
+    # clobber.
+    await repo.set_proto_version("peer-a", 5)
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": "garbage"},
+        )
+    )
+    assert repo.instances["peer-a"].proto_version == 5
