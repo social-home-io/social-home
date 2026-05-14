@@ -677,5 +677,16 @@ class PairingCoordinator:
                     result.error,
                 )
 
+        # Fire the local-side ``PairingConfirmed`` so downstream
+        # subscribers (capabilities announcement, peer-directory mirror,
+        # …) see the new confirmed peer on both sides of the handshake.
+        # Without this the initiator side would silently miss the event
+        # — the responder publishes it in ``peer_confirm`` already, so
+        # the receiver-side path is unchanged.
+        if self._bus is not None:
+            await self._bus.publish(
+                PairingConfirmed(instance_id=peer_instance_id),
+            )
+
         log.info("Pairing confirmed: instance_id=%s", peer_instance_id)
         return confirmed

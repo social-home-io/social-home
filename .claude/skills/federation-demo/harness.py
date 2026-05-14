@@ -1135,7 +1135,9 @@ def cmd_calendar() -> None:
     # seats the guest as a remote member.
     time.sleep(3)
 
-    # 2. Beta creates a calendar event in the space.
+    # 2. Beta creates a calendar event in the space — with an explicit
+    #    IANA ``tz`` so the demo can assert the new v2 field rides
+    #    through ``SPACE_CALENDAR_EVENT_CREATED`` to Alpha and Carol.
     start = "2027-01-15T18:00:00+00:00"
     end = "2027-01-15T20:00:00+00:00"
     s, ev = _request(
@@ -1147,12 +1149,20 @@ def cmd_calendar() -> None:
             "start": start,
             "end": end,
             "description": "Bring snacks.",
+            "tz": "Europe/Berlin",
         },
     )
     _must("calendar create(b)", s, ev, ok=(201,))
     event_id = ev["id"]
     state["calendar_event_id"] = event_id
-    print(f"  b: calendar event {event_id} created")
+    # Sanity: the host's own row carries the explicit tz immediately,
+    # before any federation has happened. If this fails the bug is in
+    # the create path, not the wire.
+    if ev.get("tz") != "Europe/Berlin":
+        print(
+            f"  calendar create(b): host row tz={ev.get('tz')!r} (expected Europe/Berlin)"
+        )
+    print(f"  b: calendar event {event_id} created (tz=Europe/Berlin)")
 
     # Let SPACE_CALENDAR_EVENT_CREATED fan out to a + c.
     time.sleep(4)
@@ -1403,8 +1413,27 @@ def cmd_verify() -> None:
                 failures.append(
                     f"{viewer}: relay-paired peer {peer[:8]} missing or not confirmed",
                 )
+                continue
+            print(f"  {viewer} ↔ {peer[:8]} confirmed via trust relay ✓")
+            # Capability handshake must reach trust-relay-paired peers
+            # too — the auto-pair coordinator publishes ``PairingConfirmed``
+            # for both sides of the relay so the same on-pair announcement
+            # subscriber fires. Without this assertion a regression that
+            # only the *responder* fires the event (the same bug we hit
+            # for QR pairs) would slip past the inner-ring check.
+            pv = int(match[0].get("proto_version") or 1)
+            if pv < 2:
+                failures.append(
+                    f"{viewer}: relay-paired peer {peer[:8]} stuck at "
+                    f"proto_version={pv} (expected >= 2) — "
+                    f"INSTANCE_CAPABILITIES_UPDATED never landed on the "
+                    f"trust-relay path?",
+                )
             else:
-                print(f"  {viewer} ↔ {peer[:8]} confirmed via trust relay ✓")
+                print(
+                    f"  {viewer} sees {peer[:8]} at proto_version={pv} "
+                    f"(trust-relay) ✓",
+                )
     else:
         print("  trust-relay pair (a ↔ d via b) skipped — run 'relay-pair' to exercise")
 
@@ -1432,12 +1461,99 @@ def cmd_verify() -> None:
                     f"b: RSVP from {label} ({uid}) missing (got {sorted(going)})",
                 )
 
-    # 7. Crash check — every instance still alive (WebRTC didn't blow up).
+        # 6b. tz field round-trip — Beta authored the event with
+        #     ``tz="Europe/Berlin"``. After SPACE_CALENDAR_EVENT_CREATED
+        #     federates to Alpha and Carol, their local mirror of the
+        #     event must carry the same tz. Asserts the v2 field
+        #     actually rides through the wire (the proto_version check
+        #     alone only proves the *announcement* propagated; this
+        #     proves a v2 field on a federated event reaches the
+        #     receivers in shape).
+        #
+        #     Uses the space-scoped events list rather than the per-
+        #     event GET because §D1b cross-household remote-invitees
+        #     don't pass the personal-calendar route's space-membership
+        #     check — the event lives in ``space_calendar_events`` on
+        #     the peer side, addressable only via the space endpoint.
+        space_id = state["space_id"]
+        evt_id = state["calendar_event_id"]
+        # ``Z`` not ``+00:00`` — the URL decoder turns ``+`` into a
+        # space, which then fails ``datetime.fromisoformat`` server-
+        # side and surfaces as a 422 with a generic detail message.
+        window_start = "2027-01-01T00:00:00Z"
+        window_end = "2027-02-01T00:00:00Z"
+        for guest_label in ("a", "c"):
+            guest = state["instances"][guest_label]
+            s, events = _request(
+                f"http://127.0.0.1:{guest['port']}/api/spaces/{space_id}"
+                f"/calendar/events?start={window_start}&end={window_end}",
+                token=guest["token"],
+            )
+            _must(f"space calendar events({guest_label})", s, events)
+            evt_list = events if isinstance(events, list) else (
+                events.get("events") or []
+            )
+            mirror = next((e for e in evt_list if e.get("id") == evt_id), None)
+            if mirror is None:
+                failures.append(
+                    f"{guest_label}: federated calendar event {evt_id} "
+                    f"not visible in space-scoped list — "
+                    f"SPACE_CALENDAR_EVENT_CREATED did not land",
+                )
+                continue
+            tz = mirror.get("tz")
+            if tz != "Europe/Berlin":
+                failures.append(
+                    f"{guest_label}: federated event tz={tz!r} "
+                    f"(expected 'Europe/Berlin') — v2 tz field did not "
+                    f"ride through SPACE_CALENDAR_EVENT_CREATED",
+                )
+            else:
+                print(f"  {guest_label} sees event tz=Europe/Berlin ✓")
+
+    # 7. Capability handshake — every confirmed inner-ring peer should
+    #    have announced their proto_version via
+    #    ``INSTANCE_CAPABILITIES_UPDATED`` at startup. After ``up`` + a
+    #    short settle window we expect each of a/b/c to see the others
+    #    at proto_version >= 2 (the version this build advertises). A
+    #    peer still pinned at 1 means the announcement never landed —
+    #    most likely the outbound didn't fire or the inbound handler is
+    #    not registered. The harness asserts the round-trip so future
+    #    additive-but-not-fail-soft features have a safety net.
+    for viewer in ("a", "b", "c"):
+        info = state["instances"][viewer]
+        s, conns = _request(
+            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+            token=info["token"],
+        )
+        _must(f"connections({viewer})", s, conns)
+        peers_by_id = {c["instance_id"]: c for c in conns}
+        for other in ("a", "b", "c"):
+            if other == viewer:
+                continue
+            other_iid = state["instances"][other]["instance_id"]
+            row = peers_by_id.get(other_iid)
+            if row is None:
+                failures.append(
+                    f"{viewer}: missing pairing connection row for {other}",
+                )
+                continue
+            pv = int(row.get("proto_version") or 1)
+            if pv < 2:
+                failures.append(
+                    f"{viewer}: peer {other} stuck at proto_version={pv} "
+                    f"(expected >= 2) — INSTANCE_CAPABILITIES_UPDATED "
+                    f"never landed?",
+                )
+            else:
+                print(f"  {viewer} sees {other} at proto_version={pv} ✓")
+
+    # 8. Crash check — every instance still alive (WebRTC didn't blow up).
     for label, info in state["instances"].items():
         if not _alive(info["pid"]):
             failures.append(f"{label}: process pid={info['pid']} is gone")
 
-    # 8. Log audit — scan each backend's stdout/stderr for unhandled
+    # 9. Log audit — scan each backend's stdout/stderr for unhandled
     #    exceptions, ERROR-level lines, federation-pipeline rejects.
     #    Anything we can't account for (i.e. doesn't match the
     #    benign-noise allow-list) becomes a verify failure so the

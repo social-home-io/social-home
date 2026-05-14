@@ -36,6 +36,11 @@ class AbstractFederationRepo(Protocol):
         self, local_inbox_id: str
     ) -> RemoteInstance | None: ...
     async def save_instance(self, inst: RemoteInstance) -> RemoteInstance: ...
+    async def set_proto_version(
+        self,
+        instance_id: str,
+        proto_version: int,
+    ) -> None: ...
     async def list_instances(
         self,
         *,
@@ -162,6 +167,25 @@ class SqliteFederationRepo:
             ),
         )
         return inst
+
+    async def set_proto_version(
+        self,
+        instance_id: str,
+        proto_version: int,
+    ) -> None:
+        """Apply the peer-advertised protocol version without touching
+        identity, keys, or URL.
+
+        Called from the inbound
+        :data:`FederationEventType.INSTANCE_CAPABILITIES_UPDATED`
+        handler. A single targeted UPDATE so the much larger
+        :meth:`save_instance` (which re-writes every column) doesn't
+        accidentally clobber state set elsewhere between reads.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_instances SET proto_version=? WHERE id=?",
+            (proto_version, instance_id),
+        )
 
     async def list_instances(
         self,

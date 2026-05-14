@@ -70,6 +70,10 @@ class PairingInboundHandlers:
         registry.register(FederationEventType.PAIRING_ABORT, self._on_abort)
         registry.register(FederationEventType.UNPAIR, self._on_unpair)
         registry.register(FederationEventType.URL_UPDATED, self._on_url_updated)
+        registry.register(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            self._on_capabilities_updated,
+        )
         if self._dm_contact_repo is not None:
             registry.register(
                 FederationEventType.DM_CONTACT_REQUEST,
@@ -213,6 +217,36 @@ class PairingInboundHandlers:
             "URL_UPDATED from %s: remote_inbox_url -> %s",
             event.from_instance,
             new_url,
+        )
+
+    async def _on_capabilities_updated(self, event: "FederationEvent") -> None:
+        """Peer advertised a new ``proto_version``.
+
+        Persisted onto the ``remote_instances`` row so outbound senders
+        can ``peer_supports(instance_id, min_version=N)`` before
+        including optional fields. A missing / invalid payload is
+        dropped silently — the sender will re-publish on its next
+        startup and the existing value (defaults to ``proto_version=1``)
+        keeps working until then.
+        """
+        instance = await self._repo.get_instance(event.from_instance)
+        if instance is None:
+            log.debug(
+                "INSTANCE_CAPABILITIES_UPDATED from unknown instance=%s — drop",
+                event.from_instance,
+            )
+            return
+        try:
+            proto_version = int(event.payload.get("proto_version") or 1)
+        except TypeError, ValueError:
+            return
+        if proto_version < 1 or instance.proto_version == proto_version:
+            return
+        await self._repo.set_proto_version(event.from_instance, proto_version)
+        log.info(
+            "INSTANCE_CAPABILITIES_UPDATED from %s: proto_version -> %d",
+            event.from_instance,
+            proto_version,
         )
 
     async def _on_contact_request(self, event: "FederationEvent") -> None:
