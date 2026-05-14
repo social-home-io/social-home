@@ -3763,13 +3763,27 @@ body.sh-dm-thread-open .sh-messages {
   overflow-y: auto;
   padding: var(--sh-space-md);
   display: flex;
-  flex-direction: column;
+  /* ``column-reverse`` is the classic chat-app trick — scrollTop=0
+   * means "viewing the visual bottom" (the latest message). New
+   * messages arrive at the visual bottom for free, prepended older
+   * history stays out of the viewport above without any
+   * scroll-position-restoration math, and entry doesn't need any JS
+   * scroll-to-bottom call at all because the browser already lands
+   * you at scrollTop=0 = bottom. The messages array is iterated in
+   * reverse order in JSX to compensate for the flex flip — so the
+   * underlying ``messages.value`` stays in chronological order
+   * everywhere else (WS handlers, federation, tests). */
+  flex-direction: column-reverse;
   gap: var(--sh-space-xs);
   background:
     radial-gradient(circle at 20% 15%, color-mix(in srgb, var(--sh-primary) 4%, transparent), transparent 45%),
     radial-gradient(circle at 85% 85%, color-mix(in srgb, var(--sh-success) 3%, transparent), transparent 45%),
     var(--sh-bg);
-  scroll-behavior: smooth;
+  /* No ``scroll-behavior: smooth`` — animated scrolls were
+   * fighting every programmatic ``scrollTo`` and made the entry
+   * land feel like a long jump. Intentional smooth scrolls (the
+   * jump-down chip click, reply-quote click) pass
+   * ``behavior: 'smooth'`` explicitly per-call. */
   /* Anchor for the position: sticky jump-down chip below. */
   position: relative;
 }
@@ -3902,14 +3916,6 @@ body.sh-dm-thread-open .sh-messages {
 /* Skeleton variant: drop the bubble-in entrance so the placeholder
    doesn't animate-in then animate-out when the real messages land. */
 .sh-message--skeleton { animation: none; }
-/* Pin skeleton bubbles to the bottom of the messages container so
-   the skeleton-to-real swap is positionally invisible — the last
-   real message lands right where the last skeleton bubble was, and
-   the user doesn't perceive a top→bottom content shift on entry
-   (which their brain reads as "the chat just scrolled"). */
-.sh-thread--skeleton .sh-messages {
-  justify-content: flex-end;
-}
 @keyframes sh-bubble-in {
   from { opacity: 0; transform: translateY(4px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
