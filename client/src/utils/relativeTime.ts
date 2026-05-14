@@ -51,7 +51,17 @@ interface ParsedDelta {
  *  do the right thing keep working.
  */
 const NAIVE_SQLITE_TS = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/
-function normaliseTimestamp(iso: string): string {
+/**
+ * Make a wall-clock-vs-UTC-safe ISO string out of whatever the backend
+ * sent. The two shapes the SH backend produces are both UTC by the
+ * codebase's invariants (see CLAUDE.md "Database timestamps") — this
+ * helper just makes ``Date.parse`` agree by tagging the naive shape
+ * with a ``Z`` and the ``T`` separator. Re-exported because anything
+ * that reads a SH backend timestamp into JS Date math wants the same
+ * normalisation (otherwise local-time interpretation creeps in for
+ * users not in UTC).
+ */
+export function normaliseTimestamp(iso: string): string {
   if (NAIVE_SQLITE_TS.test(iso)) return iso.replace(' ', 'T') + 'Z'
   return iso
 }

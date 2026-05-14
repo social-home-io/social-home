@@ -1,3 +1,4 @@
+import { Fragment } from 'preact'
 import { useEffect, useRef, useLayoutEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useRoute, useLocation } from 'preact-iso'
@@ -22,9 +23,17 @@ import {
 import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
+import { normaliseTimestamp } from '@/utils/relativeTime'
 
 const messages = signal<Message[]>([])
 const loading = signal(true)
+/** Page size for the lazy-load older-history fetch. The initial
+ *  load uses a wider window (see ``DmThreadPage`` body); each
+ *  follow-up "load older" page is this many messages. Backend caps
+ *  any ``limit`` query at 100; 50 is the sweet spot — wide enough
+ *  that you rarely need three fetches in one scroll session,
+ *  narrow enough to feel instant on slow links. */
+const PAGE_SIZE = 50
 /** Whether older messages are available to fetch via
  *  ``?before=<oldest_id>``. Set to ``false`` when a fetch returns
  *  fewer messages than the requested limit (= no more history). */
@@ -399,11 +408,20 @@ export default function DmThreadPage() {
         // caller (a user's own message can't be "unread" to them).
         if (lastReadAt && unreadHint > 0) {
           const myId = currentUser.value?.user_id
-          const lastReadMs = Date.parse(lastReadAt)
+          // ``normaliseTimestamp`` tags the naive SQLite shape
+          // ("YYYY-MM-DD HH:MM:SS", no Z) as UTC before parsing —
+          // without this, viewers in a non-UTC zone see V8 interpret
+          // the naive string as *their* local wall clock and shift
+          // ``lastReadMs`` by the UTC offset, landing the divider on
+          // the wrong message (or no divider at all). The message's
+          // own ``created_at`` is already tz-aware ISO but routing
+          // both sides through the same helper keeps the math
+          // consistent if that ever drifts.
+          const lastReadMs = Date.parse(normaliseTimestamp(lastReadAt))
           if (!Number.isNaN(lastReadMs)) {
             const firstUnread = msgs.find(m =>
               m.sender_user_id !== myId
-              && Date.parse(m.created_at) > lastReadMs,
+              && Date.parse(normaliseTimestamp(m.created_at)) > lastReadMs,
             )
             if (firstUnread) {
               unreadAnchor.value = { message_id: firstUnread.id }
@@ -420,6 +438,15 @@ export default function DmThreadPage() {
         if (!unreadAnchor.value && readReceiptsEnabled.value) {
           api.post(`/api/conversations/${convId}/read`).catch(() => {})
         }
+      }).catch(() => {
+        // Network blip or 5xx — don't strand the user on the skeleton
+        // forever. The thread page renders an empty list (which the
+        // existing empty-state copy handles) and the next entry
+        // retries; surfacing a toast would be louder than necessary
+        // for a transient backend glitch.
+        loading.value = false
+        messages.value = []
+        hasMoreHistory.value = false
       })
       // Hydrate delivery/read state for every message so ticks render
       // immediately — not just on messages we've seen WS frames for.
@@ -490,7 +517,18 @@ export default function DmThreadPage() {
         }
       }
       if (next !== messages.value) messages.value = next
-      if (readReceiptsEnabled.value) {
+      // Only advance the watermark when the user is actually at the
+      // bottom looking at the live edge — if they're scrolled up
+      // reading historic context above the "New messages" divider,
+      // the inbound message has NOT been seen yet, and marking it
+      // as read here would defeat the deferred-read design (next
+      // entry would see ``unread = 0`` and skip the divider).
+      // ``stickToBottom`` is the same flag ``handleScroll`` maintains;
+      // a self-send always satisfies it because ``handleSend`` flips
+      // it to true before the optimistic append. The
+      // sticky-bottom transition branch in ``handleScroll`` covers
+      // the "user scrolls down to catch up" path.
+      if (readReceiptsEnabled.value && stickToBottom.current) {
         api.post(`/api/conversations/${convId}/read`).catch(() => {})
       }
     })
@@ -797,10 +835,15 @@ export default function DmThreadPage() {
     stickToBottom.current = dist < 80
     if (!wasSticky && stickToBottom.current) {
       // User returned to the bottom — clear the unread-since-scroll-up
-      // counter so the CTA disappears, and advance the read watermark
-      // for any unread messages they've now caught up on.
+      // counter so the CTA disappears and advance the read watermark
+      // for any unread messages they've now caught up on. Only POST
+      // when there's actually something pending; otherwise an
+      // oscillating user (50 px up, 50 px down, repeat) would spam
+      // the endpoint on every false→true edge.
+      const hadPending =
+        unreadAnchor.value !== null || newSinceScrollUp.value > 0
       newSinceScrollUp.value = 0
-      if (readReceiptsEnabled.value) {
+      if (readReceiptsEnabled.value && hadPending) {
         api.post(`/api/conversations/${convId}/read`).catch(() => {})
       }
       // Clear the divider once the user has caught up — it's
@@ -836,10 +879,9 @@ export default function DmThreadPage() {
     const oldest = messages.value[0]
     if (!oldest) return
     isLoadingOlder.value = true
-    scrollAnchor.current = el.scrollHeight - el.scrollTop
     try {
       const data: Message[] = await api.get(
-        `/api/conversations/${convId}/messages?before=${oldest.id}&limit=50`,
+        `/api/conversations/${convId}/messages?before=${oldest.id}&limit=${PAGE_SIZE}`,
       ) ?? []
       const older = data.slice().reverse()
       if (older.length === 0) {
@@ -851,8 +893,21 @@ export default function DmThreadPage() {
       // ``<`` filter on ``before``), keep only ids we don't have.
       const have = new Set(messages.value.map(m => m.id))
       const fresh = older.filter(m => !have.has(m.id))
+      if (fresh.length === 0) {
+        if (data.length < PAGE_SIZE) hasMoreHistory.value = false
+        return
+      }
+      // Snapshot the scroll anchor in the SAME microtask as the
+      // signal write so the layout effect that fires off the next
+      // ``messageCount`` change reads the snapshot captured *for
+      // this prepend*. Capturing before the ``await`` (the old
+      // shape) raced with any ``dm.message`` WS append that landed
+      // during the fetch: the append's layout effect would consume
+      // the snapshot, clearing it, and the prepend's later layout
+      // effect would find no anchor → viewport teleport.
+      scrollAnchor.current = el.scrollHeight - el.scrollTop
       messages.value = [...fresh, ...messages.value]
-      if (data.length < 50) hasMoreHistory.value = false
+      if (data.length < PAGE_SIZE) hasMoreHistory.value = false
     } finally {
       isLoadingOlder.value = false
     }
@@ -924,11 +979,19 @@ export default function DmThreadPage() {
             unreadAnchor.value !== null
             && unreadAnchor.value.message_id === m.id
           if (m.type === 'call_event') {
+            // Keyed Fragment: the outermost element returned from a
+            // ``.map()`` MUST carry the key, otherwise Preact's
+            // reconciler falls back to index-matching at the fragment
+            // level — which breaks on prepend (the whole point of
+            // ``loadOlder``) because slot indices shift. Keying the
+            // Fragment moves the bubbles correctly across renders
+            // without unmount/remount churn that would lose focus,
+            // jitter scroll, and confuse the MutationObserver.
             return (
-              <>
+              <Fragment key={m.id}>
                 {isUnreadAnchor && <UnreadDivider />}
-                <CallEventRow key={m.id} m={m} onCallBack={startCall} />
-              </>
+                <CallEventRow m={m} onCallBack={startCall} />
+              </Fragment>
             )
           }
           const mine = m.sender_user_id === myUserId
@@ -939,10 +1002,9 @@ export default function DmThreadPage() {
             ? messages.value.find(x => x.id === m.reply_to_id)
             : null
           return (
-            <>
+            <Fragment key={m.id}>
               {isUnreadAnchor && <UnreadDivider />}
             <div
-              key={m.id}
               data-msg-id={m.id}
               class={`sh-message ${mine ? 'sh-message--mine' : ''} ${m.deleted ? 'sh-message--deleted' : ''}`}
             >
@@ -993,7 +1055,7 @@ export default function DmThreadPage() {
                 </button>
               )}
             </div>
-            </>
+            </Fragment>
           )
         })}
         {/* In-thread typing indicator: rendered as the last "row" of

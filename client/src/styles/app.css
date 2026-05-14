@@ -3823,14 +3823,19 @@ body.sh-dm-thread-open .sh-messages {
   position: sticky;
   align-self: flex-end;
   bottom: 12px;
-  margin-top: -32px;          /* overlap the last message slightly so
+  margin-top: -40px;          /* overlap the last message slightly so
                                  the chip feels like it sits *over*
                                  the conversation, not pushing it up. */
   margin-right: 8px;
+  /* ≥ 36 px tall so the chip satisfies the mobile tap-target floor
+   * called out in CLAUDE.md's visual-verification rule. The visible
+   * pill is slightly larger than 36 px to keep the count badge from
+   * looking squashed; the click hitbox is the full button. */
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
+  padding: 8px 14px;
   font-size: var(--sh-font-size-sm);
   font-weight: 600;
   color: var(--sh-bg);
