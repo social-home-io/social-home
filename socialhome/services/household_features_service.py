@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..domain.events import HouseholdConfigChanged
 from ..domain.household_features import (
@@ -78,6 +79,41 @@ class HouseholdFeaturesService:
         features.require_post_type(post_type)
         return features
 
+    # ── HA REST bridge ─────────────────────────────────────────────
+
+    async def set_tz_from_ha(self, tz: str) -> None:
+        """Mirror ``core.config.time_zone`` from HA Core into the
+        household tz column.
+
+        Called by the ha / haos adapter's startup poll. Validates the
+        zone (an unknown name is silently dropped — the operator's
+        next HA config edit will retry). Skips writing if the value is
+        already current, avoiding a redundant ``HouseholdConfigChanged``
+        broadcast on every poll cycle. Bypasses the admin check
+        because the source-of-truth in HA modes is HA Core itself, not
+        the SH operator.
+        """
+        try:
+            ZoneInfo(tz)
+        except ZoneInfoNotFoundError:
+            log.warning(
+                "HA Core reported unknown timezone %r — leaving household tz unchanged",
+                tz,
+            )
+            return
+        await self._repo.ensure_row()
+        current = await self._repo.get()
+        if current.tz == tz:
+            return
+        await self._repo.set_tz(tz)
+        if self._bus is not None:
+            try:
+                await self._bus.publish(
+                    HouseholdConfigChanged(changed={"tz": tz}),
+                )
+            except Exception as exc:  # pragma: no cover
+                log.debug("household tz publish failed: %s", exc)
+
     # ── Admin update ───────────────────────────────────────────────
 
     async def update(
@@ -86,15 +122,19 @@ class HouseholdFeaturesService:
         actor_is_admin: bool,
         household_name: str | None = None,
         toggles: dict | None = None,
+        tz: str | None = None,
     ) -> HouseholdFeatures:
-        """Apply ``household_name`` + a partial ``toggles`` dict.
+        """Apply ``household_name``, a partial ``toggles`` dict, and / or
+        a new ``tz`` IANA name.
 
         Unknown toggle keys are silently ignored — the service is the
         contract; the frontend is just a consumer.  Only ``True`` /
-        ``False`` are accepted as toggle values. On successful change
-        the service publishes a ``HouseholdConfigChanged`` event so
-        every connected client can refresh its nav state without a
-        page reload (spec §23.13).
+        ``False`` are accepted as toggle values. ``tz`` is validated
+        via ``ZoneInfo`` so an unknown / malformed IANA name is
+        rejected with :class:`ValueError`. On successful change the
+        service publishes a ``HouseholdConfigChanged`` event so every
+        connected client can refresh its nav state without a page
+        reload (spec §23.13).
         """
         if not actor_is_admin:
             raise SpacePermissionError(
@@ -114,6 +154,20 @@ class HouseholdFeaturesService:
             if name != before.household_name:
                 await self._repo.set_household_name(name)
                 changed["household_name"] = name
+
+        if tz is not None:
+            tz_clean = tz.strip()
+            if not tz_clean:
+                raise ValueError("tz must be a non-empty IANA name")
+            try:
+                ZoneInfo(tz_clean)
+            except ZoneInfoNotFoundError as exc:
+                raise ValueError(
+                    f"unknown IANA timezone {tz_clean!r}",
+                ) from exc
+            if tz_clean != before.tz:
+                await self._repo.set_tz(tz_clean)
+                changed["tz"] = tz_clean
 
         if toggles:
             for key, value in toggles.items():

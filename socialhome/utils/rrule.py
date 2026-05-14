@@ -14,11 +14,25 @@ lost — callers treat a non-recurring event the same way.
 
 Keeping the parser deliberately tiny avoids the ~200 kB ``python-dateutil``
 dependency and mirrors the ICS-import spirit (accept, then round-trip).
+
+DST correctness
+---------------
+
+When :func:`expand_rrule` is called with a ``tz`` IANA name, the seed,
+window, and ``UNTIL`` are all converted into the event's local wall
+clock for the duration of the expansion. ``timedelta`` arithmetic then
+preserves the *wall clock* (e.g. "every Tuesday 19:00 Berlin" stays at
+19:00 Berlin even after the spring-forward DST shift). Each emitted
+occurrence is re-localised back to UTC before return, matching the
+"DB stores UTC" rule in CLAUDE.md. Without ``tz`` the expander
+operates on whatever shape the inputs already carry (tz-aware UTC or
+naive); this is the legacy behaviour kept for ICS round-trip code.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 
 _WEEKDAYS = {
@@ -121,6 +135,7 @@ def expand_rrule(
     *,
     window_start: datetime,
     window_end: datetime,
+    tz: str | None = None,
     safety_cap: int = 1000,
 ) -> list[tuple[datetime, datetime]]:
     """Expand a recurring event into a list of ``(start, end)`` pairs
@@ -129,19 +144,48 @@ def expand_rrule(
     Seeds are always considered (even when not in window) so a one-off
     event is returned verbatim. ``safety_cap`` prevents runaway loops
     on pathological rules.
+
+    ``tz`` (optional) is an IANA timezone name such as
+    ``"Europe/Berlin"``. When set, expansion happens in the event's
+    *wall clock* (so "weekly 19:00 Berlin" survives DST) and each
+    emitted ``(start, end)`` pair is returned as tz-aware UTC. Seed
+    and window must be tz-aware (typically UTC) so the conversion is
+    well-defined; legacy callers that pass naive datetimes leave
+    ``tz=None`` and get the historical pre-DST-fix behaviour.
     """
+    zone: ZoneInfo | None = None
+    if tz is not None:
+        zone = ZoneInfo(tz)
+        # Move everything into the event's wall-clock zone, then strip
+        # tzinfo so timedelta arithmetic preserves the wall clock instead
+        # of the underlying UTC instant. Re-localised at emit time below.
+        seed_start = seed_start.astimezone(zone).replace(tzinfo=None)
+        seed_end = seed_end.astimezone(zone).replace(tzinfo=None)
+        window_start = window_start.astimezone(zone).replace(tzinfo=None)
+        window_end = window_end.astimezone(zone).replace(tzinfo=None)
     duration = seed_end - seed_start
     rule = parse_rrule(rrule or "")
+    if zone is not None and rule["UNTIL"] is not None:
+        rule["UNTIL"] = rule["UNTIL"].astimezone(zone).replace(tzinfo=None)
     freq = rule["FREQ"]
     interval = rule["INTERVAL"]
     count = rule["COUNT"]
     until = rule["UNTIL"]
     byday = rule["BYDAY"]
 
+    def _localise_out(s: datetime, e: datetime) -> tuple[datetime, datetime]:
+        """Re-attach the event's tz and convert to UTC for the output."""
+        if zone is None:
+            return s, e
+        return (
+            s.replace(tzinfo=zone).astimezone(timezone.utc),
+            e.replace(tzinfo=zone).astimezone(timezone.utc),
+        )
+
     if freq is None:
         # No recurrence — single occurrence.
         if seed_start < window_end and seed_end > window_start:
-            return [(seed_start, seed_end)]
+            return [_localise_out(seed_start, seed_end)]
         return []
 
     occurrences: list[tuple[datetime, datetime]] = []
@@ -153,7 +197,7 @@ def expand_rrule(
         if s >= window_end:
             return False
         if e > window_start:
-            occurrences.append((s, e))
+            occurrences.append(_localise_out(s, e))
         emitted += 1
         return True
 

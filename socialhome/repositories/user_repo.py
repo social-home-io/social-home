@@ -35,6 +35,7 @@ class AbstractUserRepo(Protocol):
     async def list_by_ids(self, user_ids: set[str]) -> list[User]: ...
     async def set_admin(self, username: str, is_admin: bool) -> None: ...
     async def set_last_seen(self, user_id: str, at: str) -> None: ...
+    async def set_tz(self, username: str, tz: str) -> None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
 
     # Remote users --------------------------------------------------------
@@ -134,7 +135,7 @@ class SqliteUserRepo:
                 bio, locale, theme, emoji_skin_tone_default,
                 status_emoji, status_text, status_expires_at,
                 public_key, public_key_version, is_new_member,
-                preferences_json, email, phone, date_of_birth,
+                preferences_json, tz, email, phone, date_of_birth,
                 declared_age, is_minor, child_protection_enabled,
                 deleted_at, grace_until, created_at, source, external_id
             ) VALUES(
@@ -142,7 +143,7 @@ class SqliteUserRepo:
                 ?,?,?,?,
                 ?,?,?,
                 ?,?,?,
-                ?,?,?,?,
+                ?,?,?,?,?,
                 ?,?,?,
                 ?,?,COALESCE(?, datetime('now')), ?, ?
             )
@@ -162,6 +163,7 @@ class SqliteUserRepo:
                 public_key_version=excluded.public_key_version,
                 is_new_member=excluded.is_new_member,
                 preferences_json=excluded.preferences_json,
+                tz=excluded.tz,
                 email=excluded.email,
                 phone=excluded.phone,
                 date_of_birth=excluded.date_of_birth,
@@ -191,6 +193,7 @@ class SqliteUserRepo:
                 user.public_key_version,
                 int(user.is_new_member),
                 user.preferences_json,
+                user.tz,
                 user.email,
                 user.phone,
                 user.date_of_birth,
@@ -238,6 +241,20 @@ class SqliteUserRepo:
         await self._db.enqueue(
             "UPDATE users SET last_seen_at=? WHERE user_id=?",
             (at, user_id),
+        )
+
+    async def set_tz(self, username: str, tz: str) -> None:
+        """Persist the user's IANA timezone.
+
+        Called from the SPA cold-start probe when the user logs in and
+        the column is still at its ``'UTC'`` default — the SPA POSTs
+        the browser-detected zone so personal calendar events anchor
+        to the user's local wall clock. The settings page writes here
+        too when the user picks a different zone manually.
+        """
+        await self._db.enqueue(
+            "UPDATE users SET tz=? WHERE username=?",
+            (tz, username),
         )
 
     async def soft_delete(self, username: str, grace_days: int = 30) -> None:
@@ -555,6 +572,7 @@ def _row_to_user(row: dict | None) -> User | None:
         is_minor=bool_col(row.get("is_minor", 0)),
         child_protection_enabled=bool_col(row.get("child_protection_enabled", 0)),
         preferences_json=row.get("preferences_json", "{}"),
+        tz=row.get("tz") or "UTC",
         created_at=row.get("created_at"),
         last_seen_at=row.get("last_seen_at"),
         source=row.get("source", "manual"),

@@ -321,6 +321,8 @@ class SpaceContentInboundHandlers:
             rrule=p.get("rrule"),
             cover_url=cover if isinstance(cover, str) and cover else None,
             location=location if isinstance(location, str) and location else None,
+            # IANA wall-clock anchor. Old peers omit; default ``"UTC"``.
+            tz=str(p.get("tz") or "UTC"),
         )
         is_new = await self._calendar_repo.get_event(event_id) is None
         await self._calendar_repo.save_event(space_id, ev)

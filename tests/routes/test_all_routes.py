@@ -73,7 +73,7 @@ async def test_feed_crud(client):
     )
     assert r.status == 404
     r = await client.post(
-        "/api/feed/posts/{pid}/reactions", json={"emoji": ""}, headers=h
+        f"/api/feed/posts/{pid}/reactions", json={"emoji": ""}, headers=h
     )
     assert r.status in (404, 422)
     # Invalid JSON

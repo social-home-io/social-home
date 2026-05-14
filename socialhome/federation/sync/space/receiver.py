@@ -526,4 +526,7 @@ def _calendar_from_record(r: dict[str, Any]) -> CalendarEvent | None:
         all_day=bool(r.get("all_day", False)),
         attendees=tuple(str(a) for a in (r.get("attendees") or ())),
         mirrored_from=r.get("mirrored_from"),
+        # IANA wall-clock anchor — additive field; older peers omit it,
+        # in which case the dataclass default ``"UTC"`` kicks in.
+        tz=str(r.get("tz") or "UTC"),
     )

@@ -1,6 +1,7 @@
 import { signal, computed } from '@preact/signals'
 import type { User } from '@/types'
 import { api, _resetApiLoggedOut } from '@/api'
+import { detectBrowserTz } from '@/utils/timezone'
 
 export const token       = signal<string | null>(localStorage.getItem('sh_token'))
 export const currentUser = signal<User | null>(null)
@@ -39,9 +40,37 @@ export async function loadCurrentUser(): Promise<User | null> {
   try {
     const me = await api.get('/api/me') as User
     currentUser.value = me
+    void _autoSetUserTzIfMissing(me)
     return me
   } catch {
     return null
+  }
+}
+
+/** First-login tz seed.
+ *
+ *  Mirrors the browser's resolved IANA zone into ``users.tz`` whenever
+ *  the server still has the install-time ``"UTC"`` default and the
+ *  browser disagrees. Personal calendar events created after this
+ *  point default to the user's actual wall clock without a separate
+ *  settings step — the household / user / event tz columns then carry
+ *  the right anchor through the rest of the calendar surface.
+ *
+ *  Fire-and-forget: errors are silent (a 401 on a transient probe
+ *  shouldn't block the rest of the SPA from rendering). The local
+ *  ``currentUser`` signal is updated so the SPA reads the new tz
+ *  immediately, without waiting for a fresh ``/api/me``. */
+async function _autoSetUserTzIfMissing(me: User): Promise<void> {
+  const browserTz = detectBrowserTz()
+  const currentTz = me.tz || 'UTC'
+  if (currentTz !== 'UTC' || !browserTz || browserTz === 'UTC') {
+    return
+  }
+  try {
+    const updated = await api.patch('/api/me', { tz: browserTz }) as User
+    currentUser.value = updated
+  } catch {
+    // Non-fatal — try again next cold start.
   }
 }
 

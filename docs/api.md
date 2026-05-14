@@ -52,7 +52,7 @@ log aggregation.** Code must never log the full query string of
 | POST | `/api/admin/users/{username}/issue-password-reset` | Admin: mint a single-use, 1h-TTL reset token for a user. Returns `{token, expires_at, username}` once — admin hands the resulting `/reset-password?token=…` URL to the user out-of-band. Standalone mode has no SMTP, so this is the only recovery path. |
 | GET | `/api/admin/auth-audit` | Admin: read the auth audit log — append-only trail of login attempts (success + failure), reset issues, and reset redeems. Query `?limit=N` (default 100, max 500). |
 | GET | `/api/me` | Current user profile. |
-| PATCH | `/api/me` | Update display name, timezone, language, etc. |
+| PATCH | `/api/me` | Update profile fields. Body: any of `{"display_name", "bio", "preferences", "tz"}`. `tz` is validated against the IANA database (unknown name → 422); the SPA's cold-start probe sends it once on first login so personal calendar events default to the user's local wall clock. |
 | GET | `/api/me/picture` | Download current user's avatar. |
 | POST | `/api/me/picture` | Upload avatar (multipart). |
 | DELETE | `/api/me/picture` | Remove avatar. |
@@ -279,8 +279,8 @@ unnecessary.
 | GET | `/api/calendars/invitees` | List cross-household invitees for the calendar event dialog (§23.60). Returns members of confirmed paired peer instances grouped by instance: `{"instances": [{"instance_id", "instance_name", "members": [{user_id, instance_id, remote_username, display_name, picture_hash, picture_url}]}]}`. **Local household members are never returned** — coordinating with a household member is done via the calendar selector, not the invite picker. Empty list when no instances are paired. |
 | GET / POST | `/api/calendars` | List / create calendars. |
 | GET / PATCH / DELETE | `/api/calendars/{id}` | CRUD. |
-| GET / POST | `/api/calendars/{id}/events` | List / create events. Body fields: `summary`, `start`, `end`, `all_day`, `description`, `attendees`, `rrule`, `rsvp_enabled`, `cover_url`. `attendees` accepts only confirmed-paired-instance user_ids — local household member user_ids are rejected with 422 (coordinate via the calendar selector instead). Authorization: any active household member can create / edit events on any household member's personal calendar. |
-| GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. PATCH treats `cover_url` as tri-state: omitted = leave unchanged, explicit `null` = clear, string = set. |
+| GET / POST | `/api/calendars/{id}/events` | List / create events. Body fields: `summary`, `start`, `end`, `all_day`, `description`, `attendees`, `rrule`, `rsvp_enabled`, `cover_url`, `tz`. `start` / `end` are UTC ISO 8601 — the SPA converts the local-time form input via `Intl` before submitting. `tz` is the optional IANA name the event anchors to (e.g. `"Europe/Berlin"`); when absent the server resolves to the creator's `users.tz`, then `household_features.tz`, then `"UTC"`. `attendees` accepts only confirmed-paired-instance user_ids — local household member user_ids are rejected with 422 (coordinate via the calendar selector instead). Authorization: any active household member can create / edit events on any household member's personal calendar. Response carries the resolved `tz` so the SPA can render the event in the host's wall clock with an "≈ HH:MM your time" hint when the viewer's browser zone differs. |
+| GET / PATCH / DELETE | `/api/calendars/events/{id}` | CRUD. PATCH treats `cover_url` as tri-state: omitted = leave unchanged, explicit `null` = clear, string = set. `tz` is validated against the IANA database; an unknown name returns 422. |
 | GET | `/api/calendars/events/{id}/rsvps` | List RSVPs. `?occurrence_at=<iso>` (URL-encoded) scopes to one occurrence of a recurring event. |
 | POST | `/api/calendars/events/{id}/rsvp` | Set own RSVP. Body: `{"status": "going\|maybe\|declined", "occurrence_at": "<iso>"}`. `occurrence_at` required for recurring events; defaults to `event.start` for non-recurring. |
 | DELETE | `/api/calendars/events/{id}/rsvp` | Clear own RSVP. `?occurrence_at=<iso>` (URL-encoded) required for recurring. |
@@ -565,7 +565,7 @@ Bearer auth (the integration holds the auto-provisioned token).
 | POST | `/api/backup/post_backup` | HA snapshot hook. |
 | GET / POST | `/api/backup/{export\|import}` | Full archive round-trip. |
 | GET / PATCH | `/api/theme` | Household theme. |
-| GET | `/api/household/features` | Feature toggles. |
+| GET / PUT | `/api/household/features` | Household-wide feature toggles plus `household_name` and `tz` (IANA timezone). `PUT` accepts a partial body: `{"household_name"?: str, "toggles"?: {...}, "tz"?: "<iana>"}`. `tz` is validated via Python's `zoneinfo` — an unknown name returns 422. In ha / haos modes the value is mirrored from HA Core's `time_zone` on adapter startup; explicit operator edits via PUT are still honoured but get overwritten on the next restart. |
 | POST | `/api/media/upload` | Upload a blob. |
 | GET | `/api/media/{filename}` | Download a blob. |
 | GET | `/healthz` | Liveness (public). |

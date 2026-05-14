@@ -41,6 +41,12 @@ def _expand_window(
     events are cloned per-occurrence with adjusted ``start`` / ``end``;
     the ``id`` is suffixed with ``@<iso>`` so consumers can tell
     virtuals apart from stored rows.
+
+    When ``ev.tz`` is set, recurrence expansion happens in the event's
+    wall-clock zone so DST transitions don't drift the recurring
+    occurrences by an hour (see :func:`expand_rrule`). UTC stays the
+    storage shape; the conversion is only used internally during the
+    expansion step.
     """
     out: list[CalendarEvent] = []
     for ev in events:
@@ -53,6 +59,7 @@ def _expand_window(
             ev.rrule,
             window_start=start,
             window_end=end,
+            tz=ev.tz,
         )
         for s, e in occs:
             if s == ev.start and e == ev.end:
@@ -213,9 +220,10 @@ class SqliteCalendarRepo:
             INSERT INTO calendar_events(
                 id, calendar_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, mirrored_from, rrule,
-                rsvp_enabled, cover_url, location, origin, remote_event_id,
-                remote_instance_id, created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                rsvp_enabled, cover_url, location, tz, origin,
+                remote_event_id, remote_instance_id, created_by,
+                created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -230,6 +238,7 @@ class SqliteCalendarRepo:
                 rsvp_enabled=excluded.rsvp_enabled,
                 cover_url=excluded.cover_url,
                 location=excluded.location,
+                tz=excluded.tz,
                 origin=excluded.origin,
                 remote_event_id=excluded.remote_event_id,
                 remote_instance_id=excluded.remote_instance_id,
@@ -249,6 +258,7 @@ class SqliteCalendarRepo:
                 int(event.rsvp_enabled),
                 event.cover_url,
                 event.location,
+                event.tz,
                 event.origin,
                 event.remote_event_id,
                 event.remote_instance_id,
@@ -559,8 +569,8 @@ class SqliteSpaceCalendarRepo:
             INSERT INTO space_calendar_events(
                 id, space_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, rrule, capacity, cover_url,
-                location, created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,
+                location, tz, created_by, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -574,6 +584,7 @@ class SqliteSpaceCalendarRepo:
                 capacity=excluded.capacity,
                 cover_url=excluded.cover_url,
                 location=excluded.location,
+                tz=excluded.tz,
                 updated_at=datetime('now')
             """,
             (
@@ -589,6 +600,7 @@ class SqliteSpaceCalendarRepo:
                 event.capacity,
                 event.cover_url,
                 event.location,
+                event.tz,
                 event.created_by,
                 None,
                 None,
@@ -1056,6 +1068,7 @@ def _row_to_event(row: dict | None) -> CalendarEvent | None:
         origin=row.get("origin") or "local",
         remote_event_id=row.get("remote_event_id"),
         remote_instance_id=row.get("remote_instance_id"),
+        tz=row.get("tz") or "UTC",
     )
 
 
@@ -1077,4 +1090,5 @@ def _row_to_space_event(row: dict) -> CalendarEvent:
         capacity=int(cap) if cap is not None else None,
         cover_url=row.get("cover_url"),
         location=row.get("location"),
+        tz=row.get("tz") or "UTC",
     )

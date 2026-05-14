@@ -60,6 +60,9 @@ def _event_dict(event) -> dict:
         "rsvp_enabled": getattr(event, "rsvp_enabled", False),
         "cover_url": getattr(event, "cover_url", None),
         "location": getattr(event, "location", None),
+        # IANA wall-clock anchor — the SPA uses it to render the
+        # event in the host's tz with an optional "your time" hint.
+        "tz": getattr(event, "tz", "UTC"),
     }
 
 
@@ -194,6 +197,9 @@ class CalendarEventsView(BaseView):
             # the SPA echoed back from a signed upload preview.
             cover_url=strip_signature_query(body.get("cover_url")),
             location=body.get("location"),
+            # IANA wall-clock anchor the SPA computed for this event.
+            # When absent the service falls back to user.tz → household.tz.
+            tz=body.get("tz"),
         )
         return web.json_response(
             _sign_payload(self.request, _event_dict(event)), status=201
@@ -284,6 +290,7 @@ class CalendarEventDeleteView(BaseView):
             rsvp_enabled=body.get("rsvp_enabled"),
             cover_url=cover,
             location=location,
+            tz=body.get("tz"),
         )
         return web.json_response(_sign_payload(self.request, _event_dict(event)))
 
@@ -502,6 +509,7 @@ class SpaceCalendarEventsView(BaseView):
                 capacity=body.get("capacity"),
                 cover_url=strip_signature_query(body.get("cover_url")),
                 location=body.get("location"),
+                tz=body.get("tz"),
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
@@ -552,6 +560,7 @@ class SpaceCalendarEventDetailView(BaseView):
                 clear_capacity=bool(body.get("clear_capacity", False)),
                 cover_url=cover,
                 location=location,
+                tz=body.get("tz"),
             )
         except KeyError:
             return error_response(404, "NOT_FOUND", "Event not found.")

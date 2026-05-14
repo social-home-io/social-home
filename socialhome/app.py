@@ -1146,6 +1146,11 @@ def create_app(config: Config | None = None) -> web.Application:
     feed_service.attach_household_features(household_features_service)
     task_service.attach_household_features(household_features_service)
     calendar_service.attach_household_features(household_features_service)
+    # Space-calendar event creation walks the same tz resolution chain
+    # as personal events. Wire the helpers it needs: the household
+    # service (final UTC fallback) and the space repo (per-space tz).
+    space_cal_service.attach_household_features(household_features_service)
+    space_cal_service.attach_space_repo(space_repo)
     feed_service.attach_storage_quota(storage_quota)
 
     # Schedule-poll → space calendar bridge (§9 / §23.53). Needs both

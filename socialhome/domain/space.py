@@ -512,6 +512,15 @@ class Space:
     # Short hex digest of the current cover WebP; bytes in
     # ``space_covers``. None → render a gradient fallback.
     cover_hash: str | None = None
+    # IANA timezone name (``"Europe/Berlin"``) that anchors this
+    # space's calendar wall clock. Defaults to ``"UTC"`` at the schema
+    # level (``spaces.tz NOT NULL DEFAULT 'UTC'``); on space creation
+    # the service layer seeds it from the creator's household tz so
+    # the common case (everyone in the same household) does the right
+    # thing without an extra click. Editable by space admins for the
+    # federated-multi-household case where the space anchors to a
+    # different city than the home household.
+    tz: str = "UTC"
 
 
 @dataclass(slots=True, frozen=True)
