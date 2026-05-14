@@ -7,6 +7,7 @@ vi.mock('@/ws', () => ({ ws: { on: vi.fn(() => () => {}) } }))
 
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
+import { instanceConfig } from '@/store/instance'
 import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
 import { toggles } from '@/components/HouseholdToggles'
@@ -50,15 +51,24 @@ beforeEach(() => {
   activeCalls.value = []
   dmUnreadTotal.value = 0
   toggles.value = { ...ALL_FEATURES_ON }
+  // Default to standalone for tests that don't care about platform
+  // mode. The identity-strip behaviour test explicitly flips this to
+  // ``'haos'`` to assert the strip disappears under HA Supervisor.
+  instanceConfig.value = {
+    mode: 'standalone',
+    instance_name: 'Hearth',
+    capabilities: [],
+    setup_required: false,
+  }
 })
 
 describe('SideNav', () => {
-  it('renders the four groups in IA order: At home → Talk → Browse → Local', () => {
+  it('renders the four groups in IA order: At home → Talk → Browse → Settings', () => {
     setUser({ is_admin: true })
     const { container } = renderAt('/')
     const headers = Array.from(container.querySelectorAll('.sh-sidenav-group-header'))
       .map((el) => el.textContent?.trim())
-    expect(headers).toEqual(['At home', 'Talk', 'Browse', 'Local'])
+    expect(headers).toEqual(['At home', 'Talk', 'Browse', 'Settings'])
   })
 
   it('exposes each group as a labelled <nav> landmark', () => {
@@ -102,15 +112,16 @@ describe('SideNav', () => {
     expect(headers).toContain('Browse')
   })
 
-  it('suppresses a group header entirely when every item is gated off', () => {
-    // Verify the suppression rule via the LOCAL group: every item
-    // (Parent Control, Federation, Admin) is gated, so a non-admin
-    // non-guardian user has nothing left in LOCAL and the header
-    // disappears.
+  it('hides the gated Settings sub-entries for a non-admin non-guardian, but keeps Personal + the header', () => {
+    // Settings now always has at least the ungated Personal item, so
+    // the *group header* never disappears for an authenticated user.
+    // The gated sub-entries (Parent Control / Federation / Admin)
+    // still hide individually based on role.
     setUser({ is_admin: false })
     isGuardian.value = false
     const { queryByText, container } = renderAt('/')
-    expect(queryByText('Local')).toBeNull()
+    expect(queryByText('Settings')).toBeTruthy()
+    expect(queryByText('Personal')).toBeTruthy()
     expect(queryByText('Admin')).toBeNull()
     expect(queryByText('Federation')).toBeNull()
     expect(queryByText('Parent Control')).toBeNull()
@@ -119,6 +130,7 @@ describe('SideNav', () => {
     const headers = Array.from(container.querySelectorAll('.sh-sidenav-group-header'))
       .map((el) => el.textContent?.trim())
     expect(headers).toContain('At home')
+    expect(headers).toContain('Settings')
   })
 
   it('hides Admin and Federation for non-admin users', () => {
@@ -128,11 +140,23 @@ describe('SideNav', () => {
     expect(queryByText('Federation')).toBeNull()
   })
 
-  it('does not render a Settings link in the sidebar — the identity strip is the entry point', () => {
+  it('renders a Personal link to /settings inside the Settings group for every authenticated user', () => {
+    setUser({ is_admin: false })
+    isGuardian.value = false
+    const { getByText } = renderAt('/')
+    const link = getByText('Personal').closest('a')
+    expect(link).toBeTruthy()
+    expect(link?.getAttribute('href')).toBe('/settings')
+  })
+
+  it('also renders Personal for admins (alongside Federation / Admin)', () => {
     setUser({ is_admin: true })
     isGuardian.value = true
-    const { queryByText } = renderAt('/')
-    expect(queryByText('Settings')).toBeNull()
+    const { getByText, queryByText } = renderAt('/')
+    expect(getByText('Personal').closest('a')?.getAttribute('href')).toBe('/settings')
+    expect(queryByText('Admin')).toBeTruthy()
+    expect(queryByText('Federation')).toBeTruthy()
+    expect(queryByText('Parent Control')).toBeTruthy()
   })
 
   it('shows Admin and Federation for admin users', () => {
@@ -158,7 +182,13 @@ describe('SideNav', () => {
     expect(link?.getAttribute('href')).toBe('/parent')
   })
 
-  it('renders the identity strip as the link to /settings with the user avatar and display name', () => {
+  it('renders the identity strip in standalone mode with avatar + display name linking to /settings', () => {
+    instanceConfig.value = {
+      mode: 'standalone',
+      instance_name: 'Hearth',
+      capabilities: [],
+      setup_required: false,
+    }
     setUser({ display_name: 'Pascal Vizeli', picture_url: '/pic.jpg' })
     const { container } = renderAt('/')
     const strip = container.querySelector('.sh-sidenav-identity')
@@ -169,6 +199,34 @@ describe('SideNav', () => {
     // The strip itself is the settings entry point — no nested
     // action surfaces inside it.
     expect(strip?.querySelector('a, button')).toBeNull()
+  })
+
+  it('also renders the identity strip in ha mode (SH is the primary UI surface)', () => {
+    instanceConfig.value = {
+      mode: 'ha',
+      instance_name: 'Hearth',
+      capabilities: ['ha_person_directory'],
+      setup_required: false,
+    }
+    setUser({ display_name: 'Pascal Vizeli' })
+    const { container } = renderAt('/')
+    expect(container.querySelector('.sh-sidenav-identity')).toBeTruthy()
+  })
+
+  it('hides the identity strip in haos mode (HA Core sidebar already shows the signed-in user)', () => {
+    instanceConfig.value = {
+      mode: 'haos',
+      instance_name: 'Hearth',
+      capabilities: ['ingress', 'ha_person_directory'],
+      setup_required: false,
+    }
+    setUser({ display_name: 'Pascal Vizeli' })
+    const { container } = renderAt('/')
+    expect(container.querySelector('.sh-sidenav-identity')).toBeNull()
+    // Personal entry in the Settings group remains so users still
+    // have a sidebar path to /settings.
+    const personal = container.querySelector('a[href="/settings"]')
+    expect(personal).toBeTruthy()
   })
 
   it('marks the active group with sh-sidenav-group--active when on a child route', () => {
