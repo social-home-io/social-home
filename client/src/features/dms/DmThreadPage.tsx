@@ -670,6 +670,19 @@ export default function DmThreadPage() {
       edited_at: null,
     }
     messages.value = [...messages.value, optimistic]
+    // Pin the viewport to the latest message on self-send. In
+    // column-reverse, ``scrollTop = 0`` is the visual bottom — any
+    // earlier scroll-up gesture (even a stray touch nudge that left
+    // scrollTop at a small negative value) would otherwise hide the
+    // user's own bubble just below the visible area. Also flip
+    // ``stickToBottom`` to true and clear the unread-since-scroll-up
+    // counter so the jump-down CTA disappears for sends that
+    // happened to fire while the user was reading history.
+    const scrollEl = messagesScrollRef.current
+    if (scrollEl) scrollEl.scrollTop = 0
+    stickToBottom.current = true
+    newSinceScrollUp.value = 0
+    if (unreadAnchor.value) unreadAnchor.value = null
 
     const draft = content
     form.reset()
