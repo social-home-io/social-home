@@ -3902,6 +3902,14 @@ body.sh-dm-thread-open .sh-messages {
 /* Skeleton variant: drop the bubble-in entrance so the placeholder
    doesn't animate-in then animate-out when the real messages land. */
 .sh-message--skeleton { animation: none; }
+/* Pin skeleton bubbles to the bottom of the messages container so
+   the skeleton-to-real swap is positionally invisible — the last
+   real message lands right where the last skeleton bubble was, and
+   the user doesn't perceive a top→bottom content shift on entry
+   (which their brain reads as "the chat just scrolled"). */
+.sh-thread--skeleton .sh-messages {
+  justify-content: flex-end;
+}
 @keyframes sh-bubble-in {
   from { opacity: 0; transform: translateY(4px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0) scale(1); }

@@ -253,15 +253,15 @@ export default function DmThreadPage() {
     if (!tailChanged) return
     if (stickToBottom.current) {
       // Two frames: first to let the new bubble render, second so the
-      // scroll happens *after* the layout settles. Without the rAF the
-      // assignment runs before the bubble's height is accounted for and
-      // the scroll lands a few px short. ``behavior: 'auto'`` forces an
-      // instant jump even though the container has ``scroll-behavior:
-      // smooth`` in CSS — opening a chat should land at the bottom
-      // immediately, not glide there over half a second.
+      // scroll happens *after* the layout settles. Direct ``scrollTop``
+      // assignment (not ``scrollTo({behavior: 'auto'})``) — the
+      // ``auto`` option falls back to the CSS ``scroll-behavior``,
+      // which is ``smooth`` on ``.sh-messages`` and would animate the
+      // jump over ~400 ms. A new message landing should appear at the
+      // bottom instantly, not slide into place.
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+          el.scrollTop = el.scrollHeight
         })
       })
       return
@@ -303,20 +303,29 @@ export default function DmThreadPage() {
     if (!el) return
     if (anchor) {
       stickToBottom.current = false
+      // ``behavior: 'instant'`` (not ``'auto'``) — ``auto`` defers to
+      // the CSS ``scroll-behavior: smooth`` rule on ``.sh-messages``
+      // and would animate the entry scroll over ~400 ms. Entry must
+      // be visually atomic so the user goes straight from skeleton
+      // to "messages at the right position" with zero scroll motion.
       const divider = el.querySelector('.sh-dm-unread-divider')
       if (divider) {
-        divider.scrollIntoView({ block: 'start', behavior: 'auto' })
+        divider.scrollIntoView({ block: 'start', behavior: 'instant' })
       } else {
         // Anchor message rendered but the divider somehow didn't
         // (race with the messages map). Fall back to scrolling
         // the message row itself into view.
         const row = el.querySelector(`[data-msg-id="${anchor.message_id}"]`)
-        if (row) row.scrollIntoView({ block: 'start', behavior: 'auto' })
+        if (row) row.scrollIntoView({ block: 'start', behavior: 'instant' })
       }
       return
     }
     stickToBottom.current = true
-    el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+    // Direct ``scrollTop`` assignment for the entry-to-bottom case —
+    // same reasoning as the ``'instant'`` divider scroll above; the
+    // CSS ``scroll-behavior: smooth`` makes ``scrollTo`` animate by
+    // default and the entry needs to be a single atomic paint.
+    el.scrollTop = el.scrollHeight
   }, [convId, isLoading, anchor?.message_id])
 
   // Restore the user's reading position immediately after a
@@ -353,8 +362,12 @@ export default function DmThreadPage() {
     if (!el) return
     const mo = new MutationObserver(() => {
       if (!stickToBottom.current) return
+      // Direct ``scrollTop`` assignment: ``scrollTo({behavior: 'auto'})``
+      // would defer to the ``scroll-behavior: smooth`` CSS and animate
+      // every re-pin (typing indicator appearing, delivery tick
+      // updating). We want these to be invisible adjustments.
       requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+        el.scrollTop = el.scrollHeight
       })
     })
     mo.observe(el, { childList: true, subtree: true, characterData: true })
