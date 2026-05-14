@@ -258,7 +258,14 @@ export function CommentThreadSkeleton({ count = 3 }: { count?: number } = {}) {
 
 /** Stand-in for the DM thread bubble layout: alternating-side
  *  message blocks, brief flash on cold-load before the WS hydrate
- *  fills the list. */
+ *  fills the list.
+ *
+ *  ``sh-thread--skeleton`` pins the placeholder bubbles to the BOTTOM
+ *  of the container (via ``justify-content: flex-end`` in app.css) so
+ *  that the swap from skeleton → real-messages is positionally
+ *  invisible: the last real message lands right where the last
+ *  skeleton bubble was, no top-to-bottom content jump the user
+ *  perceives as "the chat scrolled". */
 export function DmThreadSkeleton({ count = 4 }: { count?: number } = {}) {
   return (
     <div class="sh-thread sh-thread--skeleton" aria-busy="true">

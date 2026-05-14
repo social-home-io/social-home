@@ -35,8 +35,13 @@ class ConversationCollectionView(BaseView):
         for c in convos:
             members = await repo.list_members(c.id)
             preview: list[dict] = []
+            own_last_read_at: str | None = None
             for m in members:
                 if m.username == ctx.username:
+                    # Stash the caller's own read watermark so the SPA can
+                    # render a "New messages since you last looked" divider
+                    # without a second round-trip.
+                    own_last_read_at = m.last_read_at
                     continue
                 u = await user_repo.get(m.username)
                 if u is None:
@@ -65,6 +70,12 @@ class ConversationCollectionView(BaseView):
                     "members": preview,
                     "member_count": len(members),
                     "unread": unread,
+                    # ISO 8601 timestamp the caller last marked-as-read on
+                    # this conversation. ``null`` for brand-new threads.
+                    # The SPA uses this to find the first-unread message
+                    # in the loaded window and scroll to the "New
+                    # messages" divider on entry.
+                    "last_read_at": own_last_read_at,
                 }
             )
         return web.json_response(rows)

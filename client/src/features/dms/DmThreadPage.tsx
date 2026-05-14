@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'preact/hooks'
+import { Fragment } from 'preact'
+import { useEffect, useRef, useLayoutEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useRoute, useLocation } from 'preact-iso'
 import { api } from '@/api'
@@ -10,6 +11,7 @@ import { SttButton } from '@/components/SttButton'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
+import { UnreadDivider } from '@/components/UnreadDivider'
 import { openCallTypePicker } from '@/components/CallTypePickerDialog'
 import { EmojiPickButton } from '@/components/EmojiPickButton'
 import {
@@ -21,9 +23,37 @@ import {
 import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
+import { useTitle } from '@/store/pageTitle'
+import { normaliseTimestamp } from '@/utils/relativeTime'
 
 const messages = signal<Message[]>([])
 const loading = signal(true)
+/** Page size for the lazy-load older-history fetch. The initial
+ *  load uses a wider window (see ``DmThreadPage`` body); each
+ *  follow-up "load older" page is this many messages. Backend caps
+ *  any ``limit`` query at 100; 50 is the sweet spot — wide enough
+ *  that you rarely need three fetches in one scroll session,
+ *  narrow enough to feel instant on slow links. */
+const PAGE_SIZE = 50
+/** Whether older messages are available to fetch via
+ *  ``?before=<oldest_id>``. Set to ``false`` when a fetch returns
+ *  fewer messages than the requested limit (= no more history). */
+const hasMoreHistory = signal(true)
+/** True while a back-fill ``loadOlder()`` request is in flight.
+ *  Drives the spinner at the top of the messages list and stops
+ *  the scroll handler from queueing parallel requests. */
+const isLoadingOlder = signal(false)
+/** First-unread anchor used to render a "New messages" divider on
+ *  entry. ``message_id`` is the id of the first message the caller
+ *  hasn't read yet; the SPA scrolls that row into view. ``null`` if
+ *  there are no unread messages in the loaded window, in which case
+ *  the entry effect falls back to scroll-to-bottom. */
+const unreadAnchor = signal<{ message_id: string } | null>(null)
+/** Counter of new messages received since the user scrolled up off
+ *  the bottom. Drives the "↓ N new messages" jump-down chip. Resets
+ *  to zero when the user reaches the bottom (either by scrolling or
+ *  by clicking the chip). */
+const newSinceScrollUp = signal(0)
 /** Cap how tall the composer textarea is allowed to grow before it
  *  starts to scroll internally. ~6 lines at the default font; matches
  *  WhatsApp's ceiling so a very long draft doesn't eat half the chat
@@ -170,12 +200,28 @@ export default function DmThreadPage() {
   // sending. Uncontrolled input + ref keeps the existing FormData send
   // path untouched.
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
-  // Scrolling container for the messages list. We pin the view to the
-  // bottom on first load, and auto-stick to bottom on new messages
-  // when the user is already there (so an active conversation
-  // follows itself without yanking a reader who scrolled up to
-  // read older context).
+  /** Scrolling container for the messages list.
+   *
+   *  The container is laid out with ``flex-direction: column-reverse``
+   *  (see ``.sh-messages`` in ``app.css``), which inverts the
+   *  scroll coordinate system: ``scrollTop=0`` is the visual
+   *  **bottom** (latest message), and scrolling up *increases*
+   *  ``scrollTop``. This is the classic chat-app trick — entry
+   *  needs no positioning effect because the browser naturally
+   *  lands the user at the bottom, new messages appear at the
+   *  bottom without any JS scroll, and prepending older history
+   *  doesn't move the user's viewport because ``scrollTop`` is
+   *  anchored relative to the visual bottom (not the visual top).
+   *  All the scroll-position-restoration math the old code carried
+   *  goes away. */
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+  /** ``true`` when the user is within 80 px of the visual bottom —
+   *  i.e. they're "looking at the live edge" of the conversation.
+   *  Drives the jump-down CTA visibility and the read-watermark
+   *  advance: marks-as-read fire only when the user is actually
+   *  caught up. In column-reverse, "near the bottom" means
+   *  ``scrollTop < 80`` (recall: scrollTop=0 is the visual bottom).
+   *  Maintained by ``handleScroll``. */
   const stickToBottom = useRef(true)
 
   // Tag the body so the layout can hide the bottom tab bar and
@@ -187,87 +233,159 @@ export default function DmThreadPage() {
     return () => document.body.classList.remove('sh-dm-thread-open')
   }, [])
 
-  // Scroll the messages list to the bottom whenever the page first
-  // settles after a load (so opening a chat shows the most recent
-  // messages, like every other chat app) or whenever a new message
-  // lands while the user is already at the bottom. *** This hook
-  // must live ABOVE the ``if (loading.value) return`` early-return
-  // below, otherwise the hook count differs between the loading
-  // skeleton render and the settled render and Preact assigns the
-  // effect to the wrong slot — the scroll then silently never
-  // fires. ***
   const messageCount = messages.value.length
+  const lastTailMessageId = useRef<string | null>(null)
   const isLoading = loading.value
+
+  // Count new appended messages while the user is scrolled up so the
+  // jump-down CTA can show "↓ N new". No scroll positioning here —
+  // ``column-reverse`` handles "new messages naturally appear at the
+  // visual bottom" for free; the only thing we need to track is
+  // whether to surface the CTA. Self-sends set ``stickToBottom``
+  // back to true in ``handleSend`` so they take the "user is at
+  // bottom" branch and don't bump the counter. Prepended older
+  // history (from ``loadOlder``) doesn't change the tail message id
+  // so the ``tailChanged`` discriminator skips it.
   useEffect(() => {
-    const el = messagesScrollRef.current
-    if (!el) return
-    if (!stickToBottom.current) return
-    // Two frames: first to let the new bubble render, second so the
-    // scroll happens *after* the layout settles. Without the rAF the
-    // assignment runs before the bubble's height is accounted for and
-    // the scroll lands a few px short. ``behavior: 'auto'`` forces an
-    // instant jump even though the container has ``scroll-behavior:
-    // smooth`` in CSS — opening a chat should land at the bottom
-    // immediately, not glide there over half a second.
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-      })
-    })
+    const tailId = messages.value.length > 0
+      ? messages.value[messages.value.length - 1].id
+      : null
+    const tailChanged = tailId !== null && tailId !== lastTailMessageId.current
+    lastTailMessageId.current = tailId
+    if (!tailChanged || stickToBottom.current) return
+    newSinceScrollUp.value += 1
   }, [messageCount])
 
-  // Force a scroll-to-bottom on every chat open — covers the case
-  // where the user revisits a chat whose ``messages.value.length``
-  // hasn't changed since last time (e.g. /dms → click same thread
-  // again). The ``messageCount`` effect above would skip because
-  // its dep didn't change, but we always want the latest message
-  // to be the first thing visible after a fresh open. Also resets
-  // the follow-bottom flag so a re-open doesn't preserve a
-  // mid-scroll position from the previous visit.
-  useEffect(() => {
-    if (isLoading) return
-    stickToBottom.current = true
+  // Entry-scroll effect — only meaningful when there's an unread
+  // anchor. With column-reverse, the no-anchor case is automatic:
+  // the browser lands the user at ``scrollTop=0`` (visual bottom =
+  // latest message). For the unread-anchor case we still need to
+  // bring the "New messages" divider into view, so we scroll up
+  // until the divider is at the top of the viewport. ``useLayoutEffect``
+  // runs after Preact's DOM mutations but before the browser paints,
+  // so the user never sees the intermediate scrollTop=0 frame
+  // (which would show the latest message instead of the divider).
+  const anchor = unreadAnchor.value
+  useLayoutEffect(() => {
+    if (isLoading || !anchor) return
     const el = messagesScrollRef.current
     if (!el) return
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-      })
-    })
-  }, [convId, isLoading])
-
-  // The ``messageCount`` effect above re-scrolls when a new message
-  // row lands, but the typing indicator is rendered inside the same
-  // container *without* changing ``messages.value.length`` — it's
-  // driven by a separate signal in ``TypingIndicator``. Without an
-  // observer the indicator can mount just below the viewport and
-  // the user never sees it. A ``MutationObserver`` on the container
-  // catches that case (and any other DOM growth — long messages
-  // finishing layout, delivery-tick re-renders) and re-pins the
-  // scroll to the bottom when the user was already there.
-  // (Same rules-of-hooks caveat as above — must live above the
-  // loading-skeleton early return.)
-  useEffect(() => {
-    const el = messagesScrollRef.current
-    if (!el) return
-    const mo = new MutationObserver(() => {
-      if (!stickToBottom.current) return
-      requestAnimationFrame(() => {
-        el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
-      })
-    })
-    mo.observe(el, { childList: true, subtree: true, characterData: true })
-    return () => mo.disconnect()
-  }, [])
+    stickToBottom.current = false
+    const divider = el.querySelector('.sh-dm-unread-divider')
+    if (divider) {
+      divider.scrollIntoView({ block: 'start', behavior: 'instant' })
+    } else {
+      // Race fallback — anchor row rendered but divider didn't.
+      const row = el.querySelector(`[data-msg-id="${anchor.message_id}"]`)
+      if (row) row.scrollIntoView({ block: 'start', behavior: 'instant' })
+    }
+  }, [convId, isLoading, anchor?.message_id])
 
   useEffect(() => {
     loading.value = true
-    api.get(`/api/conversations/${convId}/messages`).then(data => {
-      messages.value = data.reverse()
-      loading.value = false
-      if (readReceiptsEnabled.value) {
-        api.post(`/api/conversations/${convId}/read`).catch(() => {})
-      }
+    // Reset the lazy-load + anchor state for the new thread. Without
+    // this a re-entry would inherit the previous thread's divider or
+    // "no more history" flag, both wrong for the new context.
+    hasMoreHistory.value = true
+    isLoadingOlder.value = false
+    unreadAnchor.value = null
+    newSinceScrollUp.value = 0
+    // Reset messages eagerly so the brief moment between the convId
+    // change and the new fetch's ``then`` doesn't flash the previous
+    // thread's content. Column-reverse means the empty list shows
+    // an empty container at scrollTop=0 (visual bottom) and the
+    // loading pill below.
+    messages.value = []
+    stickToBottom.current = true
+    // Look up this thread's row in the conversations list to read
+    // ``unread`` + ``last_read_at`` — the SPA uses both to size the
+    // initial message window (so the first-unread message is in the
+    // window) and to anchor the entry scroll on a "New messages"
+    // divider. The list is small and already cached server-side; a
+    // missed lookup (deep-link to an unfamiliar thread, list call
+    // 5xx) falls back to "no anchor, no unreads" gracefully.
+    let unreadHint = 0
+    let lastReadAt: string | null = null
+    const summaryPromise = api.get('/api/conversations').then(
+      (rows: Array<{ id: string; unread?: number; last_read_at?: string | null }>) => {
+        const row = rows.find(r => r.id === convId)
+        if (row) {
+          unreadHint = Math.max(0, row.unread ?? 0)
+          lastReadAt = row.last_read_at ?? null
+        }
+      },
+    ).catch(() => {
+      /* fall through with the defaults */
+    })
+
+    summaryPromise.then(() => {
+      // Window size: enough to overflow the viewport comfortably (so
+      // the user can actually scroll up and trigger ``loadOlder``),
+      // but small enough that the entry skeleton-to-content swap
+      // doesn't read as a long jump. 25 messages is the floor —
+      // ~1600 px of content vs. a typical 600-800 px container,
+      // giving a healthy ~1000 px of scroll-up headroom. Unread
+      // spike widens further so the first-unread divider always
+      // lands in the loaded set; capped at the backend's 100/request
+      // ceiling so a very busy thread doesn't pay for a giant
+      // payload on entry. The skeleton's ``justify-content: flex-end``
+      // (see app.css) places its placeholder bubbles at the same
+      // screen position as the real bottom-of-thread, so the swap
+      // looks like a fade-in, not a scroll.
+      const limit = Math.min(Math.max(unreadHint + 5, 25), 100)
+      api.get(`/api/conversations/${convId}/messages?limit=${limit}`).then(data => {
+        const msgs: Message[] = (data ?? []).slice().reverse()
+        messages.value = msgs
+        loading.value = false
+        // If we got fewer than ``limit`` back, the thread is shorter
+        // than the window — no older history to fetch.
+        hasMoreHistory.value = (data ?? []).length === limit
+        // Pick the first-unread message in the loaded window. A
+        // message counts as unread when it was created strictly after
+        // the caller's ``last_read_at`` AND was not authored by the
+        // caller (a user's own message can't be "unread" to them).
+        if (lastReadAt && unreadHint > 0) {
+          const myId = currentUser.value?.user_id
+          // ``normaliseTimestamp`` tags the naive SQLite shape
+          // ("YYYY-MM-DD HH:MM:SS", no Z) as UTC before parsing —
+          // without this, viewers in a non-UTC zone see V8 interpret
+          // the naive string as *their* local wall clock and shift
+          // ``lastReadMs`` by the UTC offset, landing the divider on
+          // the wrong message (or no divider at all). The message's
+          // own ``created_at`` is already tz-aware ISO but routing
+          // both sides through the same helper keeps the math
+          // consistent if that ever drifts.
+          const lastReadMs = Date.parse(normaliseTimestamp(lastReadAt))
+          if (!Number.isNaN(lastReadMs)) {
+            const firstUnread = msgs.find(m =>
+              m.sender_user_id !== myId
+              && Date.parse(normaliseTimestamp(m.created_at)) > lastReadMs,
+            )
+            if (firstUnread) {
+              unreadAnchor.value = { message_id: firstUnread.id }
+            }
+          }
+        }
+        // If there were no unreads (or no last_read_at), entry will
+        // scroll to bottom — mark-as-read on entry stays unchanged for
+        // that case. When there ARE unreads we defer the read POST
+        // until the user actually scrolls past the divider (see the
+        // ``handleScroll`` branch); marking on entry would advance the
+        // watermark before the user has seen anything and the next
+        // entry wouldn't render the divider.
+        if (!unreadAnchor.value && readReceiptsEnabled.value) {
+          api.post(`/api/conversations/${convId}/read`).catch(() => {})
+        }
+      }).catch(() => {
+        // Network blip or 5xx — don't strand the user on the skeleton
+        // forever. The thread page renders an empty list (which the
+        // existing empty-state copy handles) and the next entry
+        // retries; surfacing a toast would be louder than necessary
+        // for a transient backend glitch.
+        loading.value = false
+        messages.value = []
+        hasMoreHistory.value = false
+      })
       // Hydrate delivery/read state for every message so ticks render
       // immediately — not just on messages we've seen WS frames for.
       api.get(`/api/conversations/${convId}/delivery-states`).then(
@@ -337,7 +455,18 @@ export default function DmThreadPage() {
         }
       }
       if (next !== messages.value) messages.value = next
-      if (readReceiptsEnabled.value) {
+      // Only advance the watermark when the user is actually at the
+      // bottom looking at the live edge — if they're scrolled up
+      // reading historic context above the "New messages" divider,
+      // the inbound message has NOT been seen yet, and marking it
+      // as read here would defeat the deferred-read design (next
+      // entry would see ``unread = 0`` and skip the divider).
+      // ``stickToBottom`` is the same flag ``handleScroll`` maintains;
+      // a self-send always satisfies it because ``handleSend`` flips
+      // it to true before the optimistic append. The
+      // sticky-bottom transition branch in ``handleScroll`` covers
+      // the "user scrolls down to catch up" path.
+      if (readReceiptsEnabled.value && stickToBottom.current) {
         api.post(`/api/conversations/${convId}/read`).catch(() => {})
       }
     })
@@ -541,6 +670,19 @@ export default function DmThreadPage() {
       edited_at: null,
     }
     messages.value = [...messages.value, optimistic]
+    // Pin the viewport to the latest message on self-send. In
+    // column-reverse, ``scrollTop = 0`` is the visual bottom — any
+    // earlier scroll-up gesture (even a stray touch nudge that left
+    // scrollTop at a small negative value) would otherwise hide the
+    // user's own bubble just below the visible area. Also flip
+    // ``stickToBottom`` to true and clear the unread-since-scroll-up
+    // counter so the jump-down CTA disappears for sends that
+    // happened to fire while the user was reading history.
+    const scrollEl = messagesScrollRef.current
+    if (scrollEl) scrollEl.scrollTop = 0
+    stickToBottom.current = true
+    newSinceScrollUp.value = 0
+    if (unreadAnchor.value) unreadAnchor.value = null
 
     const draft = content
     form.reset()
@@ -631,16 +773,124 @@ export default function DmThreadPage() {
     location.route(`/calls/${r.call_id}`)
   }
 
+  // Page title: show the peer's display name in the TopBar (above
+  // the search box) so the user always knows whose chat they're in.
+  // ``useTitle`` must run unconditionally on every render to keep the
+  // rules-of-hooks invariant — placing it AFTER the ``loading.value``
+  // early-return below would skip the hook on the loading frame and
+  // crash. While the thread-member roster is still in flight we show
+  // "Chats" as a placeholder so the topbar isn't briefly blank on
+  // first entry.
+  const peerTitle = (() => {
+    const peers = threadMembers.value.filter(m => !m.is_self)
+    if (peers.length === 0) return 'Chats'
+    if (peers.length === 1) return peers[0].display_name
+    // Group DM: join the peers with " · " — same shape the inbox
+    // uses as the row-title fallback, so the topbar and the inbox
+    // entry agree on what to call the conversation.
+    return peers.map(p => p.display_name).join(' · ')
+  })()
+  useTitle(peerTitle)
+
   if (loading.value) return <DmThreadSkeleton />
   const myUserId = currentUser.value?.user_id
 
   const handleScroll = () => {
     const el = messagesScrollRef.current
     if (!el) return
-    // 80 px of slack — anything closer counts as "the user is at
-    // the bottom and wants to keep following".
-    const dist = el.scrollHeight - (el.scrollTop + el.clientHeight)
-    stickToBottom.current = dist < 80
+    // Column-reverse coordinate system has a long-standing browser
+    // split: Chrome / Safari / Edge use **negative** ``scrollTop``
+    // values (0 at the visual bottom, ``-(scrollHeight -
+    // clientHeight)`` at the visual top), while older Firefox
+    // implementations used **positive** values mirroring the
+    // non-reversed layout (0 at the visual top, max at the visual
+    // bottom). Modern Firefox has moved to the Chrome convention,
+    // but we normalise either way so a future user on a legacy
+    // engine still gets correct sticky / lazy-load behaviour.
+    //
+    //   distFromBottom = magnitude away from the latest message.
+    //                    0 at the visual bottom, ``maxScroll`` at
+    //                    the visual top.
+    //   distFromTop    = the complement.
+    const maxScroll = Math.max(el.scrollHeight - el.clientHeight, 0)
+    const distFromBottom =
+      el.scrollTop <= 0
+        ? -el.scrollTop                 // Chrome / modern Firefox
+        : maxScroll - el.scrollTop      // legacy positive-scrollTop
+    const distFromTop = maxScroll - distFromBottom
+    const wasSticky = stickToBottom.current
+    stickToBottom.current = distFromBottom < 80
+    if (!wasSticky && stickToBottom.current) {
+      // User returned to the bottom — clear the unread-since-scroll-up
+      // counter so the CTA disappears and advance the read watermark
+      // for any unread messages they've now caught up on. Gated on
+      // actual pending state so an oscillating user (50 px up, 50 px
+      // down) doesn't spam the endpoint on every false→true edge.
+      const hadPending =
+        unreadAnchor.value !== null || newSinceScrollUp.value > 0
+      newSinceScrollUp.value = 0
+      if (readReceiptsEnabled.value && hadPending) {
+        api.post(`/api/conversations/${convId}/read`).catch(() => {})
+      }
+      // Clear the divider once the user has caught up.
+      if (unreadAnchor.value) unreadAnchor.value = null
+    }
+    // Lazy-load older history when the user is within 120 px of the
+    // visual top — far enough out that the fetch lands before the
+    // user actually hits the very top. No "user has moved" gate is
+    // needed: on entry ``distFromTop`` equals ``maxScroll``, which
+    // is the maximum possible distance from the trigger — only a
+    // real upward gesture can satisfy this condition.
+    if (
+      distFromTop < 120
+      && hasMoreHistory.value
+      && !isLoadingOlder.value
+    ) {
+      void loadOlder()
+    }
+  }
+
+  /** Fetch the next page of older messages and prepend them.
+   *
+   *  ``column-reverse`` makes this dramatically simpler than the
+   *  classic layout: the user's ``scrollTop`` is anchored relative
+   *  to the **visual bottom**, and the prepended history lands at
+   *  the **visual top** — i.e. on the opposite side of the
+   *  scrollable region from the user's viewport reference. The
+   *  user's reading position therefore stays exactly where it was,
+   *  for free, with no snapshot / restore math.
+   *
+   *  ``isLoadingOlder`` gates re-entry so a touch-scroll dragging
+   *  the user across the trigger threshold can't queue multiple
+   *  parallel fetches. */
+  const loadOlder = async () => {
+    if (isLoadingOlder.value || !hasMoreHistory.value) return
+    const oldest = messages.value[0]
+    if (!oldest) return
+    isLoadingOlder.value = true
+    try {
+      const data: Message[] = await api.get(
+        `/api/conversations/${convId}/messages?before=${oldest.id}&limit=${PAGE_SIZE}`,
+      ) ?? []
+      const older = data.slice().reverse()
+      if (older.length === 0) {
+        hasMoreHistory.value = false
+        return
+      }
+      // Deduplicate at the seam: if a slow re-entry surfaces the same
+      // bottom-of-page message twice (rare; backend uses a strict
+      // ``<`` filter on ``before``), keep only ids we don't have.
+      const have = new Set(messages.value.map(m => m.id))
+      const fresh = older.filter(m => !have.has(m.id))
+      if (fresh.length === 0) {
+        if (data.length < PAGE_SIZE) hasMoreHistory.value = false
+        return
+      }
+      messages.value = [...fresh, ...messages.value]
+      if (data.length < PAGE_SIZE) hasMoreHistory.value = false
+    } finally {
+      isLoadingOlder.value = false
+    }
   }
 
   const status = statusLine(threadMembers.value)
@@ -692,9 +942,69 @@ export default function DmThreadPage() {
         </div>
       )}
       <div class="sh-messages" ref={messagesScrollRef} onScroll={handleScroll}>
-        {messages.value.map(m => {
+        {/* In-thread typing indicator — rendered FIRST in DOM so the
+         *  ``column-reverse`` flex flip lands it at the visual
+         *  BOTTOM of the messages area, right above the composer
+         *  where the WhatsApp/iMessage-style bubble preview lives.
+         *  Empty when nobody is typing — collapses with zero
+         *  height impact on the scroll position. The ``bubble``
+         *  prop opts into the bubble shape. */}
+        <TypingIndicator scope={convId} bubble />
+        {/* Floating "↓ N new messages" chip — appears in the
+         *  bottom-right corner of the scrollable container when the
+         *  user has scrolled up reading history and one or more new
+         *  messages have arrived. Click jumps to the bottom and
+         *  resets the counter via ``handleScroll``'s sticky-bottom
+         *  branch. In column-reverse, "bottom" is ``scrollTop=0``.
+         *  Rendered FIRST in DOM so the column-reverse flip places
+         *  the sticky chip at the visual bottom. */}
+        {newSinceScrollUp.value > 0 && !stickToBottom.current && (
+          <button
+            type="button"
+            class="sh-dm-jump-down"
+            onClick={() => {
+              const el = messagesScrollRef.current
+              if (!el) return
+              stickToBottom.current = true
+              el.scrollTo({ top: 0, behavior: 'smooth' })
+              newSinceScrollUp.value = 0
+              if (unreadAnchor.value) unreadAnchor.value = null
+              if (readReceiptsEnabled.value) {
+                api.post(`/api/conversations/${convId}/read`).catch(() => {})
+              }
+            }}
+            aria-label={`Jump to latest, ${newSinceScrollUp.value} new ${
+              newSinceScrollUp.value === 1 ? 'message' : 'messages'
+            }`}
+          >
+            <span aria-hidden="true">↓</span>
+            <span class="sh-dm-jump-down__count">
+              {newSinceScrollUp.value > 99 ? '99+' : newSinceScrollUp.value}
+            </span>
+            <span class="sh-dm-jump-down__label">new</span>
+          </button>
+        )}
+        {messages.value.slice().reverse().map(m => {
+          // Render the "New messages" divider immediately above the
+          // first-unread row visually. In column-reverse the
+          // visually-above element is the one rendered AFTER the
+          // anchor in DOM order, so the divider goes inside the
+          // Fragment AFTER the message (not before).
+          const isUnreadAnchor =
+            unreadAnchor.value !== null
+            && unreadAnchor.value.message_id === m.id
           if (m.type === 'call_event') {
-            return <CallEventRow key={m.id} m={m} onCallBack={startCall} />
+            // Keyed Fragment for the outer slot so Preact's
+            // reconciler moves the row correctly across prepend
+            // updates (column-reverse means prepend lands at the
+            // visual top, but the underlying DOM key matching is
+            // still index-based without the Fragment key).
+            return (
+              <Fragment key={m.id}>
+                <CallEventRow m={m} onCallBack={startCall} />
+                {isUnreadAnchor && <UnreadDivider />}
+              </Fragment>
+            )
           }
           const mine = m.sender_user_id === myUserId
           // Look up the parent message for inline rendering of the
@@ -704,8 +1014,8 @@ export default function DmThreadPage() {
             ? messages.value.find(x => x.id === m.reply_to_id)
             : null
           return (
+            <Fragment key={m.id}>
             <div
-              key={m.id}
               data-msg-id={m.id}
               class={`sh-message ${mine ? 'sh-message--mine' : ''} ${m.deleted ? 'sh-message--deleted' : ''}`}
             >
@@ -756,14 +1066,17 @@ export default function DmThreadPage() {
                 </button>
               )}
             </div>
+            </Fragment>
           )
         })}
-        {/* In-thread typing indicator: rendered as the last "row" of
-         * the messages list so it reads like a chat-bubble preview
-         * (WhatsApp / iMessage), not a chrome strip above the
-         * composer where it used to disappear on first glance. The
-         * ``bubble`` prop opts into the bubble shape. */}
-        <TypingIndicator scope={convId} bubble />
+        {/* Lazy-load spinner — rendered LAST in DOM order so the
+         *  ``column-reverse`` flex flip lands it at the visual TOP
+         *  of the messages list, where the user is scrolling toward
+         *  to fetch older history. Provides the "fetching older"
+         *  affordance while the network round-trip is in flight. */}
+        {isLoadingOlder.value && (
+          <div class="sh-dm-load-older" aria-live="polite">Loading older…</div>
+        )}
       </div>
       {replyTo.value && (
         <div class="sh-composer-reply" role="status" aria-live="polite">

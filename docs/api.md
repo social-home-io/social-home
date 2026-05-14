@@ -410,7 +410,7 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/conversations` | List the caller's conversations. Each row carries `members[]` (other participants only — caller is filtered out) and `member_count` so the inbox renders avatar stacks + peer-name fallbacks (`Anna · Bob`) without N+1 follow-up fetches. |
+| GET | `/api/conversations` | List the caller's conversations. Each row carries `members[]` (other participants only — caller is filtered out) and `member_count` so the inbox renders avatar stacks + peer-name fallbacks (`Anna · Bob`) without N+1 follow-up fetches. Also returns the caller's own `last_read_at` (ISO 8601 or `null`) — the SPA uses it to find the first-unread message in the loaded thread window and anchor the entry scroll on a "New messages" divider. |
 | POST | `/api/conversations/dm` | Get-or-create 1:1 DM. Body `{username}`. |
 | POST | `/api/conversations/group` | Create group conversation (≥3 participants total — creator + ≥2 others). Body `{members: [username, ...], name?: string}`. |
 | GET / POST | `/api/conversations/{id}/messages` | List / send. |
