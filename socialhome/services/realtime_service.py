@@ -137,7 +137,14 @@ class RealtimeService:
         Used to enumerate space members for SpacePostCreated events.
     """
 
-    __slots__ = ("_bus", "_ws", "_user_repo", "_space_repo", "_media_signer")
+    __slots__ = (
+        "_bus",
+        "_ws",
+        "_user_repo",
+        "_space_repo",
+        "_conversation_repo",
+        "_media_signer",
+    )
 
     def __init__(
         self,
@@ -146,12 +153,17 @@ class RealtimeService:
         *,
         user_repo,
         space_repo,
+        conversation_repo=None,
         media_signer: MediaUrlSigner | None = None,
     ) -> None:
         self._bus = bus
         self._ws = ws
         self._user_repo = user_repo
         self._space_repo = space_repo
+        # Needed by ``broadcast_dm_media_ready`` to enumerate the
+        # local participants of a conversation. Optional for older
+        # callers / test stacks that don't exercise the media path.
+        self._conversation_repo = conversation_repo
         # Lets WS broadcast frames carry the same signed ``media_url`` /
         # ``picture_url`` / ``cover_url`` shape the REST API returns, so
         # browsers can drop the fields straight into ``<img src>``
@@ -1552,6 +1564,53 @@ class RealtimeService:
                 continue
             seen.add(user_id)
             await self._ws.broadcast_to_user(user_id, payload)
+
+    async def broadcast_dm_media_ready(
+        self,
+        *,
+        message_id: str,
+        conversation_id: str,
+        media_url: str,
+    ) -> None:
+        """Push ``dm.media_ready`` to local members of a conversation.
+
+        Called by ``FederationInboundService._on_dm_media_blob`` once
+        the full bytes for a cross-household media message have
+        landed and the row's ``media_url`` has flipped to point at
+        the local full file. The SPA listens for this frame on
+        :class:`DmThreadPage` and swaps the bubble's preview
+        ``<img src>`` for the full media.
+
+        Fan-out: every local participant of the conversation. The
+        sender household's broadcast happens locally for free on the
+        original send; this method is the *receiver* fan-out, so we
+        only need the local members of *this* household (members
+        from other households see the same WS frame via their own
+        instance's matching DM_MEDIA_BLOB handler).
+        """
+        if not message_id or not conversation_id or not media_url:
+            return
+        members = await self._conversation_repo.list_members(conversation_id)
+        # Resolve usernames → user_ids so the WS broker can route.
+        user_ids: list[str] = []
+        for m in members:
+            if m.deleted_at is not None:
+                continue
+            u = await self._user_repo.get(m.username)
+            if u is None:
+                continue
+            user_ids.append(u.user_id)
+        if not user_ids:
+            return
+        await self._ws.broadcast_to_users(
+            user_ids,
+            {
+                "type": "dm.media_ready",
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "media_url": media_url,
+            },
+        )
 
     async def _on_dm_conversation_created(
         self,

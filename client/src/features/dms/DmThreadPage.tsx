@@ -642,6 +642,32 @@ export default function DmThreadPage() {
           : m,
       )
     }
+    // Cross-household media-ready swap. When the receiver's instance
+    // finishes ingesting the full ``DM_MEDIA_BLOB`` (which arrives
+    // asynchronously some time after the ``DM_MESSAGE`` envelope
+    // that carried the small preview), the backend publishes this
+    // frame to every local participant. We swap ``media_url`` to
+    // the full URL and clear ``media_sync_status`` so the bubble's
+    // brightness pulse goes away.
+    const offMediaReady = ws.on('dm.media_ready', (e) => {
+      const d = e.data as {
+        conversation_id?: string
+        message_id?: string
+        media_url?: string
+      }
+      if (d.conversation_id !== convId) return
+      if (!d.message_id || !d.media_url) return
+      const list = messages.value
+      const idx = list.findIndex(m => m.id === d.message_id)
+      if (idx < 0) return
+      const next = list.slice()
+      next[idx] = {
+        ...next[idx],
+        media_url: d.media_url,
+        media_sync_status: null,
+      }
+      messages.value = next
+    })
     const offUserOnline = ws.on('user.online', (e) => {
       const d = e.data as { user_id?: string }
       if (d.user_id) patchMember(d.user_id, { is_online: true, is_idle: false })
@@ -659,7 +685,7 @@ export default function DmThreadPage() {
       })
     })
     return () => {
-      offRead(); offNewMsg()
+      offRead(); offNewMsg(); offMediaReady()
       offUserOnline(); offUserIdle(); offUserOffline()
     }
   }, [convId])

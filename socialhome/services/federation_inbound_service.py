@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import pathlib
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -79,6 +80,28 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: Mapping from canonical media MIME types (produced by
+#: :class:`ImageProcessor` / :class:`VideoProcessor`) to file
+#: extensions for the receiver-side ``DM_MEDIA_BLOB`` write. Falls
+#: back to ``.bin`` for unknown types — the receiver's bubble will
+#: still render the file pill (clicking opens the system handler
+#: based on response MIME, not extension). Kept narrow on purpose —
+#: only MIME types we actually produce or accept upstream.
+_MEDIA_MIME_EXT: dict[str, str] = {
+    "image/webp": ".webp",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "video/webm": ".webm",
+    "video/mp4": ".mp4",
+    "application/pdf": ".pdf",
+}
+
+
+def _mime_to_ext(mime_type: str) -> str:
+    return _MEDIA_MIME_EXT.get(mime_type.lower(), ".bin")
+
+
 class FederationInboundService:
     """Apply decrypted inbound federation events to local state.
 
@@ -101,6 +124,8 @@ class FederationInboundService:
         "_report_service",
         "_dm_routing_repo",
         "_relay_policy",
+        "_media_dir",
+        "_realtime",
     )
 
     def __init__(
@@ -118,6 +143,8 @@ class FederationInboundService:
         report_service=None,
         dm_routing_repo=None,
         relay_policy: "RelayPolicy | None" = None,
+        media_dir: "pathlib.Path | None" = None,
+        realtime: "object | None" = None,
     ) -> None:
         self._bus = bus
         self._conversation_repo = conversation_repo
@@ -127,10 +154,29 @@ class FederationInboundService:
         self._highlight_repo = highlight_repo
         self._moment_repo = moment_repo
         self._moment_outbound = moment_outbound
+        # v_3 DM media: receiver writes the embedded preview here on
+        # ``DM_MESSAGE``, then the full bytes from ``DM_MEDIA_BLOB``.
+        # ``realtime`` is the WS publisher — we push
+        # ``dm.media_ready`` to the conversation's local members when
+        # the full bytes land. Both optional so unit-test stacks can
+        # omit them.
+        self._media_dir = media_dir
+        self._realtime = realtime
         self._profile_picture_repo = profile_picture_repo
         self._report_service = report_service
         self._dm_routing_repo = dm_routing_repo
         self._relay_policy = relay_policy
+
+    def attach_realtime(self, realtime: "object") -> None:
+        """Wire the realtime broadcaster after construction.
+
+        :class:`RealtimeService` is constructed downstream of this
+        service in :func:`create_app`, so the realtime handle gets
+        set after the fact. Used by ``_on_dm_media_blob`` to fan a
+        ``dm.media_ready`` WS frame to local participants once the
+        full bytes for a cross-household media DM have landed.
+        """
+        self._realtime = realtime
 
     def attach_to(self, federation_service) -> None:
         """Register inbound handlers on the federation event registry."""
@@ -138,6 +184,7 @@ class FederationInboundService:
 
         registry = federation_service._event_registry
         registry.register(FET.DM_MESSAGE, self._on_dm_message)
+        registry.register(FET.DM_MEDIA_BLOB, self._on_dm_media_blob)
         registry.register(FET.DM_MESSAGE_DELETED, self._on_dm_deleted)
         registry.register(FET.DM_MESSAGE_REACTION, self._on_dm_reaction)
 
@@ -267,6 +314,21 @@ class FederationInboundService:
             occurred_at=p.get("occurred_at"),
         )
 
+        # ── v_3: cross-household media preview ───────────────────────
+        # When the sender embedded a ``preview_bytes_b64`` we save it
+        # to local media storage now so the bubble can render
+        # immediately. ``media_sync_status='pending'`` tells the SPA
+        # to keep the bubble's brightness-pulse overlay until the
+        # follow-up ``DM_MEDIA_BLOB`` arrives and we swap to the
+        # full-quality bytes. Senders at v_2 don't carry these
+        # fields; ``media_url`` from the payload (if any) goes
+        # through unchanged.
+        media_url, media_sync_status = self._receive_media_preview(
+            payload=p,
+            message_id=message_id,
+            msg_type=msg_type,
+        )
+
         msg = ConversationMessage(
             id=message_id,
             conversation_id=conv_id,
@@ -274,7 +336,17 @@ class FederationInboundService:
             content=content,
             created_at=parse_iso8601_lenient(p.get("occurred_at")),
             type=msg_type,
-            media_url=p.get("media_url"),
+            media_url=media_url,
+            file_name=p.get("file_name"),
+            mime_type=p.get("mime_type"),
+            file_size_bytes=(
+                int(p["file_size_bytes"])
+                if isinstance(p.get("file_size_bytes"), (int, str))
+                and str(p.get("file_size_bytes")).lstrip("-").isdigit()
+                else None
+            ),
+            media_blob_id=p.get("media_blob_id"),
+            media_sync_status=media_sync_status,
         )
         await self._conversation_repo.save_message(msg)
 
@@ -287,7 +359,7 @@ class FederationInboundService:
                 recipient_user_ids=tuple(str(r) for r in recipients),
                 content=content,
                 message_type=msg_type,
-                media_url=p.get("media_url"),
+                media_url=media_url,
                 reply_to_id=p.get("reply_to_id"),
                 occurred_at=msg.created_at,
             )
@@ -385,6 +457,156 @@ class FederationInboundService:
                         "%s/%s skipped (%s)",
                         sender_instance_id,
                         remote.remote_username,
+                        exc,
+                    )
+
+    # ── DM media ─────────────────────────────────────────────────────
+
+    def _receive_media_preview(
+        self,
+        *,
+        payload: dict,
+        message_id: str,
+        msg_type: str,
+    ) -> tuple[str | None, str | None]:
+        """Persist any embedded preview + return the local ``media_url``.
+
+        Returns ``(media_url, media_sync_status)``:
+
+        * For a v_3 media message with ``preview_bytes_b64``: write
+          the preview WebP to ``media_dir`` and point ``media_url``
+          at the local API path; ``media_sync_status='pending'``
+          flags the bubble for the brightness-pulse overlay until
+          the matching ``DM_MEDIA_BLOB`` lands.
+        * For a v_3 media message *without* a preview (video / file
+          today): no local bytes yet, ``media_url`` carries the
+          sender's URL untouched and the SPA renders a placeholder
+          glyph; ``media_sync_status='pending'`` keeps the row in
+          the "waiting on blob" state.
+        * For a text / transcript / location message, or a media
+          message from a sub-v_3 sender (which fell back to text via
+          the compat shim): no media to persist, the existing
+          payload's ``media_url`` flows through.
+        """
+        is_media = msg_type in ("image", "video", "file")
+        media_url_in = payload.get("media_url")
+        if not is_media or payload.get("media_blob_id") is None:
+            # Same-household DM where the sender's URL is reachable,
+            # or a non-media message — nothing for the receiver to
+            # build locally.
+            return media_url_in, None
+        preview_b64 = payload.get("preview_bytes_b64")
+        if not preview_b64 or self._media_dir is None:
+            # Cross-household media without an embedded preview, or
+            # the receiver was launched without a media root (test
+            # stack). The SPA renders the type-glyph placeholder
+            # until the full blob lands.
+            return None, "pending"
+        try:
+            preview_bytes = base64.b64decode(preview_b64)
+        except Exception as exc:  # pragma: no cover
+            log.warning(
+                "DM_MESSAGE: malformed preview_bytes_b64 for %s: %s",
+                message_id,
+                exc,
+            )
+            return None, "pending"
+        # Preview file is short-lived — it'll be overwritten when
+        # ``DM_MEDIA_BLOB`` arrives. Naming it after the message_id
+        # keeps the replace operation atomic on the receiver: the
+        # full bytes land at the same filename and the SPA's
+        # ``media_url`` doesn't have to change at all.
+        try:
+            self._media_dir.mkdir(parents=True, exist_ok=True)
+            dest = self._media_dir / f"{message_id}.preview.webp"
+            dest.write_bytes(preview_bytes)
+        except OSError as exc:  # pragma: no cover
+            log.warning(
+                "DM_MESSAGE: failed to write preview for %s: %s",
+                message_id,
+                exc,
+            )
+            return None, "pending"
+        return f"api/media/{dest.name}", "pending"
+
+    async def _on_dm_media_blob(self, event: "FederationEvent") -> None:
+        """Land the full bytes for a previously-arrived ``DM_MESSAGE``.
+
+        Decodes the bytes, writes them under ``media_dir`` with the
+        right MIME-derived extension, swaps the message row's
+        ``media_url`` to point at the full file (replacing the
+        preview), clears ``media_sync_status``, and pushes a
+        ``dm.media_ready`` WS frame to local participants so the SPA
+        can swap the bubble's preview ``<img src>`` for the full
+        media.
+        """
+        p = event.payload
+        blob_id = str(p.get("media_blob_id") or "")
+        message_id = str(p.get("message_id") or "")
+        bytes_b64 = p.get("bytes_b64")
+        if not blob_id or not message_id or not bytes_b64:
+            log.debug("DM_MEDIA_BLOB missing required field: %s", p)
+            return
+        if self._media_dir is None:
+            log.warning(
+                "DM_MEDIA_BLOB: media_dir not wired; dropping blob %s",
+                blob_id,
+            )
+            return
+        try:
+            data = base64.b64decode(bytes_b64)
+        except Exception as exc:  # pragma: no cover
+            log.warning(
+                "DM_MEDIA_BLOB: malformed bytes_b64 for %s: %s",
+                message_id,
+                exc,
+            )
+            return
+        mime_type = str(p.get("mime_type") or "application/octet-stream")
+        ext = _mime_to_ext(mime_type)
+        try:
+            self._media_dir.mkdir(parents=True, exist_ok=True)
+            dest = self._media_dir / f"{message_id}{ext}"
+            dest.write_bytes(data)
+        except OSError as exc:  # pragma: no cover
+            log.warning(
+                "DM_MEDIA_BLOB: write failed for %s: %s",
+                message_id,
+                exc,
+            )
+            return
+        # Drop the preview file if it's there — keeping it around
+        # wastes disk space (small) but more importantly an unused
+        # ``.preview.webp`` is a vector for stale-state bugs.
+        preview = self._media_dir / f"{message_id}.preview.webp"
+        try:
+            preview.unlink(missing_ok=True)
+        except OSError:  # pragma: no cover
+            pass
+        new_url = f"api/media/{dest.name}"
+        await self._conversation_repo.update_media_sync_status(
+            message_id=message_id,
+            status=None,
+            media_url=new_url,
+        )
+        # Push the WS frame so the SPA swaps the bubble's preview for
+        # the full media without waiting for a refetch. The realtime
+        # layer is responsible for fanning to the conversation's
+        # local members. Best-effort — if the realtime service isn't
+        # wired (test stack), the SPA picks up the new ``media_url``
+        # on next ``GET /messages``.
+        if self._realtime is not None:
+            broadcaster = getattr(self._realtime, "broadcast_dm_media_ready", None)
+            if broadcaster is not None:
+                try:
+                    await broadcaster(
+                        message_id=message_id,
+                        conversation_id=str(p.get("conversation_id") or ""),
+                        media_url=new_url,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    log.debug(
+                        "DM_MEDIA_BLOB: realtime broadcast failed: %s",
                         exc,
                     )
 

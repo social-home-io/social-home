@@ -44,7 +44,7 @@ bytes follow on a separate
 | Event | When | Carries |
 |---|---|---|
 | `DM_MESSAGE` (v_3-shape) | Always — same envelope as a text DM | `type` ∈ {`image`, `video`, `file`}, `media_url` (local-signed for same-household, embedded preview ref for cross-household), `file_name`, `mime_type`, `file_size_bytes`, `media_blob_id` |
-| `DM_MEDIA_BLOB` *(reserved, lands in follow-up)* | Cross-household only, fired by sender's outbox after a successful `DM_MESSAGE` | `media_blob_id` (matches the `DM_MESSAGE` it follows), `message_id`, `conversation_id`, encrypted full-bytes payload |
+| `DM_MEDIA_BLOB` | Cross-household only, fired by sender's outbox after a successful `DM_MESSAGE` | `media_blob_id` (matches the `DM_MESSAGE` it follows), `message_id`, `conversation_id`, `file_name`, `mime_type`, `file_size_bytes`, `bytes_b64` (the full-bytes payload, encrypted by the federation transport's envelope crypto). |
 
 ## Flow
 
@@ -66,7 +66,7 @@ sequenceDiagram
   Bob-->>Bob: bubble renders &lt;img&gt; / &lt;video&gt; / file pill inline
 ```
 
-### Cross-household DM with an attachment — preview-now, sync-later *(scheduler lands in follow-up PR)*
+### Cross-household DM with an attachment — preview-now, sync-later
 
 ```mermaid
 sequenceDiagram
@@ -148,8 +148,17 @@ URL and the modifier is removed.
 - `socialhome/federation/compat/` — version-aware payload
   transforms. New compat tree introduced in this feature; see the
   package docstring + `dm_media_v3.py` for the canonical shape.
-- `socialhome/domain/federation.py` — `DM_MEDIA_BLOB` enum entry
-  (reserved here, full pipeline lands in a follow-up PR).
+- `socialhome/domain/federation.py` — `DM_MEDIA_BLOB` enum entry.
+- `socialhome/services/dm_media_sync_service.py` — preview
+  builder, ``dm_media_outbox`` enqueue, and scheduler loop
+  (asyncio.Event lifecycle per CLAUDE.md template).
+- `socialhome/repositories/dm_media_outbox_repo.py` — outbox CRUD
+  with exp-backoff reschedule + retry-budget exhaustion.
+- `socialhome/services/federation_inbound_service.py` —
+  `_receive_media_preview` decodes the inline preview at
+  `DM_MESSAGE` time; `_on_dm_media_blob` writes the full bytes,
+  updates `media_url`, and fans `dm.media_ready` via the realtime
+  service.
 - `client/src/features/dms/DmThreadPage.tsx` — paperclip attach
   button, pre-send preview tile, bubble renderers.
 - `client/src/components/UploadProgress.tsx` — shared

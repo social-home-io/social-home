@@ -93,6 +93,13 @@ class AbstractConversationRepo(Protocol):
     ) -> list[str]: ...
     async def soft_delete_message(self, message_id: str) -> None: ...
     async def edit_message(self, message_id: str, new_content: str) -> None: ...
+    async def update_media_sync_status(
+        self,
+        *,
+        message_id: str,
+        status: str | None,
+        media_url: str | None = None,
+    ) -> None: ...
     async def count_unread(self, conversation_id: str, username: str) -> int: ...
 
     # Reactions -----------------------------------------------------------
@@ -541,6 +548,34 @@ class SqliteConversationRepo:
             "SET content=?, edited_at=datetime('now') WHERE id=?",
             (new_content, message_id),
         )
+
+    async def update_media_sync_status(
+        self,
+        *,
+        message_id: str,
+        status: str | None,
+        media_url: str | None = None,
+    ) -> None:
+        """Flip ``media_sync_status`` (and optionally ``media_url``).
+
+        Used by the receiver's ``DM_MEDIA_BLOB`` handler to swap the
+        preview for the full bytes (``media_url`` updated, status
+        cleared) and by ``DmMediaSyncService``'s retry-budget
+        exhaustion path on the sender side (``status='failed'``,
+        media_url stays pointing at the local full bytes).
+        """
+        if media_url is not None:
+            await self._db.enqueue(
+                "UPDATE conversation_messages "
+                "SET media_sync_status=?, media_url=? "
+                "WHERE id=?",
+                (status, media_url, message_id),
+            )
+        else:
+            await self._db.enqueue(
+                "UPDATE conversation_messages SET media_sync_status=? WHERE id=?",
+                (status, message_id),
+            )
 
     async def count_unread(
         self,

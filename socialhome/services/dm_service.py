@@ -39,6 +39,7 @@ from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
 
 if TYPE_CHECKING:
+    from .dm_media_sync_service import DmMediaSyncService  # noqa: F401
     from ..federation.federation_service import FederationService
     from ..repositories.dm_routing_repo import AbstractDmRoutingRepo
     from ..repositories.federation_repo import AbstractFederationRepo
@@ -89,6 +90,7 @@ class DmService:
         "_federation",
         "_federation_repo",
         "_dm_routing_repo",
+        "_media_sync",
         "_own_instance_id",
     )
 
@@ -101,6 +103,7 @@ class DmService:
         federation_service: "FederationService | None" = None,
         federation_repo: "AbstractFederationRepo | None" = None,
         dm_routing_repo: "AbstractDmRoutingRepo | None" = None,
+        media_sync: "DmMediaSyncService | None" = None,
         own_instance_id: str = "",
     ) -> None:
         self._convos = conversation_repo
@@ -109,6 +112,12 @@ class DmService:
         self._federation = federation_service
         self._federation_repo = federation_repo
         self._dm_routing_repo = dm_routing_repo
+        # Cross-household media sync (preview building + DM_MEDIA_BLOB
+        # outbox). Optional — when ``None``, media DMs work for same-
+        # household only; cross-household sends silently skip the
+        # full-bytes follow-up. The unit-test stack omits this to keep
+        # the in-memory fixture small.
+        self._media_sync = media_sync
         self._own_instance_id = own_instance_id
 
     def attach_federation(
@@ -495,12 +504,23 @@ class DmService:
             payload["file_name"] = file_name
             payload["mime_type"] = mime_type
             payload["file_size_bytes"] = file_size_bytes
-            # ``media_blob_id`` reservation — the matching
-            # ``DM_MEDIA_BLOB`` event ships the bytes in a follow-up
-            # PR. The receiver's v_3 handler will look this up to
-            # join the preview (in this payload, future-PR) with the
-            # full bytes (in the blob event).
+            # ``media_blob_id`` = message id. Same identifier on the
+            # ``DM_MESSAGE`` envelope and the follow-up
+            # ``DM_MEDIA_BLOB`` event so the receiver can correlate
+            # the preview with the eventual full bytes.
             payload["media_blob_id"] = msg.id
+            # Build the inline preview if the media-sync service is
+            # wired (images get a base64 WebP thumbnail; video / file
+            # return ``None`` and the receiver renders a placeholder
+            # until ``DM_MEDIA_BLOB`` arrives).
+            if self._media_sync is not None and media_url is not None:
+                preview_b64 = await self._media_sync.build_preview(
+                    media_url=media_url,
+                    kind=type,
+                    mime_type=mime_type,
+                )
+                if preview_b64 is not None:
+                    payload["preview_bytes_b64"] = preview_b64
         if seq is not None:
             payload["sender_seq"] = seq
         await self._fan_to_remote(
@@ -508,6 +528,35 @@ class DmService:
             event_type=FederationEventType.DM_MESSAGE,
             payload=payload,
         )
+        # Enqueue the dm_media_outbox rows AFTER the DM_MESSAGE
+        # envelope has been dispatched — the receiver needs to see
+        # the preview / metadata first so the bubble renders before
+        # the full bytes land. ``enqueue_for_message`` deduplicates
+        # by ``(blob_id, target_instance_id)`` so re-sends from the
+        # edit path don't double-up.
+        if is_media and self._media_sync is not None and media_url is not None:
+            remote_instance_ids: list[str] = []
+            try:
+                remote_members = await self._convos.list_remote_members(
+                    conversation_id,
+                )
+            except Exception:  # pragma: no cover
+                remote_members = []
+            seen: set[str] = set()
+            for rm in remote_members:
+                inst = getattr(rm, "instance_id", None)
+                if not inst or inst == self._own_instance_id or inst in seen:
+                    continue
+                seen.add(inst)
+                if not await self._peer_is_confirmed(inst):
+                    continue
+                remote_instance_ids.append(inst)
+            if remote_instance_ids:
+                await self._media_sync.enqueue_for_message(
+                    message_id=msg.id,
+                    media_url=media_url,
+                    target_instance_ids=remote_instance_ids,
+                )
         return msg
 
     async def edit_message(
