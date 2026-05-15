@@ -25,6 +25,75 @@ export function groupEventsByDay(
   return groups
 }
 
+/** Merge same-event rows that landed on multiple calendars.
+ *
+ *  The composer fans out a multi-attendee event as one ``POST`` per
+ *  picked calendar — so a "Family dinner" assigned to both Pascal and
+ *  Maria lands as **two separate rows** in the DB, with different
+ *  ``id`` and ``calendar_id`` but identical content. With both
+ *  calendars visible the agenda would otherwise render two near-
+ *  identical cards stacked.
+ *
+ *  Group key: ``(summary, start, end, created_by, description,
+ *  location, cover_url)``. The first six fields cover the "same event"
+ *  signal; ``description`` / ``location`` / ``cover_url`` are added so
+ *  two genuinely-different same-minute twins (two parallel
+ *  "tennis lessons" with different teachers) don't get merged.
+ *
+ *  Returned rows are clones of the primary row (the first one in the
+ *  group whose ``calendar_id`` is owned by ``created_by``, or just the
+ *  first row when no calendar matches). ``_grouped_calendar_ids`` /
+ *  ``_grouped_event_ids`` carry the underlying ids for the chip
+ *  render and click-routing.
+ */
+export function groupSharedEvents(
+  evts: CalendarEvent[],
+  calendars: { id: string; owner_username: string }[] = [],
+): CalendarEvent[] {
+  if (evts.length === 0) return evts
+  const calOwner = new Map<string, string>()
+  for (const c of calendars) calOwner.set(c.id, c.owner_username)
+  const groups = new Map<string, CalendarEvent[]>()
+  const order: string[] = []
+  for (const e of evts) {
+    const key = [
+      e.summary,
+      e.start,
+      e.end,
+      e.created_by,
+      e.description ?? '',
+      e.location ?? '',
+      e.cover_url ?? '',
+    ].join('\x1f')
+    const bucket = groups.get(key)
+    if (bucket) {
+      bucket.push(e)
+    } else {
+      groups.set(key, [e])
+      order.push(key)
+    }
+  }
+  const out: CalendarEvent[] = []
+  for (const key of order) {
+    const bucket = groups.get(key)!
+    if (bucket.length === 1) {
+      out.push(bucket[0])
+      continue
+    }
+    // Primary = the row whose calendar belongs to the creator. Falls
+    // back to the first row when no calendar matches (e.g. the
+    // creator's row was filtered out of the visible set).
+    const primary =
+      bucket.find(e => calOwner.get(e.calendar_id) === e.created_by) ?? bucket[0]
+    out.push({
+      ...primary,
+      _grouped_calendar_ids: bucket.map(e => e.calendar_id),
+      _grouped_event_ids: bucket.map(e => e.id),
+    })
+  }
+  return out
+}
+
 /** Friendly day-group label — "Today · Friday 8 May" / "Tomorrow ·
  *  Saturday 9 May" / "Mon 12 May" rather than the spreadsheet-y
  *  ``5/8/2026`` the toLocaleDateString default emits. ``dayKey`` is

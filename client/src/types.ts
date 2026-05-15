@@ -432,6 +432,17 @@ export interface CalendarEvent {
    *  Defaults to ``"UTC"`` server-side so a missing field still
    *  resolves consistently. */
   tz?: string
+  /** SPA-only group key, set by :func:`groupSharedEvents`. The composer
+   *  fans out a multi-attendee event as one ``POST`` per picked
+   *  calendar, which lands as N rows in the DB with the same
+   *  ``summary`` / ``start`` / ``end`` / ``created_by`` / ``description``
+   *  / ``location`` / ``cover_url``. The grouper merges them into a
+   *  single rendered row whose ``_grouped_calendar_ids`` lists every
+   *  underlying row's ``calendar_id`` and ``_grouped_event_ids`` lists
+   *  the matching DB ids — used to render multi-owner chips on the
+   *  agenda. Never reaches the wire. */
+  _grouped_calendar_ids?: string[]
+  _grouped_event_ids?: string[]
 }
 
 /** Per-event reminder configured by a user (Phase D). */
