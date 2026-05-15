@@ -4365,6 +4365,22 @@ body.sh-dm-thread-open .sh-messages {
   align-items: center;
 }
 .sh-message--mine .sh-message-meta { color: rgba(255,255,255,0.75); justify-content: flex-end; }
+/* Per-bubble send-failure glyph. Shows ⚠ in the sender's bubble
+   when the background ``POST`` failed — the optimistic bubble keeps
+   the content visible so the user can still see what didn't ship.
+   ``cursor: help`` because the hover text is the primary affordance
+   (a toast also fires for accessibility). */
+.sh-message-send-failed {
+  color: var(--sh-warning, #d97706);
+  font-size: 0.95rem;
+  cursor: help;
+  line-height: 1;
+}
+.sh-message--mine .sh-message-send-failed {
+  /* On the tinted ``mine`` bubble the warning needs a brighter tone
+     so it pops against the terracotta gradient. */
+  color: #ffd25a;
+}
 
 /* Same-author bubble grouping.
  *
