@@ -22,7 +22,7 @@ import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { events, rsvpCounts, myRsvpStatus, activeCalendarScope } from '@/store/calendar'
 import {
   advanceDate, calendarHue, dateRangeForMode, formatDayLabel,
-  formatRangeHeading, groupEventsByDay, resolveCalendarColor,
+  formatRangeHeading, groupEventsByDay, groupSharedEvents, resolveCalendarColor,
   type CalendarViewMode,
 } from '@/utils/calendar'
 import { t } from '@/i18n/i18n'
@@ -91,7 +91,10 @@ async function loadEvents() {
       api.get(`/api/calendars/${id}/events`, { start, end })
         .catch(() => [] as CalendarEvent[]) as Promise<CalendarEvent[]>,
     ))
-    events.value = responses.flat()
+    // Merge rows that the composer fanned out across multiple
+    // calendars — same event, different rows. See
+    // :func:`groupSharedEvents` for the group key and rationale.
+    events.value = groupSharedEvents(responses.flat(), calendars.value)
   } catch {
     events.value = []
   }
@@ -378,28 +381,35 @@ export default function CalendarPage() {
             )}
           </h3>
           {grouped[dayKey].map(e => {
-            // Owner byline — only meaningful when overlay is on; with
-            // a single calendar visible the bylines are all the same
-            // and just add noise. When overlay is on, also surfaces
-            // ownership in text so colour-blind family members can
-            // tell whose event is whose without relying on the
-            // edge colour alone.
-            let ownerByline: string | null = null
+            // Owner byline / chips. Single attendee → one "You" /
+            // "Bob" chip (the legacy shape). Multiple attendees (the
+            // composer fanned the event out across N calendars) →
+            // one chip per owner, so a household dinner reads as one
+            // row with "YOU · BOB" instead of two stacked rows. Only
+            // surfaced when the multi-calendar overlay is on; with
+            // a single calendar visible the byline is redundant.
+            const groupedCalIds = e._grouped_calendar_ids ?? [e.calendar_id]
+            const ownerChips: string[] = []
             if (visibleCalendarIds.value.size > 1) {
-              const cal = calendars.value.find(c => c.id === e.calendar_id)
-              if (cal) {
-                const me = currentUser.value?.username
+              const me = currentUser.value?.username
+              const seen = new Set<string>()
+              for (const calId of groupedCalIds) {
+                const cal = calendars.value.find(c => c.id === calId)
+                if (!cal) continue
+                if (seen.has(cal.owner_username)) continue
+                seen.add(cal.owner_username)
                 if (cal.owner_username === me) {
-                  ownerByline = 'You'
-                } else {
-                  ownerByline = cal.owner_username
-                  for (const u of householdUsers.value.values()) {
-                    if (u.username === cal.owner_username) {
-                      ownerByline = u.display_name || u.username
-                      break
-                    }
+                  ownerChips.push('You')
+                  continue
+                }
+                let name: string = cal.owner_username
+                for (const u of householdUsers.value.values()) {
+                  if (u.username === cal.owner_username) {
+                    name = u.display_name || u.username
+                    break
                   }
                 }
+                ownerChips.push(name)
               }
             }
             return (
@@ -419,9 +429,18 @@ export default function CalendarPage() {
                   />
                 )}
                 <strong>{e.summary}</strong>
-                {ownerByline && (
-                  <span class="sh-event-owner" aria-label={`On ${ownerByline}'s calendar`}>
-                    {ownerByline}
+                {ownerChips.length > 0 && (
+                  <span
+                    class="sh-event-owner-chips"
+                    aria-label={
+                      ownerChips.length === 1
+                        ? `On ${ownerChips[0]}'s calendar`
+                        : `Shared with ${ownerChips.join(', ')}`
+                    }
+                  >
+                    {ownerChips.map(name => (
+                      <span key={name} class="sh-event-owner">{name}</span>
+                    ))}
                   </span>
                 )}
                 <time>{new Date(e.start).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}</time>

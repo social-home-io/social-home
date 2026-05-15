@@ -5299,6 +5299,15 @@ body.sh-dm-thread-open .sh-messages {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Container for the per-owner chips on a shared event (an event the
+   composer fanned out to several household members' calendars). A
+   single-chip event looks the same as the legacy ``.sh-event-owner``
+   render; two or more chips line up horizontally with a 4 px gap. */
+.sh-event-header .sh-event-owner-chips {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
 .sh-event-detail {
   margin-top: var(--sh-space-sm);
   padding: var(--sh-space-sm) 0 0 var(--sh-space-sm);
