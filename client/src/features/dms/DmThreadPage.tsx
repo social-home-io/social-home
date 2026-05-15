@@ -23,7 +23,7 @@ import {
 import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
 import { hasCapability } from '@/store/instance'
-import { useTitle } from '@/store/pageTitle'
+import { useTitle, useTitleAvatar } from '@/store/pageTitle'
 import { normaliseTimestamp } from '@/utils/relativeTime'
 
 const messages = signal<Message[]>([])
@@ -65,6 +65,109 @@ const MAX_COMPOSER_HEIGHT_PX = 160
  *  two copies of the same message). Mirrors the busy state to the
  *  composer chrome so the user has a clear "it's on the way" cue. */
 const sending = signal(false)
+/** ``true`` when the composer textarea has at least one non-whitespace
+ *  character. Drives the mic⇄send slot swap: an empty composer shows
+ *  the round push-to-talk mic (when STT is available); typing morphs
+ *  it into the round Send button — same slot, mutually exclusive
+ *  actions, the chat-bar idiom every mainstream messenger uses. */
+const composerHasContent = signal(false)
+/** Same-author message-grouping window. Consecutive bubbles from one
+ *  sender within this many ms share one timestamp + ReadReceipt
+ *  footer and get flush vertical borders so the burst reads as one
+ *  speech turn instead of N independent rows. Five minutes is the
+ *  same window Apple Messages and Signal use. */
+const GROUP_GAP_MS = 5 * 60_000
+/** Flat list item rendered by the messages map. The chronological
+ *  list of messages is interleaved with ``day`` separators at
+ *  midnight boundaries, and each ``msg`` carries pre-computed
+ *  ``showHeader`` / ``showFooter`` flags so the JSX doesn't have to
+ *  look at its neighbours at render time. */
+type FlatItem =
+  | { kind: 'day'; label: string; key: string }
+  | { kind: 'msg'; m: Message; showHeader: boolean; showFooter: boolean }
+
+/** Human-friendly day label for a separator pill.
+ *
+ *  Today / Yesterday for the two most recent days; weekday name
+ *  (``Monday``) for the rest of the past week; ``Mon 14 May`` for
+ *  this year; ``14 May 2025`` for older. Resolves locale separators
+ *  via ``toLocaleDateString`` so the formatter matches the rest of
+ *  the SPA's relative-time vocabulary. */
+function dmDayLabel(t: number, now: number = Date.now()): string {
+  const todayKey = new Date(now).toDateString()
+  const yesterdayKey = new Date(now - 86_400_000).toDateString()
+  const tKey = new Date(t).toDateString()
+  if (tKey === todayKey) return 'Today'
+  if (tKey === yesterdayKey) return 'Yesterday'
+  const d = new Date(t)
+  if (now - t < 6 * 86_400_000) {
+    return d.toLocaleDateString(undefined, { weekday: 'long' })
+  }
+  const sameYear = d.getFullYear() === new Date(now).getFullYear()
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: sameYear ? undefined : 'numeric',
+  })
+}
+
+/** Build the chronological flat render list from a message array.
+ *
+ *  - Inserts a ``day`` separator before the first message of each
+ *    calendar day (viewer's local timezone).
+ *  - Sets ``showHeader`` on each ``msg`` item to ``true`` only when
+ *    it starts a new same-author cluster (different sender from the
+ *    previous, or > ``GROUP_GAP_MS`` apart, or first after a
+ *    ``call_event``).
+ *  - Back-patches the previous item's ``showFooter`` to ``false``
+ *    when the current message continues the cluster, so only the
+ *    *last* bubble in a burst carries the timestamp + receipt.
+ *
+ *  Call events always render in their own group — they stand alone
+ *  as system-style rows and never group with adjacent text. */
+function buildFlatItems(msgs: Message[]): FlatItem[] {
+  const items: FlatItem[] = []
+  let lastDayKey: string | null = null
+  let lastSender: string | null = null
+  let lastTs: number | null = null
+  for (const m of msgs) {
+    const t = Date.parse(normaliseTimestamp(m.created_at))
+    const dayKey = Number.isNaN(t) ? '?' : new Date(t).toDateString()
+    if (dayKey !== lastDayKey) {
+      const label = Number.isNaN(t) ? '' : dmDayLabel(t)
+      items.push({ kind: 'day', label, key: `day-${dayKey}` })
+      lastDayKey = dayKey
+      // Day change always starts a new cluster.
+      lastSender = null
+      lastTs = null
+    }
+    if (m.type === 'call_event') {
+      items.push({ kind: 'msg', m, showHeader: true, showFooter: true })
+      lastSender = null
+      lastTs = null
+      continue
+    }
+    const isContinuation =
+      m.sender_user_id === lastSender &&
+      lastTs !== null && !Number.isNaN(t) &&
+      (t - lastTs) < GROUP_GAP_MS
+    if (isContinuation && items.length > 0) {
+      // The previous message item (now the second-to-last after this
+      // push) loses its footer — only the LAST bubble in a cluster
+      // carries the timestamp + ReadReceipt.
+      const prev = items[items.length - 1]
+      if (prev.kind === 'msg') prev.showFooter = false
+    }
+    items.push({
+      kind: 'msg', m,
+      showHeader: !isContinuation,
+      showFooter: true,
+    })
+    lastSender = m.sender_user_id
+    lastTs = Number.isNaN(t) ? lastTs : t
+  }
+  return items
+}
 const readMessageIds = signal<Set<string>>(new Set())
 const deliveredMessageIds = signal<Set<string>>(new Set())
 const memberCount = signal<number>(0)
@@ -73,6 +176,11 @@ interface ThreadMember {
   user_id: string
   username: string
   display_name: string
+  /** Backend-signed avatar URL — comes pre-tagged with ``?exp=&sig=``
+   *  so the browser can load it via raw ``<img>`` without an
+   *  ``Authorization`` header. Null when the user has no profile
+   *  picture set; the Avatar component falls back to initials. */
+  picture_url: string | null
   is_self: boolean
   is_online: boolean
   is_idle: boolean
@@ -290,6 +398,7 @@ export default function DmThreadPage() {
     isLoadingOlder.value = false
     unreadAnchor.value = null
     newSinceScrollUp.value = 0
+    composerHasContent.value = false
     // Reset messages eagerly so the brief moment between the convId
     // change and the new fetch's ``then`` doesn't flash the previous
     // thread's content. Column-reverse means the empty list shows
@@ -583,6 +692,12 @@ export default function DmThreadPage() {
     const ta = e.currentTarget as HTMLTextAreaElement
     autoResize(ta)
     convertShortcodes(ta)
+    // Drive the mic⇄send slot swap. Strip whitespace so a textarea
+    // holding only spaces / newlines still reads as "empty" — the
+    // user shouldn't see the send button until they actually have
+    // something to send. ``trim`` is cheap relative to the keystroke
+    // cadence; no need to memo.
+    composerHasContent.value = ta.value.trim().length > 0
     // Slack-style ``:partial`` autocomplete — fires after the
     // close-colon substitution above so a fully-typed ``:heart:`` never
     // opens the dropdown (the glyph is already in place).
@@ -686,6 +801,8 @@ export default function DmThreadPage() {
 
     const draft = content
     form.reset()
+    // Composer is now empty — flip back to the mic slot.
+    composerHasContent.value = false
     // ``form.reset()`` clears the value but leaves the explicit
     // ``style.height`` from a previous autoResize call, so the
     // composer would stay tall after sending a multi-line draft.
@@ -725,6 +842,10 @@ export default function DmThreadPage() {
         ta.value = draft
         autoResize(ta)
         ta.focus()
+        // Draft is back in the textarea — slot stays as Send so the
+        // user can hit it again to retry without rebuilding their
+        // message from scratch.
+        composerHasContent.value = ta.value.trim().length > 0
       }
       replyTo.value = restoredReply
       showToast(
@@ -781,16 +902,23 @@ export default function DmThreadPage() {
   // crash. While the thread-member roster is still in flight we show
   // "Chats" as a placeholder so the topbar isn't briefly blank on
   // first entry.
-  const peerTitle = (() => {
-    const peers = threadMembers.value.filter(m => !m.is_self)
-    if (peers.length === 0) return 'Chats'
-    if (peers.length === 1) return peers[0].display_name
+  const peers = threadMembers.value.filter(m => !m.is_self)
+  const peerTitle =
+    peers.length === 0 ? 'Chats'
+    : peers.length === 1 ? peers[0].display_name
     // Group DM: join the peers with " · " — same shape the inbox
     // uses as the row-title fallback, so the topbar and the inbox
     // entry agree on what to call the conversation.
-    return peers.map(p => p.display_name).join(' · ')
-  })()
+    : peers.map(p => p.display_name).join(' · ')
   useTitle(peerTitle)
+  // Avatar next to the title — only on 1:1 DMs, where there's a
+  // single peer face to show. Group DMs would need a stacked tile
+  // that doesn't fit the TopBar's vertical rhythm; the joined
+  // display-name list already reads as a group label.
+  useTitleAvatar(peers.length === 1
+    ? { src: peers[0].picture_url, name: peers[0].display_name }
+    : null,
+  )
 
   if (loading.value) return <DmThreadSkeleton />
   const myUserId = currentUser.value?.user_id
@@ -895,8 +1023,8 @@ export default function DmThreadPage() {
 
   const status = statusLine(threadMembers.value)
   // Compact status modifier for the dot in the header: 'online' → green,
-  // 'idle' → amber, anything else → no dot.
-  const peers = threadMembers.value.filter(m => !m.is_self)
+  // 'idle' → amber, anything else → no dot. ``peers`` already in scope
+  // (computed earlier for the topbar title + avatar).
   const headerDot: 'online' | 'idle' | null = peers.length === 1
     ? (peers[0].is_online ? (peers[0].is_idle ? 'idle' : 'online') : null)
     : (peers.some(p => p.is_online) ? 'online' : null)
@@ -984,7 +1112,29 @@ export default function DmThreadPage() {
             <span class="sh-dm-jump-down__label">new</span>
           </button>
         )}
-        {messages.value.slice().reverse().map(m => {
+        {buildFlatItems(messages.value).slice().reverse().map((item) => {
+          if (item.kind === 'day') {
+            // Day-separator pill. In column-reverse this pill sits
+            // visually ABOVE the first message of that day because
+            // it was placed *before* the day's messages in the
+            // chronological list (and the reverse iteration flips
+            // that ordering for DOM, which column-reverse then
+            // flips again — landing the pill back on top of its
+            // day's messages visually). The key is stable across
+            // re-renders so the pill doesn't unmount/remount when
+            // new messages append to the same day.
+            return (
+              <div
+                key={item.key}
+                class="sh-day-header"
+                role="separator"
+                aria-label={`Messages from ${item.label}`}
+              >
+                {item.label}
+              </div>
+            )
+          }
+          const { m, showHeader, showFooter } = item
           // Render the "New messages" divider immediately above the
           // first-unread row visually. In column-reverse the
           // visually-above element is the one rendered AFTER the
@@ -1013,13 +1163,22 @@ export default function DmThreadPage() {
           const parent = m.reply_to_id
             ? messages.value.find(x => x.id === m.reply_to_id)
             : null
+          // ``showHeader`` / ``showFooter`` come from ``buildFlatItems``
+          // and drive same-author bubble grouping: only the first
+          // bubble in a cluster shows the sender name, only the last
+          // carries the timestamp + ReadReceipt. The middle bubbles
+          // get flush vertical borders via the grouping classes so
+          // the burst reads as one speech turn.
+          const groupClass =
+            (showHeader ? '' : ' sh-message--grouped-top')
+            + (showFooter ? '' : ' sh-message--grouped-bottom')
           return (
             <Fragment key={m.id}>
             <div
               data-msg-id={m.id}
-              class={`sh-message ${mine ? 'sh-message--mine' : ''} ${m.deleted ? 'sh-message--deleted' : ''}`}
+              class={`sh-message ${mine ? 'sh-message--mine' : ''} ${m.deleted ? 'sh-message--deleted' : ''}${groupClass}`}
             >
-              {!mine && <strong>{senderName(m.sender_user_id)}</strong>}
+              {!mine && showHeader && <strong>{senderName(m.sender_user_id)}</strong>}
               {m.reply_to_id && (
                 <button
                   type="button"
@@ -1040,20 +1199,22 @@ export default function DmThreadPage() {
               <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                 {m.deleted ? '(message deleted)' : m.content}
               </p>
-              <div class="sh-message-meta">
-                <time>{new Date(m.created_at).toLocaleTimeString([],
-                  { hour: '2-digit', minute: '2-digit' })}</time>
-                {mine && (
-                  <ReadReceipt
-                    sent={true}
-                    delivered={
-                      deliveredMessageIds.value.has(m.id) ||
-                      readMessageIds.value.has(m.id)
-                    }
-                    read={readMessageIds.value.has(m.id)}
-                  />
-                )}
-              </div>
+              {showFooter && (
+                <div class="sh-message-meta">
+                  <time>{new Date(m.created_at).toLocaleTimeString([],
+                    { hour: '2-digit', minute: '2-digit' })}</time>
+                  {mine && (
+                    <ReadReceipt
+                      sent={true}
+                      delivered={
+                        deliveredMessageIds.value.has(m.id) ||
+                        readMessageIds.value.has(m.id)
+                      }
+                      read={readMessageIds.value.has(m.id)}
+                    />
+                  )}
+                </div>
+              )}
               {!m.deleted && (
                 <button
                   type="button"
@@ -1103,22 +1264,64 @@ export default function DmThreadPage() {
         }
         onSubmit={handleSend}
       >
-        <textarea
-          ref={composerInputRef}
-          name="content"
-          placeholder={sending.value ? 'Sending…' : 'Type a message...'}
-          autocomplete="off"
-          rows={1}
-          // Lock the input while the POST is in flight so a fast
-          // typist can't keep adding to a message that's already
-          // being delivered.
-          disabled={sending.value}
-          onInput={handleInput}
-          onKeyDown={handleComposerKeyDown}
-          onBlur={() => closeEmojiAutocomplete()}
-        />
-        {hasCapability('stt') && (
+        {/* Textarea + inline emoji picker. The emoji button sits
+         *  inside the input pill on the right edge (WhatsApp / iMessage
+         *  idiom): a small ghost-icon that doesn't claim a separate
+         *  flex slot from the right-hand round button. Saves
+         *  horizontal space on phones and keeps the user's eye
+         *  anchored on the text they're typing. */}
+        <div class="sh-composer-input">
+          <textarea
+            ref={composerInputRef}
+            name="content"
+            placeholder={sending.value ? 'Sending…' : 'Type a message...'}
+            autocomplete="off"
+            rows={1}
+            // Lock the input while the POST is in flight so a fast
+            // typist can't keep adding to a message that's already
+            // being delivered.
+            disabled={sending.value}
+            onInput={handleInput}
+            onKeyDown={handleComposerKeyDown}
+            onBlur={() => closeEmojiAutocomplete()}
+          />
+          <EmojiPickButton
+            openKey="dm-composer"
+            onInsert={insertEmojiAtCursor}
+            ariaLabel="Insert emoji into message"
+            className="sh-composer-emoji-inline"
+          />
+        </div>
+        {/* Mic⇄Send slot. Mutually exclusive primary actions occupy
+         *  the same round button position to the right of the input:
+         *
+         *    • Empty composer + STT available → push-to-talk mic.
+         *    • Composer has content (or send is in flight)    → Send.
+         *    • Empty composer + no STT (e.g. standalone v1)   → Send
+         *      (disabled until the user types something — the slot
+         *      can't be empty without breaking the "thumb hits one
+         *      consistent target" muscle memory).
+         *
+         *  Matches WhatsApp / iMessage / Telegram. ``sending`` keeps
+         *  the slot on Send while the POST is in flight so the
+         *  spinner sits where the click happened. */}
+        {(composerHasContent.value || sending.value || !hasCapability('stt')) ? (
+          <Button
+            type="submit"
+            loading={sending.value}
+            disabled={!composerHasContent.value && !sending.value}
+            aria-label={sending.value ? 'Sending message' : 'Send message'}
+          >
+            {/* Compact paper-plane icon so the composer reads as a
+             * chat bar (most of the row goes to the text input)
+             * rather than a form with a wide CTA. Loading spinner
+             * replaces the glyph via the ``Button`` component's
+             * ``loading`` prop. */}
+            <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
+          </Button>
+        ) : (
           <SttButton
+            className="sh-composer-mic"
             onText={(t) => {
               const input = composerInputRef.current
               if (!input) return
@@ -1127,27 +1330,14 @@ export default function DmThreadPage() {
               input.value = cur + sep + t
               autoResize(input)
               // Nudge the typing indicator + any input listeners.
+              // ``handleInput`` reads the textarea and updates
+              // ``composerHasContent`` so the slot morphs to Send
+              // once the transcript arrives.
               input.dispatchEvent(new Event('input', { bubbles: true }))
               input.focus()
             }}
           />
         )}
-        <EmojiPickButton
-          openKey="dm-composer"
-          onInsert={insertEmojiAtCursor}
-          ariaLabel="Insert emoji into message"
-        />
-        <Button
-          type="submit"
-          loading={sending.value}
-          aria-label={sending.value ? 'Sending message' : 'Send message'}
-        >
-          {/* Compact paper-plane icon so the composer reads as a chat
-           *  bar (most of the row goes to the text input) rather than
-           *  a form with a wide CTA. Loading spinner replaces the
-           *  glyph via the ``Button`` component's ``loading`` prop. */}
-          <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
-        </Button>
       </form>
       {/* Module-singleton popover for the ``:foo`` autocomplete the
        *  textarea triggers via ``checkForEmojiTrigger``. Mounting it

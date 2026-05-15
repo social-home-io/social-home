@@ -145,6 +145,23 @@ a:focus:not(:focus-visible) { outline: none; }
   top: 0;
   z-index: var(--sh-z-dropdown);
 }
+/* Page heading wrap — avatar + title. Used by surfaces that surface
+ * a person-focused view (DM thread, profile, host-approval queue):
+ * the small avatar to the left of the title reinforces "this is
+ * person X's surface" without committing a whole row of vertical
+ * space. Falls back to the title-only render when no avatar is set
+ * via :func:`pageTitleAvatar`. */
+.sh-topbar-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  min-width: 0;
+}
+.sh-topbar-heading .sh-avatar {
+  /* Lock the avatar's intrinsic size so flex doesn't shrink it when
+   * a long title bumps against the SearchBar. */
+  flex: 0 0 auto;
+}
 /* Page title sits on the left of the bar; ``flex-grow`` on the
  * trailing search keeps it pushed against the title even when the
  * title is short. */
@@ -3610,9 +3627,24 @@ body.sh-dm-thread-open .sh-messages {
   align-items: flex-end;
   gap: var(--sh-space-xs);
 }
-.sh-thread > .sh-composer > textarea {
+/* Textarea pill with the inline emoji-picker on its right edge.
+ * Wrapping the textarea + emoji button in a relative-positioned
+ * container lets the emoji icon sit *inside* the input visually
+ * (no separate flex slot) — same chat-bar idiom as WhatsApp /
+ * iMessage. The pill collapses to one flex item so the round
+ * mic⇄send button is the only sibling. */
+.sh-thread > .sh-composer > .sh-composer-input {
+  position: relative;
   flex: 1;
   min-width: 0;
+  display: flex;
+}
+.sh-thread > .sh-composer > .sh-composer-input > textarea {
+  flex: 1;
+  min-width: 0;
+  /* Inline emoji button overlays the right edge of the input. Pad
+   * the textarea so the cursor never lives under the icon. */
+  padding: 8px 40px 8px 12px;
   /* User can't drag-resize — height is driven by ``autoResize`` in JS,
    * capped via ``max-height`` so a very long draft scrolls internally
    * instead of pushing the message list off-screen. */
@@ -3624,22 +3656,82 @@ body.sh-dm-thread-open .sh-messages {
    * which lines up with the round Send button next to it). */
   font: inherit;
   line-height: 1.4;
-  padding: 8px 12px;
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-md);
   background: var(--sh-bg-secondary);
   color: var(--sh-text);
 }
-.sh-thread > .sh-composer > textarea:focus {
+.sh-thread > .sh-composer > .sh-composer-input > textarea:focus {
   outline: none;
   border-color: var(--sh-primary);
 }
+/* Inline emoji-picker — pinned to the bottom-right of the textarea
+ * pill. ``EmojiPickButton`` renders a ``.sh-emoji-pick-wrap`` div
+ * around the button (so the popover can position relative to it),
+ * so we absolutely-position the wrap, not the button itself. The
+ * button keeps its default 32×32 styling. */
+.sh-thread > .sh-composer > .sh-composer-input
+  > .sh-emoji-pick-wrap {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+}
 .sh-thread > .sh-composer > .sh-btn {
-  /* Compact send pill — square-ish, big enough for a thumb tap but
-   * not eating up half the bar. */
-  padding: 8px 12px;
-  min-width: 0;
+  /* Round chat-bar primary — share the slot with the mic so the
+   * thumb hits one consistent target whether the user is dictating
+   * a fresh message or sending text. */
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  padding: 0;
   flex: 0 0 auto;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Mic in the mic⇄send slot — matches the Send button's round shape +
+ * primary colour so the slot looks consistent across the swap. The
+ * SttButton's recording-state classes still drive the colour shift
+ * during dictation, so we only set the resting (idle) shape here. */
+.sh-thread > .sh-composer > .sh-composer-mic {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sh-primary);
+  color: var(--sh-bg);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: var(--sh-shadow-xs);
+  transition: transform var(--sh-transition-fast), background var(--sh-transition-fast);
+}
+.sh-thread > .sh-composer > .sh-composer-mic:hover:not(:disabled),
+.sh-thread > .sh-composer > .sh-composer-mic:focus-visible {
+  background: color-mix(in srgb, var(--sh-primary) 85%, black);
+  outline: none;
+}
+.sh-thread > .sh-composer > .sh-composer-mic[aria-pressed="true"] {
+  /* Recording state — feedback when the user is holding the button.
+   * Subtle pulse so the cue is felt even at a glance. */
+  background: var(--sh-success);
+  animation: sh-mic-pulse 1.2s ease-in-out infinite;
+}
+@keyframes sh-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sh-success) 60%, transparent); }
+  50%      { box-shadow: 0 0 0 6px color-mix(in srgb, var(--sh-success) 0%, transparent); }
+}
+.sh-thread > .sh-composer > .sh-btn:disabled {
+  /* Empty-composer + no-STT fallback: render Send as a dimmed pill so
+   * the user has a static "this is where send lives" anchor without
+   * the round button looking active. */
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .sh-composer-send-icon {
   display: inline-block;
@@ -3951,6 +4043,54 @@ body.sh-dm-thread-open .sh-messages {
 }
 .sh-message--mine .sh-message-meta { color: rgba(255,255,255,0.75); justify-content: flex-end; }
 
+/* Same-author bubble grouping.
+ *
+ *   sh-message--grouped-top    → this bubble continues the cluster
+ *                                from above. Flatten the top corner
+ *                                on the tail side + tighten the
+ *                                spacing above so the cluster reads
+ *                                as one speech turn.
+ *   sh-message--grouped-bottom → this bubble's cluster continues
+ *                                below. Flatten the bottom corner
+ *                                on the tail side so it doesn't grow
+ *                                a stray tail mid-cluster.
+ *
+ * Incoming bubbles have their tail on the bottom-left; outgoing
+ * bubbles on the bottom-right. The flattening selectors mirror that.
+ *
+ * The middle bubble (both classes) ends up with crisp 6 px corners on
+ * the tail side and the normal 18 px curve on the off-tail side — the
+ * classic chat-app "speech burst" look.
+ */
+.sh-message--grouped-top {
+  /* Pull the bubble up so the cluster reads as one continuous run
+   * (~1 px overlap accounting for the parent ``.sh-messages`` gap). */
+  margin-top: calc(-1 * var(--sh-space-xs) + 2px);
+}
+.sh-message--grouped-top:not(.sh-message--mine) {
+  border-top-left-radius: 6px;
+}
+.sh-message--grouped-top.sh-message--mine {
+  border-top-right-radius: 6px;
+}
+.sh-message--grouped-bottom:not(.sh-message--mine) {
+  border-bottom-left-radius: 6px;
+}
+.sh-message--grouped-bottom.sh-message--mine {
+  border-bottom-right-radius: 6px;
+}
+/* The "sender name" row already lives only on bubbles that pass
+ * ``showHeader``, so the grouped-top class doesn't need to hide it
+ * — it's never rendered to begin with. We still drop the bubble's
+ * vertical padding a touch when there's no header so the cluster
+ * isn't visually fatter than necessary. */
+.sh-message--grouped-top {
+  padding-top: 6px;
+}
+.sh-message--grouped-bottom {
+  padding-bottom: 6px;
+}
+
 /* WhatsApp-style quoted reply — sits above the body inside the bubble.
  * Cream sidebar accent (terracotta on incoming, paper-tinted on
  * outgoing), one-line preview, full-bubble click target so tapping the
@@ -4030,8 +4170,36 @@ body.sh-dm-thread-open .sh-messages {
   border-color: var(--sh-primary);
 }
 .sh-message--mine .sh-message-reply-btn { right: auto; left: -28px; }
+/* Touch devices have no hover state, so the reply chip would be
+ * permanently invisible (``opacity: 0``) without this branch. Make
+ * it always discoverable at a calm 0.85 opacity, and bump the hit-
+ * box to 36×36 so it satisfies the mobile tap-target floor. */
 @media (hover: none) {
-  .sh-message-reply-btn { opacity: 0.6; }
+  .sh-message-reply-btn {
+    /* Always visible on phones (no hover, so the hover-reveal trick
+     * is dead). Calm 0.85 so it doesn't compete with the message
+     * content; full opacity on focus from the sibling rule above. */
+    opacity: 0.85;
+    /* Bump the chip to 36×36 so it satisfies the mobile tap-target
+     * floor; centre it vertically against the bubble's middle so
+     * single-line and multi-line bubbles both get the same anchor. */
+    width: 36px;
+    height: 36px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: var(--sh-font-size-base);
+    /* Land the chip fully OUTSIDE the bubble's edge — the 36 px hit-
+     * box needs ~40 px of clearance so a long bubble's text isn't
+     * overlapped by the button. The bubble's ``max-width: 80%`` plus
+     * ``align-self: flex-end`` (mine) / ``flex-start`` (peer) leaves
+     * at least 20% of the row blank on the off-tail side, which is
+     * where the chip lives. */
+    right: -40px;
+  }
+  .sh-message--mine .sh-message-reply-btn {
+    left: -40px;
+    right: auto;
+  }
 }
 
 /* Brief flash when scrollToMessage() lands — helps the reader find the
