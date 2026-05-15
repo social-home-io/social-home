@@ -1048,6 +1048,15 @@ class DmMessageCreated(DomainEvent):
     content: str = ""
     message_type: str = "text"
     media_url: str | None = None
+    #: v_3 media metadata. Populated for ``image`` / ``video`` /
+    #: ``file`` messages; ``None`` everywhere else. The realtime
+    #: layer surfaces these on the ``dm.message`` WS frame so the
+    #: optimistic-bubble reconcile keeps the filename + size on
+    #: the receiver's bubble (the bubble's render branches on
+    #: ``mime_type`` / ``file_name``).
+    file_name: str | None = None
+    mime_type: str | None = None
+    file_size_bytes: int | None = None
     reply_to_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 

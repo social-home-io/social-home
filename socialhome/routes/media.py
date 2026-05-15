@@ -5,12 +5,17 @@ from __future__ import annotations
 import logging
 import mimetypes
 import pathlib
+import uuid
 
 from aiohttp import web
 from aiohttp.multipart import BodyPartReader
 
 from ..app_keys import config_key, media_signer_key, storage_quota_service_key
-from ..domain.media_constraints import VIDEO_MAX_UPLOAD_BYTES
+from ..domain.media_constraints import (
+    FILE_DENIED_EXTENSIONS,
+    FILE_MAX_UPLOAD_BYTES,
+    VIDEO_MAX_UPLOAD_BYTES,
+)
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
 from ..security import error_response
@@ -21,6 +26,46 @@ log = logging.getLogger(__name__)
 # Max raw upload size checked *before* processing (separate from the
 # video processor's own max_input_bytes which gates the video path).
 _DEFAULT_MAX_UPLOAD_BYTES = VIDEO_MAX_UPLOAD_BYTES
+
+#: Loose detector for the "this is an image" path. Routes the upload
+#: through :class:`ImageProcessor` (which then runs its own strict
+#: magic-byte + Pillow check). Outside this set the upload either
+#: takes the video path or — once the spec opened ``type='file'`` —
+#: the passthrough path.
+_IMAGE_HINT_MIMES: frozenset[str] = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "image/heic",
+    },
+)
+_IMAGE_HINT_EXTS: frozenset[str] = frozenset(
+    {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"},
+)
+_VIDEO_HINT_MIMES: frozenset[str] = frozenset(
+    {"video/mp4", "video/webm", "video/quicktime"},
+)
+_VIDEO_HINT_EXTS: frozenset[str] = frozenset({".mp4", ".webm", ".mov"})
+
+
+def _sanitise_file_ext(filename: str) -> str:
+    """Pick a safe extension from ``filename`` for the stored name.
+
+    Returns a lowercase ``".ext"`` (with the leading dot) or an
+    empty string when the source carried no recognisable extension.
+    Only ``a-z 0-9`` characters in the extension; up to 8 chars
+    long. ``filename`` is the un-trusted upload field — never used
+    on disk verbatim.
+    """
+    suffix = pathlib.Path(filename).suffix.lower()
+    if not suffix or len(suffix) > 9:  # incl. leading dot
+        return ""
+    cleaned = "".join(c for c in suffix[1:] if c.isalnum())
+    if not cleaned:
+        return ""
+    return f".{cleaned[:8]}"
 
 
 class MediaServeView(BaseView):
@@ -118,12 +163,10 @@ class MediaUploadView(BaseView):
         if quota is not None and total > 0:
             await quota.check_can_store(total)
         content_type = field.headers.get("Content-Type", "")
+        lower_ext = pathlib.Path(filename).suffix.lower()
 
-        is_video = content_type in (
-            "video/mp4",
-            "video/webm",
-            "video/quicktime",
-        ) or filename.lower().endswith((".mp4", ".webm", ".mov"))
+        is_video = content_type in _VIDEO_HINT_MIMES or lower_ext in _VIDEO_HINT_EXTS
+        is_image = content_type in _IMAGE_HINT_MIMES or lower_ext in _IMAGE_HINT_EXTS
 
         try:
             out_bytes: bytes
@@ -131,9 +174,30 @@ class MediaUploadView(BaseView):
             if is_video:
                 v_proc = VideoProcessor()
                 out_bytes, out_name = await v_proc.process(data, filename)
-            else:
+            elif is_image:
                 processor = ImageProcessor()
                 out_bytes, out_name = await processor.process(data, filename)
+            else:
+                # Generic file passthrough — DMs accept ``type='file'``
+                # for PDFs / docs / archives that don't transcode to a
+                # smaller form. ``ImageProcessor`` / ``VideoProcessor``
+                # would 422 on these; instead we apply a separate
+                # (smaller) size cap, deny the obvious executable
+                # extensions, and write the bytes as-is.
+                if total > FILE_MAX_UPLOAD_BYTES:
+                    return error_response(
+                        413,
+                        "PAYLOAD_TOO_LARGE",
+                        f"File exceeds the {FILE_MAX_UPLOAD_BYTES // (1024 * 1024)} MiB cap.",
+                    )
+                if lower_ext in FILE_DENIED_EXTENSIONS:
+                    return error_response(
+                        422,
+                        "UNPROCESSABLE",
+                        f"File type {lower_ext!r} isn't allowed.",
+                    )
+                out_name = f"{uuid.uuid4().hex}{_sanitise_file_ext(filename)}"
+                out_bytes = data
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
         except RuntimeError as exc:

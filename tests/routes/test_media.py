@@ -74,6 +74,109 @@ async def test_get_without_any_auth_401(client, media_file):
     assert r.status == 401
 
 
+async def _upload_file(
+    client,
+    *,
+    filename: str,
+    body: bytes,
+    content_type: str = "application/octet-stream",
+):
+    """Issue a multipart POST to ``/api/media/upload``.
+
+    Tiny stdlib-shaped multipart so the upload tests don't pull in
+    extra deps. Returns the raw aiohttp response.
+    """
+    boundary = "----test-boundary"
+    parts = [
+        f"--{boundary}".encode(),
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode(),
+        f"Content-Type: {content_type}".encode(),
+        b"",
+        body,
+        f"--{boundary}--".encode(),
+        b"",
+    ]
+    payload = b"\r\n".join(parts)
+    return await client.post(
+        "/api/media/upload",
+        data=payload,
+        headers={
+            **_auth(client._tok),
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+
+
+async def test_upload_file_passthrough_pdf(client):
+    """A PDF takes the file-passthrough branch and lands under media."""
+    pdf_bytes = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n" + b"x" * 200
+    r = await _upload_file(
+        client,
+        filename="invoice.pdf",
+        body=pdf_bytes,
+        content_type="application/pdf",
+    )
+    assert r.status == 201
+    body = await r.json()
+    # ``url`` shape is ``api/media/<hex>.pdf`` — verify extension
+    # preservation + sanitised hex filename.
+    assert body["url"].startswith("api/media/")
+    assert body["filename"].endswith(".pdf")
+    # The bytes round-trip verbatim — no transcoding for files.
+    cfg = client.app[config_key]
+    stored = pathlib.Path(cfg.media_path) / body["filename"]
+    assert stored.read_bytes() == pdf_bytes
+
+
+async def test_upload_file_rejects_executable_ext(client):
+    """``.exe`` (and other native-execute extensions) get a 422."""
+    r = await _upload_file(
+        client,
+        filename="malware.exe",
+        body=b"MZ\x90" + b"\x00" * 50,
+        content_type="application/x-msdownload",
+    )
+    assert r.status == 422
+
+
+async def test_upload_file_rejects_too_large(client):
+    """Bytes above ``FILE_MAX_UPLOAD_BYTES`` return 413."""
+    from socialhome.domain.media_constraints import FILE_MAX_UPLOAD_BYTES
+
+    too_big = b"x" * (FILE_MAX_UPLOAD_BYTES + 1)
+    r = await _upload_file(
+        client,
+        filename="huge.bin",
+        body=too_big,
+        content_type="application/octet-stream",
+    )
+    assert r.status == 413
+
+
+async def test_upload_image_still_transcodes(client):
+    """Sanity: the image path still runs through ImageProcessor.
+
+    A real WebP from Pillow round-trips to a UUID ``.webp`` name
+    so the image branch isn't accidentally diverted to the file
+    passthrough.
+    """
+    import io
+    from PIL import Image
+
+    img = Image.new("RGB", (16, 16), color=(80, 200, 120))
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=82)
+    r = await _upload_file(
+        client,
+        filename="hello.webp",
+        body=buf.getvalue(),
+        content_type="image/webp",
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body["filename"].endswith(".webp")
+
+
 async def test_signed_url_for_user_picture(client):
     """Same scheme works against ``/api/users/{id}/picture`` —
     avatars rely on it. We don't need a real picture row; the

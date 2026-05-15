@@ -469,6 +469,9 @@ class DmService:
                 content=content,
                 message_type=type,
                 media_url=media_url,
+                file_name=file_name,
+                mime_type=mime_type,
+                file_size_bytes=file_size_bytes,
                 reply_to_id=reply_to_id,
                 occurred_at=msg.created_at,
             )

@@ -1561,6 +1561,13 @@ class RealtimeService:
                 "content": event.content,
                 "type": event.message_type,
                 "media_url": signed_media_url,
+                # v_3 media metadata. Mirror the REST GET shape so
+                # the SPA's optimistic-bubble reconcile keeps the
+                # filename + size on the receiver's bubble — the
+                # file-pill render branches on these fields.
+                "file_name": event.file_name,
+                "mime_type": event.mime_type,
+                "file_size_bytes": event.file_size_bytes,
                 "reply_to_id": event.reply_to_id,
                 "deleted": False,
                 "created_at": event.occurred_at.isoformat(),
