@@ -3633,13 +3633,13 @@ body.sh-dm-thread-open .sh-messages {
  * (no separate flex slot) — same chat-bar idiom as WhatsApp /
  * iMessage. The pill collapses to one flex item so the round
  * mic⇄send button is the only sibling. */
-.sh-thread > .sh-composer > .sh-composer-input {
+.sh-thread > .sh-composer > .sh-dm-input-wrap {
   position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
 }
-.sh-thread > .sh-composer > .sh-composer-input > textarea {
+.sh-thread > .sh-composer > .sh-dm-input-wrap > textarea {
   flex: 1;
   min-width: 0;
   /* Inline emoji button overlays the right edge of the input. Pad
@@ -3649,8 +3649,33 @@ body.sh-dm-thread-open .sh-messages {
    * capped via ``max-height`` so a very long draft scrolls internally
    * instead of pushing the message list off-screen. */
   resize: none;
-  overflow-y: auto;
+  /* Start with ``overflow-y: hidden`` so the scrollbar gutter
+   * (~17 px on Linux Chrome classic scrollbars) doesn't eat into
+   * the text width at rest. ``autoResize`` (in JS) flips to
+   * ``auto`` once the composer hits ``max-height`` and the user
+   * actually needs to scroll within the input. */
+  overflow-y: hidden;
   max-height: 160px;
+  /* Override the global ``textarea { min-height: 80px }`` rule — that
+   * baseline is for paragraph-style composers (post body, page
+   * editor, etc.) where the user expects a multi-line writing area.
+   * The chat bar is single-line by default and grows as the user
+   * adds rows, matching WhatsApp / iMessage / Signal. The explicit
+   * ``height: 38px`` is the resting one-line height (line-height
+   * 22.05 + 16 px vertical padding) — ``autoResize`` (in JS) takes
+   * over once the user types and pushes it up to ``max-height``.
+   * Without this override the flex algorithm + the legacy
+   * ``min-height: 80px`` baseline ganged up to give the composer a
+   * three-line resting pose. */
+  min-height: 36px;
+  /* 40 px = ``line-height`` (~22) + 16 px vertical padding + 2 px
+   * border. The extra 2 px over the pure content height keeps
+   * ``scrollHeight`` (which excludes border under ``box-sizing:
+   * border-box``) equal to ``clientHeight`` at rest, so the
+   * one-line composer doesn't trigger ``overflow-y: auto``'s
+   * scrollbar. ``autoResize`` (in JS) takes over once the user
+   * types and pushes the height up to ``max-height``. */
+  height: 40px;
   /* Tight chat-bar look — matches the original ``<input>`` baseline
    * (1.4 line-height puts a single line at ~36 px including padding,
    * which lines up with the round Send button next to it). */
@@ -3661,7 +3686,7 @@ body.sh-dm-thread-open .sh-messages {
   background: var(--sh-bg-secondary);
   color: var(--sh-text);
 }
-.sh-thread > .sh-composer > .sh-composer-input > textarea:focus {
+.sh-thread > .sh-composer > .sh-dm-input-wrap > textarea:focus {
   outline: none;
   border-color: var(--sh-primary);
 }
@@ -3670,7 +3695,7 @@ body.sh-dm-thread-open .sh-messages {
  * around the button (so the popover can position relative to it),
  * so we absolutely-position the wrap, not the button itself. The
  * button keeps its default 32×32 styling. */
-.sh-thread > .sh-composer > .sh-composer-input
+.sh-thread > .sh-composer > .sh-dm-input-wrap
   > .sh-emoji-pick-wrap {
   position: absolute;
   right: 4px;

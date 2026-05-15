@@ -627,7 +627,28 @@ export default function DmThreadPage() {
    *  first lets it shrink when the user deletes lines. */
   const autoResize = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_HEIGHT_PX)}px`
+    // Under ``box-sizing: border-box`` the textarea's ``height``
+    // includes its 2 px top + bottom border, but ``scrollHeight``
+    // does not. Setting ``height = scrollHeight`` therefore leaves
+    // the content area 2 px short of the natural row size and
+    // triggers ``overflow-y: auto``'s scrollbar at every rest
+    // point. Add the border delta so a 1-row composer stays
+    // scrollbar-free; the cap still applies past the limit.
+    const borderDelta = el.offsetHeight - el.clientHeight
+    const target = Math.min(
+      el.scrollHeight + borderDelta,
+      MAX_COMPOSER_HEIGHT_PX,
+    )
+    el.style.height = `${target}px`
+    // Toggle the vertical scrollbar: visible only when the user has
+    // typed past the height cap. On Linux Chrome (classic
+    // scrollbars) ``overflow-y: auto`` always reserves a 17 px
+    // gutter on the right, eating into the input width and making
+    // tiny step arrows show at rest. Flipping to ``hidden`` below
+    // the cap reclaims that gutter for the text; only the rare
+    // "drafting a screenplay in the chat bar" case still gets a
+    // scrollbar.
+    el.style.overflowY = target >= MAX_COMPOSER_HEIGHT_PX ? 'auto' : 'hidden'
   }
 
   /** Replace ``ta.value[start:end]`` with ``emoji`` and place the caret
@@ -1270,7 +1291,7 @@ export default function DmThreadPage() {
          *  flex slot from the right-hand round button. Saves
          *  horizontal space on phones and keeps the user's eye
          *  anchored on the text they're typing. */}
-        <div class="sh-composer-input">
+        <div class="sh-dm-input-wrap">
           <textarea
             ref={composerInputRef}
             name="content"
