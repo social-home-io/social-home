@@ -320,6 +320,38 @@ async def test_send_media_on_unconfirmed_peer_rejects(stack):
         )
 
 
+async def test_send_media_file_type_skips_preview(stack):
+    """``type='file'`` triggers the enqueue but ``build_preview``
+    returns ``None`` (files don't get inline previews), so the
+    outbound payload omits ``preview_bytes_b64``."""
+    await stack.provision("anna")
+    bob = await _seed_remote_user(stack, instance_id="peer-b", username="bob")
+    fed = _FakeFederationService()
+    repo = _FakeFederationRepo({"peer-b": _confirmed_peer("peer-b")})
+    media_sync = _FakeMediaSync()
+    media_sync.preview_value = None  # files → no preview
+    stack.dm_svc._media_sync = media_sync  # type: ignore[attr-defined]
+    stack.dm_svc.attach_federation(fed, repo, own_instance_id=stack.own_instance_id)
+    dm = await stack.dm_svc.create_dm(
+        creator_username="anna",
+        other_user_id=bob.user_id,
+    )
+    await stack.dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="file",
+        media_url="api/media/doc.pdf",
+        file_name="invoice.pdf",
+        mime_type="application/pdf",
+    )
+    sent = [s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE]
+    payload = sent[0]["payload"]
+    assert payload["type"] == "file"
+    # File branch: no preview field embedded.
+    assert "preview_bytes_b64" not in payload
+
+
 async def test_send_media_empty_caption_allowed(stack):
     """``type='image'`` with no caption is a valid send."""
     await stack.provision("anna")

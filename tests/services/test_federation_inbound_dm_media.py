@@ -75,6 +75,104 @@ async def inbound_with_media(db, bus, tmp_path):
     return svc, media_dir, db
 
 
+# ── _receive_media_preview branches ───────────────────────────────────
+
+
+async def test_receive_media_preview_non_media_passes_through(inbound_with_media):
+    """Text / transcript / location messages flow through unchanged."""
+    svc, _media_dir, _db = inbound_with_media
+    url, status = svc._receive_media_preview(
+        payload={"media_url": "https://elsewhere/foo.jpg"},
+        message_id="m-1",
+        msg_type="text",
+    )
+    assert url == "https://elsewhere/foo.jpg"
+    assert status is None
+
+
+async def test_receive_media_preview_pre_arrived_full_file(inbound_with_media):
+    """If the blob landed before the message, the full file is
+    adopted directly — no preview write, no pending state."""
+    svc, media_dir, _db = inbound_with_media
+    full = media_dir / "m-2.webp"
+    full.write_bytes(_WEBP_HEADER)
+    url, status = svc._receive_media_preview(
+        payload={
+            "media_blob_id": "m-2",
+            "mime_type": "image/webp",
+            # preview shouldn't be touched because full file exists
+            "preview_bytes_b64": "ignored",
+        },
+        message_id="m-2",
+        msg_type="image",
+    )
+    assert url == "api/media/m-2.webp"
+    assert status is None
+    # Preview file was dropped (if it existed from a stale attempt).
+    assert not (media_dir / "m-2.preview.webp").exists()
+
+
+async def test_receive_media_preview_writes_preview(inbound_with_media):
+    """A normal v_3 media DM with embedded preview lands as a
+    ``<msg_id>.preview.webp`` and the row stays ``pending``."""
+    svc, media_dir, _db = inbound_with_media
+    url, status = svc._receive_media_preview(
+        payload={
+            "media_blob_id": "m-3",
+            "mime_type": "image/webp",
+            "preview_bytes_b64": base64.b64encode(_WEBP_HEADER).decode(),
+        },
+        message_id="m-3",
+        msg_type="image",
+    )
+    assert url == "api/media/m-3.preview.webp"
+    assert status == "pending"
+    assert (media_dir / "m-3.preview.webp").is_file()
+
+
+async def test_receive_media_preview_without_preview_field(inbound_with_media):
+    """v_3 media without an inline preview (video / file before
+    poster-extraction landed, or a sender that built none) sets
+    pending state and ``media_url=None`` — the SPA shows a
+    placeholder glyph until the blob arrives."""
+    svc, _media_dir, _db = inbound_with_media
+    url, status = svc._receive_media_preview(
+        payload={
+            "media_blob_id": "m-4",
+            "mime_type": "video/webm",
+        },
+        message_id="m-4",
+        msg_type="video",
+    )
+    assert url is None
+    assert status == "pending"
+
+
+async def test_receive_media_preview_no_media_dir_returns_pending(db, bus):
+    """Service without ``media_dir`` can't write the preview — it
+    returns ``pending`` with no URL so the SPA still shows the
+    placeholder."""
+    svc = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        media_dir=None,
+    )
+    url, status = svc._receive_media_preview(
+        payload={
+            "media_blob_id": "m-5",
+            "mime_type": "image/webp",
+            "preview_bytes_b64": "x",
+        },
+        message_id="m-5",
+        msg_type="image",
+    )
+    assert url is None
+    assert status == "pending"
+
+
 # ── Single-chunk (back-compat) blob ────────────────────────────────────
 
 
