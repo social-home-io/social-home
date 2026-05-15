@@ -1459,17 +1459,28 @@ def cmd_verify() -> None:
                             "c: media DM a→c has no media_url after blob land",
                         )
                     else:
-                        # Try to actually GET the full bytes from the
-                        # signed media URL on Carol's instance — that
-                        # confirms the file landed under media_dir
-                        # and the signing chain works for the
-                        # receiver-side path.
+                        # HEAD the signed media URL on Carol's
+                        # instance — confirms the file landed under
+                        # ``media_dir`` and the signing chain works
+                        # for the receiver-side read. ``_request``
+                        # assumes JSON, so we hit urllib directly
+                        # with a HEAD verb that doesn't return a
+                        # body to decode.
                         full_url = media_url
                         if not full_url.startswith("http"):
                             full_url = (
                                 f"http://127.0.0.1:{c['port']}/{full_url.lstrip('/')}"
                             )
-                        ms, _ = _request(full_url, token=c["token"])
+                        head_req = urllib.request.Request(
+                            full_url,
+                            method="HEAD",
+                            headers={"Authorization": f"Bearer {c['token']}"},
+                        )
+                        try:
+                            with urllib.request.urlopen(head_req, timeout=10) as r:
+                                ms = r.status
+                        except urllib.error.HTTPError as exc:
+                            ms = exc.code
                         if ms not in (200, 304):
                             failures.append(
                                 f"c: media DM a→c file fetch HTTP {ms} ({media_url})",

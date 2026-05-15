@@ -44,7 +44,7 @@ bytes follow on a separate
 | Event | When | Carries |
 |---|---|---|
 | `DM_MESSAGE` (v_3-shape) | Always — same envelope as a text DM | `type` ∈ {`image`, `video`, `file`}, `media_url` (local-signed for same-household, embedded preview ref for cross-household), `file_name`, `mime_type`, `file_size_bytes`, `media_blob_id` |
-| `DM_MEDIA_BLOB` | Cross-household only, fired by sender's outbox after a successful `DM_MESSAGE` | `media_blob_id` (matches the `DM_MESSAGE` it follows), `message_id`, `conversation_id`, `file_name`, `mime_type`, `file_size_bytes`, `bytes_b64` (the full-bytes payload, encrypted by the federation transport's envelope crypto). |
+| `DM_MEDIA_BLOB` | Cross-household only, fired by sender's outbox after a successful `DM_MESSAGE`. May ship as one or N sequenced events — see chunking below. | `media_blob_id` (matches the `DM_MESSAGE` it follows), `message_id`, `conversation_id`, `file_name`, `mime_type`, `file_size_bytes`, `bytes_b64` (the chunk's bytes, base64), `chunk_index` (0-based), `chunk_count` (total), `final` (last chunk flag). Single-chunk legacy payloads (`chunk_count=1`) and missing-field back-compat both supported on the receiver. |
 
 ## Flow
 
@@ -80,8 +80,8 @@ sequenceDiagram
   Alice->>Bob: DM_MESSAGE (v_3, encrypted)<br/>{ media_blob_id, file_name, mime_type, preview_bytes_b64 }
   Bob-->>Bob: Save preview to local cache;<br/>bubble renders immediately with media_sync_status='pending'
   Note over Alice,Bob: ─── background ───
-  Alice->>Bob: DM_MEDIA_BLOB (encrypted, may be chunked)
-  Bob-->>Bob: Decrypt + store full bytes;<br/>update conversation_messages.media_url +<br/>media_sync_status=NULL
+  Alice->>Bob: DM_MEDIA_BLOB chunks (1..N, base64; final flag on last)
+  Bob-->>Bob: Each chunk → part file under media_dir;<br/>on final, concat in order + rename to <msg_id>.<ext>;<br/>update conversation_messages.media_url +<br/>media_sync_status=NULL
   Bob-->>Bob: WS push dm.media_ready → SPA<br/>swaps preview src for full media
 ```
 
@@ -99,6 +99,41 @@ sequenceDiagram
   Alice->>Bob: DM_MESSAGE (v_2-shape)
   Bob-->>Bob: regular text bubble renders normally
 ```
+
+## Chunking
+
+The federation transport (HTTPS inbox / RTC DataChannel) has a
+soft ~1 MiB per-event ceiling on the serialised JSON. A 200 MiB
+video would exceed that as a single base64-encoded payload, so
+``DM_MEDIA_BLOB`` is split:
+
+- Files **≤ `SINGLE_CHUNK_BYTES_THRESHOLD` (1 MiB raw)** ship as
+  one event with `chunk_count=1` and `final=true`. Typical phone
+  photos and short clips take this fast path — no chunking
+  overhead.
+- **Larger files** split into `ceil(size / MAX_BLOB_CHUNK_BYTES)`
+  chunks, where each chunk carries up to 256 KiB raw (≈ 360 KB
+  after base64 inflation, well under the per-event budget). Each
+  chunk carries its `chunk_index`, the shared `chunk_count`, and a
+  `final` flag set only on the last.
+
+**Receiver side**: each chunk writes to `<msg_id>.part<idx>` under
+the media root. When `final=true` arrives, the receiver
+concatenates parts 0…N−1 in order into a temp file, atomically
+renames it to `<msg_id>.<ext>`, deletes the parts, then swaps
+`media_url` and broadcasts `dm.media_ready` as in the single-chunk
+case. A re-send from a sender restart overwrites the same part
+files idempotently; a missing chunk at finalisation time logs +
+bails (the outbox retry will resend it).
+
+**Backwards compatibility**: payloads without the `chunk_*` /
+`final` fields (older builds, or any caller that doesn't emit
+them) read as a single-chunk transfer — the fast path takes over.
+
+Single envelope is the only path active for files smaller than 1
+MiB; chunks above that. Chunked encryption is the same as the
+non-chunked case — every envelope rides through the federation
+transport's encryption layer.
 
 ## Server-side validation
 

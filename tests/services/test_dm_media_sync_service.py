@@ -395,3 +395,81 @@ async def test_flush_once_reschedules_on_failure(stack):
     assert all_rows[0].attempts == 1
     assert all_rows[0].status == "pending"
     assert all_rows[0].last_error is not None
+
+
+async def test_flush_once_chunks_large_files(stack):
+    """A file above ``SINGLE_CHUNK_BYTES_THRESHOLD`` ships as N chunks.
+
+    Every chunk lands as its own ``DM_MEDIA_BLOB`` envelope with a
+    monotonic ``chunk_index`` and the same ``chunk_count``. Only
+    the last chunk carries ``final=true``.
+    """
+    from socialhome.services.dm_media_sync_service import (
+        MAX_BLOB_CHUNK_BYTES,
+        SINGLE_CHUNK_BYTES_THRESHOLD,
+    )
+
+    # Write a file just over the single-chunk threshold so the
+    # split lands at 5 chunks (4 full + 1 short).
+    target_size = SINGLE_CHUNK_BYTES_THRESHOLD + 4 * MAX_BLOB_CHUNK_BYTES
+    big = stack["media_dir"] / "big.bin"
+    big.write_bytes(b"x" * target_size)
+    # Seed a matching message row so flush_once can read metadata.
+    stack["convos"].msgs["m-big"] = ConversationMessage(
+        id="m-big",
+        conversation_id="c1",
+        sender_user_id="u-alice",
+        content="",
+        type="file",
+        media_url="api/media/big.bin",
+        file_name="big.bin",
+        mime_type="application/octet-stream",
+        file_size_bytes=target_size,
+        media_blob_id="m-big",
+        created_at=datetime.now(timezone.utc),
+    )
+    await stack["svc"].enqueue_for_message(
+        message_id="m-big",
+        media_url="api/media/big.bin",
+        target_instance_ids=["inst-bob"],
+    )
+    shipped = await stack["svc"].flush_once()
+    assert shipped == 1
+
+    sent = stack["fed"].sent
+    assert len(sent) >= 2, "large file must split into multiple chunks"
+    # Every send went to the same peer and shared the same
+    # blob_id + chunk_count.
+    chunk_count_seen = {s["payload"]["chunk_count"] for s in sent}
+    assert chunk_count_seen == {len(sent)}, (
+        f"chunk_count mismatch: {chunk_count_seen} vs N={len(sent)}"
+    )
+    indices = [s["payload"]["chunk_index"] for s in sent]
+    assert indices == list(range(len(sent))), "chunks must dispatch in order"
+    # Only the last chunk is ``final=true``.
+    assert all(s["payload"]["final"] is False for s in sent[:-1])
+    assert sent[-1]["payload"]["final"] is True
+    # And the row was deleted after the full batch landed.
+    rows = await stack["outbox"].list_for_message("m-big")
+    assert rows == []
+
+
+async def test_flush_once_single_chunk_keeps_legacy_shape(stack):
+    """Files under the threshold ride one envelope (back-compat).
+
+    The chunk-metadata fields are still present but read as a
+    single-chunk transfer — receivers on older builds that don't
+    inspect them treat the payload as a complete file.
+    """
+    _make_test_image(stack["media_dir"])
+    await stack["svc"].enqueue_for_message(
+        message_id="m1",
+        media_url="api/media/cat.webp",
+        target_instance_ids=["inst-bob"],
+    )
+    await stack["svc"].flush_once()
+    sent = stack["fed"].sent
+    assert len(sent) == 1
+    assert sent[0]["payload"]["chunk_index"] == 0
+    assert sent[0]["payload"]["chunk_count"] == 1
+    assert sent[0]["payload"]["final"] is True

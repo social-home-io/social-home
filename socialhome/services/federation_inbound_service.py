@@ -532,13 +532,21 @@ class FederationInboundService:
     async def _on_dm_media_blob(self, event: "FederationEvent") -> None:
         """Land the full bytes for a previously-arrived ``DM_MESSAGE``.
 
-        Decodes the bytes, writes them under ``media_dir`` with the
-        right MIME-derived extension, swaps the message row's
-        ``media_url`` to point at the full file (replacing the
-        preview), clears ``media_sync_status``, and pushes a
-        ``dm.media_ready`` WS frame to local participants so the SPA
-        can swap the bubble's preview ``<img src>`` for the full
-        media.
+        Decodes the bytes from one chunk of the blob, writes them
+        under ``media_dir`` as a part file keyed by ``chunk_index``,
+        and — when the ``final`` chunk arrives (or for legacy
+        single-payload sends) — concatenates the parts into the
+        final file, swaps the message row's ``media_url`` to point
+        at it, clears ``media_sync_status``, and pushes a
+        ``dm.media_ready`` WS frame so the SPA can swap the
+        bubble's preview ``<img src>`` for the full media.
+
+        Backwards compat: payloads from older builds (and small
+        files from current builds) carry no ``chunk_count``; we
+        treat that as a single-chunk transfer. Chunks may arrive
+        out of order; each is written as ``<msg_id>.part<idx>`` so
+        a re-send from a sender restart simply overwrites the part
+        and the finalisation reads them in order.
         """
         p = event.payload
         blob_id = str(p.get("media_blob_id") or "")
@@ -562,12 +570,58 @@ class FederationInboundService:
                 exc,
             )
             return
+        # Chunk metadata. Default to a single-chunk transfer for
+        # backwards compat with senders that don't emit these
+        # fields yet.
+        try:
+            chunk_index = int(p.get("chunk_index", 0))
+            chunk_count = int(p.get("chunk_count", 1))
+        except TypeError, ValueError:
+            chunk_index = 0
+            chunk_count = 1
+        is_final = bool(p.get("final", chunk_index == chunk_count - 1))
         mime_type = str(p.get("mime_type") or "application/octet-stream")
         ext = _mime_to_ext(mime_type)
         try:
             self._media_dir.mkdir(parents=True, exist_ok=True)
-            dest = self._media_dir / f"{message_id}{ext}"
-            dest.write_bytes(data)
+            if chunk_count == 1:
+                # Fast path: no parts to assemble, write straight
+                # to the final destination.
+                dest = self._media_dir / f"{message_id}{ext}"
+                dest.write_bytes(data)
+            else:
+                part_path = self._media_dir / f"{message_id}.part{chunk_index:05d}"
+                part_path.write_bytes(data)
+                if not is_final:
+                    # Wait for the next chunk; the receive-side state
+                    # change happens only after the final chunk lands.
+                    return
+                # Final chunk: concat 0..N-1 in order, write the
+                # result, drop parts. If any earlier chunk failed to
+                # land yet we have a hole — log + bail; the sender's
+                # outbox retry will resend the missing chunk and the
+                # finalisation will rerun.
+                dest = self._media_dir / f"{message_id}{ext}"
+                tmp_dest = self._media_dir / f"{message_id}.assembled{ext}"
+                with tmp_dest.open("wb") as out_f:
+                    for i in range(chunk_count):
+                        part = self._media_dir / f"{message_id}.part{i:05d}"
+                        if not part.is_file():
+                            log.warning(
+                                "DM_MEDIA_BLOB: missing chunk %d for %s; "
+                                "awaiting resend",
+                                i,
+                                message_id,
+                            )
+                            tmp_dest.unlink(missing_ok=True)
+                            return
+                        out_f.write(part.read_bytes())
+                tmp_dest.replace(dest)
+                # Cleanup part files.
+                for i in range(chunk_count):
+                    (self._media_dir / f"{message_id}.part{i:05d}").unlink(
+                        missing_ok=True,
+                    )
         except OSError as exc:  # pragma: no cover
             log.warning(
                 "DM_MEDIA_BLOB: write failed for %s: %s",

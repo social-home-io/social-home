@@ -79,6 +79,22 @@ MAX_ATTEMPTS: int = 6
 BACKOFF_BASE_SECONDS: float = 30.0
 BACKOFF_CAP_SECONDS: float = 30 * 60.0
 
+#: Per-chunk raw byte cap for the ``DM_MEDIA_BLOB`` payload. The
+#: federation transport (HTTPS inbox or RTC DataChannel) has a soft
+#: ~1 MiB ceiling on a single event's serialised JSON; 256 KiB of
+#: raw bytes lands at ~360 KB after base64 inflation, well under
+#: that. Files at or under :data:`SINGLE_CHUNK_BYTES_THRESHOLD`
+#: still ride a single chunk (the simpler path); above the
+#: threshold the sender splits into N sequenced chunks and the
+#: receiver buffers them on disk until ``final=true`` lands.
+MAX_BLOB_CHUNK_BYTES: int = 256 * 1024
+#: Files at or below this size go through the single-chunk fast
+#: path. Picked so typical phone photos / short clips (≤ ~1 MB)
+#: never chunk — they're below the federation transport's
+#: per-event budget already, and chunking just adds latency. A 200
+#: MiB video, on the other hand, ships as ~819 chunks.
+SINGLE_CHUNK_BYTES_THRESHOLD: int = 1024 * 1024
+
 
 class DmMediaSyncService:
     """Build previews, enqueue + flush ``DM_MEDIA_BLOB`` outbox rows."""
@@ -313,7 +329,7 @@ class DmMediaSyncService:
                 target_instance_id=entry.target_instance_id,
             )
             try:
-                payload = await self._build_blob_payload(entry)
+                payloads = await self._build_blob_payloads(entry)
             except Exception as exc:
                 log.warning(
                     "dm-media-sync: failed to build blob payload for %s → %s: %s",
@@ -323,20 +339,33 @@ class DmMediaSyncService:
                 )
                 await self._reschedule_or_fail(entry, str(exc))
                 continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=entry.target_instance_id,
-                    event_type=FederationEventType.DM_MEDIA_BLOB,
-                    payload=payload,
-                )
-            except Exception as exc:
-                log.warning(
-                    "dm-media-sync: send_event failed for %s → %s: %s",
-                    entry.blob_id,
-                    entry.target_instance_id,
-                    exc,
-                )
-                await self._reschedule_or_fail(entry, str(exc))
+            # Dispatch every chunk in order. A mid-stream failure
+            # reschedules the whole row; on the next attempt the
+            # receiver overwrites the part files it already has
+            # (writes are idempotent by ``chunk_index``), so no
+            # explicit cleanup is needed when chunks are partially
+            # through.
+            send_failed = False
+            for payload in payloads:
+                try:
+                    await self._federation.send_event(
+                        to_instance_id=entry.target_instance_id,
+                        event_type=FederationEventType.DM_MEDIA_BLOB,
+                        payload=payload,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "dm-media-sync: send_event failed for %s chunk %d/%d → %s: %s",
+                        entry.blob_id,
+                        payload.get("chunk_index", 0),
+                        payload.get("chunk_count", 1),
+                        entry.target_instance_id,
+                        exc,
+                    )
+                    await self._reschedule_or_fail(entry, str(exc))
+                    send_failed = True
+                    break
+            if send_failed:
                 continue
             await self._outbox.delete(
                 blob_id=entry.blob_id,
@@ -347,15 +376,21 @@ class DmMediaSyncService:
 
     # ── Internals ─────────────────────────────────────────────────────
 
-    async def _build_blob_payload(self, entry) -> dict:
-        """Construct the ``DM_MEDIA_BLOB`` payload from an outbox row.
+    async def _build_blob_payloads(self, entry) -> list[dict]:
+        """Construct the ``DM_MEDIA_BLOB`` payload(s) from an outbox row.
 
         Reads the full file off disk, base64-encodes the bytes,
         attaches the message + conversation correlation ids, and
-        returns a dict the federation layer can serialise. The
-        message row provides ``conversation_id``, ``file_name``,
-        ``mime_type`` so the receiver can store the file under a
-        sensible name.
+        returns one dict per chunk the federation layer can
+        serialise.
+
+        Files at or below :data:`SINGLE_CHUNK_BYTES_THRESHOLD` ship
+        as one payload with ``chunk_count=1`` (the receiver's
+        backwards-compat branch). Larger files split into
+        ``ceil(len/MAX_BLOB_CHUNK_BYTES)`` chunks, each carrying
+        its 0-based ``chunk_index`` + total ``chunk_count`` + a
+        ``final`` flag that the receiver uses to trigger the
+        concatenate-and-rename finalisation.
         """
         path = pathlib.Path(entry.bytes_path)
         if not path.is_file():
@@ -364,15 +399,40 @@ class DmMediaSyncService:
         msg = await self._convos.get_message(entry.message_id)
         if msg is None:
             raise LookupError(f"message {entry.message_id} not found")
-        return {
+        size = len(data)
+        common = {
             "media_blob_id": entry.blob_id,
             "message_id": entry.message_id,
             "conversation_id": msg.conversation_id,
             "file_name": msg.file_name,
             "mime_type": msg.mime_type,
-            "file_size_bytes": len(data),
-            "bytes_b64": base64.b64encode(data).decode("ascii"),
+            "file_size_bytes": size,
         }
+        if size <= SINGLE_CHUNK_BYTES_THRESHOLD:
+            return [
+                {
+                    **common,
+                    "bytes_b64": base64.b64encode(data).decode("ascii"),
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "final": True,
+                }
+            ]
+        chunks: list[dict] = []
+        total = (size + MAX_BLOB_CHUNK_BYTES - 1) // MAX_BLOB_CHUNK_BYTES
+        for i in range(total):
+            start = i * MAX_BLOB_CHUNK_BYTES
+            end = min(start + MAX_BLOB_CHUNK_BYTES, size)
+            chunks.append(
+                {
+                    **common,
+                    "bytes_b64": base64.b64encode(data[start:end]).decode("ascii"),
+                    "chunk_index": i,
+                    "chunk_count": total,
+                    "final": i == total - 1,
+                }
+            )
+        return chunks
 
     async def _reschedule_or_fail(
         self,
