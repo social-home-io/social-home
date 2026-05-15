@@ -432,6 +432,14 @@ export interface CalendarEvent {
    *  Defaults to ``"UTC"`` server-side so a missing field still
    *  resolves consistently. */
   tz?: string
+  /** Client-stamped grouping uuid. The composer mints one before a
+   *  multi-target fan-out and ships it on every ``POST`` in the
+   *  batch; every resulting row carries the same value. The
+   *  agenda's :func:`groupSharedEvents` prefers this when both rows
+   *  have it (intent-driven), falling back to the content-key
+   *  heuristic for legacy / sub-version rows. ``null`` for
+   *  single-target events and externally-imported rows. Issue #327. */
+  client_event_uuid?: string | null
   /** SPA-only group key, set by :func:`groupSharedEvents`. The composer
    *  fans out a multi-attendee event as one ``POST`` per picked
    *  calendar, which lands as N rows in the DB with the same

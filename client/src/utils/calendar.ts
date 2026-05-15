@@ -34,11 +34,19 @@ export function groupEventsByDay(
  *  calendars visible the agenda would otherwise render two near-
  *  identical cards stacked.
  *
- *  Group key: ``(summary, start, end, created_by, description,
- *  location, cover_url)``. The first six fields cover the "same event"
- *  signal; ``description`` / ``location`` / ``cover_url`` are added so
- *  two genuinely-different same-minute twins (two parallel
- *  "tennis lessons" with different teachers) don't get merged.
+ *  Two grouping strategies, applied in order:
+ *
+ *   1. **client_event_uuid (intent-driven, issue #327)** — the
+ *      composer mints one v4 UUID before the fan-out + stamps it on
+ *      every ``POST`` in the batch. Rows that share a uuid merge
+ *      unconditionally — edits that diverge title / description /
+ *      location on one row still group correctly.
+ *   2. **Content-key fallback** — for legacy / externally-imported
+ *      rows without a uuid: ``(summary, start, end, created_by,
+ *      description, location, cover_url)``. The extra fields beyond
+ *      ``(summary, start, end)`` keep genuinely-different same-minute
+ *      twins (two parallel "tennis lessons" with different teachers)
+ *      separate.
  *
  *  Returned rows are clones of the primary row (the first one in the
  *  group whose ``calendar_id`` is owned by ``created_by``, or just the
@@ -56,15 +64,21 @@ export function groupSharedEvents(
   const groups = new Map<string, CalendarEvent[]>()
   const order: string[] = []
   for (const e of evts) {
-    const key = [
-      e.summary,
-      e.start,
-      e.end,
-      e.created_by,
-      e.description ?? '',
-      e.location ?? '',
-      e.cover_url ?? '',
-    ].join('\x1f')
+    // Prefer the client-stamped uuid when present — that's the
+    // intent-driven signal. Fall back to the content key for legacy
+    // / sub-version-peer rows that don't carry it.
+    const key = e.client_event_uuid
+      ? `uuid:${e.client_event_uuid}`
+      : [
+          'content',
+          e.summary,
+          e.start,
+          e.end,
+          e.created_by,
+          e.description ?? '',
+          e.location ?? '',
+          e.cover_url ?? '',
+        ].join('\x1f')
     const bucket = groups.get(key)
     if (bucket) {
       bucket.push(e)

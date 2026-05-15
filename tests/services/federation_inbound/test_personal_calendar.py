@@ -578,3 +578,85 @@ async def test_inbound_rsvp_deleted_missing_fields_noop(env):
         )
     )
     assert cal_repo.rsvps == {}
+
+
+# ── client_event_uuid (issue #327) ─────────────────────────────────────
+
+
+async def test_inbound_invite_persists_client_event_uuid(env):
+    """When the sender's envelope carries ``client_event_uuid``, the
+    mirror row on the recipient side persists it so cross-household
+    grouping in the agenda merges the host's row with the local
+    mirror by intent."""
+    fed, cal_repo, _ = env
+    handler = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    now = datetime.now(timezone.utc)
+    await handler(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {
+                "event_id": "remote-evt-uuid-1",
+                "summary": "Cross-house dinner",
+                "start": now.isoformat(),
+                "end": (now + timedelta(hours=2)).isoformat(),
+                "organizer_user_id": "u-bob-remote",
+                "attendee_user_ids": ["u-anna"],
+                "client_event_uuid": "abcdef0123456789abcdef0123456789",
+            },
+        )
+    )
+    ev = next(iter(cal_repo.events.values()))
+    assert ev.client_event_uuid == "abcdef0123456789abcdef0123456789"
+
+
+async def test_inbound_invite_without_uuid_lands_as_null(env):
+    """Sub-version peers (no ``client_event_uuid`` in their envelope)
+    land mirror rows with ``NULL`` — the SPA's content-key fallback
+    in :func:`groupSharedEvents` covers them."""
+    fed, cal_repo, _ = env
+    handler = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    now = datetime.now(timezone.utc)
+    await handler(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {
+                "event_id": "remote-evt-legacy",
+                "summary": "Legacy invite",
+                "start": now.isoformat(),
+                "end": (now + timedelta(hours=1)).isoformat(),
+                "organizer_user_id": "u-bob-remote",
+                "attendee_user_ids": ["u-anna"],
+            },
+        )
+    )
+    ev = next(iter(cal_repo.events.values()))
+    assert ev.client_event_uuid is None
+
+
+async def test_inbound_invite_rejects_non_string_uuid(env):
+    """A bad payload type doesn't poison the row — accepted as None."""
+    fed, cal_repo, _ = env
+    handler = fed._event_registry.handlers[
+        FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED
+    ]
+    now = datetime.now(timezone.utc)
+    await handler(
+        _envelope(
+            FederationEventType.PERSONAL_CALENDAR_EVENT_CREATED,
+            {
+                "event_id": "remote-evt-junk",
+                "summary": "Junk uuid",
+                "start": now.isoformat(),
+                "end": (now + timedelta(hours=1)).isoformat(),
+                "organizer_user_id": "u-bob-remote",
+                "attendee_user_ids": ["u-anna"],
+                "client_event_uuid": 12345,  # not a string
+            },
+        )
+    )
+    ev = next(iter(cal_repo.events.values()))
+    assert ev.client_event_uuid is None
