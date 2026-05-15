@@ -177,6 +177,73 @@ async def test_upload_image_still_transcodes(client):
     assert body["filename"].endswith(".webp")
 
 
+async def test_upload_file_extension_sanitised(client):
+    """An odd-case extension lands as a sanitised UUID name."""
+    r = await _upload_file(
+        client,
+        filename="weird name.TAR.GZ",
+        body=b"\x1f\x8b\x08" + b"\x00" * 100,
+        content_type="application/gzip",
+    )
+    assert r.status == 201
+    body = await r.json()
+    # Extension picked from the original (lowercased, alnum-only)
+    # — ``.gz`` is what ``_sanitise_file_ext`` returns from
+    # ``Path('...').suffix``.
+    assert body["filename"].endswith(".gz")
+
+
+async def test_upload_file_no_extension(client):
+    """Extensionless filenames get a UUID name with no suffix."""
+    r = await _upload_file(
+        client,
+        filename="dump",
+        body=b"hello world",
+        content_type="application/octet-stream",
+    )
+    assert r.status == 201
+    body = await r.json()
+    # No extension — pure hex.
+    assert "." not in body["filename"]
+
+
+async def test_upload_missing_file_field_400(client):
+    """An empty multipart body returns 400 with a clear error."""
+    boundary = "----empty"
+    payload = f"--{boundary}--\r\n".encode()
+    r = await client.post(
+        "/api/media/upload",
+        data=payload,
+        headers={
+            **_auth(client._tok),
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    assert r.status == 400
+
+
+async def test_upload_non_multipart_400(client):
+    """JSON body rejected with 400."""
+    r = await client.post(
+        "/api/media/upload",
+        json={"foo": "bar"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+
+
+async def test_get_media_path_traversal_400(client):
+    """``..`` and slashes get a 400 before the file lookup."""
+    r = await client.get(
+        "/api/media/..%2Fpasswd",
+        headers=_auth(client._tok),
+    )
+    # 400 or 404 both prove the route didn't read outside media_dir;
+    # the path-traversal guard rejects anything with ``/`` or
+    # leading ``.``.
+    assert r.status in (400, 404)
+
+
 async def test_signed_url_for_user_picture(client):
     """Same scheme works against ``/api/users/{id}/picture`` —
     avatars rely on it. We don't need a real picture row; the

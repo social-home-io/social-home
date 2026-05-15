@@ -82,10 +82,14 @@ class _FakeFederationRepo:
         return self._instances.get(instance_id)
 
 
-def _confirmed_peer(instance_id: str):
+def _confirmed_peer(instance_id: str, *, proto_version: int = 3):
     from types import SimpleNamespace
 
-    return SimpleNamespace(id=instance_id, status=PairingStatus.CONFIRMED)
+    return SimpleNamespace(
+        id=instance_id,
+        status=PairingStatus.CONFIRMED,
+        proto_version=proto_version,
+    )
 
 
 async def _seed_remote_instance(stack, instance_id: str) -> None:
@@ -207,3 +211,132 @@ async def test_send_to_remote_member_includes_user_id_in_envelope(stack):
     assert payload["conversation_id"] == dm.id
     assert payload["content"] == "hi bob"
     assert bob.user_id in payload["recipient_user_ids"]
+
+
+# ── v_3 media — enqueue + relay-rejection coverage ───────────────────
+
+
+class _FakeMediaSync:
+    """Records ``build_preview`` + ``enqueue_for_message`` calls
+    without exercising the real preview generation or outbox."""
+
+    def __init__(self) -> None:
+        self.previews: list[dict] = []
+        self.enqueues: list[dict] = []
+        self.preview_value: str | None = None
+
+    async def build_preview(self, *, media_url, kind, mime_type):
+        self.previews.append(
+            {"media_url": media_url, "kind": kind, "mime_type": mime_type},
+        )
+        return self.preview_value
+
+    async def enqueue_for_message(self, *, message_id, media_url, target_instance_ids):
+        self.enqueues.append(
+            {
+                "message_id": message_id,
+                "media_url": media_url,
+                "target_instance_ids": target_instance_ids,
+            },
+        )
+
+
+async def test_send_image_to_confirmed_peer_enqueues_outbox(stack):
+    """A media DM to a directly-paired peer triggers the
+    build_preview + enqueue_for_message chain."""
+    await stack.provision("anna")
+    bob = await _seed_remote_user(stack, instance_id="peer-b", username="bob")
+    fed = _FakeFederationService()
+    repo = _FakeFederationRepo({"peer-b": _confirmed_peer("peer-b")})
+    media_sync = _FakeMediaSync()
+    media_sync.preview_value = "fake-preview-b64"
+    stack.dm_svc._media_sync = media_sync  # type: ignore[attr-defined]
+    stack.dm_svc.attach_federation(fed, repo, own_instance_id=stack.own_instance_id)
+
+    dm = await stack.dm_svc.create_dm(
+        creator_username="anna",
+        other_user_id=bob.user_id,
+    )
+    msg = await stack.dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="image",
+        media_url="api/media/cat.webp",
+        file_name="cat.jpg",
+        mime_type="image/webp",
+        file_size_bytes=1234,
+    )
+
+    # ``build_preview`` was asked for an image preview.
+    assert len(media_sync.previews) == 1
+    assert media_sync.previews[0]["kind"] == "image"
+    # ``enqueue_for_message`` got one row for peer-b.
+    assert len(media_sync.enqueues) == 1
+    assert media_sync.enqueues[0]["target_instance_ids"] == ["peer-b"]
+    assert media_sync.enqueues[0]["message_id"] == msg.id
+    # The outbound DM_MESSAGE envelope picked up the preview field +
+    # the media metadata triple.
+    sent = [s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE]
+    payload = sent[0]["payload"]
+    assert payload["type"] == "image"
+    assert payload["media_url"] == "api/media/cat.webp"
+    assert payload["file_name"] == "cat.jpg"
+    assert payload["mime_type"] == "image/webp"
+    assert payload["file_size_bytes"] == 1234
+    assert payload["preview_bytes_b64"] == "fake-preview-b64"
+    assert payload["media_blob_id"] == msg.id
+
+
+async def test_send_media_on_unconfirmed_peer_rejects(stack):
+    """Sending an image to a peer that's NOT directly paired raises
+    ``MediaRequiresDirectPairingError`` — operator decision."""
+    from socialhome.services.dm_service import MediaRequiresDirectPairingError
+
+    await stack.provision("anna")
+    bob = await _seed_remote_user(stack, instance_id="peer-b", username="bob")
+    fed = _FakeFederationService()
+    # Peer exists in the repo but with NO status field set (or
+    # status != confirmed) — read by ``_peer_is_confirmed`` as
+    # not confirmed.
+    from types import SimpleNamespace
+
+    repo = _FakeFederationRepo(
+        {"peer-b": SimpleNamespace(id="peer-b", status=None)},
+    )
+    stack.dm_svc.attach_federation(fed, repo, own_instance_id=stack.own_instance_id)
+
+    dm = await stack.dm_svc.create_dm(
+        creator_username="anna",
+        other_user_id=bob.user_id,
+    )
+    with pytest.raises(MediaRequiresDirectPairingError, match="directly-paired"):
+        await stack.dm_svc.send_message(
+            dm.id,
+            sender_username="anna",
+            content="",
+            type="image",
+            media_url="api/media/cat.webp",
+        )
+
+
+async def test_send_media_empty_caption_allowed(stack):
+    """``type='image'`` with no caption is a valid send."""
+    await stack.provision("anna")
+    bob = await _seed_remote_user(stack, instance_id="peer-b", username="bob")
+    fed = _FakeFederationService()
+    repo = _FakeFederationRepo({"peer-b": _confirmed_peer("peer-b")})
+    stack.dm_svc.attach_federation(fed, repo, own_instance_id=stack.own_instance_id)
+    dm = await stack.dm_svc.create_dm(
+        creator_username="anna",
+        other_user_id=bob.user_id,
+    )
+    msg = await stack.dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="image",
+        media_url="api/media/cat.webp",
+    )
+    assert msg.content == ""
+    assert msg.type == "image"
