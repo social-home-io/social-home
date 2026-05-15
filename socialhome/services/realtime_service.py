@@ -137,7 +137,14 @@ class RealtimeService:
         Used to enumerate space members for SpacePostCreated events.
     """
 
-    __slots__ = ("_bus", "_ws", "_user_repo", "_space_repo", "_media_signer")
+    __slots__ = (
+        "_bus",
+        "_ws",
+        "_user_repo",
+        "_space_repo",
+        "_conversation_repo",
+        "_media_signer",
+    )
 
     def __init__(
         self,
@@ -146,12 +153,17 @@ class RealtimeService:
         *,
         user_repo,
         space_repo,
+        conversation_repo=None,
         media_signer: MediaUrlSigner | None = None,
     ) -> None:
         self._bus = bus
         self._ws = ws
         self._user_repo = user_repo
         self._space_repo = space_repo
+        # Needed by ``broadcast_dm_media_ready`` to enumerate the
+        # local participants of a conversation. Optional for older
+        # callers / test stacks that don't exercise the media path.
+        self._conversation_repo = conversation_repo
         # Lets WS broadcast frames carry the same signed ``media_url`` /
         # ``picture_url`` / ``cover_url`` shape the REST API returns, so
         # browsers can drop the fields straight into ``<img src>``
@@ -1527,6 +1539,18 @@ class RealtimeService:
         fetch — the sender, recipient *and* every other open session land
         on the same row in the same render tick.
         """
+        # Sign the media URL inside the WS frame just like the REST
+        # ``GET /api/conversations/{id}/messages`` response does. The
+        # canonical event carries the *unsigned* form (the bus / DB
+        # never store a signed URL — signatures expire); the SPA
+        # drops the URL straight into ``<img src>`` so it must be
+        # the signed variant. Without this, the optimistic-bubble
+        # reconciliation overwrites the sender's signed preview URL
+        # with the unsigned canonical and the picture renders as
+        # broken-image.
+        signed_media_url: str | None = event.media_url
+        if signed_media_url and self._media_signer is not None:
+            signed_media_url = self._media_signer.sign(signed_media_url)
         payload = {
             "type": "dm.message",
             "conversation_id": event.conversation_id,
@@ -1536,7 +1560,14 @@ class RealtimeService:
                 "sender_user_id": event.sender_user_id,
                 "content": event.content,
                 "type": event.message_type,
-                "media_url": event.media_url,
+                "media_url": signed_media_url,
+                # v_3 media metadata. Mirror the REST GET shape so
+                # the SPA's optimistic-bubble reconcile keeps the
+                # filename + size on the receiver's bubble — the
+                # file-pill render branches on these fields.
+                "file_name": event.file_name,
+                "mime_type": event.mime_type,
+                "file_size_bytes": event.file_size_bytes,
                 "reply_to_id": event.reply_to_id,
                 "deleted": False,
                 "created_at": event.occurred_at.isoformat(),
@@ -1552,6 +1583,60 @@ class RealtimeService:
                 continue
             seen.add(user_id)
             await self._ws.broadcast_to_user(user_id, payload)
+
+    async def broadcast_dm_media_ready(
+        self,
+        *,
+        message_id: str,
+        conversation_id: str,
+        media_url: str,
+    ) -> None:
+        """Push ``dm.media_ready`` to local members of a conversation.
+
+        Called by ``FederationInboundService._on_dm_media_blob`` once
+        the full bytes for a cross-household media message have
+        landed and the row's ``media_url`` has flipped to point at
+        the local full file. The SPA listens for this frame on
+        :class:`DmThreadPage` and swaps the bubble's preview
+        ``<img src>`` for the full media.
+
+        Fan-out: every local participant of the conversation. The
+        sender household's broadcast happens locally for free on the
+        original send; this method is the *receiver* fan-out, so we
+        only need the local members of *this* household (members
+        from other households see the same WS frame via their own
+        instance's matching DM_MEDIA_BLOB handler).
+        """
+        if not message_id or not conversation_id or not media_url:
+            return
+        members = await self._conversation_repo.list_members(conversation_id)
+        # Resolve usernames → user_ids so the WS broker can route.
+        user_ids: list[str] = []
+        for m in members:
+            if m.deleted_at is not None:
+                continue
+            u = await self._user_repo.get(m.username)
+            if u is None:
+                continue
+            user_ids.append(u.user_id)
+        if not user_ids:
+            return
+        # Sign the URL for the same reason the dm.message frame does:
+        # the SPA drops this value straight into ``<img src>`` on
+        # the receiver side, so it must be the short-lived signed
+        # variant rather than the unsigned canonical.
+        signed = media_url
+        if self._media_signer is not None:
+            signed = self._media_signer.sign(media_url)
+        await self._ws.broadcast_to_users(
+            user_ids,
+            {
+                "type": "dm.media_ready",
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "media_url": signed,
+            },
+        )
 
     async def _on_dm_conversation_created(
         self,

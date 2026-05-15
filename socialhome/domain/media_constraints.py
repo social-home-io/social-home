@@ -84,6 +84,48 @@ CAPTION_MAX: int = 300
 #: (profile picture, per-space member picture, space cover) in lockstep.
 PROFILE_PICTURE_MAX_UPLOAD_BYTES: int = 10 * 1024 * 1024  # 10 MiB
 
+# ─── Generic file uploads (DM attachments etc.) ───────────────────────────
+#: Catch-all cap for ``type='file'`` DM attachments and any future
+#: passthrough uploads (PDFs, docs, archives). Smaller than the
+#: video cap because files don't transcode to a smaller on-disk
+#: form: 25 MiB covers most invoices, scans, and short audio clips
+#: without inviting people to ship a whole movie through the DM
+#: bar. The image / video paths keep their own (larger) caps.
+FILE_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024  # 25 MiB
+#: Disallowed extensions for ``type='file'`` uploads. Anything
+#: that's *executable on default OS handlers* gets rejected — the
+#: bar there is "what would a click on the download link in the SPA
+#: do?". The list is deliberately narrow: a malicious sender can
+#: always wrap a payload inside a ``.zip``; this just prevents the
+#: most obvious foot-guns where the SPA's ``download`` attribute
+#: would auto-prompt to run something. Aligned with the GitHub /
+#: Slack / Discord "denied attachment" sets.
+FILE_DENIED_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".exe",
+        ".com",
+        ".bat",
+        ".cmd",
+        ".ps1",
+        ".msi",
+        ".scr",
+        ".vbs",
+        ".vbe",
+        ".jse",
+        ".wsf",
+        ".wsh",
+        ".lnk",
+        ".app",
+        ".dmg",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".jar",
+        ".dll",
+        ".so",
+    },
+)
+
 #: Space cover image resized to this longest side; larger than the 256-px
 #: profile-picture cap so a hero banner has real estate.
 SPACE_COVER_MAX_DIMENSION: int = 1200

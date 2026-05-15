@@ -335,8 +335,25 @@ export interface Message {
   id: string
   sender_user_id: string
   content: string
+  /** ``"text" | "image" | "video" | "file" | "transcript" |
+   *  "location" | "call_event"`` — keep ``string`` so future
+   *  additions don't require a SPA-side type bump. */
   type: string
   media_url: string | null
+  /** ``"image"``/``"video"``/``"file"`` only: original filename + IANA
+   *  MIME type + raw byte count of the full media. The SPA uses
+   *  ``mime_type`` to pick the render branch (``image/*`` → inline
+   *  ``<img>``, ``video/*`` → ``<video>``, everything else → file
+   *  pill with a glyph). ``null`` on legacy / non-media messages. */
+  file_name?: string | null
+  mime_type?: string | null
+  file_size_bytes?: number | null
+  /** Cross-household sync state. ``"pending"`` = the bubble currently
+   *  renders the small preview embedded in the federation envelope
+   *  and is waiting for the matching full-bytes blob. ``"failed"`` =
+   *  the sender's outbox exhausted its retry budget. ``null`` on
+   *  same-household messages or once the full bytes have arrived. */
+  media_sync_status?: 'pending' | 'failed' | null
   reply_to_id: string | null
   deleted: boolean
   created_at: string

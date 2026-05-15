@@ -111,6 +111,74 @@ def _must(
     return body
 
 
+def _upload_file(
+    url: str,
+    *,
+    token: str,
+    filename: str,
+    content: bytes,
+    content_type: str = "application/octet-stream",
+    timeout: float = 30.0,
+) -> tuple[int, Any]:
+    """POST a single file as ``multipart/form-data`` and return ``(status, json)``.
+
+    The harness's main :func:`_request` helper only handles JSON
+    bodies, so the v_3 media-DM round-trip needs its own tiny
+    multipart encoder. Built on stdlib so the demo stays
+    dependency-free; the boundary is a fixed string because there
+    are no user-controlled values to escape.
+    """
+    boundary = b"----shdemo-boundary"
+    parts = [
+        b"--" + boundary,
+        b'Content-Disposition: form-data; name="file"; '
+        b'filename="' + filename.encode("utf-8") + b'"',
+        b"Content-Type: " + content_type.encode("utf-8"),
+        b"",
+        content,
+        b"--" + boundary + b"--",
+        b"",
+    ]
+    body = b"\r\n".join(parts)
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "multipart/form-data; boundary=" + boundary.decode(),
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8") or "{}"
+            return r.status, json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8")
+        try:
+            return exc.code, json.loads(raw)
+        except Exception:
+            return exc.code, {"_raw": raw}
+
+
+def _make_demo_webp() -> bytes:
+    """Return the bytes of a tiny solid-colour WebP for the media-DM test.
+
+    Pillow ships with WebP support so we can produce real bytes the
+    backend's :class:`ImageProcessor` won't reject. Kept small (16×16)
+    to keep the demo's upload payload trivial — the federation
+    pipeline is what we're exercising, not the image processor.
+    """
+    import io
+    from PIL import Image
+
+    img = Image.new("RGB", (16, 16), color=(200, 100, 50))
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=80)
+    return buf.getvalue()
+
+
 # ─── Instance lifecycle ────────────────────────────────────────────────────
 
 
@@ -970,6 +1038,44 @@ def cmd_traffic() -> None:
             print(f"  a→c DM created: conv={conv['id']}, msg={state['dm_msg_id']}")
         else:
             print(f"  a→c DM message FAILED: {s} {msg}")
+
+        # v_3 cross-household media DM (a → c): upload a tiny WebP
+        # via ``/api/media/upload``, send it as ``type='image'`` in
+        # a follow-up DM, stash the message id. The verify step
+        # checks that Carol's instance receives the preview
+        # immediately + then the full bytes via DM_MEDIA_BLOB.
+        webp_bytes = _make_demo_webp()
+        s, up = _upload_file(
+            f"http://127.0.0.1:{a['port']}/api/media/upload",
+            token=a["token"],
+            filename="alice.webp",
+            content=webp_bytes,
+            content_type="image/webp",
+        )
+        if s in (200, 201):
+            s, mmsg = _request(
+                f"http://127.0.0.1:{a['port']}/api/conversations/{conv['id']}/messages",
+                token=a["token"],
+                method="POST",
+                body={
+                    "type": "image",
+                    "media_url": up["url"],
+                    "file_name": "alice.webp",
+                    "mime_type": "image/webp",
+                    "file_size_bytes": len(webp_bytes),
+                    "content": "",
+                },
+            )
+            if s in (200, 201):
+                state["dm_media_msg_id"] = mmsg.get("id")
+                print(
+                    f"  a→c media DM created: msg={state['dm_media_msg_id']} "
+                    f"({len(webp_bytes)} bytes)",
+                )
+            else:
+                print(f"  a→c media DM FAILED: {s} {mmsg}")
+        else:
+            print(f"  a→c media upload FAILED: {s} {up}")
     else:
         print(f"  a→c DM SKIPPED (create returned {s} {conv})")
 
@@ -1305,6 +1411,93 @@ def cmd_verify() -> None:
                 print(f"  c received a→c DM ({len(bodies)} msg) ✓")
             else:
                 failures.append(f"c: a→c DM body missing (got {bodies!r})")
+
+            # 3a. v_3 media DM a→c — assert Carol's view of the
+            #     image message. The DM_MESSAGE envelope carries the
+            #     preview (renders immediately as a 320 px WebP);
+            #     the DM_MEDIA_BLOB follow-up flips media_url to the
+            #     full file under media_dir and clears
+            #     media_sync_status. We give the scheduler a short
+            #     grace period (~8 s) before asserting the
+            #     full-bytes state — its tick interval defaults to
+            #     5 s.
+            if "dm_media_msg_id" in state:
+                # Wait for the scheduler to flush the blob outbox.
+                time.sleep(8)
+                msg_list = msgs if isinstance(msgs, list) else []
+                # Re-fetch since the blob may have landed after the
+                # preview's initial GET above.
+                s2, msgs2 = _request(
+                    f"http://127.0.0.1:{c['port']}"
+                    f"/api/conversations/{state['dm_a_to_c']}/messages",
+                    token=c["token"],
+                )
+                _must("media-messages(c)", s2, msgs2)
+                msg_list = msgs2 if isinstance(msgs2, list) else []
+                media_msg = next(
+                    (m for m in msg_list if m.get("type") == "image"),
+                    None,
+                )
+                if media_msg is None:
+                    failures.append(
+                        "c: media DM a→c not in inbox (no type=image row)",
+                    )
+                else:
+                    media_url = media_msg.get("media_url") or ""
+                    sync_status = media_msg.get("media_sync_status")
+                    if sync_status is not None and sync_status != "":
+                        # Still pending — the blob hasn't landed yet.
+                        # Surface as a failure so we notice scheduler
+                        # regressions; the 8 s wait should be more
+                        # than enough for a healthy boot.
+                        failures.append(
+                            "c: media DM a→c still pending after wait "
+                            f"(sync_status={sync_status!r}, media_url={media_url!r})",
+                        )
+                    elif not media_url:
+                        failures.append(
+                            "c: media DM a→c has no media_url after blob land",
+                        )
+                    else:
+                        # GET the signed media URL on Carol's
+                        # instance — confirms the file landed under
+                        # ``media_dir`` and the signing chain works
+                        # for the receiver-side read. The media
+                        # route is GET-only (HEAD returns 405), so
+                        # we read a few bytes to verify the body is
+                        # a real image without decoding the whole
+                        # response.
+                        full_url = media_url
+                        if not full_url.startswith("http"):
+                            full_url = (
+                                f"http://127.0.0.1:{c['port']}/{full_url.lstrip('/')}"
+                            )
+                        get_req = urllib.request.Request(
+                            full_url,
+                            method="GET",
+                            headers={"Authorization": f"Bearer {c['token']}"},
+                        )
+                        ms: int = 0
+                        first_bytes = b""
+                        try:
+                            with urllib.request.urlopen(get_req, timeout=10) as r:
+                                ms = r.status
+                                first_bytes = r.read(16)
+                        except urllib.error.HTTPError as exc:
+                            ms = exc.code
+                        if ms != 200:
+                            failures.append(
+                                f"c: media DM a→c file fetch HTTP {ms} ({media_url})",
+                            )
+                        elif not first_bytes:
+                            failures.append(
+                                f"c: media DM a→c file is empty ({media_url})",
+                            )
+                        else:
+                            print(
+                                "  c received a→c media DM (preview + "
+                                "full bytes via DM_MEDIA_BLOB) ✓",
+                            )
     else:
         print("  DM a→c was skipped during traffic step")
 

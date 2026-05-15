@@ -126,6 +126,10 @@ anything below contradicts the file, the file wins.
 | `dm_contact_requests` | Pending DM contact requests (§23.47). |
 | `conversation_messages.reply_to_highlight_frame_id` | Highlight-frame reply target (§Highlights). No FK so the message survives retention deletion of the source frame. |
 | `conversation_messages.reply_to_highlight_frame_snapshot` | JSON snapshot frozen at reply-time: `{thumb_url, author_user_id, highlight_date, caption_text?, caption_emoji?}`. Keeps the reply readable after the source frame is purged. |
+| `conversation_messages.file_name` / `mime_type` / `file_size_bytes` | Media-attachment metadata for `type` ∈ {`image`, `video`, `file`}. `mime_type` drives the SPA's render branch (inline `<img>` / `<video>` / file-pill). NULL on non-media or pre-v_3 rows. See [DM media](./protocol/dm-media.md). |
+| `conversation_messages.media_blob_id` | Cross-household correlation id between the v_3 `DM_MESSAGE` (carrying the small preview) and the follow-up `DM_MEDIA_BLOB` event (carrying the full bytes). NULL for same-household DMs and non-media messages. |
+| `conversation_messages.media_sync_status` | `'pending'` while the receiver is still waiting for the full-bytes blob; flips to NULL once the blob lands and `media_url` points at local bytes. `'failed'` after the sender's outbox exhausts its retry budget. NULL on legacy / non-media rows. |
+| `dm_media_outbox` | Per-(blob_id × target_instance) queue of pending `DM_MEDIA_BLOB` sends. The scheduler (lands in a follow-up PR) reads `status='pending'` rows due now, encrypts the file at `bytes_path` under the conversation key, ships, and deletes on confirmation. Exponential-backoff retries via `attempts` + `next_attempt_at`; gives up after the configured retry cap and flips to `failed`. |
 
 ## Highlights
 

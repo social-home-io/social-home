@@ -98,6 +98,13 @@ That single command runs the full sequence:
      → fans out the highlight + frame to every paired peer.
    - 1:1 DM from **a → c** (cross-instance conversation; the message
      rides the federation envelope path).
+   - 1:1 **media** DM from **a → c** (v_3 ``type='image'``): Alice
+     uploads a tiny WebP via ``/api/media/upload``, posts a DM with
+     ``media_url`` + ``file_name`` + ``mime_type``. ``DmService``
+     embeds a 320 px preview in the outbound ``DM_MESSAGE``; the
+     :class:`DmMediaSyncService` scheduler ships the full bytes via
+     a follow-up ``DM_MEDIA_BLOB`` event. ``verify`` asserts both
+     legs landed on Carol's instance.
    - **b** creates a space (``invite_only``) and mints a ``remote-invites``
      token for each of **a**'s and **c**'s admin users.
    - **b** posts a ``mode=fixed`` bazaar listing in the salon space;
@@ -125,6 +132,13 @@ That single command runs the full sequence:
      under ``/api/highlights``.
    - **c** has the a→c DM in ``/api/conversations`` and the message body
      round-tripped.
+   - **c** also has the v_3 cross-household media DM from **a**:
+     after a short scheduler-flush grace period the row's
+     ``type=image``, ``media_sync_status`` is cleared, and the
+     receiver-side ``media_url`` resolves on Carol's instance —
+     i.e. the ``DM_MESSAGE`` preview arrived AND the follow-up
+     ``DM_MEDIA_BLOB`` landed the full bytes under Carol's
+     ``media_dir``.
    - **b** has the a→b bazaar-inquiry DM in ``/api/conversations``,
      and the message body still quotes the listing id (i.e. the body
      made it through ``DM_RELAY`` decryption intact).

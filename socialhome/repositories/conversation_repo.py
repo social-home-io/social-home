@@ -93,6 +93,13 @@ class AbstractConversationRepo(Protocol):
     ) -> list[str]: ...
     async def soft_delete_message(self, message_id: str) -> None: ...
     async def edit_message(self, message_id: str, new_content: str) -> None: ...
+    async def update_media_sync_status(
+        self,
+        *,
+        message_id: str,
+        status: str | None,
+        media_url: str | None = None,
+    ) -> None: ...
     async def count_unread(self, conversation_id: str, username: str) -> int: ...
 
     # Reactions -----------------------------------------------------------
@@ -385,13 +392,20 @@ class SqliteConversationRepo:
             """
             INSERT INTO conversation_messages(
                 id, conversation_id, sender_user_id, content, type, media_url,
+                file_name, mime_type, file_size_bytes,
+                media_blob_id, media_sync_status,
                 reply_to_id, reply_to_highlight_frame_id,
                 reply_to_highlight_frame_snapshot,
                 deleted, edited_at, created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content,
                 media_url=excluded.media_url,
+                file_name=excluded.file_name,
+                mime_type=excluded.mime_type,
+                file_size_bytes=excluded.file_size_bytes,
+                media_blob_id=excluded.media_blob_id,
+                media_sync_status=excluded.media_sync_status,
                 type=excluded.type,
                 reply_to_id=excluded.reply_to_id,
                 reply_to_highlight_frame_id=excluded.reply_to_highlight_frame_id,
@@ -406,6 +420,11 @@ class SqliteConversationRepo:
                 message.content,
                 message.type,
                 message.media_url,
+                message.file_name,
+                message.mime_type,
+                message.file_size_bytes,
+                message.media_blob_id,
+                message.media_sync_status,
                 message.reply_to_id,
                 message.reply_to_highlight_frame_id,
                 message.reply_to_highlight_frame_snapshot,
@@ -512,7 +531,10 @@ class SqliteConversationRepo:
     async def soft_delete_message(self, message_id: str) -> None:
         await self._db.enqueue(
             "UPDATE conversation_messages "
-            "SET deleted=1, content='', media_url=NULL WHERE id=?",
+            "SET deleted=1, content='', media_url=NULL, "
+            "    file_name=NULL, mime_type=NULL, file_size_bytes=NULL, "
+            "    media_blob_id=NULL, media_sync_status=NULL "
+            "WHERE id=?",
             (message_id,),
         )
 
@@ -526,6 +548,34 @@ class SqliteConversationRepo:
             "SET content=?, edited_at=datetime('now') WHERE id=?",
             (new_content, message_id),
         )
+
+    async def update_media_sync_status(
+        self,
+        *,
+        message_id: str,
+        status: str | None,
+        media_url: str | None = None,
+    ) -> None:
+        """Flip ``media_sync_status`` (and optionally ``media_url``).
+
+        Used by the receiver's ``DM_MEDIA_BLOB`` handler to swap the
+        preview for the full bytes (``media_url`` updated, status
+        cleared) and by ``DmMediaSyncService``'s retry-budget
+        exhaustion path on the sender side (``status='failed'``,
+        media_url stays pointing at the local full bytes).
+        """
+        if media_url is not None:
+            await self._db.enqueue(
+                "UPDATE conversation_messages "
+                "SET media_sync_status=?, media_url=? "
+                "WHERE id=?",
+                (status, media_url, message_id),
+            )
+        else:
+            await self._db.enqueue(
+                "UPDATE conversation_messages SET media_sync_status=? WHERE id=?",
+                (status, message_id),
+            )
 
     async def count_unread(
         self,
@@ -755,6 +805,11 @@ def _row_to_message(row: dict | None) -> ConversationMessage | None:
         created_at=_parse(row["created_at"]) or datetime.now(timezone.utc),
         type=row.get("type", "text"),
         media_url=row.get("media_url"),
+        file_name=row.get("file_name"),
+        mime_type=row.get("mime_type"),
+        file_size_bytes=row.get("file_size_bytes"),
+        media_blob_id=row.get("media_blob_id"),
+        media_sync_status=row.get("media_sync_status"),
         reply_to_id=row.get("reply_to_id"),
         reply_to_highlight_frame_id=row.get("reply_to_highlight_frame_id"),
         reply_to_highlight_frame_snapshot=row.get("reply_to_highlight_frame_snapshot"),

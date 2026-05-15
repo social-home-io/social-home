@@ -14,6 +14,7 @@ import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
 import { UnreadDivider } from '@/components/UnreadDivider'
 import { openCallTypePicker } from '@/components/CallTypePickerDialog'
 import { EmojiPickButton } from '@/components/EmojiPickButton'
+import { uploadWithProgress } from '@/components/UploadProgress'
 import {
   EmojiAutocomplete,
   checkForEmojiTrigger,
@@ -71,6 +72,44 @@ const sending = signal(false)
  *  it into the round Send button — same slot, mutually exclusive
  *  actions, the chat-bar idiom every mainstream messenger uses. */
 const composerHasContent = signal(false)
+
+/** Human-readable byte-size pill. Mirrors what the feed composer's
+ *  upload UI shows so the DM composer reads in the same language. */
+function formatFileSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes < 0) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  const mb = bytes / (1024 * 1024)
+  if (mb < 10) return `${mb.toFixed(1)} MB`
+  return `${Math.round(mb)} MB`
+}
+/** Pending attachment chosen via the paperclip button. ``null`` when
+ *  no file is staged. The chip in the composer (above the textarea)
+ *  shows the upload spinner / preview thumb / filename so the user
+ *  knows what they're about to send. Cleared on send + on explicit
+ *  cancel via the chip's "×". An attachment also drives the send
+ *  button to render even when the text body is empty (a picture
+ *  message has no caption requirement). */
+interface PendingAttachment {
+  /** ``image`` / ``video`` / ``file`` — picks the bubble render. */
+  type: 'image' | 'video' | 'file'
+  /** Signed URL the SPA can drop into ``<img src>`` for the
+   *  in-composer preview. */
+  preview_url: string
+  /** Canonical (unsigned) URL — what gets POSTed back in the
+   *  ``media_url`` field. The backend signs fresh per read. */
+  media_url: string
+  file_name: string
+  mime_type: string
+  file_size_bytes: number
+}
+const pendingAttachment = signal<PendingAttachment | null>(null)
+/** Most-recent attachment-related error to surface in a toast (or
+ *  inline below the composer). Cleared when the user picks a new
+ *  file or sends. Drives the "Media can only be shared with
+ *  directly-paired households" copy when the backend rejects a
+ *  send on a relayed DM. */
+const attachmentError = signal<string | null>(null)
 /** Same-author message-grouping window. Consecutive bubbles from one
  *  sender within this many ms share one timestamp + ReadReceipt
  *  footer and get flush vertical borders so the burst reads as one
@@ -308,6 +347,11 @@ export default function DmThreadPage() {
   // sending. Uncontrolled input + ref keeps the existing FormData send
   // path untouched.
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null)
+  /** Hidden ``<input type="file">`` driven by the paperclip button.
+   *  Ref-managed so the on-click handler can call ``click()`` and
+   *  open the system file picker without rendering the ugly default
+   *  input chrome. */
+  const attachInputRef = useRef<HTMLInputElement | null>(null)
   /** Scrolling container for the messages list.
    *
    *  The container is laid out with ``flex-direction: column-reverse``
@@ -399,6 +443,8 @@ export default function DmThreadPage() {
     unreadAnchor.value = null
     newSinceScrollUp.value = 0
     composerHasContent.value = false
+    pendingAttachment.value = null
+    attachmentError.value = null
     // Reset messages eagerly so the brief moment between the convId
     // change and the new fetch's ``then`` doesn't flash the previous
     // thread's content. Column-reverse means the empty list shows
@@ -596,6 +642,32 @@ export default function DmThreadPage() {
           : m,
       )
     }
+    // Cross-household media-ready swap. When the receiver's instance
+    // finishes ingesting the full ``DM_MEDIA_BLOB`` (which arrives
+    // asynchronously some time after the ``DM_MESSAGE`` envelope
+    // that carried the small preview), the backend publishes this
+    // frame to every local participant. We swap ``media_url`` to
+    // the full URL and clear ``media_sync_status`` so the bubble's
+    // brightness pulse goes away.
+    const offMediaReady = ws.on('dm.media_ready', (e) => {
+      const d = e.data as {
+        conversation_id?: string
+        message_id?: string
+        media_url?: string
+      }
+      if (d.conversation_id !== convId) return
+      if (!d.message_id || !d.media_url) return
+      const list = messages.value
+      const idx = list.findIndex(m => m.id === d.message_id)
+      if (idx < 0) return
+      const next = list.slice()
+      next[idx] = {
+        ...next[idx],
+        media_url: d.media_url,
+        media_sync_status: null,
+      }
+      messages.value = next
+    })
     const offUserOnline = ws.on('user.online', (e) => {
       const d = e.data as { user_id?: string }
       if (d.user_id) patchMember(d.user_id, { is_online: true, is_idle: false })
@@ -613,7 +685,7 @@ export default function DmThreadPage() {
       })
     })
     return () => {
-      offRead(); offNewMsg()
+      offRead(); offNewMsg(); offMediaReady()
       offUserOnline(); offUserIdle(); offUserOffline()
     }
   }, [convId])
@@ -649,6 +721,49 @@ export default function DmThreadPage() {
     // "drafting a screenplay in the chat bar" case still gets a
     // scrollbar.
     el.style.overflowY = target >= MAX_COMPOSER_HEIGHT_PX ? 'auto' : 'hidden'
+  }
+
+  /** Drive a file picker → ``/api/media/upload`` → composer chip.
+   *
+   *  The attach button on the composer triggers a hidden ``<input
+   *  type="file">``; on change we upload via the shared
+   *  :func:`uploadWithProgress` helper (which already shows the
+   *  global upload progress bar) and stash the result on
+   *  ``pendingAttachment``. The chip above the textarea then renders
+   *  the preview, and the next send carries ``type`` /
+   *  ``media_url`` / ``file_name`` / ``mime_type`` /
+   *  ``file_size_bytes`` instead of an empty body. */
+  const handleAttachPicked = async (e: Event) => {
+    const input = e.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    // Reset the input so picking the same file again re-fires
+    // ``onchange`` (browsers de-dup identical paths otherwise).
+    input.value = ''
+    if (!file) return
+    attachmentError.value = null
+    // Branch on the MIME prefix to pick the message ``type``. The
+    // backend's ``MediaUploadView`` runs the actual conversion +
+    // size cap; we just classify for the bubble's render branch.
+    const kind: 'image' | 'video' | 'file' =
+      file.type.startsWith('image/') ? 'image'
+      : file.type.startsWith('video/') ? 'video'
+      : 'file'
+    try {
+      const res = await uploadWithProgress(file)
+      pendingAttachment.value = {
+        type: kind,
+        preview_url: res.signed_url,
+        media_url: res.url,
+        file_name: file.name,
+        mime_type: file.type || 'application/octet-stream',
+        file_size_bytes: file.size,
+      }
+      // An attachment is enough to enable Send even with no caption.
+      composerHasContent.value = true
+    } catch (err: unknown) {
+      attachmentError.value =
+        `Couldn't upload ${file.name}: ${(err as Error)?.message ?? err}`
+    }
   }
 
   /** Replace ``ta.value[start:end]`` with ``emoji`` and place the caret
@@ -716,9 +831,12 @@ export default function DmThreadPage() {
     // Drive the mic⇄send slot swap. Strip whitespace so a textarea
     // holding only spaces / newlines still reads as "empty" — the
     // user shouldn't see the send button until they actually have
-    // something to send. ``trim`` is cheap relative to the keystroke
-    // cadence; no need to memo.
-    composerHasContent.value = ta.value.trim().length > 0
+    // something to send. A staged attachment also counts as "ready
+    // to send" so a picture-with-no-caption keeps the Send button
+    // visible. ``trim`` is cheap relative to the keystroke cadence;
+    // no need to memo.
+    composerHasContent.value =
+      ta.value.trim().length > 0 || pendingAttachment.value !== null
     // Slack-style ``:partial`` autocomplete — fires after the
     // close-colon substitution above so a fully-typed ``:heart:`` never
     // opens the dropdown (the glyph is already in place).
@@ -772,7 +890,10 @@ export default function DmThreadPage() {
     if (sending.value) return  // belt-and-braces guard for keyboard Enter
     const form = e.target as HTMLFormElement
     const content = (new FormData(form).get('content') as string ?? '').trim()
-    if (!content) return
+    const attachment = pendingAttachment.value
+    // Either a caption or a staged attachment is required — both
+    // empty means nothing to send.
+    if (!content && !attachment) return
     const reply_to_id = replyTo.value?.id ?? null
     sending.value = true
 
@@ -798,8 +919,12 @@ export default function DmThreadPage() {
       id: tempId,
       sender_user_id: myUid,
       content,
-      type: 'text',
-      media_url: null,
+      type: attachment ? attachment.type : 'text',
+      media_url: attachment ? attachment.preview_url : null,
+      file_name: attachment?.file_name ?? null,
+      mime_type: attachment?.mime_type ?? null,
+      file_size_bytes: attachment?.file_size_bytes ?? null,
+      media_sync_status: null,
       reply_to_id,
       deleted: false,
       created_at: new Date().toISOString(),
@@ -821,9 +946,14 @@ export default function DmThreadPage() {
     if (unreadAnchor.value) unreadAnchor.value = null
 
     const draft = content
+    const draftAttachment = attachment
     form.reset()
-    // Composer is now empty — flip back to the mic slot.
+    // Composer is now empty — flip back to the mic slot. Also clear
+    // the staged attachment chip; the optimistic bubble already
+    // shows the user that the send is on its way.
     composerHasContent.value = false
+    pendingAttachment.value = null
+    attachmentError.value = null
     // ``form.reset()`` clears the value but leaves the explicit
     // ``style.height`` from a previous autoResize call, so the
     // composer would stay tall after sending a multi-line draft.
@@ -843,6 +973,16 @@ export default function DmThreadPage() {
       const res = await api.post(`/api/conversations/${convId}/messages`, {
         content,
         ...(reply_to_id ? { reply_to_id } : {}),
+        // Attachment metadata. Backend ignores these fields on a
+        // ``text`` send (``type`` defaults to "text"), so we only
+        // include them when an attachment is actually staged.
+        ...(draftAttachment ? {
+          type: draftAttachment.type,
+          media_url: draftAttachment.media_url,
+          file_name: draftAttachment.file_name,
+          mime_type: draftAttachment.mime_type,
+          file_size_bytes: draftAttachment.file_size_bytes,
+        } : {}),
       }) as { id: string }
       // Reconcile the optimistic row with the server-assigned id.
       //  • If the WS broadcast already landed (real ``id`` in the list)
@@ -863,16 +1003,42 @@ export default function DmThreadPage() {
         ta.value = draft
         autoResize(ta)
         ta.focus()
-        // Draft is back in the textarea — slot stays as Send so the
-        // user can hit it again to retry without rebuilding their
-        // message from scratch.
-        composerHasContent.value = ta.value.trim().length > 0
       }
       replyTo.value = restoredReply
-      showToast(
-        `Send failed: ${(err as Error)?.message ?? err}`,
-        'error',
-      )
+      // Distinguish the relayed-DM rejection from a generic send
+      // failure so the user gets a useful prompt ("media only with
+      // directly-paired households") instead of a network-error
+      // toast. The ``api`` helper currently surfaces the backend's
+      // ``error`` body as ``err.message``; the relayed-DM clause
+      // checks the message text for the canonical code.
+      const errMsg = (err as Error)?.message ?? String(err)
+      const isPairingError = errMsg.includes('MEDIA_REQUIRES_DIRECT_PAIRING')
+        || errMsg.toLowerCase().includes('directly-paired')
+      if (isPairingError && draftAttachment) {
+        // The attachment stays uploaded on the backend but won't
+        // reach the recipient. Surface a clear copy in the inline
+        // error slot and drop the staged chip — the user can
+        // remove the attachment and resend as text, or pair with
+        // the household first and re-attach.
+        attachmentError.value =
+          'Pictures, videos and files can only be sent to households '
+          + "you've paired with directly. Pair this peer's household "
+          + 'and try again, or send a text message.'
+        pendingAttachment.value = null
+        composerHasContent.value = (ta?.value.trim().length ?? 0) > 0
+      } else {
+        // Generic failure — restore the attachment so the user can
+        // retry without re-uploading.
+        if (draftAttachment) {
+          pendingAttachment.value = draftAttachment
+        }
+        // Slot stays as Send so the user can hit it again to retry
+        // without rebuilding their message from scratch.
+        composerHasContent.value =
+          (ta?.value.trim().length ?? 0) > 0
+          || pendingAttachment.value !== null
+        showToast(`Send failed: ${errMsg}`, 'error')
+      }
     } finally {
       sending.value = false
     }
@@ -1217,9 +1383,87 @@ export default function DmThreadPage() {
                   </span>
                 </button>
               )}
-              <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-                {m.deleted ? '(message deleted)' : m.content}
-              </p>
+              {/* Media attachments — rendered above any caption text.
+               *  Image / video inline; ``file`` becomes a download
+               *  pill. ``media_sync_status === 'pending'`` overlays a
+               *  spinner to signal "preview shown, full bytes still
+               *  arriving from peer" (the cross-household preview-
+               *  now-sync-later flow). On a deleted message the
+               *  media is gone — only the "(message deleted)"
+               *  placeholder renders. */}
+              {!m.deleted && m.type === 'image' && m.media_url && (
+                <img
+                  class={
+                    'sh-message-media sh-message-media--image'
+                    + (m.media_sync_status === 'pending'
+                      ? ' sh-message-media--pending'
+                      : '')
+                  }
+                  src={m.media_url}
+                  alt={m.file_name ?? 'Picture'}
+                  loading="lazy"
+                />
+              )}
+              {!m.deleted && m.type === 'video' && m.media_url && (
+                <video
+                  class={
+                    'sh-message-media sh-message-media--video'
+                    + (m.media_sync_status === 'pending'
+                      ? ' sh-message-media--pending'
+                      : '')
+                  }
+                  src={m.media_url}
+                  controls
+                  preload="metadata"
+                />
+              )}
+              {!m.deleted && m.type === 'file' && m.media_url && (
+                <a
+                  class="sh-message-file"
+                  href={m.media_url}
+                  download={m.file_name ?? 'attachment'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <span class="sh-message-file__glyph" aria-hidden="true">📎</span>
+                  <span class="sh-message-file__meta">
+                    <span class="sh-message-file__name">
+                      {m.file_name ?? 'Attachment'}
+                    </span>
+                    <span class="sh-message-file__size">
+                      {formatFileSize(m.file_size_bytes)}
+                    </span>
+                  </span>
+                </a>
+              )}
+              {/* Cross-household delivery-failure footnote. Only
+               *  surfaces on the sender's own bubble — the
+               *  recipient has nothing to act on. Set when the
+               *  ``DM_MEDIA_BLOB`` outbox exhausted its retry
+               *  budget for at least one paired peer. The file is
+               *  still on the sender's device; the message just
+               *  didn't make it to ⟨peer⟩'s household. */}
+              {!m.deleted
+                && mine
+                && (m.type === 'image' || m.type === 'video' || m.type === 'file')
+                && m.media_sync_status === 'failed' && (
+                <div class="sh-message-media-failed" role="status">
+                  <span aria-hidden="true">⚠</span>
+                  <span>
+                    Couldn't deliver this media to one or more paired
+                    households — the file is still on your device.
+                  </span>
+                </div>
+              )}
+              {/* Caption body. Empty captions on media messages
+               *  collapse silently (we don't want a stray empty
+               *  ``<p>`` adding visual weight to a picture-only
+               *  bubble). */}
+              {(m.deleted || m.content) && (
+                <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                  {m.deleted ? '(message deleted)' : m.content}
+                </p>
+              )}
               {showFooter && (
                 <div class="sh-message-meta">
                   <time>{new Date(m.created_at).toLocaleTimeString([],
@@ -1278,6 +1522,81 @@ export default function DmThreadPage() {
           >×</button>
         </div>
       )}
+      {pendingAttachment.value && (
+        <div
+          class={
+            'sh-dm-attach-preview'
+            + ` sh-dm-attach-preview--${pendingAttachment.value.type}`
+          }
+          role="status"
+          aria-live="polite"
+        >
+          {/* Pre-send preview tile. The user has just attached a file
+           *  and is about to hit Send — they need to *see* what's
+           *  going. ``image`` shows the picture at up to 280 px wide
+           *  (capped via ``object-fit: contain`` so it's never
+           *  cropped pre-send); ``video`` mounts a real ``<video>``
+           *  element with the poster frame loaded via
+           *  ``preload="metadata"``, so the user can scrub or play
+           *  before sending; ``file`` falls back to the compact chip
+           *  shape because there's no inherent thumbnail to show.
+           *  The clear "×" floats top-right of the tile so the user
+           *  can ditch a wrong pick fast. */}
+          {pendingAttachment.value.type === 'image' && (
+            <img
+              class="sh-dm-attach-preview__media"
+              src={pendingAttachment.value.preview_url}
+              alt={pendingAttachment.value.file_name}
+            />
+          )}
+          {pendingAttachment.value.type === 'video' && (
+            <video
+              class="sh-dm-attach-preview__media"
+              src={pendingAttachment.value.preview_url}
+              preload="metadata"
+              controls
+              muted
+              playsInline
+            />
+          )}
+          {pendingAttachment.value.type === 'file' && (
+            <span
+              class="sh-dm-attach-preview__file-glyph"
+              aria-hidden="true"
+            >📎</span>
+          )}
+          <div class="sh-dm-attach-preview__meta">
+            <span class="sh-dm-attach-preview__name">
+              {pendingAttachment.value.file_name}
+            </span>
+            <span class="sh-dm-attach-preview__size">
+              {formatFileSize(pendingAttachment.value.file_size_bytes)}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="sh-dm-attach-preview__clear"
+            aria-label="Remove attachment"
+            title="Remove attachment"
+            onClick={() => {
+              pendingAttachment.value = null
+              const ta = composerInputRef.current
+              composerHasContent.value = (ta?.value.trim().length ?? 0) > 0
+            }}
+          >×</button>
+        </div>
+      )}
+      {attachmentError.value && (
+        <div class="sh-dm-attach-error" role="alert">
+          {attachmentError.value}
+          <button
+            type="button"
+            class="sh-dm-attach-error__clear"
+            aria-label="Dismiss error"
+            onClick={() => { attachmentError.value = null }}
+          >×</button>
+        </div>
+      )}
       <form
         class={
           'sh-composer'
@@ -1285,6 +1604,34 @@ export default function DmThreadPage() {
         }
         onSubmit={handleSend}
       >
+        {/* Hidden file input — driven by the paperclip button below.
+         *  The picker accepts every MIME type so the user can attach
+         *  a photo, a video, OR a generic file (PDF, etc.); the
+         *  backend's :class:`MediaUploadView` is the authority on
+         *  size + format constraints (same rules as the feed). */}
+        <input
+          ref={attachInputRef}
+          type="file"
+          class="sh-dm-attach-input"
+          aria-hidden="true"
+          tabIndex={-1}
+          onChange={handleAttachPicked}
+        />
+        {/* Attach button — paperclip. Outside the input pill so it
+         *  has its own thumb target separate from the textarea and
+         *  the inline emoji picker. ``aria-label`` carries the verb
+         *  rather than the icon name so screen readers say "Attach
+         *  a file". */}
+        <button
+          type="button"
+          class="sh-dm-attach-btn"
+          title="Attach a picture, video or file"
+          aria-label="Attach a picture, video or file"
+          disabled={sending.value || pendingAttachment.value !== null}
+          onClick={() => attachInputRef.current?.click()}
+        >
+          <span aria-hidden="true">📎</span>
+        </button>
         {/* Textarea + inline emoji picker. The emoji button sits
          *  inside the input pill on the right edge (WhatsApp / iMessage
          *  idiom): a small ghost-icon that doesn't claim a separate

@@ -52,7 +52,17 @@ from __future__ import annotations
 #:   so the bump is informational; future v3+ features that aren't
 #:   fail-soft will be the first to actually flip behaviour via
 #:   :func:`FederationService.peer_supports`.
-OURS: int = 2
+#: * **v3** — DM media (image / video / file). ``DM_MESSAGE`` payloads
+#:   may now carry ``file_name``, ``mime_type``, ``file_size_bytes``,
+#:   ``media_blob_id``, and (for cross-household sends) a tiny
+#:   ``preview_bytes_b64`` thumbnail / poster / glyph that the
+#:   receiver renders immediately while a follow-up
+#:   :data:`FederationEventType.DM_MEDIA_BLOB` ships the full bytes.
+#:   Issue #319 paragraph 5 policy: **fallback**. Sub-v_3 peers
+#:   receive a synthesised ``type='text'`` message — see
+#:   :mod:`socialhome.federation.compat.dm_media_v3` for the
+#:   transform.
+OURS: int = 3
 
 
 class FederationCapability:
@@ -69,3 +79,13 @@ class FederationCapability:
     #: at any version), so this constant is informational — kept as a
     #: worked example of how the next feature should be wired.
     MIN_FOR_CALENDAR_TZ = 2
+
+    #: Minimum proto_version where ``DM_MESSAGE`` may carry the media-
+    #: attachment fields (``file_name`` / ``mime_type`` /
+    #: ``file_size_bytes`` / ``media_blob_id``) AND where the receiver
+    #: knows how to handle the follow-up ``DM_MEDIA_BLOB`` event.
+    #: Sub-v_3 peers fall back to a synthesised ``type='text'`` message
+    #: ("📎 cat.jpg — sender needs to upgrade…") so the bubble still
+    #: carries useful information instead of vanishing — see the
+    #: :mod:`socialhome.federation.compat.dm_media_v3` transform.
+    MIN_FOR_DM_MEDIA_SYNC = 3

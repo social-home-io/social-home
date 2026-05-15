@@ -20,6 +20,7 @@ Entry point: ``python -m socialhome.app`` (or via ``socialhome/__main__.py``).
 from __future__ import annotations
 
 import logging
+import pathlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -103,6 +104,7 @@ from .repositories.call_repo import SqliteCallRepo
 from .repositories.cp_repo import SqliteCpRepo
 from .repositories.gfs_connection_repo import SqliteGfsConnectionRepo
 from .repositories.dm_contact_repo import SqliteDmContactRepo
+from .repositories.dm_media_outbox_repo import SqliteDmMediaOutboxRepo
 from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
@@ -157,6 +159,7 @@ from .services.calendar_import_service import CalendarImportService
 from .services.calendar_service import CalendarService, SpaceCalendarService
 from .services.child_protection_service import ChildProtectionService
 from .services.data_export_service import DataExportService
+from .services.dm_media_sync_service import DmMediaSyncService
 from .services.dm_routing_service import DmRoutingService
 from .services.federation_inbound_service import FederationInboundService
 from .services.relay_policy import RelayPolicy
@@ -348,6 +351,7 @@ def _build_repos(db: AsyncDatabase):
         cp=SqliteCpRepo(db),
         dm_routing=SqliteDmRoutingRepo(db),
         dm_contact=SqliteDmContactRepo(db),
+        dm_media_outbox=SqliteDmMediaOutboxRepo(db),
         household_features=SqliteHouseholdFeaturesRepo(db),
         presence=SqlitePresenceRepo(db),
         public_space=SqlitePublicSpaceRepo(db),
@@ -403,6 +407,7 @@ def _wire_federation_stack(
     idempotency_cache,
     typing_service,
     dm_service,
+    dm_media_sync_service,
     dm_routing_service,
     dm_routing_repo,
     presence_service,
@@ -481,6 +486,9 @@ def _wire_federation_stack(
         federation_service,
         own_instance_id=identity.instance_id,
     )
+    # DM media sync needs federation to dispatch DM_MEDIA_BLOB
+    # events; wire it now that the federation service exists.
+    dm_media_sync_service.attach_federation(federation_service)
     federation_service.attach_dm_routing(dm_routing_service)
     federation_service.attach_presence_service(presence_service)
     # Online status (session presence) — federation hooks both ways:
@@ -528,6 +536,13 @@ def _wire_federation_stack(
         report_service=report_service,
         dm_routing_repo=dm_routing_repo,
         relay_policy=relay_policy,
+        # v_3 DM media — receiver writes the embedded preview here
+        # on DM_MESSAGE, then the full bytes from DM_MEDIA_BLOB.
+        # ``realtime`` is wired later via :meth:`attach_realtime`
+        # because :class:`RealtimeService` is constructed downstream
+        # of this point.
+        media_dir=pathlib.Path(config.media_path),
+        realtime=None,
     )
     inbound_service.attach_to(federation_service)
 
@@ -1035,11 +1050,22 @@ def create_app(config: Config | None = None) -> web.Application:
         bus,
         i18n=i18n,
     )
+    # v_3 DM media sync — preview builder + DM_MEDIA_BLOB outbox
+    # scheduler. Wired before DmService so it can be passed in;
+    # ``attach_federation`` later sets the FederationService once it
+    # exists (DM ↔ federation cycle).
+    dm_media_sync_service = DmMediaSyncService(
+        convos=conversation_repo,
+        outbox=repos.dm_media_outbox,
+        federation=None,  # set by attach_federation below
+        media_dir=pathlib.Path(config.media_path),
+    )
     dm_service = DmService(
         conversation_repo,
         user_repo,
         bus,
         dm_routing_repo=repos.dm_routing,
+        media_sync=dm_media_sync_service,
     )
     report_repo = SqliteReportRepo(db)
     report_service = ReportService(
@@ -1073,6 +1099,7 @@ def create_app(config: Config | None = None) -> web.Application:
         ws_manager,
         user_repo=user_repo,
         space_repo=space_repo,
+        conversation_repo=conversation_repo,
     )
     realtime_service.wire()
 
@@ -1712,6 +1739,7 @@ def create_app(config: Config | None = None) -> web.Application:
             idempotency_cache=idempotency_cache,
             typing_service=typing_service,
             dm_service=dm_service,
+            dm_media_sync_service=dm_media_sync_service,
             dm_routing_service=dm_routing_service,
             dm_routing_repo=repos.dm_routing,
             presence_service=presence_service,
@@ -1740,6 +1768,11 @@ def create_app(config: Config | None = None) -> web.Application:
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).
         space_cal_service.attach_federation(federation_service)
+        # Late-bind realtime into the federation inbound — the
+        # DM_MEDIA_BLOB handler uses it to fan ``dm.media_ready``
+        # frames to local participants when the full bytes for a
+        # cross-household media DM land.
+        fed.inbound_service.attach_realtime(realtime_service)
         # Personal calendar federation (§23.60). Cross-household invites
         # ride on regular send_event envelopes; attendee → instance
         # routing happens inside the service via the user/federation
@@ -1875,6 +1908,14 @@ def create_app(config: Config | None = None) -> web.Application:
         dm_relay_seen_scheduler = DmRelaySeenPruneScheduler(dm_routing_service)
         await dm_relay_seen_scheduler.start()
 
+        # DM media outbox scheduler (§DM-media) — flushes
+        # ``dm_media_outbox`` rows by reading the full bytes off
+        # disk + dispatching ``DM_MEDIA_BLOB`` to the target peer.
+        # Sleeps between ticks; an immediate first tick happens on
+        # ``start()`` so a fresh boot picks up rows queued before
+        # the previous run was killed.
+        await dm_media_sync_service.start()
+
         # Password-reset cleanup — drops expired admin-issued reset
         # tokens so the table doesn't accumulate one row per reset
         # forever (1h TTL, runs hourly).
@@ -1900,7 +1941,10 @@ def create_app(config: Config | None = None) -> web.Application:
         # DM GC (§23.47c) — hard-deletes conversations whose every
         # local member has soft-left and which have no remote members.
         nonlocal dm_gc_scheduler
-        dm_gc_scheduler = DmGcScheduler(conversation_repo)
+        dm_gc_scheduler = DmGcScheduler(
+            conversation_repo,
+            media_dir=pathlib.Path(config.media_path),
+        )
         await dm_gc_scheduler.start()
 
         # Bazaar auction expiry — closes due auctions on a 60-s cadence.
@@ -2016,6 +2060,10 @@ def create_app(config: Config | None = None) -> web.Application:
             await replay_cache_scheduler.stop()
         if dm_relay_seen_scheduler is not None:
             await dm_relay_seen_scheduler.stop()
+        # DM media outbox scheduler — drain any in-flight blob send
+        # so we don't leave a row marked ``in_flight`` past the
+        # restart (the next boot would see it stuck and never retry).
+        await dm_media_sync_service.stop()
         if password_reset_cleanup_scheduler is not None:
             await password_reset_cleanup_scheduler.stop()
         await online_status_service.stop()
