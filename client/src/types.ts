@@ -335,7 +335,7 @@ export interface Message {
   id: string
   sender_user_id: string
   content: string
-  /** ``"text" | "image" | "video" | "file" | "transcript" |
+  /** ``"text" | "image" | "video" | "file" | "audio" | "transcript" |
    *  "location" | "call_event"`` — keep ``string`` so future
    *  additions don't require a SPA-side type bump. */
   type: string

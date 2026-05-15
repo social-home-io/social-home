@@ -1062,6 +1062,37 @@ class DmMessageCreated(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class DmMessageUpdated(DomainEvent):
+    """A DM's ``content`` was updated in place.
+
+    Fires on two paths today, both for voice notes:
+
+    1. **Sender-side STT patch.** Right after the audio bubble is
+       persisted with empty ``content``, the dm service runs the
+       sender's ``adapter.stt`` on the blob; when the transcript is
+       ready it patches the row and emits this event. The recipient's
+       open thread tab swaps the "Transcribing…" placeholder for the
+       transcript line.
+    2. **Receiver-side fallback.** If a remote sender shipped audio
+       without a transcript (their STT failed or wasn't configured),
+       the local ``AudioTranscriptScheduler`` runs the recipient's own
+       STT and patches the row the same way.
+
+    ``recipient_user_ids`` covers every other participant in the
+    conversation — the realtime layer fans the
+    ``dm.message_updated`` WS frame out to all of them.
+    """
+
+    conversation_id: str
+    message_id: str
+    sender_user_id: str
+    recipient_user_ids: tuple[str, ...]
+    content: str
+    edited_at: datetime
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class DmConversationCreated(DomainEvent):
     """A new DM / group DM was created.
 

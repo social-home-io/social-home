@@ -12452,6 +12452,121 @@ a.sh-welcome-card:hover {
 }
 .sh-stt-btn:hover { background: var(--sh-bg-secondary); }
 
+/* Voice-note recorder (DM composer hold-to-record mic) */
+.sh-voice-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-full);
+  width: 40px; height: 40px;
+  cursor: pointer;
+  color: inherit;
+  transition: background var(--sh-transition-fast), color var(--sh-transition-fast);
+  /* Disable text selection so a touch-and-drag (slide-up-to-lock)
+     doesn't accidentally select neighbour text on Android Chrome. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* Long-press shouldn't trigger the native context menu either. */
+  touch-action: none;
+}
+.sh-voice-btn:hover { background: var(--sh-bg-secondary); }
+.sh-voice-btn--recording {
+  background: color-mix(in srgb, var(--sh-danger) 14%, var(--sh-bg));
+  border-color: color-mix(in srgb, var(--sh-danger) 50%, var(--sh-border));
+  color: var(--sh-danger);
+  /* Stretch the pill so the elapsed-time label has room. */
+  width: auto;
+  padding: 0 var(--sh-space-md);
+  gap: var(--sh-space-xs);
+}
+.sh-voice-btn__elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sh-space-xs);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+.sh-voice-btn__pulse {
+  display: inline-block;
+  color: var(--sh-danger);
+  animation: sh-voice-pulse 1s ease-in-out infinite;
+}
+.sh-voice-btn--disabled { opacity: 0.5; cursor: not-allowed; }
+@keyframes sh-voice-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* Locked-mode footer that replaces the composer's right side after a
+   slide-up-to-lock gesture. The two buttons mirror WhatsApp Web — a
+   Cancel that discards, a Send that finalises. */
+.sh-voice-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: 0 var(--sh-space-sm);
+  border: 1px solid color-mix(in srgb, var(--sh-danger) 35%, var(--sh-border));
+  border-radius: var(--sh-radius-full);
+  background: color-mix(in srgb, var(--sh-danger) 8%, var(--sh-bg));
+  height: 40px;
+}
+.sh-voice-locked__indicator {
+  color: var(--sh-danger);
+  animation: sh-voice-pulse 1s ease-in-out infinite;
+}
+.sh-voice-locked__elapsed {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+}
+.sh-voice-locked__btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0 var(--sh-space-sm);
+  font-size: 0.9rem;
+  color: inherit;
+}
+.sh-voice-locked__btn--cancel { color: var(--sh-fg-secondary); }
+.sh-voice-locked__btn--send { color: var(--sh-primary); font-weight: 600; }
+
+/* Voice-note bubble: inline ``<audio controls>`` + transcript line. */
+.sh-message-audio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  width: 100%;
+}
+.sh-message-audio__player {
+  width: 100%;
+  /* Keep the native controls compact — Chrome's default would otherwise
+     overflow the bubble on a 280-px-wide mobile column. */
+  max-width: 280px;
+  height: 36px;
+}
+.sh-message-audio__player--pending {
+  /* Same brightness-pulse cue as image/video previews mid-sync. */
+  animation: sh-message-media-pending 1.5s ease-in-out infinite;
+}
+.sh-message-audio__transcript {
+  font-size: 0.9rem;
+  /* ``currentColor`` inherits the bubble's foreground — cream on the
+     sender's tinted ``.sh-message--mine`` bubble, dark text on the
+     light recipient bubble. The opacity drops the visual weight so
+     the transcript reads as secondary to the audio control without
+     hard-coding a token that would invert wrong on one side. */
+  color: currentColor;
+  opacity: 0.75;
+  font-style: italic;
+  line-height: 1.35;
+}
+.sh-message-audio__transcript--pending {
+  opacity: 0.5;
+  animation: sh-voice-pulse 1.8s ease-in-out infinite;
+}
+
 /* Mute toggle (audio feeds) */
 .sh-mute-toggle {
   background: transparent;

@@ -12,10 +12,12 @@ from aiohttp.multipart import BodyPartReader
 
 from ..app_keys import config_key, media_signer_key, storage_quota_service_key
 from ..domain.media_constraints import (
+    AUDIO_ACCEPTED_MIMES,
     FILE_DENIED_EXTENSIONS,
     FILE_MAX_UPLOAD_BYTES,
     VIDEO_MAX_UPLOAD_BYTES,
 )
+from ..media.audio_processor import AudioProcessor
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
 from ..security import error_response
@@ -48,6 +50,15 @@ _VIDEO_HINT_MIMES: frozenset[str] = frozenset(
     {"video/mp4", "video/webm", "video/quicktime"},
 )
 _VIDEO_HINT_EXTS: frozenset[str] = frozenset({".mp4", ".webm", ".mov"})
+#: Audio routes the upload through :class:`AudioProcessor` — same
+#: pattern as the image/video branches. Anything that hints "audio"
+#: (any ``audio/*`` MIME or a recognisable extension) takes this
+#: branch; the processor itself enforces OGG/Opus and rejects
+#: everything else, so a mislabelled ``.mp3`` lands a clear 422
+#: instead of slipping into the generic file passthrough.
+_AUDIO_HINT_EXTS: frozenset[str] = frozenset(
+    {".ogg", ".oga", ".opus", ".weba", ".m4a", ".aac"},
+)
 
 
 def _sanitise_file_ext(filename: str) -> str:
@@ -165,13 +176,30 @@ class MediaUploadView(BaseView):
         content_type = field.headers.get("Content-Type", "")
         lower_ext = pathlib.Path(filename).suffix.lower()
 
-        is_video = content_type in _VIDEO_HINT_MIMES or lower_ext in _VIDEO_HINT_EXTS
-        is_image = content_type in _IMAGE_HINT_MIMES or lower_ext in _IMAGE_HINT_EXTS
+        # Audio detection runs FIRST so a Chromium ``voice-note.webm``
+        # blob (audio/webm; codecs=opus, ``.webm`` extension) takes the
+        # audio branch instead of being mis-routed to the video
+        # processor — the ``.webm`` extension alone matches the video
+        # hint set otherwise.
+        is_audio = (
+            content_type in AUDIO_ACCEPTED_MIMES
+            or content_type.startswith("audio/")
+            or lower_ext in _AUDIO_HINT_EXTS
+        )
+        is_video = not is_audio and (
+            content_type in _VIDEO_HINT_MIMES or lower_ext in _VIDEO_HINT_EXTS
+        )
+        is_image = not is_audio and (
+            content_type in _IMAGE_HINT_MIMES or lower_ext in _IMAGE_HINT_EXTS
+        )
 
         try:
             out_bytes: bytes
             out_name: str
-            if is_video:
+            if is_audio:
+                a_proc = AudioProcessor()
+                out_bytes, out_name = await a_proc.process(data, filename)
+            elif is_video:
                 v_proc = VideoProcessor()
                 out_bytes, out_name = await v_proc.process(data, filename)
             elif is_image:
