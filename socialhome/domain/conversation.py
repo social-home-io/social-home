@@ -21,11 +21,21 @@ class ConversationType(StrEnum):
 
 
 # Allowed ``type`` values for a :class:`ConversationMessage`.
+#
+# Media attachments (``image`` / ``video`` / ``file``) carry their
+# bytes via ``media_url`` plus the ``file_name`` / ``mime_type`` /
+# ``file_size_bytes`` siblings below. Same-household renders straight
+# from the local-signed URL; cross-household uses the preview-now-
+# sync-later flow (a tiny preview is embedded in the encrypted
+# ``DM_MESSAGE`` envelope, the full bytes follow on a
+# ``DM_MEDIA_BLOB`` event). ``transcript`` and ``location`` carry
+# their data inside ``content``.
 MESSAGE_TYPES: frozenset[str] = frozenset(
     {
         "text",
         "image",
         "video",
+        "file",
         "transcript",
         "location",
     }
@@ -53,6 +63,30 @@ class ConversationMessage:
 
     type: str = "text"
     media_url: str | None = None
+    #: Original filename for ``type='file'`` (or a user-friendly label
+    #: for image/video uploads). NULL for ``text`` / ``transcript`` /
+    #: ``location`` and for any media without a label.
+    file_name: str | None = None
+    #: IANA media type — drives the receiver's render branch
+    #: (``image/*`` → inline ``<img>``, ``video/*`` → ``<video>``,
+    #: anything else → file pill with a glyph + filename + size).
+    mime_type: str | None = None
+    #: Authoritative byte count of the full-quality media (post-
+    #: transcoding for image / video, raw for ``file``). Surfaces in
+    #: the bubble as "1.2 MB" so the recipient knows what they're
+    #: about to load on a metered connection.
+    file_size_bytes: int | None = None
+    #: Stable identifier shared with the follow-up ``DM_MEDIA_BLOB``
+    #: event when this message rides cross-household. NULL for local
+    #: messages or non-media types.
+    media_blob_id: str | None = None
+    #: Cross-household sync state. NULL when the message is local OR
+    #: the full bytes have arrived (``media_url`` now points at the
+    #: local-stored full media). ``'pending'`` = the bubble renders
+    #: the preview embedded in the envelope while waiting for the
+    #: blob; ``'failed'`` = sender gave up after retry-budget
+    #: exhaustion.
+    media_sync_status: str | None = None
     reply_to_id: str | None = None
     #: Highlight-frame reply (§Highlights). Set when the user replied to a
     #: highlight frame from the viewer; the snapshot below freezes a
@@ -64,7 +98,17 @@ class ConversationMessage:
     edited_at: datetime | None = None
 
     def soft_delete(self) -> "ConversationMessage":
-        return copy.replace(self, content="", media_url=None, deleted=True)
+        return copy.replace(
+            self,
+            content="",
+            media_url=None,
+            file_name=None,
+            mime_type=None,
+            file_size_bytes=None,
+            media_blob_id=None,
+            media_sync_status=None,
+            deleted=True,
+        )
 
     def edit(
         self, new_content: str, *, now: datetime | None = None

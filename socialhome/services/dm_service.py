@@ -33,6 +33,7 @@ from ..domain.conversation import (
 )
 from ..domain.events import DmConversationCreated, DmMessageCreated
 from ..domain.federation import FederationEventType
+from ..federation import compat
 from ..infrastructure.event_bus import EventBus
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
@@ -58,6 +59,23 @@ class RecipientBlockedError(PermissionError):
     Symmetric: rejects both "I blocked them, why am I DMing them?" and
     "they blocked me, they don't want this." :class:`BaseView._iter`
     maps :class:`PermissionError` (and subclasses) to a 403 response.
+    """
+
+
+class MediaRequiresDirectPairingError(ValueError):
+    """Raised when a media attachment can't go through the relay path.
+
+    Operator decision (issue #319 paragraph 5, "federated-only" media):
+    image / video / file attachments are only shared with households we
+    have a direct confirmed pairing with. A DM that requires the
+    multi-hop ``DM_RELAY`` path (bazaar-style inquiries, transitive-
+    only peers) rejects media so a low-trust acquaintance can't pull
+    bytes through a third-party relay.
+
+    Mapped to HTTP 422 by :class:`BaseView._iter` with the
+    ``MEDIA_REQUIRES_DIRECT_PAIRING`` error code so the SPA can render
+    a clear "this peer needs to be in your trusted households to
+    share pictures" message.
     """
 
 
@@ -337,6 +355,9 @@ class DmService:
         content: str,
         type: str = "text",
         media_url: str | None = None,
+        file_name: str | None = None,
+        mime_type: str | None = None,
+        file_size_bytes: int | None = None,
         reply_to_id: str | None = None,
         reply_to_highlight_frame_id: str | None = None,
         reply_to_highlight_frame_snapshot: str | None = None,
@@ -363,10 +384,24 @@ class DmService:
                 await self._guard_block_pair(sender.user_id, peer.user_id)
         if type not in MESSAGE_TYPES:
             raise ValueError(f"invalid message type {type!r}")
-        if not content and type == "text":
+        is_media = type in ("image", "video", "file")
+        # ``text`` requires content; media types carry the bytes via
+        # ``media_url`` instead so an empty caption is fine.
+        if not content and not is_media and type == "text":
             raise ValueError("message content must not be empty")
         if len(content) > MAX_DM_LENGTH:
             raise ValueError(f"message content exceeds {MAX_DM_LENGTH} chars")
+        if is_media and not media_url:
+            raise ValueError(f"{type!r} messages require ``media_url``")
+        # Federated-only rule (operator decision, issue #319 paragraph 5):
+        # media may only be shared with peers we have a direct confirmed
+        # pairing with — never via the multi-hop DM_RELAY path used for
+        # bazaar-style inquiries to unrelated households. ``_fan_to_remote``
+        # already skips unconfirmed peers downstream, but the rule there is
+        # "drop silently"; for media we want the sender to know immediately
+        # so they don't think the picture went through.
+        if is_media:
+            await self._reject_media_on_relay_only_conversation(conversation_id)
 
         msg = ConversationMessage(
             id=uuid.uuid4().hex,
@@ -375,6 +410,9 @@ class DmService:
             content=content,
             type=type,
             media_url=media_url,
+            file_name=file_name,
+            mime_type=mime_type,
+            file_size_bytes=file_size_bytes,
             reply_to_id=reply_to_id,
             reply_to_highlight_frame_id=reply_to_highlight_frame_id,
             reply_to_highlight_frame_snapshot=reply_to_highlight_frame_snapshot,
@@ -447,6 +485,22 @@ class DmService:
             "occurred_at": msg.created_at.isoformat(),
             "recipient_user_ids": recipients,
         }
+        # v_3 fields. ``compat.transform_for_peer`` strips them for
+        # sub-v_3 receivers via ``dm_media_v3`` — see that module's
+        # docstring for the §319 paragraph-5 ``fallback`` policy.
+        # Included unconditionally on outbound so the canonical wire
+        # shape is what v_3+ peers see; the per-peer rewrite happens
+        # downstream inside ``_fan_to_remote``.
+        if is_media:
+            payload["file_name"] = file_name
+            payload["mime_type"] = mime_type
+            payload["file_size_bytes"] = file_size_bytes
+            # ``media_blob_id`` reservation — the matching
+            # ``DM_MEDIA_BLOB`` event ships the bytes in a follow-up
+            # PR. The receiver's v_3 handler will look this up to
+            # join the preview (in this payload, future-PR) with the
+            # full bytes (in the blob event).
+            payload["media_blob_id"] = msg.id
         if seq is not None:
             payload["sender_seq"] = seq
         await self._fan_to_remote(
@@ -779,11 +833,25 @@ class DmService:
                     inst,
                 )
                 continue
+            # Per-peer compat shim. The canonical ``payload`` above is
+            # the newest (``OURS``) wire shape; for each peer we ask the
+            # registered transforms whether they need to rewrite (e.g.
+            # strip v_3 media fields for a v_2 peer and substitute a
+            # text fallback). Returning ``None`` drops the send — no
+            # current shim does, but the protocol supports the
+            # force-upgrade policy.
+            peer_payload = await self._compat_transform_payload(
+                event_type=event_type,
+                payload=payload,
+                peer_instance_id=inst,
+            )
+            if peer_payload is None:
+                continue
             try:
                 await self._federation.send_event(
                     to_instance_id=inst,
                     event_type=event_type,
-                    payload=payload,
+                    payload=peer_payload,
                 )
             except Exception as exc:  # pragma: no cover
                 log.debug(
@@ -791,6 +859,85 @@ class DmService:
                     inst,
                     event_type.value,
                     exc,
+                )
+
+    async def _compat_transform_payload(
+        self,
+        *,
+        event_type: FederationEventType,
+        payload: dict,
+        peer_instance_id: str,
+    ) -> dict | None:
+        """Run the per-peer compat transforms (see ``federation/compat/``).
+
+        Reads the peer's advertised ``proto_version`` off
+        ``remote_instances`` and hands the payload to
+        :func:`socialhome.federation.compat.transform_for_peer`. Falls
+        open (returns the payload unchanged) if the proto_version
+        lookup fails — a missing peer_version reads as "we don't know,
+        assume current" which mirrors what would happen on first
+        contact before the capabilities exchange.
+        """
+        peer_version = 1
+        if self._federation_repo is not None:
+            try:
+                instance = await self._federation_repo.get_instance(
+                    peer_instance_id,
+                )
+            except Exception:  # pragma: no cover
+                instance = None
+            if instance is not None:
+                peer_version = int(
+                    getattr(instance, "proto_version", None) or 1,
+                )
+        return compat.transform_for_peer(
+            event_type=event_type,
+            payload=payload,
+            peer_version=peer_version,
+        )
+
+    async def _reject_media_on_relay_only_conversation(
+        self,
+        conversation_id: str,
+    ) -> None:
+        """Refuse media when any remote participant requires DM_RELAY.
+
+        A conversation may carry remote members from one or more
+        peers. Each peer is either:
+
+        * **Directly paired (CONFIRMED)** — media flows through the
+          regular ``DM_MESSAGE`` envelope (v_3) plus the follow-up
+          ``DM_MEDIA_BLOB`` for full bytes.
+        * **Transitive only** — reachable only via a relay path
+          through one or more confirmed intermediaries (the bazaar
+          contact-flow that lets households reach each other via a
+          mutual friend without scanning a QR code). Media is *not*
+          allowed here: relays are explicitly the lower-trust path
+          and shouldn't shuttle picture/video/file bytes through
+          third-party households.
+
+        If any remote member's instance fails the confirmed-peer
+        check, the whole send is rejected. The SPA disables the
+        attach button when the conversation is relay-only — this is
+        the server-side belt-and-braces guard that catches a
+        bypass attempt.
+        """
+        # No remote members → same-household conversation; nothing
+        # to gate.
+        remote_members = await self._convos.list_remote_members(conversation_id)
+        if not remote_members:
+            return
+        seen: set[str] = set()
+        for rm in remote_members:
+            inst = rm.instance_id
+            if inst in seen:
+                continue
+            seen.add(inst)
+            if not await self._peer_is_confirmed(inst):
+                raise MediaRequiresDirectPairingError(
+                    "Media attachments are only allowed with directly-paired "
+                    "households. This conversation includes participants "
+                    "reachable only via a relay.",
                 )
 
     async def _peer_is_confirmed(self, instance_id: str) -> bool:

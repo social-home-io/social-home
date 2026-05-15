@@ -160,6 +160,16 @@ class FederationEventType(str, enum.Enum):
     DM_USER_TYPING = "dm_user_typing"
     DM_RELAY = "dm_relay"
     DM_MESSAGE = "dm_message"
+    #: Full-quality media bytes for a previously-sent ``DM_MESSAGE``.
+    #: Gated on :data:`FederationCapability.MIN_FOR_DM_MEDIA_SYNC`
+    #: (proto_version 3) — see :mod:`socialhome.federation.compat.dm_media_v3`
+    #: for the sub-v_3 fallback. Payload carries ``media_blob_id``
+    #: (matches the ``DM_MESSAGE`` it follows), ``message_id``,
+    #: ``conversation_id``, and the encrypted bytes. The full pipeline
+    #: (sender outbox + receiver inbox handler + scheduler) lands
+    #: incrementally in follow-up PRs; this entry reserves the wire
+    #: name so the capability bump is honest about what v_3 advertises.
+    DM_MEDIA_BLOB = "dm_media_blob"
     DM_MESSAGE_DELETED = "dm_message_deleted"
     DM_MESSAGE_REACTION = "dm_message_reaction"
     DM_MEMBER_ADDED = "dm_member_added"

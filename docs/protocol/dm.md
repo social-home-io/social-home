@@ -29,7 +29,9 @@ additional encryption layer against them would be theatre.
 **Messages**
 
 `DM_MESSAGE`, `DM_MESSAGE_DELETED`, `DM_MESSAGE_REACTION`,
-`DM_USER_TYPING`, `DM_RELAY` (relay wrapper for group DMs).
+`DM_USER_TYPING`, `DM_RELAY` (relay wrapper for group DMs),
+`DM_MEDIA_BLOB` (v_3+, full-bytes follow-up for cross-household
+picture / video / file attachments — see [DM media](./dm-media.md)).
 
 **Membership**
 

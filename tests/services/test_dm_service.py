@@ -199,6 +199,87 @@ async def test_non_member_cannot_send(stack):
         await stack.dm_svc.send_message(dm.id, sender_username="c", content="x")
 
 
+async def test_send_image_same_household(stack):
+    """An image message in a same-household DM rides through fine.
+
+    Same-household means no remote members; the relay-only gate is a
+    no-op for this case and the row gets stored with the full media
+    metadata triple.
+    """
+    await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    dm = await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+    msg = await stack.dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="image",
+        media_url="media/cat.webp",
+        file_name="cat.jpg",
+        mime_type="image/jpeg",
+        file_size_bytes=1234,
+    )
+    assert msg.type == "image"
+    assert msg.media_url == "media/cat.webp"
+    assert msg.file_name == "cat.jpg"
+    assert msg.mime_type == "image/jpeg"
+    assert msg.file_size_bytes == 1234
+
+
+async def test_send_file_same_household(stack):
+    """``type='file'`` works the same way — generic attachments are in scope."""
+    await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    dm = await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+    msg = await stack.dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="file",
+        media_url="media/invoice.pdf",
+        file_name="invoice.pdf",
+        mime_type="application/pdf",
+        file_size_bytes=99_000,
+    )
+    assert msg.type == "file"
+    assert msg.file_name == "invoice.pdf"
+
+
+async def test_send_image_rejects_empty_media_url(stack):
+    """An image message without ``media_url`` is a developer error."""
+    await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    dm = await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+    with pytest.raises(ValueError, match="media_url"):
+        await stack.dm_svc.send_message(
+            dm.id,
+            sender_username="anna",
+            content="",
+            type="image",
+            media_url=None,
+        )
+
+
+async def test_send_image_allows_empty_caption(stack):
+    """A picture-only DM (no caption) is a valid send.
+
+    Empty ``content`` is a hard error for ``type='text'`` but fine for
+    media types — most photo messages have no caption at all.
+    """
+    await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    dm = await stack.dm_svc.create_dm(creator_username="anna", other_username="bob")
+    msg = await stack.dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="image",
+        media_url="media/cat.webp",
+    )
+    assert msg.content == ""
+    assert msg.type == "image"
+
+
 async def test_add_to_1on1_rejected(stack):
     """Adding a member to a 1:1 DM raises ValueError."""
     await stack.provision_user("a")

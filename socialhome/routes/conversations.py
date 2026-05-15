@@ -149,6 +149,10 @@ class ConversationMessageView(BaseView):
                     "content": m.content,
                     "type": m.type,
                     "media_url": m.media_url,
+                    "file_name": m.file_name,
+                    "mime_type": m.mime_type,
+                    "file_size_bytes": m.file_size_bytes,
+                    "media_sync_status": m.media_sync_status,
                     "reply_to_id": m.reply_to_id,
                     "deleted": m.deleted,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
@@ -166,12 +170,24 @@ class ConversationMessageView(BaseView):
         svc = self.svc(dm_service_key)
         conv_id = self.match("id")
         body = await self.body()
+        # File-size is taken from the body if provided, but the SPA can
+        # also leave it ``None`` and let the receiver read it via the
+        # signed URL's ``content-length``. The cap is enforced by
+        # ``MediaUploadView`` before we ever reach this handler.
+        raw_size = body.get("file_size_bytes")
+        try:
+            file_size_bytes = int(raw_size) if raw_size is not None else None
+        except TypeError, ValueError:
+            file_size_bytes = None
         msg = await svc.send_message(
             conv_id,
             sender_username=ctx.username,
             content=body.get("content", ""),
             type=body.get("type", "text"),
             media_url=strip_signature_query(body.get("media_url")),
+            file_name=body.get("file_name"),
+            mime_type=body.get("mime_type"),
+            file_size_bytes=file_size_bytes,
             reply_to_id=body.get("reply_to_id"),
         )
         return web.json_response({"id": msg.id}, status=201)

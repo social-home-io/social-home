@@ -72,21 +72,31 @@ would be wrong (or a brand-new event type old peers can't dispatch):
    (`FederationCapability.MIN_FOR_OCCURRENCE_OVERRIDE`) instead of a
    magic number. Document what changed in v_N in the history list at
    the top of that module.
-3. **Gate the outbound** for the new surface on
-   `peer_supports(..., min_version=FederationCapability.X)` and pick a
-   degraded fallback that older peers can still parse — or skip the
-   send entirely when no safe fallback exists.
-4. **Update this page** with a one-line summary of v_N: what changed,
+3. **Pick a §319-paragraph-5 policy** for the new feature: `skip` /
+   `fallback` / `force-upgrade`. Record it in the **Policy** column
+   of the version history below so future contributors know what
+   degraded shape (if any) old peers should receive.
+4. **Wire the transform** when the policy is `fallback`: add a
+   one-file shim under
+   [`socialhome/federation/compat/`](../../socialhome/federation/compat/)
+   that registers a per-event transform. The main service code calls
+   `compat.transform_for_peer(...)` once per outbound — the rewrite
+   lives entirely in the compat tree, never sprinkled across
+   services. Dropping support for v_N later is then a single-file
+   delete here.
+5. **Update this page** with a one-line summary of v_N: what changed,
    what the older-peer fallback is.
-5. **Add a test** that asserts `peer_supports` returns `False` for the
-   old shape and `True` for the new one.
+6. **Add a test** that asserts `peer_supports` returns `False` for the
+   old shape and `True` for the new one (and that the compat shim
+   produces the documented fallback for a sub-v_N peer).
 
 ## Version history
 
-| Version | What changed | Fallback for older peers |
-|---|---|---|
-| **1** | Initial wire (every event type up to but not including the calendar timezone fix). | n/a — floor. |
-| **2** | `SPACE_CALENDAR_EVENT_*` and `PERSONAL_CALENDAR_EVENT_*` payloads carry an IANA `tz` field anchoring the event's wall clock. | Receiver defaults `tz` to `"UTC"` — slightly wrong but not broken, so the bump is informational. Future v3+ features that aren't fail-soft will be the first to flip behaviour via `peer_supports`. |
+| Version | What changed | Policy ([#319](https://github.com/social-home-io/socialhome/issues/319) ¶5) | Fallback for older peers |
+|---|---|---|---|
+| **1** | Initial wire (every event type up to but not including the calendar timezone fix). | n/a | n/a — floor. |
+| **2** | `SPACE_CALENDAR_EVENT_*` and `PERSONAL_CALENDAR_EVENT_*` payloads carry an IANA `tz` field anchoring the event's wall clock. | informational | Receiver defaults `tz` to `"UTC"` — slightly wrong but not broken, so the bump is informational. |
+| **3** | `DM_MESSAGE` may carry media attachments (`type` of `image` / `video` / `file`) via the existing `media_url` plus new `file_name` / `mime_type` / `file_size_bytes` / `media_blob_id` fields; the follow-up [`DM_MEDIA_BLOB`](../../socialhome/domain/federation.py) event ships the full bytes for cross-household delivery (preview-now-sync-later). | **fallback** | A sub-v_3 peer receives a synthesised `type='text'` message of the form *"📎 cat.jpg — your peer's household needs to update to share media."* — the transform lives in [`socialhome/federation/compat/dm_media_v3.py`](../../socialhome/federation/compat/dm_media_v3.py). Same-household DMs (media flows through local-signed URLs) and DMs to confirmed-paired peers (v_3) are unaffected. Media on relay-only conversations is rejected at the API boundary with `MEDIA_REQUIRES_DIRECT_PAIRING` — the relay path is explicitly lower-trust and shouldn't shuttle picture/video/file bytes through third-party households. |
 
 ## Future extensions
 

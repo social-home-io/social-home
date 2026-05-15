@@ -38,6 +38,7 @@ from ..domain.space_bot import (
 from ..repositories.page_repo import PageLockError, PageNotFoundError
 from ..security import error_response, sanitise_for_api
 from ..services.bazaar_service import BazaarServiceError, ListingNotFoundError
+from ..services.dm_service import MediaRequiresDirectPairingError
 from ..services.child_protection_service import (
     ChildProtectionError,
     GuardianRequiredError,
@@ -212,6 +213,18 @@ class BaseView(web.View):
             return error_response(403, "FORBIDDEN", str(exc))
         except (ChildProtectionError, BazaarServiceError) as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
+        except MediaRequiresDirectPairingError as exc:
+            # Distinct from the generic ``ValueError`` clause below
+            # because the SPA renders a specific copy ("only paired
+            # households can receive media") instead of the safe
+            # blanket "Request could not be processed." Issue #319
+            # paragraph 5 — the user needs to know *why* their picture
+            # didn't go through.
+            return error_response(
+                422,
+                "MEDIA_REQUIRES_DIRECT_PAIRING",
+                str(exc),
+            )
         except ValueError as exc:
             # §Audit #7: ``str(exc)`` on a ValueError can carry
             # implementation detail (e.g. "Replay detected: msg_id=…"
