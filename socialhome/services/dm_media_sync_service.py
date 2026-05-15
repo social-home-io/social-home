@@ -273,9 +273,25 @@ class DmMediaSyncService:
     # ── Scheduler loop ────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Start the background flush loop. Idempotent."""
+        """Start the background flush loop. Idempotent.
+
+        Reclaims any ``in_flight`` rows left orphaned by a previous
+        sender crash before the loop's first tick — those rows
+        would otherwise stay invisible to :meth:`list_due` and the
+        recipient would never get the blob.
+        """
         if self._task is not None and not self._task.done():
             return
+        try:
+            stuck = await self._outbox.reclaim_in_flight()
+            if stuck:
+                log.info(
+                    "dm-media-sync: reclaimed %d stuck in_flight row(s) "
+                    "from a previous run",
+                    stuck,
+                )
+        except Exception as exc:  # pragma: no cover
+            log.warning("dm-media-sync: reclaim_in_flight failed: %s", exc)
         self._stop.clear()
         self._task = asyncio.create_task(self._loop())
 

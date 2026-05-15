@@ -102,6 +102,49 @@ def _mime_to_ext(mime_type: str) -> str:
     return _MEDIA_MIME_EXT.get(mime_type.lower(), ".bin")
 
 
+#: Magic-byte signatures for the two MIME types the upload pipeline
+#: actually produces — :class:`ImageProcessor` always outputs
+#: ``image/webp`` and :class:`VideoProcessor` always outputs
+#: ``video/webm``. Any other ``mime_type`` declared on an inbound
+#: ``image`` / ``video`` blob means either the sender's instance
+#: is compromised or skipped the upload pipeline; ``_bytes_match_mime``
+#: returns ``False`` in that case so :meth:`_on_dm_media_blob`
+#: flips the row to ``media_sync_status='failed'``. ``type='file'``
+#: blobs (PDFs, ZIPs, arbitrary payloads) don't have a fixed
+#: signature and skip the check.
+_BLOB_MAGIC: dict[str, tuple[int, bytes]] = {
+    "image/webp": (8, b"WEBP"),
+    "video/webm": (0, b"\x1a\x45\xdf\xa3"),
+}
+
+
+def _bytes_match_mime(data: bytes, mime_type: str) -> bool | None:
+    """Sniff ``data``'s leading bytes against the claimed MIME.
+
+    Returns ``True`` when the bytes match a known signature,
+    ``False`` when the claim is image/video but the header doesn't
+    match webp / webm (the upload pipeline never produces other
+    image/video formats — anything else is suspicious), or ``None``
+    when there's no signature to check (``type='file'`` and the
+    like — direct-trust between paired households is the safety
+    net there).
+    """
+    lower = mime_type.lower()
+    sig = _BLOB_MAGIC.get(lower)
+    if sig is None:
+        # No registered signature. For ``image/*`` and ``video/*``
+        # without a match in :data:`_BLOB_MAGIC` — i.e. the sender
+        # claims a format we'd never produce on upload — flag as
+        # suspicious. Everything else (``application/*``,
+        # ``text/*``, the ``file`` passthrough) just trusts the
+        # direct-pairing safety net.
+        if lower.startswith("image/") or lower.startswith("video/"):
+            return False
+        return None
+    offset, pattern = sig
+    return data[offset : offset + len(pattern)] == pattern
+
+
 class FederationInboundService:
     """Apply decrypted inbound federation events to local state.
 
@@ -495,6 +538,26 @@ class FederationInboundService:
             # or a non-media message — nothing for the receiver to
             # build locally.
             return media_url_in, None
+        # Reordering guard: ``DM_MEDIA_BLOB`` may have arrived
+        # *before* this ``DM_MESSAGE`` (federation transport doesn't
+        # guarantee ordering across event types). If a finalised
+        # full file already sits under ``media_dir/<msg_id>.<ext>``,
+        # adopt it directly — no preview needed, no pending state.
+        # The blob handler's own ``update_media_sync_status`` call
+        # no-op'd at the time (row didn't exist yet); the row we're
+        # about to create here will pick up the correct URL on its
+        # first save.
+        if self._media_dir is not None:
+            mime_in = str(payload.get("mime_type") or "")
+            full_path = self._media_dir / f"{message_id}{_mime_to_ext(mime_in)}"
+            if full_path.is_file():
+                # Drop any stale preview from a previous attempt.
+                preview_old = self._media_dir / f"{message_id}.preview.webp"
+                try:
+                    preview_old.unlink(missing_ok=True)
+                except OSError:  # pragma: no cover
+                    pass
+                return f"api/media/{full_path.name}", None
         preview_b64 = payload.get("preview_bytes_b64")
         if not preview_b64 or self._media_dir is None:
             # Cross-household media without an embedded preview, or
@@ -629,6 +692,21 @@ class FederationInboundService:
                 exc,
             )
             return
+        # MIME-byte sniff. Direct-trust between paired households
+        # is the primary safety net, but if a sender's instance is
+        # ever compromised + lies about the payload type, we want
+        # the recipient bubble to surface "this didn't match what
+        # was claimed" rather than silently render whatever
+        # extension the file ended up with. We still store the
+        # file (the user may want to inspect it manually); the
+        # status flips to ``failed`` so the SPA shows the warning
+        # footnote.
+        sniff_result: bool | None = None
+        try:
+            head = dest.open("rb").read(16)
+            sniff_result = _bytes_match_mime(head, mime_type)
+        except OSError:  # pragma: no cover
+            sniff_result = None
         # Drop the preview file if it's there — keeping it around
         # wastes disk space (small) but more importantly an unused
         # ``.preview.webp`` is a vector for stale-state bugs.
@@ -638,9 +716,18 @@ class FederationInboundService:
         except OSError:  # pragma: no cover
             pass
         new_url = f"api/media/{dest.name}"
+        final_status: str | None = None
+        if sniff_result is False:
+            log.warning(
+                "DM_MEDIA_BLOB: bytes for %s don't match claimed "
+                "mime_type=%s — flagging as failed",
+                message_id,
+                mime_type,
+            )
+            final_status = "failed"
         await self._conversation_repo.update_media_sync_status(
             message_id=message_id,
-            status=None,
+            status=final_status,
             media_url=new_url,
         )
         # Push the WS frame so the SPA swaps the bubble's preview for

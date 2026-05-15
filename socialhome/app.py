@@ -1941,7 +1941,10 @@ def create_app(config: Config | None = None) -> web.Application:
         # DM GC (§23.47c) — hard-deletes conversations whose every
         # local member has soft-left and which have no remote members.
         nonlocal dm_gc_scheduler
-        dm_gc_scheduler = DmGcScheduler(conversation_repo)
+        dm_gc_scheduler = DmGcScheduler(
+            conversation_repo,
+            media_dir=pathlib.Path(config.media_path),
+        )
         await dm_gc_scheduler.start()
 
         # Bazaar auction expiry — closes due auctions on a 60-s cadence.

@@ -1539,6 +1539,18 @@ class RealtimeService:
         fetch — the sender, recipient *and* every other open session land
         on the same row in the same render tick.
         """
+        # Sign the media URL inside the WS frame just like the REST
+        # ``GET /api/conversations/{id}/messages`` response does. The
+        # canonical event carries the *unsigned* form (the bus / DB
+        # never store a signed URL — signatures expire); the SPA
+        # drops the URL straight into ``<img src>`` so it must be
+        # the signed variant. Without this, the optimistic-bubble
+        # reconciliation overwrites the sender's signed preview URL
+        # with the unsigned canonical and the picture renders as
+        # broken-image.
+        signed_media_url: str | None = event.media_url
+        if signed_media_url and self._media_signer is not None:
+            signed_media_url = self._media_signer.sign(signed_media_url)
         payload = {
             "type": "dm.message",
             "conversation_id": event.conversation_id,
@@ -1548,7 +1560,7 @@ class RealtimeService:
                 "sender_user_id": event.sender_user_id,
                 "content": event.content,
                 "type": event.message_type,
-                "media_url": event.media_url,
+                "media_url": signed_media_url,
                 "reply_to_id": event.reply_to_id,
                 "deleted": False,
                 "created_at": event.occurred_at.isoformat(),
@@ -1602,13 +1614,20 @@ class RealtimeService:
             user_ids.append(u.user_id)
         if not user_ids:
             return
+        # Sign the URL for the same reason the dm.message frame does:
+        # the SPA drops this value straight into ``<img src>`` on
+        # the receiver side, so it must be the short-lived signed
+        # variant rather than the unsigned canonical.
+        signed = media_url
+        if self._media_signer is not None:
+            signed = self._media_signer.sign(media_url)
         await self._ws.broadcast_to_users(
             user_ids,
             {
                 "type": "dm.media_ready",
                 "conversation_id": conversation_id,
                 "message_id": message_id,
-                "media_url": media_url,
+                "media_url": signed,
             },
         )
 

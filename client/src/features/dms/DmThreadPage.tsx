@@ -1436,6 +1436,25 @@ export default function DmThreadPage() {
                   </span>
                 </a>
               )}
+              {/* Cross-household delivery-failure footnote. Only
+               *  surfaces on the sender's own bubble — the
+               *  recipient has nothing to act on. Set when the
+               *  ``DM_MEDIA_BLOB`` outbox exhausted its retry
+               *  budget for at least one paired peer. The file is
+               *  still on the sender's device; the message just
+               *  didn't make it to ⟨peer⟩'s household. */}
+              {!m.deleted
+                && mine
+                && (m.type === 'image' || m.type === 'video' || m.type === 'file')
+                && m.media_sync_status === 'failed' && (
+                <div class="sh-message-media-failed" role="status">
+                  <span aria-hidden="true">⚠</span>
+                  <span>
+                    Couldn't deliver this media to one or more paired
+                    households — the file is still on your device.
+                  </span>
+                </div>
+              )}
               {/* Caption body. Empty captions on media messages
                *  collapse silently (we don't want a stray empty
                *  ``<p>`` adding visual weight to a picture-only

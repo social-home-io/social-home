@@ -115,6 +115,8 @@ class AbstractDmMediaOutboxRepo(Protocol):
         message_id: str,
     ) -> list[DmMediaOutboxEntry]: ...
 
+    async def reclaim_in_flight(self) -> int: ...
+
 
 class SqliteDmMediaOutboxRepo:
     """SQLite-backed :class:`AbstractDmMediaOutboxRepo`."""
@@ -243,6 +245,39 @@ class SqliteDmMediaOutboxRepo:
             (message_id,),
         )
         return [_row_to_entry(d) for d in rows_to_dicts(rows)]
+
+    async def reclaim_in_flight(self) -> int:
+        """Flip orphaned ``in_flight`` rows back to ``pending`` on boot.
+
+        A sender that crashes between ``mark_in_flight`` and the
+        ``send_event`` call (or between successive chunk sends)
+        leaves the row stuck at ``in_flight`` — :meth:`list_due`
+        filters those out, so the row never retries. Called once
+        from :meth:`DmMediaSyncService.start`. The reset pushes
+        ``next_attempt_at`` ten seconds out so the scheduler doesn't
+        immediately stampede the federation outbox on a busy
+        restart.
+
+        Returns the count of rows that were ``in_flight`` before the
+        update (read first, then update — the small race is fine for
+        a log-line). Returns 0 when there's nothing stuck.
+        """
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS n FROM dm_media_outbox WHERE status='in_flight'",
+            (),
+        )
+        stuck = int(row["n"] if row is not None else 0)
+        if stuck:
+            await self._db.enqueue(
+                """
+                UPDATE dm_media_outbox
+                   SET status='pending',
+                       next_attempt_at=datetime('now', '+10 seconds')
+                 WHERE status='in_flight'
+                """,
+                (),
+            )
+        return stuck
 
 
 def _row_to_entry(row: dict) -> DmMediaOutboxEntry:
