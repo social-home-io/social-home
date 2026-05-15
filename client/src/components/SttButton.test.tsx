@@ -75,7 +75,12 @@ describe('SttButton', () => {
     const { SttButton } = await import('./SttButton')
     const { getByRole } = render(<SttButton onText={() => {}} />)
     const btn = getByRole('button')
-    expect(btn.textContent).toContain('🎙')
+    // Idle state renders an inline SVG mic icon (replaced the
+    // ``🎙`` emoji because that rendered as tofu on Linux desktops
+    // without an emoji font). The SVG carries no text, so we assert
+    // its presence + the recognisable aria-label instead.
+    expect(btn.querySelector('svg')).not.toBeNull()
+    expect(btn.getAttribute('aria-label')).toMatch(/voice note/i)
     expect(btn.getAttribute('aria-pressed')).toBe('false')
   })
 

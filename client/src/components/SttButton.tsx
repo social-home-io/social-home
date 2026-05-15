@@ -11,6 +11,7 @@
  * reports no STT support — so standalone mode (which has no STT in v1)
  * quietly degrades instead of showing a broken button.
  */
+import type preact from 'preact'
 import { signal } from '@preact/signals'
 import { token } from '@/store/auth'
 
@@ -169,10 +170,34 @@ export function SttButton({ onText, language = 'en', disabled, className }: SttB
 
   if (unsupported.value) return null
 
-  const label =
+  // Idle glyph is an inline SVG mic — the previous ``🎙`` emoji
+  // rendered as a tofu box on Linux desktops (and any kiosk display
+  // running without an emoji font), making the push-to-talk button
+  // unrecognisable. The other states stay as small status emoji
+  // (red dot / hourglass / warning) since those carry colour cues
+  // that are universally legible across emoji-font implementations.
+  const idleMic = (
+    <svg
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <line x1="12" y1="18" x2="12" y2="22" />
+      <line x1="8" y1="22" x2="16" y2="22" />
+    </svg>
+  )
+  const label: preact.ComponentChildren =
     state.value === 'recording' ? '🔴' :
     state.value === 'uploading' ? '⏳' :
-    state.value === 'error' ? '⚠' : '🎙'
+    state.value === 'error' ? '⚠' : idleMic
   const title =
     state.value === 'error' ? (error.value || 'Error') :
     state.value === 'recording' ? 'Release to transcribe' :

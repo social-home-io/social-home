@@ -17,6 +17,22 @@ import { useEffect } from 'preact/hooks'
 
 export const pageTitle = signal<string>('')
 
+/** Optional avatar / name pair rendered next to the page title. Pages
+ *  that surface a person-focused view (a DM thread, a profile, a host-
+ *  approval queue) set this so the TopBar shows the peer's face right
+ *  next to their name — same idiom as the row in the inbox list, so
+ *  the user's eye doesn't have to re-anchor when they tap into a
+ *  thread. ``null`` collapses the avatar and the TopBar renders the
+ *  title alone (the default for most pages). */
+export interface PageAvatar {
+  /** Backend-signed src — comes pre-tagged so the browser can load it
+   *  via raw ``<img>`` without an Authorization header. */
+  src: string | null
+  /** Used for the initials fallback when ``src`` is null / errors. */
+  name: string
+}
+export const pageTitleAvatar = signal<PageAvatar | null>(null)
+
 /** Suffix appended to ``document.title`` so a glance at the browser
  *  tab still says "Social Home" — the per-page label tells the user
  *  *which* page they're on. */
@@ -51,4 +67,15 @@ export function useTitle(title: string): void {
       setDocTitle('')
     }
   }, [title])
+}
+
+/** Set an avatar next to the page title (and clear it on unmount).
+ *  Pair with :func:`useTitle` for the name. */
+export function useTitleAvatar(avatar: PageAvatar | null): void {
+  const src = avatar?.src ?? null
+  const name = avatar?.name ?? ''
+  useEffect(() => {
+    pageTitleAvatar.value = avatar
+    return () => { pageTitleAvatar.value = null }
+  }, [src, name])
 }

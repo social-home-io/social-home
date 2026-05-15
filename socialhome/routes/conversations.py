@@ -12,6 +12,7 @@ from ..app_keys import (
     online_status_service_key,
     user_repo_key,
 )
+from ..domain.user import _picture_url
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from .base import BaseView
@@ -208,11 +209,16 @@ class ConversationMembersView(BaseView):
                 last_seen = last_dt.isoformat() if last_dt is not None else None
             else:
                 last_seen = u.last_seen_at
+            # Same shape ``DmInboxPage`` already consumes — a relative
+            # signed URL (no leading slash) so the SPA's ``<img src>``
+            # resolves it against ``document.baseURI`` and works under
+            # the HAOS Supervisor ingress prefix without any URL surgery.
             rows.append(
                 {
                     "user_id": u.user_id,
                     "username": u.username,
                     "display_name": u.display_name,
+                    "picture_url": _picture_url(u.user_id, u.picture_hash),
                     "is_self": ctx is not None and ctx.user_id == u.user_id,
                     "is_online": is_online,
                     "is_idle": is_idle,

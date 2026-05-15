@@ -176,6 +176,12 @@ async def test_list_dm_members_carries_online_status(client):
         assert "user_id" in m
         assert "username" in m
         assert "display_name" in m
+        # ``picture_url`` is part of the contract the DM thread relies
+        # on to show the peer avatar next to the TopBar title without
+        # a follow-up fetch. ``None`` is fine — the SPA's ``Avatar``
+        # component falls back to initials.
+        assert "picture_url" in m
+        assert m["picture_url"] is None or isinstance(m["picture_url"], str)
         assert "is_self" in m
         assert "is_online" in m
         assert "is_idle" in m

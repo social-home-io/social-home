@@ -9,7 +9,8 @@ import { isAuthed, currentUser, loadCurrentUser, setToken, token } from '@/store
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { isGuardian, loadGuardian } from '@/store/guardian'
 import { loadDmUnread } from '@/store/dms'
-import { pageTitle } from '@/store/pageTitle'
+import { pageTitle, pageTitleAvatar } from '@/store/pageTitle'
+import { Avatar } from '@/components/Avatar'
 import { toggles, loadToggles } from '@/components/HouseholdToggles'
 import { SetupPage } from '@/features/setup/SetupPage'
 import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage'
@@ -195,10 +196,20 @@ function IngressAuthFailed() {
 }
 
 function TopBar() {
+  const avatar = pageTitleAvatar.value
   return (
     <header class="sh-topbar" role="banner">
       {pageTitle.value && (
-        <h1 class="sh-topbar-title">{pageTitle.value}</h1>
+        <div class="sh-topbar-heading">
+          {avatar && (
+            <Avatar
+              src={avatar.src}
+              name={avatar.name || pageTitle.value}
+              size={28}
+            />
+          )}
+          <h1 class="sh-topbar-title">{pageTitle.value}</h1>
+        </div>
       )}
       <SearchBar />
       <NotificationBell />
