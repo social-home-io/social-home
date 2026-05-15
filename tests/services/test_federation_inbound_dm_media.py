@@ -284,6 +284,70 @@ async def test_dm_media_blob_chunked_writes_parts_then_concats(
         assert not (media_dir / f"m-1.part{i:05d}").exists()
 
 
+async def test_dm_media_blob_malformed_chunk_meta_defaults_to_single(
+    inbound_with_media,
+):
+    """Garbage ``chunk_index`` / ``chunk_count`` values fall back
+    to single-chunk handling so a sender on a different language
+    runtime can't poison the receiver."""
+    svc, media_dir, db = inbound_with_media
+    await svc._on_dm_media_blob(
+        _event(
+            FederationEventType.DM_MEDIA_BLOB,
+            {
+                "media_blob_id": "m-1",
+                "message_id": "m-1",
+                "conversation_id": "conv-1",
+                "mime_type": "image/webp",
+                "chunk_index": "not-a-number",
+                "chunk_count": None,
+                "bytes_b64": base64.b64encode(_WEBP_HEADER).decode("ascii"),
+            },
+        )
+    )
+    # Garbage chunk fields → defaults to single chunk → file lands
+    # at the final destination.
+    assert (media_dir / "m-1.webp").is_file()
+
+
+async def test_dm_media_blob_unknown_mime_uses_bin_ext(inbound_with_media):
+    """An unknown ``mime_type`` writes the file with the ``.bin``
+    fallback extension."""
+    svc, media_dir, _db = inbound_with_media
+    await svc._on_dm_media_blob(
+        _event(
+            FederationEventType.DM_MEDIA_BLOB,
+            {
+                "media_blob_id": "m-1",
+                "message_id": "m-1",
+                "conversation_id": "conv-1",
+                "mime_type": "application/x-weird",
+                "bytes_b64": base64.b64encode(b"weird bytes").decode("ascii"),
+            },
+        )
+    )
+    assert (media_dir / "m-1.bin").is_file()
+
+
+async def test_dm_media_blob_malformed_b64_drops(inbound_with_media):
+    """Bad base64 → log + drop, no crash."""
+    svc, media_dir, _db = inbound_with_media
+    await svc._on_dm_media_blob(
+        _event(
+            FederationEventType.DM_MEDIA_BLOB,
+            {
+                "media_blob_id": "m-1",
+                "message_id": "m-1",
+                "conversation_id": "conv-1",
+                "mime_type": "image/webp",
+                "bytes_b64": "!@#$%^&*not-valid-b64",
+            },
+        )
+    )
+    # No file created.
+    assert not (media_dir / "m-1.webp").exists()
+
+
 async def test_dm_media_blob_chunked_missing_chunk_bails(inbound_with_media):
     """Final chunk arriving without an earlier part → log + bail.
 
