@@ -126,6 +126,47 @@ FILE_DENIED_EXTENSIONS: frozenset[str] = frozenset(
     },
 )
 
+# ─── Audio (voice notes) ──────────────────────────────────────────────────
+#: Voice notes use the Opus codec — free, royalty-free, speech-tuned. The
+#: container is whichever Opus-bearing format the sender's browser
+#: produces: Firefox emits ``audio/ogg``, Chrome / Edge emit
+#: ``audio/webm`` (their MediaRecorder doesn't support the OGG
+#: container). Both are accepted; only the codec inside has to be
+#: Opus. The receiver-side decode pipeline is container-agnostic — PyAV
+#: probes via the leading bytes either way.
+AUDIO_OUTPUT_MIME: str = "audio/ogg"
+AUDIO_ACCEPTED_MIMES: frozenset[str] = frozenset(
+    {"audio/ogg", "audio/webm", "audio/mp4"},
+)
+AUDIO_OGG_MAGIC: bytes = b"OggS"
+#: WebM uses the same EBML magic as video/webm (``\x1a\x45\xdf\xa3``).
+#: The processor probes all three magics — the codec sniff is the
+#: real gate.
+AUDIO_WEBM_MAGIC: bytes = b"\x1a\x45\xdf\xa3"
+#: MP4 / M4A is what Safari's MediaRecorder produces (AAC inside an
+#: ISO base-media container). The signature lives at byte 4 — ``ftyp``
+#: marks the ftyp box that every well-formed MP4 starts with.
+AUDIO_MP4_FTYP_OFFSET: int = 4
+AUDIO_MP4_FTYP_MAGIC: bytes = b"ftyp"
+#: Codecs we accept inside a voice-note container. Opus is the
+#: preferred codec (Firefox + Chromium MediaRecorder both emit it);
+#: AAC is the Safari path. Both decode losslessly to PCM via PyAV
+#: before STT and play back natively in every modern browser.
+AUDIO_ACCEPTED_CODECS: frozenset[str] = frozenset({"opus", "aac"})
+#: Five minutes — matches WhatsApp's voice-note ceiling. At 24 kbps Opus
+#: that is ~ 0.9 MiB so the message fits comfortably inside the 25 MiB
+#: ``FILE_MAX_UPLOAD_BYTES`` cap with margin for the OGG container
+#: overhead and any local transcoding losses.
+AUDIO_MAX_DURATION_SECONDS: int = 300
+#: Same 25 MiB ceiling as files. A 5-minute Opus@24 kbps blob is ~1 MiB,
+#: so this is generous — it leaves room for higher-bitrate clients that
+#: choose to ship 48 kbps (still well under cap).
+AUDIO_MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024  # 25 MiB
+#: Target encoder bitrate for voice notes. 24 kbps Opus is speech-clean
+#: on every device tested; doubling to 48 kbps is audibly only on music
+#: source material, which is not what a voice note ships.
+AUDIO_BITRATE_KBPS: int = 24
+
 #: Space cover image resized to this longest side; larger than the 256-px
 #: profile-picture cap so a hero banner has real estate.
 SPACE_COVER_MAX_DIMENSION: int = 1200

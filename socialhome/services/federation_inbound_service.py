@@ -33,6 +33,7 @@ from ..domain.events import (
     CommentDeleted,
     CommentUpdated,
     DmMessageCreated,
+    DmMessageUpdated,
     MomentCreated,
     MomentDeleted,
     MomentReactionChanged,
@@ -94,6 +95,9 @@ _MEDIA_MIME_EXT: dict[str, str] = {
     "image/gif": ".gif",
     "video/webm": ".webm",
     "video/mp4": ".mp4",
+    "audio/ogg": ".ogg",
+    "audio/webm": ".webm",
+    "audio/mp4": ".m4a",
     "application/pdf": ".pdf",
 }
 
@@ -102,19 +106,26 @@ def _mime_to_ext(mime_type: str) -> str:
     return _MEDIA_MIME_EXT.get(mime_type.lower(), ".bin")
 
 
-#: Magic-byte signatures for the two MIME types the upload pipeline
+#: Magic-byte signatures for the MIME types the upload pipeline
 #: actually produces — :class:`ImageProcessor` always outputs
-#: ``image/webp`` and :class:`VideoProcessor` always outputs
-#: ``video/webm``. Any other ``mime_type`` declared on an inbound
-#: ``image`` / ``video`` blob means either the sender's instance
-#: is compromised or skipped the upload pipeline; ``_bytes_match_mime``
-#: returns ``False`` in that case so :meth:`_on_dm_media_blob`
-#: flips the row to ``media_sync_status='failed'``. ``type='file'``
-#: blobs (PDFs, ZIPs, arbitrary payloads) don't have a fixed
-#: signature and skip the check.
+#: ``image/webp``, :class:`VideoProcessor` always outputs
+#: ``video/webm``, and :class:`AudioProcessor` always outputs
+#: ``audio/ogg`` (voice notes). Any other ``mime_type`` declared on
+#: an inbound ``image`` / ``video`` / ``audio`` blob means either
+#: the sender's instance is compromised or skipped the upload
+#: pipeline; ``_bytes_match_mime`` returns ``False`` in that case so
+#: :meth:`_on_dm_media_blob` flips the row to
+#: ``media_sync_status='failed'``. ``type='file'`` blobs (PDFs,
+#: ZIPs, arbitrary payloads) don't have a fixed signature and skip
+#: the check.
 _BLOB_MAGIC: dict[str, tuple[int, bytes]] = {
     "image/webp": (8, b"WEBP"),
     "video/webm": (0, b"\x1a\x45\xdf\xa3"),
+    "audio/ogg": (0, b"OggS"),
+    "audio/webm": (0, b"\x1a\x45\xdf\xa3"),
+    # Safari's MediaRecorder emits MP4/AAC. ``ftyp`` lives at offset 4
+    # in every well-formed ISO base-media file.
+    "audio/mp4": (4, b"ftyp"),
 }
 
 
@@ -122,23 +133,27 @@ def _bytes_match_mime(data: bytes, mime_type: str) -> bool | None:
     """Sniff ``data``'s leading bytes against the claimed MIME.
 
     Returns ``True`` when the bytes match a known signature,
-    ``False`` when the claim is image/video but the header doesn't
-    match webp / webm (the upload pipeline never produces other
-    image/video formats — anything else is suspicious), or ``None``
-    when there's no signature to check (``type='file'`` and the
-    like — direct-trust between paired households is the safety
-    net there).
+    ``False`` when the claim is image / video / audio but the header
+    doesn't match webp / webm / ogg (the upload pipeline never
+    produces other image/video/audio formats — anything else is
+    suspicious), or ``None`` when there's no signature to check
+    (``type='file'`` and the like — direct-trust between paired
+    households is the safety net there).
     """
     lower = mime_type.lower()
     sig = _BLOB_MAGIC.get(lower)
     if sig is None:
-        # No registered signature. For ``image/*`` and ``video/*``
-        # without a match in :data:`_BLOB_MAGIC` — i.e. the sender
-        # claims a format we'd never produce on upload — flag as
-        # suspicious. Everything else (``application/*``,
+        # No registered signature. For ``image/*`` / ``video/*`` /
+        # ``audio/*`` without a match in :data:`_BLOB_MAGIC` — i.e.
+        # the sender claims a format we'd never produce on upload —
+        # flag as suspicious. Everything else (``application/*``,
         # ``text/*``, the ``file`` passthrough) just trusts the
         # direct-pairing safety net.
-        if lower.startswith("image/") or lower.startswith("video/"):
+        if (
+            lower.startswith("image/")
+            or lower.startswith("video/")
+            or lower.startswith("audio/")
+        ):
             return False
         return None
     offset, pattern = sig
@@ -372,6 +387,17 @@ class FederationInboundService:
             msg_type=msg_type,
         )
 
+        # Detect whether this DM_MESSAGE is an in-place update of a row
+        # we already have (sender re-fanned the envelope to deliver an
+        # edit or a voice-note transcript) vs a brand-new message. The
+        # save_message UPSERT below doesn't tell us the difference, so
+        # we peek before writing. An existing row published as
+        # ``DmMessageCreated`` would land in the SPA as a duplicate
+        # bubble — :class:`RealtimeService` distinguishes the two via
+        # the event class and emits ``dm.message`` vs
+        # ``dm.message_updated`` accordingly.
+        existing = await self._conversation_repo.get_message(message_id)
+
         msg = ConversationMessage(
             id=message_id,
             conversation_id=conv_id,
@@ -392,6 +418,26 @@ class FederationInboundService:
             media_sync_status=media_sync_status,
         )
         await self._conversation_repo.save_message(msg)
+
+        if existing is not None:
+            # In-place patch — the sender re-fanned the envelope to
+            # ship updated ``content`` (the voice-note transcript, an
+            # edit, …). Publish ``DmMessageUpdated`` so the WS layer
+            # patches the existing bubble instead of appending a new
+            # one. The carrier still upserts so any other fields
+            # (``edited_at``) stay in sync.
+            edited_at_iso = p.get("edited_at") or p.get("occurred_at")
+            await self._bus.publish(
+                DmMessageUpdated(
+                    conversation_id=conv_id,
+                    message_id=message_id,
+                    sender_user_id=sender_user_id,
+                    recipient_user_ids=tuple(str(r) for r in recipients),
+                    content=content,
+                    edited_at=parse_iso8601_lenient(edited_at_iso),
+                )
+            )
+            return
 
         await self._bus.publish(
             DmMessageCreated(

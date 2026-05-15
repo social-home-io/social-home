@@ -73,6 +73,7 @@ from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionSchedul
 from .infrastructure.password_reset_cleanup_scheduler import (
     PasswordResetCleanupScheduler,
 )
+from .infrastructure.audio_transcript_scheduler import AudioTranscriptScheduler
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
 from .infrastructure.moment_retention_scheduler import MomentRetentionScheduler
@@ -158,6 +159,7 @@ from .services.space_bot_service import SpaceBotService
 from .services.calendar_import_service import CalendarImportService
 from .services.calendar_service import CalendarService, SpaceCalendarService
 from .services.child_protection_service import ChildProtectionService
+from .services.audio_transcription_service import AudioTranscriptionService
 from .services.data_export_service import DataExportService
 from .services.dm_media_sync_service import DmMediaSyncService
 from .services.dm_routing_service import DmRoutingService
@@ -1060,12 +1062,19 @@ def create_app(config: Config | None = None) -> web.Application:
         federation=None,  # set by attach_federation below
         media_dir=pathlib.Path(config.media_path),
     )
+    # DmService starts without ``audio_transcription`` — the platform
+    # adapter is built much later in ``create_app``, so the service is
+    # attached via :meth:`DmService.attach_audio_transcription` (same
+    # pattern as ``attach_federation``) once the adapter exists.
+    # ``media_dir`` is safe to pass now; it doesn't depend on the
+    # adapter.
     dm_service = DmService(
         conversation_repo,
         user_repo,
         bus,
         dm_routing_repo=repos.dm_routing,
         media_sync=dm_media_sync_service,
+        media_dir=pathlib.Path(config.media_path),
     )
     report_repo = SqliteReportRepo(db)
     report_service = ReportService(
@@ -1370,6 +1379,14 @@ def create_app(config: Config | None = None) -> web.Application:
     # ── Platform adapter (HA vs standalone) ──────────────────────────────
     platform_adapter = build_platform_adapter(config.mode, db, config)
 
+    # Voice-note transcription depends on ``adapter.stt``; fail-silent
+    # when the platform doesn't expose one (standalone v1, HA without
+    # ``stt_entity_id``). Wired into DmService via the late-binder
+    # because the service itself was constructed long before
+    # ``platform_adapter`` exists.
+    audio_transcription_service = AudioTranscriptionService(platform_adapter)
+    dm_service.attach_audio_transcription(audio_transcription_service)
+
     # Fan notifications through the adapter's push channel too (§25.3) —
     # HA mode calls ``notify.mobile_app_<user>``, standalone POSTs to
     # ``platform_users.notify_endpoint``.
@@ -1455,6 +1472,7 @@ def create_app(config: Config | None = None) -> web.Application:
     stale_call_scheduler: StaleCallCleanupScheduler | None = None
     gfs_ws_supervisor: GfsWebSocketSupervisor | None = None
     replay_cache_scheduler: ReplayCachePruneScheduler | None = None
+    audio_transcript_scheduler: AudioTranscriptScheduler | None = None
     dm_relay_seen_scheduler: DmRelaySeenPruneScheduler | None = None
     password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
@@ -1916,6 +1934,21 @@ def create_app(config: Config | None = None) -> web.Application:
         # the previous run was killed.
         await dm_media_sync_service.start()
 
+        # Voice-note receiver-side fallback STT. Runs only when the
+        # adapter advertises ``Capability.STT`` — otherwise the
+        # scheduler would burn CPU on every tick decoding blobs whose
+        # transcription would fail-silent anyway.
+        nonlocal audio_transcript_scheduler
+        if platform_adapter.supports_stt:
+            audio_transcript_scheduler = AudioTranscriptScheduler(
+                conversation_repo=conversation_repo,
+                user_repo=user_repo,
+                transcribe=audio_transcription_service,
+                bus=bus,
+                media_dir=pathlib.Path(config.media_path),
+            )
+            await audio_transcript_scheduler.start()
+
         # Password-reset cleanup — drops expired admin-issued reset
         # tokens so the table doesn't accumulate one row per reset
         # forever (1h TTL, runs hourly).
@@ -2060,6 +2093,8 @@ def create_app(config: Config | None = None) -> web.Application:
             await replay_cache_scheduler.stop()
         if dm_relay_seen_scheduler is not None:
             await dm_relay_seen_scheduler.stop()
+        if audio_transcript_scheduler is not None:
+            await audio_transcript_scheduler.stop()
         # DM media outbox scheduler — drain any in-flight blob send
         # so we don't leave a row marked ``in_flight`` past the
         # restart (the next boot would see it stuck and never retry).

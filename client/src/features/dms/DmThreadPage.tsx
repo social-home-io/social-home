@@ -7,7 +7,8 @@ import { ws } from '@/ws'
 import type { Message } from '@/types'
 import { DmThreadSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
-import { SttButton } from '@/components/SttButton'
+import { VoiceRecordButton } from '@/components/VoiceRecordButton'
+import { AudioBubble } from '@/components/AudioBubble'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
@@ -23,7 +24,6 @@ import {
 } from '@/components/EmojiAutocomplete'
 import { emojiByShortcode } from '@/data/emojis'
 import { currentUser } from '@/store/auth'
-import { hasCapability } from '@/store/instance'
 import { useTitle, useTitleAvatar } from '@/store/pageTitle'
 import { normaliseTimestamp } from '@/utils/relativeTime'
 
@@ -668,6 +668,32 @@ export default function DmThreadPage() {
       }
       messages.value = next
     })
+    // In-place content updates. Today this drives voice-note
+    // transcripts: the sender's STT (or the recipient's local
+    // fallback) lands after the audio bubble has been rendered, and
+    // the receiver's bubble swaps "Transcribing…" for the actual
+    // transcript without a re-render. Future edits (composer edit
+    // flow) will reuse the same frame shape.
+    const offMessageUpdated = ws.on('dm.message_updated', (e) => {
+      const d = e.data as {
+        conversation_id?: string
+        message_id?: string
+        content?: string
+        edited_at?: string | null
+      }
+      if (d.conversation_id !== convId) return
+      if (!d.message_id) return
+      const list = messages.value
+      const idx = list.findIndex(m => m.id === d.message_id)
+      if (idx < 0) return
+      const next = list.slice()
+      next[idx] = {
+        ...next[idx],
+        content: d.content ?? next[idx].content,
+        edited_at: d.edited_at ?? next[idx].edited_at,
+      }
+      messages.value = next
+    })
     const offUserOnline = ws.on('user.online', (e) => {
       const d = e.data as { user_id?: string }
       if (d.user_id) patchMember(d.user_id, { is_online: true, is_idle: false })
@@ -685,7 +711,7 @@ export default function DmThreadPage() {
       })
     })
     return () => {
-      offRead(); offNewMsg(); offMediaReady()
+      offRead(); offNewMsg(); offMediaReady(); offMessageUpdated()
       offUserOnline(); offUserIdle(); offUserOffline()
     }
   }, [convId])
@@ -763,6 +789,98 @@ export default function DmThreadPage() {
     } catch (err: unknown) {
       attachmentError.value =
         `Couldn't upload ${file.name}: ${(err as Error)?.message ?? err}`
+    }
+  }
+
+  /** Send a freshly-recorded voice note (OGG/Opus blob).
+   *
+   *  Unlike the paperclip flow, voice notes skip the "stage on the
+   *  composer chip then hit Send" step — the user already committed
+   *  to sending by releasing the mic. We upload the blob and POST
+   *  the message in one go, with an optimistic ``tmp-`` bubble so
+   *  the audio appears instantly. The transcript fills in later
+   *  via :type:`dm.message_updated` (sender-side STT) or the
+   *  receiver's local fallback. */
+  const handleVoiceNote = async (blob: Blob) => {
+    if (!convId) return
+    attachmentError.value = null
+    // Pick the extension + bare MIME from the recorder's chosen
+    // container. Firefox → OGG/Opus, Chromium → WebM/Opus, Safari
+    // → MP4/AAC. The backend ``AudioProcessor`` accepts all three.
+    const bareMime = (blob.type.split(';')[0] || 'audio/webm').trim()
+    const ext =
+      bareMime === 'audio/ogg' ? 'ogg'
+      : bareMime === 'audio/mp4' ? 'm4a'
+      : 'webm'
+    const fileName = `voice-note-${Date.now()}.${ext}`
+    const file = new File([blob], fileName, { type: bareMime })
+
+    const tempId = `tmp-${
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    }`
+    const myUid = currentUser.value?.user_id ?? ''
+    const previewUrl = URL.createObjectURL(blob)
+    const optimistic: Message = {
+      id: tempId,
+      sender_user_id: myUid,
+      // Empty transcript — the AudioBubble shows "Transcribing…"
+      // until the WS frame swaps it for the real text.
+      content: '',
+      type: 'audio',
+      media_url: previewUrl,
+      file_name: fileName,
+      mime_type: bareMime,
+      file_size_bytes: blob.size,
+      media_sync_status: null,
+      reply_to_id: null,
+      deleted: false,
+      created_at: new Date().toISOString(),
+      edited_at: null,
+    }
+    messages.value = [...messages.value, optimistic]
+    const scrollEl = messagesScrollRef.current
+    if (scrollEl) scrollEl.scrollTop = 0
+    stickToBottom.current = true
+    newSinceScrollUp.value = 0
+    if (unreadAnchor.value) unreadAnchor.value = null
+
+    try {
+      const res = await uploadWithProgress(file)
+      const sent = (await api.post(
+        `/api/conversations/${convId}/messages`,
+        {
+          type: 'audio',
+          content: '',
+          media_url: res.url,
+          file_name: fileName,
+          mime_type: bareMime,
+          file_size_bytes: blob.size,
+        },
+      )) as { id: string }
+      // Reconcile temp → real id. Same shape as ``handleSend``.
+      const list = messages.value
+      const realExists = list.some(m => m.id === sent.id)
+      messages.value = realExists
+        ? list.filter(m => m.id !== tempId)
+        : list.map(m =>
+            m.id === tempId
+              ? { ...m, id: sent.id, media_url: res.signed_url }
+              : m,
+          )
+    } catch (err: unknown) {
+      messages.value = messages.value.filter(m => m.id !== tempId)
+      const code = (err as { code?: string })?.code
+      if (code === 'MEDIA_REQUIRES_DIRECT_PAIRING') {
+        attachmentError.value =
+          'Voice notes can only be shared with directly-paired households.'
+      } else {
+        attachmentError.value =
+          `Couldn't send voice note: ${(err as Error)?.message ?? err}`
+      }
+    } finally {
+      try { URL.revokeObjectURL(previewUrl) } catch { /* already gone */ }
     }
   }
 
@@ -1436,6 +1554,14 @@ export default function DmThreadPage() {
                   </span>
                 </a>
               )}
+              {!m.deleted && m.type === 'audio' && m.media_url && (
+                <AudioBubble
+                  src={m.media_url}
+                  transcript={m.content}
+                  fileName={m.file_name}
+                  pending={m.media_sync_status === 'pending'}
+                />
+              )}
               {/* Cross-household delivery-failure footnote. Only
                *  surfaces on the sender's own bubble — the
                *  recipient has nothing to act on. Set when the
@@ -1458,8 +1584,10 @@ export default function DmThreadPage() {
               {/* Caption body. Empty captions on media messages
                *  collapse silently (we don't want a stray empty
                *  ``<p>`` adding visual weight to a picture-only
-               *  bubble). */}
-              {(m.deleted || m.content) && (
+               *  bubble). ``audio`` messages render their transcript
+               *  inside :class:`AudioBubble` above, so we skip the
+               *  caption render here to avoid doubling the text. */}
+              {(m.deleted || (m.content && m.type !== 'audio')) && (
                 <p style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
                   {m.deleted ? '(message deleted)' : m.content}
                 </p>
@@ -1663,17 +1791,16 @@ export default function DmThreadPage() {
         {/* Mic⇄Send slot. Mutually exclusive primary actions occupy
          *  the same round button position to the right of the input:
          *
-         *    • Empty composer + STT available → push-to-talk mic.
-         *    • Composer has content (or send is in flight)    → Send.
-         *    • Empty composer + no STT (e.g. standalone v1)   → Send
-         *      (disabled until the user types something — the slot
-         *      can't be empty without breaking the "thumb hits one
-         *      consistent target" muscle memory).
+         *    • Empty composer → hold-to-record voice note. Works
+         *      regardless of ``adapter.stt`` — the recording always
+         *      ships; the transcript fills in asynchronously when
+         *      STT is available.
+         *    • Composer has content (or send is in flight) → Send.
          *
          *  Matches WhatsApp / iMessage / Telegram. ``sending`` keeps
          *  the slot on Send while the POST is in flight so the
          *  spinner sits where the click happened. */}
-        {(composerHasContent.value || sending.value || !hasCapability('stt')) ? (
+        {(composerHasContent.value || sending.value) ? (
           <Button
             type="submit"
             loading={sending.value}
@@ -1688,22 +1815,9 @@ export default function DmThreadPage() {
             <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
           </Button>
         ) : (
-          <SttButton
+          <VoiceRecordButton
             className="sh-composer-mic"
-            onText={(t) => {
-              const input = composerInputRef.current
-              if (!input) return
-              const cur = input.value
-              const sep = cur && !/\s$/.test(cur) ? ' ' : ''
-              input.value = cur + sep + t
-              autoResize(input)
-              // Nudge the typing indicator + any input listeners.
-              // ``handleInput`` reads the textarea and updates
-              // ``composerHasContent`` so the slot morphs to Send
-              // once the transcript arrives.
-              input.dispatchEvent(new Event('input', { bubbles: true }))
-              input.focus()
-            }}
+            onCapture={handleVoiceNote}
           />
         )}
       </form>

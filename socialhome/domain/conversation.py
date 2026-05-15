@@ -22,20 +22,28 @@ class ConversationType(StrEnum):
 
 # Allowed ``type`` values for a :class:`ConversationMessage`.
 #
-# Media attachments (``image`` / ``video`` / ``file``) carry their
-# bytes via ``media_url`` plus the ``file_name`` / ``mime_type`` /
-# ``file_size_bytes`` siblings below. Same-household renders straight
-# from the local-signed URL; cross-household uses the preview-now-
-# sync-later flow (a tiny preview is embedded in the encrypted
-# ``DM_MESSAGE`` envelope, the full bytes follow on a
-# ``DM_MEDIA_BLOB`` event). ``transcript`` and ``location`` carry
-# their data inside ``content``.
+# Media attachments (``image`` / ``video`` / ``file`` / ``audio``)
+# carry their bytes via ``media_url`` plus the ``file_name`` /
+# ``mime_type`` / ``file_size_bytes`` siblings below. Same-household
+# renders straight from the local-signed URL; cross-household uses
+# the preview-now-sync-later flow (a tiny preview is embedded in the
+# encrypted ``DM_MESSAGE`` envelope, the full bytes follow on a
+# ``DM_MEDIA_BLOB`` event).
+#
+# ``audio`` (voice notes, OGG/Opus) is the one media type whose
+# ``content`` is *also* meaningful — it carries the STT transcript.
+# Empty string until the sender's STT runs (or the receiver's local
+# fallback STT runs); the bubble renders a "Transcribing…"
+# placeholder while it is empty.
+#
+# ``transcript`` and ``location`` carry their data inside ``content``.
 MESSAGE_TYPES: frozenset[str] = frozenset(
     {
         "text",
         "image",
         "video",
         "file",
+        "audio",
         "transcript",
         "location",
     }

@@ -93,6 +93,12 @@ class AbstractConversationRepo(Protocol):
     ) -> list[str]: ...
     async def soft_delete_message(self, message_id: str) -> None: ...
     async def edit_message(self, message_id: str, new_content: str) -> None: ...
+    async def find_pending_audio_transcripts(
+        self,
+        *,
+        since_iso: str,
+        limit: int = 50,
+    ) -> list[ConversationMessage]: ...
     async def update_media_sync_status(
         self,
         *,
@@ -548,6 +554,40 @@ class SqliteConversationRepo:
             "SET content=?, edited_at=datetime('now') WHERE id=?",
             (new_content, message_id),
         )
+
+    async def find_pending_audio_transcripts(
+        self,
+        *,
+        since_iso: str,
+        limit: int = 50,
+    ) -> list[ConversationMessage]:
+        """Audio messages awaiting a transcript (receiver-side STT).
+
+        Filters: ``type='audio'``, empty ``content`` (no transcript
+        yet), not soft-deleted, ``created_at >= since_iso`` (the
+        scheduler's 1-hour window — past that we stop retrying), and
+        the sender is a **remote** user. Local users' messages are
+        excluded because the sender-side STT already ran (or
+        deliberately didn't) on this household; the receiver-side
+        fallback exists to fill in transcripts for messages we
+        received from another household whose STT couldn't supply
+        one.
+
+        ``ORDER BY created_at`` so the oldest backlog drains first.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM conversation_messages "
+            "WHERE type='audio' "
+            "  AND content='' "
+            "  AND deleted=0 "
+            "  AND created_at >= ? "
+            "  AND media_url IS NOT NULL "
+            "  AND sender_user_id NOT IN (SELECT user_id FROM users) "
+            "ORDER BY created_at ASC "
+            "LIMIT ?",
+            (since_iso, int(limit)),
+        )
+        return [m for m in (_row_to_message(d) for d in rows_to_dicts(rows)) if m]
 
     async def update_media_sync_status(
         self,

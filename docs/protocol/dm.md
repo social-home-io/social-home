@@ -31,7 +31,8 @@ additional encryption layer against them would be theatre.
 `DM_MESSAGE`, `DM_MESSAGE_DELETED`, `DM_MESSAGE_REACTION`,
 `DM_USER_TYPING`, `DM_RELAY` (relay wrapper for group DMs),
 `DM_MEDIA_BLOB` (v_3+, full-bytes follow-up for cross-household
-picture / video / file attachments — see [DM media](./dm-media.md)).
+picture / video / file / **voice-note** attachments — see
+[DM media](./dm-media.md)).
 
 **Membership**
 
@@ -161,6 +162,91 @@ and ask the sender to repost.
 target_instance)`. `GET /api/me/relay-paths?conversation_id=…` (future)
 and `dm_routing_repo.list_relay_paths` expose it for a future
 diagnostics UI.
+
+## Audio messages (voice notes)
+
+WhatsApp-style hold-to-record voice notes. Captured by the SPA via
+`MediaRecorder`, 24 kbps mono, 5-minute hard cap. The container is
+whichever the browser's `MediaRecorder` produces — Firefox emits
+OGG/Opus, Chromium-based browsers emit WebM/Opus, and Safari emits
+MP4/AAC. All three are accepted; server-side PyAV decodes them
+losslessly to PCM before STT and all three play back natively in
+every modern browser.
+
+Uploaded through the standard media pipeline, federated via the
+existing v_3 cross-household media path (`DM_MESSAGE` envelope with
+`type="audio"` plus a follow-up `DM_MEDIA_BLOB` carrying the full
+bytes when the recipient is on another household). Same federated-
+only rule as image / video / file media — relayed conversations
+reject the send with `MEDIA_REQUIRES_DIRECT_PAIRING`.
+
+The wire-shape addition is in `content`: for voice notes,
+`ConversationMessage.content` carries the **STT transcript**. It is
+empty when the message lands; the sender's HA STT runs on the
+just-uploaded blob and patches the row a moment later, federating
+the update via a second `DM_MESSAGE` carrying the same `message_id`
++ the new content + an `edited_at` field. The receiver's inbound
+handler detects the existing row and publishes `DmMessageUpdated`
+instead of `DmMessageCreated`, which fans the change out to open
+thread tabs as a `dm.message_updated` WS frame.
+
+If a remote sender shipped audio without a transcript (no STT
+configured on their side), the recipient's
+`AudioTranscriptScheduler` polls for empty-transcript audio rows
+younger than one hour, runs the **recipient's** local STT, and
+patches the same way — so a household with HA STT can fill in
+transcripts for messages it receives from households without STT.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UA as User A (SPA)
+    participant A as HFS A
+    participant STT as adapter.stt (HA)
+    participant B as HFS B
+    participant UB as User B (SPA)
+    UA->>A: hold mic, release → POST /api/media/upload (OGG/Opus)
+    A->>A: AudioProcessor validates OggS + Opus + duration ≤ 300s
+    UA->>A: POST /api/conversations/{id}/messages (type=audio, content="")
+    A->>A: persist ConversationMessage, fire DmMessageCreated
+    A->>B: DM_MESSAGE (type=audio, content="")
+    A->>B: DM_MEDIA_BLOB (chunked OGG/Opus bytes)
+    A->>STT: AudioTranscriptionService.transcribe(blob)
+    STT-->>A: "hello world"
+    A->>A: edit_message + DmMessageUpdated → dm.message_updated WS
+    A->>B: DM_MESSAGE (same message_id, content="hello world", edited_at)
+    B->>UB: dm.message_updated WS frame
+    Note over UB: bubble swaps "Transcribing…" for "hello world"
+```
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as HFS A (no STT)
+    participant B as HFS B (HA STT)
+    participant SCH as AudioTranscriptScheduler (B)
+    A->>B: DM_MESSAGE (type=audio, content="")
+    A->>B: DM_MEDIA_BLOB (chunked OGG/Opus bytes)
+    Note over B: row persisted with empty transcript
+    SCH->>B: every 30s, find pending audio < 1h, remote sender
+    SCH->>SCH: read local blob, run adapter.stt.transcribe
+    SCH->>B: edit_message + DmMessageUpdated → dm.message_updated WS
+    Note over B: B's open tabs now show the transcript;<br/>A is unaffected
+```
+
+Implementation pointers:
+
+- `socialhome/media/audio_processor.py` — OggS / Opus / duration cap
+- `socialhome/services/audio_transcription_service.py` — OGG→PCM
+  decode + fail-silent adapter wrap
+- `socialhome/services/dm_service.py` — `send_message(type="audio")`
+  + the fire-and-forget transcribe-and-patch path
+- `socialhome/infrastructure/audio_transcript_scheduler.py` —
+  receiver-side fallback STT
+- `client/src/components/VoiceRecordButton.tsx` — hold-to-record
+  with slide-up-to-lock
+- `client/src/components/AudioBubble.tsx` — inline `<audio>` +
+  transcript line
 
 ## Contact requests
 

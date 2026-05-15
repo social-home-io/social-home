@@ -18,7 +18,9 @@ message CRUD, reactions, and read tracking.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import pathlib
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -31,7 +33,11 @@ from ..domain.conversation import (
     MESSAGE_TYPES,
     RemoteConversationMember,
 )
-from ..domain.events import DmConversationCreated, DmMessageCreated
+from ..domain.events import (
+    DmConversationCreated,
+    DmMessageCreated,
+    DmMessageUpdated,
+)
 from ..domain.federation import FederationEventType
 from ..federation import compat
 from ..infrastructure.event_bus import EventBus
@@ -39,6 +45,7 @@ from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
 
 if TYPE_CHECKING:
+    from .audio_transcription_service import AudioTranscriptionService  # noqa: F401
     from .dm_media_sync_service import DmMediaSyncService  # noqa: F401
     from ..federation.federation_service import FederationService
     from ..repositories.dm_routing_repo import AbstractDmRoutingRepo
@@ -91,6 +98,9 @@ class DmService:
         "_federation_repo",
         "_dm_routing_repo",
         "_media_sync",
+        "_audio_transcription",
+        "_media_dir",
+        "_pending_transcribe_tasks",
         "_own_instance_id",
     )
 
@@ -104,6 +114,8 @@ class DmService:
         federation_repo: "AbstractFederationRepo | None" = None,
         dm_routing_repo: "AbstractDmRoutingRepo | None" = None,
         media_sync: "DmMediaSyncService | None" = None,
+        audio_transcription: "AudioTranscriptionService | None" = None,
+        media_dir: pathlib.Path | None = None,
         own_instance_id: str = "",
     ) -> None:
         self._convos = conversation_repo
@@ -118,7 +130,33 @@ class DmService:
         # full-bytes follow-up. The unit-test stack omits this to keep
         # the in-memory fixture small.
         self._media_sync = media_sync
+        # Sender-side voice-note transcript. Optional — when ``None``
+        # (no ``adapter.stt`` configured, or running in a test stack)
+        # audio messages still send and play back; the recipient may
+        # fill the transcript via :class:`AudioTranscriptScheduler`'s
+        # local-STT fallback. Pairs with ``media_dir`` because the
+        # transcription task reads the just-uploaded blob from disk.
+        self._audio_transcription = audio_transcription
+        self._media_dir = media_dir
+        # Hold strong references to the fire-and-forget transcription
+        # tasks so the event loop doesn't GC them mid-flight (the
+        # Python-3.11+ behaviour with ``ensure_future`` is that an
+        # untracked Task can be collected before completion).
+        self._pending_transcribe_tasks: set[asyncio.Task[None]] = set()
         self._own_instance_id = own_instance_id
+
+    def attach_audio_transcription(
+        self,
+        service: "AudioTranscriptionService",
+    ) -> None:
+        """Wire voice-note STT after construction.
+
+        ``AudioTranscriptionService`` depends on :class:`PlatformAdapter`,
+        which is built later in ``create_app`` than ``DmService``. This
+        setter is the same shape as :meth:`attach_federation` — late
+        binding so the wiring order in ``app.py`` stays linear.
+        """
+        self._audio_transcription = service
 
     def attach_federation(
         self,
@@ -393,9 +431,10 @@ class DmService:
                 await self._guard_block_pair(sender.user_id, peer.user_id)
         if type not in MESSAGE_TYPES:
             raise ValueError(f"invalid message type {type!r}")
-        is_media = type in ("image", "video", "file")
+        is_media = type in ("image", "video", "file", "audio")
         # ``text`` requires content; media types carry the bytes via
-        # ``media_url`` instead so an empty caption is fine.
+        # ``media_url`` instead so an empty caption (or, for audio, an
+        # empty transcript pending STT) is fine.
         if not content and not is_media and type == "text":
             raise ValueError("message content must not be empty")
         if len(content) > MAX_DM_LENGTH:
@@ -560,7 +599,130 @@ class DmService:
                     media_url=media_url,
                     target_instance_ids=remote_instance_ids,
                 )
+        # Voice notes: run sender-side STT in the background. The audio
+        # bubble is already persisted + delivered with empty ``content``;
+        # when the transcript lands we patch the row and fire
+        # ``DmMessageUpdated`` so every open thread tab swaps the
+        # "Transcribing…" placeholder for the text. Skips silently if
+        # no STT capability is configured or the media bytes can't be
+        # read — the receiver's own ``AudioTranscriptScheduler`` may
+        # still fill the gap locally.
+        if (
+            type == "audio"
+            and media_url
+            and self._audio_transcription is not None
+            and self._media_dir is not None
+        ):
+            self._spawn_transcribe_task(
+                message_id=msg.id,
+                conversation_id=conversation_id,
+                sender_user_id=sender.user_id,
+                sender_display_name=sender.display_name,
+                media_url=media_url,
+                recipient_user_ids=tuple(recipients),
+            )
         return msg
+
+    # ── Voice-note transcript ──────────────────────────────────────────
+
+    def _spawn_transcribe_task(
+        self,
+        *,
+        message_id: str,
+        conversation_id: str,
+        sender_user_id: str,
+        sender_display_name: str,
+        media_url: str,
+        recipient_user_ids: tuple[str, ...],
+    ) -> None:
+        """Schedule the fire-and-forget sender-side STT pass.
+
+        Keeps a strong ref to the spawned task on ``self`` so the loop
+        doesn't GC it mid-flight, and removes the ref when it
+        completes.
+        """
+        task = asyncio.create_task(
+            self._transcribe_and_patch(
+                message_id=message_id,
+                conversation_id=conversation_id,
+                sender_user_id=sender_user_id,
+                sender_display_name=sender_display_name,
+                media_url=media_url,
+                recipient_user_ids=recipient_user_ids,
+            ),
+        )
+        self._pending_transcribe_tasks.add(task)
+        task.add_done_callback(self._pending_transcribe_tasks.discard)
+
+    async def _transcribe_and_patch(
+        self,
+        *,
+        message_id: str,
+        conversation_id: str,
+        sender_user_id: str,
+        sender_display_name: str,
+        media_url: str,
+        recipient_user_ids: tuple[str, ...],
+    ) -> None:
+        """Run STT against the local blob and, on success, patch the row."""
+        if self._audio_transcription is None or self._media_dir is None:
+            return
+        # ``media_url`` is the canonical ``api/media/<filename>`` shape;
+        # the basename is the on-disk filename.
+        try:
+            filename = media_url.rsplit("/", 1)[-1]
+            audio_bytes = await asyncio.get_running_loop().run_in_executor(
+                None, (self._media_dir / filename).read_bytes
+            )
+        except Exception as exc:
+            log.warning(
+                "dm audio: cannot read blob %s for transcription: %s",
+                media_url,
+                exc,
+            )
+            return
+
+        transcript = await self._audio_transcription.transcribe(audio_bytes)
+        if transcript is None:
+            return
+
+        try:
+            await self._convos.edit_message(message_id, transcript)
+        except Exception as exc:
+            log.warning("dm audio: failed to persist transcript: %s", exc)
+            return
+
+        edited_at = datetime.now(timezone.utc)
+        await self._bus.publish(
+            DmMessageUpdated(
+                conversation_id=conversation_id,
+                message_id=message_id,
+                sender_user_id=sender_user_id,
+                recipient_user_ids=recipient_user_ids,
+                content=transcript,
+                edited_at=edited_at,
+            )
+        )
+        # Re-fan DM_MESSAGE so remote peers' rows pick up the
+        # transcript via the existing upsert path. The receiver's
+        # inbound handler detects "row already existed" and publishes
+        # ``DmMessageUpdated`` instead of ``DmMessageCreated``, so
+        # remote SPA tabs render the same in-place patch.
+        await self._fan_to_remote(
+            conversation_id=conversation_id,
+            event_type=FederationEventType.DM_MESSAGE,
+            payload={
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "sender_user_id": sender_user_id,
+                "sender_display_name": sender_display_name,
+                "type": "audio",
+                "content": transcript,
+                "media_url": media_url,
+                "occurred_at": edited_at.isoformat(),
+                "edited_at": edited_at.isoformat(),
+            },
+        )
 
     async def edit_message(
         self,

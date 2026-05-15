@@ -52,6 +52,7 @@ from ..domain.events import (
     CpSpaceAgeGateChanged,
     DmConversationCreated,
     DmMessageCreated,
+    DmMessageUpdated,
     HouseholdConfigChanged,
     NotificationCreated,
     NotificationReadChanged,
@@ -311,6 +312,7 @@ class RealtimeService:
             self._on_bazaar_bid_withdrawn,
         )
         self._bus.subscribe(DmMessageCreated, self._on_dm_message_created)
+        self._bus.subscribe(DmMessageUpdated, self._on_dm_message_updated)
         self._bus.subscribe(
             DmConversationCreated,
             self._on_dm_conversation_created,
@@ -1580,6 +1582,34 @@ class RealtimeService:
         seen: set[str] = set()
         for user_id in (event.sender_user_id, *event.recipient_user_ids):
             if user_id in seen:
+                continue
+            seen.add(user_id)
+            await self._ws.broadcast_to_user(user_id, payload)
+
+    async def _on_dm_message_updated(self, event: DmMessageUpdated) -> None:
+        """Push the in-place ``dm.message_updated`` frame.
+
+        Two senders trigger this today, both for voice notes: the
+        sender-side STT completing after the audio bubble has already
+        shipped (``DmService._transcribe_and_patch``) and the
+        receiver-side fallback STT (:class:`AudioTranscriptScheduler`).
+        The frame carries only the fields that change so the SPA can
+        merge into the existing bubble — no need to re-render the
+        whole message.
+
+        Fan-out covers the sender's own sessions too so a desktop
+        composer sees the transcript appear on its mobile mirror.
+        """
+        payload = {
+            "type": "dm.message_updated",
+            "conversation_id": event.conversation_id,
+            "message_id": event.message_id,
+            "content": event.content,
+            "edited_at": event.edited_at.isoformat(),
+        }
+        seen: set[str] = set()
+        for user_id in (event.sender_user_id, *event.recipient_user_ids):
+            if not user_id or user_id in seen:
                 continue
             seen.add(user_id)
             await self._ws.broadcast_to_user(user_id, payload)
