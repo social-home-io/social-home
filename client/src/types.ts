@@ -354,6 +354,10 @@ export interface Message {
    *  the sender's outbox exhausted its retry budget. ``null`` on
    *  same-household messages or once the full bytes have arrived. */
   media_sync_status?: 'pending' | 'failed' | null
+  /** SPA-only fields set on the optimistic ``tmp-...`` bubble when
+   *  its background ``POST`` fails. Never reach the wire / server. */
+  send_failed?: boolean
+  send_failed_reason?: string
   reply_to_id: string | null
   deleted: boolean
   created_at: string

@@ -60,12 +60,6 @@ const newSinceScrollUp = signal(0)
  *  WhatsApp's ceiling so a very long draft doesn't eat half the chat
  *  while the user is still typing. */
 const MAX_COMPOSER_HEIGHT_PX = 160
-/** True while a ``POST /api/conversations/{id}/messages`` is in
- *  flight. Disables the Send button + locks the input so the user
- *  can't double-submit a slow request (which previously fired off
- *  two copies of the same message). Mirrors the busy state to the
- *  composer chrome so the user has a clear "it's on the way" cue. */
-const sending = signal(false)
 /** ``true`` when the composer textarea has at least one non-whitespace
  *  character. Drives the mic⇄send slot swap: an empty composer shows
  *  the round push-to-talk mic (when STT is available); typing morphs
@@ -1003,30 +997,33 @@ export default function DmThreadPage() {
     ta.form?.requestSubmit()
   }
 
-  const handleSend = async (e: Event) => {
+  const handleSend = (e: Event) => {
     e.preventDefault()
-    if (sending.value) return  // belt-and-braces guard for keyboard Enter
     const form = e.target as HTMLFormElement
     const content = (new FormData(form).get('content') as string ?? '').trim()
     const attachment = pendingAttachment.value
     // Either a caption or a staged attachment is required — both
-    // empty means nothing to send.
+    // empty means nothing to send. Also doubles as a debounce against
+    // accidental double-click + accidental Enter+Enter: the second
+    // submit lands after ``form.reset()`` has cleared the composer,
+    // so ``content`` is empty and we bail.
     if (!content && !attachment) return
     const reply_to_id = replyTo.value?.id ?? null
-    sending.value = true
 
     // **Optimistic append** — render the user's bubble immediately
-    // instead of waiting for the POST round-trip + a full message-list
-    // GET to repaint. The previous flow did two server round-trips
-    // *and* a full re-render of every bubble before the Send spinner
-    // stopped — on a busy thread that's hundreds of ms of dead time
-    // staring at "Sending…". Now the bubble flashes in on click,
-    // ``form.reset()`` clears the composer in the same frame, and the
-    // POST resolves in the background. The canonical row (real id,
+    // and let the composer stay responsive so the next message can
+    // be typed without waiting for the previous POST round-trip.
+    // The POST runs in the background; ``form.reset()`` clears the
+    // composer in the same frame, and the canonical row (real id,
     // server timestamp) arrives via the WS broadcast a moment later
     // and de-dupes by ``id`` (see ``offNewMsg`` above — it also strips
     // any leftover ``tmp-`` row from the sender to avoid showing the
-    // bubble twice if the WS frame races the POST response).
+    // bubble twice if the WS frame races the POST response). On
+    // failure the optimistic bubble flips to ``send_failed=true`` and
+    // surfaces a ⚠ glyph; the toast points the user at the cause and
+    // they can re-type without losing whatever they were drafting
+    // *next* (the old flow restored the failed draft into the
+    // textarea, which clobbered an in-progress follow-up message).
     const tempId = `tmp-${
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
@@ -1063,7 +1060,6 @@ export default function DmThreadPage() {
     newSinceScrollUp.value = 0
     if (unreadAnchor.value) unreadAnchor.value = null
 
-    const draft = content
     const draftAttachment = attachment
     form.reset()
     // Composer is now empty — flip back to the mic slot. Also clear
@@ -1085,81 +1081,67 @@ export default function DmThreadPage() {
     if (ta0) {
       requestAnimationFrame(() => autoResize(ta0))
     }
-    const restoredReply = replyTo.value
     replyTo.value = null
-    try {
-      const res = await api.post(`/api/conversations/${convId}/messages`, {
-        content,
-        ...(reply_to_id ? { reply_to_id } : {}),
-        // Attachment metadata. Backend ignores these fields on a
-        // ``text`` send (``type`` defaults to "text"), so we only
-        // include them when an attachment is actually staged.
-        ...(draftAttachment ? {
-          type: draftAttachment.type,
-          media_url: draftAttachment.media_url,
-          file_name: draftAttachment.file_name,
-          mime_type: draftAttachment.mime_type,
-          file_size_bytes: draftAttachment.file_size_bytes,
-        } : {}),
-      }) as { id: string }
-      // Reconcile the optimistic row with the server-assigned id.
-      //  • If the WS broadcast already landed (real ``id`` in the list)
-      //    we just drop the temp.
-      //  • Otherwise we swap the temp's id for the real one so a
-      //    subsequent WS frame de-dupes naturally.
-      const list = messages.value
-      const realExists = list.some(m => m.id === res.id)
-      messages.value = realExists
-        ? list.filter(m => m.id !== tempId)
-        : list.map(m => m.id === tempId ? { ...m, id: res.id } : m)
-    } catch (err: unknown) {
-      // Strip the optimistic row + restore the draft so the user
-      // can retry without re-typing.
-      messages.value = messages.value.filter(m => m.id !== tempId)
-      const ta = (form.elements.namedItem('content') as HTMLTextAreaElement | null)
-      if (ta) {
-        ta.value = draft
-        autoResize(ta)
-        ta.focus()
+    // Fire-and-forget the POST. Reconcile happens in the closure
+    // below — failures mark the optimistic bubble as
+    // ``send_failed`` rather than restoring the draft into the
+    // textarea, because the user may already be typing the next
+    // message by the time the failure lands.
+    void (async () => {
+      try {
+        const res = await api.post(`/api/conversations/${convId}/messages`, {
+          content,
+          ...(reply_to_id ? { reply_to_id } : {}),
+          // Attachment metadata. Backend ignores these fields on a
+          // ``text`` send (``type`` defaults to "text"), so we only
+          // include them when an attachment is actually staged.
+          ...(draftAttachment ? {
+            type: draftAttachment.type,
+            media_url: draftAttachment.media_url,
+            file_name: draftAttachment.file_name,
+            mime_type: draftAttachment.mime_type,
+            file_size_bytes: draftAttachment.file_size_bytes,
+          } : {}),
+        }) as { id: string }
+        // Reconcile the optimistic row with the server-assigned id.
+        //  • If the WS broadcast already landed (real ``id`` in the
+        //    list) we just drop the temp.
+        //  • Otherwise we swap the temp's id for the real one so a
+        //    subsequent WS frame de-dupes naturally.
+        const list = messages.value
+        const realExists = list.some(m => m.id === res.id)
+        messages.value = realExists
+          ? list.filter(m => m.id !== tempId)
+          : list.map(m => m.id === tempId ? { ...m, id: res.id } : m)
+      } catch (err: unknown) {
+        // Mark the optimistic bubble as failed in-place — the
+        // composer is already free for the next message, so we
+        // can't shove the draft back into the textarea without
+        // clobbering whatever the user is typing now. The ⚠ on
+        // the bubble + the toast cover the failure mode.
+        const errMsg = (err as Error)?.message ?? String(err)
+        const isPairingError = errMsg.includes('MEDIA_REQUIRES_DIRECT_PAIRING')
+          || errMsg.toLowerCase().includes('directly-paired')
+        messages.value = messages.value.map(m =>
+          m.id === tempId
+            ? {
+                ...m,
+                send_failed: true,
+                send_failed_reason: isPairingError
+                  ? 'Pictures, videos and files can only be sent to '
+                    + "households you've paired with directly."
+                  : 'Send failed — tap to retry from a re-typed message.',
+              }
+            : m,
+        )
+        showToast(
+          isPairingError
+            ? 'Media only sends to directly-paired households.'
+            : `Send failed: ${errMsg}`,
+          'error',
+        )
       }
-      replyTo.value = restoredReply
-      // Distinguish the relayed-DM rejection from a generic send
-      // failure so the user gets a useful prompt ("media only with
-      // directly-paired households") instead of a network-error
-      // toast. The ``api`` helper currently surfaces the backend's
-      // ``error`` body as ``err.message``; the relayed-DM clause
-      // checks the message text for the canonical code.
-      const errMsg = (err as Error)?.message ?? String(err)
-      const isPairingError = errMsg.includes('MEDIA_REQUIRES_DIRECT_PAIRING')
-        || errMsg.toLowerCase().includes('directly-paired')
-      if (isPairingError && draftAttachment) {
-        // The attachment stays uploaded on the backend but won't
-        // reach the recipient. Surface a clear copy in the inline
-        // error slot and drop the staged chip — the user can
-        // remove the attachment and resend as text, or pair with
-        // the household first and re-attach.
-        attachmentError.value =
-          'Pictures, videos and files can only be sent to households '
-          + "you've paired with directly. Pair this peer's household "
-          + 'and try again, or send a text message.'
-        pendingAttachment.value = null
-        composerHasContent.value = (ta?.value.trim().length ?? 0) > 0
-      } else {
-        // Generic failure — restore the attachment so the user can
-        // retry without re-uploading.
-        if (draftAttachment) {
-          pendingAttachment.value = draftAttachment
-        }
-        // Slot stays as Send so the user can hit it again to retry
-        // without rebuilding their message from scratch.
-        composerHasContent.value =
-          (ta?.value.trim().length ?? 0) > 0
-          || pendingAttachment.value !== null
-        showToast(`Send failed: ${errMsg}`, 'error')
-      }
-    } finally {
-      sending.value = false
-    }
+    })()
   }
 
   /** Resolve sender display name from the roster — falls back to the raw
@@ -1596,7 +1578,24 @@ export default function DmThreadPage() {
                 <div class="sh-message-meta">
                   <time>{new Date(m.created_at).toLocaleTimeString([],
                     { hour: '2-digit', minute: '2-digit' })}</time>
-                  {mine && (
+                  {/* Per-bubble send-failure glyph. The optimistic
+                   *  bubble keeps the user's content visible so they
+                   *  can recall what didn't go through; the ⚠ +
+                   *  hover text spell out the failure mode (relayed-
+                   *  DM media rejection vs generic network /
+                   *  validation error). A toast also fires from
+                   *  ``handleSend`` so the user gets a non-hover
+                   *  surface for the same information. */}
+                  {mine && m.send_failed && (
+                    <span
+                      class="sh-message-send-failed"
+                      title={m.send_failed_reason ?? 'Send failed.'}
+                      aria-label={m.send_failed_reason ?? 'Send failed.'}
+                    >
+                      ⚠
+                    </span>
+                  )}
+                  {mine && !m.send_failed && (
                     <ReadReceipt
                       sent={true}
                       delivered={
@@ -1725,13 +1724,7 @@ export default function DmThreadPage() {
           >×</button>
         </div>
       )}
-      <form
-        class={
-          'sh-composer'
-          + (sending.value ? ' sh-composer--sending' : '')
-        }
-        onSubmit={handleSend}
-      >
+      <form class="sh-composer" onSubmit={handleSend}>
         {/* Hidden file input — driven by the paperclip button below.
          *  The picker accepts every MIME type so the user can attach
          *  a photo, a video, OR a generic file (PDF, etc.); the
@@ -1755,7 +1748,7 @@ export default function DmThreadPage() {
           class="sh-dm-attach-btn"
           title="Attach a picture, video or file"
           aria-label="Attach a picture, video or file"
-          disabled={sending.value || pendingAttachment.value !== null}
+          disabled={pendingAttachment.value !== null}
           onClick={() => attachInputRef.current?.click()}
         >
           <span aria-hidden="true">📎</span>
@@ -1770,13 +1763,9 @@ export default function DmThreadPage() {
           <textarea
             ref={composerInputRef}
             name="content"
-            placeholder={sending.value ? 'Sending…' : 'Type a message...'}
+            placeholder="Type a message..."
             autocomplete="off"
             rows={1}
-            // Lock the input while the POST is in flight so a fast
-            // typist can't keep adding to a message that's already
-            // being delivered.
-            disabled={sending.value}
             onInput={handleInput}
             onKeyDown={handleComposerKeyDown}
             onBlur={() => closeEmojiAutocomplete()}
@@ -1791,27 +1780,24 @@ export default function DmThreadPage() {
         {/* Mic⇄Send slot. Mutually exclusive primary actions occupy
          *  the same round button position to the right of the input:
          *
-         *    • Empty composer → hold-to-record voice note. Works
-         *      regardless of ``adapter.stt`` — the recording always
-         *      ships; the transcript fills in asynchronously when
-         *      STT is available.
-         *    • Composer has content (or send is in flight) → Send.
+         *    • Empty composer → hold-to-record voice note.
+         *    • Composer has content → Send.
          *
-         *  Matches WhatsApp / iMessage / Telegram. ``sending`` keeps
-         *  the slot on Send while the POST is in flight so the
-         *  spinner sits where the click happened. */}
-        {(composerHasContent.value || sending.value) ? (
+         *  The slot does NOT lock during the POST round-trip — sends
+         *  fire-and-forget so the user can type and send the next
+         *  message immediately. Failures show a ⚠ on the optimistic
+         *  bubble (see ``send_failed`` in the messages signal) rather
+         *  than throwing the draft back into the textarea, which
+         *  would clobber whatever the user is typing now. */}
+        {composerHasContent.value ? (
           <Button
             type="submit"
-            loading={sending.value}
-            disabled={!composerHasContent.value && !sending.value}
-            aria-label={sending.value ? 'Sending message' : 'Send message'}
+            disabled={!composerHasContent.value}
+            aria-label="Send message"
           >
             {/* Compact paper-plane icon so the composer reads as a
              * chat bar (most of the row goes to the text input)
-             * rather than a form with a wide CTA. Loading spinner
-             * replaces the glyph via the ``Button`` component's
-             * ``loading`` prop. */}
+             * rather than a form with a wide CTA. */}
             <span aria-hidden="true" class="sh-composer-send-icon">➤</span>
           </Button>
         ) : (
