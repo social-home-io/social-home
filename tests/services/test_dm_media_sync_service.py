@@ -242,11 +242,65 @@ async def test_build_preview_image_returns_b64(stack):
     assert len(decoded) < 50_000
 
 
-async def test_build_preview_video_returns_none(stack):
-    """Video preview generation is deferred."""
-    _make_test_image(stack["media_dir"], name="clip.webm")
+async def test_build_preview_video_extracts_first_frame(stack, tmp_path):
+    """Video preview pulls the first frame and downscales to the cap.
+
+    We synthesise a tiny single-frame WebM via PyAV so the test
+    doesn't depend on a real video file shipped under tests/. The
+    output should be a WebP under the inline-envelope budget so the
+    receiver can render a recognisable poster immediately.
+    """
+    import av
+    import io
+
+    # 3 frames of 320×240 solid colour @ 25 fps — that's about 0.12 s
+    # of footage, plenty for ``generate_thumbnail`` to land the first
+    # frame. VideoProcessor only needs to decode one frame.
+    buf = io.BytesIO()
+    out_container = av.open(buf, mode="w", format="webm")
+    stream = out_container.add_stream("vp9", rate=25)
+    stream.width = 320
+    stream.height = 240
+    stream.pix_fmt = "yuv420p"
+    from PIL import Image as _Image
+
+    for _ in range(3):
+        frame = av.VideoFrame.from_image(
+            _Image.new("RGB", (320, 240), color=(50, 100, 200)),
+        )
+        for packet in stream.encode(frame):
+            out_container.mux(packet)
+    for packet in stream.encode():
+        out_container.mux(packet)
+    out_container.close()
+    video_bytes = buf.getvalue()
+    assert video_bytes, "synthesised video should produce bytes"
+    (stack["media_dir"] / "clip.webm").write_bytes(video_bytes)
+
     out = await stack["svc"].build_preview(
         media_url="api/media/clip.webm",
+        kind="video",
+        mime_type="video/webm",
+    )
+    assert out is not None
+    decoded = base64.b64decode(out)
+    # Output is a WebP (poster encoded by ImageProcessor's
+    # downscale path); under the preview-envelope budget.
+    assert decoded[:4] == b"RIFF"
+    assert b"WEBP" in decoded[:16]
+    assert len(decoded) < 50_000
+
+
+async def test_build_preview_video_undecodable_returns_none(stack):
+    """A corrupt video file falls back to ``None``.
+
+    PyAV raises on unparseable bytes; the build_preview branch
+    catches and returns ``None`` so the receiver shows the
+    play-glyph placeholder instead of the bubble going empty.
+    """
+    (stack["media_dir"] / "broken.webm").write_bytes(b"not a video")
+    out = await stack["svc"].build_preview(
+        media_url="api/media/broken.webm",
         kind="video",
         mime_type="video/webm",
     )

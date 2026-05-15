@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEventType
 from ..media.image_processor import ImageProcessor
+from ..media.video_processor import VideoProcessor
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -88,6 +89,7 @@ class DmMediaSyncService:
         "_federation",
         "_media_dir",
         "_image_proc",
+        "_video_proc",
         "_interval",
         "_task",
         "_stop",
@@ -108,8 +110,12 @@ class DmMediaSyncService:
         self._media_dir = media_dir
         # One processor instance is fine — ``ImageProcessor`` is
         # stateless across calls (Pillow's Image objects are
-        # short-lived per-call).
+        # short-lived per-call). ``VideoProcessor`` is the same shape
+        # — its ``generate_thumbnail`` pulls the first frame and
+        # encodes it as WebP, which we then re-resize down to the
+        # preview cap below.
         self._image_proc = ImageProcessor()
+        self._video_proc = VideoProcessor()
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
@@ -135,20 +141,24 @@ class DmMediaSyncService:
     ) -> str | None:
         """Build the inline preview for ``DM_MESSAGE.preview_bytes_b64``.
 
-        ``kind`` is the message ``type`` (``image`` / ``video`` /
-        ``file``). For ``image``, we read the WebP off disk and
-        downscale to :data:`PREVIEW_MAX_PX` @ :data:`PREVIEW_WEBP_QUALITY`.
-        For ``video`` / ``file`` we return ``None`` in v1 — the
-        receiver renders a placeholder glyph (paperclip for files,
-        play-icon for videos) until the full blob lands. Video
-        poster extraction can layer on later by piping a single
-        frame through ImageProcessor.
+        ``kind`` is the message ``type``:
 
-        Returns a base64-encoded string ready to drop into the
+        * ``image`` — read the WebP off disk, downscale to
+          :data:`PREVIEW_MAX_PX` @ :data:`PREVIEW_WEBP_QUALITY`.
+        * ``video`` — extract the first frame via
+          :class:`VideoProcessor`, then pipe through the same
+          downscale path so a video bubble shows a recognisable
+          poster on arrival (instead of the generic play-glyph
+          placeholder until the full blob lands).
+        * ``file`` — ``None``. Generic files have no inherent
+          thumbnail; the receiver renders a paperclip glyph.
+
+        Returns a base64-encoded WebP string ready to drop into the
         outbound payload, or ``None`` when no inline preview is
-        available for this kind.
+        available for this kind (or if extraction fails — the
+        receiver falls back to the placeholder).
         """
-        if kind != "image":
+        if kind == "file":
             return None
         path = self._resolve_media_path(media_url)
         if path is None or not path.is_file():
@@ -166,6 +176,26 @@ class DmMediaSyncService:
                 exc,
             )
             return None
+        # Video: pull the first frame as a WebP via VideoProcessor,
+        # then re-feed it into the image downscale path so the
+        # preview cap (320 px @ Q60) lands the bytes inside the
+        # envelope budget. ``VideoProcessor.generate_thumbnail``
+        # produces ~512 px @ Q75 — too big for inline shipping.
+        if kind == "video":
+            try:
+                video_frame = await self._video_proc.generate_thumbnail(data)
+            except (ValueError, RuntimeError, Exception) as exc:  # pragma: no cover
+                # PyAV occasionally raises non-``ValueError`` for
+                # codec quirks; treat any extraction failure as
+                # "no preview available" — the receiver falls back
+                # to the play-glyph placeholder.
+                log.debug(
+                    "dm-media-sync: video poster extraction failed for %s: %s",
+                    media_url,
+                    exc,
+                )
+                return None
+            data = video_frame
         try:
             thumb = await self._image_proc.generate_thumbnail(
                 data,

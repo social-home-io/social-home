@@ -76,7 +76,7 @@ sequenceDiagram
 
   Note over Alice: SPA upload via /api/media/upload<br/>then POST to /messages
 
-  Alice->>Alice: Build small preview (240 px WebP for image/video, glyph for file)
+  Alice->>Alice: Build small preview (320 px WebP @ Q60 for image; first frame extracted via PyAV for video; null for file → receiver renders glyph)
   Alice->>Bob: DM_MESSAGE (v_3, encrypted)<br/>{ media_blob_id, file_name, mime_type, preview_bytes_b64 }
   Bob-->>Bob: Save preview to local cache;<br/>bubble renders immediately with media_sync_status='pending'
   Note over Alice,Bob: ─── background ───
