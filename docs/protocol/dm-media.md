@@ -135,6 +135,43 @@ MiB; chunks above that. Chunked encryption is the same as the
 non-chunked case — every envelope rides through the federation
 transport's encryption layer.
 
+## Resilience
+
+A handful of paths beyond the happy flow above:
+
+- **In-flight reaper on startup.** `DmMediaSyncService.start()` calls
+  `reclaim_in_flight()` first thing — any row stuck in
+  `status='in_flight'` from a sender crash gets flipped back to
+  `pending` with a 10 s delay. Otherwise `list_due` would silently
+  skip the row forever.
+- **DM_MEDIA_BLOB-before-DM_MESSAGE reordering.** Federation
+  envelopes can race. If the full file lands before the
+  `conversation_messages` row exists, the blob handler still writes
+  the bytes to `<msg_id>.<ext>`; when the matching `DM_MESSAGE`
+  arrives later, `_receive_media_preview` adopts the pre-arrived
+  file directly (clearing `media_sync_status`) instead of
+  overwriting it with a preview.
+- **MIME magic-byte sniff.** `_on_dm_media_blob` checks the leading
+  bytes of the assembled file against the declared `mime_type`.
+  Only `image/webp` and `video/webm` have signatures we'd ever
+  produce upstream; anything else in `image/*` or `video/*` is
+  treated as suspicious and the row flips to
+  `media_sync_status='failed'` (the file still stores so the user
+  can inspect manually). Direct-trust between paired households is
+  the primary safety net; this is hardening for the
+  "sender's instance got compromised" scenario.
+- **Failed-delivery footnote.** When the outbox retry budget for any
+  paired peer is exhausted, the matching row flips to
+  `media_sync_status='failed'` and the sender's bubble renders an
+  inline warning ("Couldn't deliver this media to one or more
+  paired households — the file is still on your device."). The
+  recipient sees nothing — there's nothing to act on for them.
+- **Media-orphan janitor.** `DmGcScheduler._sweep_media_orphans`
+  runs on the hourly conversation-GC tick: enumerates
+  `<msg_id>.preview.webp` and `<msg_id>.part<idx>` files,
+  groups by message id, drops anything without a backing live
+  `conversation_messages` row.
+
 ## Server-side validation
 
 - `DmService.send_message` rejects media on a relay-only conversation
@@ -144,8 +181,12 @@ transport's encryption layer.
   staged attachment around so the user can drop it and resend as
   text.
 - Size + MIME caps are enforced inside `MediaUploadView` before
-  `media_url` ever reaches the DM POST. The DM route trusts the
-  uploaded blob's signed URL.
+  `media_url` ever reaches the DM POST. Three branches:
+  `image/*` → `ImageProcessor`, `video/*` → `VideoProcessor`,
+  everything else → passthrough (25 MiB cap,
+  `FILE_DENIED_EXTENSIONS` deny-list of execute-on-default-handler
+  extensions, UUID filename + sanitised extension). The DM route
+  trusts the uploaded blob's signed URL.
 - The receiver's `_on_dm_message` upserts on
   `conversation_messages.id` so a v_3 message arriving twice (the
   envelope + a redelivery) produces a single row.
