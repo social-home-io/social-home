@@ -1459,31 +1459,39 @@ def cmd_verify() -> None:
                             "c: media DM a→c has no media_url after blob land",
                         )
                     else:
-                        # HEAD the signed media URL on Carol's
+                        # GET the signed media URL on Carol's
                         # instance — confirms the file landed under
                         # ``media_dir`` and the signing chain works
-                        # for the receiver-side read. ``_request``
-                        # assumes JSON, so we hit urllib directly
-                        # with a HEAD verb that doesn't return a
-                        # body to decode.
+                        # for the receiver-side read. The media
+                        # route is GET-only (HEAD returns 405), so
+                        # we read a few bytes to verify the body is
+                        # a real image without decoding the whole
+                        # response.
                         full_url = media_url
                         if not full_url.startswith("http"):
                             full_url = (
                                 f"http://127.0.0.1:{c['port']}/{full_url.lstrip('/')}"
                             )
-                        head_req = urllib.request.Request(
+                        get_req = urllib.request.Request(
                             full_url,
-                            method="HEAD",
+                            method="GET",
                             headers={"Authorization": f"Bearer {c['token']}"},
                         )
+                        ms: int = 0
+                        first_bytes = b""
                         try:
-                            with urllib.request.urlopen(head_req, timeout=10) as r:
+                            with urllib.request.urlopen(get_req, timeout=10) as r:
                                 ms = r.status
+                                first_bytes = r.read(16)
                         except urllib.error.HTTPError as exc:
                             ms = exc.code
-                        if ms not in (200, 304):
+                        if ms != 200:
                             failures.append(
                                 f"c: media DM a→c file fetch HTTP {ms} ({media_url})",
+                            )
+                        elif not first_bytes:
+                            failures.append(
+                                f"c: media DM a→c file is empty ({media_url})",
                             )
                         else:
                             print(
