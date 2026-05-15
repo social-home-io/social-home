@@ -63,6 +63,11 @@ def _event_dict(event) -> dict:
         # IANA wall-clock anchor — the SPA uses it to render the
         # event in the host's tz with an optional "your time" hint.
         "tz": getattr(event, "tz", "UTC"),
+        # Client-stamped grouping uuid (issue #327). The SPA's
+        # composer mints one before a multi-target fan-out and ships
+        # it on every POST in the batch so :func:`groupSharedEvents`
+        # can merge the resulting rows by intent.
+        "client_event_uuid": getattr(event, "client_event_uuid", None),
     }
 
 
@@ -200,6 +205,11 @@ class CalendarEventsView(BaseView):
             # IANA wall-clock anchor the SPA computed for this event.
             # When absent the service falls back to user.tz → household.tz.
             tz=body.get("tz"),
+            # Composer-stamped grouping uuid (issue #327). Optional —
+            # absent / malformed values collapse to ``None`` inside the
+            # service via ``_clean_client_event_uuid``, and the SPA's
+            # content-key fallback covers those rows.
+            client_event_uuid=body.get("client_event_uuid"),
         )
         return web.json_response(
             _sign_payload(self.request, _event_dict(event)), status=201

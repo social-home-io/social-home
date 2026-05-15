@@ -339,13 +339,23 @@ export function CalendarEventDialog({ onCreated }: {
         const targets = targetCalendarIds.value.size > 0
           ? Array.from(targetCalendarIds.value)
           : [calendarId.value]
+        // Stamp one ``client_event_uuid`` across every POST in the
+        // batch so the agenda's ``groupSharedEvents`` can merge the
+        // resulting rows by intent — see issue #327. The same uuid
+        // also rides the federation envelope so cross-household
+        // mirrors group with the host's row. Only stamped when
+        // there's actually more than one target — a single-target
+        // event doesn't need it (and would just waste bytes).
+        const fanoutBody = targets.length > 1
+          ? { ...body, client_event_uuid: _mintEventUuid() }
+          : body
         // POST in parallel so a four-kid drop-on-everyone is one
         // round-trip wall-clock. Failures are individually toasted so
         // a partial success still surfaces useful state.
         const results = await Promise.allSettled(
           targets.map(id => api.post(
             `/api/calendars/${id}/events`,
-            body,
+            fanoutBody,
           )),
         )
         const ok = results.filter(r => r.status === 'fulfilled').length
@@ -609,6 +619,23 @@ export function CalendarEventDialog({ onCreated }: {
  *  household user map. Falls back to the bare username when the cache
  *  hasn't loaded yet (rare — the page kicks off ``loadHouseholdUsers``
  *  on mount). */
+/** Mint a v4 UUID shared across a multi-target event fan-out. The
+ *  same uuid lands on every resulting row + every federation envelope
+ *  so the agenda's :func:`groupSharedEvents` can merge them by
+ *  intent (see issue #327). Falls back to a timestamp+random hex
+ *  string in environments without ``crypto.randomUUID`` (older Edge,
+ *  test runners). The fallback shape still matches the
+ *  ``_clean_client_event_uuid`` server-side accept-list (32 hex
+ *  chars, no dashes). */
+function _mintEventUuid(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+  if (c?.randomUUID) return c.randomUUID()
+  // Two 16-hex-char chunks → 32-char accept-listed shape.
+  const chunk = () =>
+    Math.floor(Math.random() * 0x1_0000_0000_0000).toString(16).padStart(13, '0')
+  return (chunk() + chunk() + chunk()).slice(0, 32)
+}
+
 function ownerDisplayName(owner_username: string): string {
   for (const u of householdUsers.value.values()) {
     if (u.username === owner_username) {

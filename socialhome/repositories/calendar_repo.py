@@ -222,8 +222,9 @@ class SqliteCalendarRepo:
                 all_day, attendees_json, mirrored_from, rrule,
                 rsvp_enabled, cover_url, location, tz, origin,
                 remote_event_id, remote_instance_id, created_by,
+                client_event_uuid,
                 created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -242,6 +243,7 @@ class SqliteCalendarRepo:
                 origin=excluded.origin,
                 remote_event_id=excluded.remote_event_id,
                 remote_instance_id=excluded.remote_instance_id,
+                client_event_uuid=excluded.client_event_uuid,
                 updated_at=datetime('now')
             """,
             (
@@ -263,6 +265,7 @@ class SqliteCalendarRepo:
                 event.remote_event_id,
                 event.remote_instance_id,
                 event.created_by,
+                event.client_event_uuid,
                 None,
                 None,
             ),
@@ -1069,6 +1072,7 @@ def _row_to_event(row: dict | None) -> CalendarEvent | None:
         remote_event_id=row.get("remote_event_id"),
         remote_instance_id=row.get("remote_instance_id"),
         tz=row.get("tz") or "UTC",
+        client_event_uuid=row.get("client_event_uuid"),
     )
 
 

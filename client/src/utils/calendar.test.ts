@@ -194,4 +194,74 @@ describe('groupSharedEvents', () => {
   it('returns an empty array unchanged', () => {
     expect(groupSharedEvents([], cals)).toEqual([])
   })
+
+  // ── client_event_uuid path (issue #327) ──────────────────────────────
+
+  it('merges rows that share a client_event_uuid even when titles diverge', () => {
+    // The intent-driven path: same uuid → same event, no matter what
+    // the user did to the title / description / location on one row
+    // post-creation. Without the uuid this case would split because
+    // the content key disagrees.
+    const aliceRow = sharedEvt('e-1', {
+      calendar_id: 'cal-a',
+      summary: 'Family dinner',
+    } as SharedEvtOpts & { client_event_uuid?: string }) as CalendarEvent
+    ;(aliceRow as { client_event_uuid?: string }).client_event_uuid
+      = 'abcdef0123456789abcdef0123456789'
+    const bobRow = sharedEvt('e-2', {
+      calendar_id: 'cal-b',
+      summary: 'Family dinner (edited only on Bob\'s row)',
+    } as SharedEvtOpts) as CalendarEvent
+    ;(bobRow as { client_event_uuid?: string }).client_event_uuid
+      = 'abcdef0123456789abcdef0123456789'
+    const out = groupSharedEvents([aliceRow, bobRow], cals)
+    expect(out).toHaveLength(1)
+    expect(out[0]._grouped_calendar_ids).toEqual(['cal-a', 'cal-b'])
+    expect(out[0]._grouped_event_ids).toEqual(['e-1', 'e-2'])
+  })
+
+  it('does not merge two rows with different client_event_uuids', () => {
+    // Two genuinely different events that happen to share a content
+    // key — the uuid disambiguates them and keeps them separate.
+    const a = sharedEvt('e-1', { calendar_id: 'cal-a' }) as CalendarEvent
+    ;(a as { client_event_uuid?: string }).client_event_uuid
+      = '11111111111111111111111111111111'
+    const b = sharedEvt('e-2', { calendar_id: 'cal-b' }) as CalendarEvent
+    ;(b as { client_event_uuid?: string }).client_event_uuid
+      = '22222222222222222222222222222222'
+    const out = groupSharedEvents([a, b], cals)
+    expect(out).toHaveLength(2)
+  })
+
+  it('groups uuid-only rows together with no calendars table', () => {
+    // Cross-household case: the recipient hasn't synced the host's
+    // ``calendars`` row but DID receive the federation envelope.
+    // ``calendars`` arg is empty; uuid alone still groups.
+    const a = sharedEvt('e-1', { calendar_id: 'cal-a' }) as CalendarEvent
+    ;(a as { client_event_uuid?: string }).client_event_uuid
+      = 'abcdef0123456789abcdef0123456789'
+    const b = sharedEvt('e-2', { calendar_id: 'cal-x-remote' }) as CalendarEvent
+    ;(b as { client_event_uuid?: string }).client_event_uuid
+      = 'abcdef0123456789abcdef0123456789'
+    const out = groupSharedEvents([a, b], [])
+    expect(out).toHaveLength(1)
+    expect(out[0]._grouped_event_ids).toEqual(['e-1', 'e-2'])
+  })
+
+  it('keeps a uuid-bearing row separate from a uuid-less twin', () => {
+    // Mixed case during rollout: the host stamped a uuid on the new
+    // event but the recipient is on a sub-version peer that stripped
+    // it. We don't try to bridge the two — content-key fallback
+    // would, but the lack of uuid on one side means we can't trust
+    // any cross-version merge.
+    const stamped = sharedEvt('e-1', { calendar_id: 'cal-a' }) as CalendarEvent
+    ;(stamped as { client_event_uuid?: string }).client_event_uuid
+      = 'abcdef0123456789abcdef0123456789'
+    const unstamped = sharedEvt('e-2', { calendar_id: 'cal-b' }) as CalendarEvent
+    const out = groupSharedEvents([stamped, unstamped], cals)
+    // One uuid-group + one content-group → two rows. The agenda
+    // shows both with their own chip, which is honest about the
+    // mixed-version state.
+    expect(out).toHaveLength(2)
+  })
 })

@@ -100,6 +100,37 @@ def _clean_location(value: str | None) -> str | None:
     return trimmed[:_LOCATION_MAX]
 
 
+def _clean_client_event_uuid(value: str | None) -> str | None:
+    """Normalise the client-stamped grouping uuid.
+
+    The SPA's composer mints a v4 UUID before a multi-target fan-out
+    and ships it as ``client_event_uuid`` on every ``POST`` in the
+    batch — same UUID on every resulting row so the agenda's grouper
+    can merge by intent (see issue #327).
+
+    We accept lowercase hex with optional dashes, trim whitespace, and
+    cap the length so a malicious / mis-wired client can't pump
+    arbitrary bytes into the column. ``None`` / empty / overlong /
+    garbage shapes collapse to ``None`` — the content-key fallback
+    in :func:`groupSharedEvents` picks up the slack.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip().lower()
+    if not trimmed:
+        return None
+    # UUID hex with optional dashes — 32 chars without, 36 with the
+    # canonical 8-4-4-4-12 shape. Anything else is rejected (the
+    # column is wide enough for either shape; we just don't want a
+    # client jamming a 1 KiB string in here).
+    if len(trimmed) not in (32, 36):
+        return None
+    allowed = set("0123456789abcdef-")
+    if any(c not in allowed for c in trimmed):
+        return None
+    return trimmed
+
+
 #: Default colours for freshly-created household calendars. The
 #: service walks this list in order and picks the first hue not yet
 #: taken by an existing calendar so members get visually distinct
@@ -442,6 +473,7 @@ class CalendarService:
         cover_url: str | None = None,
         location: str | None = None,
         tz: str | None = None,
+        client_event_uuid: str | None = None,
     ) -> CalendarEvent:
         await self._require_calendar_enabled()
         summary = summary.strip()
@@ -485,6 +517,7 @@ class CalendarService:
             cover_url=_clean_cover_url(cover_url),
             location=_clean_location(location),
             tz=event_tz,
+            client_event_uuid=_clean_client_event_uuid(client_event_uuid),
         )
         saved = await self._repo.save_event(event)
         if self._bus is not None:
@@ -839,6 +872,12 @@ def _personal_event_payload(event: CalendarEvent, calendar: Calendar) -> dict:
         # it on the inbound side (their importer uses ``dict.get("tz")``
         # with a ``"UTC"`` fallback), so the field is additive.
         "tz": event.tz,
+        # Client-stamped grouping uuid (issue #327). Optional on the
+        # wire: receivers that ignore unknown payload keys just
+        # persist ``NULL`` and the SPA's content-key fallback covers
+        # the legacy case. When both sides carry it the agenda's
+        # grouper merges by intent across the household boundary.
+        "client_event_uuid": event.client_event_uuid,
     }
 
 

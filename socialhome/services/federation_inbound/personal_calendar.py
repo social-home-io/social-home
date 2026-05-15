@@ -138,6 +138,17 @@ class PersonalCalendarInboundHandlers:
             # the SPA still annotates "≈ HH:MM your time" for the
             # recipient. Old peers omit the field; default ``"UTC"``.
             event_tz = str(p.get("tz") or "UTC")
+            # Client-stamped grouping uuid (issue #327). Optional on
+            # the wire — sub-version peers omit the field; the SPA's
+            # content-key fallback covers those rows. When present
+            # the agenda's grouper merges by intent across the
+            # household boundary.
+            client_uuid_in = p.get("client_event_uuid")
+            client_event_uuid = (
+                str(client_uuid_in)
+                if isinstance(client_uuid_in, str) and client_uuid_in
+                else None
+            )
             mirrored = CalendarEvent(
                 id=row_id,
                 calendar_id=cal_id,
@@ -156,6 +167,7 @@ class PersonalCalendarInboundHandlers:
                 remote_event_id=remote_event_id,
                 remote_instance_id=event.from_instance,
                 tz=event_tz,
+                client_event_uuid=client_event_uuid,
             )
             if existing is not None:
                 # Re-save preserves the row id; ``replace`` on the
@@ -173,6 +185,7 @@ class PersonalCalendarInboundHandlers:
                     cover_url=p.get("cover_url"),
                     location=p.get("location"),
                     tz=event_tz,
+                    client_event_uuid=client_event_uuid,
                 )
             await self._calendar_repo.save_event(mirrored)
             # On first receipt, default the recipient's RSVP to

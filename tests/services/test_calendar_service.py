@@ -1738,3 +1738,95 @@ async def test_wire_is_noop_without_bus(env):
     the seeding path; ``wire()`` must not crash on it."""
     svc = CalendarService(env.cal_repo, bus=None)
     svc.wire()  # no exception
+
+
+# ── client_event_uuid (issue #327) ─────────────────────────────────────
+
+
+async def test_create_event_persists_client_event_uuid(env):
+    """The composer's mint-once UUID lands on the row + round-trips through
+    the dict shape on read."""
+    await env.db.enqueue(
+        "INSERT OR IGNORE INTO users(username,user_id,display_name) VALUES(?,?,?)",
+        ("uli", "u-uli", "Uli"),
+    )
+    cal = await env.cal_svc.create_calendar(name="C", owner_username="uli")
+    now = datetime.now(timezone.utc)
+    ev = await env.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="UUID test",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="u-uli",
+        client_event_uuid="abcdef0123456789abcdef0123456789",
+    )
+    assert ev.client_event_uuid == "abcdef0123456789abcdef0123456789"
+    got = await env.cal_repo.get_event(ev.id)
+    assert got is not None
+    assert got.client_event_uuid == "abcdef0123456789abcdef0123456789"
+
+
+async def test_create_event_normalises_uuid_with_dashes(env):
+    """Canonical 8-4-4-4-12 dashed form is accepted + lowercased."""
+    await env.db.enqueue(
+        "INSERT OR IGNORE INTO users(username,user_id,display_name) VALUES(?,?,?)",
+        ("vera", "u-vera", "Vera"),
+    )
+    cal = await env.cal_svc.create_calendar(name="C", owner_username="vera")
+    now = datetime.now(timezone.utc)
+    ev = await env.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="dashed",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="u-vera",
+        client_event_uuid="ABCDEF01-2345-6789-ABCD-EF0123456789",
+    )
+    assert ev.client_event_uuid == "abcdef01-2345-6789-abcd-ef0123456789"
+
+
+async def test_create_event_rejects_malformed_uuid(env):
+    """Garbage / overlong inputs collapse to ``None`` — the SPA's
+    content-key fallback covers them and a malicious client can't pump
+    arbitrary bytes into the column."""
+    await env.db.enqueue(
+        "INSERT OR IGNORE INTO users(username,user_id,display_name) VALUES(?,?,?)",
+        ("walt", "u-walt", "Walt"),
+    )
+    cal = await env.cal_svc.create_calendar(name="C", owner_username="walt")
+    now = datetime.now(timezone.utc)
+    for bad in (
+        "",
+        "not-a-uuid-yo",
+        "g" * 32,  # right length, wrong charset
+        "abcdef0123456789abcdef012345678",  # 31 chars
+        "abcdef0123456789abcdef01234567890",  # 33 chars
+        "x" * 200,
+    ):
+        ev = await env.cal_svc.create_event(
+            calendar_id=cal.id,
+            summary=f"bad-{bad[:4]}",
+            start=now.isoformat(),
+            end=(now + timedelta(hours=1)).isoformat(),
+            created_by="u-walt",
+            client_event_uuid=bad,
+        )
+        assert ev.client_event_uuid is None, bad
+
+
+async def test_create_event_default_is_none(env):
+    """No ``client_event_uuid`` parameter → row has ``NULL``."""
+    await env.db.enqueue(
+        "INSERT OR IGNORE INTO users(username,user_id,display_name) VALUES(?,?,?)",
+        ("xena", "u-xena", "Xena"),
+    )
+    cal = await env.cal_svc.create_calendar(name="C", owner_username="xena")
+    now = datetime.now(timezone.utc)
+    ev = await env.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="no uuid",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="u-xena",
+    )
+    assert ev.client_event_uuid is None

@@ -92,6 +92,16 @@ class CalendarEvent:
     #: never see NULL either).
     tz: str = "UTC"
 
+    #: Client-stamped grouping key. The SPA's composer mints a single
+    #: UUID before the multi-target fan-out (one ``POST`` per picked
+    #: household calendar) and includes it on every request in the
+    #: batch — every resulting row carries the same ``client_event_uuid``.
+    #: The agenda's :func:`groupSharedEvents` uses this to merge same-
+    #: event rows into one card without relying on the content
+    #: heuristic. ``None`` for legacy / externally-imported events; the
+    #: SPA falls back to the content key in that case.
+    client_event_uuid: str | None = None
+
 
 @dataclass(slots=True, frozen=True)
 class CalendarEventCreate:
