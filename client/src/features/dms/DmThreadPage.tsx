@@ -9,6 +9,7 @@ import { DmThreadSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { VoiceRecordButton } from '@/components/VoiceRecordButton'
 import { AudioBubble } from '@/components/AudioBubble'
+import { openLightbox } from '@/components/ImageLightbox'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
 import { TypingIndicator, sendTyping } from '@/components/TypingIndicator'
@@ -1492,17 +1493,31 @@ export default function DmThreadPage() {
                *  media is gone — only the "(message deleted)"
                *  placeholder renders. */}
               {!m.deleted && m.type === 'image' && m.media_url && (
-                <img
-                  class={
-                    'sh-message-media sh-message-media--image'
-                    + (m.media_sync_status === 'pending'
-                      ? ' sh-message-media--pending'
-                      : '')
-                  }
-                  src={m.media_url}
-                  alt={m.file_name ?? 'Picture'}
-                  loading="lazy"
-                />
+                <button
+                  type="button"
+                  class="sh-message-media-tap"
+                  aria-label={`Open ${m.file_name ?? 'picture'} full-screen`}
+                  onClick={(e) => {
+                    // Stop the click from bubbling to the bubble's
+                    // own click handler (which toggles the reply
+                    // affordance). The lightbox is the action the
+                    // user expected from the picture itself.
+                    e.stopPropagation()
+                    openLightbox(m.media_url!)
+                  }}
+                >
+                  <img
+                    class={
+                      'sh-message-media sh-message-media--image'
+                      + (m.media_sync_status === 'pending'
+                        ? ' sh-message-media--pending'
+                        : '')
+                    }
+                    src={m.media_url}
+                    alt={m.file_name ?? 'Picture'}
+                    loading="lazy"
+                  />
+                </button>
               )}
               {!m.deleted && m.type === 'video' && m.media_url && (
                 <video
