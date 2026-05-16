@@ -1451,6 +1451,57 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   to   { transform: translateY(0); }
 }
 
+/* SPA update banner — surfaces when the backend has shipped a newer
+   bundle than the open tab booted with. Sticky at the top of the
+   viewport, full-bleed on mobile, centred + width-capped on desktop.
+   Designed to stay until the user reloads (the canonical action) or
+   dismisses ("Later"). */
+.sh-update-banner {
+  position: fixed;
+  top: var(--sh-space-md);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 520px;
+  width: calc(100% - 2 * var(--sh-space-md));
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  background: color-mix(in srgb, var(--sh-primary) 14%, var(--sh-bg));
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 45%, var(--sh-border));
+  border-radius: var(--sh-radius-full);
+  box-shadow: var(--sh-shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+  z-index: var(--sh-z-toast);
+}
+.sh-update-banner__msg {
+  flex: 1 1 auto;
+  font-size: 0.95rem;
+  color: var(--sh-fg);
+}
+.sh-update-banner__btn {
+  flex-shrink: 0;
+  border-radius: var(--sh-radius-full);
+  padding: 4px 12px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.sh-update-banner__btn--primary {
+  background: var(--sh-primary);
+  color: var(--sh-bg);
+  font-weight: 600;
+}
+.sh-update-banner__btn--primary:hover {
+  background: var(--sh-primary-hover, var(--sh-primary));
+}
+.sh-update-banner__btn--ghost {
+  background: transparent;
+  color: var(--sh-fg-secondary);
+}
+.sh-update-banner__btn--ghost:hover {
+  color: var(--sh-fg);
+}
+
 /* Toasts */
 .sh-toast-container {
   position: fixed;
