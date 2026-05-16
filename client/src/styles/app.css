@@ -3895,6 +3895,25 @@ body.sh-dm-thread-open .sh-messages {
 .sh-message-media--image {
   object-fit: cover;
 }
+/* Button wrapper around an image bubble — exists purely to give the
+   image a tap-to-open-lightbox affordance with native keyboard /
+   screen-reader semantics. Strip every default button style so the
+   rendered output looks identical to the bare ``<img>``. */
+.sh-message-media-tap {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  width: 100%;
+  text-align: inherit;
+  border-radius: 12px;
+}
+.sh-message-media-tap:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+}
 .sh-message-media--video {
   background: #000;
 }
