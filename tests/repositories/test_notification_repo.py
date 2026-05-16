@@ -75,6 +75,84 @@ async def test_notification_mark_read(env):
     assert await env.notif_repo.count_unread(uid) == 1
 
 
+async def test_save_or_bump_unread_collapses_same_link(env):
+    """Two ``save_or_bump_unread`` calls with the same
+    ``(user_id, type, link_url)`` produce exactly one row, with the
+    second call's ``created_at`` + ``title`` overwriting the first."""
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("notif_user_b", "uid-notif-b", "NotifUserB"),
+    )
+    uid = "uid-notif-b"
+    first = new_notification(
+        user_id=uid,
+        type="dm_message",
+        title="Alice messaged you",
+        link_url="/dms/c-1",
+    )
+    second = new_notification(
+        user_id=uid,
+        type="dm_message",
+        title="Alice messaged you",
+        link_url="/dms/c-1",
+    )
+    saved_first = await env.notif_repo.save_or_bump_unread(first)
+    saved_second = await env.notif_repo.save_or_bump_unread(second)
+    # Same id back — the second call returned the bumped first row.
+    assert saved_second.id == saved_first.id
+    # Only one row in the user's list.
+    rows = await env.notif_repo.list(uid, limit=50)
+    assert len([r for r in rows if r.link_url == "/dms/c-1"]) == 1
+
+
+async def test_save_or_bump_unread_does_not_span_read(env):
+    """A read row with the same key does not absorb a new event —
+    the next ``save_or_bump_unread`` creates a fresh unread row."""
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("notif_user_c", "uid-notif-c", "NotifUserC"),
+    )
+    uid = "uid-notif-c"
+    first = new_notification(
+        user_id=uid,
+        type="dm_message",
+        title="A",
+        link_url="/dms/c-1",
+    )
+    saved = await env.notif_repo.save_or_bump_unread(first)
+    await env.notif_repo.mark_read(saved.id, uid)
+    second = new_notification(
+        user_id=uid,
+        type="dm_message",
+        title="B",
+        link_url="/dms/c-1",
+    )
+    saved_second = await env.notif_repo.save_or_bump_unread(second)
+    # Different id this time — the read row didn't absorb.
+    assert saved_second.id != saved.id
+    rows = await env.notif_repo.list(uid, limit=50)
+    assert len([r for r in rows if r.link_url == "/dms/c-1"]) == 2
+    unread = [r for r in rows if r.read_at is None]
+    assert len(unread) == 1
+
+
+async def test_save_or_bump_unread_falls_back_to_save_when_no_link(env):
+    """Without a ``link_url`` the repo can't dedupe — it falls back to
+    the plain append-only insert path so non-DM call sites keep
+    their existing shape."""
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("notif_user_d", "uid-notif-d", "NotifUserD"),
+    )
+    uid = "uid-notif-d"
+    for i in range(3):
+        await env.notif_repo.save_or_bump_unread(
+            new_notification(user_id=uid, type="t", title=f"N{i}"),
+        )
+    rows = await env.notif_repo.list(uid, limit=50)
+    assert len(rows) == 3
+
+
 async def test_notification_delete_old(env):
     """delete_old removes notifications past the threshold."""
     await env.db.enqueue(

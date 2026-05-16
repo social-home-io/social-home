@@ -96,6 +96,7 @@ class NotificationService:
         "_push",
         "_adapter",
         "_calendar_repo",
+        "_personal_calendar_repo",
     )
 
     def __init__(
@@ -115,6 +116,14 @@ class NotificationService:
         self._push = None  # attach_push_service(PushService)
         self._adapter = None  # attach_platform_adapter(PlatformAdapter)
         self._calendar_repo = None  # attach_calendar_repo(...) Phase D
+        # Personal calendars (per-user). Used by ``on_calendar_event_created``
+        # to dispatch the notification audience: a personal-calendar event
+        # only notifies the calendar's owner (and not the creator
+        # themselves). Space calendar events fall through to
+        # ``_spaces.list_members`` instead. Optional — without it the
+        # handler degrades to "no personal notifications", which is safer
+        # than the old "fan to every household member" behavior.
+        self._personal_calendar_repo = None
 
     def attach_push_service(self, push_service) -> None:
         """Attach a :class:`PushService` to fan out Web Push alongside the
@@ -129,6 +138,15 @@ class NotificationService:
         update-push handler is a no-op (Phase D)."""
         self._calendar_repo = calendar_repo
 
+    def attach_personal_calendar_repo(self, calendar_repo) -> None:
+        """Wire :class:`AbstractCalendarRepo` (the personal-calendar repo)
+        so ``on_calendar_event_created`` can resolve the owning user of
+        the event's calendar. Without it personal-calendar events emit
+        no notifications (the broader space-member branch still works
+        via ``_spaces``).
+        """
+        self._personal_calendar_repo = calendar_repo
+
     def attach_platform_adapter(self, adapter) -> None:
         """Attach the :class:`PlatformAdapter` so push notifications also
         reach HA mobile apps (`notify.mobile_app_<user>`) or the
@@ -138,14 +156,23 @@ class NotificationService:
         """
         self._adapter = adapter
 
-    async def _save_notif(self, note):
+    async def _save_notif(self, note, *, dedupe_by_link: bool = False):
         """Persist + publish ``NotificationCreated`` + fire title-only
         pushes to every registered surface (Web Push + HA mobile app).
 
         Per §25.3 we never put the body on the wire; subscribers
         translate the title and tap-open the app to see the full row.
+
+        ``dedupe_by_link=True`` collapses bursts: if an unread row
+        already exists for the same ``(user_id, type, link_url)`` it's
+        bumped in place rather than duplicated. Used today by DMs so a
+        five-message burst from one peer shows up as one bell entry
+        until the recipient opens the thread.
         """
-        saved = await self._notifs.save(note)
+        if dedupe_by_link:
+            saved = await self._notifs.save_or_bump_unread(note)
+        else:
+            saved = await self._notifs.save(note)
         await self._bus.publish(
             NotificationCreated(
                 user_id=saved.user_id,
@@ -371,10 +398,12 @@ class NotificationService:
         already drives the push fan-out (Web Push + platform adapter)
         so we don't need to call ``_fan_push`` separately.
 
-        One row per message is the simple shape. The companion
-        :meth:`mark_read_for_dm` is invoked from the conversation
-        read route so opening the thread immediately clears all rows
-        for that conversation — no flood pile-up in the bell.
+        Bell rows are **collapsed per conversation** via
+        ``dedupe_by_link=True``: a burst of N messages from one peer
+        bumps a single existing unread row rather than spamming the
+        bell with N entries. The companion :meth:`mark_read_for_dm`
+        clears that row when the recipient opens the thread, so the
+        next message after opening starts a fresh row.
         """
         if not event.recipient_user_ids:
             return
@@ -397,7 +426,8 @@ class NotificationService:
                     type="dm_message",
                     title=title,
                     link_url=link,
-                )
+                ),
+                dedupe_by_link=True,
             )
 
     async def mark_read_for_dm(
@@ -622,19 +652,83 @@ class NotificationService:
         self,
         event: CalendarEventCreated,
     ) -> None:
-        """Notify household members about a new calendar event."""
+        """Notify only the people the event is actually for.
+
+        Two paths depending on which calendar the event lives on:
+
+        * **Personal calendar.** The ``calendars`` table holds one row
+          per user's personal calendar; the event's ``calendar_id``
+          points at one of those rows. Only the calendar's owner needs
+          a bell, and only when *someone else* added the event — a
+          user adding a reminder to their own calendar should never
+          notify themselves.
+
+        * **Space calendar.** Space events live in
+          ``space_calendar_events`` and don't have a row in
+          ``calendars``; their ``calendar_id`` is the
+          :class:`Space` id directly. Members of that space (minus the
+          creator) get the bell — same shape as ``SpacePostCreated``.
+
+        The old behavior fanned out to every active household member
+        regardless of whose calendar the event lived on, which spammed
+        users about events they had nothing to do with. The user
+        report that drove the rewrite is on file in the PR notes.
+        """
         cal_event = event.event
-        users = await self._users.list_active()
-        for user in users:
-            if user.user_id == cal_event.created_by:
+        # Personal-calendar branch — only fires if the calendar row
+        # exists in ``calendars`` (i.e. the event lives on a personal
+        # calendar, not a space one).
+        if self._personal_calendar_repo is not None:
+            try:
+                cal = await self._personal_calendar_repo.get_calendar(
+                    cal_event.calendar_id,
+                )
+            except Exception:
+                cal = None
+            if cal is not None:
+                owner = await self._users.get(cal.owner_username)
+                if owner is None:
+                    return
+                if owner.user_id == cal_event.created_by:
+                    # The owner added the event to their own calendar —
+                    # no self-notification.
+                    return
+                await self._save_notif(
+                    new_notification(
+                        user_id=owner.user_id,
+                        type="calendar_event_created",
+                        title=self._t(
+                            "notification.calendar.created",
+                            locale=self._locale(owner),
+                            fallback="New event: {summary}",
+                            summary=cal_event.summary,
+                        ),
+                        link_url="/calendar",
+                    )
+                )
+                return
+        # Space-calendar branch — ``calendar_id`` is the space_id.
+        # Notify members of that space (except the creator). If the
+        # space doesn't exist either (e.g., a misrouted federation
+        # event), bail silently rather than reverting to the
+        # household-wide fanout.
+        space = await self._spaces.get(cal_event.calendar_id)
+        if space is None:
+            return
+        members = await self._spaces.list_members(cal_event.calendar_id)
+        for member in members:
+            if member.user_id == cal_event.created_by:
+                continue
+            recipient = await self._users.get_by_user_id(member.user_id)
+            if recipient is None:
                 continue
             await self._save_notif(
                 new_notification(
-                    user_id=user.user_id,
+                    user_id=member.user_id,
                     type="calendar_event_created",
                     title=self._t(
                         "notification.calendar.created",
-                        locale=self._locale(user),
+                        locale=self._locale(recipient),
                         fallback="New event: {summary}",
                         summary=cal_event.summary,
                     ),
