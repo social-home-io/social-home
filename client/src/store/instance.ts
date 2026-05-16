@@ -15,6 +15,14 @@ export interface InstanceConfig {
   instance_name: string
   capabilities: string[]
   setup_required: boolean
+  /** Vite content hash of the entry bundle the backend is currently
+   *  serving (parsed from ``static/index.html``'s
+   *  ``<script src="./assets/index-{hash}.js">`` tag). ``null`` when
+   *  the backend isn't serving the SPA (Vite dev mode) or the bundle
+   *  template is missing the canonical script tag. The
+   *  ``SpaUpdateBanner`` compares this against the hash the running
+   *  tab booted with to prompt the user when a deploy lands. */
+  spa_bundle_hash?: string | null
 }
 
 export const instanceConfig = signal<InstanceConfig | null>(null)
@@ -37,6 +45,17 @@ export async function loadInstanceConfig(): Promise<InstanceConfig> {
     })
     .finally(() => { inflight = null })
   return inflight
+}
+
+/** Same network call as :func:`loadInstanceConfig`, but does NOT use
+ *  the inflight-dedup gate — a deliberate poll always issues a fresh
+ *  request. Used by :class:`SpaUpdateBanner` so the bundle-hash check
+ *  doesn't piggyback on a stale in-flight cold-start fetch. */
+export async function recheckInstanceConfig(): Promise<InstanceConfig> {
+  const cfg = await api.get('/api/instance/config') as InstanceConfig
+  instanceConfig.value = cfg
+  instanceConfigError.value = null
+  return cfg
 }
 
 export function hasCapability(cap: string): boolean {

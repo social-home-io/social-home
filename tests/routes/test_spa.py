@@ -238,3 +238,63 @@ async def test_root_substitution_logs_warning_when_placeholder_missing(
     assert resp.status == 200
     assert "<title>no placeholder</title>" in body
     assert any("no <base href> placeholder" in r.message for r in caplog.records)
+
+
+# ── SPA bundle hash extraction ───────────────────────────────────────────
+
+
+def test_get_spa_bundle_hash_extracts_vite_hash(tmp_path):
+    """The Vite content-hash on the entry script is parsed out."""
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text(
+        '<!doctype html><script type="module" crossorigin '
+        'src="./assets/index-CChr7dg4.js"></script>'
+    )
+    assert spa_module.get_spa_bundle_hash(static) == "CChr7dg4"
+
+
+def test_get_spa_bundle_hash_tolerates_leading_slash(tmp_path):
+    """A Vite ``base: '/'`` build emits ``/assets/...`` instead of ``./assets/...``."""
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text(
+        '<!doctype html><script type="module" src="/assets/index-XYZ_abc-1.js">'
+    )
+    assert spa_module.get_spa_bundle_hash(static) == "XYZ_abc-1"
+
+
+def test_get_spa_bundle_hash_returns_none_without_template(tmp_path):
+    """Missing ``index.html`` (dev mode with no build) is silent."""
+    assert spa_module.get_spa_bundle_hash(tmp_path) is None
+
+
+def test_get_spa_bundle_hash_returns_none_when_pattern_absent(tmp_path):
+    """An ``index.html`` without the canonical script tag yields ``None``."""
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "index.html").write_text(
+        "<!doctype html><title>spa</title><script>console.log('inline')</script>"
+    )
+    assert spa_module.get_spa_bundle_hash(static) is None
+
+
+def test_get_spa_bundle_hash_is_cached_by_mtime(tmp_path, monkeypatch):
+    """Re-reading after the file's mtime is unchanged hits the cache."""
+    static = tmp_path / "static"
+    static.mkdir()
+    target = static / "index.html"
+    target.write_text('<!doctype html><script src="./assets/index-AAAA.js"></script>')
+    # First call — cache miss, reads the file.
+    assert spa_module.get_spa_bundle_hash(static) == "AAAA"
+    # Mutate the content WITHOUT bumping the mtime → cached value
+    # should still come back.
+    mtime = target.stat().st_mtime
+    target.write_text('<!doctype html><script src="./assets/index-BBBB.js"></script>')
+    import os
+
+    os.utime(target, (mtime, mtime))
+    assert spa_module.get_spa_bundle_hash(static) == "AAAA"
+    # Bump the mtime → cache invalidates + new value returned.
+    os.utime(target, (mtime + 1, mtime + 1))
+    assert spa_module.get_spa_bundle_hash(static) == "BBBB"

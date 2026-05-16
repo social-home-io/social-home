@@ -1,5 +1,6 @@
 import { render } from 'preact'
 import { App } from './App'
+import { SpaUpdateBanner } from './components/SpaUpdateBanner'
 import { ws } from './ws'
 import './styles/tokens.css'
 import './styles/app.css'
@@ -36,3 +37,13 @@ wireConnectionsWs()
 ws.connect()
 
 render(<App />, document.getElementById('root')!)
+
+// Mount the SPA-update banner OUTSIDE the App root so it survives
+// the App's auth-gate early returns. A user who left the login
+// page open across a backend deploy should still see the prompt;
+// gating on ``authed.value`` (where the banner used to live)
+// would have hidden it from them.
+const _bannerRoot = document.createElement('div')
+_bannerRoot.id = 'spa-update-banner-root'
+document.body.appendChild(_bannerRoot)
+render(<SpaUpdateBanner />, _bannerRoot)

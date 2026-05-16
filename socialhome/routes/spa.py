@@ -46,6 +46,48 @@ log = logging.getLogger(__name__)
 # in HTML resolve against ``<base>`` as a directory, not as a file.
 _BASE_HREF_RE = re.compile(r'<base href="[^"]*"\s*/?>')
 
+#: Vite content-hashes the entry bundle as ``assets/index-{hash}.js``.
+#: We surface ``{hash}`` so the SPA's open tabs can poll for changes
+#: and prompt the user to reload when the backend has shipped a new
+#: bundle while their tab was stale. Tolerates the leading ``./`` or
+#: ``/`` that ``vite`` may emit depending on ``base`` configuration.
+_BUNDLE_SCRIPT_RE = re.compile(
+    r'<script[^>]*src="(?:\.?/)?assets/index-([A-Za-z0-9_-]+)\.[A-Za-z0-9]+"',
+)
+
+#: Cache the parsed hash keyed by the ``index.html`` mtime so each call
+#: to :func:`get_spa_bundle_hash` is a stat-only test path-wise — the
+#: file content is only re-read when an operator drops a new bundle in
+#: place. Cleared by ``mount_spa`` so test instances start fresh.
+_bundle_hash_cache: dict[Path, tuple[float, str | None]] = {}
+
+
+def get_spa_bundle_hash(static_dir: Path) -> str | None:
+    """Return the SPA entry bundle's content hash, or ``None``.
+
+    ``None`` when the SPA isn't built (no ``index.html`` on disk) or
+    the template has no recognisable ``<script src="…/assets/index-
+    {hash}.js">`` tag. The SPA's update-banner client treats ``None``
+    as "no version info" and silently skips the check.
+    """
+    target = static_dir / "index.html"
+    try:
+        mtime = target.stat().st_mtime
+    except FileNotFoundError:
+        return None
+    cached = _bundle_hash_cache.get(target)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    try:
+        html = target.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    match = _BUNDLE_SCRIPT_RE.search(html)
+    bundle_hash = match.group(1) if match else None
+    _bundle_hash_cache[target] = (mtime, bundle_hash)
+    return bundle_hash
+
+
 #: Default location of the built SPA. ``client/vite.config.ts`` writes
 #: here via ``build.outDir``; the production wheel ships the same tree
 #: under ``socialhome/static/``.
@@ -208,6 +250,10 @@ def mount_spa(app: web.Application, static_dir: Path | None = None) -> bool:
         return False
 
     app[_static_dir_key] = static_dir
+    # Drop the bundle-hash cache so a fresh mount sees fresh files
+    # (per-test apps swap ``static_dir`` per fixture; without this they
+    # could read each other's cached entries when paths collide).
+    _bundle_hash_cache.pop(static_dir / "index.html", None)
 
     assets_dir = static_dir / "assets"
     if assets_dir.is_dir():

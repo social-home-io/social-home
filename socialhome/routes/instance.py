@@ -19,6 +19,8 @@ from ..app_keys import (
     setup_service_key,
 )
 from .base import BaseView
+from .spa import _static_dir_key as _spa_static_dir_key
+from .spa import get_spa_bundle_hash
 
 
 class InstanceConfigView(BaseView):
@@ -29,11 +31,23 @@ class InstanceConfigView(BaseView):
         adapter = self.svc(platform_adapter_key)
         setup = self.svc(setup_service_key)
         capabilities = sorted(str(c) for c in adapter.capabilities)
+        # SPA bundle hash — surfaced so a tab that's been open across a
+        # backend deploy can poll this endpoint, notice the mismatch
+        # against the hash it booted with, and prompt the user to
+        # reload (see ``client/src/components/SpaUpdateBanner.tsx``).
+        # ``None`` when the backend isn't serving the SPA (dev mode
+        # behind ``pnpm dev``) or the bundle template is missing the
+        # expected ``index-{hash}.js`` script tag.
+        spa_bundle_hash: str | None = None
+        static_dir = self.request.app.get(_spa_static_dir_key)
+        if static_dir is not None:
+            spa_bundle_hash = get_spa_bundle_hash(static_dir)
         return web.json_response(
             {
                 "mode": config.mode,
                 "instance_name": config.instance_name,
                 "capabilities": capabilities,
                 "setup_required": await setup.is_required(),
+                "spa_bundle_hash": spa_bundle_hash,
             }
         )
