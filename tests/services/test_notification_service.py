@@ -12,6 +12,7 @@ from socialhome.domain.post import PostType
 from socialhome.domain.task import Task, TaskStatus
 from socialhome.domain.events import TaskAssigned
 from socialhome.infrastructure.event_bus import EventBus
+from socialhome.repositories.calendar_repo import SqliteCalendarRepo
 from socialhome.repositories.notification_repo import SqliteNotificationRepo
 from socialhome.repositories.post_repo import SqlitePostRepo
 from socialhome.repositories.space_repo import SqliteSpaceRepo
@@ -38,9 +39,11 @@ async def stack(tmp_dir):
     post_repo = SqlitePostRepo(db)
     space_repo = SqliteSpaceRepo(db)
     notif_repo = SqliteNotificationRepo(db, max_per_user=50)
+    calendar_repo = SqliteCalendarRepo(db)
     user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
     feed_svc = FeedService(post_repo, user_repo, bus)
     notif_svc = NotificationService(notif_repo, user_repo, space_repo, bus)
+    notif_svc.attach_personal_calendar_repo(calendar_repo)
     notif_svc.wire()
 
     class Stack:
@@ -52,6 +55,8 @@ async def stack(tmp_dir):
     s.feed_svc = feed_svc
     s.notif_svc = notif_svc
     s.notif_repo = notif_repo
+    s.space_repo = space_repo
+    s.calendar_repo = calendar_repo
     s.bus = bus
 
     async def provision_user(username, **kw):
@@ -413,17 +418,89 @@ async def test_dm_message_creates_one_row_per_recipient(stack):
     assert bob_rows[0].link_url == "/dms/c-group"
 
 
+async def test_dm_burst_collapses_to_single_unread_row(stack):
+    """A burst of DMs from the same sender to the same recipient
+    bumps one bell row instead of stacking N entries."""
+    from socialhome.domain.events import DmMessageCreated
+
+    sender = await stack.provision_user("anna-burst")
+    bob = await stack.provision_user("bob-burst")
+    stack.notif_svc.attach_push_service(_CapturingPush())
+
+    for mid in ("m-1", "m-2", "m-3", "m-4", "m-5"):
+        await stack.bus.publish(
+            DmMessageCreated(
+                conversation_id="c-burst",
+                message_id=mid,
+                sender_user_id=sender.user_id,
+                sender_display_name="Anna",
+                recipient_user_ids=(bob.user_id,),
+            )
+        )
+
+    rows = await stack.notif_repo.list(bob.user_id, limit=50)
+    dm_rows = [
+        r for r in rows if r.type == "dm_message" and r.link_url == "/dms/c-burst"
+    ]
+    assert len(dm_rows) == 1
+    assert dm_rows[0].read_at is None
+
+
+async def test_dm_dedupe_does_not_span_read_boundary(stack):
+    """Once the recipient opens the thread, the next DM starts a
+    fresh unread row rather than re-using the now-read one."""
+    from socialhome.domain.events import DmMessageCreated
+
+    sender = await stack.provision_user("anna-rb")
+    bob = await stack.provision_user("bob-rb")
+    stack.notif_svc.attach_push_service(_CapturingPush())
+
+    await stack.bus.publish(
+        DmMessageCreated(
+            conversation_id="c-rb",
+            message_id="m-1",
+            sender_user_id=sender.user_id,
+            sender_display_name="Anna",
+            recipient_user_ids=(bob.user_id,),
+        )
+    )
+    assert await stack.notif_repo.count_unread(bob.user_id) == 1
+    # Open the thread — clears the row.
+    await stack.notif_svc.mark_read_for_dm(bob.user_id, "c-rb")
+    assert await stack.notif_repo.count_unread(bob.user_id) == 0
+    # New DM after read → new unread row, not a bump of the read one.
+    await stack.bus.publish(
+        DmMessageCreated(
+            conversation_id="c-rb",
+            message_id="m-2",
+            sender_user_id=sender.user_id,
+            sender_display_name="Anna",
+            recipient_user_ids=(bob.user_id,),
+        )
+    )
+    assert await stack.notif_repo.count_unread(bob.user_id) == 1
+    rows = await stack.notif_repo.list(bob.user_id, limit=10)
+    dm_rows = [r for r in rows if r.type == "dm_message"]
+    # Two rows total: one read (from the first burst) + one new unread.
+    assert len(dm_rows) == 2
+    assert sum(1 for r in dm_rows if r.read_at is None) == 1
+
+
 async def test_mark_read_for_dm_clears_unread_rows(stack):
-    """``mark_read_for_dm`` flips every ``dm_message`` row pointing
-    at a conversation to read — opening the thread clears the bell
-    in step with the read-receipt update."""
+    """``mark_read_for_dm`` flips the (collapsed) ``dm_message`` row
+    for a conversation to read — opening the thread clears the bell
+    in step with the read-receipt update.
+
+    Note: rows are deduped per conversation, so a 2-message burst
+    bumps a single bell row rather than producing two.
+    """
     from socialhome.domain.events import DmMessageCreated
 
     sender = await stack.provision_user("anna")
     bob = await stack.provision_user("bob")
     stack.notif_svc.attach_push_service(_CapturingPush())
 
-    # Two messages from Anna to Bob → two rows.
+    # Two messages from Anna to Bob → one (bumped) row.
     for mid in ("m-1", "m-2"):
         await stack.bus.publish(
             DmMessageCreated(
@@ -434,11 +511,11 @@ async def test_mark_read_for_dm_clears_unread_rows(stack):
                 recipient_user_ids=(bob.user_id,),
             )
         )
-    assert await stack.notif_repo.count_unread(bob.user_id) == 2
+    assert await stack.notif_repo.count_unread(bob.user_id) == 1
 
-    # Open the thread → both rows clear.
+    # Open the thread → the row clears.
     n = await stack.notif_svc.mark_read_for_dm(bob.user_id, "c-1")
-    assert n == 2
+    assert n == 1
     assert await stack.notif_repo.count_unread(bob.user_id) == 0
 
 
@@ -603,26 +680,133 @@ async def test_dm_contact_request_notifies_recipient(stack):
 # ─── CalendarEventCreated handler ──────────────────────────────────────
 
 
-async def test_calendar_event_created_notifies_household(stack):
-    from socialhome.domain.calendar import CalendarEvent
+async def test_calendar_event_created_on_personal_calendar_notifies_owner_only(stack):
+    """When someone adds an event to a user's personal calendar, only
+    that calendar's owner should get a bell — not every household
+    member. The creator themselves is excluded."""
+    from socialhome.domain.calendar import Calendar, CalendarEvent
     from socialhome.domain.events import CalendarEventCreated
 
     alice = await stack.provision_user("alice-cal")
     bob = await stack.provision_user("bob-cal")
+    carol = await stack.provision_user("carol-cal")
+    # Bob's personal calendar; Alice adds an event onto it (could be a
+    # household "this is on your calendar" obligation).
+    bobs_cal = Calendar(
+        id="cal-bob",
+        name="Bob",
+        color="#4A90E2",
+        owner_username=bob.username,
+        calendar_type="personal",
+    )
+    await stack.calendar_repo.save_calendar(bobs_cal)
     event = CalendarEvent(
         id="e1",
-        calendar_id="c1",
-        summary="Team meeting",
+        calendar_id="cal-bob",
+        summary="Dentist appointment",
         created_by=alice.user_id,
         start=datetime(2026, 5, 1, 10, tzinfo=timezone.utc),
         end=datetime(2026, 5, 1, 11, tzinfo=timezone.utc),
     )
     await stack.bus.publish(CalendarEventCreated(event=event))
-    notifs = await stack.notif_repo.list(bob.user_id, limit=10)
-    assert any(n.type == "calendar_event_created" for n in notifs)
-    # Author should NOT be notified.
-    author_notifs = await stack.notif_repo.list(alice.user_id, limit=10)
-    assert not any(n.type == "calendar_event_created" for n in author_notifs)
+    # Owner gets the bell.
+    assert any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(bob.user_id, limit=10)
+    )
+    # Creator does not.
+    assert not any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(alice.user_id, limit=10)
+    )
+    # Unrelated household member does not.
+    assert not any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(carol.user_id, limit=10)
+    )
+
+
+async def test_calendar_event_created_on_own_calendar_notifies_nobody(stack):
+    """Adding an event to your own personal calendar must not
+    self-notify."""
+    from socialhome.domain.calendar import Calendar, CalendarEvent
+    from socialhome.domain.events import CalendarEventCreated
+
+    alice = await stack.provision_user("alice-self")
+    bob = await stack.provision_user("bob-self")
+    cal = Calendar(
+        id="cal-alice",
+        name="Alice",
+        color="#4A90E2",
+        owner_username=alice.username,
+        calendar_type="personal",
+    )
+    await stack.calendar_repo.save_calendar(cal)
+    event = CalendarEvent(
+        id="e-self",
+        calendar_id="cal-alice",
+        summary="Lift weights",
+        created_by=alice.user_id,
+        start=datetime(2026, 5, 1, 7, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 1, 8, tzinfo=timezone.utc),
+    )
+    await stack.bus.publish(CalendarEventCreated(event=event))
+    assert not any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(alice.user_id, limit=10)
+    )
+    assert not any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(bob.user_id, limit=10)
+    )
+
+
+async def test_calendar_event_created_on_space_calendar_notifies_members(stack):
+    """A space calendar event has no row in ``calendars`` — the
+    ``calendar_id`` is the space_id directly. Recipients are the
+    space's members (except the creator)."""
+    from socialhome.domain.calendar import CalendarEvent
+    from socialhome.domain.events import CalendarEventCreated
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+    from socialhome.services.space_service import SpaceService
+
+    alice = await stack.provision_user("alice-sp")
+    bob = await stack.provision_user("bob-sp")
+    carol = await stack.provision_user("carol-sp")  # not a space member
+    spost_repo = SqliteSpacePostRepo(stack.db)
+    space_svc = SpaceService(
+        stack.space_repo,
+        spost_repo,
+        SqliteUserRepo(stack.db),
+        stack.bus,
+        own_instance_id="iid",
+    )
+    space = await space_svc.create_space(owner_username="alice-sp", name="Crew")
+    await space_svc.add_member(space.id, actor_username="alice-sp", user_id=bob.user_id)
+    event = CalendarEvent(
+        id="se1",
+        calendar_id=space.id,
+        summary="Saturday ride",
+        created_by=alice.user_id,
+        start=datetime(2026, 5, 1, 9, tzinfo=timezone.utc),
+        end=datetime(2026, 5, 1, 12, tzinfo=timezone.utc),
+    )
+    await stack.bus.publish(CalendarEventCreated(event=event))
+    # Member gets it.
+    assert any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(bob.user_id, limit=10)
+    )
+    # Creator (also a member) does not.
+    assert not any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(alice.user_id, limit=10)
+    )
+    # Non-member doesn't either.
+    assert not any(
+        n.type == "calendar_event_created"
+        for n in await stack.notif_repo.list(carol.user_id, limit=10)
+    )
 
 
 # ─── TaskCompleted handler ─────────────────────────────────────────────

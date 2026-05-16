@@ -47,6 +47,7 @@ from ..domain.notification import Notification  # noqa: F401,E402
 @runtime_checkable
 class AbstractNotificationRepo(Protocol):
     async def save(self, note: Notification) -> Notification: ...
+    async def save_or_bump_unread(self, note: Notification) -> Notification: ...
     async def list(
         self,
         user_id: str,
@@ -130,6 +131,62 @@ class SqliteNotificationRepo:
             (note.user_id, self._cap),
         )
         return note
+
+    async def save_or_bump_unread(self, note: Notification) -> Notification:
+        """Insert ``note``, or — if an unread row already exists with the
+        same ``(user_id, type, link_url)`` — bump that existing row's
+        ``created_at`` + ``title`` in place and return it.
+
+        Caller passes a freshly-minted ``Notification`` (its own ``id``
+        + timestamp); on bump the returned ``Notification`` carries the
+        **existing** row's ``id`` so realtime / push handlers don't
+        re-fire as a "new" notification on the SPA. The bump keeps the
+        title fresh because the sender's display name can change
+        between bursts; body stays ``None`` so §25.3's title-only
+        redaction is preserved.
+
+        Dedupe is **scoped to currently-unread rows only** — a read row
+        with the same key does not absorb a new event. That gives the
+        natural "thread cleared → next message starts a fresh row"
+        behavior the bell wants.
+
+        ``link_url`` is required for dedupe; if ``None``, this falls
+        back to plain :meth:`save` so non-DM call-sites that don't
+        carry a link keep the strict append-only shape.
+        """
+        if note.link_url is None:
+            return await self.save(note)
+        existing = await self._db.fetchone(
+            """
+            SELECT id FROM notifications
+             WHERE user_id = ?
+               AND type = ?
+               AND link_url = ?
+               AND read_at IS NULL
+             ORDER BY created_at DESC
+             LIMIT 1
+            """,
+            (note.user_id, note.type, note.link_url),
+        )
+        if existing is not None:
+            existing_row = row_to_dict(existing)
+            assert existing_row is not None  # fetchone returned a row
+            existing_id = existing_row["id"]
+            await self._db.enqueue(
+                "UPDATE notifications SET created_at=?, title=? WHERE id=?",
+                (note.created_at, note.title, existing_id),
+            )
+            return Notification(
+                id=existing_id,
+                user_id=note.user_id,
+                type=note.type,
+                title=note.title,
+                body=note.body,
+                link_url=note.link_url,
+                read_at=None,
+                created_at=note.created_at,
+            )
+        return await self.save(note)
 
     async def get(self, notification_id: str) -> Notification | None:
         row = await self._db.fetchone(

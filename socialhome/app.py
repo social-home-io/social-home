@@ -1251,6 +1251,7 @@ def create_app(config: Config | None = None) -> web.Application:
         bus=bus,
     )
     notification_service.attach_calendar_repo(space_cal_repo)
+    notification_service.attach_personal_calendar_repo(calendar_repo)
 
     # ── Per-user data export (§25.8.7) ──────────────────────────────────
     data_export_service = DataExportService(db)
