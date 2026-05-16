@@ -18,6 +18,8 @@ import { openCallTypePicker } from '@/components/CallTypePickerDialog'
 import { EmojiPickButton } from '@/components/EmojiPickButton'
 import { uploadWithProgress } from '@/components/UploadProgress'
 import { MediaAttachmentChip } from '@/components/MediaAttachmentChip'
+import { MessageContextSheet } from '@/components/MessageContextSheet'
+import { ReactionPicker } from '@/components/ReactionPicker'
 import {
   EmojiAutocomplete,
   checkForEmojiTrigger,
@@ -250,6 +252,16 @@ const threadMembers = signal<ThreadMember[]>([])
  *  with the parent message preview and the next send carries
  *  ``reply_to_id``. Cleared after send or by the chip's "×" button. */
 const replyTo = signal<Message | null>(null)
+/** Touch-only context sheet target. Set on long-press, cleared by
+ *  the sheet itself or when an action runs. Hover/keyboard users
+ *  trigger Reply through the inline ``.sh-message-reply-btn``
+ *  chip, so the sheet only ever surfaces on touch. */
+const contextSheetFor = signal<Message | null>(null)
+/** Active emoji-picker target. When set, the full
+ *  :class:`ReactionPicker` opens centred over the thread; tapping
+ *  a glyph calls ``toggleReaction`` on this message and clears
+ *  the signal. */
+const reactionPickerFor = signal<Message | null>(null)
 
 /** WhatsApp-style "Last seen 12 min ago" formatter — same shape as the
  *  presence-page helper but inline so this page doesn't grow a util
@@ -713,6 +725,45 @@ export default function DmThreadPage() {
       }
       messages.value = next
     })
+    // Reaction add / remove from any session — sender's own
+    // sessions get the frame too so a mobile + desktop mirror stay
+    // in lockstep. The optimistic patch in ``toggleReaction`` is
+    // idempotent against this echo (same emoji + same user_id =
+    // no-op net change).
+    const offReaction = ws.on('dm.message_reaction', (e) => {
+      const d = e.data as {
+        conversation_id?: string
+        message_id?: string
+        user_id?: string
+        emoji?: string
+        action?: 'add' | 'remove'
+      }
+      if (d.conversation_id !== convId) return
+      if (!d.message_id || !d.user_id || !d.emoji) return
+      const list = messages.value
+      const idx = list.findIndex(m => m.id === d.message_id)
+      if (idx < 0) return
+      const current = list[idx].reactions ?? []
+      const exists = current.some(
+        r => r.user_id === d.user_id && r.emoji === d.emoji,
+      )
+      let nextReactions = current
+      if (d.action === 'remove' && exists) {
+        nextReactions = current.filter(
+          r => !(r.user_id === d.user_id && r.emoji === d.emoji),
+        )
+      } else if (d.action !== 'remove' && !exists) {
+        nextReactions = [
+          ...current,
+          { user_id: d.user_id, emoji: d.emoji },
+        ]
+      } else {
+        return // already in the target state
+      }
+      const next = list.slice()
+      next[idx] = { ...next[idx], reactions: nextReactions }
+      messages.value = next
+    })
     const offUserOnline = ws.on('user.online', (e) => {
       const d = e.data as { user_id?: string }
       if (d.user_id) patchMember(d.user_id, { is_online: true, is_idle: false })
@@ -731,6 +782,7 @@ export default function DmThreadPage() {
     })
     return () => {
       offRead(); offNewMsg(); offMediaReady(); offMessageUpdated()
+      offReaction()
       offUserOnline(); offUserIdle(); offUserOffline()
     }
   }, [convId])
@@ -1253,6 +1305,138 @@ export default function DmThreadPage() {
     setTimeout(() => el.classList.remove('sh-message--flash'), 1200)
   }
 
+  /** Toggle the caller's reaction on a DM message. Optimistically
+   *  patches the local ``messages`` array so the chip swap feels
+   *  instant; the WS ``dm.message_reaction`` echo lands a moment
+   *  later and reconciles. On error we revert and toast. */
+  const toggleReaction = async (m: Message, emoji: string) => {
+    const myUid = currentUser.value?.user_id
+    if (!myUid) return
+    const had = (m.reactions ?? []).some(
+      r => r.user_id === myUid && r.emoji === emoji,
+    )
+    // Optimistic patch.
+    const nextReactions = had
+      ? (m.reactions ?? []).filter(
+          r => !(r.user_id === myUid && r.emoji === emoji),
+        )
+      : [...(m.reactions ?? []), { user_id: myUid, emoji }]
+    messages.value = messages.value.map(x =>
+      x.id === m.id ? { ...x, reactions: nextReactions } : x,
+    )
+    try {
+      const encoded = encodeURIComponent(emoji)
+      const path = `/api/conversations/${convId}/messages/${m.id}/reactions/${encoded}`
+      if (had) await api.delete(path)
+      else await api.put(path, {})
+    } catch {
+      // Revert the optimistic patch and surface the failure.
+      messages.value = messages.value.map(x =>
+        x.id === m.id ? { ...x, reactions: m.reactions ?? [] } : x,
+      )
+      showToast(`Could not ${had ? 'remove' : 'add'} reaction`, 'error')
+    }
+  }
+
+  /** Copy a message body to the clipboard — surfaced from the
+   *  context sheet's "Copy" action. */
+  const copyMessageText = async (m: Message) => {
+    if (!m.content) return
+    try {
+      await navigator.clipboard.writeText(m.content)
+      showToast('Copied', 'success')
+    } catch {
+      showToast("Couldn't copy — clipboard access denied", 'error')
+    }
+  }
+
+  /** Touch-only pointer handler on a message bubble. Discriminates
+   *  three outcomes from a single PointerEvent stream:
+   *    • Long-press (≥ 450 ms with < 10 px movement) → open the
+   *      context sheet.
+   *    • Right-swipe (≥ 60 px horizontal, vertical-dominant motion
+   *      bails) → set ``replyTo`` (same outcome as the desktop
+   *      reply chip).
+   *    • Anything else → no-op; lets the native scroll proceed.
+   *  Mouse / pen pointers fall through to the existing hover-chip
+   *  flow; only ``pointerType === 'touch'`` arms the handler. */
+  const onBubblePointerDown = (m: Message) => (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return
+    if (m.deleted) return
+    // Some children own their own gesture (image lightbox tap,
+    // file pill anchor, audio bubble scrubber). If the press
+    // started on one of those, leave the gesture to them and bail.
+    const target = e.target as HTMLElement | null
+    if (
+      target?.closest(
+        '.sh-message-media-tap,'
+        + '.sh-message-file,'
+        + '.sh-audio-bubble,'
+        + '.sh-message-quote,'
+        + '.sh-reaction-strip,'
+        + '.sh-message-reply-btn',
+      )
+    ) {
+      return
+    }
+    const el = e.currentTarget as HTMLElement
+    const startX = e.clientX
+    const startY = e.clientY
+    let didLongPress = false
+    let bailed = false
+    const longPressTimer = window.setTimeout(() => {
+      if (bailed) return
+      didLongPress = true
+      try { (navigator as Navigator & { vibrate?: (p: number) => void }).vibrate?.(10) } catch { /* noop */ }
+      contextSheetFor.value = m
+      el.style.removeProperty('--sh-swipe')
+    }, 450)
+    const setOffset = (px: number) => {
+      el.style.setProperty('--sh-swipe', `${px}px`)
+      el.classList.toggle('sh-message--will-reply', px >= 60)
+    }
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX
+      const dy = ev.clientY - startY
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+        window.clearTimeout(longPressTimer)
+      }
+      if (didLongPress) return
+      // Vertical-dominant motion: yield to the scroll container.
+      if (Math.abs(dy) > Math.abs(dx) + 4) {
+        bailed = true
+        setOffset(0)
+        cleanup()
+        return
+      }
+      setOffset(Math.max(0, Math.min(80, dx)))
+    }
+    const onUp = (ev: PointerEvent) => {
+      window.clearTimeout(longPressTimer)
+      const dx = ev.clientX - startX
+      if (!didLongPress && !bailed && dx >= 60) {
+        replyTo.value = m
+      }
+      el.style.removeProperty('--sh-swipe')
+      el.classList.remove('sh-message--will-reply')
+      cleanup()
+    }
+    const onCancel = () => {
+      window.clearTimeout(longPressTimer)
+      el.style.removeProperty('--sh-swipe')
+      el.classList.remove('sh-message--will-reply')
+      cleanup()
+    }
+    function cleanup() {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+  }
+
   const startCall = async (callType: 'audio' | 'video') => {
     // For v1 the backend expects a placeholder SDP — the real offer is
     // generated by ``InCallPage`` on mount via ``RtcTransport``.
@@ -1547,6 +1731,7 @@ export default function DmThreadPage() {
             <div
               data-msg-id={m.id}
               class={`sh-message ${mine ? 'sh-message--mine' : ''} ${m.deleted ? 'sh-message--deleted' : ''}${groupClass}`}
+              onPointerDown={onBubblePointerDown(m)}
             >
               {!mine && showHeader && <strong>{senderName(m.sender_user_id)}</strong>}
               {m.reply_to_id && (
@@ -1703,6 +1888,47 @@ export default function DmThreadPage() {
                     />
                   )}
                 </div>
+              )}
+              {!m.deleted && m.reactions && m.reactions.length > 0 && (
+                (() => {
+                  // Aggregate per-emoji counts + flag the caller's
+                  // own reactions so a second tap toggles them off
+                  // (mirrors the WhatsApp / iMessage chip behavior).
+                  const counts = new Map<string, { count: number; mine: boolean }>()
+                  for (const r of m.reactions ?? []) {
+                    const cur = counts.get(r.emoji) ?? { count: 0, mine: false }
+                    cur.count += 1
+                    if (r.user_id === myUserId) cur.mine = true
+                    counts.set(r.emoji, cur)
+                  }
+                  return (
+                    <div class="sh-reaction-strip" role="group" aria-label="Reactions">
+                      {Array.from(counts.entries()).map(([emoji, info]) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          class={
+                            'sh-reaction-chip'
+                            + (info.mine ? ' sh-reaction-chip--mine' : '')
+                          }
+                          aria-pressed={info.mine}
+                          aria-label={
+                            info.mine
+                              ? `Remove ${emoji} reaction (${info.count})`
+                              : `Add ${emoji} reaction (${info.count})`
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void toggleReaction(m, emoji)
+                          }}
+                        >
+                          <span aria-hidden="true">{emoji}</span>
+                          <span class="sh-reaction-chip__count">{info.count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()
               )}
               {!m.deleted && (
                 <button
@@ -1893,6 +2119,66 @@ export default function DmThreadPage() {
        *  popover positions itself absolutely against the input's
        *  bounding rect, not the parent. */}
       <EmojiAutocomplete />
+      {/* Touch-only long-press menu. Hover users get the inline
+       *  ``.sh-message-reply-btn`` chip; this sheet only ever
+       *  surfaces when a finger holds a bubble for ≥ 450 ms. */}
+      {contextSheetFor.value && (() => {
+        const target = contextSheetFor.value!
+        const isMine = target.sender_user_id === myUserId
+        const actions = [
+          {
+            label: 'Reply',
+            glyph: '↩',
+            onClick: () => { replyTo.value = target },
+          },
+          ...(target.content
+            ? [{
+                label: 'Copy text',
+                glyph: '⧉',
+                onClick: () => { void copyMessageText(target) },
+              }]
+            : []),
+          ...(target.media_url
+            ? [{
+                label: 'Open in new tab',
+                glyph: '↗',
+                onClick: () => {
+                  window.open(target.media_url ?? '', '_blank', 'noopener,noreferrer')
+                },
+              }]
+            : []),
+        ]
+        // `isMine` reserved for a future "Delete for everyone" action;
+        // wiring lives in the parent file but the action isn't shipped yet.
+        void isMine
+        return (
+          <MessageContextSheet
+            actions={actions}
+            onReact={(emoji) => { void toggleReaction(target, emoji) }}
+            onPickMore={() => { reactionPickerFor.value = target }}
+            onClose={() => { contextSheetFor.value = null }}
+          />
+        )
+      })()}
+      {/* Full emoji picker — shown when the user taps "+" in the
+       *  context sheet. Stays mounted over the thread until the
+       *  user picks a glyph or closes; tapping a result toggles
+       *  the reaction on the target message. */}
+      {reactionPickerFor.value && (
+        <div
+          class="sh-reaction-picker-overlay"
+          onClick={() => { reactionPickerFor.value = null }}
+        >
+          <ReactionPicker
+            onSelect={(emoji) => {
+              const target = reactionPickerFor.value
+              if (target) void toggleReaction(target, emoji)
+              reactionPickerFor.value = null
+            }}
+            onClose={() => { reactionPickerFor.value = null }}
+          />
+        </div>
+      )}
     </div>
   )
 }

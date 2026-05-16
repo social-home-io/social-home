@@ -4662,9 +4662,11 @@ body.sh-dm-thread-open .sh-messages {
 .sh-message--mine .sh-message-quote-body   { color: rgba(255, 255, 255, 0.8); }
 
 /* Reply button — small, hover-revealed glyph that sits just outside
- * the bubble. Shifts to the inside opposite the meta on mine messages.
- * On touch devices we keep it always-visible (focus-within is the
- * accessible alternative to hover). */
+ * the bubble on desktop. Shifts to the inside opposite the meta on
+ * mine messages. Touch devices reach Reply via the long-press menu
+ * + the swipe-right gesture (see ``MessageContextSheet`` below);
+ * the chip stays in the DOM for screen-reader / external-keyboard
+ * users (focus-visible reveals it). */
 .sh-message-reply-btn {
   position: absolute;
   top: 4px;
@@ -4695,36 +4697,204 @@ body.sh-dm-thread-open .sh-messages {
   border-color: var(--sh-primary);
 }
 .sh-message--mine .sh-message-reply-btn { right: auto; left: -28px; }
-/* Touch devices have no hover state, so the reply chip would be
- * permanently invisible (``opacity: 0``) without this branch. Make
- * it always discoverable at a calm 0.85 opacity, and bump the hit-
- * box to 36×36 so it satisfies the mobile tap-target floor. */
+/* Touch devices: hide the chip + let the long-press menu / swipe
+ * gesture be the primary reply trigger. The chip stays focusable
+ * via the tab order — ``opacity: 0`` + ``pointer-events: none``
+ * keeps it accessible to assistive tech but invisible to touch
+ * users so each bubble doesn't carry a permanent visual cue. */
 @media (hover: none) {
   .sh-message-reply-btn {
-    /* Always visible on phones (no hover, so the hover-reveal trick
-     * is dead). Calm 0.85 so it doesn't compete with the message
-     * content; full opacity on focus from the sibling rule above. */
-    opacity: 0.85;
-    /* Bump the chip to 36×36 so it satisfies the mobile tap-target
-     * floor; centre it vertically against the bubble's middle so
-     * single-line and multi-line bubbles both get the same anchor. */
-    width: 36px;
-    height: 36px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-size: var(--sh-font-size-base);
-    /* Land the chip fully OUTSIDE the bubble's edge — the 36 px hit-
-     * box needs ~40 px of clearance so a long bubble's text isn't
-     * overlapped by the button. The bubble's ``max-width: 80%`` plus
-     * ``align-self: flex-end`` (mine) / ``flex-start`` (peer) leaves
-     * at least 20% of the row blank on the off-tail side, which is
-     * where the chip lives. */
-    right: -40px;
+    opacity: 0;
+    pointer-events: none;
   }
-  .sh-message--mine .sh-message-reply-btn {
-    left: -40px;
-    right: auto;
+  .sh-message-reply-btn:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
   }
+}
+
+/* Swipe-to-reply transform — driven by the inline ``--sh-swipe``
+ * CSS variable set during a touch gesture by ``onBubblePointerDown``
+ * in :class:`DmThreadPage`. Stays at translateX(0) at rest; on
+ * release the variable is cleared and the bubble springs back. */
+.sh-message {
+  transform: translateX(var(--sh-swipe, 0));
+}
+.sh-message--will-reply::before {
+  content: '↩';
+  position: absolute;
+  left: -34px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--sh-primary);
+  font-size: 1.1rem;
+  pointer-events: none;
+}
+.sh-message--mine.sh-message--will-reply::before {
+  left: auto;
+  right: -34px;
+}
+
+/* Per-bubble reaction strip — chips wrap below the meta row so a
+ * long burst of reactions doesn't overflow the bubble's width. */
+.sh-reaction-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.sh-reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border: 1px solid var(--sh-border);
+  border-radius: 999px;
+  background: var(--sh-bg);
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-sm);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background var(--sh-transition-fast),
+              border-color var(--sh-transition-fast);
+}
+.sh-reaction-chip:hover {
+  border-color: var(--sh-primary);
+}
+.sh-reaction-chip--mine {
+  background: rgba(210, 84, 42, 0.12);
+  border-color: var(--sh-primary);
+}
+.sh-reaction-chip__count {
+  font-variant-numeric: tabular-nums;
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-xs);
+}
+.sh-message--mine .sh-reaction-chip {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.95);
+}
+.sh-message--mine .sh-reaction-chip__count { color: rgba(255, 255, 255, 0.75); }
+.sh-message--mine .sh-reaction-chip--mine {
+  background: rgba(255, 255, 255, 0.32);
+  border-color: rgba(255, 255, 255, 0.8);
+}
+
+/* Long-press context sheet — bottom-sheet on touch, centred card
+ * on desktop. The backdrop is a click-trap so a tap outside the
+ * sheet closes it (the WhatsApp / Telegram modal idiom). */
+.sh-context-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 200;
+  animation: sh-context-fade-in var(--sh-transition-fast) ease-out;
+}
+@media (min-width: 600px) {
+  .sh-context-sheet-backdrop { align-items: center; }
+}
+.sh-context-sheet {
+  background: var(--sh-bg);
+  width: 100%;
+  max-width: 420px;
+  border-radius: 16px 16px 0 0;
+  padding: 12px;
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18);
+  outline: none;
+  animation: sh-context-slide-up var(--sh-transition-fast) ease-out;
+}
+@media (min-width: 600px) {
+  .sh-context-sheet {
+    border-radius: 16px;
+    margin: 0 16px;
+    animation: sh-context-fade-in var(--sh-transition-fast) ease-out;
+  }
+}
+.sh-context-sheet__quick {
+  display: flex;
+  gap: 6px;
+  padding: 8px 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.sh-context-sheet__quick::-webkit-scrollbar { display: none; }
+.sh-context-sheet__emoji {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  background: var(--sh-surface, var(--sh-bg-alt, #f7f3ee));
+  border: 1px solid var(--sh-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform var(--sh-transition-fast);
+}
+.sh-context-sheet__emoji:active {
+  transform: scale(0.92);
+}
+.sh-context-sheet__more {
+  color: var(--sh-text-muted);
+  font-weight: 600;
+}
+.sh-context-sheet__actions {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0 0;
+}
+.sh-context-sheet__action {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 12px;
+  background: none;
+  border: none;
+  text-align: left;
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-base);
+  cursor: pointer;
+}
+.sh-context-sheet__action:hover,
+.sh-context-sheet__action:focus-visible {
+  background: var(--sh-surface, var(--sh-bg-alt, #f7f3ee));
+}
+.sh-context-sheet__action--destructive {
+  color: var(--sh-danger, #c0392b);
+}
+.sh-context-sheet__action > span:first-child {
+  font-size: 1.2rem;
+  width: 24px;
+  text-align: center;
+}
+
+/* Full emoji-picker overlay shown when the "+" tile in the
+ * context sheet is tapped. Re-uses the existing
+ * ``.sh-reaction-picker`` from the feed surfaces — only the
+ * backdrop + centring shell is new here. */
+.sh-reaction-picker-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 210;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: sh-context-fade-in var(--sh-transition-fast) ease-out;
+}
+@keyframes sh-context-slide-up {
+  from { transform: translateY(20px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes sh-context-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Brief flash when scrollToMessage() lands — helps the reader find the

@@ -359,6 +359,12 @@ export interface Message {
   send_failed?: boolean
   send_failed_reason?: string
   reply_to_id: string | null
+  /** Per-user emoji reactions on this DM message. Each row is one
+   *  emoji from one reactor. The SPA aggregates by glyph for the
+   *  reaction strip; ``user_id === currentUser.user_id`` flags the
+   *  caller's own reaction (so a second tap on the same chip toggles
+   *  it off). */
+  reactions?: { user_id: string; emoji: string }[]
   deleted: boolean
   created_at: string
   edited_at: string | null

@@ -1093,6 +1093,26 @@ class DmMessageUpdated(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class DmMessageReactionChanged(DomainEvent):
+    """A reaction was added or removed on a DM message.
+
+    Fans out a ``dm.message_reaction`` WS frame to every member of
+    the conversation so open threads update their reaction strip
+    in lockstep. The federation outbound path is handled separately
+    in :meth:`DmService.add_reaction` / :meth:`DmService.remove_reaction`
+    via ``DM_MESSAGE_REACTION`` envelopes.
+    """
+
+    conversation_id: str
+    message_id: str
+    user_id: str
+    emoji: str
+    action: str  # "add" | "remove"
+    recipient_user_ids: tuple[str, ...]
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class DmConversationCreated(DomainEvent):
     """A new DM / group DM was created.
 
