@@ -3917,6 +3917,122 @@ body.sh-dm-thread-open .sh-messages {
 .sh-message-media--video {
   background: #000;
 }
+/* Generic composer-local attachment chip (used by every surface that
+   accepts a file — DM composer, feed composer, …). Replaces the
+   legacy per-surface ``.sh-dm-attach-preview`` shape with a unified
+   render that has first-class uploading + processing affordances. */
+.sh-attach-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-sm);
+  margin-bottom: var(--sh-space-xs);
+  background: var(--sh-bg-secondary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  position: relative;
+}
+.sh-attach-chip--failed {
+  border-color: color-mix(in srgb, var(--sh-danger) 45%, var(--sh-border));
+  background: color-mix(in srgb, var(--sh-danger) 6%, var(--sh-bg-secondary));
+}
+.sh-attach-chip__preview {
+  position: relative;
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--sh-radius-sm);
+  overflow: hidden;
+  background: var(--sh-bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sh-attach-chip__media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.sh-attach-chip__glyph {
+  font-size: 1.5rem;
+}
+.sh-attach-chip__overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+.sh-attach-chip__ring {
+  color: white;
+}
+.sh-attach-chip__spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: white;
+  animation: sh-attach-chip-spin 0.9s linear infinite;
+}
+@keyframes sh-attach-chip-spin {
+  to { transform: rotate(360deg); }
+}
+.sh-attach-chip__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sh-attach-chip__name {
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sh-attach-chip__phase {
+  font-size: calc(var(--sh-font-size-xs) + 1px);
+  color: var(--sh-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.sh-attach-chip__size {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+}
+.sh-attach-chip__error {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-danger);
+}
+.sh-attach-chip__clear,
+.sh-attach-chip__retry {
+  flex-shrink: 0;
+  border: 1px solid var(--sh-border);
+  background: var(--sh-bg);
+  border-radius: var(--sh-radius-full);
+  cursor: pointer;
+  font-size: var(--sh-font-size-sm);
+  padding: 4px 10px;
+}
+.sh-attach-chip__clear {
+  /* The ``×`` is a single glyph; keep it perfectly round. */
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  color: var(--sh-text-muted);
+}
+.sh-attach-chip__clear:hover,
+.sh-attach-chip__retry:hover {
+  background: var(--sh-bg-secondary);
+  color: var(--sh-text);
+}
+
 /* Sender-side delivery-failure footnote on a media bubble. Only
  * the sender sees it (the recipient has nothing to act on). The
  * file is still on the sender's local device — we just couldn't
