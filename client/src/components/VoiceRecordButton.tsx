@@ -20,6 +20,7 @@
 import type preact from 'preact'
 import { useRef } from 'preact/hooks'
 import { useSignal } from '@preact/signals'
+import { showToast } from '@/components/Toast'
 
 const AUDIO_MAX_DURATION_SECONDS = 300
 const LOCK_SLIDE_PX = 60
@@ -148,6 +149,20 @@ export function VoiceRecordButton({
     if (state.value !== 'idle' || disabled) return
     error.value = null
 
+    // ``getUserMedia`` only exists on secure contexts: HTTPS, plus
+    // ``localhost`` as a developer convenience. The Android browser
+    // is strict about this and silently leaves ``navigator.mediaDevices``
+    // undefined on plain-HTTP origins — checking this up-front gives the
+    // user a real explanation instead of "the mic button does nothing".
+    if (!navigator.mediaDevices?.getUserMedia) {
+      const msg = window.isSecureContext
+        ? "This browser doesn't support microphone capture."
+        : 'Voice notes need HTTPS. Open this site over https:// (or use the HA add-on ingress).'
+      error.value = msg
+      showToast(msg, 'error')
+      return
+    }
+
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -158,15 +173,28 @@ export function VoiceRecordButton({
           noiseSuppression: true,
         },
       })
-    } catch {
-      error.value = 'Microphone access denied.'
+    } catch (err: unknown) {
+      // ``DOMException.name`` distinguishes "user said no" (``NotAllowedError``)
+      // from "no microphone exists" (``NotFoundError``) — both warrant a
+      // visible toast so the press isn't a silent no-op.
+      const name = (err as DOMException)?.name ?? ''
+      const msg =
+        name === 'NotAllowedError'
+          ? 'Microphone permission denied. Enable it in your browser settings to record voice notes.'
+          : name === 'NotFoundError'
+            ? 'No microphone found on this device.'
+            : 'Microphone access failed.'
+      error.value = msg
+      showToast(msg, 'error')
       return
     }
 
     const pickedMime = pickRecorderMime()
     if (pickedMime === null) {
       stream.getTracks().forEach(t => t.stop())
-      error.value = 'Audio recording unavailable in this browser.'
+      const msg = 'Audio recording unavailable in this browser.'
+      error.value = msg
+      showToast(msg, 'error')
       state.value = 'unsupported'
       return
     }
@@ -178,7 +206,9 @@ export function VoiceRecordButton({
       })
     } catch {
       stream.getTracks().forEach(t => t.stop())
-      error.value = 'Audio recording unavailable in this browser.'
+      const msg = 'Audio recording unavailable in this browser.'
+      error.value = msg
+      showToast(msg, 'error')
       state.value = 'unsupported'
       return
     }
@@ -216,6 +246,19 @@ export function VoiceRecordButton({
 
   const onPointerDown = (e: PointerEvent) => {
     e.preventDefault()
+    // Capture the pointer so subsequent move / up events fire on this
+    // button even if the finger drifts off it — without this, an
+    // Android user touching the mic and sliding even a hair lands
+    // pointerup on a different element and the recording is silently
+    // orphaned. ``setPointerCapture`` is best-effort: jsdom + older
+    // Safari throw on the call.
+    const target = e.currentTarget as Element | null
+    try {
+      target?.setPointerCapture?.(e.pointerId)
+    } catch {
+      /* unsupported — gesture still works as long as the finger
+         stays on the button */
+    }
     void start(e.clientY)
   }
   const onPointerMove = (e: PointerEvent) => {
