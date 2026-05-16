@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, fireEvent, waitFor } from '@testing-library/preact'
 import { VoiceRecordButton } from './VoiceRecordButton'
+import { toasts } from './Toast'
 
 // ── MediaRecorder fake ─────────────────────────────────────────────────
 //
@@ -53,6 +54,7 @@ const fakeStream = {
 
 beforeEach(() => {
   lastRecorder = null
+  toasts.value = []  // drain any toasts from a previous test
   ;(globalThis as any).MediaRecorder = _FakeRecorder as any
   ;(globalThis as any).navigator.mediaDevices = {
     getUserMedia: vi.fn().mockResolvedValue(fakeStream),
@@ -136,6 +138,52 @@ describe('VoiceRecordButton', () => {
     fireEvent.pointerDown(btn, { clientY: 100 })
     await _flush()
     expect(getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a toast when getUserMedia is unavailable (HTTP origin)', async () => {
+    // Android Chrome on plain-HTTP leaves ``mediaDevices`` undefined.
+    // The button used to silently no-op — now it raises a visible
+    // toast pointing at HTTPS.
+    (globalThis as any).navigator.mediaDevices = undefined
+    ;(window as any).isSecureContext = false
+    const { container } = render(
+      <VoiceRecordButton onCapture={() => {}} />,
+    )
+    const btn = container.querySelector('button') as HTMLButtonElement
+    fireEvent.pointerDown(btn, { clientY: 100 })
+    await _flush()
+    expect(toasts.value.map(t => t.message).join(' ')).toMatch(/HTTPS|secure/i)
+  })
+
+  it('surfaces a toast when getUserMedia rejects with NotAllowedError', async () => {
+    (window as any).isSecureContext = true
+    const err = Object.assign(new Error('denied'), { name: 'NotAllowedError' })
+    ;(globalThis as any).navigator.mediaDevices = {
+      getUserMedia: vi.fn().mockRejectedValue(err),
+    }
+    const { container } = render(
+      <VoiceRecordButton onCapture={() => {}} />,
+    )
+    const btn = container.querySelector('button') as HTMLButtonElement
+    fireEvent.pointerDown(btn, { clientY: 100 })
+    await _flush()
+    expect(toasts.value.map(t => t.message).join(' ')).toMatch(/permission denied/i)
+  })
+
+  it('calls setPointerCapture so finger-drift does not orphan the recording', async () => {
+    const setPointerCapture = vi.fn()
+    const { container } = render(<VoiceRecordButton onCapture={() => {}} />)
+    const btn = container.querySelector('button') as HTMLButtonElement
+    // Stub the API on the actual button — jsdom doesn't ship it.
+    ;(btn as unknown as { setPointerCapture: typeof setPointerCapture })
+      .setPointerCapture = setPointerCapture
+    fireEvent.pointerDown(btn, { clientY: 100 })
+    await _flush()
+    // jsdom-fired pointer events may carry ``pointerId === 0`` or
+    // undefined — we just care that the handler reached into the
+    // target's ``setPointerCapture`` so finger-drift doesn't orphan
+    // the recording. The arg shape is browser-trusted.
+    expect(setPointerCapture).toHaveBeenCalledTimes(1)
   })
 })
 
