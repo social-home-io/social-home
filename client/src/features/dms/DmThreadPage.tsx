@@ -17,6 +17,7 @@ import { UnreadDivider } from '@/components/UnreadDivider'
 import { openCallTypePicker } from '@/components/CallTypePickerDialog'
 import { EmojiPickButton } from '@/components/EmojiPickButton'
 import { uploadWithProgress } from '@/components/UploadProgress'
+import { MediaAttachmentChip } from '@/components/MediaAttachmentChip'
 import {
   EmojiAutocomplete,
   checkForEmojiTrigger,
@@ -99,6 +100,29 @@ interface PendingAttachment {
   file_size_bytes: number
 }
 const pendingAttachment = signal<PendingAttachment | null>(null)
+/** Live state of an in-flight upload — distinct from
+ *  ``pendingAttachment`` (which only carries the *completed* result).
+ *  Surfaced via :class:`MediaAttachmentChip` so the composer shows
+ *  "Uploading… 45%" while bytes flow + "Processing image…" while the
+ *  server transcodes. Cleared on success (``pendingAttachment`` takes
+ *  over) or on cancel; left in ``failed`` state on error so the user
+ *  can retry without re-picking the file. */
+interface UploadingAttachment {
+  kind: 'image' | 'video' | 'file'
+  filename: string
+  fileSize: number
+  /** ``URL.createObjectURL(file)`` for image / video previews;
+   *  ``null`` for generic files. The chip revokes the URL on
+   *  unmount so we don't leak the blob. */
+  previewUrl: string | null
+  phase: 'uploading' | 'processing' | 'failed'
+  percent: number
+  errorMessage?: string
+  /** Kept so the retry button can re-issue ``uploadWithProgress``
+   *  with the same File object. */
+  file: File
+}
+const uploadingAttachment = signal<UploadingAttachment | null>(null)
 /** Most-recent attachment-related error to surface in a toast (or
  *  inline below the composer). Cleared when the user picks a new
  *  file or sends. Drives the "Media can only be shared with
@@ -754,23 +778,59 @@ export default function DmThreadPage() {
    *  the preview, and the next send carries ``type`` /
    *  ``media_url`` / ``file_name`` / ``mime_type`` /
    *  ``file_size_bytes`` instead of an empty body. */
-  const handleAttachPicked = async (e: Event) => {
+  const handleAttachPicked = (e: Event) => {
     const input = e.currentTarget as HTMLInputElement
     const file = input.files?.[0]
     // Reset the input so picking the same file again re-fires
     // ``onchange`` (browsers de-dup identical paths otherwise).
     input.value = ''
     if (!file) return
+    void _startAttachmentUpload(file)
+  }
+
+  /** Drives the file → ``uploadingAttachment`` (in-flight) →
+   *  ``pendingAttachment`` (ready) progression. Extracted so the
+   *  chip's Retry button can replay it on the same File without
+   *  re-opening the picker. */
+  const _startAttachmentUpload = async (file: File) => {
     attachmentError.value = null
-    // Branch on the MIME prefix to pick the message ``type``. The
-    // backend's ``MediaUploadView`` runs the actual conversion +
-    // size cap; we just classify for the bubble's render branch.
     const kind: 'image' | 'video' | 'file' =
       file.type.startsWith('image/') ? 'image'
       : file.type.startsWith('video/') ? 'video'
       : 'file'
+    // Local blob URL for the chip preview — the user sees what
+    // they're sending the instant they pick the file, not after the
+    // upload + server processing finishes.
+    const localPreview = (kind === 'image' || kind === 'video')
+      ? URL.createObjectURL(file)
+      : null
+    uploadingAttachment.value = {
+      kind,
+      filename: file.name,
+      fileSize: file.size,
+      previewUrl: localPreview,
+      phase: 'uploading',
+      percent: 0,
+      file,
+    }
     try {
-      const res = await uploadWithProgress(file)
+      const res = await uploadWithProgress(file, (ev) => {
+        // Phase + percent updates feed the chip's progress ring + the
+        // "Processing image…" / "Processing video…" copy.
+        const cur = uploadingAttachment.value
+        if (!cur || cur.file !== file) return  // user cancelled / replaced
+        if (ev.phase === 'uploading' || ev.phase === 'processing') {
+          uploadingAttachment.value = {
+            ...cur,
+            phase: ev.phase,
+            percent: ev.percent,
+          }
+        }
+      })
+      // Upload succeeded → promote to ``pendingAttachment``, free the
+      // local blob URL (the chip will use the server-signed preview).
+      if (localPreview) URL.revokeObjectURL(localPreview)
+      uploadingAttachment.value = null
       pendingAttachment.value = {
         type: kind,
         preview_url: res.signed_url,
@@ -779,12 +839,34 @@ export default function DmThreadPage() {
         mime_type: file.type || 'application/octet-stream',
         file_size_bytes: file.size,
       }
-      // An attachment is enough to enable Send even with no caption.
       composerHasContent.value = true
     } catch (err: unknown) {
-      attachmentError.value =
-        `Couldn't upload ${file.name}: ${(err as Error)?.message ?? err}`
+      const message = (err as Error)?.message ?? String(err)
+      // Leave the chip rendered with a ``failed`` phase + retry
+      // button — the user can re-try without picking the file again.
+      // Keeping the local preview alive too.
+      uploadingAttachment.value = uploadingAttachment.value
+        ? {
+            ...uploadingAttachment.value,
+            phase: 'failed',
+            errorMessage: message,
+          }
+        : null
+      attachmentError.value = `Couldn't upload ${file.name}: ${message}`
     }
+  }
+
+  /** Cancel the in-flight upload's chip (and free the local blob).
+   *  The XHR keeps running in the background — there's no clean abort
+   *  hook today, but the per-call event handler bails on a mismatched
+   *  ``file`` reference so a successful response after cancel is
+   *  silently ignored. */
+  const _cancelUpload = () => {
+    const cur = uploadingAttachment.value
+    if (!cur) return
+    if (cur.previewUrl) URL.revokeObjectURL(cur.previewUrl)
+    uploadingAttachment.value = null
+    attachmentError.value = null
   }
 
   /** Send a freshly-recorded voice note (OGG/Opus blob).
@@ -1664,69 +1746,45 @@ export default function DmThreadPage() {
           >×</button>
         </div>
       )}
-      {pendingAttachment.value && (
-        <div
-          class={
-            'sh-dm-attach-preview'
-            + ` sh-dm-attach-preview--${pendingAttachment.value.type}`
-          }
-          role="status"
-          aria-live="polite"
-        >
-          {/* Pre-send preview tile. The user has just attached a file
-           *  and is about to hit Send — they need to *see* what's
-           *  going. ``image`` shows the picture at up to 280 px wide
-           *  (capped via ``object-fit: contain`` so it's never
-           *  cropped pre-send); ``video`` mounts a real ``<video>``
-           *  element with the poster frame loaded via
-           *  ``preload="metadata"``, so the user can scrub or play
-           *  before sending; ``file`` falls back to the compact chip
-           *  shape because there's no inherent thumbnail to show.
-           *  The clear "×" floats top-right of the tile so the user
-           *  can ditch a wrong pick fast. */}
-          {pendingAttachment.value.type === 'image' && (
-            <img
-              class="sh-dm-attach-preview__media"
-              src={pendingAttachment.value.preview_url}
-              alt={pendingAttachment.value.file_name}
-            />
-          )}
-          {pendingAttachment.value.type === 'video' && (
-            <video
-              class="sh-dm-attach-preview__media"
-              src={pendingAttachment.value.preview_url}
-              preload="metadata"
-              controls
-              muted
-              playsInline
-            />
-          )}
-          {pendingAttachment.value.type === 'file' && (
-            <span
-              class="sh-dm-attach-preview__file-glyph"
-              aria-hidden="true"
-            >📎</span>
-          )}
-          <div class="sh-dm-attach-preview__meta">
-            <span class="sh-dm-attach-preview__name">
-              {pendingAttachment.value.file_name}
-            </span>
-            <span class="sh-dm-attach-preview__size">
-              {formatFileSize(pendingAttachment.value.file_size_bytes)}
-            </span>
-          </div>
-          <button
-            type="button"
-            class="sh-dm-attach-preview__clear"
-            aria-label="Remove attachment"
-            title="Remove attachment"
-            onClick={() => {
-              pendingAttachment.value = null
-              const ta = composerInputRef.current
-              composerHasContent.value = (ta?.value.trim().length ?? 0) > 0
-            }}
-          >×</button>
-        </div>
+      {/* In-flight chip — visible the instant the user picks a file.
+       *  ``MediaAttachmentChip`` surfaces ``Uploading… 45%`` →
+       *  ``Processing image…`` → terminal states, with a local
+       *  blob-URL preview so the user sees what they're sending
+       *  before the server's signed URL is even in hand. The same
+       *  chip is re-rendered with ``phase="ready"`` once the upload
+       *  completes (see the ``pendingAttachment`` branch below).
+       *  Failure leaves the chip in place with a Retry button so the
+       *  user doesn't have to re-pick the file. */}
+      {uploadingAttachment.value && (
+        <MediaAttachmentChip
+          phase={uploadingAttachment.value.phase}
+          kind={uploadingAttachment.value.kind}
+          filename={uploadingAttachment.value.filename}
+          sizeBytes={uploadingAttachment.value.fileSize}
+          previewUrl={uploadingAttachment.value.previewUrl}
+          percent={uploadingAttachment.value.percent}
+          errorMessage={uploadingAttachment.value.errorMessage}
+          onClear={_cancelUpload}
+          onRetry={() => {
+            const cur = uploadingAttachment.value
+            if (!cur) return
+            void _startAttachmentUpload(cur.file)
+          }}
+        />
+      )}
+      {!uploadingAttachment.value && pendingAttachment.value && (
+        <MediaAttachmentChip
+          phase="ready"
+          kind={pendingAttachment.value.type}
+          filename={pendingAttachment.value.file_name}
+          sizeBytes={pendingAttachment.value.file_size_bytes}
+          previewUrl={pendingAttachment.value.preview_url}
+          onClear={() => {
+            pendingAttachment.value = null
+            const ta = composerInputRef.current
+            composerHasContent.value = (ta?.value.trim().length ?? 0) > 0
+          }}
+        />
       )}
       {attachmentError.value && (
         <div class="sh-dm-attach-error" role="alert">
@@ -1763,7 +1821,7 @@ export default function DmThreadPage() {
           class="sh-dm-attach-btn"
           title="Attach a picture, video or file"
           aria-label="Attach a picture, video or file"
-          disabled={pendingAttachment.value !== null}
+          disabled={pendingAttachment.value !== null || uploadingAttachment.value !== null}
           onClick={() => attachInputRef.current?.click()}
         >
           <span aria-hidden="true">📎</span>
@@ -1807,8 +1865,15 @@ export default function DmThreadPage() {
         {composerHasContent.value ? (
           <Button
             type="submit"
-            disabled={!composerHasContent.value}
-            aria-label="Send message"
+            // Block sends while an upload is in flight — otherwise a
+            // user mid-upload who hit Send would ship the text only
+            // and silently drop the attachment.
+            disabled={!composerHasContent.value || uploadingAttachment.value !== null}
+            aria-label={
+              uploadingAttachment.value !== null
+                ? 'Wait for upload to finish'
+                : 'Send message'
+            }
           >
             {/* Compact paper-plane icon so the composer reads as a
              * chat bar (most of the row goes to the text input)
