@@ -33,6 +33,7 @@ from ..domain.events import (
     CommentDeleted,
     CommentUpdated,
     DmMessageCreated,
+    DmMessageReactionChanged,
     DmMessageUpdated,
     MomentCreated,
     MomentDeleted,
@@ -815,6 +816,27 @@ class FederationInboundService:
             await self._conversation_repo.remove_reaction(message_id, user_id, emoji)
         else:
             await self._conversation_repo.add_reaction(message_id, user_id, emoji)
+        # Fan to local WS sessions so every open thread tab on this
+        # household updates the reaction strip without a refetch.
+        msg = await self._conversation_repo.get_message(message_id)
+        if msg is None:
+            return
+        members = await self._conversation_repo.list_members(msg.conversation_id)
+        recipient_ids: list[str] = []
+        for m in members:
+            u = await self._user_repo.get(m.username)
+            if u is not None:
+                recipient_ids.append(u.user_id)
+        await self._bus.publish(
+            DmMessageReactionChanged(
+                conversation_id=msg.conversation_id,
+                message_id=message_id,
+                user_id=user_id,
+                emoji=emoji,
+                action=action,
+                recipient_user_ids=tuple(recipient_ids),
+            )
+        )
 
     # ── Space content handlers ─────────────────────────────────────────
 

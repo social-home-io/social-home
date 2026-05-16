@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import unquote
+
 from aiohttp import web
 
 from ..app_keys import (
@@ -141,26 +143,37 @@ class ConversationMessageView(BaseView):
             limit=limit,
         )
         signer = self.request.app.get(media_signer_key)
-        payload = [
-            sanitise_for_api(
-                {
-                    "id": m.id,
-                    "sender_user_id": m.sender_user_id,
-                    "content": m.content,
-                    "type": m.type,
-                    "media_url": m.media_url,
-                    "file_name": m.file_name,
-                    "mime_type": m.mime_type,
-                    "file_size_bytes": m.file_size_bytes,
-                    "media_sync_status": m.media_sync_status,
-                    "reply_to_id": m.reply_to_id,
-                    "deleted": m.deleted,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                    "edited_at": m.edited_at.isoformat() if m.edited_at else None,
-                }
+        repo = self.svc(conversation_repo_key)
+        payload = []
+        for m in msgs:
+            # ``list_reactions`` is a small per-message read; the page
+            # size is capped at 100 so the worst case is 100 queries —
+            # cheap on SQLite WAL. A bulk-by-conversation read can come
+            # later if the cost shows up in profiling.
+            rxs = await repo.list_reactions(m.id) if not m.deleted else []
+            reactions = [{"user_id": r.user_id, "emoji": r.emoji} for r in rxs]
+            payload.append(
+                sanitise_for_api(
+                    {
+                        "id": m.id,
+                        "sender_user_id": m.sender_user_id,
+                        "content": m.content,
+                        "type": m.type,
+                        "media_url": m.media_url,
+                        "file_name": m.file_name,
+                        "mime_type": m.mime_type,
+                        "file_size_bytes": m.file_size_bytes,
+                        "media_sync_status": m.media_sync_status,
+                        "reply_to_id": m.reply_to_id,
+                        "reactions": reactions,
+                        "deleted": m.deleted,
+                        "created_at": m.created_at.isoformat()
+                        if m.created_at
+                        else None,
+                        "edited_at": m.edited_at.isoformat() if m.edited_at else None,
+                    }
+                )
             )
-            for m in msgs
-        ]
         if signer is not None:
             sign_media_urls_in(payload, signer)
         return web.json_response(payload)
@@ -323,6 +336,58 @@ class ConversationDeliveryStatesView(BaseView):
             message_ids=ids,
         )
         return web.json_response({"states": states})
+
+
+class ConversationMessageReactionView(BaseView):
+    """``PUT|DELETE /api/conversations/{id}/messages/{mid}/reactions/{emoji}``.
+
+    Add or remove a single emoji reaction for the caller on a DM
+    message. ``{emoji}`` is URL-encoded so multi-byte glyphs survive
+    the routing layer. The actor is always the caller — there's no
+    "react on behalf of" path.
+    """
+
+    async def put(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(dm_service_key)
+        message_id = self.match("mid")
+        emoji = unquote(self.match("emoji"))
+        await svc.add_reaction(
+            message_id,
+            username=ctx.username,
+            emoji=emoji,
+        )
+        return web.json_response({"ok": True})
+
+    async def delete(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(dm_service_key)
+        message_id = self.match("mid")
+        emoji = unquote(self.match("emoji"))
+        await svc.remove_reaction(
+            message_id,
+            username=ctx.username,
+            emoji=emoji,
+        )
+        return web.json_response({"ok": True})
+
+
+class ConversationMessageReactionListView(BaseView):
+    """``GET /api/conversations/{id}/messages/{mid}/reactions`` —
+    the full reaction roster for one message. Membership-gated.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(dm_service_key)
+        message_id = self.match("mid")
+        reactions = await svc.list_reactions(
+            message_id,
+            username=ctx.username,
+        )
+        return web.json_response(
+            {"reactions": [{"user_id": r.user_id, "emoji": r.emoji} for r in reactions]}
+        )
 
 
 class ConversationGapsView(BaseView):

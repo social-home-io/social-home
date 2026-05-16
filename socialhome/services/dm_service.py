@@ -36,6 +36,7 @@ from ..domain.conversation import (
 from ..domain.events import (
     DmConversationCreated,
     DmMessageCreated,
+    DmMessageReactionChanged,
     DmMessageUpdated,
 )
 from ..domain.federation import FederationEventType
@@ -892,23 +893,26 @@ class DmService:
         self,
         message_id: str,
         *,
-        user_id: str,
+        username: str,
         emoji: str,
     ) -> None:
-        # Verifies existence — raises if the message was purged.
         msg = await self._require_message(message_id)
-        # membership check would require finding the conversation of the
-        # message and the username of the user_id. For v1 we trust the
-        # caller (route layer already verified membership).
+        await self._require_membership(msg.conversation_id, username)
+        actor = await self._require_user(username)
         clean = emoji.strip()
-        await self._convos.add_reaction(message_id, user_id, clean)
+        if not clean:
+            raise ValueError("emoji must not be empty")
+        if len(clean) > 32:
+            raise ValueError("emoji glyph too long")
+        await self._convos.add_reaction(message_id, actor.user_id, clean)
+        await self._publish_reaction(msg, actor.user_id, clean, "add")
         await self._fan_to_remote(
             conversation_id=msg.conversation_id,
             event_type=FederationEventType.DM_MESSAGE_REACTION,
             payload={
                 "conversation_id": msg.conversation_id,
                 "message_id": msg.id,
-                "user_id": user_id,
+                "user_id": actor.user_id,
                 "emoji": clean,
                 "action": "add",
             },
@@ -918,22 +922,66 @@ class DmService:
         self,
         message_id: str,
         *,
-        user_id: str,
+        username: str,
         emoji: str,
     ) -> None:
         msg = await self._require_message(message_id)
+        await self._require_membership(msg.conversation_id, username)
+        actor = await self._require_user(username)
         clean = emoji.strip()
-        await self._convos.remove_reaction(message_id, user_id, clean)
+        if not clean:
+            raise ValueError("emoji must not be empty")
+        await self._convos.remove_reaction(message_id, actor.user_id, clean)
+        await self._publish_reaction(msg, actor.user_id, clean, "remove")
         await self._fan_to_remote(
             conversation_id=msg.conversation_id,
             event_type=FederationEventType.DM_MESSAGE_REACTION,
             payload={
                 "conversation_id": msg.conversation_id,
                 "message_id": msg.id,
-                "user_id": user_id,
+                "user_id": actor.user_id,
                 "emoji": clean,
                 "action": "remove",
             },
+        )
+
+    async def list_reactions(
+        self,
+        message_id: str,
+        *,
+        username: str,
+    ) -> list:
+        msg = await self._require_message(message_id)
+        await self._require_membership(msg.conversation_id, username)
+        return await self._convos.list_reactions(message_id)
+
+    async def _publish_reaction(
+        self,
+        msg: ConversationMessage,
+        actor_user_id: str,
+        emoji: str,
+        action: str,
+    ) -> None:
+        """Fan a ``DmMessageReactionChanged`` event to every local
+        member's open WS sessions. The reacting user IS included in
+        the recipient list so their other open tabs (mobile + desktop)
+        update the reaction strip in lockstep.
+        """
+        members = await self._convos.list_members(msg.conversation_id)
+        recipient_ids: list[str] = []
+        for m in members:
+            u = await self._users.get(m.username)
+            if u is not None:
+                recipient_ids.append(u.user_id)
+        await self._bus.publish(
+            DmMessageReactionChanged(
+                conversation_id=msg.conversation_id,
+                message_id=msg.id,
+                user_id=actor_user_id,
+                emoji=emoji,
+                action=action,
+                recipient_user_ids=tuple(recipient_ids),
+            )
         )
 
     # ── Leave ──────────────────────────────────────────────────────────

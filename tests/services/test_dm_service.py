@@ -531,9 +531,8 @@ async def test_reactions_federate_add_and_remove(stack):
     )
     msg = await stack.dm_svc.send_message(dm.id, sender_username="anna", content="hi")
     fed.sent.clear()
-    anna = await stack.user_svc.get("anna")
-    await stack.dm_svc.add_reaction(msg.id, user_id=anna.user_id, emoji="👍")
-    await stack.dm_svc.remove_reaction(msg.id, user_id=anna.user_id, emoji="👍")
+    await stack.dm_svc.add_reaction(msg.id, username="anna", emoji="👍")
+    await stack.dm_svc.remove_reaction(msg.id, username="anna", emoji="👍")
     reacts = [
         s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE_REACTION
     ]

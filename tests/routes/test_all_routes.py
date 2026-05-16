@@ -189,6 +189,70 @@ async def test_conversation_routes(client):
     assert r.status == 422
 
 
+async def test_conversation_reaction_routes(client):
+    """DM reactions: PUT adds, DELETE removes, GET messages includes
+    the reactions list, GET reactions returns the full roster."""
+    h = _auth(client._tok)
+    await client._db.enqueue(
+        "INSERT OR IGNORE INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("dm_reactor", "uid-dm-reactor", "DmReactor"),
+    )
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"username": "dm_reactor"},
+        headers=h,
+    )
+    assert r.status == 201
+    cid = (await r.json())["id"]
+    r = await client.post(
+        f"/api/conversations/{cid}/messages",
+        json={"content": "react me"},
+        headers=h,
+    )
+    assert r.status == 201
+    mid = (await r.json())["id"]
+    # PUT reaction
+    r = await client.put(
+        f"/api/conversations/{cid}/messages/{mid}/reactions/%F0%9F%91%8D",
+        headers=h,
+    )
+    assert r.status == 200
+    # GET messages echoes reactions
+    r = await client.get(f"/api/conversations/{cid}/messages", headers=h)
+    assert r.status == 200
+    payload = await r.json()
+    target = next(m for m in payload if m["id"] == mid)
+    assert any(rx["emoji"] == "👍" for rx in target.get("reactions") or [])
+    # GET reactions list
+    r = await client.get(
+        f"/api/conversations/{cid}/messages/{mid}/reactions",
+        headers=h,
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert any(rx["emoji"] == "👍" for rx in body["reactions"])
+    # DELETE reaction
+    r = await client.delete(
+        f"/api/conversations/{cid}/messages/{mid}/reactions/%F0%9F%91%8D",
+        headers=h,
+    )
+    assert r.status == 200
+    # Reaction gone
+    r = await client.get(
+        f"/api/conversations/{cid}/messages/{mid}/reactions",
+        headers=h,
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert not any(rx["emoji"] == "👍" for rx in body["reactions"])
+    # Empty emoji = 422 (service rejects)
+    r = await client.put(
+        f"/api/conversations/{cid}/messages/{mid}/reactions/%20",
+        headers=h,
+    )
+    assert r.status == 422
+
+
 # ── Notification routes ───────────────────────────────────────────────────
 
 

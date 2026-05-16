@@ -52,6 +52,7 @@ from ..domain.events import (
     CpSpaceAgeGateChanged,
     DmConversationCreated,
     DmMessageCreated,
+    DmMessageReactionChanged,
     DmMessageUpdated,
     HouseholdConfigChanged,
     NotificationCreated,
@@ -313,6 +314,10 @@ class RealtimeService:
         )
         self._bus.subscribe(DmMessageCreated, self._on_dm_message_created)
         self._bus.subscribe(DmMessageUpdated, self._on_dm_message_updated)
+        self._bus.subscribe(
+            DmMessageReactionChanged,
+            self._on_dm_message_reaction_changed,
+        )
         self._bus.subscribe(
             DmConversationCreated,
             self._on_dm_conversation_created,
@@ -1609,6 +1614,32 @@ class RealtimeService:
         }
         seen: set[str] = set()
         for user_id in (event.sender_user_id, *event.recipient_user_ids):
+            if not user_id or user_id in seen:
+                continue
+            seen.add(user_id)
+            await self._ws.broadcast_to_user(user_id, payload)
+
+    async def _on_dm_message_reaction_changed(
+        self,
+        event: DmMessageReactionChanged,
+    ) -> None:
+        """Push ``dm.message_reaction`` to every conversation member.
+
+        The frame is a patch — the SPA applies it to the message in
+        the active thread (or to the cached list if the thread is
+        open elsewhere) and re-renders the reaction strip without
+        a follow-up fetch.
+        """
+        payload = {
+            "type": "dm.message_reaction",
+            "conversation_id": event.conversation_id,
+            "message_id": event.message_id,
+            "user_id": event.user_id,
+            "emoji": event.emoji,
+            "action": event.action,
+        }
+        seen: set[str] = set()
+        for user_id in event.recipient_user_ids:
             if not user_id or user_id in seen:
                 continue
             seen.add(user_id)
