@@ -388,8 +388,14 @@ export default function CalendarPage() {
             // row with "YOU · BOB" instead of two stacked rows. Only
             // surfaced when the multi-calendar overlay is on; with
             // a single calendar visible the byline is redundant.
+            // Each chip carries its OWN calendar's hue so a shared
+            // event reads as ``YOU (terracotta) · BOB (moss)`` rather
+            // than two same-coloured pills. Without the per-chip
+            // colour, all chips inherited ``--cal-hue`` from the
+            // primary row (the creator's calendar) and the "shared
+            // with" signal was visually flat.
             const groupedCalIds = e._grouped_calendar_ids ?? [e.calendar_id]
-            const ownerChips: string[] = []
+            const ownerChips: { name: string; color: string }[] = []
             if (visibleCalendarIds.value.size > 1) {
               const me = currentUser.value?.username
               const seen = new Set<string>()
@@ -398,8 +404,9 @@ export default function CalendarPage() {
                 if (!cal) continue
                 if (seen.has(cal.owner_username)) continue
                 seen.add(cal.owner_username)
+                const color = resolveCalendarColor(cal)
                 if (cal.owner_username === me) {
-                  ownerChips.push('You')
+                  ownerChips.push({ name: 'You', color })
                   continue
                 }
                 let name: string = cal.owner_username
@@ -409,7 +416,7 @@ export default function CalendarPage() {
                     break
                   }
                 }
-                ownerChips.push(name)
+                ownerChips.push({ name, color })
               }
             }
             return (
@@ -434,12 +441,18 @@ export default function CalendarPage() {
                     class="sh-event-owner-chips"
                     aria-label={
                       ownerChips.length === 1
-                        ? `On ${ownerChips[0]}'s calendar`
-                        : `Shared with ${ownerChips.join(', ')}`
+                        ? `On ${ownerChips[0].name}'s calendar`
+                        : `Shared with ${ownerChips.map(c => c.name).join(', ')}`
                     }
                   >
-                    {ownerChips.map(name => (
-                      <span key={name} class="sh-event-owner">{name}</span>
+                    {ownerChips.map(chip => (
+                      <span
+                        key={chip.name}
+                        class="sh-event-owner"
+                        style={{ '--cal-hue': chip.color } as Record<string, string>}
+                      >
+                        {chip.name}
+                      </span>
                     ))}
                   </span>
                 )}
