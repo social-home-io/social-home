@@ -745,7 +745,12 @@ function ItemRow(props: RowProps) {
        *  content. Clicking the box is the ONLY toggle action; clicks
        *  on the text / pill / delete never accidentally check the
        *  item off (the long-standing "I meant to edit but I marked
-       *  it done" trap). */}
+       *  it done" trap).
+       *
+       *  The button is the *tap target* — sized to a comfortable
+       *  hit area; the visible round mark lives in the nested
+       *  ``__dot`` so the visual weight stays compact while
+       *  fingertips still get a generous landing zone. */}
       <button
         type="button"
         class={
@@ -760,7 +765,9 @@ function ItemRow(props: RowProps) {
         }
         aria-pressed={done}
       >
-        <span aria-hidden="true">{done ? '✓' : ''}</span>
+        <span class="sh-shopping-item__check-dot" aria-hidden="true">
+          {done ? '✓' : ''}
+        </span>
       </button>
       <span
         class="sh-shopping-item__text"

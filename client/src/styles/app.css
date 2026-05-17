@@ -6561,42 +6561,58 @@ body.sh-dm-thread-open .sh-messages {
   transition: background-color 120ms;
 }
 .sh-shopping-list li:last-child { border-bottom: none; }
-/* Standalone checkbox button. Replaces the old <label> wrap so the
- * checkbox and text never share a click target — clicking the item
- * text used to forward to the label's default behavior (toggle done)
- * AND the span's onClick (start edit), producing the "I meant to
- * edit but I marked it done" trap. Now the check is its own
- * ≥36×36 button surface; everything else on the row is a separate
- * tap target. */
+/* Two-layer toggle: the outer ``__check`` button is the tap
+ * target — sized generously for fingertips but visually
+ * transparent so it doesn't take over the row. The inner
+ * ``__dot`` is the visible round mark. Previously the whole
+ * 36×36 surface was the visible circle, which read as heavy on a
+ * mobile list (each row screamed "DECISION" instead of "item").
+ * The decoupling lets us keep the comfortable hit-area while
+ * shrinking the visual weight to a compact ~20 px dot — same
+ * pattern Apple Reminders / Things / Todoist use. */
 .sh-shopping-item__check {
   flex-shrink: 0;
   width: 36px;
   height: 36px;
-  border-radius: 50%;
-  border: 1.5px solid var(--sh-border);
-  background: var(--sh-bg);
-  color: var(--sh-primary);
-  font-size: 18px;
-  line-height: 1;
+  background: transparent;
+  border: none;
+  padding: 0;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 120ms, border-color 120ms, color 120ms;
-  padding: 0;
+  /* Reset the text-color the ``--done`` modifier uses so the
+   * inner ✓ inherits the same colour as the dot's fill. */
+  color: var(--sh-on-primary, #fff);
 }
-.sh-shopping-item__check:hover {
+.sh-shopping-item__check:focus-visible {
+  /* Focus ring on the tap-target button, not the dot, so keyboard
+   * users see a generous ring around the whole interactive
+   * surface — not a tiny ~20 px dot. */
+  outline: 2px solid var(--sh-primary);
+  outline-offset: -4px;
+  border-radius: 50%;
+}
+.sh-shopping-item__check-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sh-border);
+  background: var(--sh-bg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  transition: background-color 120ms, border-color 120ms;
+}
+.sh-shopping-item__check:hover .sh-shopping-item__check-dot {
   border-color: var(--sh-primary);
   background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
 }
-.sh-shopping-item__check:focus-visible {
-  outline: 2px solid var(--sh-primary);
-  outline-offset: 2px;
-}
-.sh-shopping-item__check--done {
+.sh-shopping-item__check--done .sh-shopping-item__check-dot {
   background: var(--sh-primary);
   border-color: var(--sh-primary);
-  color: var(--sh-on-primary, #fff);
 }
 .sh-shopping-item__text {
   flex: 1;
