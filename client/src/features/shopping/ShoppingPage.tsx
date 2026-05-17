@@ -855,22 +855,40 @@ function EditRow({
 interface StorePickerProps {
   /** Current store on the item, or ``null`` for "No store". */
   currentStore: string | null
-  /** Household catalogue. Picker also offers "+ New store…" to extend
-   *  this list inline via prompt(). */
+  /** Household catalogue. The picker also offers "+ New store…" to
+   *  extend this list inline (no native ``prompt()`` — the
+   *  popover swaps to a focused text input instead). */
   storeNames: string[]
   onPick: (next: string | null) => void
 }
 
 /** One-tap reassign affordance on the item row.
  *
- *  Replaces the typing-required second text input that lived inside
- *  ``EditRow``: the user no longer has to remember the store name or
- *  enter rename mode at all to drop an item onto Migros. The button
- *  surface stays a pill so it reads as paired metadata at rest; the
- *  popover anchors to the bottom edge of the button. */
+ *  Replaces the typing-required second text input that used to live
+ *  inside ``EditRow``: the user no longer has to remember the store
+ *  name or enter rename mode at all to drop an item onto Migros. The
+ *  button surface stays a pill so it reads as paired metadata at
+ *  rest. The popover anchors under the pill on desktop and docks as
+ *  a bottom-sheet on mobile.
+ *
+ *  Two-mode state machine inside the popover:
+ *   - ``list`` (default): existing stores + "No store" + "+ New
+ *     store…" call-to-action.
+ *   - ``new``: the menu items are replaced by a focused text input
+ *     ("Type a store name") + Save / "← Back". Submit creates the
+ *     store *and* assigns the item to it in one round-trip via
+ *     ``onPick(name)`` — the parent's ``updateItem`` already
+ *     server-side upserts a new catalogue row whenever it sees an
+ *     unknown store name. Replaces the previous ``window.prompt``
+ *     call (poor mobile UX + the native dialog hid the picker). */
 function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
   const [open, setOpen] = useState(false)
+  /** Sub-view inside the popover. ``list`` is the default;
+   *  ``new`` swaps to the inline name-entry input. */
+  const [mode, setMode] = useState<'list' | 'new'>('list')
+  const [newName, setNewName] = useState('')
   const ref = useRef<HTMLDivElement | null>(null)
+  const newInputRef = useRef<HTMLInputElement | null>(null)
 
   // Click-outside closes the menu. ``useLayoutEffect`` would be
   // overkill — the menu is small enough that one async paint frame
@@ -882,7 +900,17 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
       if (!ref.current.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        // Escape unwinds one step at a time: from ``new`` back to
+        // ``list``, from ``list`` to closed. Mirrors the way a
+        // native iOS / Android picker handles the back button.
+        if (mode === 'new') {
+          setMode('list')
+          setNewName('')
+        } else {
+          setOpen(false)
+        }
+      }
     }
     document.addEventListener('mousedown', onDocClick)
     document.addEventListener('keydown', onKey)
@@ -890,18 +918,36 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
       document.removeEventListener('mousedown', onDocClick)
       document.removeEventListener('keydown', onKey)
     }
+  }, [open, mode])
+
+  // Reset to list mode whenever the picker closes — the next open
+  // should always start from the store list, not from a stale
+  // half-typed new-store name.
+  useEffect(() => {
+    if (!open) {
+      setMode('list')
+      setNewName('')
+    }
   }, [open])
+
+  // Autofocus the new-store input when we enter ``new`` mode so the
+  // mobile keyboard pops up immediately.
+  useEffect(() => {
+    if (mode === 'new') {
+      newInputRef.current?.focus()
+    }
+  }, [mode])
 
   const pick = (next: string | null) => {
     if (next !== currentStore) onPick(next)
     setOpen(false)
   }
 
-  const promptNew = () => {
+  const saveNew = () => {
+    const trimmed = newName.trim()
+    if (!trimmed) return
+    onPick(trimmed)
     setOpen(false)
-    const name = window.prompt('New store name')?.trim()
-    if (!name) return
-    onPick(name)
   }
 
   const label = currentStore || 'Set store'
@@ -926,11 +972,11 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
         <span>{label}</span>
         <span aria-hidden="true" class="sh-shopping-store-pill__chev">▾</span>
       </button>
-      {open && (
+      {open && mode === 'list' && (
         <ul class="sh-shopping-store-picker__menu" role="menu">
           {storeNames.length === 0 && (
             <li class="sh-shopping-store-picker__empty" role="presentation">
-              No stores yet — add one below.
+              No stores yet — tap below to add one.
             </li>
           )}
           {storeNames.map((name) => (
@@ -973,12 +1019,45 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
               type="button"
               role="menuitem"
               class="sh-shopping-store-picker__opt sh-shopping-store-picker__opt--new"
-              onClick={promptNew}
+              onClick={() => setMode('new')}
             >
               + New store…
             </button>
           </li>
         </ul>
+      )}
+      {open && mode === 'new' && (
+        <div class="sh-shopping-store-picker__menu sh-shopping-store-picker__new" role="dialog" aria-label="Add a new store">
+          <button
+            type="button"
+            class="sh-shopping-store-picker__back"
+            onClick={() => { setMode('list'); setNewName('') }}
+          >
+            ‹ Back
+          </button>
+          <input
+            ref={newInputRef}
+            type="text"
+            class="sh-shopping-store-picker__new-input"
+            placeholder="Store name (e.g. Migros)"
+            aria-label="New store name"
+            value={newName}
+            onInput={(e) => setNewName((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                saveNew()
+              }
+            }}
+          />
+          <Button
+            type="button"
+            onClick={saveNew}
+            disabled={!newName.trim()}
+          >
+            Save
+          </Button>
+        </div>
       )}
     </div>
   )
