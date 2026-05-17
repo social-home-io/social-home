@@ -12,6 +12,7 @@ Shared QR-token service handles the single-use 10-minute pairing token
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import html as _html
 import io
@@ -119,8 +120,12 @@ def _escape(value: object | None) -> str:
     return _html.escape(str(value), quote=True)
 
 
-def _render_qr_png_data_uri(payload: str) -> str:
+async def _render_qr_png_data_uri(payload: str) -> str:
     """Return a data: URI with a PNG-encoded QR code of *payload*."""
+    return await asyncio.to_thread(_render_qr_png_data_uri_sync, payload)
+
+
+def _render_qr_png_data_uri_sync(payload: str) -> str:
     img = qrcode.make(payload, box_size=8, border=2)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -589,7 +594,7 @@ async def handle_landing(request: web.Request) -> web.Response:
         if cfg.base_url
         else f"gfs:token={token}"
     )
-    qr_data = _render_qr_png_data_uri(qr_payload)
+    qr_data = await _render_qr_png_data_uri(qr_payload)
 
     search = (request.query.get("search") or "").strip()
     audience = (request.query.get("audience") or "").strip()

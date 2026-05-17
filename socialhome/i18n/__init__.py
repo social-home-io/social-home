@@ -52,6 +52,8 @@ class Catalog:
         cls, path: str | Path, *, default_locale: str = _DEFAULT_LOCALE
     ) -> "Catalog":
         """Load every ``{locale}.json`` file under ``path``."""
+        # Cold path: called once during app startup wiring before any
+        # request is in flight, so sync filesystem reads are acceptable.
         catalog = cls(default_locale=default_locale)
         d = Path(path)
         if not d.exists():

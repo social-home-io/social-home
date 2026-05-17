@@ -325,3 +325,38 @@ async def test_poll_once_multiple_gfs(env):
     # Both GFS were polled, each returned 1 listing.
     assert n == 2
     assert len(session.calls) == 2
+
+
+async def test_start_then_stop_exits_via_stop_event(env):
+    """``stop()`` must drain the loop via ``_stop`` instead of bare cancel."""
+    _, repo, gfs_repo = env
+    await gfs_repo.save(_gfs_conn("gfs-1", inbox_url="https://gfs.example.com"))
+    svc = PublicSpaceDiscoveryService(
+        repo,
+        gfs_connection_repo=gfs_repo,
+        poll_interval_seconds=30.0,
+        http_client=_StubSession(body={"spaces": []}),
+    )
+    await svc.start()
+    assert svc._task is not None and not svc._task.done()
+    await svc.stop()
+    assert svc._task is None
+    # ``_stop`` is set so a follow-up ``start()`` clears it again.
+    assert svc._stop.is_set() is True
+
+
+async def test_start_is_idempotent(env):
+    """Calling ``start()`` twice does not spawn a second task."""
+    _, repo, gfs_repo = env
+    await gfs_repo.save(_gfs_conn("gfs-1", inbox_url="https://gfs.example.com"))
+    svc = PublicSpaceDiscoveryService(
+        repo,
+        gfs_connection_repo=gfs_repo,
+        poll_interval_seconds=30.0,
+        http_client=_StubSession(body={"spaces": []}),
+    )
+    await svc.start()
+    first_task = svc._task
+    await svc.start()
+    assert svc._task is first_task
+    await svc.stop()

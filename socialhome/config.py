@@ -180,6 +180,8 @@ class Config:
         platform_options: dict[str, Mapping[str, Any]] = {}
         toml_path_str = os.environ.get("SH_CONFIG")
         toml_path = Path(toml_path_str) if toml_path_str else Path(DEFAULT_TOML_FILE)
+        # Cold path: load_config runs once at process start, before the event
+        # loop is serving traffic — sync filesystem I/O is fine here.
         if toml_path.exists():
             try:
                 raw_toml = tomllib.loads(toml_path.read_text(encoding="utf-8"))

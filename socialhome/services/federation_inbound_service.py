@@ -20,6 +20,9 @@ import pathlib
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+import aiofiles
+import aiofiles.os
+
 from ..domain.conversation import (
     Conversation,
     ConversationMember,
@@ -382,7 +385,7 @@ class FederationInboundService:
         # full-quality bytes. Senders at v_2 don't carry these
         # fields; ``media_url`` from the payload (if any) goes
         # through unchanged.
-        media_url, media_sync_status = self._receive_media_preview(
+        media_url, media_sync_status = await self._receive_media_preview(
             payload=p,
             message_id=message_id,
             msg_type=msg_type,
@@ -552,7 +555,7 @@ class FederationInboundService:
 
     # ── DM media ─────────────────────────────────────────────────────
 
-    def _receive_media_preview(
+    async def _receive_media_preview(
         self,
         *,
         payload: dict,
@@ -597,11 +600,13 @@ class FederationInboundService:
         if self._media_dir is not None:
             mime_in = str(payload.get("mime_type") or "")
             full_path = self._media_dir / f"{message_id}{_mime_to_ext(mime_in)}"
-            if full_path.is_file():
+            if await aiofiles.os.path.isfile(full_path):
                 # Drop any stale preview from a previous attempt.
                 preview_old = self._media_dir / f"{message_id}.preview.webp"
                 try:
-                    preview_old.unlink(missing_ok=True)
+                    await aiofiles.os.remove(preview_old)
+                except FileNotFoundError:
+                    pass
                 except OSError:  # pragma: no cover
                     pass
                 return f"api/media/{full_path.name}", None
@@ -627,9 +632,10 @@ class FederationInboundService:
         # full bytes land at the same filename and the SPA's
         # ``media_url`` doesn't have to change at all.
         try:
-            self._media_dir.mkdir(parents=True, exist_ok=True)
+            await aiofiles.os.makedirs(self._media_dir, exist_ok=True)
             dest = self._media_dir / f"{message_id}.preview.webp"
-            dest.write_bytes(preview_bytes)
+            async with aiofiles.open(dest, "wb") as f:
+                await f.write(preview_bytes)
         except OSError as exc:  # pragma: no cover
             log.warning(
                 "DM_MESSAGE: failed to write preview for %s: %s",
@@ -693,15 +699,17 @@ class FederationInboundService:
         mime_type = str(p.get("mime_type") or "application/octet-stream")
         ext = _mime_to_ext(mime_type)
         try:
-            self._media_dir.mkdir(parents=True, exist_ok=True)
+            await aiofiles.os.makedirs(self._media_dir, exist_ok=True)
             if chunk_count == 1:
                 # Fast path: no parts to assemble, write straight
                 # to the final destination.
                 dest = self._media_dir / f"{message_id}{ext}"
-                dest.write_bytes(data)
+                async with aiofiles.open(dest, "wb") as out_f:
+                    await out_f.write(data)
             else:
                 part_path = self._media_dir / f"{message_id}.part{chunk_index:05d}"
-                part_path.write_bytes(data)
+                async with aiofiles.open(part_path, "wb") as out_f:
+                    await out_f.write(data)
                 if not is_final:
                     # Wait for the next chunk; the receive-side state
                     # change happens only after the final chunk lands.
@@ -713,25 +721,32 @@ class FederationInboundService:
                 # finalisation will rerun.
                 dest = self._media_dir / f"{message_id}{ext}"
                 tmp_dest = self._media_dir / f"{message_id}.assembled{ext}"
-                with tmp_dest.open("wb") as out_f:
+                async with aiofiles.open(tmp_dest, "wb") as out_f:
                     for i in range(chunk_count):
                         part = self._media_dir / f"{message_id}.part{i:05d}"
-                        if not part.is_file():
+                        if not await aiofiles.os.path.isfile(part):
                             log.warning(
                                 "DM_MEDIA_BLOB: missing chunk %d for %s; "
                                 "awaiting resend",
                                 i,
                                 message_id,
                             )
-                            tmp_dest.unlink(missing_ok=True)
+                            try:
+                                await aiofiles.os.remove(tmp_dest)
+                            except FileNotFoundError:
+                                pass
                             return
-                        out_f.write(part.read_bytes())
-                tmp_dest.replace(dest)
+                        async with aiofiles.open(part, "rb") as in_f:
+                            await out_f.write(await in_f.read())
+                await aiofiles.os.replace(tmp_dest, dest)
                 # Cleanup part files.
                 for i in range(chunk_count):
-                    (self._media_dir / f"{message_id}.part{i:05d}").unlink(
-                        missing_ok=True,
-                    )
+                    try:
+                        await aiofiles.os.remove(
+                            self._media_dir / f"{message_id}.part{i:05d}",
+                        )
+                    except FileNotFoundError:
+                        pass
         except OSError as exc:  # pragma: no cover
             log.warning(
                 "DM_MEDIA_BLOB: write failed for %s: %s",
@@ -750,7 +765,8 @@ class FederationInboundService:
         # footnote.
         sniff_result: bool | None = None
         try:
-            head = dest.open("rb").read(16)
+            async with aiofiles.open(dest, "rb") as f:
+                head = await f.read(16)
             sniff_result = _bytes_match_mime(head, mime_type)
         except OSError:  # pragma: no cover
             sniff_result = None
@@ -759,7 +775,9 @@ class FederationInboundService:
         # ``.preview.webp`` is a vector for stale-state bugs.
         preview = self._media_dir / f"{message_id}.preview.webp"
         try:
-            preview.unlink(missing_ok=True)
+            await aiofiles.os.remove(preview)
+        except FileNotFoundError:
+            pass
         except OSError:  # pragma: no cover
             pass
         new_url = f"api/media/{dest.name}"

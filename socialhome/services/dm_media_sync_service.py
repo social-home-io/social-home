@@ -44,6 +44,9 @@ import random
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+import aiofiles
+import aiofiles.os
+
 from ..domain.federation import FederationEventType
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
@@ -177,14 +180,15 @@ class DmMediaSyncService:
         if kind == "file":
             return None
         path = self._resolve_media_path(media_url)
-        if path is None or not path.is_file():
+        if path is None or not await aiofiles.os.path.isfile(path):
             log.debug(
                 "dm-media-sync: preview source missing for %s",
                 media_url,
             )
             return None
         try:
-            data = path.read_bytes()
+            async with aiofiles.open(path, "rb") as f:
+                data = await f.read()
         except OSError as exc:
             log.warning(
                 "dm-media-sync: failed to read %s: %s",
@@ -256,7 +260,7 @@ class DmMediaSyncService:
                 media_url,
             )
             return
-        if not path.is_file():
+        if not await aiofiles.os.path.isfile(path):
             log.warning(
                 "dm-media-sync: cannot enqueue, file missing at %s",
                 path,
@@ -409,9 +413,10 @@ class DmMediaSyncService:
         concatenate-and-rename finalisation.
         """
         path = pathlib.Path(entry.bytes_path)
-        if not path.is_file():
+        if not await aiofiles.os.path.isfile(path):
             raise FileNotFoundError(f"blob source missing: {path}")
-        data = path.read_bytes()
+        async with aiofiles.open(path, "rb") as f:
+            data = await f.read()
         msg = await self._convos.get_message(entry.message_id)
         if msg is None:
             raise LookupError(f"message {entry.message_id} not found")

@@ -7,6 +7,7 @@ maximum, and converts to WebP at the protocol-defined quality.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import uuid
@@ -78,6 +79,13 @@ class ImageProcessor:
             If the data fails magic-byte validation or Pillow cannot
             open it.
         """
+        # Pillow's decode + resize + encode are CPU-bound and would
+        # stall the event loop on every upload. Mirror the pattern in
+        # ``video_processor`` / ``audio_processor`` and run the
+        # synchronous body on the default thread pool.
+        return await asyncio.to_thread(self._process_sync, data, filename)
+
+    def _process_sync(self, data: bytes, filename: str) -> tuple[bytes, str]:
         mime = self._detect_mime(data)
         if mime is None:
             raise ValueError(
@@ -128,6 +136,9 @@ class ImageProcessor:
         ValueError
             If Pillow cannot open *data*.
         """
+        return await asyncio.to_thread(self._generate_thumbnail_sync, data, size)
+
+    def _generate_thumbnail_sync(self, data: bytes, size: int) -> bytes:
         try:
             img = Image.open(io.BytesIO(data))
         except Exception as exc:

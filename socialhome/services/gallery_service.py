@@ -20,12 +20,16 @@ on demand via ``gallery_item_full``.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import pathlib
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
+
+import aiofiles
+import aiofiles.os
 
 from ..config import Config
 from ..domain.events import (
@@ -55,6 +59,33 @@ except ImportError:
     _PIL_AVAILABLE = False
 
 log = logging.getLogger(__name__)
+
+
+def _extract_exif_date_sync(data: bytes) -> str | None:
+    if not _PIL_AVAILABLE:
+        return None
+    try:
+        img = Image.open(io.BytesIO(data))
+        exif = img.getexif()
+        if not exif:
+            return None
+        for tag_id, val in exif.items():
+            if ExifTags.TAGS.get(tag_id) == "DateTimeOriginal":
+                parts = str(val).split(" ", 1)[0].replace(":", "-")
+                return parts
+    except Exception:
+        return None
+    return None
+
+
+def _read_dims_sync(path: pathlib.Path) -> tuple[int, int]:
+    try:
+        if not _PIL_AVAILABLE:  # pragma: no cover
+            return 0, 0
+        with Image.open(path) as img:
+            return int(img.width), int(img.height)
+    except Exception:  # pragma: no cover
+        return 0, 0
 
 
 # ─── Limits (§14.927) ─────────────────────────────────────────────────────
@@ -391,23 +422,23 @@ class GalleryService:
     ) -> GalleryItem:
         proc = ImageProcessor()
         # Extract EXIF date BEFORE processing — ImageProcessor strips EXIF.
-        taken_at = self._extract_exif_date(data)
+        taken_at = await self._extract_exif_date(data)
 
         out_bytes, out_name = await proc.process(data, "upload")
-        self._save_to_disk(out_name, out_bytes)
+        await self._save_to_disk(out_name, out_bytes)
 
         # Delegate to ImageProcessor.generate_thumbnail — one path for all
         # WebP thumbnails (EXIF-aware, LANCZOS, THUMBNAIL_WEBP_QUALITY).
         try:
             thumb_bytes = await proc.generate_thumbnail(out_bytes)
             thumb_name = f"{uuid.uuid4().hex}.webp"
-            self._save_to_disk(thumb_name, thumb_bytes)
+            await self._save_to_disk(thumb_name, thumb_bytes)
             thumbnail_url = f"api/media/{thumb_name}"
         except ValueError as exc:
             log.warning("gallery: photo thumbnail failed, using primary: %s", exc)
             thumbnail_url = f"api/media/{out_name}"
 
-        w, h = self._read_dims(self._media_dir / out_name)
+        w, h = await self._read_dims(self._media_dir / out_name)
         return GalleryItem(
             id=uuid.uuid4().hex,
             album_id=album_id,
@@ -435,13 +466,13 @@ class GalleryService:
     ) -> GalleryItem:
         proc = VideoProcessor()
         out_bytes, out_name = await proc.process(data, "upload.mp4")
-        self._save_to_disk(out_name, out_bytes)
+        await self._save_to_disk(out_name, out_bytes)
 
         # Extract a WebP thumbnail from the first video frame.
         thumb_name = f"{uuid.uuid4().hex}.webp"
         try:
             thumb_bytes = await proc.generate_thumbnail(data)
-            self._save_to_disk(thumb_name, thumb_bytes)
+            await self._save_to_disk(thumb_name, thumb_bytes)
         except (RuntimeError, ValueError) as exc:
             log.warning("gallery: video thumbnail extraction failed: %s", exc)
 
@@ -461,37 +492,17 @@ class GalleryService:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    def _save_to_disk(self, filename: str, payload: bytes) -> None:
-        self._media_dir.mkdir(parents=True, exist_ok=True)
-        (self._media_dir / filename).write_bytes(payload)
+    async def _save_to_disk(self, filename: str, payload: bytes) -> None:
+        await aiofiles.os.makedirs(self._media_dir, exist_ok=True)
+        async with aiofiles.open(self._media_dir / filename, "wb") as f:
+            await f.write(payload)
 
-    @staticmethod
-    def _extract_exif_date(data: bytes) -> str | None:
+    async def _extract_exif_date(self, data: bytes) -> str | None:
         """Pull DateTimeOriginal as ``YYYY-MM-DD`` (day precision only)."""
-        if not _PIL_AVAILABLE:
-            return None
-        try:
-            img = Image.open(io.BytesIO(data))
-            exif = img.getexif()
-            if not exif:
-                return None
-            for tag_id, val in exif.items():
-                if ExifTags.TAGS.get(tag_id) == "DateTimeOriginal":
-                    parts = str(val).split(" ", 1)[0].replace(":", "-")
-                    return parts
-        except Exception:
-            return None
-        return None
+        return await asyncio.to_thread(_extract_exif_date_sync, data)
 
-    @staticmethod
-    def _read_dims(path: pathlib.Path) -> tuple[int, int]:
-        try:
-            if not _PIL_AVAILABLE:  # pragma: no cover
-                return 0, 0
-            with Image.open(path) as img:
-                return int(img.width), int(img.height)
-        except Exception:  # pragma: no cover
-            return 0, 0
+    async def _read_dims(self, path: pathlib.Path) -> tuple[int, int]:
+        return await asyncio.to_thread(_read_dims_sync, path)
 
     # ─── Internals: cover / permissions ───────────────────────────────────
 

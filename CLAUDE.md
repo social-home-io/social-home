@@ -45,11 +45,38 @@ The spec is the source of truth — if code and spec disagree, fix the code.
   body should only orchestrate, not enumerate.
 - **Async everywhere:** all I/O is `async def`. Never use `time.sleep()` —
   use `asyncio.sleep()`. Never call blocking I/O without `run_in_executor`.
+- **Filesystem I/O goes through `aiofiles`** — never `open(...)`,
+  `Path.read_bytes/write_bytes/read_text/write_text`, `Path.is_file/exists/stat`,
+  `Path.mkdir/unlink/replace`, or `shutil.*` inside an `async def`. The
+  async equivalents live in `aiofiles` (`aiofiles.open`) and `aiofiles.os`
+  (`aiofiles.os.path.isfile`, `.stat`, `.makedirs`, `.remove`, `.replace`).
+  Reference call sites: `routes/media.py`, `services/dm_media_sync_service.py`,
+  `services/federation_inbound_service.py` (DM media blob assembly),
+  `services/highlight_signaling_handler.py` (DataChannel streaming).
+- **CPU-bound work goes through `asyncio.to_thread`** — Pillow
+  decode/encode, QR PNG rendering, gzip / tarfile assembly, hashlib over
+  large buffers, anything that would burn ≥ tens of ms of CPU. Pattern is
+  `return await asyncio.to_thread(self._sync_helper, *args)` with the
+  blocking body extracted into a sibling sync method. Reference call
+  sites: `media/image_processor.py` (`process` / `generate_thumbnail`),
+  `media/video_processor.py` (PyAV transcode), `media/audio_processor.py`
+  (PyAV probe), `services/audio_transcription_service.py` (Opus → PCM16
+  decode), `services/backup_service.py` (`_build_tarball_bytes`,
+  `_read_restore_tar`), `global_server/public.py`
+  (`_render_qr_png_data_uri`), `services/gallery_service.py`
+  (`_extract_exif_date_sync`, `_read_dims_sync`).
 - **Schedulers follow the `asyncio.Event` lifecycle.** Every background loop
   takes the shape: `_stop: asyncio.Event` set in `stop()`, drained in `start()`,
   body is `while not self._stop.is_set()`. Reference template:
   `infrastructure/replay_cache_scheduler.py`. Do not introduce a `_running:
-  bool` flag instead — that pattern is gone from the codebase.
+  bool` flag instead — that pattern is gone from the codebase. Cluster /
+  heartbeat / discovery loops follow the same shape (see
+  `global_server/cluster.py:_heartbeat_loop`,
+  `services/public_space_discovery_service.py:_poll_loop`) — `cancel()`
+  alone is not a substitute, because it can rip the task out mid-DB-write
+  or mid-HTTP-request. The sole exception is a queue-driven worker that
+  uses a sentinel value (e.g. `db/database.py:_writer_loop`); document it
+  so a future reader doesn't "fix" it.
 
 ### Design patterns
 
@@ -496,6 +523,25 @@ perfect?" Incremental accuracy beats big bang rewrites.
   `_build_repos` / `_build_services` / `_build_middleware` factories
 - Never roll your own `_running: bool` scheduler loop — copy the
   `_stop: asyncio.Event` pattern from `replay_cache_scheduler.py`
+- Never call sync filesystem APIs (`open(...)`, `Path.read_bytes`,
+  `Path.write_bytes`, `Path.read_text`, `Path.write_text`, `Path.is_file`,
+  `Path.exists`, `Path.stat`, `Path.mkdir`, `Path.unlink`, `Path.replace`,
+  `shutil.*`) from inside an `async def`. Use `aiofiles.open` for
+  read/write and `aiofiles.os.*` (`makedirs`, `remove`, `replace`,
+  `stat`, `path.isfile`) for metadata. The whole DM media + highlight
+  streaming path was rewritten on top of this rule — any new code that
+  re-introduces a sync FS call is reverting a recent fix
+- Never run CPU-bound work (Pillow decode/encode, QR PNG render, gzip /
+  tarfile assembly, hashlib over a multi-MiB buffer, manual format
+  conversion) directly inside an `async def`. Extract the body into a
+  sync helper and call it through `asyncio.to_thread(...)`. Pillow in
+  particular: `media/image_processor.py` runs every upload through
+  `to_thread` — match that pattern when adding new image / video / audio
+  processing
+- Never close the event loop on a `time.sleep(...)` — use
+  `await asyncio.sleep(...)`. The single-line check matters because a
+  blocking sleep in a scheduler tick stalls every other coroutine for
+  the duration
 - Never create a new migration without incrementing the number
 - Never add / rename / remove a `FederationEventType` or an HTTP
   endpoint without updating the matching page in `docs/protocol/` or

@@ -30,6 +30,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+import aiofiles
+import aiofiles.os
 import aiohttp
 
 from ..crypto import b64url_encode, sign_ed25519
@@ -273,19 +275,19 @@ class HighlightSignalingHandler:
     async def _stream_frame(self, session_id: str, frame_row) -> None:
         sess = self._sessions[session_id]
         path = self._resolve_media_path(frame_row.media_url)
-        if path is None or not path.is_file():
+        if path is None or not await aiofiles.os.path.isfile(path):
             log.warning(
                 "highlight_signal: missing media for frame %s, sending error",
                 frame_row.id,
             )
             await sess.peer.send(framing.error_frame("expired"))
             return
-        size = path.stat().st_size
+        size = (await aiofiles.os.stat(path)).st_size
         chunk_index = 0
         sent = 0
-        with open(path, "rb") as fh:
+        async with aiofiles.open(path, "rb") as fh:
             while True:
-                buf = fh.read(framing.CHUNK_SIZE)
+                buf = await fh.read(framing.CHUNK_SIZE)
                 if not buf:
                     break
                 sent += len(buf)

@@ -83,6 +83,7 @@ class ClusterService:
         "_own_pk_hex",
         "_enabled",
         "_heartbeat_task",
+        "_stop",
         "_fail_counts",
         "_seen_relays",
         "_active_sync_count",
@@ -113,6 +114,7 @@ class ClusterService:
         self._own_pk_hex = own_public_key_hex
         self._enabled = enabled
         self._heartbeat_task: asyncio.Task | None = None
+        self._stop = asyncio.Event()
         self._fail_counts: dict[str, int] = {}
         #: 10-minute TTL dedup for relayed message ids.
         self._seen_relays: dict[str, float] = {}
@@ -170,16 +172,21 @@ class ClusterService:
         """
         if not self._enabled or not self._node_id:
             return
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            return
+        self._stop.clear()
         await self._announce_to_peers()
         loop = asyncio.get_running_loop()
         self._heartbeat_task = loop.create_task(self._heartbeat_loop())
 
     async def stop(self) -> None:
+        self._stop.set()
         if self._heartbeat_task is not None:
-            self._heartbeat_task.cancel()
             try:
-                await self._heartbeat_task
-            except asyncio.CancelledError, Exception:
+                await asyncio.wait_for(self._heartbeat_task, timeout=5.0)
+            except asyncio.TimeoutError, asyncio.CancelledError:
+                self._heartbeat_task.cancel()
+            except Exception:  # pragma: no cover
                 pass
             self._heartbeat_task = None
 
@@ -653,8 +660,15 @@ class ClusterService:
 
     async def _heartbeat_loop(self) -> None:
         try:
-            while True:
-                await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+            while not self._stop.is_set():
+                try:
+                    await asyncio.wait_for(
+                        self._stop.wait(),
+                        timeout=HEARTBEAT_INTERVAL_S,
+                    )
+                    return
+                except asyncio.TimeoutError:
+                    pass
                 rows = await self._repo.list_nodes()
                 for r in rows:
                     if r.status == "offline":
