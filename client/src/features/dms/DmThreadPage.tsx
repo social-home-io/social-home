@@ -470,27 +470,53 @@ export default function DmThreadPage() {
   // bottom" branch and don't bump the counter. Prepended older
   // history (from ``loadOlder``) doesn't change the tail message id
   // so the ``tailChanged`` discriminator skips it.
+  //
+  // The ``previousTail !== null`` guard is the belt-and-suspenders
+  // for "initial population isn't an arrival" — if any other effect
+  // ever sets ``stickToBottom = false`` before this effect runs on
+  // the first messages-loaded render (the anchor-scroll layout
+  // effect used to do exactly that), without the guard the counter
+  // would tick to 1 against an "arrival" that's just the freshly-
+  // mounted thread loading its own history. Same bug class as the
+  // chip-at-bottom regression — pinned defensively.
   useEffect(() => {
     const tailId = messages.value.length > 0
       ? messages.value[messages.value.length - 1].id
       : null
-    const tailChanged = tailId !== null && tailId !== lastTailMessageId.current
+    const previousTail = lastTailMessageId.current
+    const tailChanged =
+      tailId !== null
+      && previousTail !== null
+      && tailId !== previousTail
     lastTailMessageId.current = tailId
     if (!tailChanged || stickToBottom.current) return
     newSinceScrollUp.value += 1
   }, [messageCount])
 
-  // Entry-scroll effect — only meaningful when there's an unread
-  // anchor. With column-reverse, the no-anchor case is automatic:
-  // the browser lands the user at ``scrollTop=0`` (visual bottom =
-  // latest message). For the unread-anchor case we still need to
-  // bring the "New messages" divider into view, so we scroll up
-  // until the divider is at the top of the viewport. ``useLayoutEffect``
-  // runs after Preact's DOM mutations but before the browser paints,
-  // so the user never sees the intermediate scrollTop=0 frame
-  // (which would show the latest message instead of the divider).
+  // Entry-scroll layout effect — only meaningful when there's an
+  // unread anchor. With column-reverse, the no-anchor case is
+  // automatic: the browser lands the user at ``scrollTop=0`` (visual
+  // bottom = latest message). For the unread-anchor case we still
+  // need to bring the "New messages" divider into view, so we scroll
+  // up until the divider is at the top of the viewport.
+  // ``useLayoutEffect`` runs after Preact's DOM mutations but before
+  // the browser paints, so the user never sees the intermediate
+  // scrollTop=0 frame (which would show the latest message instead
+  // of the divider).
+  //
+  // The effect is deliberately limited to DOM reads + writes:
+  // ``scrollIntoView`` + ``stickToBottom.current``. Side effects
+  // (clearing the anchor, resetting the counter, posting the read
+  // watermark) live in the follow-up ``useEffect`` below — those
+  // don't belong in a paint-blocking layout phase.
   const anchor = unreadAnchor.value
+  /** Set by the layout effect when the entry-scroll landed at the
+   *  live edge — read by the follow-up effect to fire side effects.
+   *  A ref (not a signal) avoids an extra re-render between the
+   *  layout commit and the post-paint side-effect commit. */
+  const entryLandedAtLiveEdge = useRef(false)
   useLayoutEffect(() => {
+    entryLandedAtLiveEdge.current = false
     if (isLoading || !anchor) return
     const el = messagesScrollRef.current
     if (!el) return
@@ -511,17 +537,24 @@ export default function DmThreadPage() {
     // the single unread message is the latest one and the column-
     // reverse default already shows it at the visual bottom.
     stickToBottom.current = isAtLiveEdge(el)
-    // Anchor scroll landed us at the live edge — the unread message
-    // is in view. Clear the divider + counter and stamp the read
-    // watermark so the next entry starts clean. Without this the
-    // chip would still surface on the very next inbound message
-    // (the tail-tracking effect would bump it).
-    if (stickToBottom.current) {
-      newSinceScrollUp.value = 0
-      if (unreadAnchor.value) unreadAnchor.value = null
-      if (readReceiptsEnabled.value) {
-        api.post(`/api/conversations/${convId}/read`).catch(() => {})
-      }
+    entryLandedAtLiveEdge.current = stickToBottom.current
+  }, [convId, isLoading, anchor?.message_id])
+
+  // Follow-up to the layout effect above: when the entry-scroll
+  // landed us at the live edge, the unread message is already in
+  // view — clear the divider + counter and stamp the read watermark
+  // so the next entry starts clean. Without this the chip would
+  // still surface on the very next inbound message (the tail-
+  // tracking effect would bump it, even though the user has seen
+  // everything). Lives in a regular ``useEffect`` so the
+  // fire-and-forget ``api.post`` and signal writes happen *after*
+  // paint, not during the layout commit.
+  useEffect(() => {
+    if (!entryLandedAtLiveEdge.current) return
+    if (newSinceScrollUp.value !== 0) newSinceScrollUp.value = 0
+    if (unreadAnchor.value) unreadAnchor.value = null
+    if (readReceiptsEnabled.value) {
+      api.post(`/api/conversations/${convId}/read`).catch(() => {})
     }
   }, [convId, isLoading, anchor?.message_id])
 
