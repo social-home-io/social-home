@@ -6791,7 +6791,12 @@ body.sh-dm-thread-open .sh-messages {
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-md);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  z-index: 20;
+  /* ``--sh-z-modal`` (200) instead of the previous local ``20`` so
+   * the picker overlays the mobile bottom tab bar (z-index ``100``
+   * via ``--sh-z-dropdown``). Without this the "+ New store…"
+   * call-to-action — which sits at the bottom of the menu —
+   * disappears behind the tab bar on small viewports. */
+  z-index: var(--sh-z-modal);
 }
 .sh-shopping-store-picker__opt {
   width: 100%;
@@ -6840,8 +6845,11 @@ body.sh-dm-thread-open .sh-messages {
 @media (max-width: 640px) {
   /* Bottom-sheet shape on mobile. The picker pops from the bottom
    * edge of the viewport so the menu stays reachable even when the
-   * row is near the keyboard / nav bar; the scrim suppresses the
-   * underlying content's hover/tap noise while the picker is open. */
+   * row is near the keyboard / nav bar. ``z-index: var(--sh-z-modal)``
+   * (set on the desktop rule above) puts the sheet over the mobile
+   * tab bar, and the bottom padding leaves the tab bar's height as
+   * tap-target slack so a stray fingertip on the very bottom edge
+   * doesn't dismiss the sheet. */
   .sh-shopping-store-picker__menu {
     position: fixed;
     left: 0;
@@ -6859,6 +6867,52 @@ body.sh-dm-thread-open .sh-messages {
     min-height: 44px;
     font-size: var(--sh-font-size-md);
   }
+  .sh-shopping-store-picker__new {
+    padding: 8px 16px calc(env(safe-area-inset-bottom, 0) + 16px) 16px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .sh-shopping-store-picker__back {
+    align-self: flex-start;
+  }
+}
+
+/* ``new`` mode — the menu is replaced with an inline text input +
+ * Save button. No native ``window.prompt()`` so the picker stays the
+ * single surface the user is looking at (the old prompt closed the
+ * picker, popped a native dialog, and surprised mobile testers). */
+.sh-shopping-store-picker__new {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: 12px 16px;
+}
+.sh-shopping-store-picker__new-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  font-size: var(--sh-font-size-md);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  background: var(--sh-bg);
+  color: var(--sh-text);
+}
+.sh-shopping-store-picker__new-input:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 1px;
+  border-color: var(--sh-primary);
+}
+.sh-shopping-store-picker__back {
+  background: transparent;
+  border: none;
+  padding: 6px 8px;
+  margin: 0;
+  cursor: pointer;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-primary);
+}
+.sh-shopping-store-picker__back:hover {
+  text-decoration: underline;
 }
 
 /* Drag-drop visual feedback for the new item-between-stores flow.

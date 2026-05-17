@@ -140,6 +140,99 @@ describe('ShoppingPage', () => {
     )
   })
 
+  it('inline "+ New store…" creates a new store and assigns it in one go', async () => {
+    // Regression for the mobile-tested complaint: there used to be
+    // no way to add a new store without first picking it for an
+    // item via ``window.prompt()`` (poor mobile UX). The picker
+    // now swaps to an inline name-entry input on tap of "+ New
+    // store…"; Save fires ``onPick(name)`` which the store layer
+    // upserts into the catalogue + assigns to the item.
+    wireApi({
+      items: [{
+        id: 'i1', text: 'Eggs', store: null, completed: false,
+        created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1',
+      }],
+      stores: [{ name: 'Aldi', sort_order: 0 }],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-pill')).not.toBeNull()
+    })
+
+    // Open the picker.
+    fireEvent.click(container.querySelector('.sh-shopping-store-pill') as HTMLElement)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__menu')).not.toBeNull()
+    })
+
+    // Tap "+ New store…" → swap to ``new`` mode.
+    const newBtn = Array.from(
+      container.querySelectorAll('.sh-shopping-store-picker__opt'),
+    ).find(b => b.textContent?.includes('New store')) as HTMLElement
+    expect(newBtn).toBeTruthy()
+    fireEvent.click(newBtn)
+
+    // Inline input appears.
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__new-input'))
+        .not.toBeNull()
+    })
+
+    // Type a name + Enter → PATCH with new store.
+    const input = container.querySelector(
+      '.sh-shopping-store-picker__new-input',
+    ) as HTMLInputElement
+    fireEvent.input(input, { target: { value: 'Migros' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(apiPatch).toHaveBeenCalledWith(
+        '/api/shopping/i1',
+        { store: 'Migros' },
+      )
+    })
+  })
+
+  it('"← Back" returns from new-store input to the store list', async () => {
+    wireApi({
+      items: [{
+        id: 'i1', text: 'Eggs', store: null, completed: false,
+        created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1',
+      }],
+      stores: [{ name: 'Aldi', sort_order: 0 }],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-pill')).not.toBeNull()
+    })
+    fireEvent.click(container.querySelector('.sh-shopping-store-pill') as HTMLElement)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__menu')).not.toBeNull()
+    })
+    const newBtn = Array.from(
+      container.querySelectorAll('.sh-shopping-store-picker__opt'),
+    ).find(b => b.textContent?.includes('New store')) as HTMLElement
+    fireEvent.click(newBtn)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__new-input'))
+        .not.toBeNull()
+    })
+    const back = container.querySelector('.sh-shopping-store-picker__back') as HTMLElement
+    expect(back).toBeTruthy()
+    fireEvent.click(back)
+    await waitFor(() => {
+      // Back to list mode: the menu's ``<ul>`` returns.
+      expect(container.querySelector('.sh-shopping-store-picker__new-input'))
+        .toBeNull()
+      const opts = container.querySelectorAll('.sh-shopping-store-picker__opt')
+      expect(opts.length).toBeGreaterThan(0)
+    })
+  })
+
   it('store pill opens a picker; clicking a store calls PATCH with the new store', async () => {
     wireApi({
       items: [{
