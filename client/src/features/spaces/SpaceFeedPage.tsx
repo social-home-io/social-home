@@ -367,9 +367,10 @@ export default function SpaceFeedPage() {
 
       {activeTab.value === 'calendar' && (() => {
         const grouped = groupEventsByDay(spaceCalEvents.value)
-        const dayKeys = Object.keys(grouped).sort(
-          (a, b) => new Date(a).getTime() - new Date(b).getTime(),
-        )
+        // Keys are ``YYYY-MM-DD`` (see ``groupEventsByDay``) so a plain
+        // lexicographic sort is chronological — no locale-fragile
+        // ``new Date(key)`` round-trip required.
+        const dayKeys = Object.keys(grouped).sort()
         return (
           <div class="sh-calendar">
             <div class="sh-page-header">

@@ -300,7 +300,10 @@ export default function CalendarPage() {
   if (loading.value) return <CalendarSkeleton />
 
   const grouped = groupEventsByDay(events.value)
-  const dayKeys = Object.keys(grouped).sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+  // Keys are ``YYYY-MM-DD`` (see ``groupEventsByDay``) so a plain
+  // lexicographic sort is chronological — no locale-fragile
+  // ``new Date(key)`` round-trip required.
+  const dayKeys = Object.keys(grouped).sort()
 
   const setVisible = (next: Set<string>) => {
     visibleCalendarIds.value = next
