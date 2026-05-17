@@ -1,6 +1,10 @@
 # CLAUDE.md — socialhome
 
-This is the Claude Code instruction file for the Social Home core application.
+Canonical AI-agent instruction file for the Social Home core application.
+Also visible as `AGENTS.md`, `.cursorrules`, and
+`.github/copilot-instructions.md` — those are symlinks to this file so
+the three agent surfaces can't drift apart.
+
 Read spec_work.md (the project specification) before making any changes.
 The spec is the source of truth — if code and spec disagree, fix the code.
 
