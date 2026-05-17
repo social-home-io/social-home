@@ -56,6 +56,14 @@ function writeGroupPref(v: GroupPref) {
 
 const NO_STORE_KEY = '__no_store__'
 
+/** Distinguishes item drags from store-header drags in the same
+ *  drag-and-drop layer. Stamped on ``dataTransfer`` so a section's
+ *  drop handler can decide whether to reassign an item or reorder
+ *  stores. The string is opaque — we only look at the *presence* of
+ *  ``DRAG_ITEM_MIME``. */
+const DRAG_ITEM_MIME = 'application/x-sh-shopping-item'
+const DRAG_STORE_MIME = 'application/x-sh-shopping-store'
+
 export default function ShoppingPage() {
   useTitle('Shopping')
   const inputRef = useRef<HTMLInputElement | null>(null)
@@ -71,7 +79,16 @@ export default function ShoppingPage() {
   const [suggestHeld, setSuggestHeld] = useState(false)
   const [groupPref, setGroupPref] = useState<GroupPref>(readGroupPref())
   const [editingId, setEditingId] = useState<string | null>(null)
+  /** Currently-dragged store name (header drag), or ``null``. */
   const [dragStore, setDragStore] = useState<string | null>(null)
+  /** Currently-dragged item id (row drag), or ``null``. ``null`` and
+   *  ``dragStore=null`` together mean nothing is being dragged. The
+   *  two states are mutually exclusive: a single drag is *either* a
+   *  store reorder or an item reassign, never both. */
+  const [dragItemId, setDragItemId] = useState<string | null>(null)
+  /** Section currently hovered as a drop target while a row is being
+   *  dragged. Drives the section's drop-zone highlight. */
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
 
   // Suggest re-adding any completed item by name (existing pattern).
   const pastNames = useMemo(() => {
@@ -161,22 +178,32 @@ export default function ShoppingPage() {
     }
   }
 
-  const handleEditSave = async (
-    id: string,
-    nextText: string,
-    nextStore: string,
-  ) => {
+  /** Rename-only save path. The store assignment moved to the
+   *  ``StorePicker`` popover (single-tap on the row's store pill) so
+   *  this entry point doesn't need a second field. */
+  const handleEditSave = async (id: string, nextText: string) => {
     const trimmedText = nextText.trim()
     if (!trimmedText) return
-    const trimmedStore = nextStore.trim()
     try {
-      await updateItem(id, {
-        text: trimmedText,
-        store: trimmedStore || null,
-      })
+      await updateItem(id, { text: trimmedText })
       setEditingId(null)
     } catch (err: unknown) {
       showToast(`Update failed: ${(err as Error)?.message ?? err}`, 'error')
+    }
+  }
+
+  /** Reassign an item to a different store (or clear the store).
+   *  Drives both the StorePicker popover and the drag-and-drop path
+   *  in GroupedView — both call straight here. ``null`` clears the
+   *  store ("No store"). */
+  const handleReassignStore = async (
+    id: string,
+    nextStore: string | null,
+  ) => {
+    try {
+      await updateItem(id, { store: nextStore })
+    } catch (err: unknown) {
+      showToast(`Reassign failed: ${(err as Error)?.message ?? err}`, 'error')
     }
   }
 
@@ -195,7 +222,7 @@ export default function ShoppingPage() {
     }
   }
 
-  const handleDropOnStore = async (target: string) => {
+  const handleStoreHeaderDrop = async (target: string) => {
     if (!dragStore || dragStore === target) {
       setDragStore(null)
       return
@@ -251,10 +278,7 @@ export default function ShoppingPage() {
     writeGroupPref(next)
   }
 
-  // Datalist input id for the inline-edit store field. Putting it
-  // once at the page root keeps the DOM clean even when several
-  // rows mount editors over a session.
-  const storeListId = 'sh-shopping-store-suggest'
+  const storeNames = stores.value.map(s => s.name)
 
   return (
     <div class="sh-shopping">
@@ -322,14 +346,6 @@ export default function ShoppingPage() {
         </div>
       )}
 
-      {/* Single shared datalist for the inline-edit store input —
-          autosuggests every known catalogue name. */}
-      <datalist id={storeListId}>
-        {stores.value.map((s) => (
-          <option key={s.name} value={s.name} />
-        ))}
-      </datalist>
-
       {items.value.length === 0 ? (
         <div class="sh-empty-state">
           <div aria-hidden="true">🛒</div>
@@ -347,12 +363,18 @@ export default function ShoppingPage() {
           onToggle={handleToggle}
           onDelete={handleDelete}
           onClearCompleted={handleClearCompleted}
+          onReassignStore={handleReassignStore}
           onDragStoreStart={setDragStore}
-          onDropOnStore={handleDropOnStore}
+          onStoreHeaderDrop={handleStoreHeaderDrop}
           dragStore={dragStore}
           onMoveStore={handleMoveStore}
+          dragItemId={dragItemId}
+          onDragItemStart={setDragItemId}
+          onDragItemEnd={() => { setDragItemId(null); setDropTarget(null) }}
+          dropTarget={dropTarget}
+          onDropTargetChange={setDropTarget}
           userNameById={userNameById}
-          storeListId={storeListId}
+          storeNames={storeNames}
         />
       ) : (
         <FlatView
@@ -365,8 +387,9 @@ export default function ShoppingPage() {
           onToggle={handleToggle}
           onDelete={handleDelete}
           onClearCompleted={handleClearCompleted}
+          onReassignStore={handleReassignStore}
           userNameById={userNameById}
-          storeListId={storeListId}
+          storeNames={storeNames}
         />
       )}
     </div>
@@ -381,12 +404,13 @@ interface ViewProps {
   editingId: string | null
   onEditStart: (id: string) => void
   onEditCancel: () => void
-  onEditSave: (id: string, text: string, store: string) => void
+  onEditSave: (id: string, text: string) => void
   onToggle: (id: string, completed: boolean) => void
   onDelete: (id: string) => void
   onClearCompleted: () => void
+  onReassignStore: (id: string, nextStore: string | null) => void
   userNameById: (uid: string) => string
-  storeListId: string
+  storeNames: string[]
 }
 
 function FlatView(props: ViewProps) {
@@ -398,12 +422,15 @@ function FlatView(props: ViewProps) {
       isEditing={props.editingId === item.id}
       onEditStart={() => props.onEditStart(item.id)}
       onEditCancel={props.onEditCancel}
-      onEditSave={(t, s) => props.onEditSave(item.id, t, s)}
+      onEditSave={(t) => props.onEditSave(item.id, t)}
       onToggle={() => props.onToggle(item.id, item.completed)}
       onDelete={() => props.onDelete(item.id)}
+      onReassignStore={(s) => props.onReassignStore(item.id, s)}
       userNameById={props.userNameById}
-      storeListId={props.storeListId}
-      showStorePill
+      storeNames={props.storeNames}
+      draggable={false}
+      onDragItemStart={null}
+      onDragItemEnd={null}
     />
   )
   return (
@@ -436,9 +463,14 @@ function FlatView(props: ViewProps) {
 
 interface GroupedProps extends ViewProps {
   onDragStoreStart: (name: string | null) => void
-  onDropOnStore: (target: string) => void
+  onStoreHeaderDrop: (target: string) => void
   dragStore: string | null
   onMoveStore: (name: string, delta: number) => void
+  dragItemId: string | null
+  onDragItemStart: (id: string) => void
+  onDragItemEnd: () => void
+  dropTarget: string | null
+  onDropTargetChange: (target: string | null) => void
 }
 
 function GroupedView(props: GroupedProps) {
@@ -466,9 +498,18 @@ function GroupedView(props: GroupedProps) {
             ? !i.store
             : i.store === section.key,
         )
-        if (itemsHere.length === 0 && doneHere.length === 0) return null
+        // Hide a section only when it's completely empty AND no item
+        // drag is in flight — during an item drag every section needs
+        // to be a visible drop target, even ones that have no items
+        // yet, so the user can drag "Eggs" to a freshly-created store.
+        if (
+          itemsHere.length === 0
+          && doneHere.length === 0
+          && props.dragItemId === null
+        ) return null
         const isFirst = idx === 0
         const isLast = idx === stores.value.length - 1 // before "No store"
+        const isDropTarget = props.dropTarget === section.key
         return (
           <section
             key={section.key}
@@ -477,24 +518,61 @@ function GroupedView(props: GroupedProps) {
               (props.dragStore === section.key
                 ? 'sh-shopping-group--dragging '
                 : '') +
+              (isDropTarget ? 'sh-shopping-group--drop-target ' : '') +
               (section.key === NO_STORE_KEY ? 'sh-shopping-group--unassigned' : '')
             }
             onDragOver={(e) => {
-              if (props.dragStore && section.draggable) {
+              // Two drag shapes converge on the same dragover: store
+              // headers (existing reorder) and item rows (the new
+              // reassign path). Both must call preventDefault to make
+              // this element a valid drop target.
+              const types = e.dataTransfer?.types
+              const isItemDrag = !!types?.includes(DRAG_ITEM_MIME)
+              const isStoreDrag = !!types?.includes(DRAG_STORE_MIME)
+              if (isItemDrag) {
+                e.preventDefault()
+                if (props.dropTarget !== section.key) {
+                  props.onDropTargetChange(section.key)
+                }
+              } else if (isStoreDrag && section.draggable) {
                 e.preventDefault()
               }
             }}
+            onDragLeave={(e) => {
+              // ``dragleave`` fires when crossing into a child element
+              // too. Only clear the drop highlight when the cursor
+              // really left the section root.
+              if (e.currentTarget === e.target) {
+                if (props.dropTarget === section.key) {
+                  props.onDropTargetChange(null)
+                }
+              }
+            }}
             onDrop={(e) => {
-              if (!section.draggable) return
-              e.preventDefault()
-              props.onDropOnStore(section.key)
+              const types = e.dataTransfer?.types
+              if (types?.includes(DRAG_ITEM_MIME)) {
+                e.preventDefault()
+                const id = e.dataTransfer?.getData(DRAG_ITEM_MIME)
+                if (id) {
+                  props.onReassignStore(
+                    id,
+                    section.key === NO_STORE_KEY ? null : section.key,
+                  )
+                }
+                props.onDropTargetChange(null)
+              } else if (types?.includes(DRAG_STORE_MIME) && section.draggable) {
+                e.preventDefault()
+                props.onStoreHeaderDrop(section.key)
+              }
             }}
           >
             <header
               class="sh-shopping-group__header"
               draggable={section.draggable}
-              onDragStart={() => {
-                if (section.draggable) props.onDragStoreStart(section.key)
+              onDragStart={(e) => {
+                if (!section.draggable) return
+                e.dataTransfer?.setData(DRAG_STORE_MIME, section.key)
+                props.onDragStoreStart(section.key)
               }}
               onDragEnd={() => props.onDragStoreStart(null)}
             >
@@ -536,6 +614,17 @@ function GroupedView(props: GroupedProps) {
               )}
             </header>
 
+            {/* Empty-during-drag placeholder so a freshly-created
+             *  section without items still reads as a valid drop
+             *  target while the user is mid-drag. */}
+            {itemsHere.length === 0
+              && doneHere.length === 0
+              && props.dragItemId !== null && (
+              <div class="sh-shopping-group__droppad" aria-hidden="true">
+                Drop here to move into {section.label}
+              </div>
+            )}
+
             {itemsHere.length > 0 && (
               <ul class="sh-shopping-list sh-list-card">
                 {itemsHere.map((item) => (
@@ -546,12 +635,15 @@ function GroupedView(props: GroupedProps) {
                     isEditing={props.editingId === item.id}
                     onEditStart={() => props.onEditStart(item.id)}
                     onEditCancel={props.onEditCancel}
-                    onEditSave={(t, s) => props.onEditSave(item.id, t, s)}
+                    onEditSave={(t) => props.onEditSave(item.id, t)}
                     onToggle={() => props.onToggle(item.id, item.completed)}
                     onDelete={() => props.onDelete(item.id)}
+                    onReassignStore={(s) => props.onReassignStore(item.id, s)}
                     userNameById={props.userNameById}
-                    storeListId={props.storeListId}
-                    showStorePill={false}
+                    storeNames={props.storeNames}
+                    draggable={true}
+                    onDragItemStart={props.onDragItemStart}
+                    onDragItemEnd={props.onDragItemEnd}
                   />
                 ))}
               </ul>
@@ -566,12 +658,15 @@ function GroupedView(props: GroupedProps) {
                     isEditing={props.editingId === item.id}
                     onEditStart={() => props.onEditStart(item.id)}
                     onEditCancel={props.onEditCancel}
-                    onEditSave={(t, s) => props.onEditSave(item.id, t, s)}
+                    onEditSave={(t) => props.onEditSave(item.id, t)}
                     onToggle={() => props.onToggle(item.id, item.completed)}
                     onDelete={() => props.onDelete(item.id)}
+                    onReassignStore={(s) => props.onReassignStore(item.id, s)}
                     userNameById={props.userNameById}
-                    storeListId={props.storeListId}
-                    showStorePill={false}
+                    storeNames={props.storeNames}
+                    draggable={false}
+                    onDragItemStart={null}
+                    onDragItemEnd={null}
                   />
                 ))}
               </ul>
@@ -603,12 +698,20 @@ interface RowProps {
   isEditing: boolean
   onEditStart: () => void
   onEditCancel: () => void
-  onEditSave: (text: string, store: string) => void
+  onEditSave: (text: string) => void
   onToggle: () => void
   onDelete: () => void
+  onReassignStore: (nextStore: string | null) => void
   userNameById: (uid: string) => string
-  storeListId: string
-  showStorePill: boolean
+  storeNames: string[]
+  /** When true, the whole row carries HTML5 ``draggable=true`` so the
+   *  user can drag it onto another store section. Only set in the
+   *  grouped-view active list — completed items and the flat view
+   *  stay non-draggable so a reorder doesn't suggest an unsupported
+   *  meaning. */
+  draggable: boolean
+  onDragItemStart: ((id: string) => void) | null
+  onDragItemEnd: (() => void) | null
 }
 
 function ItemRow(props: RowProps) {
@@ -617,8 +720,6 @@ function ItemRow(props: RowProps) {
     <li class="sh-shopping-item sh-shopping-item--edit">
       <EditRow
         initialText={item.text}
-        initialStore={item.store ?? ''}
-        storeListId={props.storeListId}
         onSave={props.onEditSave}
         onCancel={props.onEditCancel}
       />
@@ -626,33 +727,54 @@ function ItemRow(props: RowProps) {
   )
 
   return (
-    <li class={'sh-shopping-item ' + (done ? 'sh-item--done' : '')}>
-      <label class="sh-shopping-item__main">
-        <input
-          type="checkbox"
-          checked={done}
-          onChange={props.onToggle}
-          aria-label={
-            done
-              ? `Put ${item.text} back on the list`
-              : `Mark ${item.text} as bought`
-          }
+    <li
+      class={'sh-shopping-item ' + (done ? 'sh-item--done' : '')}
+      draggable={props.draggable}
+      onDragStart={(e) => {
+        if (!props.draggable) return
+        e.dataTransfer?.setData(DRAG_ITEM_MIME, item.id)
+        // Force the move cursor — Chrome's default ``copy`` would
+        // suggest the wrong semantic (the item moves between stores,
+        // not gets duplicated).
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+        props.onDragItemStart?.(item.id)
+      }}
+      onDragEnd={() => props.onDragItemEnd?.()}
+    >
+      {/* Standalone checkbox button — no ``<label>`` wrapping the row
+       *  content. Clicking the box is the ONLY toggle action; clicks
+       *  on the text / pill / delete never accidentally check the
+       *  item off (the long-standing "I meant to edit but I marked
+       *  it done" trap). */}
+      <button
+        type="button"
+        class={
+          'sh-shopping-item__check '
+          + (done ? 'sh-shopping-item__check--done' : '')
+        }
+        onClick={props.onToggle}
+        aria-label={
+          done
+            ? `Put ${item.text} back on the list`
+            : `Mark ${item.text} as bought`
+        }
+        aria-pressed={done}
+      >
+        <span aria-hidden="true">{done ? '✓' : ''}</span>
+      </button>
+      <span
+        class="sh-shopping-item__text"
+        onClick={() => { if (!done) props.onEditStart() }}
+        title={done ? '' : 'Click to rename'}
+      >
+        {item.text}
+      </span>
+      {!done && (
+        <StorePicker
+          currentStore={item.store ?? null}
+          storeNames={props.storeNames}
+          onPick={props.onReassignStore}
         />
-        <span
-          class="sh-shopping-item__text"
-          onClick={(e) => {
-            e.preventDefault()
-            props.onEditStart()
-          }}
-          title="Click to edit"
-        >
-          {item.text}
-        </span>
-      </label>
-      {props.showStorePill && item.store && (
-        <span class="sh-shopping-store-pill" title={`Buy at ${item.store}`}>
-          <span aria-hidden="true">📍</span> {item.store}
-        </span>
       )}
       <div
         class="sh-shopping-item__meta"
@@ -681,25 +803,20 @@ function ItemRow(props: RowProps) {
 
 function EditRow({
   initialText,
-  initialStore,
-  storeListId,
   onSave,
   onCancel,
 }: {
   initialText: string
-  initialStore: string
-  storeListId: string
-  onSave: (text: string, store: string) => void
+  onSave: (text: string) => void
   onCancel: () => void
 }) {
   const [text, setText] = useState(initialText)
-  const [store, setStore] = useState(initialStore)
   const textRef = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
     textRef.current?.focus()
     textRef.current?.select()
   }, [])
-  const submit = () => onSave(text, store)
+  const submit = () => onSave(text)
   const cancel = () => onCancel()
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -721,16 +838,6 @@ function EditRow({
         onKeyDown={onKey}
         class="sh-shopping-edit__text"
       />
-      <input
-        type="text"
-        value={store}
-        list={storeListId}
-        placeholder="Store (optional)"
-        aria-label="Store"
-        onInput={(e) => setStore((e.target as HTMLInputElement).value)}
-        onKeyDown={onKey}
-        class="sh-shopping-edit__store"
-      />
       <Button type="button" onClick={submit} disabled={!text.trim()}>Save</Button>
       <button
         type="button"
@@ -739,6 +846,140 @@ function EditRow({
       >
         Cancel
       </button>
+    </div>
+  )
+}
+
+// ─── Store picker popover (replaces the second text input in EditRow) ──
+
+interface StorePickerProps {
+  /** Current store on the item, or ``null`` for "No store". */
+  currentStore: string | null
+  /** Household catalogue. Picker also offers "+ New store…" to extend
+   *  this list inline via prompt(). */
+  storeNames: string[]
+  onPick: (next: string | null) => void
+}
+
+/** One-tap reassign affordance on the item row.
+ *
+ *  Replaces the typing-required second text input that lived inside
+ *  ``EditRow``: the user no longer has to remember the store name or
+ *  enter rename mode at all to drop an item onto Migros. The button
+ *  surface stays a pill so it reads as paired metadata at rest; the
+ *  popover anchors to the bottom edge of the button. */
+function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  // Click-outside closes the menu. ``useLayoutEffect`` would be
+  // overkill — the menu is small enough that one async paint frame
+  // of stale state is invisible.
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current) return
+      if (!ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const pick = (next: string | null) => {
+    if (next !== currentStore) onPick(next)
+    setOpen(false)
+  }
+
+  const promptNew = () => {
+    setOpen(false)
+    const name = window.prompt('New store name')?.trim()
+    if (!name) return
+    onPick(name)
+  }
+
+  const label = currentStore || 'Set store'
+
+  return (
+    <div class="sh-shopping-store-picker" ref={ref}>
+      <button
+        type="button"
+        class={
+          'sh-shopping-store-pill '
+          + (currentStore ? '' : 'sh-shopping-store-pill--empty')
+        }
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={currentStore ? `At ${currentStore} — tap to change` : 'Tap to set a store'}
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen((v) => !v)
+        }}
+      >
+        <span aria-hidden="true">📍</span>
+        <span>{label}</span>
+        <span aria-hidden="true" class="sh-shopping-store-pill__chev">▾</span>
+      </button>
+      {open && (
+        <ul class="sh-shopping-store-picker__menu" role="menu">
+          {storeNames.length === 0 && (
+            <li class="sh-shopping-store-picker__empty" role="presentation">
+              No stores yet — add one below.
+            </li>
+          )}
+          {storeNames.map((name) => (
+            <li key={name} role="none">
+              <button
+                type="button"
+                role="menuitem"
+                class={
+                  'sh-shopping-store-picker__opt '
+                  + (currentStore === name ? 'sh-shopping-store-picker__opt--current' : '')
+                }
+                onClick={() => pick(name)}
+              >
+                {name}
+                {currentStore === name && (
+                  <span aria-hidden="true" class="sh-shopping-store-picker__check">✓</span>
+                )}
+              </button>
+            </li>
+          ))}
+          <li role="separator" class="sh-shopping-store-picker__sep" />
+          <li role="none">
+            <button
+              type="button"
+              role="menuitem"
+              class={
+                'sh-shopping-store-picker__opt '
+                + (currentStore === null ? 'sh-shopping-store-picker__opt--current' : '')
+              }
+              onClick={() => pick(null)}
+            >
+              No store
+              {currentStore === null && (
+                <span aria-hidden="true" class="sh-shopping-store-picker__check">✓</span>
+              )}
+            </button>
+          </li>
+          <li role="none">
+            <button
+              type="button"
+              role="menuitem"
+              class="sh-shopping-store-picker__opt sh-shopping-store-picker__opt--new"
+              onClick={promptNew}
+            >
+              + New store…
+            </button>
+          </li>
+        </ul>
+      )}
     </div>
   )
 }

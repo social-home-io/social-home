@@ -3383,16 +3383,16 @@ a.sh-friends-member-chip:hover {
   background: var(--sh-bg);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-lg);
-  /* ``overflow: clip`` instead of the older ``overflow: hidden``: same
-   * rounded-corner clipping for child hover backgrounds, but ``clip``
-   * doesn't establish a scroll container — so the
-   * ``.sh-space-subheader`` first-child stays in normal flow on
-   * initial render instead of pinning itself to its sticky offset
-   * and stacking on top of the first chat row. The bug surfaced when
-   * a user had only a single conversation: the only row was completely
-   * hidden behind the sticky tab strip. */
-  overflow: clip;
   box-shadow: var(--sh-shadow-xs);
+}
+/* DM list uses ``overflow: clip`` (the older ``overflow: hidden``
+ * causes the sticky ``.sh-space-subheader`` first-child to pin
+ * itself early and stack on top of the first chat row when there's
+ * only one conversation). The shopping list deliberately stays at
+ * the default ``visible`` so the per-row ``StorePicker`` popover
+ * isn't clipped to the list's rounded corners. */
+.sh-dms, .sh-dm-list {
+  overflow: clip;
 }
 .sh-dm-row {
   display: flex;
@@ -6552,18 +6552,55 @@ body.sh-dm-thread-open .sh-messages {
   display: flex;
   align-items: center;
   gap: var(--sh-space-sm);
-  padding: var(--sh-space-sm) 0;
+  /* Horizontal inset so the round checkbox + ✕ delete don't sit
+   * flush against the card edge. ``--sh-space-md`` keeps the row
+   * visually aligned with the section header (which also pads
+   * to ``--sh-space-md`` on the left). */
+  padding: var(--sh-space-sm) var(--sh-space-md);
   border-bottom: 1px dashed var(--sh-border);
   transition: background-color 120ms;
 }
 .sh-shopping-list li:last-child { border-bottom: none; }
-.sh-shopping-item__main {
-  flex: 1;
-  display: flex; gap: var(--sh-space-sm);
-  align-items: center; margin: 0;
-  cursor: pointer; min-width: 0;
+/* Standalone checkbox button. Replaces the old <label> wrap so the
+ * checkbox and text never share a click target — clicking the item
+ * text used to forward to the label's default behavior (toggle done)
+ * AND the span's onClick (start edit), producing the "I meant to
+ * edit but I marked it done" trap. Now the check is its own
+ * ≥36×36 button surface; everything else on the row is a separate
+ * tap target. */
+.sh-shopping-item__check {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1.5px solid var(--sh-border);
+  background: var(--sh-bg);
+  color: var(--sh-primary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 120ms, border-color 120ms, color 120ms;
+  padding: 0;
+}
+.sh-shopping-item__check:hover {
+  border-color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+}
+.sh-shopping-item__check:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+}
+.sh-shopping-item__check--done {
+  background: var(--sh-primary);
+  border-color: var(--sh-primary);
+  color: var(--sh-on-primary, #fff);
 }
 .sh-shopping-item__text {
+  flex: 1;
+  min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sh-shopping-item__meta {
@@ -6686,9 +6723,10 @@ body.sh-dm-thread-open .sh-messages {
   cursor: not-allowed;
 }
 
-/* Store pill on the flat (ungrouped) item row. Same mono-byline
- * shape as the "+ user" meta to read as paired metadata, with the
- * calendar-location pin glyph for instant recognition. */
+/* Store pill on the item row. Used to be plain metadata; now it's
+ * a button that opens the StorePicker popover — one tap to
+ * reassign, no typing. The chevron + interactive states call out
+ * the click affordance. */
 .sh-shopping-store-pill {
   font: 500 calc(var(--sh-font-size-xs) - 1px) / 1.2
         ui-monospace, Menlo, Consolas, monospace;
@@ -6696,14 +6734,160 @@ body.sh-dm-thread-open .sh-messages {
   text-transform: uppercase;
   color: var(--sh-primary);
   background: color-mix(in srgb, var(--sh-primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sh-primary) 25%, transparent);
   border-radius: var(--sh-radius-full);
-  padding: 2px 8px;
+  padding: 4px 10px;
   white-space: nowrap;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  cursor: pointer;
+  min-height: 28px;
+  transition: background-color 120ms, border-color 120ms;
 }
+.sh-shopping-store-pill:hover {
+  background: color-mix(in srgb, var(--sh-primary) 18%, transparent);
+  border-color: color-mix(in srgb, var(--sh-primary) 45%, transparent);
+}
+.sh-shopping-store-pill--empty {
+  color: var(--sh-text-muted);
+  background: transparent;
+  border-color: var(--sh-border);
+}
+.sh-shopping-store-pill--empty:hover {
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  color: var(--sh-primary);
+  border-color: color-mix(in srgb, var(--sh-primary) 30%, transparent);
+}
+.sh-shopping-store-pill__chev {
+  font-size: 9px;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+
+/* StorePicker popover anchored under the store pill. The picker is
+ * a one-tap reassign affordance — replaces the typing-required
+ * second text input that lived inside EditRow. On desktop it floats
+ * as a small menu; on mobile (≤640 px) it docks to the bottom edge
+ * of the screen as a sheet so the touch target stays reachable
+ * even when the row sits near the keyboard. */
+.sh-shopping-store-picker {
+  position: relative;
+  flex-shrink: 0;
+}
+.sh-shopping-store-picker__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 200px;
+  max-width: 280px;
+  max-height: 60vh;
+  overflow-y: auto;
+  list-style: none;
+  padding: 4px 0;
+  margin: 0;
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 20;
+}
+.sh-shopping-store-picker__opt {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 36px;
+}
+.sh-shopping-store-picker__opt:hover,
+.sh-shopping-store-picker__opt:focus-visible {
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  outline: none;
+}
+.sh-shopping-store-picker__opt--current {
+  color: var(--sh-primary);
+  font-weight: 600;
+}
+.sh-shopping-store-picker__opt--new {
+  color: var(--sh-primary);
+  border-top: 1px solid var(--sh-border);
+  margin-top: 2px;
+  padding-top: 12px;
+}
+.sh-shopping-store-picker__check {
+  color: var(--sh-primary);
+}
+.sh-shopping-store-picker__sep {
+  height: 1px;
+  background: var(--sh-border);
+  margin: 4px 0;
+}
+.sh-shopping-store-picker__empty {
+  padding: 10px 14px;
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  font-style: italic;
+}
+@media (max-width: 640px) {
+  /* Bottom-sheet shape on mobile. The picker pops from the bottom
+   * edge of the viewport so the menu stays reachable even when the
+   * row is near the keyboard / nav bar; the scrim suppresses the
+   * underlying content's hover/tap noise while the picker is open. */
+  .sh-shopping-store-picker__menu {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    max-width: 100%;
+    max-height: 70vh;
+    border-radius: var(--sh-radius-md) var(--sh-radius-md) 0 0;
+    padding: 8px 0 calc(env(safe-area-inset-bottom, 0) + 12px) 0;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.16);
+  }
+  .sh-shopping-store-picker__opt {
+    padding: 14px 18px;
+    min-height: 44px;
+    font-size: var(--sh-font-size-md);
+  }
+}
+
+/* Drag-drop visual feedback for the new item-between-stores flow.
+ * A section the user is hovering during an item drag gets a clear
+ * dashed-outline highlight + warmer fill so the drop target is
+ * unambiguous; an empty section also renders a "Drop here…" pad
+ * so a fresh / no-items section can still receive a drop. */
+.sh-shopping-group--drop-target > .sh-shopping-group__header,
+.sh-shopping-group--drop-target > .sh-shopping-list {
+  outline: 2px dashed var(--sh-primary);
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--sh-primary) 12%, transparent);
+}
+.sh-shopping-group__droppad {
+  margin: var(--sh-space-xs) 0;
+  padding: var(--sh-space-md);
+  border: 2px dashed var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  text-align: center;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text-muted);
+}
+.sh-shopping-group--drop-target .sh-shopping-group__droppad {
+  border-color: var(--sh-primary);
+  color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+}
+.sh-shopping-item[draggable="true"] { cursor: grab; }
+.sh-shopping-item[draggable="true"]:active { cursor: grabbing; }
 
 /* Inline editor — text + store + Save / Cancel laid out on one row
  * (wraps on mobile). The row's background gets a faint focus ring
@@ -6721,7 +6905,6 @@ body.sh-dm-thread-open .sh-messages {
   align-items: center;
 }
 .sh-shopping-edit__text { flex: 2 1 200px; }
-.sh-shopping-edit__store { flex: 1 1 140px; }
 .sh-shopping-edit__cancel { flex-shrink: 0; }
 
 /* Click affordance on the item text — only meaningful for the
@@ -8353,7 +8536,7 @@ hr {
   padding: var(--sh-space-sm) var(--sh-space-md);
   border-radius: var(--sh-radius-md);
   border: 1px solid var(--sh-border);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   color: var(--sh-text);
   font: inherit;
 }
@@ -12975,7 +13158,7 @@ a.sh-welcome-card:hover {
   border-radius: var(--sh-radius-lg);
   overflow: hidden;
   border: 1px solid var(--sh-border);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
 }
 .sh-location-map__canvas {
   width: 100%;
@@ -12992,7 +13175,7 @@ a.sh-welcome-card:hover {
   width: 36px; height: 36px;
   border-radius: 50%;
   border: 3px solid #22c55e;
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   color: white;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
   display: flex; align-items: center; justify-content: center;
@@ -13051,7 +13234,7 @@ a.sh-welcome-card:hover {
   padding: var(--sh-space-xs) var(--sh-space-md);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-pill);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   color: inherit; cursor: pointer;
   font: inherit;
   transition: background-color 120ms, border-color 120ms;
@@ -13163,7 +13346,7 @@ a.sh-welcome-card:hover {
   padding: var(--sh-space-sm) var(--sh-space-md);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-md);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   color: inherit;
 }
 .sh-browser-tabs {
@@ -13580,7 +13763,7 @@ a.sh-welcome-card:hover {
   padding: var(--sh-space-xs) var(--sh-space-sm);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-sm);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   color: inherit;
   font-family: inherit;
   font-size: inherit;
@@ -15989,7 +16172,7 @@ a.sh-btn--ghost:hover {
   padding: var(--sh-space-sm) var(--sh-space-md);
   font: inherit;
   color: var(--sh-text);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-sm);
 }
@@ -16011,7 +16194,7 @@ a.sh-btn--ghost:hover {
   align-items: start;
   gap: var(--sh-space-sm);
   padding: var(--sh-space-md);
-  background: var(--sh-surface);
+  background: var(--sh-bg);
   border: 1px solid var(--sh-border);
   border-radius: var(--sh-radius-md);
 }
