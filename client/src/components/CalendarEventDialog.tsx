@@ -431,9 +431,10 @@ export function CalendarEventDialog({ onCreated }: {
           <input
             type="date"
             value={startDate.value}
-            onInput={(e) =>
-              (startDate.value = (e.target as HTMLInputElement).value)
-            }
+            onInput={(e) => {
+              startDate.value = (e.target as HTMLInputElement).value
+              syncEndToStart()
+            }}
           />
         </label>
         {!allDay.value && (
@@ -442,9 +443,10 @@ export function CalendarEventDialog({ onCreated }: {
             <input
               type="time"
               value={startTime.value}
-              onInput={(e) =>
-                (startTime.value = (e.target as HTMLInputElement).value)
-              }
+              onInput={(e) => {
+                startTime.value = (e.target as HTMLInputElement).value
+                syncEndToStart()
+              }}
             />
           </label>
         )}
@@ -634,6 +636,31 @@ function _mintEventUuid(): string {
   const chunk = () =>
     Math.floor(Math.random() * 0x1_0000_0000_0000).toString(16).padStart(13, '0')
   return (chunk() + chunk() + chunk()).slice(0, 32)
+}
+
+/** Keep ``end ≥ start`` whenever the start fields change. Picking a
+ *  start date past the current end (e.g. opening the dialog at default
+ *  ``today + 1h`` and then jumping the start to next month) would
+ *  otherwise leave the end input "in the past" relative to the new
+ *  start and force the user into a second pick. Same logic guards
+ *  the same-day case where the user nudges start_time past end_time.
+ *
+ *  Lexicographic compares are safe: ``YYYY-MM-DD`` and ``HH:MM``
+ *  strings both sort chronologically. Exported for unit tests — the
+ *  module-level signals are kept private. */
+export function syncEndToStart(): void {
+  if (!startDate.value) return
+  if (endDate.value && endDate.value < startDate.value) {
+    endDate.value = startDate.value
+  }
+  if (
+    endDate.value === startDate.value
+    && startTime.value
+    && endTime.value
+    && endTime.value < startTime.value
+  ) {
+    endTime.value = startTime.value
+  }
 }
 
 function ownerDisplayName(owner_username: string): string {

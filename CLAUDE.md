@@ -226,33 +226,64 @@ References:
 
 ### Visually verifying UI changes
 
-Every change that touches SPA chrome — layout, components, CSS,
-copy — **must be visually verified on both desktop and mobile
-viewports** using the `chrome-devtools-mcp:chrome-devtools` skill
-before the PR is opened. Type-checking and Vitest cover code
-correctness, not visual correctness — a button can pass `tsc` +
-tests and still bleed off-screen on a 360 px phone or stack
-vertically on desktop. Walk through the touched surface in both
-shapes:
+**Every change that touches the SPA — layout, components, CSS,
+copy, dialog flow, form interactions, anything a user can see or
+click — MUST be both (a) visually verified in Chrome on desktop
+*and* mobile viewports AND (b) walked through as a UX review pass
+before the PR is opened.** This is not "if the change feels
+visual"; it is every change that mounts a component, mutates the
+DOM, or alters user-facing copy. Type-checking and Vitest cover
+code correctness, not visual or UX correctness — a button can pass
+`tsc` + tests and still bleed off-screen on a 360 px phone, stack
+vertically on desktop, leave a date input stranded in the past,
+or make the user fight a default they'd never have picked.
 
-- **Desktop** at the default ~1280×720 viewport — confirm the
-  layout reads as designed, nothing overflows the column, hover
-  states do what they say, focus rings land where keyboard users
-  expect them.
+Use the `chrome-devtools-mcp:chrome-devtools` skill against a
+local `pnpm dev` boot. `resize_page` flips between sizes; reuse
+the same browser tab so you compare the same state.
+
+**Both viewports are mandatory:**
+
+- **Desktop** at ~1280×720 — confirm the layout reads as designed,
+  nothing overflows the column, hover states do what they say,
+  focus rings land where keyboard users expect them.
 - **Mobile** at ~390×844 (iPhone 14 / Pixel-class) — confirm the
   strip / chip / form wraps correctly, tap targets stay ≥ 36 px
   tall, horizontal scroll doesn't appear on body content, text
   doesn't get clipped, sticky chrome doesn't cover the active
   control.
 
-The skill spins up Chrome via MCP and exposes `navigate_page` /
-`resize_page` / `take_screenshot` / `take_snapshot`. Use it
-against the local dev server (`pnpm dev` in `client/`); use
-`resize_page` to flip between desktop and mobile sizes, take a
-screenshot of each touched surface, and read the DOM snapshot for
-anything keyboard-focusable. If the dev server can't be reached
-(sandbox, offline), say so explicitly in the PR description rather
-than claiming visual verification — the missing screenshots are
+**The UX review pass is mandatory too.** Visual verification
+proves "the pixels rendered." UX review proves "a real person
+trying to use this gets through it cleanly." Before opening the
+PR, walk the touched surface yourself with the user's goal in
+mind and ask:
+
+- **Defaults:** is the pre-filled state what the user actually
+  wants 90% of the time? (e.g. when a start date moves past the
+  end date, does the end follow automatically?)
+- **Error / empty states:** what does the user see when the
+  network fails, the list is empty, the input is invalid? Is the
+  next action obvious from that state alone?
+- **Discoverability:** can a first-time user find the new
+  control without being told it's there? Is the affordance
+  (button vs link vs chip) honest about what happens on click?
+- **Recovery:** if the user makes the wrong choice, how do they
+  back out? Is "undo" or "edit" reachable in one click?
+- **Cross-state coherence:** does the change look right when the
+  surrounding state is *different* (no events, one event, many
+  events; mobile keyboard up; long copy in another language;
+  RTL)?
+- **Keyboard / a11y:** can a keyboard-only or screen-reader user
+  reach and operate the new control? Do focus rings render
+  somewhere visible against the surface tint?
+
+Take screenshots of both viewports + a short note (in the PR
+description) on what the UX review surfaced and how you handled
+it. "No issues" is a valid outcome but you must have actually
+looked. If the dev server can't be reached (sandbox, offline),
+say so explicitly in the PR description rather than claiming
+verification — the missing screenshots / review notes are
 themselves the signal that a reviewer should reproduce locally
 before merging.
 
