@@ -7,6 +7,8 @@ import mimetypes
 import pathlib
 import uuid
 
+import aiofiles
+import aiofiles.os
 from aiohttp import web
 from aiohttp.multipart import BodyPartReader
 
@@ -98,16 +100,17 @@ class MediaServeView(BaseView):
             return error_response(400, "BAD_REQUEST", "Invalid filename.")
 
         file_path = pathlib.Path(config.media_path) / filename
-        if not file_path.exists() or not file_path.is_file():
+        if not await aiofiles.os.path.isfile(file_path):
             return error_response(404, "NOT_FOUND", "Media file not found.")
 
         content_type, _ = mimetypes.guess_type(str(file_path))
         if not content_type:
             content_type = "application/octet-stream"
 
+        stat_result = await aiofiles.os.stat(file_path)
         headers = {
             "Content-Disposition": f'inline; filename="{filename}"',
-            "Content-Length": str(file_path.stat().st_size),
+            "Content-Length": str(stat_result.st_size),
             "Cache-Control": "private, max-age=86400",
         }
 
@@ -117,9 +120,9 @@ class MediaServeView(BaseView):
         )
         await response.prepare(self.request)
 
-        with open(file_path, "rb") as fh:
+        async with aiofiles.open(file_path, "rb") as fh:
             while True:
-                chunk = fh.read(64 * 1024)
+                chunk = await fh.read(64 * 1024)
                 if not chunk:
                     break
                 await response.write(chunk)
@@ -233,9 +236,10 @@ class MediaUploadView(BaseView):
             return error_response(503, "SERVICE_UNAVAILABLE", str(exc))
 
         media_dir = pathlib.Path(config.media_path)
-        media_dir.mkdir(parents=True, exist_ok=True)
+        await aiofiles.os.makedirs(media_dir, exist_ok=True)
         dest = media_dir / out_name
-        dest.write_bytes(out_bytes)
+        async with aiofiles.open(dest, "wb") as f:
+            await f.write(out_bytes)
 
         url = f"api/media/{out_name}"
         # The composer needs a URL it can drop straight into ``<img src>``

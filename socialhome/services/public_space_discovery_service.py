@@ -63,7 +63,7 @@ class PublicSpaceDiscoveryService:
         "_cache_ttl",
         "_http_client",
         "_task",
-        "_running",
+        "_stop",
         "_refresh_event",
     )
 
@@ -82,7 +82,7 @@ class PublicSpaceDiscoveryService:
         self._cache_ttl = cache_ttl_hours
         self._http_client: aiohttp.ClientSession | None = http_client
         self._task: asyncio.Task | None = None
-        self._running = False
+        self._stop = asyncio.Event()
         self._refresh_event: asyncio.Event | None = None
 
     def attach_session(self, session: aiohttp.ClientSession) -> None:
@@ -98,9 +98,11 @@ class PublicSpaceDiscoveryService:
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        if self._running or self._gfs_connection_repo is None:
+        if self._gfs_connection_repo is None:
             return
-        self._running = True
+        if self._task is not None and not self._task.done():
+            return
+        self._stop.clear()
         self._refresh_event = asyncio.Event()
         loop = asyncio.get_running_loop()
         self._task = loop.create_task(
@@ -109,16 +111,15 @@ class PublicSpaceDiscoveryService:
         )
 
     async def stop(self) -> None:
-        self._running = False
+        self._stop.set()
         if self._refresh_event is not None:
             # Unblock any pending wait inside the poll loop so it can exit.
             self._refresh_event.set()
         if self._task is not None:
-            self._task.cancel()
             try:
-                await self._task
-            except asyncio.CancelledError, Exception:
-                pass
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except asyncio.TimeoutError, asyncio.CancelledError:
+                self._task.cancel()
             self._task = None
 
     async def refresh_now(self) -> None:
@@ -163,11 +164,13 @@ class PublicSpaceDiscoveryService:
     # ─── Internals ────────────────────────────────────────────────────────
 
     async def _poll_loop(self) -> None:
-        while self._running:
+        while not self._stop.is_set():
             try:
                 await self.poll_once()
             except Exception:
                 log.exception("public_space_discovery: poll tick failed")
+            if self._stop.is_set():
+                return
             try:
                 if self._refresh_event is not None:
                     try:
@@ -180,7 +183,12 @@ class PublicSpaceDiscoveryService:
                     finally:
                         self._refresh_event.clear()
                 else:
-                    await asyncio.sleep(self._poll_interval)
+                    await asyncio.wait_for(
+                        self._stop.wait(),
+                        timeout=self._poll_interval,
+                    )
+            except asyncio.TimeoutError:
+                continue
             except asyncio.CancelledError:
                 return
 

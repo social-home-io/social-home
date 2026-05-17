@@ -301,3 +301,26 @@ async def test_apply_partition_gap_drops_invalid_range(enabled_cluster):
         {"space_id": "sp-1", "gap_start": 200.0, "gap_end": 100.0},
     )
     assert enabled_cluster.pending_partition_gaps() == []
+
+
+# ─── Heartbeat scheduler lifecycle ────────────────────────────────────────
+
+
+async def test_heartbeat_start_then_stop_exits_via_stop_event(enabled_cluster):
+    """``stop()`` must drain the heartbeat loop via ``_stop``, not bare cancel."""
+    await enabled_cluster.start()
+    task = enabled_cluster._heartbeat_task
+    assert task is not None and not task.done()
+    await enabled_cluster.stop()
+    assert enabled_cluster._heartbeat_task is None
+    # Task exited cleanly via the stop event — it should not be cancelled.
+    assert task.done() and not task.cancelled()
+
+
+async def test_heartbeat_start_is_idempotent(enabled_cluster):
+    """A second ``start()`` while the first task is alive is a no-op."""
+    await enabled_cluster.start()
+    first_task = enabled_cluster._heartbeat_task
+    await enabled_cluster.start()
+    assert enabled_cluster._heartbeat_task is first_task
+    await enabled_cluster.stop()

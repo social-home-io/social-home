@@ -16,6 +16,7 @@ admin nuking a populated household by mistake.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -23,6 +24,8 @@ import tarfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+import aiofiles.os
 
 from ..db import AsyncDatabase
 
@@ -149,18 +152,32 @@ class BackupService:
         very large exports the route handler can stream to disk via
         :meth:`export_to_path`.
         """
-        buf = io.BytesIO()
-        await self._write_tar(buf)
-        return buf.getvalue()
+        manifest_payload, table_payloads = await self._collect_export_payloads()
+        return await asyncio.to_thread(
+            self._build_tarball_bytes, manifest_payload, table_payloads
+        )
 
     async def export_to_path(self, target: str | Path) -> Path:
         target_path = Path(target)
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        with target_path.open("wb") as f:
-            await self._write_tar(f)
+        await aiofiles.os.makedirs(target_path.parent, exist_ok=True)
+        manifest_payload, table_payloads = await self._collect_export_payloads()
+        await asyncio.to_thread(
+            self._build_tarball_to_path,
+            target_path,
+            manifest_payload,
+            table_payloads,
+        )
         return target_path
 
-    async def _write_tar(self, fp) -> None:
+    async def _collect_export_payloads(
+        self,
+    ) -> tuple[bytes, list[tuple[str, bytes]]]:
+        """Gather manifest + per-table JSON via async DB reads.
+
+        The actual tar.gz writes happen in :meth:`_build_tarball_bytes`
+        or :meth:`_build_tarball_to_path` — both run inside
+        ``asyncio.to_thread`` because tarfile + gzip are sync CPU work.
+        """
         instance_row = await self._db.fetchone(
             "SELECT instance_id FROM instance_identity WHERE id='self'",
         )
@@ -172,30 +189,54 @@ class BackupService:
             exported_at=datetime.now(timezone.utc).isoformat(),
             table_names=list(EXPORTABLE_TABLES),
         )
+        manifest_payload = json.dumps(
+            {
+                "schema_version": manifest.schema_version,
+                "instance_id": manifest.instance_id,
+                "exported_at": manifest.exported_at,
+                "table_names": manifest.table_names,
+            },
+            indent=2,
+        ).encode("utf-8")
 
-        with tarfile.open(fileobj=fp, mode="w:gz") as tar:
-            self._tar_add_bytes(
-                tar,
-                "manifest.json",
-                json.dumps(
-                    {
-                        "schema_version": manifest.schema_version,
-                        "instance_id": manifest.instance_id,
-                        "exported_at": manifest.exported_at,
-                        "table_names": manifest.table_names,
-                    },
-                    indent=2,
-                ).encode("utf-8"),
+        table_payloads: list[tuple[str, bytes]] = []
+        for table in EXPORTABLE_TABLES:
+            if table in NEVER_EXPORT:
+                continue
+            rows = await self._dump_table(table)
+            table_payloads.append(
+                (table, json.dumps(rows).encode("utf-8")),
             )
-            for table in EXPORTABLE_TABLES:
-                if table in NEVER_EXPORT:
-                    continue
-                rows = await self._dump_table(table)
-                self._tar_add_bytes(
-                    tar,
-                    f"tables/{table}.json",
-                    json.dumps(rows).encode("utf-8"),
-                )
+        return manifest_payload, table_payloads
+
+    def _build_tarball_bytes(
+        self,
+        manifest_payload: bytes,
+        table_payloads: list[tuple[str, bytes]],
+    ) -> bytes:
+        buf = io.BytesIO()
+        self._write_tar_sync(buf, manifest_payload, table_payloads)
+        return buf.getvalue()
+
+    def _build_tarball_to_path(
+        self,
+        target_path: Path,
+        manifest_payload: bytes,
+        table_payloads: list[tuple[str, bytes]],
+    ) -> None:
+        with target_path.open("wb") as fp:
+            self._write_tar_sync(fp, manifest_payload, table_payloads)
+
+    def _write_tar_sync(
+        self,
+        fp,
+        manifest_payload: bytes,
+        table_payloads: list[tuple[str, bytes]],
+    ) -> None:
+        with tarfile.open(fileobj=fp, mode="w:gz") as tar:
+            self._tar_add_bytes(tar, "manifest.json", manifest_payload)
+            for table, payload in table_payloads:
+                self._tar_add_bytes(tar, f"tables/{table}.json", payload)
             self._tar_add_media(tar)
 
     async def _dump_table(self, table: str) -> list[dict]:
@@ -227,6 +268,39 @@ class BackupService:
         """Restore from a tarball. Refuses if DB already has users."""
         await self._guard_db_is_empty()
 
+        # Sync, CPU-bound phase: decompress the gzip stream and pull
+        # every table + media member out of the tarball into memory.
+        manifest_payload, table_payloads, media_files = await asyncio.to_thread(
+            self._read_restore_tar, blob
+        )
+
+        manifest = json.loads(manifest_payload.decode("utf-8"))
+        if int(manifest.get("schema_version", -1)) != self._schema_version:
+            raise BackupError(
+                f"schema_version mismatch: backup={manifest.get('schema_version')!r} "
+                f"current={self._schema_version}"
+            )
+
+        # Async phase: replay each table's rows through the DB writer
+        # queue so they get the normal aiosqlite WAL coalescing.
+        for table, payload in table_payloads:
+            rows = json.loads(payload.decode("utf-8"))
+            await self._import_table(table, rows)
+
+        # Sync, I/O-bound phase: write the media files onto disk.
+        if media_files:
+            await asyncio.to_thread(self._write_restore_media, media_files)
+
+    def _read_restore_tar(
+        self,
+        blob: bytes,
+    ) -> tuple[bytes, list[tuple[str, bytes]], list[tuple[str, bytes]]]:
+        """Parse the restore tarball and pull every member into memory.
+
+        Returns ``(manifest_payload, table_payloads, media_files)`` where
+        media_files holds ``(relative_path, bytes)`` tuples ready to be
+        written under ``self._media_path``.
+        """
         with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
             members = {m.name: m for m in tar.getmembers()}
             manifest_member = members.get("manifest.json")
@@ -235,13 +309,9 @@ class BackupService:
             data = tar.extractfile(manifest_member)
             if data is None:
                 raise BackupError("Could not read manifest.json")
-            manifest = json.loads(data.read().decode("utf-8"))
-            if int(manifest.get("schema_version", -1)) != self._schema_version:
-                raise BackupError(
-                    f"schema_version mismatch: backup={manifest.get('schema_version')!r} "
-                    f"current={self._schema_version}"
-                )
+            manifest_payload = data.read()
 
+            table_payloads: list[tuple[str, bytes]] = []
             for name, member in members.items():
                 if not name.startswith("tables/") or not name.endswith(".json"):
                     continue
@@ -257,19 +327,27 @@ class BackupService:
                 fobj = tar.extractfile(member)
                 if fobj is None:
                     continue
-                rows = json.loads(fobj.read().decode("utf-8"))
-                await self._import_table(table, rows)
+                table_payloads.append((table, fobj.read()))
 
-            # Media files (optional).
+            media_files: list[tuple[str, bytes]] = []
             for name, member in members.items():
                 if not name.startswith("media/") or not member.isfile():
                     continue
-                target = self._media_path / name[len("media/") :]
-                target.parent.mkdir(parents=True, exist_ok=True)
                 fobj = tar.extractfile(member)
                 if fobj is None:
                     continue
-                target.write_bytes(fobj.read())
+                media_files.append((name[len("media/") :], fobj.read()))
+
+        return manifest_payload, table_payloads, media_files
+
+    def _write_restore_media(
+        self,
+        media_files: list[tuple[str, bytes]],
+    ) -> None:
+        for rel_name, payload in media_files:
+            target = self._media_path / rel_name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
 
     async def _guard_db_is_empty(self) -> None:
         row = await self._db.fetchone("SELECT COUNT(*) AS n FROM users")

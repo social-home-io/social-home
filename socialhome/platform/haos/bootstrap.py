@@ -212,6 +212,9 @@ class HaBootstrap:
 
         token_path = self._token_path()
         try:
+            # Cold path: bootstrap runs once at add-on startup before the
+            # HTTP server begins serving — sync file writes don't block
+            # any in-flight coroutines.
             os.makedirs(self._data_dir, exist_ok=True)
             with open(token_path, "w", encoding="utf-8") as f:
                 f.write(raw_token)
@@ -239,6 +242,9 @@ class HaBootstrap:
         substitution on the integration side.
         """
         token_path = self._token_path()
+        # Cold path: _push_discovery is called from the boot-time run()
+        # method, so reading the token file synchronously here doesn't
+        # contend with any request-serving coroutines.
         if not os.path.exists(token_path):
             log.debug("ha_bootstrap: no integration token file — skipping discovery")
             return
