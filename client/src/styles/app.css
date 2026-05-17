@@ -6552,7 +6552,11 @@ body.sh-dm-thread-open .sh-messages {
   display: flex;
   align-items: center;
   gap: var(--sh-space-sm);
-  padding: var(--sh-space-sm) 0;
+  /* Horizontal inset so the round checkbox + ✕ delete don't sit
+   * flush against the card edge. ``--sh-space-md`` keeps the row
+   * visually aligned with the section header (which also pads
+   * to ``--sh-space-md`` on the left). */
+  padding: var(--sh-space-sm) var(--sh-space-md);
   border-bottom: 1px dashed var(--sh-border);
   transition: background-color 120ms;
 }
