@@ -64,6 +64,47 @@ const newSinceScrollUp = signal(0)
  *  WhatsApp's ceiling so a very long draft doesn't eat half the chat
  *  while the user is still typing. */
 const MAX_COMPOSER_HEIGHT_PX = 160
+
+/** Pixel slack at the visual bottom that still counts as "looking at
+ *  the live edge". Picked at 80 px so a single line of swipe inertia
+ *  on mobile doesn't flip the chat out of sticky-bottom mode. Shared
+ *  between :func:`handleScroll` (user scroll) and the anchor-scroll
+ *  layout effect (entry from notification) so both compute the same
+ *  thing. */
+const LIVE_EDGE_PX = 80
+
+/** Magnitude of the user's distance from the latest message in the
+ *  column-reverse scroll container.
+ *
+ *  Chrome / Safari / Edge / modern Firefox use **negative**
+ *  ``scrollTop`` values in column-reverse — 0 at the visual bottom,
+ *  ``-(scrollHeight - clientHeight)`` at the visual top. Older
+ *  Firefox versions used **positive** values mirroring the
+ *  non-reversed layout. We normalise either way so a future user on
+ *  a legacy engine still gets correct sticky / lazy-load behaviour.
+ *
+ *  Exported so unit tests can pin the threshold logic without
+ *  having to materialise a real scroll layout (jsdom doesn't run
+ *  layout, so manipulating ``scrollHeight`` / ``scrollTop`` directly
+ *  is the only way to drive this through the page). */
+export function columnReverseDistFromBottom(el: Pick<
+  HTMLElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'
+>): number {
+  const maxScroll = Math.max(el.scrollHeight - el.clientHeight, 0)
+  return el.scrollTop <= 0
+    ? -el.scrollTop                 // Chrome / modern Firefox
+    : maxScroll - el.scrollTop      // legacy positive-scrollTop
+}
+
+/** True when the user is within ``LIVE_EDGE_PX`` of the visual bottom
+ *  of a column-reverse scroll container — the "looking at the latest
+ *  message" state. Drives the jump-down chip visibility and the
+ *  read-watermark advance. */
+export function isAtLiveEdge(el: Pick<
+  HTMLElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'
+>): boolean {
+  return columnReverseDistFromBottom(el) < LIVE_EDGE_PX
+}
 /** ``true`` when the composer textarea has at least one non-whitespace
  *  character. Drives the mic⇄send slot swap: an empty composer shows
  *  the round push-to-talk mic (when STT is available); typing morphs
@@ -453,7 +494,6 @@ export default function DmThreadPage() {
     if (isLoading || !anchor) return
     const el = messagesScrollRef.current
     if (!el) return
-    stickToBottom.current = false
     const divider = el.querySelector('.sh-dm-unread-divider')
     if (divider) {
       divider.scrollIntoView({ block: 'start', behavior: 'instant' })
@@ -461,6 +501,27 @@ export default function DmThreadPage() {
       // Race fallback — anchor row rendered but divider didn't.
       const row = el.querySelector(`[data-msg-id="${anchor.message_id}"]`)
       if (row) row.scrollIntoView({ block: 'start', behavior: 'instant' })
+    }
+    // Re-derive ``stickToBottom`` from the position the anchor scroll
+    // actually landed on, using the same threshold ``handleScroll``
+    // applies on user scroll. An earlier version of this effect
+    // hard-coded ``stickToBottom = false``, which lit up the
+    // "↓ N new messages" chip even when the entry-scroll didn't move
+    // the viewport — typical for a notification-driven entry where
+    // the single unread message is the latest one and the column-
+    // reverse default already shows it at the visual bottom.
+    stickToBottom.current = isAtLiveEdge(el)
+    // Anchor scroll landed us at the live edge — the unread message
+    // is in view. Clear the divider + counter and stamp the read
+    // watermark so the next entry starts clean. Without this the
+    // chip would still surface on the very next inbound message
+    // (the tail-tracking effect would bump it).
+    if (stickToBottom.current) {
+      newSinceScrollUp.value = 0
+      if (unreadAnchor.value) unreadAnchor.value = null
+      if (readReceiptsEnabled.value) {
+        api.post(`/api/conversations/${convId}/read`).catch(() => {})
+      }
     }
   }, [convId, isLoading, anchor?.message_id])
 
@@ -1480,28 +1541,15 @@ export default function DmThreadPage() {
   const handleScroll = () => {
     const el = messagesScrollRef.current
     if (!el) return
-    // Column-reverse coordinate system has a long-standing browser
-    // split: Chrome / Safari / Edge use **negative** ``scrollTop``
-    // values (0 at the visual bottom, ``-(scrollHeight -
-    // clientHeight)`` at the visual top), while older Firefox
-    // implementations used **positive** values mirroring the
-    // non-reversed layout (0 at the visual top, max at the visual
-    // bottom). Modern Firefox has moved to the Chrome convention,
-    // but we normalise either way so a future user on a legacy
-    // engine still gets correct sticky / lazy-load behaviour.
-    //
-    //   distFromBottom = magnitude away from the latest message.
-    //                    0 at the visual bottom, ``maxScroll`` at
-    //                    the visual top.
-    //   distFromTop    = the complement.
+    // ``columnReverseDistFromBottom`` normalises across the
+    // Chrome / Safari / Edge / modern-Firefox negative-scrollTop
+    // convention and the legacy-Firefox positive one — see its
+    // docstring for the long version.
+    const distFromBottom = columnReverseDistFromBottom(el)
     const maxScroll = Math.max(el.scrollHeight - el.clientHeight, 0)
-    const distFromBottom =
-      el.scrollTop <= 0
-        ? -el.scrollTop                 // Chrome / modern Firefox
-        : maxScroll - el.scrollTop      // legacy positive-scrollTop
     const distFromTop = maxScroll - distFromBottom
     const wasSticky = stickToBottom.current
-    stickToBottom.current = distFromBottom < 80
+    stickToBottom.current = distFromBottom < LIVE_EDGE_PX
     if (!wasSticky && stickToBottom.current) {
       // User returned to the bottom — clear the unread-since-scroll-up
       // counter so the CTA disappears and advance the read watermark
