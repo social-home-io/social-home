@@ -12,15 +12,43 @@ import type { CalendarEvent } from '@/types'
  *  helper module. */
 export type CalendarViewMode = 'month' | 'week' | 'day'
 
-/** Group events into ``{ "M/D/YYYY" → events }`` buckets, locale-aware. */
+/** Build a ``YYYY-MM-DD`` key from the local date components of ``d``.
+ *  Used as the bucket key in :func:`groupEventsByDay` — lexicographic
+ *  sort over this shape is chronological, so callers don't have to
+ *  round-trip through ``new Date()`` (which doesn't reliably parse
+ *  locale-formatted strings like ``14.5.2026`` / ``14/05/2026``). */
+function localDateKey(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
+/** Group events into ``{ "YYYY-MM-DD" → events }`` buckets. The key is
+ *  built from the local date components rather than
+ *  ``toLocaleDateString()`` because the previous shape (``5/14/2026`` /
+ *  ``14.5.2026``) couldn't be round-tripped through ``new Date()`` in
+ *  non-en-* locales, so the agenda sort silently fell back to insertion
+ *  order. With ``YYYY-MM-DD`` the sort is locale-independent
+ *  (lexicographic == chronological).
+ *
+ *  Events within a bucket are sorted by start time so a multi-calendar
+ *  overlay (the household page does one fetch per calendar then
+ *  ``.flat()``s the results) doesn't surface in calendar-arrival order
+ *  inside the day. */
 export function groupEventsByDay(
   evts: CalendarEvent[],
 ): Record<string, CalendarEvent[]> {
   const groups: Record<string, CalendarEvent[]> = {}
   for (const e of evts) {
-    const key = new Date(e.start).toLocaleDateString()
+    const key = localDateKey(new Date(e.start))
     if (!groups[key]) groups[key] = []
     groups[key].push(e)
+  }
+  for (const key of Object.keys(groups)) {
+    groups[key].sort(
+      (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime(),
+    )
   }
   return groups
 }
@@ -122,11 +150,16 @@ export interface FriendlyDayLabel {
   isToday: boolean
 }
 export function formatDayLabel(dayKey: string): FriendlyDayLabel {
-  const date = new Date(dayKey)
-  // ``new Date('5/8/2026')`` parses across en-* locales; for other
-  // locales we fall through to the raw key. Anyone hitting an
-  // unparseable key gets the original string back rather than
-  // "Invalid Date".
+  // Parse ``YYYY-MM-DD`` (the shape :func:`groupEventsByDay` emits) as
+  // a LOCAL date — ``new Date('2026-05-14')`` would treat it as UTC
+  // midnight and bump the rendered day back by one for viewers west of
+  // UTC. Any other shape falls through to the generic ``new Date()``
+  // path so legacy callers / tests that still pass
+  // ``toLocaleDateString()`` output keep working.
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey)
+  const date = iso
+    ? new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))
+    : new Date(dayKey)
   if (Number.isNaN(date.getTime())) {
     return { long: dayKey, relative: null, isToday: false }
   }

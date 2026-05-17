@@ -63,6 +63,45 @@ describe('calendar utils', () => {
     expect(groups[keys[1]].map(e => e.id)).toEqual(['c'])
   })
 
+  it('emits locale-independent YYYY-MM-DD keys that sort chronologically', () => {
+    // Regression for the multi-day agenda landing out of order on
+    // non-en-* locales (de-DE / en-GB / fr-FR / …). The old key
+    // shape was ``toLocaleDateString()`` and the sort tried to
+    // round-trip via ``new Date(key)``, which returns NaN for
+    // ``14.5.2026`` / ``14/05/2026`` — V8's stable sort then left the
+    // insertion order untouched. Locking in the YYYY-MM-DD shape so a
+    // plain lexicographic sort is enough.
+    const e21 = evt('e21', '2026-05-21T10:00:00')
+    const e14 = evt('e14', '2026-05-14T10:00:00')
+    const e19 = evt('e19', '2026-05-19T10:00:00')
+    // Order chosen to match the bug report: keys land in
+    // [14, 21, 19] order, which the broken sort previously left
+    // untouched on non-en-US locales.
+    const groups = groupEventsByDay([e14, e21, e19])
+    const keys = Object.keys(groups).sort()
+    expect(keys).toEqual(['2026-05-14', '2026-05-19', '2026-05-21'])
+    // formatDayLabel must round-trip the new key shape as a LOCAL
+    // date — ``new Date('2026-05-14')`` would otherwise be UTC
+    // midnight and bump the rendered day back by one west of UTC.
+    expect(formatDayLabel('2026-05-14').long).toContain('14')
+  })
+
+  it('sorts events within a day by start time even when inputs are scrambled', () => {
+    // The household calendar fans one fetch per visible calendar and
+    // then ``.flat()``s the results — when two visible calendars each
+    // contribute events to the same day, the per-day order ends up
+    // calendar-arrival order unless we sort inside the bucket.
+    const afternoon = evt('afternoon', '2026-05-14T15:00:00')
+    const morning = evt('morning', '2026-05-14T08:00:00')
+    const noon = evt('noon', '2026-05-14T12:00:00')
+    const groups = groupEventsByDay([afternoon, morning, noon])
+    const keys = Object.keys(groups)
+    expect(keys).toHaveLength(1)
+    expect(groups[keys[0]].map(e => e.id)).toEqual([
+      'morning', 'noon', 'afternoon',
+    ])
+  })
+
   it('formats a month heading with month name + year', () => {
     const heading = formatMonthHeading(new Date('2026-04-15T00:00:00'))
     expect(heading.toLowerCase()).toContain('april')
@@ -80,10 +119,20 @@ describe('calendar utils', () => {
 })
 
 describe('formatDayLabel', () => {
+  // Helper mirroring the production ``localDateKey`` shape — keeps
+  // these tests independent of the runtime locale (the previous shape
+  // ``toLocaleDateString()`` would round-trip via ``new Date()`` and
+  // explode on non-en-* hosts).
+  function dayKey(d: Date): string {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${dd}`
+  }
+
   it('marks the current day with the "Today" relative kicker', () => {
     const today = new Date()
-    const key = today.toLocaleDateString()
-    const out = formatDayLabel(key)
+    const out = formatDayLabel(dayKey(today))
     expect(out.isToday).toBe(true)
     expect(out.relative).toBe('Today')
     // Long form contains the weekday — locale-agnostic existence check.
@@ -93,7 +142,7 @@ describe('formatDayLabel', () => {
   it('marks the day after as "Tomorrow"', () => {
     const tomorrow = new Date()
     tomorrow.setDate(tomorrow.getDate() + 1)
-    const out = formatDayLabel(tomorrow.toLocaleDateString())
+    const out = formatDayLabel(dayKey(tomorrow))
     expect(out.isToday).toBe(false)
     expect(out.relative).toBe('Tomorrow')
   })
@@ -101,7 +150,7 @@ describe('formatDayLabel', () => {
   it('returns null relative for far-future / past days', () => {
     const future = new Date()
     future.setDate(future.getDate() + 7)
-    const out = formatDayLabel(future.toLocaleDateString())
+    const out = formatDayLabel(dayKey(future))
     expect(out.isToday).toBe(false)
     expect(out.relative).toBe(null)
   })
