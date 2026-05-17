@@ -1,17 +1,23 @@
 name: Release — draft
 
-# Manual entry point for cutting a release. The workflow computes
-# today's CalVer tag (``YYYY.M.D`` with a ``.N`` suffix when there's
-# already a same-day release), asks GitHub to auto-generate the notes
-# from merged PRs since the last published release, and opens a
-# **draft** release for the operator to polish.
+# Entry points for cutting a release.
+#
+#  * ``push: branches: [main]`` — every merge to main auto-refreshes
+#    the draft for today's CalVer date. If a draft for that date is
+#    already open (because an earlier merge created one), this run
+#    deletes it and recreates it so the notes always reflect the
+#    latest merged set. No tag is created until the operator clicks
+#    **Publish release**, so a refresh cycle costs nothing.
+#  * ``workflow_dispatch`` — manual override. Same logic, plus an
+#    optional ``date`` input for back-dating a draft (e.g. cutting a
+#    release for yesterday's merges if the auto-run was missed).
 #
 # Publishing the draft (in the GitHub UI or via ``gh release edit
 # <tag> --draft=false``) is what creates the underlying CalVer tag
 # AND fires ``release.published``, which is the single trigger for
 # ``publish.yml`` (PyPI + Docker images). Drafts do not create tags
 # and do not trigger ``publish.yml`` — so this workflow is safe to
-# re-run; just delete the stale draft from the Releases UI first.
+# re-run any number of times per day.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +25,15 @@ on:
         description: "Release date (YYYY-MM-DD). Defaults to today UTC."
         required: false
         type: string
+  push:
+    branches: [main]
+
+# Multiple PR merges within seconds of each other would otherwise
+# race two draft-creation runs against the same version. Group by
+# the branch so the latest run wins; cancel any in-flight refresh.
+concurrency:
+  group: release-draft-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write  # creating a draft release needs write
@@ -69,7 +84,7 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create draft release with auto-generated notes
+      - name: Create or refresh the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -81,6 +96,21 @@ jobs:
           # rollover where lexical tag sorting would otherwise misorder
           # ``2026.5.13`` vs ``2026.5.9``.
           prev=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+
+          # On a push-triggered run a draft for this version may already
+          # exist (an earlier merge from today). Delete + recreate so
+          # the notes reflect the *current* merge log — that's the only
+          # safe re-run shape, since ``gh release create`` would
+          # otherwise 422 on the duplicate name. ``--generate-notes``
+          # rebuilds the body deterministically from merged PRs since
+          # ``--notes-start-tag``, so nothing the operator typed by
+          # hand is at risk yet (a draft that *was* hand-polished
+          # should have been published; an un-published draft is by
+          # contract the auto-generated view).
+          if gh release view "$VERSION" --json isDraft -q .isDraft 2>/dev/null | grep -q true; then
+            gh release delete "$VERSION" --yes
+          fi
+
           args=(
             "$VERSION"
             --target main

@@ -329,15 +329,23 @@ before merging.
 
 ### Releases
 
-- CalVer (`YYYY.M.D`). The preferred path is the **Release — draft**
-  workflow (`.github/workflows/release-draft.yml`): Actions →
-  *Release — draft* → *Run workflow*. The workflow computes the
+- CalVer (`YYYY.M.D`). The **Release — draft** workflow
+  (`.github/workflows/release-draft.yml`) maintains a draft
+  release that always reflects the current merge backlog. It
+  fires automatically on **every push to `main`** (every PR
+  merge) AND on manual `workflow_dispatch` (Actions → *Release —
+  draft* → *Run workflow* — the manual path also takes an
+  optional `date` input for back-dating). Each run computes the
   next `YYYY.M.D[.N]` tag (bumping `.N` when a same-day release
-  already exists), asks GitHub to auto-generate the notes from
-  merged PRs since the last published release, and opens a
-  **draft** release for an operator to polish. Publishing the
-  draft from the UI is what creates the tag and fires
-  `release.published`. Cutting by hand still works —
+  is already published), asks GitHub to auto-generate the notes
+  from merged PRs since the last published release, and creates
+  or refreshes a **draft** release. If a draft for the same
+  version already exists (an earlier merge today), the workflow
+  deletes and recreates it so the notes always reflect the
+  current merged set — un-published drafts are by contract the
+  auto-generated view, not a place to keep hand-polish.
+  Publishing the draft from the UI is what creates the tag and
+  fires `release.published`. Cutting by hand still works —
   `gh release create 2026.5.12 --target main --title 2026.5.12 --notes …`
   — for one-off / out-of-band releases.
 - `.github/workflows/publish.yml` listens for `release.published`
