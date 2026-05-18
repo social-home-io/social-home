@@ -207,6 +207,7 @@ from .shopping import (
     ShoppingItemCompleteView,
     ShoppingItemDetailView,
     ShoppingItemUncompleteView,
+    ShoppingStoreDetailView,
     ShoppingStoresOrderView,
     ShoppingStoresView,
 )
@@ -607,6 +608,8 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/shopping/clear-completed", ShoppingClearCompletedView)
     app.router.add_view("/api/shopping/stores", ShoppingStoresView)
     app.router.add_view("/api/shopping/stores/order", ShoppingStoresOrderView)
+    # Encoded ``{name}`` last so it can't shadow ``/stores/order``.
+    app.router.add_view("/api/shopping/stores/{name}", ShoppingStoreDetailView)
     app.router.add_view("/api/shopping/{id}", ShoppingItemDetailView)
     app.router.add_view("/api/shopping/{id}/complete", ShoppingItemCompleteView)
     app.router.add_view("/api/shopping/{id}/uncomplete", ShoppingItemUncompleteView)

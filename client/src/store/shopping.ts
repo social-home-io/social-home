@@ -96,6 +96,56 @@ export async function clearCompleted() {
   }
 }
 
+export async function renameStore(oldName: string, newName: string): Promise<void> {
+  const trimmedOld = oldName.trim()
+  const trimmedNew = newName.trim()
+  if (!trimmedOld || !trimmedNew) {
+    throw new Error('store names must be non-empty')
+  }
+  if (trimmedOld === trimmedNew) return
+  const prevStores = stores.value
+  const prevItems = items.value
+  // Optimistic — rename the catalogue row + every item that
+  // referenced the old name. The WS frame the server sends back
+  // will be a no-op on the local state since we already did it.
+  stores.value = prevStores.map(s =>
+    s.name === trimmedOld ? { ...s, name: trimmedNew } : s,
+  )
+  items.value = prevItems.map(i =>
+    i.store === trimmedOld ? { ...i, store: trimmedNew } : i,
+  )
+  try {
+    await api.patch(
+      `/api/shopping/stores/${encodeURIComponent(trimmedOld)}`,
+      { name: trimmedNew },
+    )
+  } catch (err) {
+    stores.value = prevStores
+    items.value = prevItems
+    throw err
+  }
+}
+
+export async function deleteStore(name: string): Promise<void> {
+  const trimmed = name.trim()
+  if (!trimmed) return
+  const prevStores = stores.value
+  const prevItems = items.value
+  // Optimistic — drop the catalogue row + clear ``store`` on every
+  // item that referenced it (rows fall into the "No store" bucket).
+  stores.value = prevStores.filter(s => s.name !== trimmed)
+  items.value = prevItems.map(i =>
+    i.store === trimmed ? { ...i, store: null } : i,
+  )
+  try {
+    await api.delete(`/api/shopping/stores/${encodeURIComponent(trimmed)}`)
+  } catch (err) {
+    stores.value = prevStores
+    items.value = prevItems
+    throw err
+  }
+}
+
 export async function reorderStores(orderedNames: string[]) {
   const prev = stores.value
   // Optimistic: shuffle the local store list so the section headers
@@ -182,5 +232,26 @@ export function wireShoppingWs() {
     // server only carries the new index, not any per-store metadata,
     // so we just rebuild the local catalogue from it.
     stores.value = order.map((name, i) => ({ name, sort_order: i }))
+  })
+  ws.on('shopping_list.store_renamed', (e) => {
+    const { old_name, new_name } = e.data as {
+      old_name: string
+      new_name: string
+    }
+    if (!old_name || !new_name || old_name === new_name) return
+    stores.value = stores.value.map(s =>
+      s.name === old_name ? { ...s, name: new_name } : s,
+    )
+    items.value = items.value.map(i =>
+      i.store === old_name ? { ...i, store: new_name } : i,
+    )
+  })
+  ws.on('shopping_list.store_deleted', (e) => {
+    const { name } = e.data as { name: string }
+    if (!name) return
+    stores.value = stores.value.filter(s => s.name !== name)
+    items.value = items.value.map(i =>
+      i.store === name ? { ...i, store: null } : i,
+    )
   })
 }

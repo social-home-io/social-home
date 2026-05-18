@@ -12,6 +12,8 @@ import {
   deleteItem,
   clearCompleted,
   reorderStores,
+  renameStore,
+  deleteStore,
 } from '@/store/shopping'
 import type { ShoppingItem } from '@/types'
 import { Spinner } from '@/components/Spinner'
@@ -364,6 +366,8 @@ export default function ShoppingPage() {
           onDelete={handleDelete}
           onClearCompleted={handleClearCompleted}
           onReassignStore={handleReassignStore}
+          onRenameStore={renameStore}
+          onDeleteStore={deleteStore}
           onDragStoreStart={setDragStore}
           onStoreHeaderDrop={handleStoreHeaderDrop}
           dragStore={dragStore}
@@ -388,6 +392,8 @@ export default function ShoppingPage() {
           onDelete={handleDelete}
           onClearCompleted={handleClearCompleted}
           onReassignStore={handleReassignStore}
+          onRenameStore={renameStore}
+          onDeleteStore={deleteStore}
           userNameById={userNameById}
           storeNames={storeNames}
         />
@@ -409,6 +415,11 @@ interface ViewProps {
   onDelete: (id: string) => void
   onClearCompleted: () => void
   onReassignStore: (id: string, nextStore: string | null) => void
+  /** Rename a catalogue store across the whole household. Threaded
+   *  to every ItemRow → StorePicker; the picker surfaces it through
+   *  the per-row ⋯ → Rename affordance. */
+  onRenameStore: (oldName: string, newName: string) => Promise<void>
+  onDeleteStore: (name: string) => Promise<void>
   userNameById: (uid: string) => string
   storeNames: string[]
 }
@@ -426,6 +437,8 @@ function FlatView(props: ViewProps) {
       onToggle={() => props.onToggle(item.id, item.completed)}
       onDelete={() => props.onDelete(item.id)}
       onReassignStore={(s) => props.onReassignStore(item.id, s)}
+      onRenameStore={done ? undefined : props.onRenameStore}
+      onDeleteStore={done ? undefined : props.onDeleteStore}
       userNameById={props.userNameById}
       storeNames={props.storeNames}
       draggable={false}
@@ -493,20 +506,14 @@ function GroupedView(props: GroupedProps) {
             ? !i.store
             : i.store === section.key,
         )
-        const doneHere = props.completed.filter((i) =>
-          section.key === NO_STORE_KEY
-            ? !i.store
-            : i.store === section.key,
-        )
-        // Hide a section only when it's completely empty AND no item
-        // drag is in flight — during an item drag every section needs
-        // to be a visible drop target, even ones that have no items
-        // yet, so the user can drag "Eggs" to a freshly-created store.
-        if (
-          itemsHere.length === 0
-          && doneHere.length === 0
-          && props.dragItemId === null
-        ) return null
+        // Hide a section when no ACTIVE items are at this store and
+        // no item drag is in flight. Completed items don't count any
+        // more — they no longer render inline per store; they're
+        // collected at the bottom of the page under the "n bought ·
+        // Clear all" trailer. During a drag every section needs to
+        // be a visible drop target so the user can drag onto a
+        // currently-empty store.
+        if (itemsHere.length === 0 && props.dragItemId === null) return null
         const isFirst = idx === 0
         const isLast = idx === stores.value.length - 1 // before "No store"
         const isDropTarget = props.dropTarget === section.key
@@ -588,7 +595,6 @@ function GroupedView(props: GroupedProps) {
               <h3 class="sh-shopping-group__name">{section.label}</h3>
               <span class="sh-shopping-group__count">
                 {itemsHere.length}
-                {doneHere.length > 0 ? ` · ${doneHere.length} done` : ''}
               </span>
               {section.draggable && (
                 <div class="sh-shopping-group__nudge" role="group" aria-label="Reorder">
@@ -617,9 +623,7 @@ function GroupedView(props: GroupedProps) {
             {/* Empty-during-drag placeholder so a freshly-created
              *  section without items still reads as a valid drop
              *  target while the user is mid-drag. */}
-            {itemsHere.length === 0
-              && doneHere.length === 0
-              && props.dragItemId !== null && (
+            {itemsHere.length === 0 && props.dragItemId !== null && (
               <div class="sh-shopping-group__droppad" aria-hidden="true">
                 Drop here to move into {section.label}
               </div>
@@ -639,6 +643,9 @@ function GroupedView(props: GroupedProps) {
                     onToggle={() => props.onToggle(item.id, item.completed)}
                     onDelete={() => props.onDelete(item.id)}
                     onReassignStore={(s) => props.onReassignStore(item.id, s)}
+                    onRenameStore={props.onRenameStore}
+                    onDeleteStore={props.onDeleteStore}
+                    hideStorePill={section.key === NO_STORE_KEY}
                     userNameById={props.userNameById}
                     storeNames={props.storeNames}
                     draggable={true}
@@ -648,43 +655,50 @@ function GroupedView(props: GroupedProps) {
                 ))}
               </ul>
             )}
-            {doneHere.length > 0 && (
-              <ul class="sh-shopping-list sh-list-card sh-list-card--moss sh-shopping-list--done">
-                {doneHere.map((item) => (
-                  <ItemRow
-                    key={item.id}
-                    item={item}
-                    done={true}
-                    isEditing={props.editingId === item.id}
-                    onEditStart={() => props.onEditStart(item.id)}
-                    onEditCancel={props.onEditCancel}
-                    onEditSave={(t) => props.onEditSave(item.id, t)}
-                    onToggle={() => props.onToggle(item.id, item.completed)}
-                    onDelete={() => props.onDelete(item.id)}
-                    onReassignStore={(s) => props.onReassignStore(item.id, s)}
-                    userNameById={props.userNameById}
-                    storeNames={props.storeNames}
-                    draggable={false}
-                    onDragItemStart={null}
-                    onDragItemEnd={null}
-                  />
-                ))}
-              </ul>
-            )}
           </section>
         )
       })}
+      {/* Global "Already bought" trailer in the grouped view —
+       *  collects done items from every store into one quiet pile
+       *  at the bottom of the page. Matches the flat view's trailer
+       *  and the tasks page's archive trailer; replaces the old
+       *  per-store ``doneHere`` lists that scattered completed
+       *  items across the page and made the open work harder to
+       *  scan. */}
       {props.completed.length > 0 && (
-        <div class="sh-shopping-divider">
-          <span>{props.completed.length} bought</span>
-          <button
-            type="button"
-            class="sh-link"
-            onClick={props.onClearCompleted}
-          >
-            Clear all
-          </button>
-        </div>
+        <>
+          <div class="sh-shopping-divider">
+            <span>{props.completed.length} bought</span>
+            <button
+              type="button"
+              class="sh-link"
+              onClick={props.onClearCompleted}
+            >
+              Clear all
+            </button>
+          </div>
+          <ul class="sh-shopping-list sh-list-card sh-list-card--moss sh-shopping-list--done">
+            {props.completed.map((item) => (
+              <ItemRow
+                key={item.id}
+                item={item}
+                done={true}
+                isEditing={props.editingId === item.id}
+                onEditStart={() => props.onEditStart(item.id)}
+                onEditCancel={props.onEditCancel}
+                onEditSave={(t) => props.onEditSave(item.id, t)}
+                onToggle={() => props.onToggle(item.id, item.completed)}
+                onDelete={() => props.onDelete(item.id)}
+                onReassignStore={(s) => props.onReassignStore(item.id, s)}
+                userNameById={props.userNameById}
+                storeNames={props.storeNames}
+                draggable={false}
+                onDragItemStart={null}
+                onDragItemEnd={null}
+              />
+            ))}
+          </ul>
+        </>
       )}
     </>
   )
@@ -702,6 +716,18 @@ interface RowProps {
   onToggle: () => void
   onDelete: () => void
   onReassignStore: (nextStore: string | null) => void
+  /** Optional — only the active-row (not the done trailer) wires
+   *  these through so the picker shows the manage affordance. */
+  onRenameStore?: (oldName: string, newName: string) => Promise<void>
+  onDeleteStore?: (name: string) => Promise<void>
+  /** When ``true`` the row hides its store pill. Used inside the
+   *  "No store" section of the grouped view — the section header
+   *  already says "No store", and rendering a "📍 SET STORE" pill
+   *  next to every item is the loudest, most-repeated thing on
+   *  the page. Tapping the row's text still opens the picker via
+   *  the rename flow, and dragging to another section still
+   *  reassigns. */
+  hideStorePill?: boolean
   userNameById: (uid: string) => string
   storeNames: string[]
   /** When true, the whole row carries HTML5 ``draggable=true`` so the
@@ -776,11 +802,13 @@ function ItemRow(props: RowProps) {
       >
         {item.text}
       </span>
-      {!done && (
+      {!done && !props.hideStorePill && (
         <StorePicker
           currentStore={item.store ?? null}
           storeNames={props.storeNames}
           onPick={props.onReassignStore}
+          onRenameStore={props.onRenameStore}
+          onDeleteStore={props.onDeleteStore}
         />
       )}
       <div
@@ -867,6 +895,17 @@ interface StorePickerProps {
    *  popover swaps to a focused text input instead). */
   storeNames: string[]
   onPick: (next: string | null) => void
+  /** Rename a store across the whole household catalogue. The
+   *  picker shows a per-row ⋯ → Rename affordance; the callback
+   *  fires with ``(oldName, newName)``. Optional — the picker
+   *  hides the manage affordance when both rename / delete are
+   *  omitted, so the same component still works in
+   *  ``manage = false`` contexts. */
+  onRenameStore?: (oldName: string, newName: string) => Promise<void>
+  /** Delete a store from the catalogue. Items at that store are
+   *  cleared to "No store" (handled server-side + optimistically
+   *  by the caller's store helper). */
+  onDeleteStore?: (name: string) => Promise<void>
 }
 
 /** One-tap reassign affordance on the item row.
@@ -888,14 +927,27 @@ interface StorePickerProps {
  *     server-side upserts a new catalogue row whenever it sees an
  *     unknown store name. Replaces the previous ``window.prompt``
  *     call (poor mobile UX + the native dialog hid the picker). */
-function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
+function StorePicker({
+  currentStore,
+  storeNames,
+  onPick,
+  onRenameStore,
+  onDeleteStore,
+}: StorePickerProps) {
+  const canManage = !!onRenameStore && !!onDeleteStore
   const [open, setOpen] = useState(false)
-  /** Sub-view inside the popover. ``list`` is the default;
-   *  ``new`` swaps to the inline name-entry input. */
-  const [mode, setMode] = useState<'list' | 'new'>('list')
+  /** Sub-view inside the popover.
+   *  - ``list`` is the default;
+   *  - ``new`` swaps to the inline name-entry input;
+   *  - ``manage`` lets the user rename or delete the store named
+   *    in :state:`manageStore`. */
+  const [mode, setMode] = useState<'list' | 'new' | 'manage'>('list')
   const [newName, setNewName] = useState('')
+  const [manageStore, setManageStore] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
   const ref = useRef<HTMLDivElement | null>(null)
   const newInputRef = useRef<HTMLInputElement | null>(null)
+  const renameInputRef = useRef<HTMLInputElement | null>(null)
 
   // Click-outside closes the menu. ``useLayoutEffect`` would be
   // overkill — the menu is small enough that one async paint frame
@@ -908,12 +960,17 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        // Escape unwinds one step at a time: from ``new`` back to
-        // ``list``, from ``list`` to closed. Mirrors the way a
-        // native iOS / Android picker handles the back button.
+        // Escape unwinds one step at a time: from ``new`` /
+        // ``manage`` back to ``list``, from ``list`` to closed.
+        // Mirrors the way a native iOS / Android picker handles
+        // the back button.
         if (mode === 'new') {
           setMode('list')
           setNewName('')
+        } else if (mode === 'manage') {
+          setMode('list')
+          setManageStore(null)
+          setRenameDraft('')
         } else {
           setOpen(false)
         }
@@ -934,14 +991,19 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
     if (!open) {
       setMode('list')
       setNewName('')
+      setManageStore(null)
+      setRenameDraft('')
     }
   }, [open])
 
-  // Autofocus the new-store input when we enter ``new`` mode so the
+  // Autofocus the relevant input when entering a typed-mode so the
   // mobile keyboard pops up immediately.
   useEffect(() => {
     if (mode === 'new') {
       newInputRef.current?.focus()
+    } else if (mode === 'manage') {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
     }
   }, [mode])
 
@@ -955,6 +1017,46 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
     if (!trimmed) return
     onPick(trimmed)
     setOpen(false)
+  }
+
+  const startManage = (name: string) => {
+    setManageStore(name)
+    setRenameDraft(name)
+    setMode('manage')
+  }
+
+  const saveRename = async () => {
+    const trimmed = renameDraft.trim()
+    if (!trimmed || !manageStore || !onRenameStore) return
+    if (trimmed === manageStore) {
+      // No-op rename; just go back.
+      setMode('list')
+      setManageStore(null)
+      setRenameDraft('')
+      return
+    }
+    try {
+      await onRenameStore(manageStore, trimmed)
+      setOpen(false)
+    } catch (err: unknown) {
+      // Surface via toast at the page level; the optimistic patch
+      // already rolled back so the user sees the original name.
+      showToast(`Rename failed: ${(err as Error).message ?? err}`, 'error')
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!manageStore || !onDeleteStore) return
+    if (!await confirmDialog(
+      `Delete the "${manageStore}" store? Items in it will move to "No store".`,
+      { destructive: true },
+    )) return
+    try {
+      await onDeleteStore(manageStore)
+      setOpen(false)
+    } catch (err: unknown) {
+      showToast(`Delete failed: ${(err as Error).message ?? err}`, 'error')
+    }
   }
 
   const label = currentStore || 'Set store'
@@ -987,7 +1089,7 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
             </li>
           )}
           {storeNames.map((name) => (
-            <li key={name} role="none">
+            <li key={name} role="none" class="sh-shopping-store-picker__row">
               <button
                 type="button"
                 role="menuitem"
@@ -1002,6 +1104,17 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
                   <span aria-hidden="true" class="sh-shopping-store-picker__check">✓</span>
                 )}
               </button>
+              {canManage && (
+                <button
+                  type="button"
+                  class="sh-shopping-store-picker__manage"
+                  aria-label={`Manage ${name}`}
+                  title={`Rename or delete ${name}`}
+                  onClick={(e) => { e.stopPropagation(); startManage(name) }}
+                >
+                  ⋯
+                </button>
+              )}
             </li>
           ))}
           <li role="separator" class="sh-shopping-store-picker__sep" />
@@ -1064,6 +1177,59 @@ function StorePicker({ currentStore, storeNames, onPick }: StorePickerProps) {
           >
             Save
           </Button>
+        </div>
+      )}
+      {open && mode === 'manage' && manageStore && (
+        <div
+          class="sh-shopping-store-picker__menu sh-shopping-store-picker__manage-view"
+          role="dialog"
+          aria-label={`Manage store ${manageStore}`}
+        >
+          <button
+            type="button"
+            class="sh-shopping-store-picker__back"
+            onClick={() => {
+              setMode('list')
+              setManageStore(null)
+              setRenameDraft('')
+            }}
+          >
+            ‹ Back
+          </button>
+          <label class="sh-shopping-store-picker__manage-label">
+            Rename
+            <input
+              ref={renameInputRef}
+              type="text"
+              class="sh-shopping-store-picker__new-input"
+              value={renameDraft}
+              aria-label="New store name"
+              onInput={(e) => setRenameDraft((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void saveRename()
+                }
+              }}
+            />
+          </label>
+          <div class="sh-shopping-store-picker__manage-actions">
+            <Button
+              type="button"
+              onClick={() => void saveRename()}
+              disabled={!renameDraft.trim() || renameDraft.trim() === manageStore}
+            >
+              Save
+            </Button>
+            <button
+              type="button"
+              class="sh-shopping-store-picker__delete"
+              onClick={() => void confirmDelete()}
+              aria-label={`Delete the ${manageStore} store`}
+            >
+              Delete store
+            </button>
+          </div>
         </div>
       )}
     </div>

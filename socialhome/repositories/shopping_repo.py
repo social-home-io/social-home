@@ -73,6 +73,8 @@ class AbstractShoppingRepo(Protocol):
     async def list_stores(self) -> _list[ShoppingStore]: ...
     async def touch_store(self, name: str) -> None: ...
     async def reorder_stores(self, ordered_names: _list[str]) -> None: ...
+    async def rename_store(self, old_name: str, new_name: str) -> bool: ...
+    async def delete_store(self, name: str) -> int: ...
 
 
 class SqliteShoppingRepo:
@@ -278,6 +280,76 @@ class SqliteShoppingRepo:
                 "UPDATE shopping_stores SET sort_order=? WHERE name=?",
                 (idx, name),
             )
+
+    async def rename_store(self, old_name: str, new_name: str) -> bool:
+        """Rename a catalogue row + cascade to every item that
+        references it. Returns ``True`` when the old row existed and
+        was renamed, ``False`` when it didn't exist (caller can map
+        to a 404).
+
+        Cascade rule: ``shopping_list_items.store`` is a free-text
+        column (no FK), so we update both rows in a single write
+        batch. The catalogue's ``ON CONFLICT(name)`` would fire if
+        ``new_name`` is already taken — surface that as a domain
+        error rather than silently dropping rows.
+        """
+        old_name = old_name.strip()
+        new_name = new_name.strip()
+        if not old_name or not new_name:
+            raise ValueError("store names must be non-empty")
+        if old_name == new_name:
+            return True
+        # ``old_name`` must exist; ``new_name`` must NOT — collisions
+        # would lose items. The route layer is welcome to first call
+        # ``list_stores`` to surface a friendlier error.
+        rows = await self._db.fetchall(
+            "SELECT name FROM shopping_stores WHERE name IN (?, ?)",
+            (old_name, new_name),
+        )
+        names = {r["name"] for r in rows_to_dicts(rows)}
+        if old_name not in names:
+            return False
+        if new_name in names:
+            raise ValueError(
+                f"another store is already named {new_name!r}",
+            )
+        await self._db.enqueue(
+            "UPDATE shopping_stores SET name=? WHERE name=?",
+            (new_name, old_name),
+        )
+        await self._db.enqueue(
+            "UPDATE shopping_list_items SET store=? WHERE store=?",
+            (new_name, old_name),
+        )
+        return True
+
+    async def delete_store(self, name: str) -> int:
+        """Remove a store from the catalogue + clear it from every
+        item that currently references it. Returns the count of
+        items whose ``store`` was set to NULL (zero is fine — the
+        store may have had nothing on it).
+
+        Catalogue row may not exist (already-deleted from another
+        tab). That's a no-op return-zero, not a 4xx — operators
+        often double-click.
+        """
+        name = name.strip()
+        if not name:
+            return 0
+        affected = await self._db.fetchval(
+            "SELECT COUNT(*) FROM shopping_list_items WHERE store=?",
+            (name,),
+            default=0,
+        )
+        await self._db.enqueue(
+            "UPDATE shopping_list_items SET store=NULL WHERE store=?",
+            (name,),
+        )
+        await self._db.enqueue(
+            "DELETE FROM shopping_stores WHERE name=?",
+            (name,),
+        )
+        return int(affected)
 
 
 def _row_to_item(row: dict | None) -> ShoppingItem | None:

@@ -232,6 +232,73 @@ async def test_shopping_reorder_stores_emits_event(env):
     assert captured[0].order == ("Whole Foods", "Bakery", "Aldi")
 
 
+async def test_shopping_rename_store_emits_event_and_cascades(env):
+    """Rename publishes ``ShoppingStoreRenamed`` once the repo cascade
+    has run; items at the old name now point at the new name."""
+    from socialhome.domain.events import ShoppingStoreRenamed
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = ShoppingService(env.shopping_repo, bus)
+    captured: list = []
+    bus.subscribe(ShoppingStoreRenamed, lambda e: captured.append(e))
+
+    await svc.add_item("Milk", created_by="u1", store="Aldi")
+    await svc.add_item("Eggs", created_by="u1", store="Aldi")
+
+    ok = await svc.rename_store("Aldi", "Coop")
+
+    assert ok is True
+    assert len(captured) == 1
+    assert captured[0].old_name == "Aldi"
+    assert captured[0].new_name == "Coop"
+    items = await svc.list_items()
+    assert {i.text: i.store for i in items} == {"Milk": "Coop", "Eggs": "Coop"}
+
+
+async def test_shopping_rename_store_collision_raises(env):
+    """Collision surfaces as a ValueError so the route can map to 409.
+    No event is published — the rename never happened."""
+    import pytest
+    from socialhome.domain.events import ShoppingStoreRenamed
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = ShoppingService(env.shopping_repo, bus)
+    captured: list = []
+    bus.subscribe(ShoppingStoreRenamed, lambda e: captured.append(e))
+
+    await svc.add_item("Milk", created_by="u1", store="Aldi")
+    await svc.add_item("Bread", created_by="u1", store="Migros")
+
+    with pytest.raises(ValueError):
+        await svc.rename_store("Aldi", "Migros")
+    assert captured == []
+
+
+async def test_shopping_delete_store_emits_event(env):
+    """Delete clears item ``store`` to NULL and publishes
+    ``ShoppingStoreDeleted`` with the cleared store's name."""
+    from socialhome.domain.events import ShoppingStoreDeleted
+    from socialhome.infrastructure.event_bus import EventBus
+
+    bus = EventBus()
+    svc = ShoppingService(env.shopping_repo, bus)
+    captured: list = []
+    bus.subscribe(ShoppingStoreDeleted, lambda e: captured.append(e))
+
+    await svc.add_item("Milk", created_by="u1", store="Aldi")
+    await svc.add_item("Eggs", created_by="u1", store="Aldi")
+
+    cleared = await svc.delete_store("Aldi")
+
+    assert cleared == 2
+    assert len(captured) == 1
+    assert captured[0].name == "Aldi"
+    stores = await svc.list_stores()
+    assert "Aldi" not in [s.name for s in stores]
+
+
 async def test_shopping_list_stores_returns_catalogue(env):
     """list_stores returns rows in canonical sort_order."""
     await env.shopping_svc.add_item("Bread", created_by="u1", store="Bakery")

@@ -146,3 +146,45 @@ class ShoppingStoresOrderView(BaseView):
         return self._json(
             [{"name": s.name, "sort_order": s.sort_order} for s in stores]
         )
+
+
+class ShoppingStoreDetailView(BaseView):
+    """``PATCH /api/shopping/stores/{name}`` — rename a catalogue row
+    and cascade to every item that referenced it.
+
+    ``DELETE /api/shopping/stores/{name}`` — remove the catalogue row
+    + clear ``store`` on every item that referenced it (items drop
+    into the "No store" bucket).
+
+    Both are idempotent on a missing row — PATCH returns 404, DELETE
+    returns 200 with ``{cleared: 0}`` so an operator double-clicking
+    the trash icon doesn't see an alarming error.
+    """
+
+    async def patch(self) -> web.Response:
+        self.user
+        old_name = self.match("name")
+        body = await self.body()
+        new_name = body.get("name")
+        if not isinstance(new_name, str) or not new_name.strip():
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "`name` (new store name) is required.",
+            )
+        try:
+            ok = await self.svc(shopping_service_key).rename_store(
+                old_name,
+                new_name,
+            )
+        except ValueError as exc:
+            return error_response(409, "CONFLICT", str(exc))
+        if not ok:
+            return error_response(404, "NOT_FOUND", f"No store named {old_name!r}.")
+        return self._json({"old_name": old_name, "new_name": new_name.strip()})
+
+    async def delete(self) -> web.Response:
+        self.user
+        name = self.match("name")
+        cleared = await self.svc(shopping_service_key).delete_store(name)
+        return self._json({"name": name, "cleared": cleared})
