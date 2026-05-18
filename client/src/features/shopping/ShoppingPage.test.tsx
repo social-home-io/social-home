@@ -234,9 +234,15 @@ describe('ShoppingPage', () => {
   })
 
   it('store pill opens a picker; clicking a store calls PATCH with the new store', async () => {
+    // Seed the item already assigned to a store so it lands in
+    // ``Aldi``'s section (where the pill renders). Items in the
+    // No-store section now intentionally hide the pill — the
+    // section header already says "No store" and a redundant
+    // "📍 SET STORE" pill on every row was the loudest, most-
+    // repeated thing on the page.
     wireApi({
       items: [{
-        id: 'i1', text: 'Milk', store: null, completed: false,
+        id: 'i1', text: 'Milk', store: 'Aldi', completed: false,
         created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1',
       }],
       stores: [
@@ -363,6 +369,168 @@ describe('ShoppingPage', () => {
         '/api/shopping/i1',
         { store: null },
       )
+    })
+  })
+
+  it('hides the store pill inside the No store section (redundant with header)', async () => {
+    // The pill says "📍 SET STORE" for unassigned items in the
+    // flat view, but in the grouped view the row already sits
+    // under a "No store" header — rendering both is the loudest
+    // pile of redundant labels on the page. The pill is hidden;
+    // tap the row text to rename or drag to reassign.
+    wireApi({
+      items: [
+        // One assigned to Aldi (so grouping kicks in) + one
+        // unassigned (lands in the No store section).
+        { id: 'i1', text: 'Eggs',  store: 'Aldi', completed: false, created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1' },
+        { id: 'i2', text: 'Tools', store: null,   completed: false, created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1' },
+      ],
+      stores: [
+        { name: 'Aldi',   sort_order: 0 },
+        { name: 'Migros', sort_order: 1 },
+      ],
+    })
+    const { render, waitFor } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelectorAll('.sh-shopping-group').length).toBeGreaterThanOrEqual(1)
+    })
+
+    // Eggs (under Aldi) keeps its pill so the user can reassign.
+    const eggsRow = Array.from(container.querySelectorAll('.sh-shopping-item'))
+      .find(li => li.textContent?.includes('Eggs')) as HTMLElement
+    expect(eggsRow.querySelector('.sh-shopping-store-pill')).not.toBeNull()
+
+    // Tools (under "No store") hides the pill — section header
+    // already announces the state.
+    const toolsRow = Array.from(container.querySelectorAll('.sh-shopping-item'))
+      .find(li => li.textContent?.includes('Tools')) as HTMLElement
+    expect(toolsRow.querySelector('.sh-shopping-store-pill')).toBeNull()
+  })
+
+  it('grouped view collects all done items into a single trailer (not per-store)', async () => {
+    wireApi({
+      items: [
+        { id: 'a1', text: 'Eggs',          store: 'Aldi',   completed: false, created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1' },
+        { id: 'm1', text: 'Bread',         store: 'Migros', completed: false, created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1' },
+        { id: 'a2', text: 'Old apples',    store: 'Aldi',   completed: true,  created_at: '2026-05-15T10:00:00+00:00', created_by: 'u1' },
+        { id: 'm2', text: 'Old mozzarella', store: 'Migros', completed: true, created_at: '2026-05-15T10:00:00+00:00', created_by: 'u1' },
+      ],
+      stores: [
+        { name: 'Aldi',   sort_order: 0 },
+        { name: 'Migros', sort_order: 1 },
+      ],
+    })
+    const { render, waitFor } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-divider')).not.toBeNull()
+    })
+
+    // Per-store done piles are gone — neither Aldi nor Migros
+    // sections contain ``--done`` rows; both done items live in
+    // a single trailer at the bottom.
+    const groupDoneLists = container.querySelectorAll(
+      '.sh-shopping-group .sh-shopping-list--done',
+    )
+    expect(groupDoneLists.length).toBe(0)
+
+    const trailerDone = container.querySelector(
+      'ul.sh-shopping-list--done',
+    )
+    expect(trailerDone).not.toBeNull()
+    expect(trailerDone!.textContent).toContain('Old apples')
+    expect(trailerDone!.textContent).toContain('Old mozzarella')
+  })
+
+  it('per-store ⋯ menu → Rename calls PATCH /api/shopping/stores/{name}', async () => {
+    wireApi({
+      items: [{
+        id: 'i1', text: 'Eggs', store: 'Aldi', completed: false,
+        created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1',
+      }],
+      stores: [
+        { name: 'Aldi',   sort_order: 0 },
+        { name: 'Migros', sort_order: 1 },
+      ],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-pill')).not.toBeNull()
+    })
+
+    // Open picker.
+    fireEvent.click(container.querySelector('.sh-shopping-store-pill') as HTMLElement)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__manage')).not.toBeNull()
+    })
+
+    // Tap the manage ⋯ button next to "Aldi" (the row this item
+    // is currently on).
+    const aldiRow = Array.from(container.querySelectorAll('.sh-shopping-store-picker__row'))
+      .find(li => li.textContent?.includes('Aldi')) as HTMLElement
+    const manageBtn = aldiRow.querySelector('.sh-shopping-store-picker__manage') as HTMLElement
+    fireEvent.click(manageBtn)
+
+    // Manage view appears with the rename input.
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__manage-view')).not.toBeNull()
+    })
+
+    const input = container.querySelector(
+      '.sh-shopping-store-picker__manage-view input',
+    ) as HTMLInputElement
+    fireEvent.input(input, { target: { value: 'Coop' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(apiPatch).toHaveBeenCalledWith(
+        '/api/shopping/stores/Aldi',
+        { name: 'Coop' },
+      )
+    })
+  })
+
+  it('per-store ⋯ menu → Delete calls DELETE /api/shopping/stores/{name}', async () => {
+    const { confirmDialog } = await import('@/components/confirm')
+    vi.mocked(confirmDialog).mockResolvedValue(true)
+    wireApi({
+      items: [{
+        id: 'i1', text: 'Eggs', store: 'Aldi', completed: false,
+        created_at: '2026-05-17T10:00:00+00:00', created_by: 'u1',
+      }],
+      stores: [
+        { name: 'Aldi',   sort_order: 0 },
+        { name: 'Migros', sort_order: 1 },
+      ],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-pill')).not.toBeNull()
+    })
+
+    fireEvent.click(container.querySelector('.sh-shopping-store-pill') as HTMLElement)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__manage')).not.toBeNull()
+    })
+    const aldiRow = Array.from(container.querySelectorAll('.sh-shopping-store-picker__row'))
+      .find(li => li.textContent?.includes('Aldi')) as HTMLElement
+    fireEvent.click(aldiRow.querySelector('.sh-shopping-store-picker__manage') as HTMLElement)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-store-picker__delete')).not.toBeNull()
+    })
+    const del = container.querySelector('.sh-shopping-store-picker__delete') as HTMLElement
+    fireEvent.click(del)
+
+    await waitFor(() => {
+      const deletes = apiDelete.mock.calls.map(c => c[0])
+      expect(deletes).toContain('/api/shopping/stores/Aldi')
     })
   })
 })

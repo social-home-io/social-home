@@ -81,6 +81,8 @@ from ..domain.events import (
     ShoppingItemsCleared,
     ShoppingItemToggled,
     ShoppingItemUpdated,
+    ShoppingStoreDeleted,
+    ShoppingStoreRenamed,
     ShoppingStoresReordered,
     SpaceConfigChanged,
     SpaceJoinApproved,
@@ -277,6 +279,14 @@ class RealtimeService:
         self._bus.subscribe(
             ShoppingStoresReordered,
             self._on_shopping_stores_reordered,
+        )
+        self._bus.subscribe(
+            ShoppingStoreRenamed,
+            self._on_shopping_store_renamed,
+        )
+        self._bus.subscribe(
+            ShoppingStoreDeleted,
+            self._on_shopping_store_deleted,
         )
         self._bus.subscribe(NotificationCreated, self._on_notification_new)
         self._bus.subscribe(
@@ -1335,6 +1345,35 @@ class RealtimeService:
             {
                 "type": "shopping_list.stores_reordered",
                 "order": list(event.order),
+            }
+        )
+
+    async def _on_shopping_store_renamed(
+        self,
+        event: ShoppingStoreRenamed,
+    ) -> None:
+        # Receivers patch both their catalogue (rename the row) and
+        # every item whose ``store`` matched ``old_name`` (point it
+        # at ``new_name``). One frame covers both.
+        await self._broadcast_household(
+            {
+                "type": "shopping_list.store_renamed",
+                "old_name": event.old_name,
+                "new_name": event.new_name,
+            }
+        )
+
+    async def _on_shopping_store_deleted(
+        self,
+        event: ShoppingStoreDeleted,
+    ) -> None:
+        # Items at this store have already had ``store`` cleared to
+        # NULL server-side; SPA receivers mirror that locally so the
+        # rows drop into the "No store" bucket without a refetch.
+        await self._broadcast_household(
+            {
+                "type": "shopping_list.store_deleted",
+                "name": event.name,
             }
         )
 

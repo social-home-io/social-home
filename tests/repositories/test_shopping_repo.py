@@ -234,3 +234,80 @@ async def test_reorder_stores_dedupes_input(env):
 
     stores = await env.repo.list_stores()
     assert [s.name for s in stores] == ["Aldi", "Bakery"]
+
+
+async def test_rename_store_updates_catalogue_and_items(env):
+    """Renaming cascades to every item whose ``store`` matched."""
+    await env.repo.add("Milk", created_by="u1", store="Aldi")
+    await env.repo.add("Eggs", created_by="u1", store="Aldi")
+    await env.repo.add("Bread", created_by="u1", store="Bakery")
+
+    ok = await env.repo.rename_store("Aldi", "Coop")
+
+    assert ok is True
+    stores = await env.repo.list_stores()
+    assert "Aldi" not in [s.name for s in stores]
+    assert "Coop" in [s.name for s in stores]
+    items = await env.repo.list()
+    by_text = {i.text: i for i in items}
+    assert by_text["Milk"].store == "Coop"
+    assert by_text["Eggs"].store == "Coop"
+    assert by_text["Bread"].store == "Bakery"
+
+
+async def test_rename_store_missing_returns_false(env):
+    """No-op rename on a non-existent store name — let the route layer map to 404."""
+    await env.repo.touch_store("Aldi")
+    ok = await env.repo.rename_store("Migrso", "Migros")
+    assert ok is False
+
+
+async def test_rename_store_collision_raises(env):
+    """Renaming to an already-taken catalogue name would lose
+    items — surface as a ValueError so the route can map to 409."""
+    await env.repo.touch_store("Aldi")
+    await env.repo.touch_store("Migros")
+
+    import pytest
+
+    with pytest.raises(ValueError):
+        await env.repo.rename_store("Aldi", "Migros")
+
+
+async def test_rename_store_same_name_is_noop(env):
+    """Renaming a store to its current name shortcuts without
+    touching the DB. Returns True (the store exists)."""
+    await env.repo.touch_store("Aldi")
+    ok = await env.repo.rename_store("Aldi", "Aldi")
+    assert ok is True
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Aldi"]
+
+
+async def test_delete_store_clears_items_and_removes_catalogue_row(env):
+    """Delete drops the catalogue row + sets ``store=NULL`` on every
+    item that referenced it. Returns the count of items cleared."""
+    await env.repo.add("Milk", created_by="u1", store="Aldi")
+    await env.repo.add("Eggs", created_by="u1", store="Aldi")
+    await env.repo.add("Bread", created_by="u1", store="Bakery")
+
+    cleared = await env.repo.delete_store("Aldi")
+
+    assert cleared == 2
+    stores = await env.repo.list_stores()
+    assert "Aldi" not in [s.name for s in stores]
+    items = await env.repo.list()
+    by_text = {i.text: i for i in items}
+    assert by_text["Milk"].store is None
+    assert by_text["Eggs"].store is None
+    assert by_text["Bread"].store == "Bakery"
+
+
+async def test_delete_store_missing_is_zero(env):
+    """Delete-on-missing returns zero rather than raising — operators
+    double-clicking the trash icon shouldn't see an error."""
+    await env.repo.touch_store("Aldi")
+    cleared = await env.repo.delete_store("Migrso")
+    assert cleared == 0
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Aldi"]

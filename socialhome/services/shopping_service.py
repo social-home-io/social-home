@@ -23,6 +23,8 @@ from ..domain.events import (
     ShoppingItemsCleared,
     ShoppingItemToggled,
     ShoppingItemUpdated,
+    ShoppingStoreDeleted,
+    ShoppingStoreRenamed,
     ShoppingStoresReordered,
 )
 from ..domain.shopping import ShoppingStore
@@ -207,3 +209,32 @@ class ShoppingService:
                 )
             )
         return result
+
+    async def rename_store(self, old_name: str, new_name: str) -> bool:
+        """Rename a catalogue row + cascade to items. Returns ``False``
+        when the old store didn't exist (route layer maps to a 404);
+        raises ``ValueError`` when the new name collides with an
+        existing store (route layer maps to a 409). Broadcasts
+        :class:`ShoppingStoreRenamed` on success so paired tabs patch
+        their local catalogue and items' ``store`` field.
+        """
+        ok = await self._repo.rename_store(old_name, new_name)
+        if ok and self._bus is not None and old_name.strip() != new_name.strip():
+            await self._bus.publish(
+                ShoppingStoreRenamed(
+                    old_name=old_name.strip(),
+                    new_name=new_name.strip(),
+                )
+            )
+        return ok
+
+    async def delete_store(self, name: str) -> int:
+        """Remove a catalogue row + clear it from every item that
+        referenced it. Returns the count of items whose ``store`` was
+        set to NULL — useful as a "moved X items to No store" toast
+        hint. Broadcasts :class:`ShoppingStoreDeleted`.
+        """
+        affected = await self._repo.delete_store(name)
+        if self._bus is not None:
+            await self._bus.publish(ShoppingStoreDeleted(name=name.strip()))
+        return affected

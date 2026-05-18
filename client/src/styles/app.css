@@ -6654,10 +6654,36 @@ body.sh-dm-thread-open .sh-messages {
   gap: var(--sh-space-sm);
   flex-wrap: wrap;
 }
+/* Grouped / list view toggle. Renders as a true segmented control
+ * (shared border, no gap between buttons, the active one pops with
+ * a soft fill) instead of two adjacent independent chips. Reads as
+ * "an A/B switch" rather than "two unrelated buttons next to each
+ * other." */
 .sh-shopping-grouptoggle {
   display: inline-flex;
-  gap: 4px;
   flex-shrink: 0;
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-full);
+  background: var(--sh-bg);
+  padding: 2px;
+  gap: 0;
+}
+.sh-shopping-grouptoggle .sh-chip {
+  border: none;
+  background: transparent;
+  color: var(--sh-text-muted);
+  border-radius: var(--sh-radius-full);
+  padding: 4px 12px;
+  font-size: calc(var(--sh-font-size-xs) - 1px);
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+.sh-shopping-grouptoggle .sh-chip:hover {
+  color: var(--sh-text);
+}
+.sh-shopping-grouptoggle .sh-chip--active {
+  background: color-mix(in srgb, var(--sh-primary) 18%, transparent);
+  color: var(--sh-primary);
 }
 .sh-shopping-add { display: flex; gap: var(--sh-space-sm); }
 .sh-shopping-add input { flex: 1; }
@@ -7056,6 +7082,75 @@ body.sh-dm-thread-open .sh-messages {
 }
 .sh-shopping-store-picker__back:hover {
   text-decoration: underline;
+}
+
+/* Per-store ⋯ button (sits to the right of the picker option row).
+ * Opens the manage view for that store — rename + delete in one
+ * place. Quiet at rest so the picker still scans as a list of
+ * choices, not a list of edit actions. */
+.sh-shopping-store-picker__row {
+  display: flex;
+  align-items: stretch;
+}
+.sh-shopping-store-picker__row .sh-shopping-store-picker__opt {
+  flex: 1;
+  min-width: 0;
+}
+.sh-shopping-store-picker__manage {
+  border: none;
+  background: transparent;
+  color: var(--sh-text-muted);
+  cursor: pointer;
+  padding: 0 12px;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+.sh-shopping-store-picker__manage:hover,
+.sh-shopping-store-picker__manage:focus-visible {
+  color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  outline: none;
+}
+
+/* Manage view — rename input + delete button stacked. Same surface
+ * + back-button pattern as ``__new`` so the two typed-modes feel
+ * like siblings to the user. */
+.sh-shopping-store-picker__manage-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  padding: 12px 16px;
+}
+.sh-shopping-store-picker__manage-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sh-shopping-store-picker__manage-label .sh-shopping-store-picker__new-input {
+  width: 100%;
+}
+.sh-shopping-store-picker__manage-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--sh-space-sm);
+}
+.sh-shopping-store-picker__delete {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--sh-danger, #ef4444) 30%, transparent);
+  color: var(--sh-danger, #ef4444);
+  padding: 6px 12px;
+  border-radius: var(--sh-radius-md);
+  font-size: var(--sh-font-size-sm);
+  cursor: pointer;
+}
+.sh-shopping-store-picker__delete:hover {
+  background: color-mix(in srgb, var(--sh-danger, #ef4444) 10%, transparent);
 }
 
 /* Drag-drop visual feedback for the new item-between-stores flow.

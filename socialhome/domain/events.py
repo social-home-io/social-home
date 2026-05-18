@@ -765,6 +765,34 @@ class ShoppingStoresReordered(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+@dataclass(slots=True, frozen=True)
+class ShoppingStoreRenamed(DomainEvent):
+    """A store row was renamed in the catalogue.
+
+    The rename cascades to every item that referenced ``old_name``;
+    receivers should patch both their catalogue and their items'
+    ``store`` field in one pass.
+    """
+
+    old_name: str
+    new_name: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class ShoppingStoreDeleted(DomainEvent):
+    """A store row was removed from the catalogue.
+
+    All items that referenced this store have already had their
+    ``store`` field cleared to ``NULL``; the SPA should mirror that
+    locally so the row drops into the "No store" bucket without
+    waiting for a re-fetch.
+    """
+
+    name: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
 # ─── Presence + notification real-time events (§21, §22) ────────────────
 
 
