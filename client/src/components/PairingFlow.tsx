@@ -1,21 +1,26 @@
 /**
- * PairingFlow — QR-code household pairing (§11 / §23.4).
+ * PairingFlow — household + GFS pairing (§11 / §23.4 / §24.7).
  *
  * Two sides, one component:
  *
  *   **Show QR** (inviter): generates a QR, waits for the other side
  *   to scan, auto-fills the 6-digit SAS code when the peer's
  *   ``peer-accept`` lands, admin confirms, WS ``pairing.confirmed``
- *   flips to success.
+ *   flips to success. Renders the QR + a peer ``socialhome://pair#…``
+ *   "share code" card so remote-pairing (chat, SMS, email) works.
  *
- *   **Scan QR** (scanner): camera preview via the native
- *   ``BarcodeDetector`` API, file-picker fallback for desktops,
- *   paste fallback for browsers without either. Posts the parsed
- *   payload to ``/api/pairing/accept``, shows the SAS for the scanner
- *   to read aloud to the inviter, waits for ``pairing.confirmed``.
+ *   **Scan QR** (scanner): a two-method picker — camera scan via the
+ *   native ``BarcodeDetector`` (with image-upload fallback inside the
+ *   same method) and "Paste code" textarea as the equal-weight peer.
+ *   Posts the parsed payload to ``/api/pairing/accept``, shows the
+ *   SAS for the scanner to read aloud to the inviter, waits for
+ *   ``pairing.confirmed``.
  *
- * GFS mode: the Global-Federation-Server connect flow lives in the
- * same component to share the modal chrome + state reset.
+ * GFS mode: the Global-Federation-Server connect flow uses the same
+ * two-method picker. The QR encodes a ``socialhome://gfs-pair/{url}
+ * ?token={token}`` URL the GFS landing page now publishes; the paste
+ * field accepts that URL directly. POSTs ``{gfs_url, token}`` (the
+ * shape ``gfs_connection_service.pair`` requires).
  */
 import { signal } from '@preact/signals'
 import { useEffect, useRef, useState } from 'preact/hooks'
@@ -30,10 +35,11 @@ import { t } from '@/i18n/i18n'
 
 type PairingMode = 'household' | 'gfs'
 type PairingRole = 'unset' | 'inviter' | 'scanner'
+type ScanMethod = 'qr' | 'paste'
 type PairingStep =
   | 'idle'        // mode picker (inviter / scanner)
   | 'generating'  // inviter: POST /api/pairing/initiate
-  | 'waiting'     // inviter: QR shown, waiting for SAS auto-fill
+  | 'waiting'     // inviter: QR + code shown, waiting for SAS auto-fill
   | 'scanning'    // scanner: camera / upload / paste
   | 'accepting'   // scanner: POST /api/pairing/accept
   | 'sas-display' // scanner: show the 6-digit SAS for out-of-band verify
@@ -44,12 +50,12 @@ type PairingStep =
 const step = signal<PairingStep>('idle')
 const role = signal<PairingRole>('unset')
 const mode = signal<PairingMode>('household')
-const qrPayload = signal('')
+const qrPayload = signal('')         // raw JSON for household, socialhome://gfs-pair URL for gfs
+const pairingCode = signal('')       // socialhome://pair#… (household) or socialhome://gfs-pair/… (gfs)
 const verificationCode = signal('')
 const sasDigits = signal(['', '', '', '', '', ''])
 const pairingToken = signal('')
 const scannedSas = signal('')  // scanner-side SAS to display
-const gfsUrl = signal('')
 const open = signal(false)
 const onGfsConnectedCb = signal<(() => void) | null>(null)
 const peerHint = signal<string | null>(null)
@@ -87,6 +93,9 @@ function friendlyPairError(err: unknown, stage?: 'initiate'): string {
     if (err.status === 409) {
       return 'You’re already paired with this household.'
     }
+    if (err.status === 422) {
+      return 'The pairing code looks malformed. Try copying it again.'
+    }
     if (err.status >= 500) {
       return 'The server hit an error. Wait a moment and retry.'
     }
@@ -99,18 +108,116 @@ function friendlyPairError(err: unknown, stage?: 'initiate'): string {
   return 'Couldn’t pair. Retry, or check your network.'
 }
 
+// ────────────────────────────────────────────────────────────────
+//  socialhome:// URL scheme — encode / decode
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * ``socialhome://pair#<base64url(JSON)>`` — a single-line, chat-safe
+ * pairing string. Payload sits in the URL fragment so a stray paste
+ * into a browser address bar (or a URL preview generator) never sends
+ * the secret to the receiving instance's server logs — fragments stay
+ * client-side.
+ */
+function base64UrlEncode(text: string): string {
+  const utf8 = new TextEncoder().encode(text)
+  let bin = ''
+  for (const byte of utf8) bin += String.fromCharCode(byte)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function base64UrlDecode(text: string): string | null {
+  const normalised = text.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = normalised + '='.repeat((4 - (normalised.length % 4)) % 4)
+  try {
+    const bin = atob(padded)
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return null
+  }
+}
+
+export function buildPairingCode(payloadJson: string): string {
+  return `socialhome://pair#${base64UrlEncode(payloadJson)}`
+}
+
+/**
+ * Decode a household pairing string. Accepts:
+ *   - ``socialhome://pair#<base64url(JSON)>`` (the new shape)
+ *   - Raw multi-field JSON (back-compat for codes already in flight)
+ * Returns the parsed payload or ``null`` if it's neither.
+ */
+function decodePairingCode(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('socialhome://pair#')) {
+    const fragment = trimmed.slice('socialhome://pair#'.length)
+    const json = base64UrlDecode(fragment)
+    if (!json) return null
+    try {
+      return JSON.parse(json) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+  // Back-compat: raw JSON payload (what older QR codes encoded).
+  if (trimmed.startsWith('{')) {
+    try {
+      return JSON.parse(trimmed) as Record<string, unknown>
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/**
+ * Decode a GFS pairing string. Accepts ``socialhome://gfs-pair/{base_url}
+ * ?token={token}`` — the URL the GFS landing page renders.
+ *
+ * The ``URL`` constructor can't parse non-special schemes' pathname
+ * cleanly, so we hand-strip the prefix and re-parse with
+ * ``new URL(rest, 'https://placeholder')``.
+ */
+function decodeGfsCode(raw: string): { gfs_url: string; token: string } | null {
+  const trimmed = raw.trim()
+  if (!trimmed.startsWith('socialhome://gfs-pair/')) return null
+  const rest = trimmed.slice('socialhome://gfs-pair/'.length)
+  // ``rest`` is now ``{base_url-without-scheme}?token=…`` — but the QR
+  // payload keeps the ``https://`` on the base URL, so peel it off
+  // before the query split.
+  const qIdx = rest.indexOf('?')
+  if (qIdx < 0) return null
+  const base = rest.slice(0, qIdx).replace(/\/$/, '')
+  const query = rest.slice(qIdx + 1)
+  const params = new URLSearchParams(query)
+  const token = params.get('token') ?? ''
+  if (!base || !token) return null
+  // The QR keeps the scheme — make sure ``base`` actually starts with
+  // ``http://`` or ``https://`` so the SH service doesn't get tricked
+  // into hitting an arbitrary host as if it were a URL.
+  if (!/^https?:\/\//.test(base)) return null
+  return { gfs_url: base, token }
+}
+
+// ────────────────────────────────────────────────────────────────
+//  Component-level handles + helpers
+// ────────────────────────────────────────────────────────────────
+
 export function openPairing(pairingMode: PairingMode = 'household') {
   mode.value = pairingMode
   open.value = true
   step.value = 'idle'
   role.value = 'unset'
-  gfsUrl.value = ''
   peerHint.value = null
   verificationCode.value = ''
   sasDigits.value = ['', '', '', '', '', '']
   scannedSas.value = ''
   scanError.value = null
   qrPayload.value = ''
+  pairingCode.value = ''
   pairingToken.value = ''
 }
 
@@ -120,7 +227,7 @@ export function openPairing(pairingMode: PairingMode = 'household') {
  * correction level M (15% redundancy) which is plenty for a
  * short URL and keeps the code visually clean.
  */
-function QrCodeImg({ data, size = 240 }: { data: string; size?: number }) {
+function QrCodeImg({ data, size = 220 }: { data: string; size?: number }) {
   const [src, setSrc] = useState<string | null>(null)
   useEffect(() => {
     let stopped = false
@@ -215,31 +322,6 @@ function SasDisplay({ code }: { code: string }) {
   )
 }
 
-function GfsUrlInput({ onSubmit }: { onSubmit: () => void }) {
-  return (
-    <div class="sh-gfs-url-input">
-      {/* Privacy framing — first-time admins shouldn't have to leave
-       *  the dialog to understand what a GFS does or what gets shared.
-       *  Two sentences max so the field stays the focal point. */}
-      <p class="sh-gfs-url-intro sh-muted">{t('gfs.modal_intro')}</p>
-      <label>{t('gfs.enter_url')}</label>
-      <input
-        type="url"
-        class="sh-input"
-        placeholder="https://gfs.example.com"
-        value={gfsUrl.value}
-        onInput={(e) => gfsUrl.value = (e.target as HTMLInputElement).value}
-      />
-      <p class="sh-gfs-url-hint sh-muted">{t('gfs.url_hint')}</p>
-      <div class="sh-pairing-actions">
-        <Button onClick={onSubmit} disabled={!gfsUrl.value.trim()}>
-          {t('gfs.add')}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 /**
  * Step indicator — reflects the inviter flow by default. The scanner
  * flow has its own labels since the middle step is different.
@@ -292,7 +374,7 @@ function StepIndicator({ current, role: currentRole }: {
 }
 
 // ────────────────────────────────────────────────────────────────
-//  Scanner — camera preview / file picker / paste
+//  Scanner — camera + image-upload fallback (same method)
 // ────────────────────────────────────────────────────────────────
 
 type BarcodeDetectorLike = {
@@ -425,14 +507,7 @@ async function decodeImage(file: File): Promise<string | null> {
   }
 }
 
-function ScanOptions({
-  onPayload,
-  onPaste,
-}: {
-  onPayload: (raw: string) => void
-  onPaste: () => void
-}) {
-  const [useCamera, setUseCamera] = useState(true)
+function ScanQrPanel({ onPayload }: { onPayload: (raw: string) => void }) {
   const [decoding, setDecoding] = useState(false)
 
   const handleFile = async (ev: Event) => {
@@ -458,10 +533,10 @@ function ScanOptions({
 
   return (
     <div class="sh-scan-options">
-      {useCamera && barcodeDetectorSupported() && (
+      {barcodeDetectorSupported() && (
         <QrCameraScanner onPayload={onPayload} />
       )}
-      {(!useCamera || !barcodeDetectorSupported()) && (
+      {!barcodeDetectorSupported() && (
         <div class="sh-scan-no-camera">
           <p class="sh-muted">{t('pairing.scan_no_camera_hint')}</p>
         </div>
@@ -469,65 +544,108 @@ function ScanOptions({
       {scanError.value && (
         <p class="sh-scan-error-inline" role="alert">{scanError.value}</p>
       )}
-      <div class="sh-scan-fallbacks">
-        {barcodeDetectorSupported() && (
-          <button
-            type="button"
-            class="sh-link"
-            onClick={() => setUseCamera(c => !c)}
-          >
-            {useCamera ? t('pairing.scan_hide_camera') : t('pairing.scan_show_camera')}
-          </button>
-        )}
-        <label class="sh-link sh-scan-upload-label">
-          <input
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={handleFile}
-            disabled={decoding}
-          />
-          {t('pairing.scan_upload')}
-        </label>
-        <button
-          type="button"
-          class="sh-link"
-          onClick={onPaste}
-        >
-          {t('pairing.scan_paste')}
-        </button>
-      </div>
+      <label class="sh-link sh-scan-upload-label">
+        <input
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={handleFile}
+          disabled={decoding}
+        />
+        {t('pairing.scan_upload')}
+      </label>
       {decoding && <Spinner />}
     </div>
   )
 }
 
-function ScanPaste({
+function PastePanel({
   onSubmit,
-  onCancel,
+  placeholder,
+  label,
+  mode: pasteMode,
 }: {
   onSubmit: (raw: string) => void
-  onCancel: () => void
+  placeholder: string
+  label: string
+  mode: PairingMode
 }) {
   const [value, setValue] = useState('')
   return (
     <div class="sh-scan-paste">
-      <label>{t('pairing.scan_paste_label')}</label>
+      <label>{label}</label>
       <textarea
         class="sh-textarea"
-        rows={6}
-        placeholder='{"token":"...","identity_pk":"...",...}'
+        rows={pasteMode === 'household' ? 4 : 3}
+        placeholder={placeholder}
         value={value}
         onInput={(e) => setValue((e.target as HTMLTextAreaElement).value)}
+        autoFocus
       />
       <div class="sh-pairing-actions">
         <Button onClick={() => onSubmit(value.trim())} disabled={!value.trim()}>
-          {t('pairing.scan_paste_submit')}
+          {t('pairing.paste_submit')}
         </Button>
-        <button type="button" class="sh-link" onClick={onCancel}>
-          {t('pairing.scan_paste_cancel')}
-        </button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Two-method picker: Scan QR card + Paste code card. Equal-weight
+ * peers — the "Paste code" path is no longer a buried fallback link
+ * but a first-class entry point for remote pairing.
+ */
+function MethodPicker({
+  active,
+  onPick,
+}: {
+  active: ScanMethod
+  onPick: (method: ScanMethod) => void
+}) {
+  return (
+    <div class="sh-pairing-method-grid" role="tablist"
+         aria-label={t('pairing.scan_intro')}>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active === 'qr'}
+        class={`sh-pairing-method-card ${active === 'qr' ? 'sh-pairing-method-card--active' : ''}`}
+        onClick={() => onPick('qr')}
+      >
+        <span class="sh-pairing-method-icon" aria-hidden="true">📷</span>
+        <span class="sh-pairing-method-title">{t('pairing.method_qr')}</span>
+        <span class="sh-pairing-method-hint">{t('pairing.method_qr_hint')}</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active === 'paste'}
+        class={`sh-pairing-method-card ${active === 'paste' ? 'sh-pairing-method-card--active' : ''}`}
+        onClick={() => onPick('paste')}
+      >
+        <span class="sh-pairing-method-icon" aria-hidden="true">📋</span>
+        <span class="sh-pairing-method-title">{t('pairing.method_paste')}</span>
+        <span class="sh-pairing-method-hint">{t('pairing.method_paste_hint')}</span>
+      </button>
+    </div>
+  )
+}
+
+/**
+ * Inviter-side "Or share a code" card — the chat-safe peer of the QR
+ * image. Lives next to (desktop) or under (mobile) the QR with an OR
+ * divider so it reads as an alternative path, not a fallback.
+ */
+function ShareCodeCard({ code, onCopy }: { code: string; onCopy: () => void }) {
+  return (
+    <div class="sh-pairing-code-card">
+      <div class="sh-pairing-code-heading">{t('pairing.code_share_heading')}</div>
+      <code class="sh-pairing-code-string" aria-label={code}>{code}</code>
+      <Button onClick={onCopy} variant="secondary">
+        {t('pairing.copy_code')}
+      </Button>
+      <p class="sh-muted sh-pairing-code-hint">{t('pairing.code_share_hint')}</p>
     </div>
   )
 }
@@ -546,7 +664,7 @@ const PAIRING_STEP_TIMEOUT_MS = 5 * 60 * 1000
 export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void }) {
   onGfsConnectedCb.value = onGfsConnected ?? null
   const sasAutofilledRef = useRef(false)
-  const [pasteMode, setPasteMode] = useState(false)
+  const [scanMethod, setScanMethod] = useState<ScanMethod>('qr')
 
   // ── Per-state timeout ─────────────────────────────────────────────
   // Watches ``step.value``; when the user enters one of the open-ended
@@ -612,7 +730,9 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
       const result = await api.post('/api/pairing/initiate', {}) as {
         token: string; [key: string]: unknown
       }
-      qrPayload.value = JSON.stringify(result)
+      const json = JSON.stringify(result)
+      qrPayload.value = buildPairingCode(json)
+      pairingCode.value = qrPayload.value
       pairingToken.value = result.token
       step.value = 'waiting'
     } catch (err: unknown) {
@@ -637,10 +757,10 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     }
   }
 
-  const copyPayload = async () => {
+  const copyCode = async () => {
     try {
-      await navigator.clipboard.writeText(qrPayload.value)
-      showToast(t('pairing.link_copied'), 'success')
+      await navigator.clipboard.writeText(pairingCode.value)
+      showToast(t('pairing.code_copied'), 'success')
     } catch {
       showToast(t('pairing.clipboard_unavailable'), 'error')
     }
@@ -651,16 +771,13 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     role.value = 'scanner'
     step.value = 'scanning'
     scanError.value = null
-    setPasteMode(false)
+    setScanMethod('qr')
   }
 
   const handleScanned = async (raw: string) => {
-    // Parse first — invalid JSON → show message, let user retry.
-    let parsed: Record<string, unknown>
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      scanError.value = t('pairing.scan_invalid_json')
+    const parsed = decodePairingCode(raw)
+    if (!parsed) {
+      scanError.value = t('pairing.scan_invalid_code')
       return
     }
     if (!parsed.token || !parsed.identity_pk || !parsed.dh_pk) {
@@ -682,6 +799,32 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     }
   }
 
+  // ── GFS path ─────────────────────────────────────────────────────
+  const startGfs = () => {
+    role.value = 'scanner'  // GFS is "scan/paste a code that the GFS issued"
+    step.value = 'scanning'
+    scanError.value = null
+    setScanMethod('qr')
+  }
+
+  const handleGfsScanned = async (raw: string) => {
+    const parsed = decodeGfsCode(raw)
+    if (!parsed) {
+      scanError.value = t('gfs.invalid_code')
+      return
+    }
+    step.value = 'generating'
+    try {
+      await api.post('/api/gfs/connections', parsed)
+      step.value = 'success'
+      showToast(t('gfs.pair_success'), 'success')
+      if (onGfsConnectedCb.value) onGfsConnectedCb.value()
+    } catch (err: unknown) {
+      step.value = 'failed'
+      peerHint.value = friendlyPairError(err)
+    }
+  }
+
   // ── Shared reset ─────────────────────────────────────────────────
   const resetSas = () => {
     sasDigits.value = ['', '', '', '', '', '']
@@ -693,29 +836,23 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     step.value = 'idle'
     role.value = 'unset'
     resetSas()
-    gfsUrl.value = ''
     peerHint.value = null
     qrPayload.value = ''
+    pairingCode.value = ''
     pairingToken.value = ''
     scannedSas.value = ''
     scanError.value = null
-    setPasteMode(false)
-  }
-
-  const connectGfs = async () => {
-    step.value = 'generating'
-    try {
-      await api.post('/api/gfs/connections', { inbox_url: gfsUrl.value.trim() })
-      step.value = 'success'
-      showToast(t('gfs.pair_success'), 'success')
-      if (onGfsConnectedCb.value) onGfsConnectedCb.value()
-    } catch (err: unknown) {
-      step.value = 'failed'
-      peerHint.value = friendlyPairError(err)
-    }
+    setScanMethod('qr')
   }
 
   const modalTitle = mode.value === 'gfs' ? t('gfs.modal_title') : t('pairing.title')
+  const onPayload = mode.value === 'gfs' ? handleGfsScanned : handleScanned
+  const pastePlaceholder = mode.value === 'gfs'
+    ? t('gfs.paste_placeholder')
+    : t('pairing.paste_placeholder')
+  const pasteLabel = mode.value === 'gfs'
+    ? t('gfs.paste_label')
+    : t('pairing.paste_label')
 
   return (
     <Modal open={open.value}
@@ -726,205 +863,200 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
           <StepIndicator current={step.value} role={role.value} />
         )}
 
-        {mode.value === 'household' && (
-          <>
-            {step.value === 'idle' && (
-              <div class="sh-pairing-start">
-                <div class="sh-pairing-hero" aria-hidden="true">🔗</div>
-                {/* The Modal already shows "Pair with Household" in its
-                 *  header — the body just needs an action prompt, not a
-                 *  duplicate title. */}
-                <p class="sh-muted">{t('pairing.intro')}</p>
-                <div class="sh-pairing-role-grid">
-                  <button
-                    type="button"
-                    class="sh-pairing-role-card"
-                    onClick={initiate}
-                    aria-label={t('pairing.role_show_aria')}
-                  >
-                    <span class="sh-pairing-role-icon" aria-hidden="true">🪪</span>
-                    <span class="sh-pairing-role-title">
-                      {t('pairing.role_show')}
-                    </span>
-                    <span class="sh-pairing-role-hint">
-                      {t('pairing.role_show_hint')}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="sh-pairing-role-card"
-                    onClick={startScan}
-                    aria-label={t('pairing.role_scan_aria')}
-                  >
-                    <span class="sh-pairing-role-icon" aria-hidden="true">📷</span>
-                    <span class="sh-pairing-role-title">
-                      {t('pairing.role_scan')}
-                    </span>
-                    <span class="sh-pairing-role-hint">
-                      {t('pairing.role_scan_hint')}
-                    </span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {step.value === 'generating' && <Spinner />}
-
-            {/* Inviter — showing the QR + waiting for SAS auto-fill */}
-            {step.value === 'waiting' && (
-              <div class="sh-pairing-qr">
-                <p class="sh-muted">{t('pairing.show_qr')}</p>
-                <QrCodeImg data={qrPayload.value} size={240} />
-                <div class="sh-row" style={{ gap: 'var(--sh-space-xs)', justifyContent: 'center' }}>
-                  <button type="button" class="sh-link"
-                          onClick={copyPayload}>
-                    {t('pairing.copy_link')}
-                  </button>
-                </div>
-                <div class="sh-pairing-waiting" role="status">
-                  <span class="sh-pairing-pulse" aria-hidden="true" />
-                  <span>{t('pairing.waiting')}</span>
-                </div>
-                <SasInput autofilled={sasAutofilledRef.current} />
-                <div class="sh-pairing-actions">
-                  <Button onClick={verify}
-                          disabled={verificationCode.value.length !== 6}>
-                    {t('pairing.verify')}
-                  </Button>
-                  {!sasAutofilledRef.current && (
-                    <button type="button" class="sh-link" onClick={resetSas}>
-                      {t('pairing.clear_code')}
-                    </button>
-                  )}
-                  <button type="button" class="sh-link" onClick={resetAll}>
-                    {t('pairing.cancel')}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Scanner — camera / upload / paste */}
-            {step.value === 'scanning' && !pasteMode && (
-              <div class="sh-pairing-scan">
-                <p class="sh-muted">{t('pairing.scan_intro')}</p>
-                <ScanOptions
-                  onPayload={handleScanned}
-                  onPaste={() => setPasteMode(true)}
-                />
-                <div class="sh-pairing-actions">
-                  <button type="button" class="sh-link" onClick={resetAll}>
-                    {t('pairing.back')}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {step.value === 'scanning' && pasteMode && (
-              <ScanPaste
-                onSubmit={handleScanned}
-                onCancel={() => setPasteMode(false)}
-              />
-            )}
-
-            {step.value === 'accepting' && (
-              <div class="sh-pairing-accepting">
-                <Spinner />
-                <p class="sh-muted">{t('pairing.accepting')}</p>
-              </div>
-            )}
-
-            {/* Scanner — SAS display */}
-            {step.value === 'sas-display' && (
-              <div class="sh-pairing-sas">
-                <h3 style={{ margin: 0 }}>{t('pairing.sas_heading')}</h3>
-                <p class="sh-muted">{t('pairing.sas_instructions')}</p>
-                <SasDisplay code={scannedSas.value} />
-                <div class="sh-pairing-waiting" role="status">
-                  <span class="sh-pairing-pulse" aria-hidden="true" />
-                  <span>{t('pairing.sas_waiting')}</span>
-                </div>
-                <div class="sh-pairing-actions">
-                  <button type="button" class="sh-link" onClick={resetAll}>
-                    {t('pairing.cancel')}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {step.value === 'verifying' && <Spinner />}
-
-            {step.value === 'success' && (
-              <div class="sh-pairing-success">
-                <div class="sh-pairing-success-burst" aria-hidden="true">
-                  <span>✓</span>
-                </div>
-                <h3 style={{ margin: 0 }}>{t('pairing.success')}</h3>
-                <p class="sh-muted">
-                  {peerHint.value
-                    ? t('pairing.success_named').replace('{peer}', peerHint.value)
-                    : t('pairing.success_message')}
-                </p>
-                <Button onClick={() => { open.value = false }}>
-                  {t('pairing.done')}
-                </Button>
-              </div>
-            )}
-
-            {step.value === 'failed' && (
-              <div class="sh-pairing-failed">
-                <div class="sh-pairing-fail-mark" aria-hidden="true">⚠</div>
-                <h3 style={{ margin: 0 }}>{t('pairing.failed')}</h3>
-                <p class="sh-muted">
-                  {peerHint.value ?? t('pairing.failed_message')}
-                </p>
-                <Button onClick={resetAll}>{t('pairing.retry')}</Button>
-              </div>
-            )}
-          </>
+        {mode.value === 'household' && step.value === 'idle' && (
+          <div class="sh-pairing-start">
+            <div class="sh-pairing-hero" aria-hidden="true">🔗</div>
+            <p class="sh-muted">{t('pairing.intro')}</p>
+            <div class="sh-pairing-role-grid">
+              <button
+                type="button"
+                class="sh-pairing-role-card"
+                onClick={initiate}
+                aria-label={t('pairing.role_show_aria')}
+              >
+                <span class="sh-pairing-role-icon" aria-hidden="true">🪪</span>
+                <span class="sh-pairing-role-title">
+                  {t('pairing.role_show')}
+                </span>
+                <span class="sh-pairing-role-hint">
+                  {t('pairing.role_show_hint')}
+                </span>
+              </button>
+              <button
+                type="button"
+                class="sh-pairing-role-card"
+                onClick={startScan}
+                aria-label={t('pairing.role_scan_aria')}
+              >
+                <span class="sh-pairing-role-icon" aria-hidden="true">📷</span>
+                <span class="sh-pairing-role-title">
+                  {t('pairing.role_scan')}
+                </span>
+                <span class="sh-pairing-role-hint">
+                  {t('pairing.role_scan_hint')}
+                </span>
+              </button>
+            </div>
+          </div>
         )}
 
-        {mode.value === 'gfs' && (
-          <>
-            {step.value === 'idle' && (
-              <GfsUrlInput onSubmit={connectGfs} />
-            )}
-            {step.value === 'generating' && <Spinner />}
-            {step.value === 'success' && (
-              <div class="sh-pairing-success">
-                <div class="sh-pairing-success-burst" aria-hidden="true">
-                  <span>✓</span>
-                </div>
-                <h3 style={{ margin: 0 }}>{t('gfs.connected')}</h3>
-                <p class="sh-muted">{t('gfs.pair_success')}</p>
-                {/* Wayfinding — once connected, the next thing an admin
-                 *  wants is to choose what to publish. Linking the
-                 *  public-sharing route here saves a sidebar dig. */}
-                <p class="sh-muted">{t('gfs.next_steps')}</p>
-                <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
-                  <Button variant="secondary"
-                          onClick={() => { open.value = false }}>
-                    {t('pairing.done')}
-                  </Button>
-                  <Button onClick={() => {
-                    open.value = false
-                    location.assign('/momentum/public/sharing')
-                  }}>
-                    {t('gfs.open_publishing')}
-                  </Button>
-                </div>
+        {step.value === 'generating' && (
+          <div class="sh-pairing-generating">
+            <Spinner />
+          </div>
+        )}
+
+        {/* ── Inviter — QR + share-code card ─────────────────────── */}
+        {mode.value === 'household' && step.value === 'waiting' && (
+          <div class="sh-pairing-qr">
+            <div class="sh-pairing-share">
+              <div class="sh-pairing-share-qr">
+                <p class="sh-muted">{t('pairing.show_qr')}</p>
+                <QrCodeImg data={qrPayload.value} size={220} />
               </div>
-            )}
-            {step.value === 'failed' && (
-              <div class="sh-pairing-failed">
-                <div class="sh-pairing-fail-mark" aria-hidden="true">⚠</div>
-                <h3 style={{ margin: 0 }}>{t('pairing.failed')}</h3>
-                <p class="sh-muted">
-                  {peerHint.value ?? t('gfs.pairing_failed')}
-                </p>
-                <Button onClick={resetAll}>{t('pairing.retry')}</Button>
+              <div class="sh-pairing-or" aria-hidden="true">
+                <span>{t('pairing.or_divider')}</span>
               </div>
+              <ShareCodeCard code={pairingCode.value} onCopy={copyCode} />
+            </div>
+            <div class="sh-pairing-waiting" role="status">
+              <span class="sh-pairing-pulse" aria-hidden="true" />
+              <span>{t('pairing.waiting')}</span>
+            </div>
+            <SasInput autofilled={sasAutofilledRef.current} />
+            <div class="sh-pairing-actions">
+              <Button onClick={verify}
+                      disabled={verificationCode.value.length !== 6}>
+                {t('pairing.verify')}
+              </Button>
+              {!sasAutofilledRef.current && (
+                <button type="button" class="sh-link" onClick={resetSas}>
+                  {t('pairing.clear_code')}
+                </button>
+              )}
+              <button type="button" class="sh-link" onClick={resetAll}>
+                {t('pairing.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Scanner / GFS — method picker + active panel ────────── */}
+        {step.value === 'scanning' && (
+          <div class="sh-pairing-scan">
+            {mode.value === 'gfs' && (
+              <p class="sh-muted">{t('gfs.scan_intro')}</p>
             )}
-          </>
+            {mode.value === 'household' && (
+              <p class="sh-muted">{t('pairing.scan_intro')}</p>
+            )}
+            <MethodPicker active={scanMethod} onPick={(m) => {
+              scanError.value = null
+              setScanMethod(m)
+            }} />
+            {scanMethod === 'qr' && <ScanQrPanel onPayload={onPayload} />}
+            {scanMethod === 'paste' && (
+              <PastePanel
+                onSubmit={onPayload}
+                placeholder={pastePlaceholder}
+                label={pasteLabel}
+                mode={mode.value}
+              />
+            )}
+            <div class="sh-pairing-actions">
+              <button type="button" class="sh-link" onClick={resetAll}>
+                {t('pairing.back')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step.value === 'accepting' && mode.value === 'household' && (
+          <div class="sh-pairing-accepting">
+            <Spinner />
+            <p class="sh-muted">{t('pairing.accepting')}</p>
+          </div>
+        )}
+
+        {/* Scanner — SAS display */}
+        {step.value === 'sas-display' && mode.value === 'household' && (
+          <div class="sh-pairing-sas">
+            <h3 style={{ margin: 0 }}>{t('pairing.sas_heading')}</h3>
+            <p class="sh-muted">{t('pairing.sas_instructions')}</p>
+            <SasDisplay code={scannedSas.value} />
+            <div class="sh-pairing-waiting" role="status">
+              <span class="sh-pairing-pulse" aria-hidden="true" />
+              <span>{t('pairing.sas_waiting')}</span>
+            </div>
+            <div class="sh-pairing-actions">
+              <button type="button" class="sh-link" onClick={resetAll}>
+                {t('pairing.cancel')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step.value === 'verifying' && <Spinner />}
+
+        {step.value === 'success' && mode.value === 'household' && (
+          <div class="sh-pairing-success">
+            <div class="sh-pairing-success-burst" aria-hidden="true">
+              <span>✓</span>
+            </div>
+            <h3 style={{ margin: 0 }}>{t('pairing.success')}</h3>
+            <p class="sh-muted">
+              {peerHint.value
+                ? t('pairing.success_named').replace('{peer}', peerHint.value)
+                : t('pairing.success_message')}
+            </p>
+            <Button onClick={() => { open.value = false }}>
+              {t('pairing.done')}
+            </Button>
+          </div>
+        )}
+
+        {step.value === 'failed' && (
+          <div class="sh-pairing-failed">
+            <div class="sh-pairing-fail-mark" aria-hidden="true">⚠</div>
+            <h3 style={{ margin: 0 }}>{t('pairing.failed')}</h3>
+            <p class="sh-muted">
+              {peerHint.value ?? t('pairing.failed_message')}
+            </p>
+            <Button onClick={resetAll}>{t('pairing.retry')}</Button>
+          </div>
+        )}
+
+        {/* ── GFS mode ─────────────────────────────────────────── */}
+        {mode.value === 'gfs' && step.value === 'idle' && (
+          <div class="sh-pairing-start">
+            <p class="sh-gfs-url-intro sh-muted">{t('gfs.modal_intro')}</p>
+            <div class="sh-pairing-actions">
+              <Button onClick={startGfs}>{t('gfs.add')}</Button>
+            </div>
+          </div>
+        )}
+
+        {mode.value === 'gfs' && step.value === 'success' && (
+          <div class="sh-pairing-success">
+            <div class="sh-pairing-success-burst" aria-hidden="true">
+              <span>✓</span>
+            </div>
+            <h3 style={{ margin: 0 }}>{t('gfs.connected')}</h3>
+            <p class="sh-muted">{t('gfs.pair_success')}</p>
+            <p class="sh-muted">{t('gfs.next_steps')}</p>
+            <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
+              <Button variant="secondary"
+                      onClick={() => { open.value = false }}>
+                {t('pairing.done')}
+              </Button>
+              <Button onClick={() => {
+                open.value = false
+                location.assign('/momentum/public/sharing')
+              }}>
+                {t('gfs.open_publishing')}
+              </Button>
+            </div>
+          </div>
         )}
       </div>
     </Modal>

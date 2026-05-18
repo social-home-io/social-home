@@ -149,6 +149,7 @@ def _render_landing(
     landing_markdown: str,
     header_image_url: str,
     token: str,
+    pair_code: str,
     pair_qr_data_uri: str,
     spaces: list[dict],
     search: str,
@@ -268,7 +269,14 @@ def _render_landing(
     .pair code {{ background: var(--warm-bg); border: 1px solid var(--hair);
                  padding: 4px 8px; border-radius: 6px;
                  display: inline-block; word-break: break-all;
-                 font-size: 13px; }}
+                 font-size: 13px; max-width: 100%; }}
+    .pair .copy-btn {{ margin-top: 6px; padding: 6px 14px;
+                       background: var(--primary); color: #fff;
+                       border: 0; border-radius: 999px; font: inherit;
+                       font-size: 13px; font-weight: 600; cursor: pointer;
+                       transition: filter 100ms; }}
+    .pair .copy-btn:hover {{ filter: brightness(0.95); }}
+    .pair .copy-btn.copied {{ background: #2D8F4E; }}
     .filters {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }}
     .filters a {{ padding: 4px 12px; border-radius: 999px;
                   border: 1px solid var(--hair); color: var(--ink-soft);
@@ -315,13 +323,53 @@ def _render_landing(
           <ol>
             <li>Open Social Home</li>
             <li>Spaces → Discover → ⬡ Global</li>
-            <li>Scan this code or paste the token below</li>
+            <li>Scan the QR or copy the pairing code below</li>
           </ol>
-          <p><code data-pair-token="{_escape(token)}">{_escape(token)}</code></p>
+          <p><code id="pair-code" data-pair-token="{_escape(token)}"
+                   >{_escape(pair_code)}</code></p>
+          <p>
+            <button type="button" class="copy-btn" id="copy-pair-btn"
+                    data-copy-target="pair-code"
+                    data-copied-label="Copied ✓"
+                    data-default-label="Copy code">Copy code</button>
+          </p>
           <p class="muted">Valid for 10 minutes · single-use.</p>
         </div>
       </div>
     </section>
+    <script>
+      // Tiny inline copy-button shim — keeps the landing as a single
+      // server-rendered HTML page (no SPA bundle to ship to first-time
+      // visitors). Falls back to selecting the code text if the
+      // clipboard API is unavailable (older Safari, file://).
+      (function() {{
+        var btn = document.getElementById("copy-pair-btn");
+        var target = document.getElementById("pair-code");
+        if (!btn || !target) return;
+        btn.addEventListener("click", function() {{
+          var text = target.textContent || "";
+          var done = function() {{
+            btn.textContent = btn.dataset.copiedLabel || "Copied";
+            btn.classList.add("copied");
+            setTimeout(function() {{
+              btn.textContent = btn.dataset.defaultLabel || "Copy code";
+              btn.classList.remove("copied");
+            }}, 1800);
+          }};
+          if (navigator.clipboard && navigator.clipboard.writeText) {{
+            navigator.clipboard.writeText(text).then(done).catch(function() {{
+              var r = document.createRange(); r.selectNode(target);
+              window.getSelection().removeAllRanges();
+              window.getSelection().addRange(r);
+            }});
+          }} else {{
+            var r = document.createRange(); r.selectNode(target);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(r);
+          }}
+        }});
+      }})();
+    </script>
 
     <section>
       <h2>Spaces</h2>
@@ -589,12 +637,19 @@ async def handle_landing(request: web.Request) -> web.Response:
     token, _wait = await token_svc.generate(_client_ip(request))
     if token is None:
         token = "please-wait"
-    qr_payload = (
-        f"sh://gfs-pair/{cfg.base_url}?token={token}"
+    # The pairing code is a single ``socialhome://gfs-pair/{base_url}
+    # ?token={token}`` URL — chat-safe, copy/paste friendly, and the
+    # same string the SH SPA's GFS paste field consumes. When the GFS
+    # was booted without an external ``base_url`` (admin still
+    # configuring), fall back to the bare token so the QR isn't broken
+    # — the SPA paste path won't accept it, which is the right
+    # behaviour (no operator should pair against an unconfigured GFS).
+    pair_code = (
+        f"socialhome://gfs-pair/{cfg.base_url}?token={token}"
         if cfg.base_url
-        else f"gfs:token={token}"
+        else f"token:{token}"
     )
-    qr_data = await _render_qr_png_data_uri(qr_payload)
+    qr_data = await _render_qr_png_data_uri(pair_code)
 
     search = (request.query.get("search") or "").strip()
     audience = (request.query.get("audience") or "").strip()
@@ -630,6 +685,7 @@ async def handle_landing(request: web.Request) -> web.Response:
         landing_markdown=_escape(landing_markdown),
         header_image_url=header_image_url,
         token=token,
+        pair_code=pair_code,
         pair_qr_data_uri=qr_data,
         spaces=items,
         search=search,

@@ -290,3 +290,33 @@ async def test_pairing_token_rate_limit_per_ip(client):
     assert "please-wait" in text_b
     # (The first token was real.)
     assert "please-wait" not in text_a
+
+
+# ─── Pairing-code copy/paste fallback (socialhome:// scheme) ──────────
+
+
+async def test_landing_renders_socialhome_pair_code(client):
+    """The landing page renders a ``socialhome://gfs-pair/{base_url}
+    ?token={token}`` pairing code in a ``<code>`` element next to the
+    QR, plus a Copy-code button. Replaces the old ``sh://`` scheme
+    that the SPA doesn't recognise."""
+    resp = await client.get("/")
+    assert resp.status == 200
+    text = await resp.text()
+    # New scheme present in the rendered HTML.
+    assert "socialhome://gfs-pair/http://gfs.test?token=" in text
+    # Old scheme is gone — operators who script against the landing
+    # shouldn't get away with two parallel formats.
+    assert "sh://gfs-pair" not in text
+    # Copy button + the code id the inline JS shim wires to.
+    assert 'id="pair-code"' in text
+    assert 'id="copy-pair-btn"' in text
+
+
+async def test_landing_pair_code_carries_token_in_data_attr(client):
+    """The code element carries ``data-pair-token`` for tests + the
+    inline JS shim — so screen-scraper tooling can extract the raw
+    token without parsing the full URL."""
+    resp = await client.get("/")
+    text = await resp.text()
+    assert "data-pair-token=" in text

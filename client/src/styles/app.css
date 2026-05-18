@@ -10984,6 +10984,151 @@ a.sh-welcome-card:hover {
   line-height: 1.35;
 }
 
+/* ───── Inviter share row — QR + OR + share-code card ─────────────
+ *
+ * Side-by-side on desktop so neither half reads as a fallback;
+ * the QR + the chat-safe ``socialhome://pair#…`` code are equal-
+ * weight peers. The middle column carries a vertical "OR" rule on
+ * desktop and a thin horizontal one on mobile so the alternative
+ * path keeps reading as deliberate. */
+.sh-pairing-share {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--sh-space-md);
+  width: 100%;
+  margin-bottom: var(--sh-space-sm);
+}
+.sh-pairing-share-qr {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-xs);
+}
+.sh-pairing-or {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex: 0 0 auto;
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.sh-pairing-or::before,
+.sh-pairing-or::after {
+  content: "";
+  display: block;
+  background: var(--sh-border);
+  position: absolute;
+  left: 50%;
+  width: 1px;
+  height: calc(50% - 18px);
+}
+.sh-pairing-or::before { top: 0;    transform: translateX(-50%); }
+.sh-pairing-or::after  { bottom: 0; transform: translateX(-50%); }
+.sh-pairing-or span {
+  background: var(--sh-bg);
+  padding: 2px 6px;
+  z-index: 1;
+}
+.sh-pairing-code-card {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-sm);
+  background: var(--sh-bg-secondary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  min-width: 0;
+}
+.sh-pairing-code-heading {
+  font-size: var(--sh-font-size-sm);
+  font-weight: 600;
+}
+.sh-pairing-code-string {
+  display: block;
+  font-family: var(--sh-font-mono, monospace);
+  font-size: var(--sh-font-size-xs);
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  padding: var(--sh-space-xs);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  max-height: 90px;
+  overflow-y: auto;
+  line-height: 1.4;
+  color: var(--sh-text);
+}
+.sh-pairing-code-hint {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
+  line-height: 1.35;
+}
+@media (max-width: 640px) {
+  .sh-pairing-share { flex-direction: column; align-items: stretch; }
+  .sh-pairing-share-qr { align-self: center; }
+  .sh-pairing-or { flex-direction: row; }
+  .sh-pairing-or::before,
+  .sh-pairing-or::after {
+    top: 50%;
+    left: auto;
+    bottom: auto;
+    width: calc(50% - 22px);
+    height: 1px;
+    transform: translateY(-50%);
+  }
+  .sh-pairing-or::before { left: 0; }
+  .sh-pairing-or::after  { right: 0; }
+}
+
+/* ───── Scan-method picker (Scan QR / Paste code) ───────────────── */
+.sh-pairing-method-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sh-space-sm);
+  width: 100%;
+}
+.sh-pairing-method-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-xxs);
+  padding: var(--sh-space-sm) var(--sh-space-xs);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  background: var(--sh-bg);
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+  text-align: center;
+  min-height: 92px;
+}
+.sh-pairing-method-card:hover,
+.sh-pairing-method-card:focus-visible {
+  border-color: var(--sh-primary);
+}
+.sh-pairing-method-card--active {
+  border-color: var(--sh-primary);
+  background: var(--sh-primary-soft);
+}
+.sh-pairing-method-icon { font-size: 1.6rem; line-height: 1; }
+.sh-pairing-method-title { font-weight: 600; font-size: var(--sh-font-size-sm); }
+.sh-pairing-method-hint {
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-xs);
+  line-height: 1.3;
+}
+.sh-pairing-generating {
+  display: flex;
+  justify-content: center;
+  padding: var(--sh-space-lg);
+}
+
 /* ───── QR scanner (camera / upload / paste) ───────────────────── */
 .sh-pairing-scan {
   display: flex;

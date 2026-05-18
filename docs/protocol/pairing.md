@@ -55,6 +55,54 @@ sequenceDiagram
     A-->>B: URL_UPDATED<br/>(if URL changes later)
 ```
 
+## Manual code fallback — `socialhome://` URL scheme
+
+The QR path fails the moment a camera is missing or denied, the QR is
+too small to focus on a phone screen, or the two households are
+pairing remotely (over chat / SMS / email). To keep pairing possible
+in those cases, the SPA exposes a **copy/paste pairing code** as an
+equal-weight peer to the QR — not a hidden fallback.
+
+The code is a single-line `socialhome://` URL that survives chat
+copy/paste round-trips. Two shapes:
+
+- **Instance pairing (households)** — `socialhome://pair#<base64url(JSON)>`.
+  The fragment carries the exact same JSON object the QR encodes
+  (`token`, `instance_id`, `identity_pk`, `dh_pk`, `inbox_url`,
+  `expires_at`, plus the optional post-quantum `pq_*` fields).
+  Encoding the payload in the **URL fragment** (`#…`) — rather than
+  a query string — keeps it client-side: a stray paste into a
+  browser address bar never sends the secret to a third party's
+  server logs, because fragments are not transmitted on HTTP
+  requests.
+
+- **GFS pairing** — `socialhome://gfs-pair/{base_url}?token={token}`.
+  Direct migration of the GFS landing's previous `sh://gfs-pair/…`
+  scheme. The pairing token is single-use with a 10-minute TTL
+  (§24.7.4) — short enough to make casual reuse a non-issue, long
+  enough for a screenshot ↔ paste handoff in another room.
+
+### Back-compat
+
+The scanner-side paste field accepts both the new `socialhome://pair#…`
+URL and **raw multi-field JSON** (what the older QR codes encoded
+directly). A code in flight in someone's chat thread keeps working
+across the 5-minute token TTL.
+
+### Where it shows up
+
+- **Inviter side** — the modal renders the QR and the
+  `socialhome://pair#…` code in a peer card, side-by-side on desktop
+  and stacked under an OR divider on mobile. A "Copy code" button
+  next to the card writes the URL to the clipboard.
+- **Scanner side** — a two-method picker (Scan QR / Paste code) at
+  the top of the scan step replaces the previous camera-with-buried-
+  fallback layout. Both methods are equal-weight cards. The paste
+  textarea decodes whichever shape the user provides.
+- **GFS landing page** — the server-rendered HTML (`GET /` on a GFS)
+  renders the `socialhome://gfs-pair/…` URL next to the QR with a
+  small inline-JS Copy code button. The QR encodes the same URL.
+
 ## Flow — auto-pair via relay
 
 When two instances can't scan each other's QR but share a mutual peer
