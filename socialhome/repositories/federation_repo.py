@@ -68,6 +68,7 @@ class AbstractFederationRepo(Protocol):
     async def get_pairing(self, token: str) -> PairingSession | None: ...
     async def update_pairing(self, session: PairingSession) -> None: ...
     async def delete_pairing(self, token: str) -> None: ...
+    async def cleanup_expired_pairings(self) -> int: ...
 
     # Bans ----------------------------------------------------------------
     async def ban_instance_from_space(
@@ -403,6 +404,46 @@ class SqliteFederationRepo:
             "DELETE FROM pending_pairings WHERE token=?",
             (token,),
         )
+
+    async def cleanup_expired_pairings(self) -> int:
+        """Delete ``pending_pairings`` past their ``expires_at`` plus the
+        orphan ``remote_instances`` rows (in PENDING_SENT /
+        PENDING_RECEIVED status) whose ``local_inbox_id`` matched one
+        of those sessions. Returns the count of pairing rows pruned.
+
+        SQLite's ``datetime()`` function normalises both the
+        ``"YYYY-MM-DDTHH:MM:SS+00:00"`` ISO 8601 shape Python's
+        :meth:`datetime.isoformat` produces and the
+        ``"YYYY-MM-DD HH:MM:SS"`` shape SQLite's ``datetime('now')``
+        emits, so a single comparison works regardless of which path
+        wrote the row.
+
+        Already-confirmed pairs are safe: :meth:`confirm` deletes the
+        ``pending_pairings`` row before flipping the
+        ``remote_instances`` row to ``CONFIRMED``, so no expired
+        session ever points at a confirmed instance.
+        """
+        expired_count = await self._db.fetchval(
+            "SELECT COUNT(*) FROM pending_pairings "
+            "WHERE datetime(expires_at) < datetime('now')",
+            default=0,
+        )
+        if not expired_count:
+            return 0
+        await self._db.enqueue(
+            """
+            DELETE FROM remote_instances
+            WHERE status IN ('pending_sent', 'pending_received')
+              AND local_inbox_id IN (
+                SELECT own_local_inbox_id FROM pending_pairings
+                WHERE datetime(expires_at) < datetime('now')
+              )
+            """,
+        )
+        await self._db.enqueue(
+            "DELETE FROM pending_pairings WHERE datetime(expires_at) < datetime('now')",
+        )
+        return int(expired_count)
 
     # ── Instance bans ──────────────────────────────────────────────────
 

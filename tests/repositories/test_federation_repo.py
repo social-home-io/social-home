@@ -85,6 +85,126 @@ async def test_federation_pairing_lifecycle(env):
     assert await env.fed_repo.get_pairing("tok-abc") is None
 
 
+async def test_cleanup_expired_pairings_no_rows(env):
+    """Empty table → returns 0, no side effects."""
+    pruned = await env.fed_repo.cleanup_expired_pairings()
+    assert pruned == 0
+
+
+async def test_cleanup_expired_pairings_keeps_fresh_rows(env):
+    """A session whose ``expires_at`` is in the future is left alone."""
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    session = PairingSession(
+        token="tok-fresh",
+        own_identity_pk="aa" * 32,
+        own_dh_pk="bb" * 32,
+        own_dh_sk="cc" * 32,
+        inbox_url="https://local/inbox/own-fresh",
+        own_local_inbox_id="own-fresh",
+        issued_at=datetime.now(timezone.utc).isoformat(),
+        expires_at=future,
+        status=PairingStatus.PENDING_SENT,
+    )
+    await env.fed_repo.create_pairing(session)
+    pruned = await env.fed_repo.cleanup_expired_pairings()
+    assert pruned == 0
+    assert await env.fed_repo.get_pairing("tok-fresh") is not None
+
+
+async def test_cleanup_expired_pairings_deletes_session_and_orphan_instance(env):
+    """An expired session plus its PENDING_RECEIVED orphan instance both
+    get pruned. A CONFIRMED instance sharing the local_inbox_id (should
+    never happen — defensive guard) is left alone."""
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    session = PairingSession(
+        token="tok-expired",
+        own_identity_pk="aa" * 32,
+        own_dh_pk="bb" * 32,
+        own_dh_sk="cc" * 32,
+        inbox_url="https://local/inbox/own-stale",
+        own_local_inbox_id="own-stale",
+        issued_at=past,
+        expires_at=past,
+        status=PairingStatus.PENDING_RECEIVED,
+    )
+    await env.fed_repo.create_pairing(session)
+    orphan = RemoteInstance(
+        id="peer-stale",
+        display_name="Stale",
+        remote_identity_pk="11" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://stale/wh",
+        local_inbox_id="own-stale",
+        status=PairingStatus.PENDING_RECEIVED,
+    )
+    await env.fed_repo.save_instance(orphan)
+
+    pruned = await env.fed_repo.cleanup_expired_pairings()
+    assert pruned == 1
+    assert await env.fed_repo.get_pairing("tok-expired") is None
+    assert await env.fed_repo.get_instance("peer-stale") is None
+
+
+async def test_cleanup_expired_pairings_preserves_confirmed_instance(env):
+    """Defensive: even if an expired session and a CONFIRMED instance
+    share a local_inbox_id, the CONFIRMED row stays. (Real flows
+    delete the session before flipping the instance to CONFIRMED, so
+    this scenario shouldn't arise — but the status filter is the belt
+    that protects against a future bug.)"""
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    session = PairingSession(
+        token="tok-x",
+        own_identity_pk="aa" * 32,
+        own_dh_pk="bb" * 32,
+        own_dh_sk="cc" * 32,
+        inbox_url="https://local/inbox/own-confirmed",
+        own_local_inbox_id="own-confirmed",
+        issued_at=past,
+        expires_at=past,
+        status=PairingStatus.PENDING_RECEIVED,
+    )
+    await env.fed_repo.create_pairing(session)
+    inst = RemoteInstance(
+        id="peer-confirmed",
+        display_name="Real",
+        remote_identity_pk="22" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://real/wh",
+        local_inbox_id="own-confirmed",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+
+    pruned = await env.fed_repo.cleanup_expired_pairings()
+    assert pruned == 1
+    # Confirmed row survives.
+    assert await env.fed_repo.get_instance("peer-confirmed") is not None
+
+
+async def test_cleanup_expired_pairings_handles_session_without_instance(env):
+    """``initiate()`` creates a session but no RemoteInstance row. The
+    cleanup must still prune the orphan session even with no peer
+    instance to delete."""
+    past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    session = PairingSession(
+        token="tok-initiate",
+        own_identity_pk="aa" * 32,
+        own_dh_pk="bb" * 32,
+        own_dh_sk="cc" * 32,
+        inbox_url="https://local/inbox/own-initiate",
+        own_local_inbox_id="own-initiate",
+        issued_at=past,
+        expires_at=past,
+        status=PairingStatus.PENDING_SENT,
+    )
+    await env.fed_repo.create_pairing(session)
+    pruned = await env.fed_repo.cleanup_expired_pairings()
+    assert pruned == 1
+    assert await env.fed_repo.get_pairing("tok-initiate") is None
+
+
 async def test_federation_replay_cache(env):
     """Insert replay IDs and confirm they appear in load_replay_cache; prune works."""
     await env.fed_repo.insert_replay_id("msg-001")
