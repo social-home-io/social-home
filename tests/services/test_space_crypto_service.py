@@ -220,3 +220,100 @@ async def test_unseal_unknown_epoch_raises(crypto_env):
     )
     with pytest.raises(RuntimeError, match="missing epoch"):
         await crypto.unseal_from_gfs(fake)
+
+
+# ─── Sync chunks (§25.6 direct space sync) ────────────────────────────────
+
+
+async def test_encrypt_decrypt_chunk_roundtrip(crypto_env):
+    """A sync chunk AAD-binds to ``space_id:epoch:sync_id`` so it can
+    only be decrypted with the matching tuple."""
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    epoch, ciphertext = await crypto.encrypt_chunk(
+        space_id="sp-1",
+        sync_id="sync-abc",
+        plaintext=b"chunk-bytes",
+    )
+    assert epoch == 0
+    plain = await crypto.decrypt_chunk(
+        space_id="sp-1",
+        epoch=epoch,
+        sync_id="sync-abc",
+        ciphertext=ciphertext,
+    )
+    assert plain == b"chunk-bytes"
+
+
+async def test_encrypt_chunk_without_init_raises(crypto_env):
+    """Per the encryption-first rule, encrypt_chunk must NOT silently
+    fall back to plaintext when no key has been minted."""
+    crypto, _ = crypto_env
+    with pytest.raises(RuntimeError, match="no key for space"):
+        await crypto.encrypt_chunk(
+            space_id="missing",
+            sync_id="sync-1",
+            plaintext=b"x",
+        )
+
+
+async def test_decrypt_chunk_unknown_epoch_raises(crypto_env):
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    with pytest.raises(RuntimeError, match="missing epoch"):
+        await crypto.decrypt_chunk(
+            space_id="sp-1",
+            epoch=99,
+            sync_id="sync-1",
+            ciphertext="aa:bb",
+        )
+
+
+async def test_decrypt_chunk_rejects_malformed_ciphertext(crypto_env):
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    with pytest.raises(ValueError, match="Malformed space ciphertext"):
+        await crypto.decrypt_chunk(
+            space_id="sp-1",
+            epoch=0,
+            sync_id="sync-1",
+            ciphertext="no-colon",
+        )
+
+
+async def test_decrypt_chunk_rejects_wrong_sync_id(crypto_env):
+    """A chunk's AAD includes ``sync_id`` — replaying a chunk under a
+    different sync_id must fail the tag check (§25.8.18)."""
+    from cryptography.exceptions import InvalidTag
+
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    epoch, ciphertext = await crypto.encrypt_chunk(
+        space_id="sp-1",
+        sync_id="sync-original",
+        plaintext=b"hi",
+    )
+    with pytest.raises(InvalidTag):
+        await crypto.decrypt_chunk(
+            space_id="sp-1",
+            epoch=epoch,
+            sync_id="sync-different",
+            ciphertext=ciphertext,
+        )
+
+
+# ─── verify_space_config error paths ──────────────────────────────────────
+
+
+def test_verify_space_config_returns_false_for_bad_base64():
+    """Malformed base64 signature is rejected without raising — caller
+    just sees False so the §24.11 inbound pipeline can drop the event."""
+    _, pk, _ = create_space_identity()
+    assert (
+        verify_space_config(
+            b"payload",
+            "not-valid-base64-!@#",
+            space_public_key=pk,
+        )
+        is False
+    )

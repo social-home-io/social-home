@@ -296,3 +296,178 @@ async def test_config_catch_up_missing_space_id_is_noop(handlers):
             {"sequence": 5},
         )
     )
+
+
+# ─── Defensive early-return paths ────────────────────────────────────────
+
+
+async def test_space_created_missing_space_id_is_noop(repo, handlers):
+    """No space_id → handler returns silently (no save, no event)."""
+    await handlers._on_created(_event(FederationEventType.SPACE_CREATED, {}))
+    assert repo.saved == []
+
+
+async def test_space_created_missing_identity_pk_is_noop(repo, handlers):
+    """Without identity_public_key the row can't be persisted — drop."""
+    await handlers._on_created(
+        _event(
+            FederationEventType.SPACE_CREATED,
+            {"name": "X", "space_type": "private", "join_mode": "open"},
+            space_id="sp-x",
+        )
+    )
+    assert repo.saved == []
+
+
+async def test_space_created_with_bad_enums_falls_back_to_defaults(repo, handlers):
+    """An unknown space_type / join_mode coerces to PRIVATE / INVITE_ONLY
+    (forward-compat: a newer peer's enum value should not crash us)."""
+    await handlers._on_created(
+        _event(
+            FederationEventType.SPACE_CREATED,
+            {
+                "name": "S",
+                "identity_public_key": "aa" * 32,
+                "space_type": "what-even",
+                "join_mode": "unknown-future-mode",
+            },
+            space_id="sp-y",
+        )
+    )
+    assert len(repo.saved) == 1
+    saved = repo.saved[0]
+    assert saved.space_type is SpaceType.PRIVATE
+    assert saved.join_mode is JoinMode.INVITE_ONLY
+
+
+async def test_space_dissolved_missing_id_is_noop(repo, handlers):
+    await handlers._on_dissolved(
+        _event(FederationEventType.SPACE_DISSOLVED, {}),
+    )
+    assert repo.dissolved == []
+
+
+async def test_space_instance_left_missing_id_is_noop(repo, handlers):
+    await handlers._on_instance_left(
+        _event(FederationEventType.SPACE_INSTANCE_LEFT, {}),
+    )
+    assert repo.instance_removes == []
+
+
+async def test_member_banned_missing_user_id_is_noop(repo, handlers):
+    """A SPACE_MEMBER_BANNED without ``user_id`` is malformed — drop."""
+    captured: list[RemoteSpaceMemberBanned] = []
+    bus = handlers._bus
+    bus.subscribe(RemoteSpaceMemberBanned, captured.append)
+    await handlers._on_banned(
+        _event(
+            FederationEventType.SPACE_MEMBER_BANNED,
+            {"reason": "x"},
+            space_id="sp-1",
+        )
+    )
+    assert repo.bans == []
+    assert captured == []
+
+
+async def test_member_unbanned_missing_user_id_is_noop(repo, handlers):
+    await handlers._on_unbanned(
+        _event(
+            FederationEventType.SPACE_MEMBER_UNBANNED,
+            {},
+            space_id="sp-1",
+        )
+    )
+    assert repo.unbans == []
+
+
+async def test_age_gate_missing_space_id_is_noop(repo, handlers):
+    await handlers._on_age_gate(
+        _event(FederationEventType.SPACE_AGE_GATE_UPDATED, {"min_age": 13}),
+    )
+    assert repo.age_gates == []
+
+
+# ─── _push_config_to (catch-up reply path) ───────────────────────────────
+
+
+class _RecordingFederation:
+    def __init__(self) -> None:
+        self._event_registry = _FakeRegistry()
+        self.sent: list[tuple[str, FederationEventType, dict]] = []
+
+    async def send_event(self, *, to_instance_id, event_type, payload):
+        self.sent.append((to_instance_id, event_type, payload))
+
+
+async def test_catch_up_replays_config_when_we_are_ahead(bus, repo):
+    """When the requester's seq is BEHIND ours, push a
+    ``SPACE_CONFIG_CHANGED`` snapshot to them so they catch up."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+
+    repo.spaces["sp-ahead"] = Space(
+        id="sp-ahead",
+        name="Ahead",
+        owner_instance_id="me",
+        owner_username="alice",
+        identity_public_key="aa" * 32,
+        config_sequence=7,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PUBLIC,
+        join_mode=JoinMode.OPEN,
+        description="hi",
+        emoji="🌱",
+    )
+    h = SpaceMembershipInboundHandlers(bus=bus, space_repo=repo)
+    fed = _RecordingFederation()
+    h.attach_to(fed)
+    await h._on_catch_up(
+        _event(
+            FederationEventType.SPACE_CONFIG_CATCH_UP,
+            {"sequence": 2},
+            from_instance="peer-behind",
+            space_id="sp-ahead",
+        )
+    )
+    assert len(fed.sent) == 1
+    to, ev, payload = fed.sent[0]
+    assert to == "peer-behind"
+    assert ev is FederationEventType.SPACE_CONFIG_CHANGED
+    assert payload["space_id"] == "sp-ahead"
+    assert payload["sequence"] == 7
+    assert payload["space_type"] == "public"
+    assert payload["join_mode"] == "open"
+
+
+async def test_catch_up_no_push_without_federation_service(bus, repo, caplog):
+    """``_push_config_to`` is a no-op when federation isn't wired — the
+    test that constructs handlers with the dummy ``_FakeFederationService``
+    (which has ``send_event = AttributeError`` if called) covers that
+    path silently."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+
+    h = SpaceMembershipInboundHandlers(bus=bus, space_repo=repo)
+    # No attach_to → ``self._federation`` stays ``None``.
+    space = Space(
+        id="sp-z",
+        name="Z",
+        owner_instance_id="me",
+        owner_username="me",
+        identity_public_key="bb" * 32,
+        config_sequence=3,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+    # Direct call — must return silently without raising.
+    await h._push_config_to("peer", space)

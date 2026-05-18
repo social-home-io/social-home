@@ -202,3 +202,134 @@ async def test_update_no_change_no_event(env, tmp_dir):
     # Setting the same value as the current default → no change → no event.
     await svc_bus.update(actor_is_admin=True, toggles={"feat_feed": True})
     assert received == []
+
+
+# ─── HA tz mirror — set_tz_from_ha ───────────────────────────────────────
+
+
+async def test_set_tz_from_ha_writes_when_different(env, tmp_dir):
+    """The HA tz poll writes the new value AND publishes a
+    HouseholdConfigChanged event so connected clients refresh."""
+    from socialhome.domain.events import HouseholdConfigChanged
+    from socialhome.infrastructure.event_bus import EventBus
+    from socialhome.repositories.household_features_repo import (
+        SqliteHouseholdFeaturesRepo,
+    )
+
+    _, db = env
+    bus = EventBus()
+    received: list[HouseholdConfigChanged] = []
+    bus.subscribe(
+        HouseholdConfigChanged,
+        lambda e: received.append(e),  # type: ignore[arg-type]
+    )
+    svc = HouseholdFeaturesService(
+        SqliteHouseholdFeaturesRepo(db),
+        bus=bus,
+    )
+
+    await svc.set_tz_from_ha("Europe/Berlin")
+
+    feats = await svc.get()
+    assert feats.tz == "Europe/Berlin"
+    assert received and received[0].changed == {"tz": "Europe/Berlin"}
+
+
+async def test_set_tz_from_ha_skips_when_unchanged(env, tmp_dir):
+    """Idempotent — the HA adapter polls on every startup and we don't
+    want the broadcast to fire every time."""
+    from socialhome.domain.events import HouseholdConfigChanged
+    from socialhome.infrastructure.event_bus import EventBus
+    from socialhome.repositories.household_features_repo import (
+        SqliteHouseholdFeaturesRepo,
+    )
+
+    _, db = env
+    bus = EventBus()
+    received: list[HouseholdConfigChanged] = []
+    bus.subscribe(
+        HouseholdConfigChanged,
+        lambda e: received.append(e),  # type: ignore[arg-type]
+    )
+    svc = HouseholdFeaturesService(
+        SqliteHouseholdFeaturesRepo(db),
+        bus=bus,
+    )
+
+    await svc.set_tz_from_ha("Europe/Berlin")
+    received.clear()
+    # Second call with the same value — no DB write, no event.
+    await svc.set_tz_from_ha("Europe/Berlin")
+    assert received == []
+
+
+async def test_set_tz_from_ha_ignores_unknown_zone(env):
+    """An invalid IANA name (HA sometimes ships a malformed string) is
+    silently dropped so the next poll can retry once HA's config is fixed."""
+    svc, _ = env
+    await svc.set_tz_from_ha("Not/AReal_Zone")
+    # No change to the stored value.
+    feats = await svc.get()
+    assert feats.tz == "UTC"  # default
+
+
+async def test_set_tz_from_ha_works_without_bus(env):
+    """If no bus is wired (early bootstrap), the tz still persists —
+    the event publish is best-effort."""
+    _, db = env
+    from socialhome.repositories.household_features_repo import (
+        SqliteHouseholdFeaturesRepo,
+    )
+
+    svc = HouseholdFeaturesService(SqliteHouseholdFeaturesRepo(db))
+    await svc.set_tz_from_ha("Asia/Tokyo")
+    feats = await svc.get()
+    assert feats.tz == "Asia/Tokyo"
+
+
+# ─── Admin update — tz branch ────────────────────────────────────────────
+
+
+async def test_update_sets_tz_when_valid(env):
+    svc, _ = env
+    after = await svc.update(actor_is_admin=True, tz="Europe/Berlin")
+    assert after.tz == "Europe/Berlin"
+
+
+async def test_update_rejects_empty_tz(env):
+    svc, _ = env
+    with pytest.raises(ValueError, match="tz must be"):
+        await svc.update(actor_is_admin=True, tz="   ")
+
+
+async def test_update_rejects_unknown_tz(env):
+    svc, _ = env
+    with pytest.raises(ValueError, match="unknown IANA timezone"):
+        await svc.update(actor_is_admin=True, tz="Not/AReal_Zone")
+
+
+async def test_update_tz_unchanged_no_op(env):
+    """Re-setting tz to its current value doesn't trigger a DB write
+    (covered by the existing ``set_household_name`` no-op pattern) and
+    doesn't publish an event."""
+    from socialhome.domain.events import HouseholdConfigChanged
+    from socialhome.infrastructure.event_bus import EventBus
+    from socialhome.repositories.household_features_repo import (
+        SqliteHouseholdFeaturesRepo,
+    )
+
+    _, db = env
+    bus = EventBus()
+    received: list[HouseholdConfigChanged] = []
+    bus.subscribe(
+        HouseholdConfigChanged,
+        lambda e: received.append(e),  # type: ignore[arg-type]
+    )
+    svc = HouseholdFeaturesService(
+        SqliteHouseholdFeaturesRepo(db),
+        bus=bus,
+    )
+    await svc.update(actor_is_admin=True, tz="Europe/Berlin")
+    received.clear()
+    await svc.update(actor_is_admin=True, tz="Europe/Berlin")
+    assert received == []
