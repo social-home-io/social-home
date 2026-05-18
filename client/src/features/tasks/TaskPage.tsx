@@ -15,7 +15,12 @@ import { Modal } from '@/components/Modal'
 import { TasksSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
-import { lists, tasks } from '@/store/tasks'
+import {
+  lists,
+  tasks,
+  clearCompletedTasks,
+  patchTaskStatus,
+} from '@/store/tasks'
 import { householdUsers, loadHouseholdUsers } from '@/store/householdUsers'
 import { currentUser } from '@/store/auth'
 import type { TaskItem, TaskListEntry } from '@/types'
@@ -174,20 +179,36 @@ export default function TaskPage() {
     await setTaskStatus(task, next)
   }
 
-  /** Reassign a task's status. Used by the legacy cycle button, by
-   *  the checkbox toggle (todo ⇄ done), and by the new
-   *  drag-and-drop between status groups. Falls back to a toast
-   *  on error — no optimistic local patch so a 4xx doesn't leave
-   *  the row in a misleading state. */
+  /** Reassign a task's status. Optimistic — flips the row locally
+   *  first so a drag visibly lands in the new section the instant
+   *  the mouse releases; rolls back + toasts on error. The store
+   *  helper handles the actual PATCH + server reconcile. */
   const setTaskStatus = async (task: TaskItem, next: Status) => {
-    if (task.status === next) return
     try {
-      const updated = await api.patch(
-        `/api/tasks/${task.id}`, { status: next },
-      ) as TaskItem
-      tasks.value = tasks.value.map(t => t.id === task.id ? updated : t)
+      await patchTaskStatus(task.id, next)
     } catch (err: unknown) {
       showToast(`Update failed: ${(err as Error).message ?? err}`, 'error')
+    }
+  }
+
+  const handleClearCompleted = async () => {
+    const listId = activeList.value
+    if (!listId) return
+    const doneCount = tasks.value.filter(
+      t => t.list_id === listId && t.status === 'done',
+    ).length
+    if (doneCount === 0) return
+    if (!await confirmDialog(
+      `Clear ${doneCount} completed task${doneCount === 1 ? '' : 's'}? This can't be undone.`,
+      { destructive: true },
+    )) return
+    const { ok, failed } = await clearCompletedTasks(listId)
+    if (failed > 0 && ok === 0) {
+      showToast(`Clear failed for all ${failed} task${failed === 1 ? '' : 's'}`, 'error')
+    } else if (failed > 0) {
+      showToast(`Cleared ${ok}, ${failed} failed`, 'error')
+    } else if (ok > 0) {
+      showToast(`Cleared ${ok} done task${ok === 1 ? '' : 's'}`, 'success')
     }
   }
 
@@ -314,12 +335,20 @@ export default function TaskPage() {
         {visibleTasks.length > 0 && STATUS_ORDER.map(group => {
           const inGroup = visibleTasks.filter(t => t.status === group)
           const isDropTarget = dropTarget === group
-          // Always render every group so the user can drop into an
-          // empty bucket (e.g. "I'm starting fresh — drag this todo
-          // into In progress"). Empty groups collapse to a small
-          // header + drop pad while a drag is in flight; otherwise
-          // they show a one-line "no items" placeholder so the
-          // available-states inventory stays visible.
+          const isDone = group === 'done'
+          // Render rule:
+          //  - Open groups (todo / in_progress) always render. While
+          //    a drag is in flight they also show a drop-pad if
+          //    empty so the user can drop into a fresh bucket.
+          //    When NO drag is in flight, an empty open group
+          //    simply collapses — no "Nothing here." noise.
+          //  - The Done group skips the inline render here entirely;
+          //    it appears below the open groups separated by a
+          //    divider + "Clear all" link (see the block after
+          //    this map). That matches the shopping list's
+          //    "Already bought" trailer pattern.
+          if (isDone) return null
+          if (inGroup.length === 0 && draggingId === null) return null
           return (
             <section
               key={group}
@@ -352,15 +381,13 @@ export default function TaskPage() {
                 </span>
               </header>
               {inGroup.length === 0 ? (
-                draggingId ? (
-                  <div class="sh-task-group__droppad" aria-hidden="true">
-                    Drop here to move into {STATUS_LABEL[group]}
-                  </div>
-                ) : (
-                  <div class="sh-task-group__empty">
-                    Nothing here.
-                  </div>
-                )
+                // Reached only when ``draggingId !== null`` (the
+                // collapse-when-idle branch is the early-return
+                // above). Drop-pad with the destination's label so
+                // there's a visible target even with no rows yet.
+                <div class="sh-task-group__droppad" aria-hidden="true">
+                  Drop here to move into {STATUS_LABEL[group]}
+                </div>
               ) : (
                 <ul class="sh-list-card" style={{ listStyle: 'none', margin: 0 }}>
                   {inGroup.map(t => {
@@ -440,6 +467,126 @@ export default function TaskPage() {
             </section>
           )
         })}
+
+        {/* Done — rendered separately AFTER the open buckets,
+         *  trailing a "n done · Clear all" divider. Mirrors the
+         *  shopping list's "Already bought · Clear all" pattern so
+         *  the completed pile reads as archive, not as a peer
+         *  status bucket. Renders when there ARE done items OR a
+         *  drag is in flight (so the user can drop a row into an
+         *  empty Done bucket). */}
+        {(() => {
+          const doneTasks = visibleTasks.filter(t => t.status === 'done')
+          const showDone = doneTasks.length > 0 || draggingId !== null
+          if (!showDone) return null
+          const isDropTarget = dropTarget === 'done'
+          return (
+            <>
+              <div class="sh-shopping-divider sh-tasks-done-divider">
+                <span>
+                  {doneTasks.length === 0
+                    ? 'No done tasks yet'
+                    : `${doneTasks.length} done`}
+                </span>
+                {doneTasks.length > 0 && (
+                  <button
+                    type="button"
+                    class="sh-link"
+                    onClick={() => void handleClearCompleted()}
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+              <section
+                class={
+                  'sh-task-group sh-task-group--done sh-task-group--archive '
+                  + (isDropTarget ? 'sh-task-group--drop-target ' : '')
+                }
+                onDragOver={(e) => {
+                  if (!e.dataTransfer?.types.includes(DRAG_TASK_MIME)) return
+                  e.preventDefault()
+                  if (dropTarget !== 'done') setDropTarget('done')
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget === e.target && dropTarget === 'done') {
+                    setDropTarget(null)
+                  }
+                }}
+                onDrop={(e) => {
+                  if (!e.dataTransfer?.types.includes(DRAG_TASK_MIME)) return
+                  e.preventDefault()
+                  handleTaskDrop('done')
+                }}
+              >
+                {doneTasks.length === 0 ? (
+                  <div class="sh-task-group__droppad" aria-hidden="true">
+                    Drop here to mark done
+                  </div>
+                ) : (
+                  <ul
+                    class="sh-list-card sh-list-card--moss sh-shopping-list--done"
+                    style={{ listStyle: 'none', margin: 0 }}
+                  >
+                    {doneTasks.map(t => {
+                      const due = t.due_date ? dueLabel(t.due_date) : null
+                      const owners = (t.assignees ?? [])
+                        .map(uid => userNameById(uid))
+                        .filter(Boolean)
+                      const ownerLine =
+                        owners.length > 0
+                          ? owners.join(' · ')
+                          : t.created_by ? `+ ${userNameById(t.created_by)}` : ''
+                      return (
+                        <li
+                          key={t.id}
+                          class={
+                            'sh-task-row sh-task--done '
+                            + (draggingId === t.id ? 'sh-task-row--dragging' : '')
+                          }
+                          draggable={true}
+                          onDragStart={(e) => {
+                            e.dataTransfer?.setData(DRAG_TASK_MIME, t.id)
+                            if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+                            setDraggingId(t.id)
+                          }}
+                          onDragEnd={() => {
+                            setDraggingId(null)
+                            setDropTarget(null)
+                          }}
+                        >
+                          <input type="checkbox" checked={true}
+                            onChange={() => cycleStatus({ ...t, status: 'todo' })}
+                            aria-label={`Toggle ${t.title}`} />
+                          <button
+                            type="button"
+                            class="sh-task-title"
+                            onClick={() => (editingTask.value = t)}
+                            title="Edit task"
+                            aria-label={`Edit task: ${t.title}`}
+                          >
+                            {t.title}
+                          </button>
+                          <div class="sh-task-meta">
+                            {ownerLine && (
+                              <span class="sh-byline">{ownerLine}</span>
+                            )}
+                            {due && (
+                              <span class="sh-byline">· {due.text}</span>
+                            )}
+                          </div>
+                          <button type="button" class="sh-icon-btn"
+                                  aria-label={`Delete ${t.title}`}
+                                  onClick={() => void deleteTask(t)}>🗑️</button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </section>
+            </>
+          )
+        })()}
 
         {visibleTasks.length === 0 && activeList.value && (
           <div class="sh-empty-state">
