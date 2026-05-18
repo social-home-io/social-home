@@ -193,10 +193,18 @@ class HaosAdapter(PlatformAdapter):
         )
 
     async def get_federation_base(self) -> str | None:
-        """Return the base URL the HA integration last advertised
-        (cached in ``instance_config['ha_federation_base']`` by the
-        ``federation.set_base`` WS command). Returns ``None`` until
-        the integration has pushed it."""
+        """Return the externally-reachable federation inbox base URL.
+
+        The HA integration pushes the bare external URL (Nabu Casa
+        Remote UI or admin-set ``external_url``) and registers an HA
+        Core HTTP view at ``/api/socialhome/inbox/{inbox_id}`` that
+        forwards into the addon. Peers therefore POST to
+        ``{pushed_url}/api/socialhome/inbox/{inbox_id}``, so the
+        adapter has to splice that path onto the pushed base before
+        the pairing coordinator appends a per-peer secret. Idempotent
+        against an integration that ever pushes the full path so we
+        don't double-append.
+        """
         if self._db is None:
             return None
         row = await self._db.fetchone(
@@ -208,7 +216,10 @@ class HaosAdapter(PlatformAdapter):
         raw = str(row["value"] or "").strip()
         if not raw:
             return None
-        return raw.rstrip("/")
+        base = raw.rstrip("/")
+        if base.endswith("/api/socialhome/inbox"):
+            return base
+        return f"{base}/api/socialhome/inbox"
 
     async def update_location(
         self,

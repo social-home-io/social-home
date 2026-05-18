@@ -617,8 +617,18 @@ async def test_get_federation_base_returns_none_before_integration_push(tmp_path
     assert await adapter.get_federation_base() is None
 
 
-async def test_get_federation_base_reads_instance_config(tmp_path):
-    """Post-startup, returns whatever the HA integration wrote."""
+async def test_get_federation_base_appends_inbox_path(tmp_path):
+    """The HA integration pushes the bare external URL (Nabu Casa or
+    admin-set ``external_url``). It also registers an HA Core HTTP
+    view at ``/api/socialhome/inbox/{inbox_id}`` that forwards into
+    the addon. So peers POST to
+    ``{pushed_url}/api/socialhome/inbox/{inbox_id}`` — the adapter
+    has to splice that path on so the pairing coordinator's
+    ``{base}/{secret_id}`` produces a URL peers can actually reach.
+
+    Regression: before this, the adapter returned the bare URL,
+    pairing QRs ended up with ``inbox_url = {ha_url}/{secret_id}``,
+    and peers hit HA's frontend instead of the addon's inbox."""
     db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
     await db.startup()
     kp = generate_identity_keypair()
@@ -630,10 +640,7 @@ async def test_get_federation_base_reads_instance_config(tmp_path):
     )
     await db.enqueue(
         "INSERT INTO instance_config(key, value) VALUES(?, ?)",
-        (
-            "ha_federation_base",
-            "https://abc.ui.nabu.casa/api/social_home/inbox",
-        ),
+        ("ha_federation_base", "https://abc.ui.nabu.casa"),
     )
 
     app = web.Application()
@@ -649,12 +656,14 @@ async def test_get_federation_base_reads_instance_config(tmp_path):
         await adapter.on_startup(app)
         assert (
             await adapter.get_federation_base()
-            == "https://abc.ui.nabu.casa/api/social_home/inbox"
+            == "https://abc.ui.nabu.casa/api/socialhome/inbox"
         )
     await db.shutdown()
 
 
 async def test_get_federation_base_strips_trailing_slash(tmp_path):
+    """Trailing slash on the pushed bare URL gets normalised — the
+    appended ``/api/socialhome/inbox`` keeps a single boundary slash."""
     db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
     await db.startup()
     kp = generate_identity_keypair()
@@ -666,7 +675,7 @@ async def test_get_federation_base_strips_trailing_slash(tmp_path):
     )
     await db.enqueue(
         "INSERT INTO instance_config(key, value) VALUES(?, ?)",
-        ("ha_federation_base", "https://example/api/social_home/inbox/"),
+        ("ha_federation_base", "https://example/"),
     )
 
     app = web.Application()
@@ -682,6 +691,42 @@ async def test_get_federation_base_strips_trailing_slash(tmp_path):
         await adapter.on_startup(app)
         assert (
             await adapter.get_federation_base()
-            == "https://example/api/social_home/inbox"
+            == "https://example/api/socialhome/inbox"
+        )
+    await db.shutdown()
+
+
+async def test_get_federation_base_idempotent_if_already_appended(tmp_path):
+    """A future integration that ever pushed the full path mustn't
+    cause a double-append (``…/inbox/api/socialhome/inbox``). The
+    adapter is idempotent against the path it owns."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    await db.enqueue(
+        "INSERT INTO instance_identity(instance_id, identity_private_key,"
+        " identity_public_key, routing_secret) VALUES(?,?,?,?)",
+        (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
+    )
+    await db.enqueue(
+        "INSERT INTO instance_config(key, value) VALUES(?, ?)",
+        ("ha_federation_base", "https://example/api/socialhome/inbox"),
+    )
+
+    app = web.Application()
+    app[db_key] = db
+    app[event_bus_key] = EventBus()
+    async with aiohttp.ClientSession() as session:
+        app[http_session_key] = session
+        adapter = HomeAssistantAdapter(
+            ha_url="http://ha.local:8123",
+            ha_token="",
+            data_dir=str(tmp_path),
+        )
+        await adapter.on_startup(app)
+        assert (
+            await adapter.get_federation_base()
+            == "https://example/api/socialhome/inbox"
         )
     await db.shutdown()

@@ -241,10 +241,37 @@ async def test_get_federation_base_returns_none_when_unset():
     assert await adapter.get_federation_base() is None
 
 
-async def test_get_federation_base_strips_trailing_slash():
+async def test_get_federation_base_appends_inbox_path():
+    """The HA integration pushes the bare external URL (Nabu Casa or
+    admin-set ``external_url``) and registers an HA Core HTTP view at
+    ``/api/socialhome/inbox/{inbox_id}`` that forwards into the
+    addon. Peers POST to ``{pushed_url}/api/socialhome/inbox/...`` so
+    the adapter has to splice that path onto the pushed base — the
+    pairing coordinator's ``{base}/{secret_id}`` concat assumes the
+    full inbox base already."""
     adapter = _build_haos_adapter()
-    adapter._db = _FakeDb("https://x.example/inbox/")
-    assert await adapter.get_federation_base() == "https://x.example/inbox"
+    adapter._db = _FakeDb("https://abc.ui.nabu.casa")
+    assert (
+        await adapter.get_federation_base()
+        == "https://abc.ui.nabu.casa/api/socialhome/inbox"
+    )
+
+
+async def test_get_federation_base_strips_trailing_slash_before_append():
+    adapter = _build_haos_adapter()
+    adapter._db = _FakeDb("https://x.example/")
+    assert (
+        await adapter.get_federation_base() == "https://x.example/api/socialhome/inbox"
+    )
+
+
+async def test_get_federation_base_idempotent_if_already_appended():
+    """No double-append if the integration ever pushes the full path."""
+    adapter = _build_haos_adapter()
+    adapter._db = _FakeDb("https://x.example/api/socialhome/inbox")
+    assert (
+        await adapter.get_federation_base() == "https://x.example/api/socialhome/inbox"
+    )
 
 
 async def test_get_federation_base_returns_none_for_blank_value():
