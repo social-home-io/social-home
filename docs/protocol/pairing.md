@@ -143,6 +143,30 @@ Both are stored alongside the peer in `remote_instances` with a
 `PairingStatus.CONFIRMED` row. See `docs/crypto.md` for the full key
 schedule.
 
+## Federation inbox base — per-adapter shape
+
+The pairing coordinator works with a "federation inbox base" URL —
+the string a peer would POST to with a per-peer suffix appended.
+What that string actually is depends on the platform adapter:
+
+- **Standalone** — adapter owns the route. Returns
+  `{external_url}/federation/inbox`; the addon listens on
+  `/federation/inbox/{inbox_id}` directly.
+- **HA / HAOS** — addon sits behind HA Core. The HA integration
+  pushes the bare external URL (Nabu Casa Remote UI or admin-set
+  `external_url`) via `PUT /api/ha/integration/federation-base`
+  and registers an HA Core HTTP view at
+  `/api/socialhome/inbox/{inbox_id}` that forwards into the addon's
+  own `/federation/inbox/{inbox_id}`. The adapter splices that
+  path onto the pushed value, so callers see
+  `{external_url}/api/socialhome/inbox`. The append is idempotent —
+  a future integration that ever pushes the full path won't cause
+  a double-append.
+
+Every adapter returns `None` until the URL is configured; the
+pairing route surfaces that as a 422 `NOT_CONFIGURED` so the admin
+knows to wire it up before issuing a QR.
+
 ## URL rotation — `URL_UPDATED`
 
 When this instance's externally-reachable inbox URL changes — admin

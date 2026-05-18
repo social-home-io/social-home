@@ -222,13 +222,22 @@ class HaAdapter(PlatformAdapter):
         )
 
     async def get_federation_base(self) -> str | None:
-        """Return the base URL the HA integration last advertised.
+        """Return the externally-reachable federation inbox base URL.
 
-        The adapter never guesses — the integration knows the
-        externally-reachable URL (admin-set ``external_url`` or Nabu
-        Casa Remote UI) and pushes it via the ``federation.set_base``
-        WS command. Returns ``None`` until that has happened; the
-        pairing route surfaces it as 422 ``NOT_CONFIGURED``.
+        The HA integration pushes the bare external URL (its
+        ``get_url(hass, allow_internal=False, ...)`` — Nabu Casa
+        Remote UI or admin-set ``external_url``). The integration
+        also registers an HA Core HTTP view at
+        ``/api/socialhome/inbox/{inbox_id}`` that forwards into this
+        addon's ``/federation/inbox/{inbox_id}``. So the peer-facing
+        inbox base is ``{pushed_url}/api/socialhome/inbox`` — that's
+        what pairing's ``{base}/{secret_id}`` concatenation must hit.
+
+        Idempotent against an integration that ever pushes the full
+        path (or a future-renamed prefix) so we don't double-append.
+
+        Returns ``None`` until the integration has pushed something;
+        the pairing route surfaces it as 422 ``NOT_CONFIGURED``.
         """
         if self._db is None:
             return None
@@ -241,7 +250,10 @@ class HaAdapter(PlatformAdapter):
         raw = str(row["value"] or "").strip()
         if not raw:
             return None
-        return raw.rstrip("/")
+        base = raw.rstrip("/")
+        if base.endswith("/api/socialhome/inbox"):
+            return base
+        return f"{base}/api/socialhome/inbox"
 
     async def on_startup(self, app: "web.Application") -> None:
         """Wire HaClient + HaBridge. No supervisor bootstrap here —
