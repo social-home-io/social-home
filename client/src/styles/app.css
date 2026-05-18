@@ -5927,6 +5927,108 @@ body.sh-dm-thread-open .sh-messages {
   color: var(--sh-bg);
 }
 
+/* Status-grouped sections in the task list. Same shape as the
+ * shopping list's per-store groups but tinted to the status's
+ * semantic colour (warm-neutral / honey / moss). Sections are
+ * drop targets — drag a task row onto another section's body and
+ * the page calls ``setTaskStatus`` to reassign it. */
+.sh-task-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  margin-top: var(--sh-space-md);
+}
+.sh-task-group:first-of-type { margin-top: 0; }
+.sh-task-group__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xs) var(--sh-space-md);
+  border-radius: var(--sh-radius-md);
+}
+.sh-task-group__name {
+  flex: 1;
+  margin: 0;
+  font-family: 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
+  font-size: var(--sh-font-size-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.sh-task-group__count {
+  font: 500 calc(var(--sh-font-size-xs) - 1px) / 1
+        ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--sh-text-muted);
+  white-space: nowrap;
+}
+.sh-task-group__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.sh-task-group__empty {
+  padding: var(--sh-space-xs) var(--sh-space-md);
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+  font-style: italic;
+}
+.sh-task-group__droppad {
+  margin: 0;
+  padding: var(--sh-space-md);
+  border: 2px dashed var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  text-align: center;
+  font-size: var(--sh-font-size-sm);
+  color: var(--sh-text-muted);
+}
+.sh-task-group--drop-target .sh-task-group__droppad,
+.sh-task-group--drop-target > .sh-list-card,
+.sh-task-group--drop-target > .sh-task-group__header {
+  outline: 2px dashed currentColor;
+  outline-offset: 2px;
+}
+
+/* Per-status tint. Header gets a soft fill; the indicator dot is
+ * the same hue at full saturation so the colour reads from a
+ * glance even on a quiet row. Mirrors the existing per-status
+ * pill colours so the picker in the dialog and the section
+ * header speak the same language. */
+.sh-task-group--todo .sh-task-group__header {
+  background: color-mix(in srgb, var(--sh-text-muted) 8%, transparent);
+  color: var(--sh-text);
+}
+.sh-task-group--todo .sh-task-group__dot {
+  background: var(--sh-text-muted);
+}
+.sh-task-group--todo.sh-task-group--drop-target { color: var(--sh-text-muted); }
+
+.sh-task-group--in_progress .sh-task-group__header {
+  background: color-mix(in srgb, var(--sh-warning) 14%, transparent);
+  color: var(--sh-warning);
+}
+.sh-task-group--in_progress .sh-task-group__dot {
+  background: var(--sh-warning);
+}
+.sh-task-group--in_progress.sh-task-group--drop-target { color: var(--sh-warning); }
+
+.sh-task-group--done .sh-task-group__header {
+  background: color-mix(in srgb, var(--sh-success) 14%, transparent);
+  color: var(--sh-success);
+}
+.sh-task-group--done .sh-task-group__dot {
+  background: var(--sh-success);
+}
+.sh-task-group--done.sh-task-group--drop-target { color: var(--sh-success); }
+
+/* Row state while it's being dragged — a quiet ghost so the user
+ * doesn't lose track of the source position while the cursor
+ * crosses sections. */
+.sh-task-row[draggable="true"] { cursor: grab; }
+.sh-task-row[draggable="true"]:active { cursor: grabbing; }
+.sh-task-row--dragging { opacity: 0.4; }
+
 /* Status segmented button (Todo / In progress / Done). Smaller pill so
  * it fits next to the pin without a wide trailing column. */
 .sh-task-status {

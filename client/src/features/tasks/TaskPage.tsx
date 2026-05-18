@@ -39,6 +39,18 @@ const STATUS_CYCLE: Record<Status, Status> = {
   in_progress: 'done',
   done:        'todo',
 }
+/** Render order for the grouped view. Mirrors how a household
+ *  actually scans the list — "what's next" reads first, the
+ *  in-flight items are the middle band, and "what's already off
+ *  my plate" sits at the bottom as quiet confirmation. */
+const STATUS_ORDER: Status[] = ['todo', 'in_progress', 'done']
+
+/** Drag-data MIME used to differentiate task drags from any other
+ *  drag-and-drop layer in the same DOM tree. Drop targets read
+ *  ``e.dataTransfer.types.includes(DRAG_TASK_MIME)`` before
+ *  triggering a status reassignment. Same shape as the shopping
+ *  list's per-store drop targets. */
+const DRAG_TASK_MIME = 'application/x-sh-task'
 
 function dueLabel(due: string): { text: string; modifier: 'due' | 'overdue' | null } {
   // Parse a YYYY-MM-DD or ISO timestamp; reduce to a date-only comparison
@@ -159,6 +171,16 @@ export default function TaskPage() {
 
   const cycleStatus = async (task: TaskItem) => {
     const next = STATUS_CYCLE[task.status as Status]
+    await setTaskStatus(task, next)
+  }
+
+  /** Reassign a task's status. Used by the legacy cycle button, by
+   *  the checkbox toggle (todo ⇄ done), and by the new
+   *  drag-and-drop between status groups. Falls back to a toast
+   *  on error — no optimistic local patch so a 4xx doesn't leave
+   *  the row in a misleading state. */
+  const setTaskStatus = async (task: TaskItem, next: Status) => {
+    if (task.status === next) return
     try {
       const updated = await api.patch(
         `/api/tasks/${task.id}`, { status: next },
@@ -204,6 +226,24 @@ export default function TaskPage() {
   // active list always shows its real total.
   const totalOpen = tasks.value.filter(t => t.status !== 'done').length
   const newListInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Drag-and-drop state for moving a task between status groups.
+  // Mirrors the shopping-list per-store flow. ``draggingId`` keeps
+  // the in-flight row id so the source group can render a faded
+  // ghost; ``dropTarget`` paints the destination's outline / pad
+  // while the cursor is hovering over it. Both clear on dragend.
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<Status | null>(null)
+
+  const handleTaskDrop = (target: Status) => {
+    const id = draggingId
+    setDraggingId(null)
+    setDropTarget(null)
+    if (!id) return
+    const t = tasks.value.find(x => x.id === id)
+    if (!t || t.status === target) return
+    void setTaskStatus(t, target)
+  }
 
   return (
     <div class="sh-tasks">
@@ -271,69 +311,135 @@ export default function TaskPage() {
           </form>
         )}
 
-        {visibleTasks.length > 0 && (
-          <ul class="sh-list-card" style={{ listStyle: 'none', margin: 0 }}>
-            {visibleTasks.map(t => {
-              const due = t.due_date ? dueLabel(t.due_date) : null
-              const owners = (t.assignees ?? [])
-                .map(uid => userNameById(uid))
-                .filter(Boolean)
-              const ownerLine =
-                owners.length > 0
-                  ? owners.join(' · ')
-                  : t.created_by ? `+ ${userNameById(t.created_by)}` : ''
-              return (
-                <li key={t.id}
-                    class={`sh-task-row ${t.status === 'done' ? 'sh-task--done' : ''}`}>
-                  <input type="checkbox" checked={t.status === 'done'}
-                    onChange={() => cycleStatus({
-                      ...t,
-                      status: t.status === 'done' ? 'todo' : 'done',
-                    })}
-                    aria-label={`Toggle ${t.title}`} />
-                  <button
-                    type="button"
-                    class="sh-task-title"
-                    onClick={() => (editingTask.value = t)}
-                    title="Edit task"
-                    aria-label={`Edit task: ${t.title}`}
-                  >
-                    {t.title}
-                  </button>
-                  <div class="sh-task-meta">
-                    {ownerLine && (
-                      <span class="sh-byline">{ownerLine}</span>
-                    )}
-                    {due && due.text !== t.due_date && (
-                      <span class="sh-byline sh-byline--accent">
-                        · {due.text}
-                      </span>
-                    )}
-                    {due && due.text === t.due_date && (
-                      <span class="sh-byline">· {due.text}</span>
-                    )}
-                    <button type="button"
-                      class={`sh-task-status sh-task-status--${t.status}`}
-                      onClick={() => void cycleStatus(t)}
-                      title="Click to cycle status"
-                      aria-label={`Status: ${STATUS_LABEL[t.status as Status]}, click to change`}>
-                      {STATUS_LABEL[t.status as Status] ?? t.status}
-                    </button>
+        {visibleTasks.length > 0 && STATUS_ORDER.map(group => {
+          const inGroup = visibleTasks.filter(t => t.status === group)
+          const isDropTarget = dropTarget === group
+          // Always render every group so the user can drop into an
+          // empty bucket (e.g. "I'm starting fresh — drag this todo
+          // into In progress"). Empty groups collapse to a small
+          // header + drop pad while a drag is in flight; otherwise
+          // they show a one-line "no items" placeholder so the
+          // available-states inventory stays visible.
+          return (
+            <section
+              key={group}
+              class={
+                'sh-task-group '
+                + `sh-task-group--${group} `
+                + (isDropTarget ? 'sh-task-group--drop-target ' : '')
+              }
+              onDragOver={(e) => {
+                if (!e.dataTransfer?.types.includes(DRAG_TASK_MIME)) return
+                e.preventDefault()
+                if (dropTarget !== group) setDropTarget(group)
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget === e.target && dropTarget === group) {
+                  setDropTarget(null)
+                }
+              }}
+              onDrop={(e) => {
+                if (!e.dataTransfer?.types.includes(DRAG_TASK_MIME)) return
+                e.preventDefault()
+                handleTaskDrop(group)
+              }}
+            >
+              <header class="sh-task-group__header">
+                <span class={`sh-task-group__dot sh-task-group__dot--${group}`} aria-hidden="true" />
+                <h3 class="sh-task-group__name">{STATUS_LABEL[group]}</h3>
+                <span class="sh-task-group__count">
+                  {inGroup.length}
+                </span>
+              </header>
+              {inGroup.length === 0 ? (
+                draggingId ? (
+                  <div class="sh-task-group__droppad" aria-hidden="true">
+                    Drop here to move into {STATUS_LABEL[group]}
                   </div>
-                  {due?.modifier === 'overdue' && (
-                    <span class="sh-task-pin sh-task-pin--overdue">overdue</span>
-                  )}
-                  {due?.modifier === 'due' && (
-                    <span class="sh-task-pin sh-task-pin--due">due</span>
-                  )}
-                  <button type="button" class="sh-icon-btn"
-                          aria-label={`Delete ${t.title}`}
-                          onClick={() => void deleteTask(t)}>🗑️</button>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+                ) : (
+                  <div class="sh-task-group__empty">
+                    Nothing here.
+                  </div>
+                )
+              ) : (
+                <ul class="sh-list-card" style={{ listStyle: 'none', margin: 0 }}>
+                  {inGroup.map(t => {
+                    const due = t.due_date ? dueLabel(t.due_date) : null
+                    const owners = (t.assignees ?? [])
+                      .map(uid => userNameById(uid))
+                      .filter(Boolean)
+                    const ownerLine =
+                      owners.length > 0
+                        ? owners.join(' · ')
+                        : t.created_by ? `+ ${userNameById(t.created_by)}` : ''
+                    return (
+                      <li
+                        key={t.id}
+                        class={
+                          `sh-task-row ${t.status === 'done' ? 'sh-task--done' : ''} `
+                          + (draggingId === t.id ? 'sh-task-row--dragging' : '')
+                        }
+                        draggable={true}
+                        onDragStart={(e) => {
+                          // ``DRAG_TASK_MIME`` is the mark a section
+                          // drop handler checks before reassigning;
+                          // ``effectAllowed = move`` keeps Chrome's
+                          // default ``copy`` cursor from suggesting
+                          // the wrong semantic.
+                          e.dataTransfer?.setData(DRAG_TASK_MIME, t.id)
+                          if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+                          setDraggingId(t.id)
+                        }}
+                        onDragEnd={() => {
+                          setDraggingId(null)
+                          setDropTarget(null)
+                        }}
+                      >
+                        <input type="checkbox" checked={t.status === 'done'}
+                          onChange={() => cycleStatus({
+                            ...t,
+                            status: t.status === 'done' ? 'todo' : 'done',
+                          })}
+                          aria-label={`Toggle ${t.title}`} />
+                        <button
+                          type="button"
+                          class="sh-task-title"
+                          onClick={() => (editingTask.value = t)}
+                          title="Edit task"
+                          aria-label={`Edit task: ${t.title}`}
+                        >
+                          {t.title}
+                        </button>
+                        <div class="sh-task-meta">
+                          {ownerLine && (
+                            <span class="sh-byline">{ownerLine}</span>
+                          )}
+                          {due && due.text !== t.due_date && (
+                            <span class="sh-byline sh-byline--accent">
+                              · {due.text}
+                            </span>
+                          )}
+                          {due && due.text === t.due_date && (
+                            <span class="sh-byline">· {due.text}</span>
+                          )}
+                        </div>
+                        {due?.modifier === 'overdue' && (
+                          <span class="sh-task-pin sh-task-pin--overdue">overdue</span>
+                        )}
+                        {due?.modifier === 'due' && (
+                          <span class="sh-task-pin sh-task-pin--due">due</span>
+                        )}
+                        <button type="button" class="sh-icon-btn"
+                                aria-label={`Delete ${t.title}`}
+                                onClick={() => void deleteTask(t)}>🗑️</button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+          )
+        })}
 
         {visibleTasks.length === 0 && activeList.value && (
           <div class="sh-empty-state">
@@ -475,25 +581,32 @@ function TaskEditDialog({
   onClose: () => void
   onSaved: (t: TaskItem) => void
 }) {
-  const title       = signal(task.title)
-  const description = signal(task.description ?? '')
-  const dueDate     = signal(task.due_date ?? '')
-  const status      = signal<Status>(task.status as Status)
-  const saving      = signal(false)
+  // ``useState`` (not ``signal()``) for the form fields. The old
+  // ``signal(initialValue)`` calls ran inside the component body —
+  // every re-render created a *new* signal, so clicking a status
+  // button updated a soon-to-be-discarded signal and the next
+  // re-render reset the value to ``task.status``. That's the bug
+  // behind "I can't change the status in the edit dialog": the click
+  // registered for a frame, then bounced back to the original.
+  const [title, setTitle]             = useState(task.title)
+  const [description, setDescription] = useState(task.description ?? '')
+  const [dueDate, setDueDate]         = useState(task.due_date ?? '')
+  const [status, setStatus]           = useState<Status>(task.status as Status)
+  const [saving, setSaving]           = useState(false)
 
   const save = async (e: Event) => {
     e.preventDefault()
-    if (!title.value.trim()) {
+    if (!title.trim()) {
       showToast('Title cannot be empty', 'error')
       return
     }
-    saving.value = true
+    setSaving(true)
     try {
       const body: Record<string, unknown> = {
-        title:       title.value.trim(),
-        description: description.value.trim() || null,
-        due_date:    dueDate.value || null,
-        status:      status.value,
+        title:       title.trim(),
+        description: description.trim() || null,
+        due_date:    dueDate || null,
+        status,
       }
       const updated = await api.patch(
         `/api/tasks/${task.id}`, body,
@@ -503,49 +616,52 @@ function TaskEditDialog({
     } catch (err: unknown) {
       showToast(`Save failed: ${(err as Error).message ?? err}`, 'error')
     } finally {
-      saving.value = false
+      setSaving(false)
     }
   }
 
   return (
     <Modal open={true} onClose={onClose} title="Edit task">
       <form onSubmit={save}>
+        {/* Status moved to the TOP of the dialog — it's the most
+         *  common edit (move a task between buckets) and burying it
+         *  at the bottom under three text fields hid the affordance.
+         *  Mirrors the at-a-glance status grouping on the page
+         *  behind the dialog. */}
+        <label class="sh-form-label">Status</label>
+        <div class="sh-task-status-picker" role="radiogroup" aria-label="Status">
+          {STATUS_ORDER.map(s => (
+            <button
+              key={s}
+              type="button"
+              role="radio"
+              aria-checked={status === s}
+              class={`sh-task-status sh-task-status--${s} ${status === s ? 'sh-task-status--active' : ''}`}
+              onClick={() => setStatus(s)}
+            >
+              {STATUS_LABEL[s]}
+            </button>
+          ))}
+        </div>
         <label>
           Title
-          <input type="text" value={title.value} maxLength={200}
-            onInput={(e) => (title.value = (e.target as HTMLInputElement).value)}
+          <input type="text" value={title} maxLength={200}
+            onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
             autoFocus />
         </label>
         <label>
           Description
-          <textarea value={description.value} maxLength={2000}
-            onInput={(e) => (description.value = (e.target as HTMLTextAreaElement).value)} />
+          <textarea value={description} maxLength={2000}
+            onInput={(e) => setDescription((e.target as HTMLTextAreaElement).value)} />
         </label>
         <label>
           Due date
-          <input type="date" value={dueDate.value}
-            onInput={(e) => (dueDate.value = (e.target as HTMLInputElement).value)} />
-        </label>
-        <label>
-          Status
-          <div class="sh-task-status-picker" role="radiogroup" aria-label="Status">
-            {(['todo', 'in_progress', 'done'] as Status[]).map(s => (
-              <button
-                key={s}
-                type="button"
-                role="radio"
-                aria-checked={status.value === s}
-                class={`sh-task-status sh-task-status--${s} ${status.value === s ? 'sh-task-status--active' : ''}`}
-                onClick={() => (status.value = s)}
-              >
-                {STATUS_LABEL[s]}
-              </button>
-            ))}
-          </div>
+          <input type="date" value={dueDate}
+            onInput={(e) => setDueDate((e.target as HTMLInputElement).value)} />
         </label>
         <div class="sh-form-actions">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={saving.value}>Save</Button>
+          <Button type="submit" loading={saving}>Save</Button>
         </div>
       </form>
     </Modal>
