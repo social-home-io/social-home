@@ -7038,23 +7038,28 @@ body.sh-dm-thread-open .sh-messages {
   }
   .sh-shopping-store-picker__new {
     padding: 8px 16px calc(env(safe-area-inset-bottom, 0) + 16px) 16px;
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .sh-shopping-store-picker__back {
-    align-self: flex-start;
   }
 }
 
 /* ``new`` mode — the menu is replaced with an inline text input +
  * Save button. No native ``window.prompt()`` so the picker stays the
  * single surface the user is looking at (the old prompt closed the
- * picker, popped a native dialog, and surprised mobile testers). */
+ * picker, popped a native dialog, and surprised mobile testers).
+ *
+ * Stacked vertically (Back / input / Save) on every viewport: the
+ * menu itself caps at ``max-width: 280px`` (above), so a horizontal
+ * row would crush the input to ~30 px between the two buttons —
+ * literally too narrow to type into. The manage view follows the
+ * same vertical shape; the two typed-modes now read as siblings. */
 .sh-shopping-store-picker__new {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: var(--sh-space-sm);
   padding: 12px 16px;
+}
+.sh-shopping-store-picker__new .sh-shopping-store-picker__back {
+  align-self: flex-start;
 }
 .sh-shopping-store-picker__new-input {
   flex: 1;
