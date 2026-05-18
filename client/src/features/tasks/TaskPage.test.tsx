@@ -83,7 +83,7 @@ describe('TaskPage', () => {
     expect(typeof mod.default).toBe('function')
   })
 
-  it('renders three status group headers when a list has tasks', async () => {
+  it('renders open status headers + a trailing "done" divider', async () => {
     wireApi({
       lists: [{ id: 'l1', name: 'House' }],
       tasks: [
@@ -96,11 +96,85 @@ describe('TaskPage', () => {
     const mod = await import('./TaskPage')
     const { container } = render(<mod.default />)
     await waitFor(() => {
+      // 3 sections (todo / in_progress / done) all render — the
+      // done section is the archive trailer with no visible header.
       expect(container.querySelectorAll('.sh-task-group').length).toBe(3)
     }, { timeout: 2000 })
     const headers = Array.from(container.querySelectorAll('.sh-task-group__name'))
       .map(h => h.textContent)
-    expect(headers).toEqual(['To do', 'In progress', 'Done'])
+    // Only the OPEN buckets carry a header; Done is announced by
+    // the "n done · Clear all" divider below them.
+    expect(headers).toEqual(['To do', 'In progress'])
+    expect(container.querySelector('.sh-tasks-done-divider')).not.toBeNull()
+    expect(container.querySelector('.sh-task-group--archive')).not.toBeNull()
+  })
+
+  it('"Clear all" on the done divider deletes every done task in the list', async () => {
+    const { confirmDialog } = await import('@/components/confirm')
+    vi.mocked(confirmDialog).mockResolvedValue(true)
+    wireApi({
+      lists: [{ id: 'l1', name: 'House' }],
+      tasks: [
+        { id: 't1', list_id: 'l1', title: 'Fix tap', status: 'todo', position: 1, assignees: [], created_by: 'u1' },
+        { id: 't2', list_id: 'l1', title: 'Old',     status: 'done', position: 2, assignees: [], created_by: 'u1' },
+        { id: 't3', list_id: 'l1', title: 'Older',   status: 'done', position: 3, assignees: [], created_by: 'u1' },
+      ],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./TaskPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-tasks-done-divider')).not.toBeNull()
+    })
+    const clearBtn = container.querySelector('.sh-tasks-done-divider .sh-link') as HTMLElement
+    expect(clearBtn).toBeTruthy()
+    fireEvent.click(clearBtn)
+    await waitFor(() => {
+      const deletes = apiDelete.mock.calls.map(c => c[0])
+      expect(deletes).toContain('/api/tasks/t2')
+      expect(deletes).toContain('/api/tasks/t3')
+      // The not-yet-done task must NOT be deleted.
+      expect(deletes).not.toContain('/api/tasks/t1')
+    })
+  })
+
+  it('drag-status reassignment is optimistic — local store flips before the PATCH resolves', async () => {
+    // Regression for the lag where ``setTaskStatus`` waited for
+    // the server before moving the row. We delay the PATCH by a
+    // tick and assert the DOM has already moved before resolution.
+    type PatchResolver = (v: unknown) => void
+    const resolverRef: { current: PatchResolver | null } = { current: null }
+    apiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/tasks/lists') return [{ id: 'l1', name: 'House' }]
+      if (url.startsWith('/api/tasks/lists/')) return [
+        { id: 't1', list_id: 'l1', title: 'Fix tap', status: 'todo', position: 1, assignees: [], created_by: 'u1' },
+      ]
+      return []
+    })
+    apiPatch.mockImplementation(() => new Promise<unknown>((r) => {
+      resolverRef.current = r
+    }))
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./TaskPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-task-row')).not.toBeNull()
+    })
+    const row = container.querySelector('.sh-task-row') as HTMLElement
+    const dt = makeDataTransfer()
+    fireEvent.dragStart(row, { dataTransfer: dt })
+    const ipGroup = container.querySelector('.sh-task-group--in_progress') as HTMLElement
+    fireEvent.dragOver(ipGroup, { dataTransfer: dt })
+    fireEvent.drop(ipGroup, { dataTransfer: dt })
+    // Before the PATCH resolves, the row should already live in
+    // the In progress section.
+    await waitFor(() => {
+      const ipRows = ipGroup.querySelectorAll('.sh-task-row')
+      expect(ipRows.length).toBe(1)
+      expect(ipRows[0].textContent).toContain('Fix tap')
+    })
+    // Now resolve the PATCH and confirm the row stays.
+    resolverRef.current?.({ id: 't1', list_id: 'l1', title: 'Fix tap', status: 'in_progress', position: 1, assignees: [], created_by: 'u1' })
   })
 
   it('places each task under its current status group', async () => {

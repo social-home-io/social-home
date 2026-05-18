@@ -6022,6 +6022,31 @@ body.sh-dm-thread-open .sh-messages {
 }
 .sh-task-group--done.sh-task-group--drop-target { color: var(--sh-success); }
 
+/* Done as an "archive trailer" — the divider + section is
+ * deliberately quieter than the open sections so the page reads
+ * top-to-bottom as "what's next → in flight → archive of what's
+ * off my plate." Mirrors the shopping list's "Already bought"
+ * trailer. The bare section header is HIDDEN here (the
+ * "n done · Clear all" divider takes its place) — we don't want
+ * both a divider AND a header repeating the count. */
+.sh-tasks-done-divider {
+  margin-top: var(--sh-space-md);
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-muted);
+}
+.sh-task-group--archive {
+  margin-top: var(--sh-space-xs);
+  opacity: 0.78;
+}
+.sh-task-group--archive .sh-task-group__header {
+  display: none;
+}
+.sh-task-group--archive .sh-task-row {
+  /* Cumulative with .sh-task--done (0.65 opacity on title). The
+   * section ``opacity: 0.78`` above gives the whole archive a
+   * trailing-quieter feel without making the text unreadable. */
+}
+
 /* Row state while it's being dragged — a quiet ghost so the user
  * doesn't lose track of the source position while the cursor
  * crosses sections. */
