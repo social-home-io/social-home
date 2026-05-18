@@ -6,7 +6,9 @@ encrypted + paired. The §24.11 pipeline would reject it at the
 instance-lookup step (the pair doesn't exist yet on the receiver's
 side). See `graceful-weaving-dahl.md` for the full design.
 
-Two one-way messages:
+Two one-way messages, both carried on the peer's federation inbox URL
+as :data:`FederationEventType.PAIRING_PEER_ACCEPT` /
+:data:`FederationEventType.PAIRING_PEER_CONFIRM`:
 
 * **peer-accept** — B → A. Delivers B's pairing material
   (``identity_pk``, ``dh_pk``, ``inbox_url``, ``display_name``,
@@ -15,6 +17,10 @@ Two one-way messages:
 * **peer-confirm** — A → B. Signals that A's admin entered the
   matching SAS, letting B flip its local ``PENDING_RECEIVED`` status
   to ``CONFIRMED``.
+
+Riding the inbox URL keeps the handshake reachable in HA / HAOS, where
+the HA integration only proxies the federation inbox path —
+Supervisor Ingress blocks every other route to remote callers.
 
 Both are best-effort sends: network errors are logged and returned as
 ``ok=False`` so the caller can surface a retry hint in the UI without
@@ -26,12 +32,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
-from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 import orjson
 
 from ..crypto import sign_ed25519
+from ..domain.federation import FederationEventType
 
 log = logging.getLogger(__name__)
 
@@ -48,24 +54,15 @@ class PeerPairingResult:
     error: str | None = None
 
 
-def _derive_peer_base(peer_inbox_url: str) -> str:
-    """From a peer inbox URL like ``https://host/federation/inbox/xyz``,
-    return ``https://host`` — the host/port the peer-pairing routes
-    live under.
-    """
-    parsed = urlparse(peer_inbox_url)
-    if not parsed.scheme or not parsed.netloc:
-        raise ValueError(f"peer inbox URL is malformed: {peer_inbox_url!r}")
-    return urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
-
-
 def _canonical_body_bytes(body: dict) -> bytes:
     """Canonical bytes of ``body`` (without ``signature``) for signing.
 
     Uses orjson's SORT_KEYS option so both sides compute the same
     digest regardless of dict ordering. The ``signature`` field — if
     present — is omitted before serialising; callers sign the
-    unsigned body and add ``signature`` afterwards.
+    unsigned body and add ``signature`` afterwards. ``event_type`` is
+    included in the canonical bytes so the signature covers the
+    dispatch marker too.
     """
     signed_view = {k: v for k, v in body.items() if k != "signature"}
     return orjson.dumps(signed_view, option=orjson.OPT_SORT_KEYS)
@@ -83,7 +80,14 @@ def sign_peer_body(body: dict, *, own_identity_seed: bytes) -> dict:
 
 
 class PeerPairingClient:
-    """Thin outbound client for ``POST /api/pairing/peer-{accept,confirm}``.
+    """Thin outbound client for the §11 peer-pairing bootstrap.
+
+    Both ``send_peer_accept`` and ``send_peer_confirm`` POST a signed
+    body directly to the peer's federation ``inbox_url`` (no path
+    rewriting). The body carries an ``event_type`` of
+    ``PAIRING_PEER_ACCEPT`` / ``PAIRING_PEER_CONFIRM`` and the
+    receiving federation-inbox view dispatches it ahead of the §24.11
+    pipeline.
 
     Construction parameters:
 
@@ -122,7 +126,11 @@ class PeerPairingClient:
         body: dict,
     ) -> PeerPairingResult:
         """POST a signed ``peer-accept`` body to the inviter (A)."""
-        return await self._post(peer_inbox_url, "/api/pairing/peer-accept", body)
+        return await self._post(
+            peer_inbox_url,
+            FederationEventType.PAIRING_PEER_ACCEPT.value,
+            body,
+        )
 
     async def send_peer_confirm(
         self,
@@ -131,27 +139,35 @@ class PeerPairingClient:
         body: dict,
     ) -> PeerPairingResult:
         """POST a signed ``peer-confirm`` body to the scanner (B)."""
-        return await self._post(peer_inbox_url, "/api/pairing/peer-confirm", body)
+        return await self._post(
+            peer_inbox_url,
+            FederationEventType.PAIRING_PEER_CONFIRM.value,
+            body,
+        )
 
     async def _post(
         self,
         peer_inbox_url: str,
-        path: str,
+        event_type: str,
         body: dict,
     ) -> PeerPairingResult:
-        """Sign ``body`` and POST it to ``{peer_host}{path}``."""
-        try:
-            base = _derive_peer_base(peer_inbox_url)
-        except ValueError as exc:
-            log.warning("peer-pairing: bad URL %r: %s", peer_inbox_url, exc)
-            return PeerPairingResult(ok=False, status_code=None, error=str(exc))
+        """Sign ``body`` (with ``event_type`` woven in) and POST it."""
+        if not peer_inbox_url:
+            log.warning("peer-pairing: empty inbox URL for event_type=%s", event_type)
+            return PeerPairingResult(
+                ok=False,
+                status_code=None,
+                error="empty peer inbox URL",
+            )
 
-        signed = sign_peer_body(body, own_identity_seed=self._own_identity_seed)
-        url = base + path
+        envelope_body: dict = {"event_type": event_type, **body}
+        signed = sign_peer_body(
+            envelope_body, own_identity_seed=self._own_identity_seed
+        )
         try:
             client = await self._client_once()
             async with client.post(
-                url,
+                peer_inbox_url,
                 data=orjson.dumps(signed),
                 headers={"Content-Type": "application/json"},
                 timeout=aiohttp.ClientTimeout(total=self._timeout_s),
@@ -162,14 +178,19 @@ class PeerPairingClient:
                     detail = await _read_brief(resp)
                     log.warning(
                         "peer-pairing: %s %s returned %d: %s",
-                        path,
-                        url,
+                        event_type,
+                        peer_inbox_url,
                         status,
                         detail,
                     )
                 return PeerPairingResult(ok=ok, status_code=status)
         except Exception as exc:
-            log.warning("peer-pairing: %s %s failed: %s", path, url, exc)
+            log.warning(
+                "peer-pairing: %s %s failed: %s",
+                event_type,
+                peer_inbox_url,
+                exc,
+            )
             return PeerPairingResult(ok=False, status_code=None, error=str(exc))
 
 

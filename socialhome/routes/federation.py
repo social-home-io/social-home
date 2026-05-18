@@ -7,6 +7,15 @@ signature verify -> replay cache -> decrypt -> dispatch) lives in
 thin shim that forwards the raw body and converts the service's
 canonical ``ValueError`` rejections into HTTP 400 / 403 / 410.
 
+§11 peer-pairing bootstrap (``PAIRING_PEER_ACCEPT`` /
+``PAIRING_PEER_CONFIRM``) rides the same URL. The view peeks the
+body's ``event_type`` before invoking the pipeline because pairing
+bodies are plaintext + Ed25519 + TOFU on identity_pk — the §24.11
+pipeline assumes a confirmed ``RemoteInstance`` exists and would
+reject them at the instance-lookup step. Pairing events short-circuit
+to :meth:`FederationService.handle_peer_accept` /
+:meth:`handle_peer_confirm`.
+
 Authentication: the path is in ``_DEFAULT_PUBLIC_PATHS`` because the
 envelope is itself authenticated (Ed25519 over the canonical bytes).
 The auth middleware bypass is the contract — no ``Authorization``
@@ -22,9 +31,11 @@ from __future__ import annotations
 
 import logging
 
+import orjson
 from aiohttp import web
 
 from .. import app_keys as K
+from ..domain.federation import FederationEventType
 from .base import BaseView
 
 log = logging.getLogger(__name__)
@@ -66,8 +77,42 @@ _STATUS_CODE_RULES: tuple[tuple[str, int], ...] = (
 )
 
 
+# §11 bootstrap event-type → pairing-service method. The receiver
+# dispatches these ahead of the §24.11 pipeline because the pair
+# doesn't exist on this side yet — the message itself materialises it.
+_PAIRING_BOOTSTRAP_DISPATCH: dict[str, str] = {
+    FederationEventType.PAIRING_PEER_ACCEPT.value: "handle_peer_accept",
+    FederationEventType.PAIRING_PEER_CONFIRM.value: "handle_peer_confirm",
+}
+
+
+# Substrings within a pairing-service ValueError message → HTTP status.
+# Mirrors the legacy ``routes/pairing_peer.py`` table so the wire
+# behaviour for §11 errors is unchanged after the transport swap.
+_PAIRING_STATUS_RULES: tuple[tuple[str, int], ...] = (
+    ("Missing required fields", 400),
+    ("Malformed signature", 400),
+    ("Malformed dh", 400),
+    ("Malformed identity", 400),
+    ("No pending pairing", 404),
+    ("RemoteInstance not found", 404),
+    ("signature verification failed", 403),
+    ("does not match identity_pk", 403),
+    ("does not match stored identity_pk", 403),
+    ("has expired", 410),
+    ("cannot accept peer-accept", 409),
+)
+
+
 def _classify(msg: str) -> int:
     for needle, status in _STATUS_CODE_RULES:
+        if needle in msg:
+            return status
+    return 400
+
+
+def _classify_pairing(msg: str) -> int:
+    for needle, status in _PAIRING_STATUS_RULES:
         if needle in msg:
             return status
     return 400
@@ -130,6 +175,18 @@ class FederationInboxView(BaseView):
                 status=503,
             )
 
+        # §11 bootstrap fast-path: peek ``event_type`` before the §24.11
+        # pipeline. Pairing bodies carry their own Ed25519 signature
+        # and the receiver doesn't yet have a ``RemoteInstance`` row
+        # for the sender, so the pipeline would reject them.
+        pairing_response = await self._maybe_dispatch_pairing(
+            federation_service,
+            raw_body,
+            inbox_id,
+        )
+        if pairing_response is not None:
+            return pairing_response
+
         try:
             result = await federation_service.handle_inbound_envelope(
                 inbox_id,
@@ -162,3 +219,58 @@ class FederationInboxView(BaseView):
             )
 
         return web.json_response(result)
+
+    async def _maybe_dispatch_pairing(
+        self,
+        federation_service: object,
+        raw_body: bytes,
+        inbox_id: str,
+    ) -> web.Response | None:
+        """Dispatch §11 bootstrap events ahead of the §24.11 pipeline.
+
+        Returns the response to send back, or ``None`` if the body is
+        not a pairing event and the caller should fall through to the
+        regular pipeline. A malformed JSON body always falls through —
+        the pipeline produces a stable 400 with the same wire shape.
+        """
+        try:
+            body = orjson.loads(raw_body)
+        except Exception:
+            return None
+        if not isinstance(body, dict):
+            return None
+        event_type = body.get("event_type")
+        if not isinstance(event_type, str):
+            return None
+        handler_name = _PAIRING_BOOTSTRAP_DISPATCH.get(event_type)
+        if handler_name is None:
+            return None
+
+        handler = getattr(federation_service, handler_name)
+        try:
+            result = await handler(body)
+        except ValueError as exc:
+            msg = str(exc)
+            status = _classify_pairing(msg)
+            log.warning(
+                "federation inbox: pairing %s rejected inbox_id=%s status=%d reason=%s",
+                event_type,
+                inbox_id,
+                status,
+                exc,
+            )
+            return web.json_response(
+                {"error": _GENERIC_ERROR_BY_STATUS.get(status, "rejected")},
+                status=status,
+            )
+        except Exception:
+            log.exception(
+                "federation inbox: pairing %s unexpected error (inbox_id=%s)",
+                event_type,
+                inbox_id,
+            )
+            return web.json_response(
+                {"error": "internal"},
+                status=500,
+            )
+        return web.json_response(result, status=200)

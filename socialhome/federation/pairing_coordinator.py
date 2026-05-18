@@ -342,8 +342,10 @@ class PairingCoordinator:
             if self._own_pq_pk is not None:
                 peer_accept_body["pq_algorithm"] = "mldsa65"
                 peer_accept_body["pq_identity_pk"] = self._own_pq_pk.hex()
-            # The QR's ``inbox_url`` is A's inbox; that's where the
-            # peer-accept POST lands (via the host part of the URL).
+            # The QR's ``inbox_url`` is A's federation inbox. The
+            # peer-accept rides it as a ``PAIRING_PEER_ACCEPT``
+            # federation event so the HA integration's existing inbox
+            # proxy is the only path we depend on.
             result = await self._peer_pairing_client.send_peer_accept(
                 peer_inbox_url=peer_inbox_url,
                 body=peer_accept_body,

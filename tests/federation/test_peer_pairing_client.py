@@ -5,10 +5,10 @@ from __future__ import annotations
 import orjson
 
 from socialhome.crypto import generate_identity_keypair, verify_ed25519
+from socialhome.domain.federation import FederationEventType
 from socialhome.federation.peer_pairing_client import (
     PeerPairingClient,
     _canonical_body_bytes,
-    _derive_peer_base,
     sign_peer_body,
 )
 
@@ -55,27 +55,6 @@ class _FakeClient:
 # ── helper tests ──
 
 
-def test_derive_peer_base_strips_path():
-    assert (
-        _derive_peer_base("https://peer.example/federation/inbox/xyz")
-        == "https://peer.example"
-    )
-
-
-def test_derive_peer_base_preserves_port():
-    assert (
-        _derive_peer_base("http://peer.example:8080/federation/inbox/xyz")
-        == "http://peer.example:8080"
-    )
-
-
-def test_derive_peer_base_raises_for_malformed():
-    import pytest
-
-    with pytest.raises(ValueError):
-        _derive_peer_base("not-a-url")
-
-
 def test_canonical_body_omits_signature_and_sorts_keys():
     body = {"b": 2, "a": 1, "signature": "deadbeef"}
     canonical = _canonical_body_bytes(body)
@@ -86,6 +65,16 @@ def test_canonical_body_omits_signature_and_sorts_keys():
     # produces identical canonical bytes.
     body2 = {"a": 1, "b": 2}
     assert _canonical_body_bytes(body2) == canonical
+
+
+def test_canonical_body_covers_event_type():
+    """``event_type`` must be in the signed bytes — otherwise an
+    attacker could swap the dispatch marker on the wire without
+    invalidating the Ed25519 signature.
+    """
+    a = _canonical_body_bytes({"event_type": "pairing_peer_accept", "token": "x"})
+    b = _canonical_body_bytes({"event_type": "pairing_peer_confirm", "token": "x"})
+    assert a != b
 
 
 def test_sign_peer_body_produces_valid_signature():
@@ -105,9 +94,9 @@ def test_sign_peer_body_produces_valid_signature():
 # ── client POST tests ──
 
 
-async def test_send_peer_accept_signs_and_posts():
+async def test_send_peer_accept_posts_to_inbox_url_with_event_type():
     kp = generate_identity_keypair()
-    fake = _FakeClient(responses=[_FakeResponse(status=204)])
+    fake = _FakeClient(responses=[_FakeResponse(status=200)])
 
     async def _factory():
         return fake
@@ -116,29 +105,36 @@ async def test_send_peer_accept_signs_and_posts():
         own_identity_seed=kp.private_key,
         client_factory=_factory,
     )
+    inbox_url = "https://peer.example/federation/inbox/wh"
     result = await client.send_peer_accept(
-        peer_inbox_url="https://peer.example/federation/inbox/wh",
+        peer_inbox_url=inbox_url,
         body={"token": "abc", "verification_code": "123456"},
     )
 
     assert result.ok is True
-    assert result.status_code == 204
+    assert result.status_code == 200
     url, data, headers = fake.calls[0]
-    assert url == "https://peer.example/api/pairing/peer-accept"
+    # Posts directly to the peer's inbox URL — no path rewriting.
+    assert url == inbox_url
     assert headers["Content-Type"] == "application/json"
     signed = orjson.loads(data)
+    assert signed["event_type"] == FederationEventType.PAIRING_PEER_ACCEPT.value
     assert signed["token"] == "abc"
-    # Signature is appended and verifies.
+    # Signature is appended and verifies over the body INCLUDING event_type.
     sig = bytes.fromhex(signed["signature"])
     canonical = _canonical_body_bytes(
-        {"token": "abc", "verification_code": "123456"},
+        {
+            "event_type": FederationEventType.PAIRING_PEER_ACCEPT.value,
+            "token": "abc",
+            "verification_code": "123456",
+        },
     )
     assert verify_ed25519(kp.public_key, canonical, sig)
 
 
-async def test_send_peer_confirm_posts_to_confirm_path():
+async def test_send_peer_confirm_posts_to_inbox_url_with_event_type():
     kp = generate_identity_keypair()
-    fake = _FakeClient(responses=[_FakeResponse(status=204)])
+    fake = _FakeClient(responses=[_FakeResponse(status=200)])
 
     async def _factory():
         return fake
@@ -147,14 +143,17 @@ async def test_send_peer_confirm_posts_to_confirm_path():
         own_identity_seed=kp.private_key,
         client_factory=_factory,
     )
+    inbox_url = "https://peer.example/federation/inbox/wh"
     result = await client.send_peer_confirm(
-        peer_inbox_url="https://peer.example/federation/inbox/wh",
+        peer_inbox_url=inbox_url,
         body={"token": "abc", "instance_id": "iid-A"},
     )
 
     assert result.ok is True
-    url, _, _ = fake.calls[0]
-    assert url == "https://peer.example/api/pairing/peer-confirm"
+    url, data, _ = fake.calls[0]
+    assert url == inbox_url
+    signed = orjson.loads(data)
+    assert signed["event_type"] == FederationEventType.PAIRING_PEER_CONFIRM.value
 
 
 async def test_send_reports_non_2xx_as_failure():
@@ -199,7 +198,7 @@ async def test_send_reports_network_error_as_failure():
     assert result.error == "boom"
 
 
-async def test_send_reports_bad_url_as_failure():
+async def test_send_rejects_empty_inbox_url():
     kp = generate_identity_keypair()
     fake = _FakeClient()
 
@@ -210,10 +209,7 @@ async def test_send_reports_bad_url_as_failure():
         own_identity_seed=kp.private_key,
         client_factory=_factory,
     )
-    result = await client.send_peer_accept(
-        peer_inbox_url="not-a-url",
-        body={"token": "x"},
-    )
+    result = await client.send_peer_accept(peer_inbox_url="", body={"token": "x"})
     assert result.ok is False
     assert result.status_code is None
     # No POST was issued.
