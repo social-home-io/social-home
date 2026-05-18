@@ -70,6 +70,9 @@ from .infrastructure.gfs_ws_supervisor import GfsWebSocketSupervisor
 from .infrastructure.dm_gc_scheduler import DmGcScheduler
 from .infrastructure.dm_relay_seen_scheduler import DmRelaySeenPruneScheduler
 from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionScheduler
+from .infrastructure.pairing_session_prune_scheduler import (
+    PairingSessionPruneScheduler,
+)
 from .infrastructure.password_reset_cleanup_scheduler import (
     PasswordResetCleanupScheduler,
 )
@@ -1477,6 +1480,7 @@ def create_app(config: Config | None = None) -> web.Application:
     dm_relay_seen_scheduler: DmRelaySeenPruneScheduler | None = None
     password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
+    pairing_session_prune_scheduler: PairingSessionPruneScheduler | None = None
     dm_gc_scheduler: DmGcScheduler | None = None
     page_lock_scheduler: PageLockExpiryScheduler | None = None
     space_retention_scheduler: SpaceRetentionScheduler | None = None
@@ -1972,6 +1976,17 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         await pairing_relay_scheduler.start()
 
+        # Pairing-session retention (§11) — drops ``pending_pairings``
+        # rows past their ``expires_at`` and the orphan PENDING
+        # ``remote_instances`` they pointed at, so the SPA's pending
+        # handshake list doesn't grow forever when a peer never
+        # completes the SAS step.
+        nonlocal pairing_session_prune_scheduler
+        pairing_session_prune_scheduler = PairingSessionPruneScheduler(
+            federation_repo,
+        )
+        await pairing_session_prune_scheduler.start()
+
         # DM GC (§23.47c) — hard-deletes conversations whose every
         # local member has soft-left and which have no remote members.
         nonlocal dm_gc_scheduler
@@ -2105,6 +2120,8 @@ def create_app(config: Config | None = None) -> web.Application:
         await online_status_service.stop()
         if pairing_relay_scheduler is not None:
             await pairing_relay_scheduler.stop()
+        if pairing_session_prune_scheduler is not None:
+            await pairing_session_prune_scheduler.stop()
         if dm_gc_scheduler is not None:
             await dm_gc_scheduler.stop()
         if page_lock_scheduler is not None:

@@ -203,6 +203,25 @@ by the §24.11 inbound pipeline. The handler additionally rejects
 empty URLs and unsupported schemes (anything that isn't `http://` or
 `https://`).
 
+## TTL + cleanup
+
+`PAIRING_TTL_SECONDS = 300` — five minutes from the QR being issued
+(or scanned) to the SAS being entered on both sides. Past that, every
+handler in the coordinator rejects the in-progress message with
+`Pairing session has expired`.
+
+`PairingSessionPruneScheduler` (in
+[`socialhome/infrastructure/`](../../socialhome/infrastructure/pairing_session_prune_scheduler.py))
+runs once a minute and calls
+[`federation_repo.cleanup_expired_pairings`](../../socialhome/repositories/federation_repo.py).
+That call deletes the expired `pending_pairings` row AND any
+PENDING_SENT / PENDING_RECEIVED `remote_instances` row whose
+`local_inbox_id` matched it — so the SPA's pending handshake list
+self-empties within ~1 minute of expiry. CONFIRMED rows are protected
+by an explicit status filter (the real `confirm()` path deletes the
+session before flipping the instance, so the scenario is defensive
+rather than actual).
+
 ## Unpairing
 
 `UNPAIR` is a polite notice that the session keys are about to be
