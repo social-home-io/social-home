@@ -62,7 +62,17 @@ from __future__ import annotations
 #:   receive a synthesised ``type='text'`` message — see
 #:   :mod:`socialhome.federation.compat.dm_media_v3` for the
 #:   transform.
-OURS: int = 3
+#: * **v4** — §11 peer-pairing bootstrap moves off the dedicated
+#:   ``/api/pairing/peer-{accept,confirm}`` routes onto the federation
+#:   inbox URL as :data:`FederationEventType.PAIRING_PEER_ACCEPT` /
+#:   :data:`FederationEventType.PAIRING_PEER_CONFIRM`. Required because
+#:   HA / HAOS deployments only proxy the federation inbox path —
+#:   remote peers cannot reach any other SH path through Supervisor
+#:   Ingress. **No fallback.** Sub-v_4 peers cannot pair under HAOS
+#:   today (the bug this version fixes); standalone-to-standalone
+#:   pairs with one upgraded side and one sub-v_4 side will fail too
+#:   and need both sides upgraded.
+OURS: int = 4
 
 
 class FederationCapability:
@@ -89,3 +99,13 @@ class FederationCapability:
     #: carries useful information instead of vanishing — see the
     #: :mod:`socialhome.federation.compat.dm_media_v3` transform.
     MIN_FOR_DM_MEDIA_SYNC = 3
+
+    #: Minimum proto_version where the §11 peer-pairing bootstrap rides
+    #: the federation inbox URL as
+    #: :data:`FederationEventType.PAIRING_PEER_ACCEPT` /
+    #: :data:`FederationEventType.PAIRING_PEER_CONFIRM` instead of the
+    #: legacy ``/api/pairing/peer-{accept,confirm}`` routes. Capability
+    #: exchange happens *after* pairing completes, so this constant is
+    #: informational — the sender always emits the new shape — and is
+    #: kept so the version history in :data:`OURS` is searchable.
+    MIN_FOR_PAIRING_VIA_INBOX = 4

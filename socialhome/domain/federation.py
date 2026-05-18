@@ -41,6 +41,14 @@ class FederationEventType(str, enum.Enum):
     PAIRING_INTRO_AUTO_ACK_VIA = "pairing_intro_auto_ack_via"
     PAIRING_ACCEPT = "pairing_accept"
     PAIRING_CONFIRM = "pairing_confirm"
+    #: §11 bootstrap handshake carried on the federation inbox URL
+    #: instead of a dedicated REST route. Plaintext, Ed25519-signed body
+    #: (TOFU on identity_pk + SAS round-trip). The receiving inbox view
+    #: dispatches these short of the §24.11 pipeline because the
+    #: ``RemoteInstance`` lookup that the pipeline assumes hasn't
+    #: happened yet — the pair is being created by this message.
+    PAIRING_PEER_ACCEPT = "pairing_peer_accept"
+    PAIRING_PEER_CONFIRM = "pairing_peer_confirm"
     PAIRING_ABORT = "pairing_abort"
     UNPAIR = "unpair"
     URL_UPDATED = "url_updated"
@@ -276,6 +284,8 @@ PAIRING_EVENTS: frozenset[FederationEventType] = frozenset(
         FederationEventType.PAIRING_INTRO_AUTO_ACK_VIA,
         FederationEventType.PAIRING_ACCEPT,
         FederationEventType.PAIRING_CONFIRM,
+        FederationEventType.PAIRING_PEER_ACCEPT,
+        FederationEventType.PAIRING_PEER_CONFIRM,
         FederationEventType.PAIRING_ABORT,
         FederationEventType.UNPAIR,
     }

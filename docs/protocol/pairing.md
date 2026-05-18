@@ -15,19 +15,24 @@ here.
 
 `PAIRING_INTRO`, `PAIRING_INTRO_RELAY`, `PAIRING_INTRO_AUTO`,
 `PAIRING_INTRO_AUTO_ACK`, `PAIRING_INTRO_AUTO_ACK_VIA`,
-`PAIRING_ACCEPT`, `PAIRING_CONFIRM`, `PAIRING_ABORT`, `UNPAIR`,
-`URL_UPDATED`.
+`PAIRING_ACCEPT`, `PAIRING_CONFIRM`, `PAIRING_PEER_ACCEPT`,
+`PAIRING_PEER_CONFIRM`, `PAIRING_ABORT`, `UNPAIR`, `URL_UPDATED`.
 
 ## Flow — direct QR handshake
 
-The handshake runs on a **dedicated plaintext bootstrap transport**
-(`POST /api/pairing/peer-accept` and `POST /api/pairing/peer-confirm`)
-rather than the §24.11 federation inbox. The §24.11 pipeline starts
-with a `RemoteInstance` lookup that doesn't exist until pairing
-completes — classic bootstrap chicken-and-egg. Both bootstrap
-endpoints are public; the body's Ed25519 signature is the auth
-(TOFU on first contact, plus the SAS round-trip closes the MITM
-window).
+The bootstrap handshake rides the **federation inbox URL** as two
+plaintext, Ed25519-signed federation events: `PAIRING_PEER_ACCEPT`
+(B → A) and `PAIRING_PEER_CONFIRM` (A → B). The receiving
+federation-inbox view peeks the body's `event_type` and dispatches
+pairing events directly to the pairing coordinator — short of the
+§24.11 pipeline, which assumes a confirmed `RemoteInstance` row that
+doesn't exist until pairing completes.
+
+The federation inbox path is the only public surface peers reach
+through the HA / HAOS Supervisor Ingress proxy, so anchoring the
+bootstrap there is what keeps QR pairing working under those modes.
+Auth is the body's Ed25519 signature (TOFU on first contact, plus
+the SAS round-trip to close the MITM window).
 
 ```mermaid
 sequenceDiagram
@@ -39,17 +44,17 @@ sequenceDiagram
     Note over A,B: user shows QR to B
 
     B->>B: scan QR → accept_pairing()<br/>derives shared DH secret,<br/>stores local RemoteInstance for A
-    B->>A: POST /api/pairing/peer-accept<br/>(B.identity_pk, B.dh_pk,<br/>B.inbox_url, B.display_name,<br/>token, SAS, Ed25519 signature)
+    B->>A: POST {A.inbox_url}<br/>{event_type: PAIRING_PEER_ACCEPT,<br/>B.identity_pk, B.dh_pk,<br/>B.inbox_url, B.display_name,<br/>token, SAS, Ed25519 signature}
 
-    A->>A: handle_peer_accept: TOFU verify sig,<br/>derive shared secret, KEK-encrypt keys,<br/>save RemoteInstance for B,<br/>publish PairingAcceptReceived
+    A->>A: federation-inbox view dispatches<br/>PAIRING_PEER_ACCEPT → handle_peer_accept:<br/>TOFU verify sig, derive shared secret,<br/>KEK-encrypt keys, save RemoteInstance for B,<br/>publish PairingAcceptReceived
     A-->>A: WS pairing.accept_received →<br/>admin UI auto-fills SAS digits
 
     Note over A,B: admins compare SAS<br/>out-of-band
 
     A->>A: admin enters SAS → confirm_pairing()<br/>flips local RemoteInstance → CONFIRMED
-    A->>B: POST /api/pairing/peer-confirm<br/>(token, A.instance_id, Ed25519 signature)
+    A->>B: POST {B.inbox_url}<br/>{event_type: PAIRING_PEER_CONFIRM,<br/>token, A.instance_id, Ed25519 signature}
 
-    B->>B: handle_peer_confirm: verify sig<br/>with stored A.identity_pk,<br/>flip local RemoteInstance → CONFIRMED,<br/>publish PairingConfirmed
+    B->>B: federation-inbox view dispatches<br/>PAIRING_PEER_CONFIRM → handle_peer_confirm:<br/>verify sig with stored A.identity_pk,<br/>flip local RemoteInstance → CONFIRMED,<br/>publish PairingConfirmed
 
     Note over A,B: both sides hold CONFIRMED pair;<br/>normal §24.11 federation starts here.
     A-->>B: URL_UPDATED<br/>(if URL changes later)
@@ -211,10 +216,13 @@ the receiver still decrypts with a key it's about to delete.
   direct + auto-pair flows, plus `handle_peer_accept` /
   `handle_peer_confirm` for the bootstrap transport.
 - `socialhome/federation/peer_pairing_client.py` — outbound HTTP
-  client for `/api/pairing/peer-{accept,confirm}`. Signs bodies with
-  Ed25519 using this instance's identity seed.
-- `socialhome/routes/pairing_peer.py` — the two public bootstrap
-  endpoints.
+  client that POSTs `PAIRING_PEER_ACCEPT` / `PAIRING_PEER_CONFIRM`
+  bodies directly to the peer's federation `inbox_url`. Signs bodies
+  with Ed25519 using this instance's identity seed.
+- `socialhome/routes/federation.py` — `FederationInboxView` peeks the
+  body's `event_type` and dispatches `PAIRING_PEER_ACCEPT` /
+  `PAIRING_PEER_CONFIRM` to the pairing coordinator ahead of the
+  §24.11 pipeline.
 - `socialhome/routes/pairing.py` — local-only admin routes used by
   the UI (`/api/pairing/initiate`, `/accept`, `/confirm`).
 - `socialhome/services/federation_inbound/pairing.py` — §24.11
