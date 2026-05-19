@@ -940,10 +940,12 @@ class FederationService:
         self,
         event: LocalHomeLocationUpdated,
     ) -> None:
-        """Fan out LOCAL_HOME_LOCATION_CHANGED to every confirmed peer at proto_version >= 5."""
+        """Fan out LOCAL_HOME_LOCATION_CHANGED to every confirmed peer at proto_version >= 5 that has share_home enabled."""
         peers = await self._federation_repo.list_instances(status="confirmed")
         payload = {"latitude": event.latitude, "longitude": event.longitude}
         for peer in peers:
+            if not peer.share_home:
+                continue
             if not await self.peer_supports(
                 peer.id,
                 min_version=FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST,

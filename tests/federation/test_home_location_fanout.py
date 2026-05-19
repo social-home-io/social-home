@@ -36,7 +36,9 @@ def _make_kek() -> KeyManager:
     return KeyManager(os.urandom(32))
 
 
-def _peer(instance_id: str, *, proto_version: int) -> RemoteInstance:
+def _peer(
+    instance_id: str, *, proto_version: int, share_home: bool = True
+) -> RemoteInstance:
     return RemoteInstance(
         id=instance_id,
         display_name=instance_id,
@@ -48,6 +50,7 @@ def _peer(instance_id: str, *, proto_version: int) -> RemoteInstance:
         status=PairingStatus.CONFIRMED,
         source=InstanceSource.MANUAL,
         proto_version=proto_version,
+        share_home=share_home,
     )
 
 
@@ -121,3 +124,30 @@ async def test_local_home_location_skips_v4_sends_to_v5():
         assert mock_send.await_count == 1
         call_kwargs = mock_send.await_args.kwargs
         assert call_kwargs["to_instance_id"] == "peer-v5"
+
+
+@pytest.mark.asyncio
+async def test_local_home_location_skips_share_home_false_peer():
+    """A v5 confirmed peer with share_home=False is silently skipped."""
+    svc, fed_repo, bus = _make_service()
+    await fed_repo.save_instance(
+        _peer("peer-v5-no-share", proto_version=5, share_home=False)
+    )
+
+    with patch(_SEND_EVENT_PATH, new_callable=AsyncMock) as mock_send:
+        await bus.publish(LocalHomeLocationUpdated(latitude=52.52, longitude=13.40))
+
+        mock_send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_local_home_location_skips_when_all_peers_have_share_home_false():
+    """All confirmed peers with share_home=False → zero sends, no error."""
+    svc, fed_repo, bus = _make_service()
+    await fed_repo.save_instance(_peer("peer-v5-a", proto_version=5, share_home=False))
+    await fed_repo.save_instance(_peer("peer-v5-b", proto_version=5, share_home=False))
+
+    with patch(_SEND_EVENT_PATH, new_callable=AsyncMock) as mock_send:
+        await bus.publish(LocalHomeLocationUpdated(latitude=52.52, longitude=13.40))
+
+        mock_send.assert_not_awaited()
