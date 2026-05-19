@@ -199,6 +199,7 @@ describe('DM path row', () => {
     )
     await waitFor(() => {
       expect(screen.getByText(/Last DM took the relay path/i)).toBeTruthy()
+      expect(screen.getByText(/peer-relay/)).toBeTruthy()
     })
   })
 
