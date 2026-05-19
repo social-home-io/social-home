@@ -34,7 +34,7 @@ from ..adapter import (
     InstanceConfig,
     PlatformAdapter,
 )
-from .._ha_home_location import persist_home_location_from_ha
+from ..ha_home_location import persist_home_location_from_ha
 from ..ha.client import HaClient, build_ha_client
 from ..ha.providers import (
     HaAIProvider,

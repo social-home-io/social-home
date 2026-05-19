@@ -30,7 +30,7 @@ from ..local_credentials import (
     LocalCredentialStore,
     hash_password as _hash_password,
 )
-from .._ha_home_location import persist_home_location_from_ha
+from ..ha_home_location import persist_home_location_from_ha
 from .client import HaClient, build_ha_client
 from .providers import (
     HaAIProvider,

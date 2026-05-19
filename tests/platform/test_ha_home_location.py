@@ -8,7 +8,7 @@ from socialhome.crypto import derive_instance_id, generate_identity_keypair
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.events import LocalHomeLocationUpdated
 from socialhome.infrastructure.event_bus import EventBus
-from socialhome.platform._ha_home_location import (
+from socialhome.platform.ha_home_location import (
     persist_home_location_from_ha,
 )
 
