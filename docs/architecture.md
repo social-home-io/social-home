@@ -153,6 +153,40 @@ flowchart LR
     dispatch --> handler["per-event handler"]
 ```
 
+### Federation map — peer home location
+
+The HA and HAOS adapters fetch `latitude` / `longitude` from HA Core's
+`GET /api/config` during `on_startup` and persist them (truncated to 4dp)
+to `instance_identity.home_lat` / `home_lon`. Persistence fires a
+`LocalHomeLocationUpdated` bus event, which two subscribers consume:
+
+- **`FederationService`** fans out `LOCAL_HOME_LOCATION_CHANGED` to every
+  confirmed peer whose `proto_version ≥ 5` (capability v5). The peer stores
+  the coordinates on `remote_instances.home_lat` / `home_lon` and publishes
+  `PeerHomeChanged`.
+- **`RealtimeService`** pushes a `local.home_changed` WS frame to every
+  connected client so the SPA's Connections Map tab updates the own-household
+  pin without a page reload.
+
+Inbound `LOCAL_HOME_LOCATION_CHANGED` triggers the same `PeerHomeChanged`
+event, which `RealtimeService` broadcasts as a `peer.home_changed` WS frame
+so the Map tab can move or add the peer's pin. The `PAIRING_PEER_ACCEPT`
+bootstrap message also carries `home_lat` / `home_lon` when available, so
+the map is populated immediately after pairing without waiting for a
+subsequent broadcast.
+
+The Connections page exposes a **List | Map** tab toggle. The Map tab
+renders an OpenStreetMap canvas (Leaflet) with one pin per household — own
+household marked distinctly, peers marked with transport-indicator badges
+(WebRTC / HTTPS). Tapping a pin opens a popup with distance and 8-point
+compass bearing. Peers without coordinates appear in a "Not on map" footer
+below the canvas. Standalone and third-party instances never have a
+home location unless the operator configures one explicitly; the UI
+degrades gracefully in that case.
+
+See [`protocol/home-location.md`](./protocol/home-location.md) for the
+full wire protocol and sequence diagram.
+
 ### Outbox and retries
 
 Outbound envelopes go to `federation_outbox` first
