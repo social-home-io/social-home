@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from ..domain.events import UserProfileUpdated
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from ._visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -92,24 +93,15 @@ class ProfileFederationOutbound:
             if not instance_id or instance_id == own:
                 continue
             # Per-pair user-visibility filter (peer_user_visibility).
-            # Default-visible: ``is_visible`` returns ``True`` when the
-            # admin hasn't explicitly hidden ``event.user_id`` from
-            # this peer.
-            if self._visibility_repo is not None:
-                try:
-                    visible = await self._visibility_repo.is_visible(
-                        instance_id,
-                        event.user_id,
-                    )
-                except Exception as exc:  # pragma: no cover — defensive
-                    log.debug(
-                        "profile-outbound: visibility check for %s failed: %s",
-                        instance_id,
-                        exc,
-                    )
-                    visible = True
-                if not visible:
-                    continue
+            # ``hidden_for_peer`` is fail-soft — repo errors default to
+            # visible so we never silently lose profile updates on a
+            # transient infra blip.
+            hidden = await hidden_for_peer(
+                self._visibility_repo,
+                instance_id,
+            )
+            if event.user_id in hidden:
+                continue
             try:
                 await self._federation.send_event(
                     to_instance_id=instance_id,
