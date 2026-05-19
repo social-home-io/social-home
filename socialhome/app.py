@@ -821,6 +821,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         federation_repo=federation_repo,
         user_repo=user_repo,
+        visibility_repo=peer_user_visibility_repo,
     )
     highlight_federation_outbound.wire()
 

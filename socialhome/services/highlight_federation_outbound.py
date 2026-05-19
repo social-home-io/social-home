@@ -35,10 +35,12 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from ._visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.peer_user_visibility_repo import AbstractPeerUserVisibilityRepo
     from ..repositories.user_repo import AbstractUserRepo
 
 log = logging.getLogger(__name__)
@@ -47,7 +49,13 @@ log = logging.getLogger(__name__)
 class HighlightFederationOutbound:
     """Publish Highlight mutations to paired peer instances."""
 
-    __slots__ = ("_bus", "_federation", "_federation_repo", "_user_repo")
+    __slots__ = (
+        "_bus",
+        "_federation",
+        "_federation_repo",
+        "_user_repo",
+        "_visibility_repo",
+    )
 
     def __init__(
         self,
@@ -56,11 +64,13 @@ class HighlightFederationOutbound:
         federation_service: "FederationService",
         federation_repo: "AbstractFederationRepo",
         user_repo: "AbstractUserRepo",
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
         self._federation_repo = federation_repo
         self._user_repo = user_repo
+        self._visibility_repo = visibility_repo
 
     def wire(self) -> None:
         """Subscribe handlers on the bus. Idempotent."""
@@ -104,6 +114,7 @@ class HighlightFederationOutbound:
             audience=event.audience,
             event_type=ev_type,
             payload=payload,
+            author_user_id=event.author_user_id,
         )
 
     async def _on_frame_removed(self, event: HighlightFrameRemoved) -> None:
@@ -119,6 +130,7 @@ class HighlightFederationOutbound:
                 "author_user_id": event.author_user_id,
                 "occurred_at": event.occurred_at.isoformat(),
             },
+            author_user_id=event.author_user_id,
         )
 
     async def _on_highlight_removed(self, event: HighlightRemoved) -> None:
@@ -133,6 +145,7 @@ class HighlightFederationOutbound:
                 "author_user_id": event.author_user_id,
                 "occurred_at": event.occurred_at.isoformat(),
             },
+            author_user_id=event.author_user_id,
         )
 
     # ── Back-channel: viewer/reactor → author ────────────────────────────
@@ -146,6 +159,9 @@ class HighlightFederationOutbound:
         # federation work — the local realtime layer already fanned.
         target = await self._home_instance_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
+            return
+        hidden = await hidden_for_peer(self._visibility_repo, target)
+        if event.viewer_user_id in hidden:
             return
         await self._send_to(
             instance_id=target,
@@ -164,6 +180,9 @@ class HighlightFederationOutbound:
             return
         target = await self._home_instance_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
+            return
+        hidden = await hidden_for_peer(self._visibility_repo, target)
+        if event.reactor_user_id in hidden:
             return
         if event.emoji is None:
             ev_type = FederationEventType.HIGHLIGHT_FRAME_REACTION_REMOVED
@@ -253,9 +272,13 @@ class HighlightFederationOutbound:
         audience: tuple[str, ...],
         event_type: FederationEventType,
         payload: dict,
+        author_user_id: str,
     ) -> None:
         targets = await self._resolve_audience(audience_kind, audience)
         for instance_id in targets:
+            hidden = await hidden_for_peer(self._visibility_repo, instance_id)
+            if author_user_id in hidden:
+                continue
             await self._send_to(
                 instance_id=instance_id,
                 event_type=event_type,
