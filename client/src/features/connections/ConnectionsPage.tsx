@@ -22,7 +22,7 @@ import { ConnectionDetail } from '@/components/ConnectionDetail'
 import { showToast } from '@/components/Toast'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
-import { selfLat, selfLon } from '@/store/connections'
+
 import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
@@ -230,26 +230,7 @@ export default function ConnectionsPage() {
           : c,
       )
     })
-    const off5 = ws.on('peer.home_changed', (msg) => {
-      const d = msg.data as unknown as {
-        instance_id: string
-        latitude: number
-        longitude: number
-      }
-      if (!d?.instance_id || d?.latitude == null || d?.longitude == null) return
-      connections.value = connections.value.map(c =>
-        c.instance_id === d.instance_id
-          ? { ...c, home_lat: d.latitude, home_lon: d.longitude }
-          : c,
-      )
-    })
-    const off6 = ws.on('local.home_changed', (msg) => {
-      const d = msg.data as unknown as { latitude: number; longitude: number }
-      if (d?.latitude == null || d?.longitude == null) return
-      selfLat.value = d.latitude
-      selfLon.value = d.longitude
-    })
-    return () => { off1(); off2(); off3(); off4(); off5(); off6() }
+    return () => { off1(); off2(); off3(); off4() }
   }, [])
 
   const confirmed = connections.value.filter(c => c.status === 'confirmed')
