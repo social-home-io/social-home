@@ -859,16 +859,7 @@ class FederationService:
         self,
         event: LocalHomeLocationUpdated,
     ) -> None:
-        """Fan out the new home coordinates to every confirmed peer that
-        supports the event type (proto_version >= 5).
-
-        Called when :class:`~socialhome.domain.events.LocalHomeLocationUpdated`
-        fires on the bus — published by the HA/HAOS adapter when the instance's
-        GPS position changes. The payload is forwarded as
-        :data:`~socialhome.domain.federation.FederationEventType.LOCAL_HOME_LOCATION_CHANGED`
-        to peers gated on
-        :data:`~socialhome.domain.federation_capabilities.FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST`.
-        """
+        """Fan out LOCAL_HOME_LOCATION_CHANGED to every confirmed peer at proto_version >= 5."""
         peers = await self._federation_repo.list_instances(status="confirmed")
         payload = {"latitude": event.latitude, "longitude": event.longitude}
         for peer in peers:
@@ -877,6 +868,9 @@ class FederationService:
                 min_version=FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST,
             ):
                 continue
+            # Serial fanout: send_event does inline HTTP I/O; gather() would
+            # parallelise at the cost of more complex error handling — acceptable
+            # for the typical 1-3 peer count of a home instance.
             await self.send_event(
                 to_instance_id=peer.id,
                 event_type=FederationEventType.LOCAL_HOME_LOCATION_CHANGED,
