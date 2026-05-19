@@ -5,6 +5,7 @@ All tests use in-memory stubs — no network, no real disk.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -156,6 +157,32 @@ class InMemoryFederationRepo:
 
     async def update_inbox(self, instance_id: str, new_url: str) -> None:
         pass
+
+    async def update_alias(self, instance_id: str, alias: str | None) -> None:
+        pass
+
+    async def set_proto_version(self, instance_id: str, proto_version: int) -> None:
+        if instance_id in self._instances:
+            self._instances[instance_id] = dataclasses.replace(
+                self._instances[instance_id], proto_version=proto_version
+            )
+
+    async def update_instance_home(
+        self,
+        instance_id: str,
+        *,
+        latitude: float,
+        longitude: float,
+    ) -> None:
+        if instance_id in self._instances:
+            self._instances[instance_id] = dataclasses.replace(
+                self._instances[instance_id],
+                home_lat=round(float(latitude), 4),
+                home_lon=round(float(longitude), 4),
+            )
+
+    async def cleanup_expired_pairings(self) -> int:
+        return 0
 
     async def load_replay_cache(self, within_hours: int = 1) -> list[tuple[str, str]]:
         return list(self._replay.items())

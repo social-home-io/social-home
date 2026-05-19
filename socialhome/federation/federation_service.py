@@ -31,6 +31,7 @@ from ..domain.events import (
     ConnectionReachable,
     LocalHomeLocationUpdated,
     PairingIntroRelayReceived,
+    PeerHomeChanged,
     SpaceConfigChanged,
 )
 from ..domain.federation_capabilities import FederationCapability
@@ -811,6 +812,12 @@ class FederationService:
             self._handle_instance_sync_status,
         )
 
+        # Peer home-location update — always active
+        self._event_registry.register(
+            FederationEventType.LOCAL_HOME_LOCATION_CHANGED,
+            self._on_local_home_location_changed,
+        )
+
         # Inbound media validation — strip non-conforming file_meta from
         # post payloads so the text is kept but invalid media is dropped.
         for _evt in (
@@ -852,6 +859,38 @@ class FederationService:
                 exc,
             )
             event.payload.pop("file_meta", None)
+
+    async def _on_local_home_location_changed(self, event: FederationEvent) -> None:
+        """Inbound LOCAL_HOME_LOCATION_CHANGED: update peer row + publish PeerHomeChanged."""
+        lat_raw = event.payload.get("latitude")
+        lon_raw = event.payload.get("longitude")
+        if lat_raw is None or lon_raw is None:
+            log.warning(
+                "LOCAL_HOME_LOCATION_CHANGED from %s missing latitude/longitude",
+                event.from_instance,
+            )
+            return
+        try:
+            latitude = round(float(lat_raw), 4)
+            longitude = round(float(lon_raw), 4)
+        except TypeError, ValueError:
+            log.warning(
+                "LOCAL_HOME_LOCATION_CHANGED from %s has non-numeric coordinates",
+                event.from_instance,
+            )
+            return
+        await self._federation_repo.update_instance_home(
+            event.from_instance,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        await self._bus.publish(
+            PeerHomeChanged(
+                instance_id=event.from_instance,
+                latitude=latitude,
+                longitude=longitude,
+            ),
+        )
 
     # ─── Domain-event subscribers (outbound fan-out) ─────────────────────────
 
