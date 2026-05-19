@@ -105,6 +105,24 @@ class AbstractDmRoutingRepo(Protocol):
         conversation_id: str,
     ) -> list[dict]: ...
 
+    # last_relay_for helper -----------------------------------------------
+    async def fetch_last_relay_for(
+        self,
+        target_instance_id: str,
+        *,
+        cutoff_iso: str,
+    ) -> dict | None: ...
+
+    async def insert_relay_path_for_test(
+        self,
+        *,
+        conversation_id: str,
+        sender_user_id: str,
+        target_instance: str,
+        via: str,
+        ts: str,
+    ) -> None: ...
+
 
 class SqliteDmRoutingRepo:
     """SQLite-backed :class:`AbstractDmRoutingRepo`."""
@@ -437,6 +455,59 @@ class SqliteDmRoutingRepo:
                 }
             )
         return out
+
+    async def fetch_last_relay_for(
+        self,
+        target_instance_id: str,
+        *,
+        cutoff_iso: str,
+    ) -> dict | None:
+        """Return the most recent multi-hop relay path record targeting
+        ``target_instance_id`` with ``last_used_at >= cutoff_iso``.
+
+        Only considers primary paths (``path_index = 0``) that have more
+        than one hop (``hop_count > 1``), so a direct single-hop send is
+        not mistaken for a relayed DM.
+
+        Uses ``datetime(...)`` on both sides of the comparison so that the
+        SQLite-default space-separator format and the Python ISO-with-T
+        format sort consistently — same technique as ``prune_seen``.
+        """
+        row = await self._db.fetchone(
+            "SELECT relay_path, last_used_at "
+            "FROM conversation_relay_paths "
+            "WHERE target_instance=? AND path_index=0 AND hop_count>1 "
+            "  AND datetime(last_used_at) >= datetime(?) "
+            "ORDER BY datetime(last_used_at) DESC LIMIT 1",
+            (target_instance_id, cutoff_iso),
+        )
+        if row is None:
+            return None
+        return {"relay_path": row["relay_path"], "last_used_at": row["last_used_at"]}
+
+    async def insert_relay_path_for_test(
+        self,
+        *,
+        conversation_id: str,
+        sender_user_id: str,
+        target_instance: str,
+        via: str,
+        ts: str,
+    ) -> None:
+        """Test helper — seed a multi-hop relay path row directly.
+
+        Avoids the full BFS + conversation machinery so unit tests can
+        control the ``target_instance``, ``via`` (first hop), and
+        ``last_used_at`` timestamp independently.
+        """
+        relay_path_json = json.dumps([via, target_instance], separators=(",", ":"))
+        await self._db.enqueue(
+            "INSERT OR REPLACE INTO conversation_relay_paths("
+            "  conversation_id, sender_user_id, path_index,"
+            "  target_instance, relay_path, hop_count, last_used_at"
+            ") VALUES(?, ?, 0, ?, ?, 2, ?)",
+            (conversation_id, sender_user_id, target_instance, relay_path_json, ts),
+        )
 
 
 def utcnow_iso() -> str:
