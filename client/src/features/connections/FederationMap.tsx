@@ -19,6 +19,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import './FederationMap.css'
 import { connections, selfLat, selfLon } from '@/store/connections'
+import { haversineKm, bearing8, roundKm } from './_mapMath'
 
 const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
 const ATTRIBUTION =
@@ -52,6 +53,12 @@ function _transportLabel(transport: 'rtc' | 'https' | null | undefined): string 
   if (transport === 'rtc') return '⚡ Direct (WebRTC)'
   if (transport === 'https') return '☁ HTTPS (fallback)'
   return 'Transport unknown'
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]!
+  ))
 }
 
 export default function FederationMap() {
@@ -133,9 +140,16 @@ export default function FederationMap() {
       })
       const marker = L.marker([peer.home_lat, peer.home_lon], { icon }).addTo(layer)
       const manageId = `sh-map-manage-${peer.instance_id}`
+      const distanceRow =
+        lat != null && lon != null
+          ? `<div style="color:#6b7280">~${roundKm(
+              haversineKm(lat, lon, peer.home_lat, peer.home_lon),
+            )} km · ${bearing8(lat, lon, peer.home_lat, peer.home_lon)}</div>`
+          : ''
       marker.bindPopup(
-        `<strong>${peer.display_name ?? peer.instance_id}</strong><br/>`
+        `<strong>${escapeHtml(peer.display_name ?? peer.instance_id)}</strong><br/>`
         + `<span>${_transportLabel(transport)}</span><br/>`
+        + distanceRow
         + `<a id="${manageId}" href="#" style="font-size:13px">Manage</a>`,
       )
       allMarkers.push(marker)
