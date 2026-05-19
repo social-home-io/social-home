@@ -18,6 +18,7 @@ handful of attempts per hour instead of thousands.
 from __future__ import annotations
 
 import asyncio
+import enum
 import logging
 import random
 from collections.abc import Awaitable, Callable
@@ -74,10 +75,30 @@ NEVER_DROP: frozenset[FederationEventType] = frozenset(
 )
 
 
-#: Delivery callback signature. Return ``True`` on success, ``False`` on a
-#: transport failure the processor should retry. Raising is treated the
-#: same as returning ``False``.
-Deliver = Callable[[OutboxEntry], Awaitable[bool]]
+class DeliveryOutcome(enum.Enum):
+    """Result of a single outbound delivery attempt.
+
+    The processor uses the outcome to decide between three terminal
+    paths:
+
+    * :attr:`SUCCESS` — receiver returned 2xx. Row is marked delivered.
+    * :attr:`PERMANENT` — receiver returned 4xx (already seen via
+      replay cache, timestamp too old, banned, malformed envelope).
+      Retrying will never succeed; row is marked failed immediately
+      regardless of attempt count or :data:`NEVER_DROP` membership.
+    * :attr:`TRANSIENT` — 5xx, timeout, DNS failure, connection reset.
+      Row is rescheduled with jittered backoff, respecting
+      :data:`NEVER_DROP` past :data:`MAX_ATTEMPTS`.
+    """
+
+    SUCCESS = "success"
+    PERMANENT = "permanent"
+    TRANSIENT = "transient"
+
+
+#: Delivery callback signature. Return one of the :class:`DeliveryOutcome`
+#: values; raising is treated the same as :attr:`DeliveryOutcome.TRANSIENT`.
+Deliver = Callable[[OutboxEntry], Awaitable[DeliveryOutcome]]
 
 
 class OutboxProcessor:
@@ -153,24 +174,37 @@ class OutboxProcessor:
         """Process up to ``limit`` due entries. Returns count processed.
 
         Errors raised by the deliver callback are caught and treated as
-        transport failures. Rows whose ``attempts`` would exceed
-        :data:`MAX_ATTEMPTS` are marked failed rather than rescheduled.
+        :attr:`DeliveryOutcome.TRANSIENT`. Rows whose ``attempts`` would
+        exceed :data:`MAX_ATTEMPTS` are marked failed rather than
+        rescheduled. 4xx outcomes are dropped immediately.
         """
         entries = await self._repo.list_due(limit)
         if not entries:
             return 0
         for entry in entries:
             try:
-                ok = await self._deliver(entry)
+                outcome = await self._deliver(entry)
             except Exception as exc:
                 log.warning(
                     "OutboxProcessor delivery raised for %s: %s",
                     entry.id,
                     exc,
                 )
-                ok = False
-            if ok:
+                outcome = DeliveryOutcome.TRANSIENT
+            if outcome is DeliveryOutcome.SUCCESS:
                 await self._repo.mark_delivered(entry.id)
+                continue
+            if outcome is DeliveryOutcome.PERMANENT:
+                # 4xx — peer will never accept this envelope (replay cache
+                # hit, expired timestamp, banned sender, malformed body).
+                # Drop the row even for :data:`NEVER_DROP` events: a
+                # 410 ``Replay detected`` means the receiver already has
+                # the event, so the security invariant is satisfied.
+                log.warning(
+                    "OutboxProcessor: peer permanently rejected %s — dropping",
+                    entry.id,
+                )
+                await self._repo.mark_failed(entry.id)
                 continue
 
             new_attempts = entry.attempts + 1

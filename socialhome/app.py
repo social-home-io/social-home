@@ -52,6 +52,7 @@ from .i18n import Catalog
 from .identity_bootstrap import ensure_instance_identity
 from .media_signer import MediaUrlSigner, derive_signing_key
 from .infrastructure import (
+    DeliveryOutcome,
     EventBus,
     IdempotencyCache,
     KeyManager,
@@ -259,18 +260,52 @@ async def _redeliver_envelope(
     federation_service: FederationService,
     federation_repo,
     entry,
-) -> bool:
+) -> DeliveryOutcome:
     """Re-POST a previously-built envelope from an :class:`OutboxEntry`.
 
     The envelope JSON stored in ``payload_json`` is already signed and
     encrypted from the original :meth:`FederationService.send_event`
     call — we just need to look up the peer inbox and POST again.
-    Returns ``True`` on 2xx, ``False`` otherwise.
+
+    Status code mapping:
+
+    * 2xx → :attr:`DeliveryOutcome.SUCCESS`.
+    * 4xx → :attr:`DeliveryOutcome.PERMANENT` (drop). The federation
+      inbox returns 4xx for several distinct reasons — most are
+      genuinely "the receiver has this state already" (success-
+      equivalent) and the rest are "the receiver will never accept
+      this envelope" (irrecoverable). Either way retrying won't help:
+
+      * **410 ``Replay detected``** — receiver already saw this
+        ``msg_id``; their state is consistent with ours. Most
+        commonly the residue of a previously-mangled response (e.g.
+        the HA integration's pre-2026.5.18 charset bug) that left
+        the row queued even though the peer processed it.
+      * **410 timestamp skew** — envelope is older than ±300s; the
+        receiver dropped it on §24.11 anti-replay grounds. Retrying
+        with a new timestamp would require resigning, which would
+        change ``msg_id`` — out of scope for the outbox.
+      * **403 banned / signature invalid** — receiver refuses this
+        sender. Dropping the entry is the right call: retrying gives
+        the sender no path to recover, and the ban / key revocation
+        is authoritative on the receiver side.
+      * **400 / 404** — malformed envelope or unknown inbox. Same
+        reasoning — the next attempt POSTs identical bytes.
+
+    * 5xx, timeout, network error → :attr:`DeliveryOutcome.TRANSIENT`
+      (reschedule with backoff).
     """
     instance = await federation_repo.get_instance(entry.instance_id)
     if instance is None:
+        # Peer was unpaired (the row in ``remote_instances`` is gone)
+        # between the original ``send_event`` enqueue and this retry —
+        # behaviour change vs. pre-:class:`DeliveryOutcome`, where this
+        # path returned False and burned through MAX_ATTEMPTS before
+        # giving up. Retrying serves no purpose: there is no row to
+        # mark reachable, no URL to POST to, and the operator already
+        # decided to drop the peer.
         log.warning("outbox: unknown instance %s — dropping", entry.instance_id)
-        return False
+        return DeliveryOutcome.PERMANENT
 
     try:
         client = await federation_service._get_http_client()
@@ -282,17 +317,36 @@ async def _redeliver_envelope(
         ) as resp:
             if 200 <= resp.status < 300:
                 await federation_repo.mark_reachable(entry.instance_id)
-                return True
+                return DeliveryOutcome.SUCCESS
+            if 400 <= resp.status < 500:
+                # 4xx still proves reachability: the peer received the
+                # HTTP request, ran our envelope through their §24.11
+                # pipeline, and returned a deliberate refusal. The most
+                # common case in the post-charset-bug fallout is 410
+                # ``Replay detected`` on backlog entries the peer
+                # already processed — without ``mark_reachable`` here
+                # the ``RemoteInstance`` row stays stuck on its
+                # last-seen ``unreachable_since`` value and the SPA's
+                # online indicator never goes green even though every
+                # outbox tick is succeeding from the receiver's view.
+                await federation_repo.mark_reachable(entry.instance_id)
+                log.warning(
+                    "outbox: %s returned terminal HTTP %d for %s — dropping",
+                    entry.instance_id,
+                    resp.status,
+                    entry.id,
+                )
+                return DeliveryOutcome.PERMANENT
             log.warning(
                 "outbox: %s returned HTTP %d for %s",
                 entry.instance_id,
                 resp.status,
                 entry.id,
             )
-            return False
+            return DeliveryOutcome.TRANSIENT
     except Exception as exc:
         log.debug("outbox: redelivery error %s: %s", entry.id, exc)
-        return False
+        return DeliveryOutcome.TRANSIENT
 
 
 def _default_ice_servers(config: Config) -> list[dict]:

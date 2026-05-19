@@ -7,6 +7,7 @@ from .outbox_processor import (
     BACKOFF_SECONDS,
     MAX_ATTEMPTS,
     NEVER_DROP,
+    DeliveryOutcome,
     OutboxProcessor,
 )
 from .reconnect_queue import (
@@ -24,6 +25,7 @@ from .ws_manager import WebSocketManager
 
 __all__ = [
     "BACKOFF_SECONDS",
+    "DeliveryOutcome",
     "EventBus",
     "Handler",
     "IdempotencyCache",
