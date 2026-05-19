@@ -10,12 +10,12 @@ class _FakeRepo:
     def __init__(self, mapping: dict[str, set[str]]) -> None:
         self._mapping = mapping
 
-    async def hidden_user_ids_for_peer(self, peer_id: str) -> set[str]:
-        return set(self._mapping.get(peer_id, set()))
+    async def hidden_user_ids_for_peer(self, peer_id: str) -> frozenset[str]:
+        return frozenset(self._mapping.get(peer_id, set()))
 
 
 class _BrokenRepo:
-    async def hidden_user_ids_for_peer(self, peer_id: str) -> set[str]:
+    async def hidden_user_ids_for_peer(self, peer_id: str) -> frozenset[str]:
         raise RuntimeError("db went away")
 
 
