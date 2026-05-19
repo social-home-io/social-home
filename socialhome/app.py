@@ -560,6 +560,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         federation_repo=federation_repo,
         own_instance_id=identity.instance_id,
+        visibility_repo=peer_user_visibility_repo,
     )
 
     # §Momentum outbound is constructed first so the inbound handler

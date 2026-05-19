@@ -52,10 +52,12 @@ from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.ws_manager import WebSocketManager
 from ..repositories.user_repo import AbstractUserRepo
+from ._visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.peer_user_visibility_repo import AbstractPeerUserVisibilityRepo
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +98,7 @@ class OnlineStatusService:
         "_federation",
         "_federation_repo",
         "_own_instance_id",
+        "_visibility_repo",
         "_sessions",
         "_idle_users",
         "_last_persisted",
@@ -117,6 +120,7 @@ class OnlineStatusService:
         self._federation: FederationService | None = None
         self._federation_repo: AbstractFederationRepo | None = None
         self._own_instance_id: str = ""
+        self._visibility_repo: AbstractPeerUserVisibilityRepo | None = None
         # ``_sessions[user_id]`` = ``{ws_id: last_active_dt}``
         self._sessions: dict[str, dict[int, datetime]] = {}
         self._idle_users: set[str] = set()
@@ -138,13 +142,17 @@ class OnlineStatusService:
         federation_service: "FederationService",
         federation_repo: "AbstractFederationRepo",
         own_instance_id: str,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         """Attach federation so transitions fan out to paired peers
         and inbound `USER_ONLINE` / `USER_IDLE` / `USER_OFFLINE` events
-        update the remote-state cache."""
+        update the remote-state cache. ``visibility_repo`` enables the
+        per-pair user-visibility filter — when provided, transitions
+        are skipped for peers that have hidden the firing user."""
         self._federation = federation_service
         self._federation_repo = federation_repo
         self._own_instance_id = own_instance_id
+        self._visibility_repo = visibility_repo
 
     # ─── Inspection (used by route handlers + RealtimeService) ────────────
 
@@ -380,6 +388,9 @@ class OnlineStatusService:
         for inst in instances:
             inst_id = getattr(inst, "id", None) or getattr(inst, "instance_id", None)
             if not inst_id or inst_id == self._own_instance_id:
+                continue
+            hidden = await hidden_for_peer(self._visibility_repo, inst_id)
+            if user_id in hidden:
                 continue
             try:
                 await self._federation.send_event(

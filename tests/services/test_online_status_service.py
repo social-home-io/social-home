@@ -412,3 +412,61 @@ async def test_idle_remote_user_surfaces_in_idle_user_ids():
     )
     assert "u-bob" in svc.idle_user_ids()
     assert svc.is_idle("u-bob")
+
+
+# ─── Per-peer visibility filtering ──────────────────────────────────────────
+
+
+class _FakeVisibilityRepo:
+    """Per-peer hide list. Matches the Protocol's
+    ``hidden_user_ids_for_peer`` signature exactly so it slots in
+    wherever the real repo would."""
+
+    def __init__(self) -> None:
+        self._hidden: dict[str, set[str]] = {}
+
+    def hide(self, peer: str, user_id: str) -> None:
+        self._hidden.setdefault(peer, set()).add(user_id)
+
+    async def hidden_user_ids_for_peer(self, peer: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer, set()))
+
+
+async def test_user_online_skips_peers_who_hid_the_user():
+    """A USER_ONLINE transition fans to every confirmed peer EXCEPT
+    those who have hidden ``user_id`` via the per-pair toggle."""
+    from socialhome.domain.federation import FederationEventType  # noqa: F401
+
+    svc, _bus, _repo, _captured = _make()
+    fed = _FakeFederationService()
+    fed_repo = _FakeFederationRepo([_peer("inst-open"), _peer("inst-hider")])
+    vis = _FakeVisibilityRepo()
+    vis.hide("inst-hider", "alice")
+    svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        own_instance_id="inst-self",
+        visibility_repo=vis,
+    )
+    await svc.user_session_opened("alice", ws_id=1)
+    targets = {tid for tid, _t, _p in fed.sent}
+    assert "inst-open" in targets
+    assert "inst-hider" not in targets
+
+
+async def test_user_online_no_visibility_repo_fans_to_every_peer():
+    """Back-compat: when ``visibility_repo`` isn't passed to
+    ``attach_federation``, every peer receives the transition. Protects
+    older call sites that haven't wired the repo yet."""
+    svc, _bus, _repo, _captured = _make()
+    fed = _FakeFederationService()
+    fed_repo = _FakeFederationRepo([_peer("inst-A"), _peer("inst-B")])
+    svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        own_instance_id="inst-self",
+        # visibility_repo intentionally omitted
+    )
+    await svc.user_session_opened("alice", ws_id=1)
+    targets = {tid for tid, _t, _p in fed.sent}
+    assert targets == {"inst-A", "inst-B"}
