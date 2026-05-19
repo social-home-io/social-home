@@ -1,0 +1,12 @@
+-- Per-paired-peer "share our home location" toggle.
+--
+-- Default 1 (share) so existing pairs keep broadcasting their HA-sourced
+-- home coordinates and the Connections → Map view continues to show them.
+-- The toggle is operator-controlled via PATCH /api/pairing/connections/{id}
+-- and surfaced both in ConnectionDetail and inside the pairing wizard's
+-- new ``configure-sharing`` step. The federation outbound handler skips
+-- peers with ``share_home = 0`` so HA Core location changes never reach
+-- a revoked peer; flipping the column also fires a one-shot
+-- LOCAL_HOME_LOCATION_CHANGED envelope with null coords (revoke) or
+-- current coords (re-share) so the peer's UI updates immediately.
+ALTER TABLE remote_instances ADD COLUMN share_home INTEGER NOT NULL DEFAULT 1;
