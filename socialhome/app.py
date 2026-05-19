@@ -319,6 +319,17 @@ async def _redeliver_envelope(
                 await federation_repo.mark_reachable(entry.instance_id)
                 return DeliveryOutcome.SUCCESS
             if 400 <= resp.status < 500:
+                # 4xx still proves reachability: the peer received the
+                # HTTP request, ran our envelope through their §24.11
+                # pipeline, and returned a deliberate refusal. The most
+                # common case in the post-charset-bug fallout is 410
+                # ``Replay detected`` on backlog entries the peer
+                # already processed — without ``mark_reachable`` here
+                # the ``RemoteInstance`` row stays stuck on its
+                # last-seen ``unreachable_since`` value and the SPA's
+                # online indicator never goes green even though every
+                # outbox tick is succeeding from the receiver's view.
+                await federation_repo.mark_reachable(entry.instance_id)
                 log.warning(
                     "outbox: %s returned terminal HTTP %d for %s — dropping",
                     entry.instance_id,

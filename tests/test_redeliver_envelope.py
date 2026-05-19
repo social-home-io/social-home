@@ -203,6 +203,62 @@ async def test_redeliver_4xx_is_permanent(env):
         assert outcome is DeliveryOutcome.PERMANENT, (status, outcome)
 
 
+async def test_redeliver_4xx_marks_peer_reachable(env):
+    """A 4xx is proof of reachability — the receiver got the HTTP
+    request, ran our envelope through the §24.11 pipeline, and chose
+    to reject it. The peer-online indicator in the SPA reads from
+    ``RemoteInstance.unreachable_since``; without flipping that field
+    back to ``None`` on 4xx, the entire post-charset-bug backlog of
+    410 ``Replay detected`` retries kept the indicator stuck on
+    "not connected" even though the peer was clearly responsive.
+    """
+    svc, fed_repo, kek = env
+    peer_kp = generate_identity_keypair()
+    wrapped = kek.encrypt(b"\x05" * 32)
+    peer = RemoteInstance(
+        id=derive_instance_id(peer_kp.public_key),
+        display_name="peer",
+        remote_identity_pk=peer_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-410-reach",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(peer)
+    # Simulate the peer having been marked unreachable by an earlier
+    # send_event failure.
+    await fed_repo.mark_unreachable(peer.id)
+    pre = await fed_repo.get_instance(peer.id)
+    assert pre.unreachable_since is not None
+
+    class _Resp:
+        def __init__(self):
+            self.status = 410
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Client:
+        def post(self, url, **kw):
+            return _Resp()
+
+    svc._http_client = _Client()
+    entry = _OutboxEntry(id="e-reach", instance_id=peer.id, payload_json="{}")
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.PERMANENT
+
+    post = await fed_repo.get_instance(peer.id)
+    assert post.unreachable_since is None, (
+        "4xx response must flip the peer back to reachable — otherwise "
+        "the SPA's online indicator stays stuck on 'not connected'"
+    )
+
+
 async def test_redeliver_transport_error_is_transient(env):
     svc, fed_repo, kek = env
     peer_kp = generate_identity_keypair()
