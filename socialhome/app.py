@@ -1335,6 +1335,7 @@ def create_app(config: Config | None = None) -> web.Application:
         repos.dm_routing,
         federation_repo,
         child_protection_service=child_protection_service,
+        visibility_repo=repos.peer_user_visibility,
     )
 
     # ── Page conflict resolution (§4.4.4.1) ─────────────────────────────
