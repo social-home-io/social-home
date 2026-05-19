@@ -29,9 +29,11 @@ from ..crypto import (
 from ..db import AsyncDatabase
 from ..domain.events import (
     ConnectionReachable,
+    LocalHomeLocationUpdated,
     PairingIntroRelayReceived,
     SpaceConfigChanged,
 )
+from ..domain.federation_capabilities import FederationCapability
 from ..domain.media_validator import validate_inbound_media_meta
 from ..domain.federation import (
     BroadcastResult,
@@ -227,6 +229,11 @@ class FederationService:
         # Handlers register themselves via attach_* methods.
         self._event_registry = EventDispatchRegistry()
         self._register_default_handlers()
+        # Subscribe to domain events that trigger outbound federation.
+        self._bus.subscribe(
+            LocalHomeLocationUpdated,
+            self._on_local_home_location_updated,
+        )
 
     def _build_inbound_pipeline(self):
         """Lazily construct the §24.11 validation middleware chain.
@@ -845,6 +852,36 @@ class FederationService:
                 exc,
             )
             event.payload.pop("file_meta", None)
+
+    # ─── Domain-event subscribers (outbound fan-out) ─────────────────────────
+
+    async def _on_local_home_location_updated(
+        self,
+        event: LocalHomeLocationUpdated,
+    ) -> None:
+        """Fan out the new home coordinates to every confirmed peer that
+        supports the event type (proto_version >= 5).
+
+        Called when :class:`~socialhome.domain.events.LocalHomeLocationUpdated`
+        fires on the bus — published by the HA/HAOS adapter when the instance's
+        GPS position changes. The payload is forwarded as
+        :data:`~socialhome.domain.federation.FederationEventType.LOCAL_HOME_LOCATION_CHANGED`
+        to peers gated on
+        :data:`~socialhome.domain.federation_capabilities.FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST`.
+        """
+        peers = await self._federation_repo.list_instances(status="confirmed")
+        payload = {"latitude": event.latitude, "longitude": event.longitude}
+        for peer in peers:
+            if not await self.peer_supports(
+                peer.id,
+                min_version=FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST,
+            ):
+                continue
+            await self.send_event(
+                to_instance_id=peer.id,
+                event_type=FederationEventType.LOCAL_HOME_LOCATION_CHANGED,
+                payload=payload,
+            )
 
     async def _handle_pairing_intro_relay(self, event: FederationEvent) -> None:
         """§11.9 friend-of-friend introduction request."""
