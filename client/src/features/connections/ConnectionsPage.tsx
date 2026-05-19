@@ -414,6 +414,7 @@ export default function ConnectionsPage() {
             intro_relay_enabled: detail.intro_relay_enabled ?? true,
             unreachable_since: detail.unreachable_since ?? null,
             paired_at: detail.paired_at ?? null,
+            transport: detail.transport ?? null,
           }}
           onClose={() => setDetail(null)}
           onRevoke={() => { setDetail(null); void loadConnections() }}

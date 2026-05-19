@@ -4,6 +4,7 @@
 import { signal } from '@preact/signals'
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
+import { relativeDocsTime } from '@/utils/relativeTime'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -22,6 +23,9 @@ interface Connection {
    *  When non-null, ``display_name`` already reflects this value
    *  (the backend pre-resolves the effective name). */
   local_alias?: string | null
+  /** Active federation transport for this peer. Shown read-only
+   *  in the detail panel so the admin can see whether WebRTC is up. */
+  transport?: 'rtc' | 'https' | null
 }
 
 interface VisibleUser {
@@ -30,6 +34,11 @@ interface VisibleUser {
   display_name: string
   is_admin: boolean
   visible: boolean
+}
+
+interface RelayDetail {
+  via: string
+  ts: string
 }
 
 const showRevoke = signal(false)
@@ -47,6 +56,7 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
   const [visBusy, setVisBusy] = useState<Set<string>>(new Set())
   const [alias, setAlias] = useState(conn.local_alias ?? '')
   const [aliasBusy, setAliasBusy] = useState(false)
+  const [relay, setRelay] = useState<RelayDetail | null>(null)
   /** Effective display name as currently rendered — handshake name
    *  if no alias is set, else the alias. Shown above the input as
    *  the "Display this household as" hint. */
@@ -69,6 +79,19 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
         }
       }
     })()
+    return () => { cancelled = true }
+  }, [conn.instance_id])
+
+  useEffect(() => {
+    let cancelled = false
+    api.get(`/api/pairing/connections/${conn.instance_id}/transport-detail`)
+      .then((body: unknown) => {
+        const b = body as { last_relay: RelayDetail | null }
+        if (!cancelled) setRelay(b?.last_relay ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setRelay(null)
+      })
     return () => { cancelled = true }
   }, [conn.instance_id])
 
@@ -194,6 +217,31 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
           {conn.paired_at && <><dt>Paired</dt><dd>{new Date(conn.paired_at).toLocaleString()}</dd></>}
           {conn.unreachable_since && (
             <><dt>Unreachable since</dt><dd class="sh-text-warning">{new Date(conn.unreachable_since).toLocaleString()}</dd></>
+          )}
+          {conn.transport === 'rtc' && (
+            <><dt>Transport</dt><dd>
+              Direct (WebRTC DataChannel)
+              <span class="sh-muted" style={{ display: 'block', fontSize: 'var(--sh-font-size-sm)' }}>
+                Low-latency channel open between your add-on and the peer's.
+              </span>
+            </dd></>
+          )}
+          {conn.transport === 'https' && (
+            <><dt>Transport</dt><dd>
+              HTTPS inbox (fallback)
+              <span class="sh-muted" style={{ display: 'block', fontSize: 'var(--sh-font-size-sm)' }}>
+                Direct channel unavailable — usually a NAT or firewall block.
+                Federation works, just at higher latency.
+              </span>
+            </dd></>
+          )}
+          {relay !== null && (
+            <><dt>DM path</dt><dd>
+              You → 🔁 {relay.via} → {conn.display_name}
+              <span class="sh-muted" style={{ display: 'block', fontSize: 'var(--sh-font-size-sm)' }}>
+                Last DM took the relay path {relativeDocsTime(relay.ts)}.
+              </span>
+            </dd></>
           )}
         </dl>
         <label class="sh-toggle-row">
