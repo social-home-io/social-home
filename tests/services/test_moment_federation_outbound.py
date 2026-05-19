@@ -17,6 +17,20 @@ from socialhome.services.moment_federation_outbound import (
 )
 
 
+class _FakeVisibilityRepo:
+    """In-memory stub for AbstractPeerUserVisibilityRepo used in unit tests."""
+
+    def __init__(self, hidden: dict[str, frozenset[str]] | None = None) -> None:
+        self._hidden: dict[str, frozenset[str]] = hidden or {}
+
+    def hide(self, peer: str, user_id: str) -> None:
+        existing = self._hidden.get(peer, frozenset())
+        self._hidden[peer] = existing | {user_id}
+
+    async def hidden_user_ids_for_peer(self, peer_id: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer_id, set()))
+
+
 def _peer(iid: str) -> RemoteInstance:
     inst = MagicMock(spec=RemoteInstance)
     inst.id = iid
@@ -287,3 +301,107 @@ async def test_list_instances_failure_returns_no_peers(stack):
     fed_repo.list_instances = AsyncMock(side_effect=RuntimeError("db down"))
     await out._on_created(_create_event())
     fed.send_event.assert_not_called()
+
+
+# ── Visibility gate ──────────────────────────────────────────────────────
+
+
+async def test_moment_created_skips_peer_that_hid_author():
+    """A peer that hid the local author must not receive MOMENT_CREATED."""
+    federation = MagicMock()
+    federation.own_instance_id = "self"
+    federation.send_event = AsyncMock()
+    fed_repo = MagicMock()
+    user_repo = MagicMock()
+    bus = MagicMock()
+
+    visibility_repo = _FakeVisibilityRepo()
+    visibility_repo.hide("peer-hider", "uid-author")
+
+    out = MomentFederationOutbound(
+        bus=bus,
+        federation_service=federation,
+        federation_repo=fed_repo,
+        user_repo=user_repo,
+        visibility_repo=visibility_repo,
+    )
+    user_repo.get_instance_for_user = AsyncMock(return_value="self")
+    fed_repo.list_instances = AsyncMock(
+        return_value=[_peer("peer-hider"), _peer("peer-ok")],
+    )
+    await out._on_created(_create_event(author="uid-author"))
+
+    sent = {c.kwargs["to_instance_id"] for c in federation.send_event.call_args_list}
+    assert sent == {"peer-ok"}
+
+
+async def test_moment_deleted_skips_peer_that_hid_author():
+    """A peer that hid the local author must not receive MOMENT_DELETED."""
+    federation = MagicMock()
+    federation.own_instance_id = "self"
+    federation.send_event = AsyncMock()
+    fed_repo = MagicMock()
+    user_repo = MagicMock()
+    bus = MagicMock()
+
+    visibility_repo = _FakeVisibilityRepo()
+    visibility_repo.hide("peer-hider", "uid-author")
+
+    out = MomentFederationOutbound(
+        bus=bus,
+        federation_service=federation,
+        federation_repo=fed_repo,
+        user_repo=user_repo,
+        visibility_repo=visibility_repo,
+    )
+    user_repo.get_instance_for_user = AsyncMock(return_value="self")
+    fed_repo.list_instances = AsyncMock(
+        return_value=[_peer("peer-hider"), _peer("peer-ok")],
+    )
+    await out._on_deleted(
+        MomentDeleted(
+            moment_id="m-1",
+            author_user_id="uid-author",
+            origin_instance_id="self",
+        )
+    )
+
+    sent = {c.kwargs["to_instance_id"] for c in federation.send_event.call_args_list}
+    assert sent == {"peer-ok"}
+
+
+async def test_moment_reaction_suppressed_when_reactor_hidden_from_author_peer():
+    """When the local reactor is hidden from the author's home instance,
+    no MOMENT_REACTED (or REACTION_REMOVED) envelope is sent."""
+    federation = MagicMock()
+    federation.own_instance_id = "self"
+    federation.send_event = AsyncMock()
+    fed_repo = MagicMock()
+    user_repo = MagicMock()
+    bus = MagicMock()
+
+    # Hide the local reactor from the remote author's home instance.
+    visibility_repo = _FakeVisibilityRepo()
+    visibility_repo.hide("peer-author", "uid-reactor")
+
+    out = MomentFederationOutbound(
+        bus=bus,
+        federation_service=federation,
+        federation_repo=fed_repo,
+        user_repo=user_repo,
+        visibility_repo=visibility_repo,
+    )
+
+    async def _home(uid: str) -> str:
+        return {"uid-reactor": "self", "uid-author": "peer-author"}.get(uid, "self")
+
+    user_repo.get_instance_for_user = AsyncMock(side_effect=_home)
+    await out._on_reaction_changed(
+        MomentReactionChanged(
+            moment_id="m-1",
+            reactor_user_id="uid-reactor",
+            author_user_id="uid-author",
+            emoji="🔥",
+        )
+    )
+    federation.send_event.assert_not_called()

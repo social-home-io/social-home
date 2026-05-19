@@ -581,6 +581,7 @@ def _wire_federation_stack(
         federation_repo=federation_repo,
         user_repo=user_repo,
         relay_policy=relay_policy,
+        visibility_repo=peer_user_visibility_repo,
     )
     moment_federation_outbound.wire()
 

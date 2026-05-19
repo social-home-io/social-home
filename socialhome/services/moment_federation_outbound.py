@@ -38,10 +38,12 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType
 from ..domain.moment import MOMENT_MAX_HOPS
 from ..infrastructure.event_bus import EventBus
+from ._visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.peer_user_visibility_repo import AbstractPeerUserVisibilityRepo
     from ..repositories.user_repo import AbstractUserRepo
     from .relay_policy import RelayPolicy
 
@@ -57,6 +59,7 @@ class MomentFederationOutbound:
         "_federation_repo",
         "_user_repo",
         "_relay_policy",
+        "_visibility_repo",
     )
 
     def __init__(
@@ -67,12 +70,14 @@ class MomentFederationOutbound:
         federation_repo: "AbstractFederationRepo",
         user_repo: "AbstractUserRepo",
         relay_policy: "RelayPolicy | None" = None,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
         self._federation_repo = federation_repo
         self._user_repo = user_repo
         self._relay_policy = relay_policy
+        self._visibility_repo = visibility_repo
 
     def wire(self) -> None:
         self._bus.subscribe(MomentCreated, self._on_created)
@@ -111,6 +116,7 @@ class MomentFederationOutbound:
             },
             origin_instance_id=event.origin_instance_id,
             exclude_instances=set(),
+            author_user_id=event.author_user_id,
         )
 
     async def _on_deleted(self, event: MomentDeleted) -> None:
@@ -133,6 +139,7 @@ class MomentFederationOutbound:
             },
             origin_instance_id=event.origin_instance_id,
             exclude_instances=set(),
+            author_user_id=event.author_user_id,
         )
 
     async def _on_reaction_changed(self, event: MomentReactionChanged) -> None:
@@ -149,6 +156,9 @@ class MomentFederationOutbound:
         # the Highlights back-channel.)
         target = await self._home_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
+            return
+        hidden = await hidden_for_peer(self._visibility_repo, target)
+        if event.reactor_user_id in hidden:
             return
         await self._send_to(
             instance_id=target,
@@ -208,6 +218,7 @@ class MomentFederationOutbound:
             payload=next_payload,
             origin_instance_id=origin,
             exclude_instances={from_instance},
+            author_user_id=str(payload.get("author_user_id") or "") or None,
         )
 
     # ── Helpers ────────────────────────────────────────────────────────
@@ -219,6 +230,7 @@ class MomentFederationOutbound:
         payload: dict,
         origin_instance_id: str,
         exclude_instances: set[str],
+        author_user_id: str | None = None,
     ) -> None:
         own = self._federation.own_instance_id
         try:
@@ -227,10 +239,19 @@ class MomentFederationOutbound:
             log.debug("moment-outbound: list peers failed: %s", exc)
             return
         skip = exclude_instances | {own, origin_instance_id}
+        hidden_per_peer: dict[str, frozenset[str]] = {}
         for peer in peers:
             instance_id = getattr(peer, "id", None)
             if not instance_id or instance_id in skip:
                 continue
+            if author_user_id is not None:
+                if instance_id not in hidden_per_peer:
+                    hidden_per_peer[instance_id] = await hidden_for_peer(
+                        self._visibility_repo,
+                        instance_id,
+                    )
+                if author_user_id in hidden_per_peer[instance_id]:
+                    continue
             await self._send_to(
                 instance_id=instance_id,
                 event_type=event_type,
