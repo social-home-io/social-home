@@ -462,8 +462,20 @@ def make_check_deprovisioned_author(*, user_repo) -> InboundStep:
         author_user_id = str(payload.get(author_field) or "")
         if not author_user_id:
             return
-        user = await user_repo.get_remote(author_user_id)
-        if user is not None and user.deprovisioned_at is not None:
+        try:
+            user = await user_repo.get_remote(author_user_id)
+        except Exception as exc:  # pragma: no cover — defensive
+            # Fail-soft: a transient infra error in the visibility
+            # lookup must not block legitimate inbound traffic. Log
+            # and pass through.
+            log.debug(
+                "inbound: deprovisioned-author lookup failed for %s: %s",
+                author_user_id,
+                exc,
+            )
+            return
+        deprovisioned_at = getattr(user, "deprovisioned_at", None) if user else None
+        if deprovisioned_at is not None:
             log.debug(
                 "inbound: dropped %s from deprovisioned remote user %s",
                 event.event_type.value,

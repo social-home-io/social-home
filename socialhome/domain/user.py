@@ -167,6 +167,13 @@ class RemoteUser:
     public_key: str | None = None
     public_key_version: int = 0
     synced_at: str | None = None
+    #: ISO-8601 UTC timestamp marking the user as locally deprovisioned —
+    #: set by the inbound ``USER_REMOVED`` handler. Filters the user out of
+    #: member lists / autocomplete via ``list_remote_for_instance`` and
+    #: drives the §24.11 deprovisioned-author drop on the inbound pipeline
+    #: (any subsequent user-scoped envelope from this user is silently
+    #: discarded). ``None`` for active users.
+    deprovisioned_at: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
