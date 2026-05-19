@@ -62,3 +62,10 @@ socialhome/global_server/static/hooks.module-*.js
 .idea/
 *.swp
 .DS_Store
+
+# Superpowers brainstorming companion — drops mockup HTML, server
+# state, and event logs under ``.superpowers/brainstorm/<session>/``
+# when launched with ``--project-dir`` so they survive across
+# conversation turns. The artefacts are scratch-only and not meant
+# to be tracked.
+.superpowers/
