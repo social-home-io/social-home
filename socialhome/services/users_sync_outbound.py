@@ -1,0 +1,147 @@
+"""Outbound roster sync on pair-confirm (§4 / §11 / §23).
+
+Subscribes to :class:`PairingConfirmed` and pushes a single
+``USERS_SYNC`` envelope to the freshly-paired peer carrying every
+local household member's profile. Without this, the peer's
+``remote_users`` mirror sits empty until each member *individually*
+edits their profile — which is rarely the first thing people do
+after pairing, so households would see only the admin (whoever
+happened to touch their profile) in :file:`/friends`.
+
+Payload mirrors what the existing ``USER_UPDATED`` outbound
+(:mod:`socialhome.services.profile_federation_outbound`) ships, just
+batched: ``{users: [{user_id, username, display_name, bio,
+picture_hash, picture_webp_base64?}, ...]}``. The inbound handler
+(:meth:`FederationInboundService._on_users_sync`) iterates the list
+and upserts each row via the same ``_upsert_remote_user`` path that
+``USER_UPDATED`` uses, so the receiver code is unchanged.
+
+Per-pair user-visibility filter applies — admins who have hidden a
+user from a peer via the existing peer-user-visibility surface keep
+that user out of the snapshot.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+from typing import TYPE_CHECKING
+
+from ..domain.events import PairingConfirmed
+from ..domain.federation import FederationEventType
+from ..infrastructure.event_bus import EventBus
+
+if TYPE_CHECKING:
+    from ..federation.federation_service import FederationService
+    from ..repositories.profile_picture_repo import AbstractProfilePictureRepo
+    from ..repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
+    from ..repositories.user_repo import AbstractUserRepo
+
+log = logging.getLogger(__name__)
+
+
+class UsersSyncOutbound:
+    """Send ``USERS_SYNC`` to a freshly-confirmed peer."""
+
+    __slots__ = (
+        "_bus",
+        "_federation",
+        "_user_repo",
+        "_picture_repo",
+        "_visibility_repo",
+    )
+
+    def __init__(
+        self,
+        *,
+        bus: EventBus,
+        federation_service: "FederationService",
+        user_repo: "AbstractUserRepo",
+        profile_picture_repo: "AbstractProfilePictureRepo | None" = None,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
+    ) -> None:
+        self._bus = bus
+        self._federation = federation_service
+        self._user_repo = user_repo
+        # Optional so test wiring without picture bytes still works —
+        # ``picture_webp_base64`` is just omitted in that case and
+        # receivers fall back to the ``picture_hash`` URL.
+        self._picture_repo = profile_picture_repo
+        # Same optionality contract the existing profile_federation_outbound
+        # uses: when unset, every local user fans to the new peer.
+        self._visibility_repo = visibility_repo
+
+    def wire(self) -> None:
+        self._bus.subscribe(PairingConfirmed, self._on_pair_confirmed)
+
+    async def _on_pair_confirmed(self, event: PairingConfirmed) -> None:
+        peer_id = event.instance_id
+        own = getattr(self._federation, "_own_instance_id", "")
+        if not peer_id or peer_id == own:
+            return
+        try:
+            users = await self._user_repo.list_active()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug("users-sync: list_active failed: %s", exc)
+            return
+
+        payload_users: list[dict] = []
+        for u in users:
+            if self._visibility_repo is not None:
+                try:
+                    visible = await self._visibility_repo.is_visible(
+                        peer_id,
+                        u.user_id,
+                    )
+                except Exception as exc:  # pragma: no cover — defensive
+                    log.debug(
+                        "users-sync: visibility check for %s failed: %s",
+                        u.user_id,
+                        exc,
+                    )
+                    visible = True
+                if not visible:
+                    continue
+
+            entry: dict = {
+                "user_id": u.user_id,
+                "username": u.username,
+                "display_name": u.display_name,
+                "bio": u.bio,
+                "picture_hash": u.picture_hash,
+            }
+            # Attach the WebP bytes so the peer can render the avatar
+            # immediately. Skipped silently when the picture lookup
+            # fails or no bytes exist — the receiver will still get
+            # the hash and can lazy-load the avatar via the per-user
+            # picture endpoint on first render.
+            if u.picture_hash and self._picture_repo is not None:
+                try:
+                    pic = await self._picture_repo.get_user_picture(u.user_id)
+                except Exception as exc:  # pragma: no cover — defensive
+                    log.debug(
+                        "users-sync: picture lookup for %s failed: %s",
+                        u.user_id,
+                        exc,
+                    )
+                    pic = None
+                if pic is not None:
+                    raw_bytes, _hash = pic
+                    entry["picture_webp_base64"] = base64.b64encode(
+                        raw_bytes,
+                    ).decode("ascii")
+            payload_users.append(entry)
+
+        if not payload_users:
+            return
+
+        try:
+            await self._federation.send_event(
+                to_instance_id=peer_id,
+                event_type=FederationEventType.USERS_SYNC,
+                payload={"users": payload_users},
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug("users-sync: send to %s failed: %s", peer_id, exc)

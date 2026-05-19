@@ -184,6 +184,7 @@ from .federation.peer_directory_handler import PeerDirectoryHandler
 from .federation.private_invite_handler import PrivateSpaceInviteHandler
 from .services.peer_directory_service import PeerDirectoryService
 from .services.profile_federation_outbound import ProfileFederationOutbound
+from .services.users_sync_outbound import UsersSyncOutbound
 from .services.capabilities_outbound import CapabilitiesOutbound
 from .services.url_update_outbound import UrlUpdateOutbound
 from .services.space_member_profile_federation_outbound import (
@@ -795,6 +796,20 @@ def _wire_federation_stack(
         visibility_repo=peer_user_visibility_repo,
     )
     profile_federation_outbound.wire()
+
+    # Roster catch-up — on PairingConfirmed, send the new peer a single
+    # USERS_SYNC envelope carrying every (visible) local user so their
+    # remote_users mirror is populated immediately. Without this the
+    # peer only sees household members who happen to edit their profile
+    # after pairing — which usually means only the admin shows up.
+    users_sync_outbound = UsersSyncOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        user_repo=user_repo,
+        profile_picture_repo=profile_picture_repo,
+        visibility_repo=peer_user_visibility_repo,
+    )
+    users_sync_outbound.wire()
 
     # §Highlights — fan HighlightFrameAdded / HighlightRemoved / HighlightFrameRemoved
     # to peer instances based on the highlight's audience. The subscriber
