@@ -2093,6 +2093,93 @@ def cmd_visibility() -> None:
         )
     print(f"  pre-check: Beta sees ada via /api/friends ✓")
 
+    # 3b. Resolve Bob's user_id from Alpha's federated view (Alpha
+    #     mirrors Beta's users in ``remote_users`` after the USERS_SYNC
+    #     on pair-confirm). Used both for the pre-hide DM (step 3c) and
+    #     the during-hide DM (step 5b).
+    s, alpha_friends = _request(f"{a_url}/api/friends", token=a["token"])
+    _must("alpha friends list", s, alpha_friends)
+    bob_user_id: str | None = None
+    for h in alpha_friends.get("households") or []:
+        if h.get("instance_id") == b["instance_id"]:
+            for m in h.get("members") or []:
+                if m.get("remote_username") == "bob":
+                    bob_user_id = m.get("user_id")
+                    break
+    if bob_user_id is None:
+        raise SystemExit("visibility: cannot resolve bob user_id from Alpha")
+
+    # 3c. While ada is still visible, post a moment + highlight from
+    #     ada AND open a DM ada→bob so Beta receives them. Step 5
+    #     (hide) then proves the cascade purge: USER_REMOVED triggers
+    #     receiver-side hard-delete of every moment / highlight / DM
+    #     conversation involving the deprovisioned user.
+    pre_needle = f"pre-{int(time.time())}"
+    print(f"  pre-hide: ada posts moment + highlight + DM (needle={pre_needle})")
+
+    s, _mom = _request(
+        f"{a_url}/api/moments",
+        token=ada_token,
+        method="POST",
+        body={"content": f"[ada pre-hide] moment {pre_needle}"},
+    )
+    # Allow 429 (1-per-15-min); the cascade assertion below still
+    # holds when the moment never gets created (trivially no row to
+    # purge), and the highlight/DM legs are enough to prove cascade.
+    if s not in (201, 429):
+        _must("ada pre-hide moment(a)", s, _mom, ok=(201, 429))
+
+    s, _hl = _request(
+        f"{a_url}/api/highlights/frames",
+        token=ada_token,
+        method="POST",
+        body={
+            "media_url": "https://example.invalid/ada-pre.jpg",
+            "frame_type": "image",
+            "caption_text": f"[ada pre-hide] highlight {pre_needle}",
+            "audience_kind": "all_paired",
+        },
+    )
+    _must("ada pre-hide highlight(a)", s, _hl, ok=(201,))
+
+    s, conv = _request(
+        f"{a_url}/api/conversations/dm",
+        token=ada_token,
+        method="POST",
+        body={"user_id": bob_user_id},
+    )
+    _must("ada→bob dm conv (pre-hide)", s, conv, ok=(200, 201))
+    pre_conv_id = conv.get("id")
+    s, _dm = _request(
+        f"{a_url}/api/conversations/{pre_conv_id}/messages",
+        token=ada_token,
+        method="POST",
+        body={"content": f"[ada→bob pre-hide] dm {pre_needle}"},
+    )
+    _must("ada→bob dm message (pre-hide)", s, _dm, ok=(200, 201))
+
+    # Let federation settle so Beta has time to mirror the content.
+    time.sleep(6)
+
+    # Sanity: Beta has at least the highlight (the most reliable of
+    # the three to land — moment 429s on rate-limit, DM rides relay).
+    def _captions(url: str, token: str) -> set[str]:
+        s, hls = _request(f"{url}/api/highlights", token=token)
+        _must("highlights", s, hls)
+        caps: set[str] = set()
+        for h in hls if isinstance(hls, list) else []:
+            for f in h.get("frames") or []:
+                caps.add(f.get("caption_text") or "")
+        return caps
+
+    beta_pre_caps = _captions(b_url, b["token"])
+    if not any(pre_needle in cap for cap in beta_pre_caps):
+        raise SystemExit(
+            f"visibility precheck: Beta should have ada's pre-hide "
+            f"highlight before we hide her — saw {sorted(beta_pre_caps)!r}",
+        )
+    print(f"  pre-hide: Beta has ada's highlight ✓ (cascade-target seeded)")
+
     # 4. Hide ada from Beta.
     s, body = _request(
         f"{a_url}/api/pairing/connections/{b['instance_id']}/visible-users",
@@ -2118,6 +2205,54 @@ def cmd_visibility() -> None:
         )
     print(f"  post-hide: Beta no longer lists ada ✓")
 
+    # 5a. Cascade purge. USER_REMOVED inbound on Beta hard-deletes
+    #     every moment / highlight authored by ada plus every DM
+    #     conversation she ever sent in. The pre-hide highlight we
+    #     seeded at step 3c must therefore be gone from Beta's
+    #     ``/api/highlights`` view.
+    beta_caps_after_hide = _captions(b_url, b["token"])
+    if any(pre_needle in cap for cap in beta_caps_after_hide):
+        raise SystemExit(
+            f"visibility cascade: Beta still has ada's pre-hide highlight "
+            f"after USER_REMOVED — purge didn't fire. needle={pre_needle}, "
+            f"caps={sorted(beta_caps_after_hide)!r}",
+        )
+    print("  cascade: Beta purged ada's pre-hide highlight ✓")
+
+    # And the pre-hide DM conversation is hard-deleted from Beta's
+    # side — walk every conversation and grep for the needle.
+    def _beta_message_bodies() -> list[str]:
+        s, beta_convs = _request(f"{b_url}/api/conversations", token=b["token"])
+        _must("beta conversations", s, beta_convs)
+        rows = (
+            beta_convs
+            if isinstance(beta_convs, list)
+            else beta_convs.get("conversations") or []
+        )
+        bodies: list[str] = []
+        for cv in rows:
+            cid = cv.get("id")
+            if not cid:
+                continue
+            s, msgs = _request(
+                f"{b_url}/api/conversations/{cid}/messages",
+                token=b["token"],
+            )
+            if s != 200:
+                continue
+            mrows = msgs if isinstance(msgs, list) else msgs.get("messages") or []
+            for m in mrows:
+                bodies.append(m.get("content") or "")
+        return bodies
+
+    beta_bodies_after_hide = _beta_message_bodies()
+    if any(pre_needle in body for body in beta_bodies_after_hide):
+        raise SystemExit(
+            f"visibility cascade: Beta still has ada's pre-hide DM body "
+            f"after USER_REMOVED — purge didn't fire. needle={pre_needle}",
+        )
+    print("  cascade: Beta purged ada's pre-hide DM conversation ✓")
+
     # 5b. While ada is hidden, exercise the user-scoped outbound gates
     #     added by feat/visibility-filter-full-coverage: DM, moment,
     #     highlight. Beta must NOT receive any of them; Gamma (still
@@ -2125,21 +2260,6 @@ def cmd_visibility() -> None:
     #     so the filter is proven per-peer rather than global.
     c = state["instances"]["c"]
     c_url = f"http://127.0.0.1:{c['port']}"
-    # Look up Bob's user_id from Alpha's federated view so ada can
-    # open a cross-household 1:1 DM to him. /api/conversations/dm
-    # takes a remote ``user_id`` — Alpha mirrors Beta's local users in
-    # ``remote_users`` after the USERS_SYNC on pair-confirm.
-    s, alpha_friends = _request(f"{a_url}/api/friends", token=a["token"])
-    _must("alpha friends list", s, alpha_friends)
-    bob_user_id: str | None = None
-    for h in alpha_friends.get("households") or []:
-        if h.get("instance_id") == b["instance_id"]:
-            for m in h.get("members") or []:
-                if m.get("username") == "bob":
-                    bob_user_id = m.get("user_id")
-                    break
-    if bob_user_id is None:
-        raise SystemExit("visibility: cannot resolve bob user_id from Alpha")
     needle = f"hide-{int(time.time())}"
     print(f"  ada fires DM + moment + highlight while hidden (needle={needle})")
 
@@ -2216,15 +2336,6 @@ def cmd_visibility() -> None:
     print("  post-hide: ada's moment did NOT reach Beta ✓")
 
     # 5b.v — Beta must NOT see ada's highlight.
-    def _captions(url: str, token: str) -> set[str]:
-        s, hls = _request(f"{url}/api/highlights", token=token)
-        _must("highlights", s, hls)
-        caps: set[str] = set()
-        for h in hls if isinstance(hls, list) else []:
-            for f in h.get("frames") or []:
-                caps.add(f.get("caption_text") or "")
-        return caps
-
     beta_caps = _captions(b_url, b["token"])
     if any(needle in c for c in beta_caps):
         raise SystemExit(

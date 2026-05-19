@@ -257,10 +257,11 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
                 Who's visible to {conn.display_name}?
               </h4>
               <p class="sh-muted" style={{ marginTop: 0, fontSize: 'var(--sh-font-size-sm)' }}>
-                Unticked members stop showing up here. Existing posts in
-                shared spaces stay; future profile updates, presence,
-                DMs, highlights, and moments from hidden members are
-                filtered.
+                Unticked members are removed from this household's view.
+                Their existing DMs, highlights, and moments are deleted
+                on this side; future ones don't arrive at all. Posts in
+                shared spaces stay — spaces own their own audience.
+                Tick again to restore the contact for new content.
               </p>
               <ul class="sh-visible-users-list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                 {visUsers.map(u => (

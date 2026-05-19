@@ -173,27 +173,45 @@ The admin Connection-Detail modal toggles which **local** users
 surface to a paired peer. Default-visible: a household member shows
 up unless an admin has explicitly hidden them via
 `PATCH /api/pairing/connections/{instance_id}/visible-users`. State
-lives in `peer_user_visibility`; lookups go through the
-`socialhome.services._visibility.hidden_for_peer` helper.
+lives in `peer_user_visibility`; the sender-side gates read it
+through the `VisibilityMixin` on each outbound service.
 
-Forward-only semantics: when an admin flips a user to hidden, all of
-the following outbound federation events are filtered **per peer**
-when the event's author / actor is that user:
+**Semantic: hide = remove.** A hide flips three things in one
+admin click:
+
+1. The peer is told to forget the user — `USER_REMOVED` fires and
+   the peer's inbound handler marks the row
+   `remote_users.deprovisioned_at`, dropping the user from
+   `/api/friends`, the DM picker, member lists, and autocomplete.
+2. The peer **cascade-purges** every moment, highlight, and DM
+   conversation that user is involved in — hard delete on the
+   peer's side so no orphan content from the hidden user lingers.
+3. Future user-scoped envelopes from that user are dropped two
+   different ways (sender + receiver, defence-in-depth — see
+   below).
+
+Un-hide fires `USER_UPDATED`, which un-sets `deprovisioned_at` on
+the peer's `remote_users` row. The user re-appears, but the
+purged content does **not** come back — un-hiding is a fresh
+start, not a rewind.
+
+**Sender-side gates** (efficient + privacy-respecting). Every
+direct-fan-out user-scoped event is gated through the
+`peer_user_visibility` lookup before the envelope is built. The
+plaintext never hits the wire and never gets decrypted on the
+blocked peer's process:
 
 - `USER_UPDATED`, `USERS_SYNC` (profile catch-up)
-- `USER_REMOVED` is fired once at hide-time so the peer drops the
-  user from `/api/friends`, the DM picker, and member lists
 - `USER_ONLINE`, `USER_IDLE`, `USER_OFFLINE` (session presence)
-- `DM_MESSAGE`, `DM_MESSAGE_DELETED`, `DM_MESSAGE_REACTION`
-- `DM_MEDIA_BLOB`
-- `DM_USER_TYPING`
-- `DM_HISTORY_CHUNK` (filtered **at the conversation level**:
+- `DM_MESSAGE`, `DM_MESSAGE_DELETED`, `DM_MESSAGE_REACTION`,
+  `DM_MEDIA_BLOB`, `DM_USER_TYPING`
+- `DM_RELAY` (at the originating node only — forwarding hops
+  handle opaque ciphertext and cannot gate)
+- `DM_HISTORY_CHUNK` (filtered at the conversation level:
   cross-household DMs are 1:1, so a hidden local participant
   suppresses the entire conversation's catch-up; the
   `DM_HISTORY_COMPLETE` envelope still fires so the requester's
   state machine terminates cleanly)
-- `DM_RELAY` (at the originating node only; forwarding hops handle
-  opaque ciphertext and cannot gate)
 - `HIGHLIGHT_CREATED`, `HIGHLIGHT_FRAME_APPENDED`,
   `HIGHLIGHT_DELETED`, `HIGHLIGHT_FRAME_DELETED`,
   `HIGHLIGHT_FRAME_VIEWED`, `HIGHLIGHT_FRAME_REACTED`,
@@ -201,19 +219,30 @@ when the event's author / actor is that user:
 - `MOMENT_CREATED`, `MOMENT_DELETED`, `MOMENT_REACTED`,
   `MOMENT_REACTION_REMOVED`
 
-Existing content the peer already has — DMs already delivered,
-posts in shared spaces, highlights already received — stays. The
-filter is strictly forward-looking.
+**Receiver-side backstop**. `MomentFederationOutbound` runs a 3-hop
+relay (`relay_inbound`) — a household that's *not* the originator
+re-broadcasts moments to its own peers, so a moment from a hidden
+user can leak back to the blocked peer via that relay. The mid-path
+relayer has no visibility into the originator's per-pair hide
+policy, so the sender-side gate can't help. §24.11 step 11
+(`make_check_deprovisioned_author`) closes the hole: every inbound
+user-scoped envelope is checked against the receiver's
+`remote_users.deprovisioned_at`, and dropped silently if the
+author has been purged. The step runs after `persist_replay` so
+the relayer's outbox sees a 200 OK and stops redelivering.
+
+The deprovisioned-author filter covers the same event-type list as
+the sender gates, keyed off the per-event-type author field
+(`sender_user_id` / `reactor_user_id` / `viewer_user_id` /
+`author_user_id` / `user_id`).
 
 Space-scoped events (`SPACE_POST_CREATED`, `SPACE_COMMENT_*`,
 `SPACE_STICKY_*`, `SPACE_CALENDAR_*`, etc.) are **not** gated by
 this toggle — spaces own their own audience model.
 
-Un-hide fires the existing `USER_UPDATED` envelope so the peer's
-`remote_users` row resurrects (`deprovisioned_at` clears).
-
-Wire compat: this filter is purely sender-side. Receivers see fewer
-envelopes; no new event types and no `proto_version` bump.
+Wire compat: zero. No new event types, no payload-field additions,
+no `proto_version` bump. The sender simply doesn't emit some
+envelopes, and the receiver drops some that arrive via relay.
 
 ## Key derivation
 
