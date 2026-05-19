@@ -111,6 +111,37 @@ renders an OpenStreetMap canvas (Leaflet) with:
 - A "Not on map" footer listing peers whose coordinates are NULL (e.g.
   standalone instances without a configured location).
 
+## Revoking access
+
+An admin can stop sharing the household's home coordinates with a specific
+peer via `PATCH /api/pairing/connections/{instance_id}` with
+`{"share_home": false}`. The flip fires a one-shot
+`LOCAL_HOME_LOCATION_CHANGED` envelope to that peer carrying
+`{"latitude": null, "longitude": null}`. The peer's inbound handler treats
+null coords as a revoke signal: it clears `remote_instances.home_lat` /
+`home_lon` for the sender and publishes `PeerHomeChanged` with nulls so the
+SPA drops the pin from the Connections → Map view.
+
+Re-enabling (OFF → ON) immediately fires a `LOCAL_HOME_LOCATION_CHANGED`
+with the current local coordinates, so the pin reappears on the peer's map
+within seconds.
+
+The toggle also gates the regular fan-out: `_on_local_home_location_updated`
+skips peers whose `remote_instances.share_home = 0`, so HA Core location
+changes never reach a revoked peer.
+
+Defaults to ON (`share_home = 1`) for every newly paired peer. Operators can
+flip it inside the pairing wizard's final "Configure sharing" step or at any
+time afterwards from Connections → Manage → Home location.
+
+No `proto_version` bump is needed — null coordinates inside the existing
+v5 `LOCAL_HOME_LOCATION_CHANGED` event are forward-compatible. A pre-toggle
+v5 peer running the federation-map release silently discards a null-coord
+envelope (its inbound handler bails early on `None` values), which is
+the correct degraded behaviour: the peer keeps its last-known pin rather
+than receiving an explicit revoke signal, and the sender's `share_home = 0`
+gate prevents further coord updates from reaching that peer anyway.
+
 ## Implementation pointers
 
 - `socialhome/platform/ha/adapter.py` — `_persist_home_location_from_ha`
@@ -134,6 +165,12 @@ renders an OpenStreetMap canvas (Leaflet) with:
   inbound handler.
 - `socialhome/services/realtime_service.py` — `_on_local_home_location_updated`
   and `_on_peer_home_changed` push WS frames.
+- `socialhome/services/peer_home_sharing_service.py` — `PeerHomeSharingService.set_share_home`
+  — idempotent toggle; fires the one-shot null-coord or current-coord envelope.
+- `socialhome/routes/pairing.py` — `PATCH /api/pairing/connections/{instance_id}`
+  accepts `{"share_home": bool}` (admin-only).
+- `client/src/features/connections/ShareHomeToggle.tsx` — toggle component
+  rendered in ConnectionDetail under "Home location".
 - `client/src/features/connections/FederationMap.tsx` — Leaflet map
   component.
 - `client/src/features/connections/_mapMath.ts` — distance + bearing

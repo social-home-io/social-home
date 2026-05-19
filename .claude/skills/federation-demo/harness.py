@@ -1886,7 +1886,82 @@ def cmd_verify() -> None:
                         f"  {viewer} sees {other}'s home ({lat}, {lon}) ✓",
                     )
 
-    # 10. Log audit — scan each backend's stdout/stderr for unhandled
+    # 10. share_home toggle — flip Alpha's share_home for Bob OFF, assert Bob
+    #     clears Alpha's home coords, then flip ON and assert they are restored.
+    #
+    #     This exercises PeerHomeSharingService.set_share_home end-to-end:
+    #       OFF → fires null-coord LOCAL_HOME_LOCATION_CHANGED → Bob clears row
+    #       ON  → fires current-coord LOCAL_HOME_LOCATION_CHANGED → Bob restores row
+    a = state["instances"]["a"]
+    b = state["instances"]["b"]
+    bob_id = b["instance_id"]
+
+    # Flip OFF on Alpha's side.
+    s, r = _request(
+        f"http://127.0.0.1:{a['port']}/api/pairing/connections/{bob_id}",
+        token=a["token"],
+        method="PATCH",
+        body={"share_home": False},
+    )
+    if s not in (200, 204):
+        failures.append(f"share_home OFF patch failed: HTTP {s} {r!r}")
+    else:
+        # Give the outbound envelope a moment to arrive and be processed.
+        time.sleep(1)
+        # Assert Bob sees NULL home_lat for Alpha's remote_instances row.
+        a_id = a["instance_id"]
+        db_path = _instance_dir("b") / "socialhome.db"
+        con = sqlite3.connect(str(db_path))
+        try:
+            row = con.execute(
+                "SELECT home_lat, home_lon FROM remote_instances WHERE instance_id = ?",
+                (a_id,),
+            ).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            failures.append(
+                "share_home OFF: Alpha's remote_instances row not found on Bob's DB"
+            )
+        elif row[0] is not None or row[1] is not None:
+            failures.append(
+                f"share_home OFF: Bob still has Alpha's coords "
+                f"(home_lat={row[0]}, home_lon={row[1]}); expected NULL"
+            )
+        else:
+            print("  share_home OFF: Bob's home_lat/home_lon for Alpha is NULL ✓")
+
+        # Flip ON and verify coords are restored.
+        s2, r2 = _request(
+            f"http://127.0.0.1:{a['port']}/api/pairing/connections/{bob_id}",
+            token=a["token"],
+            method="PATCH",
+            body={"share_home": True},
+        )
+        if s2 not in (200, 204):
+            failures.append(f"share_home ON patch failed: HTTP {s2} {r2!r}")
+        else:
+            time.sleep(1)
+            con = sqlite3.connect(str(db_path))
+            try:
+                row2 = con.execute(
+                    "SELECT home_lat, home_lon FROM remote_instances WHERE instance_id = ?",
+                    (a_id,),
+                ).fetchone()
+            finally:
+                con.close()
+            if row2 is None or row2[0] is None or row2[1] is None:
+                failures.append(
+                    f"share_home ON: Bob still has NULL coords for Alpha "
+                    f"after re-enable (row={row2!r})"
+                )
+            else:
+                print(
+                    f"  share_home ON: Bob sees Alpha's home "
+                    f"({row2[0]}, {row2[1]}) ✓"
+                )
+
+    # 11. Log audit — scan each backend's stdout/stderr for unhandled
     #    exceptions, ERROR-level lines, federation-pipeline rejects.
     #    Anything we can't account for (i.e. doesn't match the
     #    benign-noise allow-list) becomes a verify failure so the

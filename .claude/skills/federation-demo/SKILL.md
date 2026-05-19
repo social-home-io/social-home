@@ -155,6 +155,14 @@ That single command runs the full sequence:
      Hamburg / Frankfurt / Munich) and carried during the §11
      pairing handshake via the ``peer-accept`` body. A NULL coord
      on the peer row means the pairing carry-through regressed.
+   - **share_home toggle** (per-peer home-sharing control): flips Alpha's
+     ``share_home`` for Bob to OFF via
+     ``PATCH /api/pairing/connections/{bob_id}`` ``{"share_home": false}``,
+     waits ~1 s for the null-coord ``LOCAL_HOME_LOCATION_CHANGED`` envelope
+     to land, then asserts Bob's ``remote_instances.home_lat`` / ``home_lon``
+     for Alpha's row are NULL in Bob's DB. Flips back ON and asserts the
+     coords are restored. Exercises ``PeerHomeSharingService.set_share_home``
+     end-to-end.
    - **Log audit**: every backend's ``log.txt`` is scanned for
      ``Traceback`` / ``ERROR:`` / ``WARNING:`` / ``Exception:``
      lines. Anything that doesn't match the benign-noise allow-list
