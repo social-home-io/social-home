@@ -16,7 +16,7 @@ from socialhome.domain.federation import (
     RemoteInstance,
 )
 from socialhome.federation.federation_service import FederationService
-from socialhome.infrastructure import EventBus, KeyManager
+from socialhome.infrastructure import DeliveryOutcome, EventBus, KeyManager
 from socialhome.repositories import (
     SqliteFederationRepo,
     SqliteOutboxRepo,
@@ -71,18 +71,19 @@ async def env(tmp_dir):
     await db.shutdown()
 
 
-async def test_redeliver_unknown_instance_returns_false(env):
+async def test_redeliver_unknown_instance_is_permanent(env):
     svc, fed_repo, _ = env
     entry = _OutboxEntry(
         id="e1",
         instance_id="never-paired",
         payload_json="{}",
     )
-    ok = await _redeliver_envelope(svc, fed_repo, entry)
-    assert ok is False
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    # Instance was unpaired / dropped — nothing to retry, mark failed.
+    assert outcome is DeliveryOutcome.PERMANENT
 
 
-async def test_redeliver_2xx_returns_true(env):
+async def test_redeliver_2xx_is_success(env):
     svc, fed_repo, kek = env
     peer_kp = generate_identity_keypair()
     wrapped = kek.encrypt(b"\x01" * 32)
@@ -115,11 +116,11 @@ async def test_redeliver_2xx_returns_true(env):
 
     svc._http_client = _Client()
     entry = _OutboxEntry(id="e1", instance_id=peer.id, payload_json='{"x":1}')
-    ok = await _redeliver_envelope(svc, fed_repo, entry)
-    assert ok is True
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.SUCCESS
 
 
-async def test_redeliver_non_2xx_returns_false(env):
+async def test_redeliver_5xx_is_transient(env):
     svc, fed_repo, kek = env
     peer_kp = generate_identity_keypair()
     wrapped = kek.encrypt(b"\x02" * 32)
@@ -152,11 +153,57 @@ async def test_redeliver_non_2xx_returns_false(env):
 
     svc._http_client = _Client()
     entry = _OutboxEntry(id="e2", instance_id=peer.id, payload_json="{}")
-    ok = await _redeliver_envelope(svc, fed_repo, entry)
-    assert ok is False
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.TRANSIENT
 
 
-async def test_redeliver_transport_error_returns_false(env):
+async def test_redeliver_4xx_is_permanent(env):
+    """A 4xx response — replay-cache hit, expired timestamp, banned —
+    must be dropped, not retried. Specifically pins the 410 ``Replay
+    detected`` shape that left thousands of zombie outbox entries
+    behind during the HA-integration charset bug.
+    """
+    svc, fed_repo, kek = env
+    peer_kp = generate_identity_keypair()
+    wrapped = kek.encrypt(b"\x04" * 32)
+    peer = RemoteInstance(
+        id=derive_instance_id(peer_kp.public_key),
+        display_name="peer",
+        remote_identity_pk=peer_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-410",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(peer)
+
+    class _Resp:
+        def __init__(self, status):
+            self.status = status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Client:
+        def __init__(self, status):
+            self._status = status
+
+        def post(self, url, **kw):
+            return _Resp(self._status)
+
+    for status in (400, 403, 404, 410, 422):
+        svc._http_client = _Client(status)
+        entry = _OutboxEntry(id=f"e-{status}", instance_id=peer.id, payload_json="{}")
+        outcome = await _redeliver_envelope(svc, fed_repo, entry)
+        assert outcome is DeliveryOutcome.PERMANENT, (status, outcome)
+
+
+async def test_redeliver_transport_error_is_transient(env):
     svc, fed_repo, kek = env
     peer_kp = generate_identity_keypair()
     wrapped = kek.encrypt(b"\x03" * 32)
@@ -179,5 +226,5 @@ async def test_redeliver_transport_error_returns_false(env):
 
     svc._http_client = _Client()
     entry = _OutboxEntry(id="e3", instance_id=peer.id, payload_json="{}")
-    ok = await _redeliver_envelope(svc, fed_repo, entry)
-    assert ok is False
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.TRANSIENT

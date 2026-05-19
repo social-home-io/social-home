@@ -10,6 +10,7 @@ from socialhome.domain.federation import FederationEventType
 from socialhome.infrastructure.outbox_processor import (
     BACKOFF_SECONDS,
     MAX_ATTEMPTS,
+    DeliveryOutcome,
     OutboxProcessor,
 )
 from socialhome.repositories.outbox_repo import SqliteOutboxRepo
@@ -74,7 +75,7 @@ async def test_outbox_processor_max_attempts(env):
     )
 
     async def always_fail(entry):
-        return False
+        return DeliveryOutcome.TRANSIENT
 
     proc = OutboxProcessor(env.outbox_repo, always_fail, rng=lambda: 0.5)
     await proc.drain_once()
@@ -111,7 +112,7 @@ async def test_outbox_processor_lifecycle(env):
     """OutboxProcessor start and stop do not raise."""
 
     async def noop(entry):
-        return True
+        return DeliveryOutcome.SUCCESS
 
     proc = OutboxProcessor(
         env.outbox_repo,
@@ -135,7 +136,7 @@ async def test_outbox_processor_drain(env):
 
     async def deliver(entry):
         delivered.append(entry.id)
-        return True
+        return DeliveryOutcome.SUCCESS
 
     proc = OutboxProcessor(env.outbox_repo, deliver, rng=lambda: 0.5)
     count = await proc.drain_once()

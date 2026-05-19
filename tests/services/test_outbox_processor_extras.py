@@ -8,6 +8,7 @@ from socialhome.infrastructure.outbox_processor import (
     BACKOFF_SECONDS,
     JITTER_RATIO,
     MAX_ATTEMPTS,
+    DeliveryOutcome,
     OutboxProcessor,
 )
 from socialhome.repositories.outbox_repo import OutboxEntry
@@ -88,7 +89,7 @@ async def test_double_start_is_idempotent():
     repo = _FakeRepo()
 
     async def deliver(_):
-        return True
+        return DeliveryOutcome.SUCCESS
 
     proc = OutboxProcessor(repo, deliver, poll_interval_seconds=0.05)
     await proc.start()
@@ -111,7 +112,7 @@ async def test_drain_once_marks_delivered():
     repo.pending.append(_entry("e1"))
 
     async def deliver(_):
-        return True
+        return DeliveryOutcome.SUCCESS
 
     proc = OutboxProcessor(repo, deliver)
     n = await proc.drain_once()
@@ -119,12 +120,12 @@ async def test_drain_once_marks_delivered():
     assert "e1" in repo.delivered
 
 
-async def test_drain_once_reschedules_on_failure():
+async def test_drain_once_reschedules_on_transient():
     repo = _FakeRepo()
     repo.pending.append(_entry("e1"))
 
     async def deliver(_):
-        return False
+        return DeliveryOutcome.TRANSIENT
 
     proc = OutboxProcessor(repo, deliver, rng=lambda: 0.5)
     await proc.drain_once()
@@ -134,19 +135,34 @@ async def test_drain_once_reschedules_on_failure():
     assert attempts == 1
 
 
+async def test_drain_once_drops_on_permanent():
+    """A PERMANENT outcome (4xx from the peer) marks the entry failed
+    without consuming a retry budget."""
+    repo = _FakeRepo()
+    repo.pending.append(_entry("e1"))
+
+    async def deliver(_):
+        return DeliveryOutcome.PERMANENT
+
+    proc = OutboxProcessor(repo, deliver)
+    await proc.drain_once()
+    assert "e1" in repo.failed
+    assert not repo.rescheduled
+
+
 async def test_drain_once_marks_failed_after_max_attempts():
     repo = _FakeRepo()
     repo.pending.append(_entry("e1", attempts=MAX_ATTEMPTS - 1))
 
     async def deliver(_):
-        return False
+        return DeliveryOutcome.TRANSIENT
 
     proc = OutboxProcessor(repo, deliver)
     await proc.drain_once()
     assert "e1" in repo.failed
 
 
-async def test_drain_once_treats_exception_as_failure():
+async def test_drain_once_treats_exception_as_transient():
     repo = _FakeRepo()
     repo.pending.append(_entry("e1"))
 

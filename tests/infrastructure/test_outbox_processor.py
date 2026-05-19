@@ -10,6 +10,7 @@ from socialhome.infrastructure.outbox_processor import (
     BACKOFF_SECONDS,
     JITTER_RATIO,
     MAX_ATTEMPTS,
+    DeliveryOutcome,
     OutboxProcessor,
 )
 from socialhome.repositories.outbox_repo import OutboxEntry
@@ -102,14 +103,14 @@ async def test_drain_once_empty_repo():
 
 
 async def test_drain_once_success():
-    """drain_once marks an entry delivered when deliver returns True."""
+    """drain_once marks an entry delivered on DeliveryOutcome.SUCCESS."""
     entry = _make_entry(attempts=0)
     repo = MagicMock()
     repo.list_due = AsyncMock(return_value=[entry])
     repo.mark_delivered = AsyncMock()
 
     async def _deliver(e):
-        return True
+        return DeliveryOutcome.SUCCESS
 
     proc = OutboxProcessor(repo, _deliver)
     result = await proc.drain_once()
@@ -117,38 +118,94 @@ async def test_drain_once_success():
     repo.mark_delivered.assert_awaited_once_with(entry.id)
 
 
-async def test_drain_once_failure_reschedules():
-    """drain_once reschedules an entry when deliver returns False."""
+async def test_drain_once_transient_reschedules():
+    """drain_once reschedules on DeliveryOutcome.TRANSIENT."""
     entry = _make_entry(attempts=0)
     repo = MagicMock()
     repo.list_due = AsyncMock(return_value=[entry])
     repo.reschedule = AsyncMock()
 
     async def _deliver(e):
-        return False
+        return DeliveryOutcome.TRANSIENT
 
     proc = OutboxProcessor(repo, _deliver, rng=lambda: 0.5)
     await proc.drain_once()
     repo.reschedule.assert_awaited_once()
 
 
-async def test_drain_once_max_attempts_marks_failed():
-    """When attempts reaches MAX_ATTEMPTS, drain_once marks the entry failed."""
-    entry = _make_entry(attempts=MAX_ATTEMPTS - 1)
+async def test_drain_once_permanent_marks_failed_immediately():
+    """drain_once drops the entry on PERMANENT regardless of attempt count.
+
+    A 4xx (replay-cache hit, expired timestamp, banned sender, malformed
+    envelope) will never become a 2xx no matter how many times we retry,
+    so the processor must short-circuit to ``mark_failed`` without
+    consuming a retry budget. Specifically this is the path that drains
+    the residual outbox noise left over from the HA-integration charset
+    bug (#19) — every retry there now returns 410 ``Replay detected``.
+    """
+    entry = _make_entry(attempts=0)
+    repo = MagicMock()
+    repo.list_due = AsyncMock(return_value=[entry])
+    repo.mark_failed = AsyncMock()
+    repo.reschedule = AsyncMock()
+    repo.mark_delivered = AsyncMock()
+
+    async def _deliver(e):
+        return DeliveryOutcome.PERMANENT
+
+    proc = OutboxProcessor(repo, _deliver)
+    await proc.drain_once()
+    repo.mark_failed.assert_awaited_once_with(entry.id)
+    repo.reschedule.assert_not_called()
+    repo.mark_delivered.assert_not_called()
+
+
+async def test_drain_once_permanent_bypasses_never_drop():
+    """Even a NEVER_DROP event (e.g. SPACE_MEMBER_BANNED) is dropped on a
+    4xx — the receiver returning 410 ``Replay detected`` means it
+    already has the event, so the security invariant is satisfied.
+    """
+    entry = _make_entry(attempts=0)
+    # Promote to a NEVER_DROP type by rebuilding the dataclass.
+    entry = OutboxEntry(
+        id=entry.id,
+        instance_id=entry.instance_id,
+        event_type=FederationEventType.SPACE_MEMBER_BANNED,
+        payload_json=entry.payload_json,
+        status=entry.status,
+        attempts=entry.attempts,
+        next_attempt_at=entry.next_attempt_at,
+        created_at=entry.created_at,
+    )
     repo = MagicMock()
     repo.list_due = AsyncMock(return_value=[entry])
     repo.mark_failed = AsyncMock()
 
     async def _deliver(e):
-        return False
+        return DeliveryOutcome.PERMANENT
 
     proc = OutboxProcessor(repo, _deliver)
     await proc.drain_once()
     repo.mark_failed.assert_awaited_once_with(entry.id)
 
 
-async def test_drain_once_exception_treated_as_failure():
-    """An exception raised by deliver is caught and treated as a retry."""
+async def test_drain_once_max_attempts_marks_failed():
+    """When attempts reaches MAX_ATTEMPTS on TRANSIENT, mark failed."""
+    entry = _make_entry(attempts=MAX_ATTEMPTS - 1)
+    repo = MagicMock()
+    repo.list_due = AsyncMock(return_value=[entry])
+    repo.mark_failed = AsyncMock()
+
+    async def _deliver(e):
+        return DeliveryOutcome.TRANSIENT
+
+    proc = OutboxProcessor(repo, _deliver)
+    await proc.drain_once()
+    repo.mark_failed.assert_awaited_once_with(entry.id)
+
+
+async def test_drain_once_exception_treated_as_transient():
+    """An exception raised by deliver is caught and treated as TRANSIENT."""
     entry = _make_entry(attempts=0)
     repo = MagicMock()
     repo.list_due = AsyncMock(return_value=[entry])
@@ -163,7 +220,7 @@ async def test_drain_once_exception_treated_as_failure():
 
 
 async def test_drain_once_mixed_success_failure():
-    """drain_once handles a mix of successful and failing entries correctly."""
+    """drain_once handles a mix of SUCCESS / TRANSIENT entries correctly."""
     ok_entry = _make_entry(attempts=0, entry_id="ok")
     fail_entry = _make_entry(attempts=0, entry_id="fail")
     repo = MagicMock()
@@ -172,7 +229,7 @@ async def test_drain_once_mixed_success_failure():
     repo.reschedule = AsyncMock()
 
     async def _deliver(e):
-        return e.id == "ok"
+        return DeliveryOutcome.SUCCESS if e.id == "ok" else DeliveryOutcome.TRANSIENT
 
     proc = OutboxProcessor(repo, _deliver, rng=lambda: 0.5)
     result = await proc.drain_once()
@@ -190,7 +247,7 @@ async def test_start_stop_lifecycle():
     repo.list_due = AsyncMock(return_value=[])
 
     async def _deliver(e):
-        return True
+        return DeliveryOutcome.SUCCESS
 
     proc = OutboxProcessor(repo, _deliver, poll_interval_seconds=0.01)
     await proc.start()

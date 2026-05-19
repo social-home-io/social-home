@@ -52,6 +52,7 @@ from .i18n import Catalog
 from .identity_bootstrap import ensure_instance_identity
 from .media_signer import MediaUrlSigner, derive_signing_key
 from .infrastructure import (
+    DeliveryOutcome,
     EventBus,
     IdempotencyCache,
     KeyManager,
@@ -259,18 +260,30 @@ async def _redeliver_envelope(
     federation_service: FederationService,
     federation_repo,
     entry,
-) -> bool:
+) -> DeliveryOutcome:
     """Re-POST a previously-built envelope from an :class:`OutboxEntry`.
 
     The envelope JSON stored in ``payload_json`` is already signed and
     encrypted from the original :meth:`FederationService.send_event`
     call — we just need to look up the peer inbox and POST again.
-    Returns ``True`` on 2xx, ``False`` otherwise.
+
+    Status code mapping:
+
+    * 2xx → :attr:`DeliveryOutcome.SUCCESS`.
+    * 4xx → :attr:`DeliveryOutcome.PERMANENT` (drop). The federation
+      inbox returns 4xx for replay-cache hits, expired timestamps,
+      banned senders, and malformed envelopes — none of which a retry
+      can fix. Most commonly this is 410 ``Replay detected``, fired
+      when a previously-mangled response (e.g. the HA integration's
+      pre-2026.5.18 charset bug) left the row queued even though the
+      peer already processed it.
+    * 5xx, timeout, network error → :attr:`DeliveryOutcome.TRANSIENT`
+      (reschedule with backoff).
     """
     instance = await federation_repo.get_instance(entry.instance_id)
     if instance is None:
         log.warning("outbox: unknown instance %s — dropping", entry.instance_id)
-        return False
+        return DeliveryOutcome.PERMANENT
 
     try:
         client = await federation_service._get_http_client()
@@ -282,17 +295,25 @@ async def _redeliver_envelope(
         ) as resp:
             if 200 <= resp.status < 300:
                 await federation_repo.mark_reachable(entry.instance_id)
-                return True
+                return DeliveryOutcome.SUCCESS
+            if 400 <= resp.status < 500:
+                log.warning(
+                    "outbox: %s returned terminal HTTP %d for %s — dropping",
+                    entry.instance_id,
+                    resp.status,
+                    entry.id,
+                )
+                return DeliveryOutcome.PERMANENT
             log.warning(
                 "outbox: %s returned HTTP %d for %s",
                 entry.instance_id,
                 resp.status,
                 entry.id,
             )
-            return False
+            return DeliveryOutcome.TRANSIENT
     except Exception as exc:
         log.debug("outbox: redelivery error %s: %s", entry.id, exc)
-        return False
+        return DeliveryOutcome.TRANSIENT
 
 
 def _default_ice_servers(config: Config) -> list[dict]:
