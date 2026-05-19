@@ -27,6 +27,7 @@ from aiohttp import web
 from ..app_keys import (
     auto_pair_coordinator_key,
     auto_pair_inbox_key,
+    dm_routing_service_key,
     federation_repo_key,
     federation_service_key,
     federation_transport_key,
@@ -660,4 +661,30 @@ class PairingConnectionAliasView(BaseView):
                 "local_alias": updated.local_alias,
                 "effective_display_name": updated.effective_display_name,
             }
+        )
+
+
+class PairingConnectionTransportDetailView(BaseView):
+    """``GET /api/pairing/connections/{instance_id}/transport-detail``.
+
+    Admin-only side panel data for the SPA's Manage detail view.
+    Returns ``{"last_relay": {"via": <iid>, "ts": <iso>} | null}`` —
+    the most recent DM that relayed via a third household within
+    the last 24 hours. Used to surface "Last DM took the relay path"
+    on the connection detail panel.
+    """
+
+    async def get(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        instance_id = self.match("instance_id")
+        svc = self.svc(dm_routing_service_key)
+        entry = await svc.last_relay_for(instance_id)
+        return web.json_response(
+            {
+                "last_relay": (
+                    {"via": entry.via, "ts": entry.ts} if entry is not None else None
+                ),
+            },
         )

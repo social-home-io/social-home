@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 
-from socialhome.app_keys import federation_repo_key, federation_transport_key
+from datetime import datetime, timezone
+
+from socialhome.app_keys import (
+    dm_routing_service_key,
+    federation_repo_key,
+    federation_transport_key,
+)
 from socialhome.config import Config
 from socialhome.crypto import (
     derive_instance_id,
@@ -784,3 +790,54 @@ async def test_connections_response_transport_https_when_no_rtc_wired(client):
     rows = await r.json()
     row = next(x for x in rows if x["instance_id"] == peer.id)
     assert row["transport"] == "https"
+
+
+# ─── Transport detail (Task 6) ───────────────────────────────────────────────
+
+
+async def test_transport_detail_returns_recent_relay(client):
+    """For a peer with a recent DM relay, the endpoint returns
+    {last_relay: {via, ts}}."""
+    svc = client.app[dm_routing_service_key]
+    now = datetime.now(timezone.utc).isoformat()
+    await svc._record_relay_for_test(
+        target="peer-target",
+        via="peer-relay",
+        ts=now,
+    )
+
+    r = await client.get(
+        "/api/pairing/connections/peer-target/transport-detail",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["last_relay"] is not None
+    assert body["last_relay"]["via"] == "peer-relay"
+    assert body["last_relay"]["ts"]  # non-empty
+
+
+async def test_transport_detail_returns_null_when_no_recent_relay(client):
+    r = await client.get(
+        "/api/pairing/connections/peer-no-relay/transport-detail",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["last_relay"] is None
+
+
+async def test_transport_detail_admin_only(client):
+    """Non-admin user gets 403."""
+    from socialhome.app_keys import db_key as _db_key
+
+    db = client.app[_db_key]
+    await db.enqueue(
+        "UPDATE users SET is_admin=0 WHERE user_id=?",
+        (client._uid,),
+    )
+    r = await client.get(
+        "/api/pairing/connections/peer-x/transport-detail",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
