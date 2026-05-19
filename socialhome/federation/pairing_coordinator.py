@@ -151,6 +151,8 @@ class PairingCoordinator:
         # keypair. Without this check the receiver would accept any
         # ``display_name`` the attacker baked in.
         own_instance_id = derive_instance_id(self._own_identity_pk)
+        local = await self._repo.get_local_identity()
+        own_display_name = (local or {}).get("display_name") or ""
         payload: dict = {
             "token": token,
             "instance_id": own_instance_id,
@@ -159,6 +161,7 @@ class PairingCoordinator:
             "inbox_url": inbox_url,
             "expires_at": expires_at,
             "sig_suite": self._own_sig_suite,
+            "display_name": own_display_name,
         }
         if self._own_pq_pk is not None:
             payload["pq_algorithm"] = "mldsa65"
@@ -328,7 +331,8 @@ class PairingCoordinator:
         # pair. Best-effort: on failure we still return the SAS locally
         # so the admin sees a surfaced retry hint in the UI.
         if self._peer_pairing_client is not None:
-            own_display_name = qr_payload.get("display_name_hint") or ""
+            local = await self._repo.get_local_identity()
+            own_display_name = (local or {}).get("display_name") or ""
             peer_accept_body: dict = {
                 "token": token,
                 "verification_code": verification_code,
@@ -339,7 +343,6 @@ class PairingCoordinator:
                 "display_name": own_display_name,
                 "sig_suite": self._own_sig_suite,
             }
-            local = await self._repo.get_local_identity()
             if (
                 local
                 and local.get("home_lat") is not None
