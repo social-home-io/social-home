@@ -149,6 +149,12 @@ That single command runs the full sequence:
      pending or joined depending on whether the invitation flow has
      auto-accepted by the time the assertion runs).
    - Every backend process is still alive (no WebRTC native crash).
+   - **Home-location propagation** (v5): each of a / b / c sees every
+     confirmed peer's ``home_lat`` / ``home_lon`` populated in
+     ``/api/friends``. Coordinates are seeded in ``cmd_up`` (Berlin /
+     Hamburg / Frankfurt / Munich) and carried during the §11
+     pairing handshake via the ``peer-accept`` body. A NULL coord
+     on the peer row means the pairing carry-through regressed.
    - **Log audit**: every backend's ``log.txt`` is scanned for
      ``Traceback`` / ``ERROR:`` / ``WARNING:`` / ``Exception:``
      lines. Anything that doesn't match the benign-noise allow-list

@@ -35,6 +35,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -248,6 +249,51 @@ def _alive(pid: int) -> bool:
         return False
 
 
+# ─── Home-location seed ─────────────────────────────────────────────────────
+# Distinct fake coordinates per household so a flipped assignment is obvious.
+# The coords ride the §11 pairing handshake (peer-accept body) into each
+# peer's remote_instances row, and the v5 LOCAL_HOME_LOCATION_CHANGED
+# broadcast fires from _on_local_home_location_updated after the first
+# confirmed pairing.
+_SEED_COORDS: dict[str, tuple[float, float]] = {
+    "a": (52.5200, 13.4050),   # Berlin  (Alpha House)
+    "b": (53.5500,  9.9900),   # Hamburg (Beta House)
+    "c": (50.1100,  8.6800),   # Frankfurt (Gamma House)
+    "d": (48.1350, 11.5820),   # Munich  (Delta House)
+}
+
+
+def _seed_home_coords(label: str) -> None:
+    """Write fake home coordinates into ``instance_identity`` for *label*.
+
+    Called at the end of ``cmd_up``, after setup has created the DB and the
+    ``instance_identity`` row, but before ``cmd_pair`` runs.  The coordinates
+    are picked up by :func:`_pair_two` because the pairing coordinator reads
+    ``instance_identity.home_lat/home_lon`` when building the ``peer-accept``
+    body (§11) — so both sides of every pair exchange coords during the
+    normal handshake without any extra wiring.
+
+    Direct SQLite write is intentional: the standalone adapter's
+    ``update_location`` does not publish ``LocalHomeLocationUpdated``
+    (that event originates from the HA adapters' ``on_startup``).
+    Writing to the DB before pairing is the cleanest path that keeps the
+    harness self-contained and exercises the pairing carry-through path
+    end-to-end.
+    """
+    lat, lon = _SEED_COORDS[label]
+    db_path = _instance_dir(label) / "socialhome.db"
+    con = sqlite3.connect(str(db_path))
+    try:
+        con.execute(
+            "UPDATE instance_identity SET home_lat = ?, home_lon = ? WHERE id = 'self'",
+            (lat, lon),
+        )
+        con.commit()
+    finally:
+        con.close()
+    print(f"  {label}: home seeded lat={lat} lon={lon}")
+
+
 # ─── Step: up ──────────────────────────────────────────────────────────────
 
 
@@ -299,6 +345,13 @@ def cmd_up() -> None:
         _must(f"me({label})", s3, me)
         state["instances"][label]["user_id"] = me["user_id"]
         print(f"  {label}: instance_id={state['instances'][label]['instance_id']}")
+
+    # Seed home coordinates into each instance's DB now that setup has
+    # created the ``instance_identity`` row.  The coords travel with the
+    # pairing handshake so peers learn each other's location automatically.
+    print("seeding home coordinates...")
+    for label, *_ in INSTANCES:
+        _seed_home_coords(label)
 
     _save(state)
     print("up: ok")
@@ -1778,6 +1831,60 @@ def cmd_verify() -> None:
     for label, info in state["instances"].items():
         if not _alive(info["pid"]):
             failures.append(f"{label}: process pid={info['pid']} is gone")
+
+    # 11. Home-location propagation — each inner-ring household should see
+    #     every confirmed peer's home_lat/home_lon populated after pairing.
+    #     Coords are seeded in ``cmd_up`` (see ``_seed_home_coords``) and
+    #     exchanged during the §11 pairing handshake via the peer-accept body.
+    #     The assertion validates the full carry-through: seed → peer-accept →
+    #     remote_instances → /api/friends response.
+    #
+    #     Expected coords per label (4dp precision from schema):
+    #     a=Berlin(52.52,13.405), b=Hamburg(53.55,9.99), c=Frankfurt(50.11,8.68)
+    _expected_coords: dict[str, tuple[float, float]] = {
+        label: (_SEED_COORDS[label][0], _SEED_COORDS[label][1])
+        for label in ("a", "b", "c", "d")
+    }
+    for viewer in ("a", "b", "c"):
+        info = state["instances"][viewer]
+        s, fr = _request(
+            f"http://127.0.0.1:{info['port']}/api/friends",
+            token=info["token"],
+        )
+        _must(f"friends({viewer})", s, fr)
+        households_by_id: dict[str, dict] = {}
+        for hh in fr.get("households", []):
+            households_by_id[hh["instance_id"]] = hh
+        for other in ("a", "b", "c"):
+            if other == viewer:
+                continue
+            other_iid = state["instances"][other]["instance_id"]
+            hh = households_by_id.get(other_iid)
+            if hh is None:
+                failures.append(
+                    f"{viewer}: peer {other} missing from /api/friends households",
+                )
+                continue
+            lat = hh.get("home_lat")
+            lon = hh.get("home_lon")
+            if lat is None or lon is None:
+                failures.append(
+                    f"{viewer}: peer {other} has NULL home_lat/home_lon in "
+                    f"/api/friends — LOCAL_HOME_LOCATION_CHANGED did not "
+                    f"propagate (or coord not sent during pairing handshake)",
+                )
+            else:
+                exp_lat, exp_lon = _expected_coords[other]
+                # Compare at 4 dp (schema precision).
+                if round(lat, 4) != round(exp_lat, 4) or round(lon, 4) != round(exp_lon, 4):
+                    failures.append(
+                        f"{viewer}: peer {other} home coords mismatch — "
+                        f"got ({lat}, {lon}), expected ({exp_lat}, {exp_lon})",
+                    )
+                else:
+                    print(
+                        f"  {viewer} sees {other}'s home ({lat}, {lon}) ✓",
+                    )
 
     # 10. Log audit — scan each backend's stdout/stderr for unhandled
     #    exceptions, ERROR-level lines, federation-pipeline rejects.
