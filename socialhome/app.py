@@ -1891,6 +1891,7 @@ def create_app(config: Config | None = None) -> web.Application:
             bus=bus,
         )
         federation_service.attach_transport(fed_transport)
+        app[K.federation_transport_key] = fed_transport
 
         # Replay any operator-pushed STUN/TURN list (PUT /api/ha/integration/
         # ice-servers) so the live FederationService + transport see the
