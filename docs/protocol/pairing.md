@@ -167,6 +167,54 @@ When every local user is hidden from the peer (or there are no
 local users at all), the envelope is suppressed entirely — no
 empty-roster sync.
 
+## Per-pair user visibility
+
+The admin Connection-Detail modal toggles which **local** users
+surface to a paired peer. Default-visible: a household member shows
+up unless an admin has explicitly hidden them via
+`PATCH /api/pairing/connections/{instance_id}/visible-users`. State
+lives in `peer_user_visibility`; lookups go through the
+`socialhome.services._visibility.hidden_for_peer` helper.
+
+Forward-only semantics: when an admin flips a user to hidden, all of
+the following outbound federation events are filtered **per peer**
+when the event's author / actor is that user:
+
+- `USER_UPDATED`, `USERS_SYNC` (profile catch-up)
+- `USER_REMOVED` is fired once at hide-time so the peer drops the
+  user from `/api/friends`, the DM picker, and member lists
+- `USER_ONLINE`, `USER_IDLE`, `USER_OFFLINE` (session presence)
+- `DM_MESSAGE`, `DM_MESSAGE_DELETED`, `DM_MESSAGE_REACTION`
+- `DM_MEDIA_BLOB`
+- `DM_USER_TYPING`
+- `DM_HISTORY_CHUNK` (filtered **at the conversation level**:
+  cross-household DMs are 1:1, so a hidden local participant
+  suppresses the entire conversation's catch-up; the
+  `DM_HISTORY_COMPLETE` envelope still fires so the requester's
+  state machine terminates cleanly)
+- `DM_RELAY` (at the originating node only; forwarding hops handle
+  opaque ciphertext and cannot gate)
+- `HIGHLIGHT_CREATED`, `HIGHLIGHT_FRAME_APPENDED`,
+  `HIGHLIGHT_DELETED`, `HIGHLIGHT_FRAME_DELETED`,
+  `HIGHLIGHT_FRAME_VIEWED`, `HIGHLIGHT_FRAME_REACTED`,
+  `HIGHLIGHT_FRAME_REACTION_REMOVED`
+- `MOMENT_CREATED`, `MOMENT_DELETED`, `MOMENT_REACTED`,
+  `MOMENT_REACTION_REMOVED`
+
+Existing content the peer already has — DMs already delivered,
+posts in shared spaces, highlights already received — stays. The
+filter is strictly forward-looking.
+
+Space-scoped events (`SPACE_POST_CREATED`, `SPACE_COMMENT_*`,
+`SPACE_STICKY_*`, `SPACE_CALENDAR_*`, etc.) are **not** gated by
+this toggle — spaces own their own audience model.
+
+Un-hide fires the existing `USER_UPDATED` envelope so the peer's
+`remote_users` row resurrects (`deprovisioned_at` clears).
+
+Wire compat: this filter is purely sender-side. Receivers see fewer
+envelopes; no new event types and no `proto_version` bump.
+
 ## Key derivation
 
 Each side holds an **Ed25519 identity key** (long-lived) and generates
