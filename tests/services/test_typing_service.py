@@ -551,3 +551,76 @@ async def test_is_typing_on_comment_expires_after_ttl():
         "alice",
         now=100.0 + TYPING_TTL_SECONDS + 1,
     )
+
+
+# ─── Visibility-gated federation fan-out ─────────────────────────────────
+
+
+class _FakeVisibilityRepo:
+    """Per-peer hide list — Protocol-shape fake."""
+
+    def __init__(self) -> None:
+        self._hidden: dict[str, set[str]] = {}
+
+    def hide(self, peer: str, user_id: str) -> None:
+        self._hidden.setdefault(peer, set()).add(user_id)
+
+    async def hidden_user_ids_for_peer(self, peer: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer, set()))
+
+
+async def test_user_typing_skips_peers_where_sender_is_hidden():
+    """Sender hidden from ``peer-hider`` → no DM_USER_TYPING sent there."""
+    repo = _FakeConvoRepo(
+        members=[_FakeMember("alice")],
+        remote=[
+            _FakeRemoteMember("peer-open"),
+            _FakeRemoteMember("peer-hider"),
+        ],
+    )
+    fed = _FakeFed()
+    vis = _FakeVisibilityRepo()
+    vis.hide("peer-hider", "u-alice")
+    svc = TypingService(
+        conversation_repo=repo,
+        user_repo=_FakeUserRepo(),
+        ws_manager=_FakeWS(),
+        federation_service=fed,
+        own_instance_id="self",
+        visibility_repo=vis,
+    )
+    await svc.user_started_typing(
+        conversation_id="c1",
+        sender_user_id="u-alice",
+        sender_username="alice",
+    )
+    targets = {t for t, _, _ in fed.sent}
+    assert "peer-open" in targets
+    assert "peer-hider" not in targets
+
+
+async def test_user_typing_no_repo_fans_to_every_peer():
+    """``visibility_repo=None`` → default-visible, every peer receives."""
+    repo = _FakeConvoRepo(
+        members=[_FakeMember("alice")],
+        remote=[
+            _FakeRemoteMember("peer-open"),
+            _FakeRemoteMember("peer-hider"),
+        ],
+    )
+    fed = _FakeFed()
+    svc = TypingService(
+        conversation_repo=repo,
+        user_repo=_FakeUserRepo(),
+        ws_manager=_FakeWS(),
+        federation_service=fed,
+        own_instance_id="self",
+        visibility_repo=None,
+    )
+    await svc.user_started_typing(
+        conversation_id="c1",
+        sender_user_id="u-alice",
+        sender_username="alice",
+    )
+    targets = {t for t, _, _ in fed.sent}
+    assert targets == {"peer-open", "peer-hider"}

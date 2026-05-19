@@ -1451,6 +1451,7 @@ def create_app(config: Config | None = None) -> web.Application:
         user_repo=user_repo,
         ws_manager=ws_manager,
         space_repo=space_repo,
+        visibility_repo=repos.peer_user_visibility,
     )
 
     # ── Platform adapter (HA vs standalone) ──────────────────────────────
