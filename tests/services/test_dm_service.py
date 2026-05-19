@@ -620,3 +620,120 @@ async def test_fan_out_deduplicates_same_instance(stack):
     sent = [s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE]
     assert len(sent) == 1
     assert sent[0]["to"] == "peer-a"
+
+
+# ─── §task-5 per-pair user-visibility gate on DM fan-out ─────────────────────
+
+
+class _FakeVisibilityRepo:
+    """Per-peer hide list — Protocol-shape fake. Matches the
+    ``AbstractPeerUserVisibilityRepo.hidden_user_ids_for_peer``
+    signature exactly."""
+
+    def __init__(self) -> None:
+        self._hidden: dict[str, set[str]] = {}
+
+    def hide(self, peer: str, user_id: str) -> None:
+        self._hidden.setdefault(peer, set()).add(user_id)
+
+    async def hidden_user_ids_for_peer(self, peer: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer, set()))
+
+
+async def test_dm_message_outbound_skips_peers_where_sender_is_hidden(stack):
+    """When the sender is hidden from a peer, DM_MESSAGE must NOT be sent to
+    that peer, but the local message row is still created (forward-only).
+
+    Setup: two remote peers — peer-ok and peer-hidden. The sender (anna)
+    is hidden from peer-hidden but not from peer-ok.
+
+    Expected:
+    - peer-ok receives DM_MESSAGE
+    - peer-hidden does NOT receive DM_MESSAGE
+    - The message row was created locally (list_messages returns it)
+    """
+    from socialhome.domain.federation import FederationEventType
+
+    fed = _FakeFederationService()
+    fed_repo = _FakeFederationRepo(
+        {
+            "peer-ok": _confirmed_peer("peer-ok"),
+            "peer-hidden": _confirmed_peer("peer-hidden"),
+        }
+    )
+    vis_repo = _FakeVisibilityRepo()
+
+    anna = await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    await stack.provision_user("carl")
+    gdm = await stack.dm_svc.create_group_dm(
+        creator_username="anna",
+        member_usernames=["bob", "carl"],
+        name="cross-hh",
+    )
+    # Hide anna from peer-hidden (not from peer-ok).
+    vis_repo.hide("peer-hidden", anna.user_id)
+
+    # Re-construct with visibility_repo wired.
+    from socialhome.services.dm_service import DmService
+
+    stack.dm_svc = DmService(
+        stack.dm_svc._convos,  # noqa: SLF001
+        stack.dm_svc._users,  # noqa: SLF001
+        stack.dm_svc._bus,  # noqa: SLF001
+        visibility_repo=vis_repo,
+    )
+    stack.dm_svc.attach_federation(fed, fed_repo, own_instance_id="self")
+
+    await _attach_remote_member(
+        stack, conversation_id=gdm.id, instance_id="peer-ok", username="bob-ok"
+    )
+    await _attach_remote_member(
+        stack, conversation_id=gdm.id, instance_id="peer-hidden", username="bob-hidden"
+    )
+
+    await stack.dm_svc.send_message(gdm.id, sender_username="anna", content="secret")
+
+    sent = [s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE]
+    assert {s["to"] for s in sent} == {"peer-ok"}, (
+        f"expected only peer-ok to receive; got {[s['to'] for s in sent]}"
+    )
+    # Local row still created (forward-only semantics).
+    msgs = await stack.dm_svc.list_messages(gdm.id, reader_username="anna")
+    assert len(msgs) == 1
+    assert msgs[0].content == "secret"
+
+
+async def test_dm_message_outbound_no_repo_fans_to_every_peer(stack):
+    """Without a visibility_repo (default None), all confirmed peers receive."""
+    from socialhome.domain.federation import FederationEventType
+
+    fed = _FakeFederationService()
+    fed_repo = _FakeFederationRepo(
+        {
+            "peer-a": _confirmed_peer("peer-a"),
+            "peer-b": _confirmed_peer("peer-b"),
+        }
+    )
+    # No visibility_repo — default None means "no filter".
+    stack.dm_svc.attach_federation(fed, fed_repo, own_instance_id="self")
+
+    await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    await stack.provision_user("carl")
+    gdm = await stack.dm_svc.create_group_dm(
+        creator_username="anna",
+        member_usernames=["bob", "carl"],
+        name="cross-hh",
+    )
+    await _attach_remote_member(
+        stack, conversation_id=gdm.id, instance_id="peer-a", username="bob-a"
+    )
+    await _attach_remote_member(
+        stack, conversation_id=gdm.id, instance_id="peer-b", username="bob-b"
+    )
+
+    await stack.dm_svc.send_message(gdm.id, sender_username="anna", content="hello")
+
+    sent = [s for s in fed.sent if s["type"] == FederationEventType.DM_MESSAGE]
+    assert {s["to"] for s in sent} == {"peer-a", "peer-b"}

@@ -1148,6 +1148,7 @@ def create_app(config: Config | None = None) -> web.Application:
         dm_routing_repo=repos.dm_routing,
         media_sync=dm_media_sync_service,
         media_dir=pathlib.Path(config.media_path),
+        visibility_repo=repos.peer_user_visibility,
     )
     report_repo = SqliteReportRepo(db)
     report_service = ReportService(
