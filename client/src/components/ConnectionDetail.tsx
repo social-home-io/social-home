@@ -259,7 +259,8 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
               <p class="sh-muted" style={{ marginTop: 0, fontSize: 'var(--sh-font-size-sm)' }}>
                 Unticked members stop showing up here. Existing posts in
                 shared spaces stay; future profile updates, presence,
-                and DMs from hidden members are filtered.
+                DMs, highlights, and moments from hidden members are
+                filtered.
               </p>
               <ul class="sh-visible-users-list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                 {visUsers.map(u => (
