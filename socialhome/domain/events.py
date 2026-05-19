@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .calendar import CalendarEvent
@@ -911,7 +911,7 @@ class PeerTransportChanged(DomainEvent):
     """
 
     instance_id: str
-    transport: str  # "rtc" | "https"
+    transport: Literal["rtc", "https"]
     occurred_at: datetime = field(default_factory=_now)
 
 

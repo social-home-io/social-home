@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from socialhome.domain.events import DomainEvent, PostCreated
+from socialhome.domain.events import DomainEvent, PeerTransportChanged, PostCreated
 from socialhome.domain.post import Post, PostType
 
 
@@ -19,8 +19,6 @@ def test_post_created_is_domain_event():
 
 def test_peer_transport_changed_shape():
     """PeerTransportChanged has instance_id and transport fields."""
-    from socialhome.domain.events import PeerTransportChanged
-
     e = PeerTransportChanged(instance_id="iid-1", transport="rtc")
     assert e.instance_id == "iid-1"
     assert e.transport == "rtc"
