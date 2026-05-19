@@ -21,15 +21,19 @@ from socialhome.crypto import (
     generate_x25519_keypair,
 )
 from socialhome.federation.pairing_coordinator import PairingCoordinator
+from socialhome.federation.peer_pairing_client import (
+    sign_peer_body,
+)
 from socialhome.infrastructure.key_manager import KeyManager
 
 
 class _FakeRepo:
     """In-memory ``AbstractFederationRepo`` good enough for handshake tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, local_identity: dict | None = None) -> None:
         self.instances: dict = {}
         self.pairings: dict = {}
+        self._local_identity = local_identity
 
     async def save_instance(self, inst):
         self.instances[inst.id] = inst
@@ -49,6 +53,9 @@ class _FakeRepo:
 
     async def delete_pairing(self, token):
         self.pairings.pop(token, None)
+
+    async def get_local_identity(self) -> dict | None:
+        return self._local_identity
 
 
 def _kek() -> KeyManager:
@@ -144,3 +151,152 @@ async def test_accept_carries_acceptor_inbox_url_in_peer_accept_body():
     assert body["inbox_url"] != a_inbox_url
     # Peer-accept itself is POSTed *to* A — the destination URL is the QR's.
     assert captured[0]["peer_inbox_url"] == a_inbox_url
+
+
+async def test_accept_peer_accept_body_carries_home_coords_when_set():
+    """accept() (B-side) includes home_lat/home_lon in the peer-accept
+    body when the local identity has coordinates set, so A's RemoteInstance
+    row learns B's home location immediately on pairing."""
+    captured: list[dict] = []
+
+    class _RecordingPeerClient:
+        async def send_peer_accept(self, *, peer_inbox_url, body):
+            captured.append({"peer_inbox_url": peer_inbox_url, "body": body})
+
+            class _R:
+                ok = True
+                status_code = 200
+                error = None
+
+            return _R()
+
+    kp = generate_identity_keypair()
+    repo = _FakeRepo(local_identity={"home_lat": 52.52, "home_lon": 13.40})
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    coord.attach_peer_pairing_client(_RecordingPeerClient())
+
+    peer_kp = generate_identity_keypair()
+    peer_dh = generate_x25519_keypair()
+    qr = {
+        "token": "tok-coords-1",
+        "instance_id": derive_instance_id(peer_kp.public_key),
+        "identity_pk": peer_kp.public_key.hex(),
+        "dh_pk": peer_dh.public_key.hex(),
+        "inbox_url": "https://alpha.example/federation/inbox/A-INBOX",
+    }
+
+    await coord.accept(qr, own_inbox_base_url="https://beta.example/federation/inbox")
+
+    assert len(captured) == 1
+    body = captured[0]["body"]
+    assert body.get("home_lat") == 52.52
+    assert body.get("home_lon") == 13.40
+
+
+async def test_accept_peer_accept_body_omits_home_coords_when_none():
+    """accept() omits home_lat/home_lon from the body when the local
+    identity has NULL coords (not yet configured)."""
+    captured: list[dict] = []
+
+    class _RecordingPeerClient:
+        async def send_peer_accept(self, *, peer_inbox_url, body):
+            captured.append(body)
+
+            class _R:
+                ok = True
+                status_code = 200
+                error = None
+
+            return _R()
+
+    kp = generate_identity_keypair()
+    repo = _FakeRepo(local_identity={"home_lat": None, "home_lon": None})
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    coord.attach_peer_pairing_client(_RecordingPeerClient())
+
+    peer_kp = generate_identity_keypair()
+    peer_dh = generate_x25519_keypair()
+    qr = {
+        "token": "tok-no-coords",
+        "identity_pk": peer_kp.public_key.hex(),
+        "dh_pk": peer_dh.public_key.hex(),
+        "inbox_url": "https://alpha.example/federation/inbox/A-INBOX2",
+    }
+
+    await coord.accept(qr)
+
+    assert len(captured) == 1
+    assert "home_lat" not in captured[0]
+    assert "home_lon" not in captured[0]
+
+
+async def test_handle_peer_accept_populates_home_coords_on_remote_instance():
+    """handle_peer_accept() (A-side) reads home_lat/home_lon from the
+    incoming body and stores them on the new RemoteInstance row."""
+    kp_a = generate_identity_keypair()
+    kp_b = generate_identity_keypair()
+    dh_b = generate_x25519_keypair()
+
+    repo_a = _FakeRepo()
+    coord_a = PairingCoordinator(repo_a, _kek(), kp_a.public_key)
+
+    # A initiates — this creates a PENDING_SENT PairingSession.
+    qr = await coord_a.initiate(inbox_base_url="https://a.example/federation/inbox")
+    token = qr["token"]
+
+    # Build the peer-accept body as B would send it, including home coords.
+    peer_accept: dict = {
+        "token": token,
+        "verification_code": "123456",
+        "identity_pk": kp_b.public_key.hex(),
+        "instance_id": derive_instance_id(kp_b.public_key),
+        "dh_pk": dh_b.public_key.hex(),
+        "inbox_url": "https://b.example/federation/inbox/B-LOCAL",
+        "display_name": "Household B",
+        "sig_suite": "ed25519",
+        "home_lat": 52.52,
+        "home_lon": 13.40,
+    }
+    signed_body = sign_peer_body(peer_accept, own_identity_seed=kp_b.private_key)
+
+    await coord_a.handle_peer_accept(signed_body)
+
+    b_iid = derive_instance_id(kp_b.public_key)
+    stored = repo_a.instances.get(b_iid)
+    assert stored is not None
+    assert stored.home_lat == 52.52
+    assert stored.home_lon == 13.40
+
+
+async def test_handle_peer_accept_home_coords_none_when_absent_from_body():
+    """handle_peer_accept() stores None for home_lat/home_lon when the
+    body doesn't include those fields (older peers / coords not set)."""
+    kp_a = generate_identity_keypair()
+    kp_b = generate_identity_keypair()
+    dh_b = generate_x25519_keypair()
+
+    repo_a = _FakeRepo()
+    coord_a = PairingCoordinator(repo_a, _kek(), kp_a.public_key)
+
+    qr = await coord_a.initiate(inbox_base_url="https://a.example/federation/inbox")
+    token = qr["token"]
+
+    peer_accept: dict = {
+        "token": token,
+        "verification_code": "654321",
+        "identity_pk": kp_b.public_key.hex(),
+        "instance_id": derive_instance_id(kp_b.public_key),
+        "dh_pk": dh_b.public_key.hex(),
+        "inbox_url": "https://b.example/federation/inbox/B-LOCAL2",
+        "display_name": "Household B",
+        "sig_suite": "ed25519",
+    }
+    signed_body = sign_peer_body(peer_accept, own_identity_seed=kp_b.private_key)
+
+    await coord_a.handle_peer_accept(signed_body)
+
+    b_iid = derive_instance_id(kp_b.public_key)
+    stored = repo_a.instances.get(b_iid)
+    assert stored is not None
+    assert stored.home_lat is None
+    assert stored.home_lon is None

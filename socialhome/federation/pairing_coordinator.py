@@ -339,6 +339,10 @@ class PairingCoordinator:
                 "display_name": own_display_name,
                 "sig_suite": self._own_sig_suite,
             }
+            local = await self._repo.get_local_identity()
+            if local and local.get("home_lat") is not None:
+                peer_accept_body["home_lat"] = float(local["home_lat"])
+                peer_accept_body["home_lon"] = float(local["home_lon"])
             if self._own_pq_pk is not None:
                 peer_accept_body["pq_algorithm"] = "mldsa65"
                 peer_accept_body["pq_identity_pk"] = self._own_pq_pk.hex()
@@ -506,6 +510,16 @@ class PairingCoordinator:
             remote_pq_identity_pk=str(peer_pq_pk) if peer_pq_pk else None,
             sig_suite=negotiated,
             paired_at=now.isoformat(),
+            home_lat=(
+                round(float(body["home_lat"]), 4)
+                if body.get("home_lat") is not None
+                else None
+            ),
+            home_lon=(
+                round(float(body["home_lon"]), 4)
+                if body.get("home_lon") is not None
+                else None
+            ),
         )
         await self._repo.save_instance(remote_inst)
 

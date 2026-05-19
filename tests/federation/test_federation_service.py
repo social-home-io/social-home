@@ -194,6 +194,9 @@ class InMemoryFederationRepo:
     ) -> bool:
         return (space_id, instance_id) in self._bans
 
+    async def get_local_identity(self) -> dict | None:
+        return None
+
 
 class InMemoryOutboxRepo:
     """Minimal in-memory outbox repo for tests."""
