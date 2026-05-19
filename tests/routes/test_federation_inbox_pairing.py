@@ -178,6 +178,38 @@ async def test_peer_accept_via_inbox_rejects_bad_signature(client):
     assert r.status == 403
 
 
+async def test_peer_accept_via_inbox_rejects_wrong_url_inbox_id(client):
+    """The URL-path inbox_id must match the pairing session's
+    ``own_local_inbox_id``. Defense-in-depth on top of the unguessable
+    token lookup: a body posted to the wrong inbox URL is rejected
+    before any pairing state changes.
+
+    Previously the dispatch keyed off the body's ``token`` alone, so a
+    correctly-signed peer-accept body would have been accepted at any
+    inbox URL on the receiver. That's not exploitable (the token is
+    unguessable and the signature still has to verify) but binding
+    the URL to the body forecloses a class of future client bugs.
+    """
+    qr = await _generate_qr(client)
+
+    b_id_kp = generate_identity_keypair()
+    b_dh_kp = generate_x25519_keypair()
+    body = _peer_accept_body(
+        token=qr["token"],
+        b_id_pk=b_id_kp.public_key,
+        b_dh_pk=b_dh_kp.public_key,
+    )
+    signed = sign_peer_body(body, own_identity_seed=b_id_kp.private_key)
+
+    # Deliberately POST to a different inbox_id than the QR's.
+    r = await client.post(
+        "/federation/inbox/wrong-inbox-id",
+        data=orjson.dumps(signed),
+        headers={"Content-Type": "application/json"},
+    )
+    assert r.status == 400
+
+
 async def test_peer_accept_via_inbox_rejects_instance_id_mismatch(client):
     qr = await _generate_qr(client)
     path = _inbox_path_from_url(qr["inbox_url"])
@@ -230,11 +262,17 @@ async def test_peer_confirm_via_inbox_unknown_token(client):
     assert r.status == 404
 
 
-async def test_pairing_event_dispatch_skips_pipeline_for_unknown_inbox(client):
-    """A ``PAIRING_PEER_ACCEPT`` body succeeds (or fails on its own
-    grounds) regardless of whether ``{inbox_id}`` in the URL maps to
-    a known peer — the §24.11 pipeline's instance lookup never runs."""
+async def test_pairing_event_dispatch_skips_pipeline(client):
+    """A ``PAIRING_PEER_ACCEPT`` body posted to the correct inbox URL
+    is dispatched to the pairing coordinator without entering the
+    §24.11 pipeline (whose ``RemoteInstance`` lookup would reject the
+    body — the peer instance only exists *after* this call lands).
+
+    The wrong-URL case is covered separately in
+    :func:`test_peer_accept_via_inbox_rejects_wrong_url_inbox_id`.
+    """
     qr = await _generate_qr(client)
+    path = _inbox_path_from_url(qr["inbox_url"])
 
     b_id_kp = generate_identity_keypair()
     b_dh_kp = generate_x25519_keypair()
@@ -245,10 +283,8 @@ async def test_pairing_event_dispatch_skips_pipeline_for_unknown_inbox(client):
     )
     signed = sign_peer_body(body, own_identity_seed=b_id_kp.private_key)
 
-    # POST to a deliberately-wrong inbox_id — pairing dispatch keys off
-    # the body's ``token`` not the URL path, so this still succeeds.
     r = await client.post(
-        "/federation/inbox/wrong-inbox-id",
+        path,
         data=orjson.dumps(signed),
         headers={"Content-Type": "application/json"},
     )

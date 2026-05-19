@@ -1184,13 +1184,29 @@ class FederationService:
         """Delegates to :class:`PairingCoordinator`."""
         return await self._pairing.confirm(token, verification_code)
 
-    async def handle_peer_accept(self, body: dict) -> dict:
+    async def handle_peer_accept(
+        self,
+        body: dict,
+        *,
+        expected_local_inbox_id: str | None = None,
+    ) -> dict:
         """Delegates to :class:`PairingCoordinator.handle_peer_accept`."""
-        return await self._pairing.handle_peer_accept(body)
+        return await self._pairing.handle_peer_accept(
+            body,
+            expected_local_inbox_id=expected_local_inbox_id,
+        )
 
-    async def handle_peer_confirm(self, body: dict) -> dict:
+    async def handle_peer_confirm(
+        self,
+        body: dict,
+        *,
+        expected_local_inbox_id: str | None = None,
+    ) -> dict:
         """Delegates to :class:`PairingCoordinator.handle_peer_confirm`."""
-        return await self._pairing.handle_peer_confirm(body)
+        return await self._pairing.handle_peer_confirm(
+            body,
+            expected_local_inbox_id=expected_local_inbox_id,
+        )
 
     # ─── Encryption helpers ───────────────────────────────────────────────
 

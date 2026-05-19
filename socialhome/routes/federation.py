@@ -248,7 +248,11 @@ class FederationInboxView(BaseView):
 
         handler = getattr(federation_service, handler_name)
         try:
-            result = await handler(body)
+            # Bind URL inbox_id to the body so the pairing coordinator
+            # can refuse a body whose ``own_local_inbox_id`` doesn't
+            # match the per-peer secret path we baked into the QR.
+            # Defense-in-depth on top of the unguessable token lookup.
+            result = await handler(body, expected_local_inbox_id=inbox_id)
         except ValueError as exc:
             msg = str(exc)
             status = _classify_pairing(msg)
