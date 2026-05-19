@@ -364,7 +364,12 @@ class PairingCoordinator:
             "own_dh_pk": own_dh_kp.public_key.hex(),
         }
 
-    async def handle_peer_accept(self, body: dict) -> dict:
+    async def handle_peer_accept(
+        self,
+        body: dict,
+        *,
+        expected_local_inbox_id: str | None = None,
+    ) -> dict:
         """A-side receiver for :meth:`accept`'s outbound ``peer-accept``.
 
         Verifies the Ed25519 signature against the payload's
@@ -374,9 +379,20 @@ class PairingCoordinator:
         and publishes :class:`PairingAcceptReceived` so the admin UI
         can auto-fill the SAS digits.
 
+        ``expected_local_inbox_id`` is the inbox id extracted from the
+        URL path the federation inbox view received. When non-None we
+        assert it matches the session's ``own_local_inbox_id`` — the
+        URL was the per-peer secret we baked into the QR, so a
+        mismatch means the body and the URL were stitched together
+        from different pairing sessions. Defense-in-depth on top of
+        the token-based lookup (the token alone is unguessable, but
+        binding the URL to the session prevents a future client bug
+        from POSTing to the wrong inbox and the server happily
+        accepting it).
+
         Returns a small status dict on success. Raises ``ValueError``
         on missing fields / bad signature / unknown token / expired
-        session.
+        session / URL-vs-session mismatch.
         """
         _require_fields(
             body,
@@ -399,6 +415,13 @@ class PairingCoordinator:
         session = await self._repo.get_pairing(token)
         if session is None:
             raise ValueError(f"No pending pairing for token={token!r}")
+        if (
+            expected_local_inbox_id is not None
+            and session.own_local_inbox_id != expected_local_inbox_id
+        ):
+            raise ValueError(
+                "peer-accept inbox_id does not match pairing session",
+            )
         if session.status is not PairingStatus.PENDING_SENT:
             # Replay-safe idempotency: if the RemoteInstance already
             # exists for this session's peer, accept silently without
@@ -521,7 +544,12 @@ class PairingCoordinator:
         log.info("peer-accept materialised: instance_id=%s", peer_instance_id)
         return {"ok": True, "instance_id": peer_instance_id, "replay": False}
 
-    async def handle_peer_confirm(self, body: dict) -> dict:
+    async def handle_peer_confirm(
+        self,
+        body: dict,
+        *,
+        expected_local_inbox_id: str | None = None,
+    ) -> dict:
         """B-side receiver for :meth:`confirm`'s outbound ``peer-confirm``.
 
         Verifies the signature using the stored
@@ -529,6 +557,9 @@ class PairingCoordinator:
         have the peer's identity_pk from the QR scan), flips our
         local ``RemoteInstance`` status to ``CONFIRMED``, and
         publishes :class:`PairingConfirmed`.
+
+        ``expected_local_inbox_id`` is the URL-path inbox id; see
+        :meth:`handle_peer_accept` for the rationale.
         """
         _require_fields(body, "token", "instance_id", "signature")
         token = str(body["token"])
@@ -537,6 +568,13 @@ class PairingCoordinator:
         session = await self._repo.get_pairing(token)
         if session is None:
             raise ValueError(f"No pending pairing for token={token!r}")
+        if (
+            expected_local_inbox_id is not None
+            and session.own_local_inbox_id != expected_local_inbox_id
+        ):
+            raise ValueError(
+                "peer-confirm inbox_id does not match pairing session",
+            )
 
         instance = await self._repo.get_instance(claimed_instance_id)
         if instance is None:

@@ -100,12 +100,11 @@ class FederationCapability:
     #: :mod:`socialhome.federation.compat.dm_media_v3` transform.
     MIN_FOR_DM_MEDIA_SYNC = 3
 
-    #: Minimum proto_version where the §11 peer-pairing bootstrap rides
-    #: the federation inbox URL as
-    #: :data:`FederationEventType.PAIRING_PEER_ACCEPT` /
-    #: :data:`FederationEventType.PAIRING_PEER_CONFIRM` instead of the
-    #: legacy ``/api/pairing/peer-{accept,confirm}`` routes. Capability
-    #: exchange happens *after* pairing completes, so this constant is
-    #: informational — the sender always emits the new shape — and is
-    #: kept so the version history in :data:`OURS` is searchable.
-    MIN_FOR_PAIRING_VIA_INBOX = 4
+    # v_4 (§11 pairing-via-inbox) intentionally has no named constant
+    # here. Capability exchange happens *after* pairing completes, so
+    # there is no point in the codepath where ``peer_supports(...,
+    # min_version=4)`` could change behaviour — the sender always
+    # emits the new shape, and v_3 receivers can't pair at all
+    # (the legacy ``/api/pairing/peer-{accept,confirm}`` routes are
+    # gone). The bump in :data:`OURS` plus the version-history entry
+    # in the module docstring is the entire public surface.

@@ -183,6 +183,46 @@ async def test_cleanup_expired_pairings_preserves_confirmed_instance(env):
     assert await env.fed_repo.get_instance("peer-confirmed") is not None
 
 
+async def test_cleanup_expired_pairings_handles_sqlite_naive_timestamp(env):
+    """A row whose ``expires_at`` was written via SQLite's
+    ``datetime('now', ...)`` (the ``"YYYY-MM-DD HH:MM:SS"`` shape, no
+    ``T`` separator, no ``+00:00`` suffix) is still pruned correctly.
+
+    The Python codepaths in the coordinator emit
+    ``datetime.now(timezone.utc).isoformat()`` (with ``T`` and
+    timezone), but the cleanup SQL has to accept both shapes because
+    SQLite's bare ``datetime('now')`` will be a future writer's
+    natural choice and the type difference is otherwise invisible.
+    """
+    # Insert via raw SQL so the row's ``expires_at`` is in SQLite's
+    # naive shape rather than the Python ISO format the
+    # :meth:`create_pairing` path uses.
+    await env.db.enqueue(
+        """
+        INSERT INTO pending_pairings(
+            token, own_identity_pk, own_dh_pk, own_dh_sk,
+            inbox_url, own_local_inbox_id,
+            status, issued_at, expires_at
+        ) VALUES(?,?,?,?,?,?,?,
+                 datetime('now', '-5 minutes'),
+                 datetime('now', '-1 minute'))
+        """,
+        (
+            "tok-naive",
+            "aa" * 32,
+            "bb" * 32,
+            "cc" * 32,
+            "https://local/inbox/own-naive",
+            "own-naive",
+            PairingStatus.PENDING_SENT.value,
+        ),
+    )
+
+    pruned = await env.fed_repo.cleanup_expired_pairings()
+    assert pruned == 1
+    assert await env.fed_repo.get_pairing("tok-naive") is None
+
+
 async def test_cleanup_expired_pairings_handles_session_without_instance(env):
     """``initiate()`` creates a session but no RemoteInstance row. The
     cleanup must still prune the orphan session even with no peer
