@@ -407,7 +407,11 @@ def make_persist_replay(*, federation_repo) -> InboundStep:
 #: 3-hop relay) where the relaying instance has no visibility into
 #: the originator's per-pair hide policy.
 _AUTHOR_FIELD_FOR_INBOUND: dict[str, str] = {
-    "user_updated": "user_id",
+    # NB: ``user_updated`` is deliberately NOT in this map. It is the
+    # *un-hide signal* — the sender re-publishing a profile clears
+    # ``deprovisioned_at`` on our side via ``upsert_remote``. Filtering
+    # it would lock the user in the deprovisioned state forever and
+    # break the visibility-toggle round-trip.
     "user_status_updated": "user_id",
     "user_online": "user_id",
     "user_idle": "user_id",

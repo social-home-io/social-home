@@ -359,6 +359,25 @@ async def test_deprovisioned_author_skips_unmapped_event_types():
     assert ctx.early_response is None
 
 
+async def test_deprovisioned_author_does_not_drop_user_updated():
+    """USER_UPDATED is the un-hide signal — the sender re-publishing
+    a profile clears ``deprovisioned_at`` on our side via
+    ``upsert_remote``. Filtering it would lock the user in the
+    deprovisioned state forever and break the visibility-toggle
+    round-trip. Must pass through unconditionally."""
+    user_repo = _FakeUserRepo(
+        {"u-hidden": _FakeRemoteUser(deprovisioned_at="2026-05-19 16:48:41")},
+    )
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.USER_UPDATED,
+        {"user_id": "u-hidden", "display_name": "Ada"},
+    )
+    await step(ctx)
+    assert ctx.early_response is None
+
+
 async def test_deprovisioned_author_uses_per_event_field_name():
     """``HIGHLIGHT_FRAME_VIEWED`` keys off ``viewer_user_id``, not
     ``author_user_id`` — the receipt's actor is the viewer. A
