@@ -10,7 +10,7 @@
  *      outgoing "pair via a trusted peer" flow.
  *   3. Global Federation Servers.
  */
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useState, lazy, Suspense } from 'preact/compat'
 import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
@@ -28,6 +28,8 @@ import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
 import { confirmDialog } from '@/components/confirm'
 import { relativeDocsTime } from '@/utils/relativeTime'
+
+const FederationMap = lazy(() => import('./FederationMap'))
 
 interface Connection {
   instance_id: string
@@ -262,11 +264,11 @@ export default function ConnectionsPage() {
         </div>
       </div>
 
-      {/* ── Map placeholder (Task 11 will replace this) ───────────── */}
+      {/* ── Federation Map ────────────────────────────────────────── */}
       {view.value === 'map' && (
-        <div class="sh-connections-map-placeholder">
-          Map coming in Task 11 (federation-map)
-        </div>
+        <Suspense fallback={<div class="sh-federation-map__loading">Loading map…</div>}>
+          <FederationMap />
+        </Suspense>
       )}
 
       {view.value === 'list' && (

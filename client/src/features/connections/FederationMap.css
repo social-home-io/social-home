@@ -1,0 +1,139 @@
+/* FederationMap — canvas + pin styles + not-on-map footer */
+
+.sh-federation-map {
+  border: 1px solid var(--sh-border-color, #e5e7eb);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  margin-bottom: 16px;
+}
+
+/* ── Map canvas ──────────────────────────────────────────────────── */
+.sh-federation-map__canvas {
+  height: 420px;
+  width: 100%;
+}
+
+/* loading fallback shown via Suspense in ConnectionsPage */
+.sh-federation-map__loading {
+  height: 420px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--sh-text-muted, #6b7280);
+  font-size: 14px;
+}
+
+/* ── Pin base — Leaflet sets className='sh-fed-icon' on the wrapper */
+.sh-fed-icon {
+  background: none !important;
+  border: none !important;
+}
+
+.sh-fed-pin {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #10b981;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: #166534;
+  font-family: system-ui, sans-serif;
+  font-weight: 600;
+  position: relative;
+  /* Prevent Leaflet default pointer cursor bleed */
+  cursor: pointer;
+}
+
+/* Self pin: smaller, filled green */
+.sh-fed-pin--self {
+  width: 22px;
+  height: 22px;
+  font-size: 11px;
+  background: #166534;
+  color: #fff;
+  border-color: #166534;
+}
+
+/* HTTPS-only peer: amber border */
+.sh-fed-pin--https {
+  border-color: #f59e0b;
+  color: #92400e;
+}
+
+/* Transport badge: small circle in the bottom-right of the pin */
+.sh-fed-pin-tx {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  font-size: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* ── "Not on map" footer ──────────────────────────────────────────── */
+.sh-federation-map__footer {
+  padding: 12px 14px;
+  background: #fafafa;
+  border-top: 1px solid #f3f4f6;
+  font-size: 13px;
+}
+
+.sh-federation-map__footer-heading {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.sh-federation-map__footer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: #4b5563;
+  flex-wrap: wrap;
+}
+
+.sh-federation-map__footer-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d1d5db;
+  flex-shrink: 0;
+}
+
+/* ── Popup overrides (Leaflet adds these to the map root) ──────────── */
+/* Handled in app.css — no duplication needed here. */
+
+/* ── Mobile ──────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .sh-federation-map__canvas {
+    height: 300px;
+  }
+
+  .sh-fed-pin {
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
+
+  .sh-fed-pin--self {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+}
