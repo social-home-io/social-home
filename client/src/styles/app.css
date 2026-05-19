@@ -442,6 +442,11 @@ a:focus:not(:focus-visible) { outline: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Flex children default to ``min-width: auto`` (= content width),
+   * which prevents ``text-overflow: ellipsis`` from ever firing —
+   * the flex item just grows to fit the content. Force shrink so the
+   * ellipsis kicks in on overflowing display names. */
+  min-width: 0;
 }
 .sh-sidenav-identity .sh-avatar {
   flex: 0 0 auto;
@@ -9104,6 +9109,13 @@ hr {
 .sh-profile-name {
   font-size: var(--sh-font-size-lg);
   font-weight: 700;
+  /* Long unbreakable strings (e.g. a placeholder display_name set to
+   * a continuous run of characters) used to overflow the profile
+   * card horizontally. Wrap inside the card and break inside words
+   * only when there's nowhere else to break — keeps natural-language
+   * names on a single line while preventing the overflow.
+   */
+  overflow-wrap: anywhere;
 }
 .sh-profile-source {
   display: inline-flex;
