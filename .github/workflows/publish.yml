@@ -32,12 +32,17 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      # Match ci.yml's pinned pair (pnpm 11, Node 24) — and what local
+      # dev runs against. The previous publish-only pin (pnpm 9, Node
+      # 22) hid bugs that only manifest on release: 2026.5.19 broke on
+      # a workspace yaml that pnpm 9.15.x rejects but pnpm 10+ accepts,
+      # so every PR check passed while every release silently broke.
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          version: 11
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
       - uses: actions/setup-python@v5
