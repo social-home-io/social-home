@@ -378,9 +378,22 @@ class RemoteInstance:
     created_at: str | None = None
     last_reachable_at: str | None = None
     unreachable_since: str | None = None
+    #: Local-only alias the admin set in the UI ("Brother's house").
+    #: Never federated — purely a display string for this household.
+    #: When ``None`` the SPA falls back to :attr:`display_name`.
+    local_alias: str | None = None
 
     def is_reachable(self) -> bool:
         return self.unreachable_since is None
+
+    @property
+    def effective_display_name(self) -> str:
+        """The user-facing name: local alias if set, else the peer's
+        federated display name. Use this everywhere the connection
+        is rendered to the household — list views, the friends
+        dashboard, the DM picker."""
+        alias = (self.local_alias or "").strip()
+        return alias or self.display_name
 
 
 # ─── Wire envelope (§24.11) ───────────────────────────────────────────────

@@ -14,6 +14,14 @@ interface Connection {
   instance_id: string; display_name: string; status: string
   inbox_url: string; intro_relay_enabled: boolean
   unreachable_since: string | null; paired_at: string | null
+  /** The raw name the peer advertised via the federation handshake.
+   *  Shown read-only so the admin sees "Peer advertises: <name>"
+   *  alongside their own editable alias. */
+  federated_display_name?: string
+  /** Local-only alias the admin set; ``null`` until they set one.
+   *  When non-null, ``display_name`` already reflects this value
+   *  (the backend pre-resolves the effective name). */
+  local_alias?: string | null
 }
 
 interface VisibleUser {
@@ -26,11 +34,24 @@ interface VisibleUser {
 
 const showRevoke = signal(false)
 
-export function ConnectionDetail({ conn, onClose, onRevoke }: {
-  conn: Connection; onClose: () => void; onRevoke: () => void
+export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
+  conn: Connection
+  onClose: () => void
+  onRevoke: () => void
+  /** Called after the alias was successfully saved so the parent
+   *  can refresh its listing — the rendered ``display_name``
+   *  changes everywhere the connection is shown. */
+  onAliasSaved?: () => void
 }) {
   const [visUsers, setVisUsers] = useState<VisibleUser[] | null>(null)
   const [visBusy, setVisBusy] = useState<Set<string>>(new Set())
+  const [alias, setAlias] = useState(conn.local_alias ?? '')
+  const [aliasBusy, setAliasBusy] = useState(false)
+  /** Effective display name as currently rendered — handshake name
+   *  if no alias is set, else the alias. Shown above the input as
+   *  the "Display this household as" hint. */
+  const peerName =
+    conn.federated_display_name ?? conn.display_name
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +107,31 @@ export function ConnectionDetail({ conn, onClose, onRevoke }: {
     } catch (e: any) { showToast(e.message || 'Failed', 'error') }
   }
 
+  const saveAlias = async () => {
+    if (aliasBusy) return
+    const trimmed = alias.trim()
+    // Empty → null. Same trimmed value as the displayed one → no-op.
+    const next: string | null = trimmed || null
+    if ((next ?? '') === (conn.local_alias ?? '')) return
+    setAliasBusy(true)
+    try {
+      await api.patch(`/api/pairing/connections/${conn.instance_id}/alias`, {
+        alias: next,
+      })
+      showToast(
+        next
+          ? `Renamed to "${next}" — only visible to your household.`
+          : 'Local rename cleared. Showing the household’s own name.',
+        'success',
+      )
+      onAliasSaved?.()
+    } catch (e: any) {
+      showToast(e.message || 'Failed to save', 'error')
+    } finally {
+      setAliasBusy(false)
+    }
+  }
+
   const revoke = async () => {
     try {
       await api.delete(`/api/pairing/connections/${conn.instance_id}`)
@@ -95,9 +141,52 @@ export function ConnectionDetail({ conn, onClose, onRevoke }: {
     } catch (e: any) { showToast(e.message || 'Failed', 'error') }
   }
 
+  const aliasDirty = alias.trim() !== (conn.local_alias ?? '').trim()
   return (
     <Modal open={true} onClose={onClose} title={conn.display_name}>
       <div class="sh-connection-detail">
+        <section class="sh-connection-alias">
+          <label
+            class="sh-connection-alias__label"
+            for="sh-connection-alias-input"
+          >
+            Display this household as
+          </label>
+          <div class="sh-connection-alias__row">
+            <input
+              id="sh-connection-alias-input"
+              type="text"
+              class="sh-input sh-connection-alias__input"
+              maxLength={80}
+              placeholder={peerName}
+              value={alias}
+              disabled={aliasBusy}
+              onInput={(e) =>
+                setAlias((e.target as HTMLInputElement).value)
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void saveAlias()
+                }
+              }}
+            />
+            <Button
+              variant="secondary"
+              onClick={() => void saveAlias()}
+              disabled={!aliasDirty || aliasBusy}
+            >
+              Save
+            </Button>
+          </div>
+          <p class="sh-muted sh-connection-alias__hint">
+            Only your household sees this name.
+            {conn.local_alias
+              ? null
+              : ` They advertise themselves as "${peerName}".`}
+          </p>
+        </section>
+        <hr />
         <dl>
           <dt>Instance ID</dt><dd class="sh-mono">{conn.instance_id}</dd>
           <dt>Status</dt><dd class={`sh-status sh-status--${conn.status}`}>{conn.status}</dd>

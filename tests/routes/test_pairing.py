@@ -514,3 +514,138 @@ async def test_relay_requests_require_admin(client):
         headers=_auth(raw),
     )
     assert r.status == 403
+
+
+# ─── Local alias on a paired peer (PR A) ──────────────────────────────────
+
+
+async def test_alias_patch_sets_alias_and_returns_effective_name(client):
+    fed_repo = client.app[federation_repo_key]
+    inst = _fake_instance("peer-alias-1")
+    # Simulate the cryptic federated display_name the user actually
+    # sees today (truncated instance_id).
+    await fed_repo.save_instance(inst)
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-alias-1/alias",
+        json={"alias": "Brother's house"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["instance_id"] == "peer-alias-1"
+    assert body["local_alias"] == "Brother's house"
+    assert body["effective_display_name"] == "Brother's house"
+    # Federated name unchanged — we only renamed locally.
+    assert body["display_name"] == "peer-alias-1"
+
+    # GET /api/pairing/connections now returns the effective name in
+    # ``display_name`` (the SPA-facing field).
+    listing = await (
+        await client.get(
+            "/api/pairing/connections",
+            headers=_auth(client._tok),
+        )
+    ).json()
+    row = next(r for r in listing if r["instance_id"] == "peer-alias-1")
+    assert row["display_name"] == "Brother's house"
+    assert row["federated_display_name"] == "peer-alias-1"
+    assert row["local_alias"] == "Brother's house"
+
+
+async def test_alias_patch_clear_with_null(client):
+    """``{"alias": null}`` clears the alias; effective name falls back."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-alias-2"))
+    await fed_repo.update_alias("peer-alias-2", "Temporary")
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-alias-2/alias",
+        json={"alias": None},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["local_alias"] is None
+    assert body["effective_display_name"] == "peer-alias-2"
+
+
+async def test_alias_patch_whitespace_clears(client):
+    """Whitespace-only alias is treated as a clear — keeps the picker
+    from showing a blank effective name."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-alias-3"))
+    await fed_repo.update_alias("peer-alias-3", "Some name")
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-alias-3/alias",
+        json={"alias": "   "},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    assert (await r.json())["local_alias"] is None
+
+
+async def test_alias_patch_rejects_too_long(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-alias-4"))
+    r = await client.patch(
+        "/api/pairing/connections/peer-alias-4/alias",
+        json={"alias": "x" * 81},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_alias_patch_rejects_non_string(client):
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-alias-5"))
+    r = await client.patch(
+        "/api/pairing/connections/peer-alias-5/alias",
+        json={"alias": 42},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_alias_patch_unknown_peer_returns_404(client):
+    r = await client.patch(
+        "/api/pairing/connections/no-such-peer/alias",
+        json={"alias": "Anything"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+
+
+async def test_alias_patch_requires_admin(client):
+    """Non-admin token is rejected — local rename is an admin
+    concern, same gate the other connection-edit views use."""
+    from socialhome.app_keys import db_key as _db_key
+    from socialhome.auth import sha256_token_hash
+    from socialhome.crypto import derive_user_id
+
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-alias-6"))
+
+    db = client.app[_db_key]
+    row = await db.fetchone(
+        "SELECT identity_public_key FROM instance_identity WHERE id='self'",
+    )
+    pk_bytes = bytes.fromhex(row["identity_public_key"])
+    uid = derive_user_id(pk_bytes, "member")
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        ("member", uid, "Member"),
+    )
+    raw = "member-tok"
+    await db.enqueue(
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) VALUES(?,?,?,?)",
+        ("t-mem", uid, "t", sha256_token_hash(raw)),
+    )
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-alias-6/alias",
+        json={"alias": "nope"},
+        headers=_auth(raw),
+    )
+    assert r.status == 403

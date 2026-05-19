@@ -30,7 +30,14 @@ import { relativeDocsTime } from '@/utils/relativeTime'
 
 interface Connection {
   instance_id: string
+  /** The displayed name — local alias when set, else the peer's
+   *  advertised display_name. The backend already resolves this. */
   display_name: string
+  /** What the peer actually advertises via the federation handshake.
+   *  Used by ``ConnectionDetail`` to render "They advertise themselves
+   *  as <X>" alongside the editable alias input. */
+  federated_display_name?: string
+  local_alias?: string | null
   status: string
   paired_at?: string | null
   source?: string
@@ -356,6 +363,8 @@ export default function ConnectionsPage() {
           conn={{
             instance_id: detail.instance_id,
             display_name: detail.display_name,
+            federated_display_name: detail.federated_display_name,
+            local_alias: detail.local_alias ?? null,
             status: detail.status,
             inbox_url: detail.inbox_url ?? '',
             intro_relay_enabled: detail.intro_relay_enabled ?? true,
@@ -364,6 +373,7 @@ export default function ConnectionsPage() {
           }}
           onClose={() => setDetail(null)}
           onRevoke={() => { setDetail(null); void loadConnections() }}
+          onAliasSaved={() => { setDetail(null); void loadConnections() }}
         />
       )}
       <ConfirmDialog

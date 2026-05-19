@@ -52,6 +52,11 @@ class AbstractFederationRepo(Protocol):
     async def mark_reachable(self, instance_id: str) -> None: ...
     async def mark_unreachable(self, instance_id: str) -> None: ...
     async def update_inbox(self, instance_id: str, new_url: str) -> None: ...
+    async def update_alias(
+        self,
+        instance_id: str,
+        alias: str | None,
+    ) -> None: ...
 
     # Local instance identity (display_name + household coords) ----------
     async def get_local_identity(self) -> dict | None: ...
@@ -257,6 +262,23 @@ class SqliteFederationRepo:
         await self._db.enqueue(
             "UPDATE remote_instances SET remote_inbox_url=? WHERE id=?",
             (new_url, instance_id),
+        )
+
+    async def update_alias(
+        self,
+        instance_id: str,
+        alias: str | None,
+    ) -> None:
+        """Set or clear the local alias for a paired peer.
+
+        ``alias`` is the local-only display string the admin set in
+        the UI ("Brother's house"). ``None`` clears it so the SPA
+        falls back to the peer's federated display_name. Never
+        federated — purely local UX state.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_instances SET local_alias=? WHERE id=?",
+            (alias, instance_id),
         )
 
     async def get_local_identity(self) -> dict | None:
@@ -504,4 +526,5 @@ def _row_to_instance(row: dict | None) -> RemoteInstance | None:
         created_at=row.get("created_at"),
         last_reachable_at=row.get("last_reachable_at"),
         unreachable_since=row.get("unreachable_since"),
+        local_alias=row.get("local_alias"),
     )
