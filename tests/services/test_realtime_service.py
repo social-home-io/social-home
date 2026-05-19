@@ -557,3 +557,25 @@ async def test_bazaar_listing_closed_broadcast(env):
         )
     )
     assert any('"bazaar.listing_closed"' in m for m in sock.sent)
+
+
+async def test_peer_transport_changed_broadcasts_to_household(env):
+    """Publishing PeerTransportChanged fans out as the
+    ``peer.transport_changed`` WS frame with the right payload."""
+    from socialhome.domain.events import PeerTransportChanged
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        PeerTransportChanged(instance_id="peer-tx", transport="rtc"),
+    )
+    import json
+
+    frames = [json.loads(m) for m in sock.sent]
+    assert any(
+        m.get("type") == "peer.transport_changed"
+        and m.get("instance_id") == "peer-tx"
+        and m.get("transport") == "rtc"
+        for m in frames
+    )

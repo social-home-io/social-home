@@ -37,6 +37,7 @@ from ..domain.events import (
     PairingAcceptReceived,
     PairingConfirmed,
     PairingIntroReceived,
+    PeerTransportChanged,
     SpaceMemberProfileUpdated,
     UserCameOnline,
     UserProfileUpdated,
@@ -211,6 +212,10 @@ class RealtimeService:
         self._bus.subscribe(
             PairingAborted,
             self._on_pairing_aborted,
+        )
+        self._bus.subscribe(
+            PeerTransportChanged,
+            self._on_peer_transport_changed,
         )
         self._bus.subscribe(
             PairingIntroReceived,
@@ -526,6 +531,18 @@ class RealtimeService:
                 "type": "pairing.aborted",
                 "instance_id": event.instance_id,
                 "reason": event.reason,
+            }
+        )
+
+    async def _on_peer_transport_changed(
+        self,
+        event: PeerTransportChanged,
+    ) -> None:
+        await self._broadcast_household(
+            {
+                "type": "peer.transport_changed",
+                "instance_id": event.instance_id,
+                "transport": event.transport,
             }
         )
 
