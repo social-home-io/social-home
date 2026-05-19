@@ -20,6 +20,7 @@ frontend NetworkMap component consumes.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from aiohttp import web
 
@@ -41,7 +42,9 @@ from .base import BaseView
 log = logging.getLogger(__name__)
 
 
-def _instance_dict(inst, *, transport_state: str | None = None) -> dict:
+def _instance_dict(
+    inst, *, transport_state: Literal["rtc", "https"] | None = None
+) -> dict:
     """Public-shape view of a :class:`RemoteInstance`.
 
     Omits the KEK-encrypted session keys (``key_self_to_remote`` /
@@ -222,7 +225,7 @@ class PairingConnectionCollectionView(BaseView):
         transport = self.request.app.get(federation_transport_key)
         rows = []
         for inst in instances:
-            ts: str | None = None
+            ts: Literal["rtc", "https"] | None = None
             if inst.status is PairingStatus.CONFIRMED and inst.is_reachable():
                 if transport is not None and transport.is_ready(inst.id):
                     ts = "rtc"

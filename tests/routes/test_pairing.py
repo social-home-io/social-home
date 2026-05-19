@@ -752,3 +752,35 @@ async def test_connections_response_transport_null_when_unreachable(client):
     rows = await r.json()
     row = next(x for x in rows if x["instance_id"] == peer.id)
     assert row["transport"] is None
+
+
+async def test_connections_response_transport_https_when_no_rtc_wired(client):
+    """No federation_transport_key in app → confirmed peer still gets
+    transport='https'. Models a deployment without RTC wiring (e.g. a
+    stripped harness) where federation has to fall back to HTTPS-only.
+    """
+    kp = generate_identity_keypair()
+    peer = RemoteInstance(
+        id=derive_instance_id(kp.public_key),
+        display_name="peer-no-rtc",
+        remote_identity_pk=kp.public_key.hex(),
+        key_self_to_remote="k",
+        key_remote_to_self="k",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-no-rtc",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(peer)
+
+    # Deliberately drop the transport key — simulate a no-RTC build.
+    client.app[federation_transport_key] = None
+
+    r = await client.get(
+        "/api/connections",
+        headers=_auth(client._tok),
+    )
+    rows = await r.json()
+    row = next(x for x in rows if x["instance_id"] == peer.id)
+    assert row["transport"] == "https"
