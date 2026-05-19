@@ -542,7 +542,7 @@ async def test_rtc_peer_publishes_transport_changed_on_close():
         bus=bus,
     )
     peer._open.set()
-    peer._loop = asyncio.get_event_loop()
+    peer._loop = asyncio.get_running_loop()
     await peer._publish_open_if_needed()
     received.clear()
 
@@ -584,3 +584,46 @@ async def test_rtc_peer_does_not_publish_close_without_prior_open():
     peer.close()
     await asyncio.sleep(0)
     assert received == []
+
+
+async def test_rtc_peer_close_is_idempotent():
+    """A double close() after a prior open publishes 'https' exactly once,
+    not twice — the second close() is a no-op for the bus."""
+    bus = EventBus()
+    received: list[PeerTransportChanged] = []
+
+    async def _record(e: PeerTransportChanged) -> None:
+        received.append(e)
+
+    bus.subscribe(PeerTransportChanged, _record)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+        bus=bus,
+    )
+    peer = _RtcPeer(
+        instance_id="peer-double-close",
+        ice_servers=None,
+        signaling=t._signaling_factory("peer-double-close"),
+        inbound=t._inbound_factory("peer-double-close"),
+        bus=bus,
+    )
+    peer._loop = asyncio.get_running_loop()
+    peer._open.set()
+    await peer._publish_open_if_needed()
+    received.clear()
+
+    peer.close()
+    peer.close()  # second call — must not publish again
+
+    # Let the create_task'd publishes settle.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert len(received) == 1
+    assert received[0].instance_id == "peer-double-close"
+    assert received[0].transport == "https"

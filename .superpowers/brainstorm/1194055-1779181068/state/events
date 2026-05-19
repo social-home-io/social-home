@@ -1,0 +1,1 @@
+{"type":"click","text":"✓\n    \n      Looks right — proceed\n      The connection card uses ⚡ for WebRTC and ☁ for HTTPS, relay only shows in the detail view (and the DM conversation header — separate PR). The \"Transport\" row explains the state in plain English.","choice":"approve","id":null,"timestamp":1779181594174}

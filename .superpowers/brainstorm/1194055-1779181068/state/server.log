@@ -1,0 +1,5 @@
+{"type":"server-started","port":51759,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:51759","screen_dir":"/workspaces/socialhome/.claude/worktrees/pairing-issue/.superpowers/brainstorm/1194055-1779181068/content","state_dir":"/workspaces/socialhome/.claude/worktrees/pairing-issue/.superpowers/brainstorm/1194055-1779181068/state"}
+{"type":"screen-added","file":"/workspaces/socialhome/.claude/worktrees/pairing-issue/.superpowers/brainstorm/1194055-1779181068/content/inline-signal.html"}
+{"type":"screen-added","file":"/workspaces/socialhome/.claude/worktrees/pairing-issue/.superpowers/brainstorm/1194055-1779181068/content/inline-signal-v2.html"}
+{"source":"user-event","type":"click","text":"✓\n    \n      Looks right — proceed\n      The connection card uses ⚡ for WebRTC and ☁ for HTTPS, relay only shows in the detail view (and the DM conversation header — separate PR). The \"Transport\" row explains the state in plain English.","choice":"approve","id":null,"timestamp":1779181594174}
+{"type":"server-stopped","reason":"idle timeout"}
