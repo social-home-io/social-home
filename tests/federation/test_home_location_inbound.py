@@ -185,3 +185,53 @@ async def test_inbound_home_location_non_numeric_is_silent_noop():
     assert inst is not None
     assert inst.home_lat is None
     assert received == []
+
+
+@pytest.mark.asyncio
+async def test_inbound_null_coords_clears_peer_row():
+    """Both-null payload clears the peer's home_lat/home_lon + publishes PeerHomeChanged(None, None)."""
+    svc, fed_repo, bus = _make_service()
+    peer = _peer("peer-6")
+    # Seed the peer with coords so we can verify they get cleared.
+    import dataclasses
+
+    peer_with_coords = dataclasses.replace(peer, home_lat=52.52, home_lon=13.405)
+    await fed_repo.save_instance(peer_with_coords)
+
+    received: list[PeerHomeChanged] = []
+    bus.subscribe(PeerHomeChanged, received.append)
+
+    await svc._on_local_home_location_changed(
+        _event("peer-6", {"latitude": None, "longitude": None})
+    )
+
+    inst = await fed_repo.get_instance("peer-6")
+    assert inst is not None
+    assert inst.home_lat is None
+    assert inst.home_lon is None
+
+    assert len(received) == 1
+    ev = received[0]
+    assert ev.instance_id == "peer-6"
+    assert ev.latitude is None
+    assert ev.longitude is None
+
+
+@pytest.mark.asyncio
+async def test_inbound_asymmetric_null_is_dropped():
+    """Asymmetric nulls (one None, one float) → no DB write, no publish, warning only."""
+    svc, fed_repo, bus = _make_service()
+    await fed_repo.save_instance(_peer("peer-7"))
+
+    received: list[PeerHomeChanged] = []
+    bus.subscribe(PeerHomeChanged, received.append)
+
+    await svc._on_local_home_location_changed(
+        _event("peer-7", {"latitude": 52.5, "longitude": None})
+    )
+
+    inst = await fed_repo.get_instance("peer-7")
+    assert inst is not None
+    assert inst.home_lat is None
+    assert inst.home_lon is None
+    assert received == []

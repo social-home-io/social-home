@@ -67,8 +67,8 @@ class AbstractFederationRepo(Protocol):
         self,
         instance_id: str,
         *,
-        latitude: float,
-        longitude: float,
+        latitude: float | None,
+        longitude: float | None,
     ) -> None: ...
 
     # Local instance identity (display_name + household coords) ----------
@@ -316,8 +316,8 @@ class SqliteFederationRepo:
         self,
         instance_id: str,
         *,
-        latitude: float,
-        longitude: float,
+        latitude: float | None,
+        longitude: float | None,
     ) -> None:
         """Update the peer's ``home_lat`` / ``home_lon`` columns only.
 
@@ -325,16 +325,15 @@ class SqliteFederationRepo:
         :data:`FederationEventType.LOCAL_HOME_LOCATION_CHANGED`
         handler. Values are 4dp-truncated on write per §25 — the
         inbound caller has already validated the body but we defend-
-        in-depth here. Missing rows are silent no-ops (the §24.11
+        in-depth here. Pass ``None`` for both to clear the columns
+        (revoke signal). Missing rows are silent no-ops (the §24.11
         inbound pipeline has already verified the sender is known).
         """
+        lat_db = round(float(latitude), 4) if latitude is not None else None
+        lon_db = round(float(longitude), 4) if longitude is not None else None
         await self._db.enqueue(
             "UPDATE remote_instances SET home_lat = ?, home_lon = ? WHERE id = ?",
-            (
-                round(float(latitude), 4),
-                round(float(longitude), 4),
-                instance_id,
-            ),
+            (lat_db, lon_db, instance_id),
         )
 
     async def get_local_identity(self) -> dict | None:

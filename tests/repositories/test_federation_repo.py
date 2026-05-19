@@ -608,3 +608,32 @@ async def test_save_instance_does_not_clobber_share_home(env):
     got = await env.fed_repo.get_instance("peer-sh-persist")
     assert got.share_home is False  # preserved across re-save
     assert got.remote_inbox_url == "https://frank.NEW/wh"  # URL did update
+
+
+async def test_update_instance_home_with_nulls_clears_row(env):
+    """update_instance_home(latitude=None, longitude=None) writes NULL to both columns."""
+    inst = RemoteInstance(
+        id="peer-null-home",
+        display_name="NullHome",
+        remote_identity_pk="66" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://nullhome/wh",
+        local_inbox_id="wh-nullhome",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+    # First set coords…
+    await env.fed_repo.update_instance_home(
+        "peer-null-home", latitude=52.52, longitude=13.405
+    )
+    got = await env.fed_repo.get_instance("peer-null-home")
+    assert got.home_lat == 52.52
+    assert got.home_lon == 13.405
+    # …then clear them via None.
+    await env.fed_repo.update_instance_home(
+        "peer-null-home", latitude=None, longitude=None
+    )
+    got = await env.fed_repo.get_instance("peer-null-home")
+    assert got.home_lat is None
+    assert got.home_lon is None

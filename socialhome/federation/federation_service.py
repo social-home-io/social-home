@@ -893,23 +893,34 @@ class FederationService:
 
     async def _on_local_home_location_changed(self, event: FederationEvent) -> None:
         """Inbound LOCAL_HOME_LOCATION_CHANGED: update peer row + publish PeerHomeChanged."""
-        lat_raw = event.payload.get("latitude")
-        lon_raw = event.payload.get("longitude")
-        if lat_raw is None or lon_raw is None:
+        if "latitude" not in event.payload or "longitude" not in event.payload:
             log.warning(
                 "LOCAL_HOME_LOCATION_CHANGED from %s missing latitude/longitude",
                 event.from_instance,
             )
             return
-        try:
-            latitude = round(float(lat_raw), 4)
-            longitude = round(float(lon_raw), 4)
-        except (TypeError, ValueError):  # fmt: skip
+        lat_raw = event.payload["latitude"]
+        lon_raw = event.payload["longitude"]
+        # Both-null = revoke signal: peer asks us to clear our copy.
+        if lat_raw is None and lon_raw is None:
+            latitude: float | None = None
+            longitude: float | None = None
+        elif lat_raw is None or lon_raw is None:
             log.warning(
-                "LOCAL_HOME_LOCATION_CHANGED from %s has non-numeric coordinates",
+                "LOCAL_HOME_LOCATION_CHANGED from %s has asymmetric nulls; ignored",
                 event.from_instance,
             )
             return
+        else:
+            try:
+                latitude = round(float(lat_raw), 4)
+                longitude = round(float(lon_raw), 4)
+            except (TypeError, ValueError):  # fmt: skip
+                log.warning(
+                    "LOCAL_HOME_LOCATION_CHANGED from %s has non-numeric coordinates",
+                    event.from_instance,
+                )
+                return
         await self._federation_repo.update_instance_home(
             event.from_instance,
             latitude=latitude,
