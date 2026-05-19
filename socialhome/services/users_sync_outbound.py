@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from ..domain.events import PairingConfirmed
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -42,7 +43,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class UsersSyncOutbound:
+class UsersSyncOutbound(VisibilityMixin):
     """Send ``USERS_SYNC`` to a freshly-confirmed peer."""
 
     __slots__ = (
@@ -50,7 +51,6 @@ class UsersSyncOutbound:
         "_federation",
         "_user_repo",
         "_picture_repo",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -87,23 +87,11 @@ class UsersSyncOutbound:
             log.debug("users-sync: list_active failed: %s", exc)
             return
 
+        hidden = await self.hidden_for_peer(peer_id)
         payload_users: list[dict] = []
         for u in users:
-            if self._visibility_repo is not None:
-                try:
-                    visible = await self._visibility_repo.is_visible(
-                        peer_id,
-                        u.user_id,
-                    )
-                except Exception as exc:  # pragma: no cover — defensive
-                    log.debug(
-                        "users-sync: visibility check for %s failed: %s",
-                        u.user_id,
-                        exc,
-                    )
-                    visible = True
-                if not visible:
-                    continue
+            if u.user_id in hidden:
+                continue
 
             entry: dict = {
                 "user_id": u.user_id,

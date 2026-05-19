@@ -394,6 +394,105 @@ def make_persist_replay(*, federation_repo) -> InboundStep:
     return persist_replay
 
 
+#: Per-event-type author field. The receiver-side deprovisioned-author
+#: filter reads this to find the originating user inside the decrypted
+#: payload and drop the envelope when that user has been marked
+#: ``deprovisioned_at`` in ``remote_users`` (i.e. an admin on the
+#: sender's side hid them via the per-pair user-visibility toggle and
+#: a ``USER_REMOVED`` already landed here).
+#:
+#: Sender-side gates suppress most direct-delivery envelopes before
+#: they leave the source — this map is the receiver-side backstop for
+#: envelopes that arrive via mesh relay (``MomentFederationOutbound``
+#: 3-hop relay) where the relaying instance has no visibility into
+#: the originator's per-pair hide policy.
+_AUTHOR_FIELD_FOR_INBOUND: dict[str, str] = {
+    # NB: ``user_updated`` is deliberately NOT in this map. It is the
+    # *un-hide signal* — the sender re-publishing a profile clears
+    # ``deprovisioned_at`` on our side via ``upsert_remote``. Filtering
+    # it would lock the user in the deprovisioned state forever and
+    # break the visibility-toggle round-trip.
+    "user_status_updated": "user_id",
+    "user_online": "user_id",
+    "user_idle": "user_id",
+    "user_offline": "user_id",
+    "dm_message": "sender_user_id",
+    "dm_message_deleted": "sender_user_id",
+    "dm_message_reaction": "reactor_user_id",
+    "dm_media_blob": "sender_user_id",
+    "dm_user_typing": "user_id",
+    "highlight_created": "author_user_id",
+    "highlight_frame_appended": "author_user_id",
+    "highlight_deleted": "author_user_id",
+    "highlight_frame_deleted": "author_user_id",
+    "highlight_frame_viewed": "viewer_user_id",
+    "highlight_frame_reacted": "reactor_user_id",
+    "highlight_frame_reaction_removed": "reactor_user_id",
+    "moment_created": "author_user_id",
+    "moment_deleted": "author_user_id",
+    "moment_reacted": "reactor_user_id",
+    "moment_reaction_removed": "reactor_user_id",
+}
+
+
+def make_check_deprovisioned_author(*, user_repo) -> InboundStep:
+    """Step 11: drop user-scoped events whose author is locally deprovisioned.
+
+    Receiver-side enforcement of the per-pair user-visibility toggle.
+    When an admin on the sender's side hides a local user from us,
+    ``USER_REMOVED`` fires → we mark them as ``deprovisioned_at`` in
+    ``remote_users``. Subsequent user-scoped envelopes from that user
+    — whether sent directly OR relayed through a third household whose
+    relay logic can't see the sender's hide policy — get dropped here
+    before the dispatch handler sees them.
+
+    Skips events that are space-scoped, routing-only, or whose author
+    field isn't in :data:`_AUTHOR_FIELD_FOR_INBOUND`. Skips when the
+    user has no row in ``remote_users`` (a stranger / new contact —
+    handled by the upsert path on ``USER_UPDATED``) or has a row
+    without ``deprovisioned_at`` set (still active).
+    """
+
+    async def check_deprovisioned_author(ctx: InboundContext) -> None:
+        event = ctx.event
+        if event is None:
+            return
+        author_field = _AUTHOR_FIELD_FOR_INBOUND.get(event.event_type.value)
+        if author_field is None:
+            return
+        payload = event.payload if isinstance(event.payload, dict) else None
+        if payload is None:
+            return
+        author_user_id = str(payload.get(author_field) or "")
+        if not author_user_id:
+            return
+        try:
+            user = await user_repo.get_remote(author_user_id)
+        except Exception as exc:  # pragma: no cover — defensive
+            # Fail-soft: a transient infra error in the visibility
+            # lookup must not block legitimate inbound traffic. Log
+            # and pass through.
+            log.debug(
+                "inbound: deprovisioned-author lookup failed for %s: %s",
+                author_user_id,
+                exc,
+            )
+            return
+        deprovisioned_at = getattr(user, "deprovisioned_at", None) if user else None
+        if deprovisioned_at is not None:
+            log.debug(
+                "inbound: dropped %s from deprovisioned remote user %s",
+                event.event_type.value,
+                author_user_id,
+            )
+            ctx.early_response = {
+                "status": "ok",
+                "dropped": "deprovisioned-author",
+            }
+
+    return check_deprovisioned_author
+
+
 # ─── Pipeline runner ─────────────────────────────────────────────────────
 
 

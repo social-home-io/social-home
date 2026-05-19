@@ -509,6 +509,12 @@ def _wire_federation_stack(
         sig_suite=config.federation_sig_suite,
     )
     federation_service.attach_session(http_session)
+    # Enables the §24.11 receiver-side deprovisioned-author filter so
+    # envelopes from a remote user we've marked ``deprovisioned_at``
+    # (e.g. via an inbound ``USER_REMOVED``) get dropped before
+    # dispatch — backstops the sender-side per-pair gate for events
+    # that arrived via mesh relay (Momentum 3-hop).
+    federation_service.attach_user_repo(user_repo)
 
     async def _get_max_seq(space_id: str) -> int:
         row = await db.fetchone(
@@ -560,6 +566,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         federation_repo=federation_repo,
         own_instance_id=identity.instance_id,
+        visibility_repo=peer_user_visibility_repo,
     )
 
     # §Momentum outbound is constructed first so the inbound handler
@@ -580,6 +587,7 @@ def _wire_federation_stack(
         federation_repo=federation_repo,
         user_repo=user_repo,
         relay_policy=relay_policy,
+        visibility_repo=peer_user_visibility_repo,
     )
     moment_federation_outbound.wire()
 
@@ -820,6 +828,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         federation_repo=federation_repo,
         user_repo=user_repo,
+        visibility_repo=peer_user_visibility_repo,
     )
     highlight_federation_outbound.wire()
 
@@ -876,6 +885,8 @@ def _wire_federation_stack(
     dm_history_provider = DmHistoryProvider(
         conversation_repo=conversation_repo,
         federation_service=federation_service,
+        user_repo=user_repo,
+        visibility_repo=peer_user_visibility_repo,
     )
     dm_history_receiver = DmHistoryReceiver(
         conversation_repo=conversation_repo,
@@ -1133,6 +1144,7 @@ def create_app(config: Config | None = None) -> web.Application:
         outbox=repos.dm_media_outbox,
         federation=None,  # set by attach_federation below
         media_dir=pathlib.Path(config.media_path),
+        visibility_repo=repos.peer_user_visibility,
     )
     # DmService starts without ``audio_transcription`` — the platform
     # adapter is built much later in ``create_app``, so the service is
@@ -1147,6 +1159,7 @@ def create_app(config: Config | None = None) -> web.Application:
         dm_routing_repo=repos.dm_routing,
         media_sync=dm_media_sync_service,
         media_dir=pathlib.Path(config.media_path),
+        visibility_repo=repos.peer_user_visibility,
     )
     report_repo = SqliteReportRepo(db)
     report_service = ReportService(
@@ -1333,6 +1346,7 @@ def create_app(config: Config | None = None) -> web.Application:
         repos.dm_routing,
         federation_repo,
         child_protection_service=child_protection_service,
+        visibility_repo=repos.peer_user_visibility,
     )
 
     # ── Page conflict resolution (§4.4.4.1) ─────────────────────────────
@@ -1447,6 +1461,7 @@ def create_app(config: Config | None = None) -> web.Application:
         user_repo=user_repo,
         ws_manager=ws_manager,
         space_repo=space_repo,
+        visibility_repo=repos.peer_user_visibility,
     )
 
     # ── Platform adapter (HA vs standalone) ──────────────────────────────

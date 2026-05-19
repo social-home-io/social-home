@@ -23,8 +23,12 @@ from typing import TYPE_CHECKING
 from ..domain.federation import FederationEventType
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
+    from ..repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
     from ..repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
@@ -41,7 +45,7 @@ class _TypingState:
     last_seen_at: float
 
 
-class TypingService:
+class TypingService(VisibilityMixin):
     """Relay + dedup typing indicators across conversation members."""
 
     __slots__ = (
@@ -64,6 +68,7 @@ class TypingService:
         federation_service=None,
         own_instance_id: str = "",
         space_repo: "AbstractSpaceRepo | None" = None,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._convo_repo = conversation_repo
         self._user_repo = user_repo
@@ -71,6 +76,7 @@ class TypingService:
         self._ws = ws_manager
         self._federation = federation_service
         self._own_instance_id = own_instance_id
+        self._visibility_repo = visibility_repo
         # (conversation_id, user_id) → _TypingState
         self._active: dict[tuple[str, str], _TypingState] = {}
         # (post_id, user_id) → _TypingState  for comment-thread typing
@@ -340,6 +346,9 @@ class TypingService:
             if not inst or inst == self._own_instance_id or inst in seen_instances:
                 continue
             seen_instances.add(inst)
+            hidden = await self.hidden_for_peer(inst)
+            if sender_user_id in hidden:
+                continue
             try:
                 await self._federation.send_event(
                     to_instance_id=inst,

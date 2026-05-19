@@ -8,6 +8,8 @@ Covers:
 * Echo-loop guard: events whose author lives on a peer instance never
   re-fan to peers (so inbound republished events stay local).
 * ``HighlightFrameRemoved`` / ``HighlightRemoved`` map to the matching FET.
+* Visibility filter: peers that have hidden the author are skipped in fan-out;
+  back-channel sends are suppressed when the local viewer / reactor is hidden.
 """
 
 from __future__ import annotations
@@ -27,6 +29,17 @@ from socialhome.domain.federation import FederationEventType, RemoteInstance
 from socialhome.services.highlight_federation_outbound import (
     HighlightFederationOutbound,
 )
+
+
+class _FakeVisibilityRepo:
+    """In-memory stub for AbstractPeerUserVisibilityRepo used in unit tests."""
+
+    def __init__(self, hidden: dict[str, frozenset[str]] | None = None) -> None:
+        # Maps peer_instance_id → frozenset of hidden local user_ids
+        self._hidden: dict[str, frozenset[str]] = hidden or {}
+
+    async def hidden_user_ids_for_peer(self, peer_id: str) -> frozenset[str]:
+        return self._hidden.get(peer_id, frozenset())
 
 
 def _frame_event(
@@ -321,3 +334,97 @@ async def test_reaction_changed_skipped_when_reactor_remote(stack):
         ),
     )
     fed.send_event.assert_not_called()
+
+
+# ─── Visibility filter tests ──────────────────────────────────────────────────
+
+
+async def test_fan_to_audience_skips_peer_that_hid_author():
+    """Fan-out must skip a peer that has hidden the author."""
+    federation = MagicMock()
+    federation.own_instance_id = "self"
+    federation.send_event = AsyncMock()
+    federation_repo = MagicMock()
+    user_repo = MagicMock()
+    user_repo.get_instance_for_user = AsyncMock(return_value="self")
+    federation_repo.list_instances = AsyncMock(
+        return_value=[_peer("peer-a"), _peer("peer-b")],
+    )
+    # peer-a has hidden uid-author; peer-b has not
+    visibility_repo = _FakeVisibilityRepo({"peer-a": frozenset(["uid-author"])})
+    out = HighlightFederationOutbound(
+        bus=MagicMock(),
+        federation_service=federation,
+        federation_repo=federation_repo,
+        user_repo=user_repo,
+        visibility_repo=visibility_repo,
+    )
+    await out._on_frame_added(_frame_event(author="uid-author", is_first=True))
+    sent = {c.kwargs["to_instance_id"] for c in federation.send_event.call_args_list}
+    assert "peer-b" in sent
+    assert "peer-a" not in sent
+
+
+async def test_back_channel_view_suppressed_when_viewer_hidden_from_author_peer():
+    """HighlightFrameViewed must not be sent when the local viewer is hidden
+    from the author's home instance."""
+    federation = MagicMock()
+    federation.own_instance_id = "self"
+    federation.send_event = AsyncMock()
+    user_repo = MagicMock()
+
+    async def _home(uid: str) -> str:
+        return {"uid-viewer": "self", "uid-author": "peer-author"}.get(uid, "self")
+
+    user_repo.get_instance_for_user = AsyncMock(side_effect=_home)
+    # peer-author has hidden uid-viewer
+    visibility_repo = _FakeVisibilityRepo({"peer-author": frozenset(["uid-viewer"])})
+    out = HighlightFederationOutbound(
+        bus=MagicMock(),
+        federation_service=federation,
+        federation_repo=MagicMock(),
+        user_repo=user_repo,
+        visibility_repo=visibility_repo,
+    )
+    await out._on_frame_viewed(
+        HighlightFrameViewed(
+            highlight_id="s-1",
+            frame_id="f-1",
+            viewer_user_id="uid-viewer",
+            author_user_id="uid-author",
+        ),
+    )
+    federation.send_event.assert_not_called()
+
+
+async def test_back_channel_reaction_suppressed_when_reactor_hidden_from_author_peer():
+    """HighlightFrameReactionChanged must not be sent when the local reactor
+    is hidden from the author's home instance."""
+    federation = MagicMock()
+    federation.own_instance_id = "self"
+    federation.send_event = AsyncMock()
+    user_repo = MagicMock()
+
+    async def _home(uid: str) -> str:
+        return {"uid-reactor": "self", "uid-author": "peer-author"}.get(uid, "self")
+
+    user_repo.get_instance_for_user = AsyncMock(side_effect=_home)
+    # peer-author has hidden uid-reactor
+    visibility_repo = _FakeVisibilityRepo({"peer-author": frozenset(["uid-reactor"])})
+    out = HighlightFederationOutbound(
+        bus=MagicMock(),
+        federation_service=federation,
+        federation_repo=MagicMock(),
+        user_repo=user_repo,
+        visibility_repo=visibility_repo,
+    )
+    await out._on_reaction_changed(
+        HighlightFrameReactionChanged(
+            highlight_id="s-1",
+            frame_id="f-1",
+            reactor_user_id="uid-reactor",
+            author_user_id="uid-author",
+            emoji="🔥",
+        ),
+    )
+    federation.send_event.assert_not_called()

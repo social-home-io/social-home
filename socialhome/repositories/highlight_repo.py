@@ -94,6 +94,7 @@ class AbstractHighlightRepo(Protocol):
     ) -> builtins.list[HighlightFrameReaction]: ...
     async def delete_frame(self, frame_id: str) -> None: ...
     async def delete_highlight(self, highlight_id: str) -> None: ...
+    async def delete_by_author(self, author_user_id: str) -> int: ...
     async def prune_expired(self) -> int: ...
     async def prune_over_max(self, author_user_id: str, max_count: int) -> int: ...
     async def save_highlight(self, highlight: Highlight) -> Highlight: ...
@@ -303,6 +304,26 @@ class SqliteHighlightRepo:
             "DELETE FROM highlights WHERE id=?",
             (highlight_id,),
         )
+
+    async def delete_by_author(self, author_user_id: str) -> int:
+        """Hard-delete every highlight authored by ``author_user_id``.
+
+        Drives the §Connection-Detail visibility cascade: when an
+        inbound ``USER_REMOVED`` lands for this user, every highlight
+        they ever published is removed from our local view. Frames /
+        views / reactions cascade through the FK on ``highlights.id``.
+        """
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS n FROM highlights WHERE author_user_id=?",
+            (author_user_id,),
+        )
+        n = int(row["n"]) if row else 0
+        if n:
+            await self._db.enqueue(
+                "DELETE FROM highlights WHERE author_user_id=?",
+                (author_user_id,),
+            )
+        return n
 
     # ── Views ───────────────────────────────────────────────────────────
 

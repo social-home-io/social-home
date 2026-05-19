@@ -58,6 +58,19 @@ async def _seed_relay(svc: DmRoutingService, *, target: str, via: str, ts: str) 
 # ─── Fakes ────────────────────────────────────────────────────────────────
 
 
+class _FakeVisibilityRepo:
+    """Per-peer hide list — Protocol-shape fake."""
+
+    def __init__(self) -> None:
+        self._hidden: dict[str, set[str]] = {}
+
+    def hide(self, peer: str, user_id: str) -> None:
+        self._hidden.setdefault(peer, set()).add(user_id)
+
+    async def hidden_user_ids_for_peer(self, peer: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer, set()))
+
+
 class _FakeFed:
     def __init__(self, own: str = "self-iid"):
         self.own_instance_id = own
@@ -676,3 +689,53 @@ async def test_last_relay_for_returns_none_for_unknown_peer(env):
     """Peer with no recorded relays returns None."""
     _, _, svc, _ = env
     assert await svc.last_relay_for("never-relayed") is None
+
+
+# ─── Visibility-gated DM_RELAY origination ──────────────────────────────
+
+
+async def test_send_relay_envelope_suppresses_when_sender_hidden_from_next_hop(env):
+    """DM_RELAY is not sent when the sender is hidden from the next-hop peer."""
+    _, fed_repo, svc, fed = env
+    vis = _FakeVisibilityRepo()
+    vis.hide("target", "alice")
+    svc._visibility_repo = vis
+
+    await fed_repo.save_instance(_remote("target"))
+    envelope = await svc.send_relay_envelope(
+        conversation_id="c1",
+        sender_user_id="alice",
+        target_instance_id="target",
+        target_user_id="bob",
+        inner_event_type="dm_message",
+        sender_ephemeral_pk="pk",
+        encrypted_payload="ct",
+        payload_iv="iv",
+    )
+    # No envelope should have been sent to the federation service.
+    assert fed.sent == [], "send_event should NOT be called when sender is hidden"
+    # The method still returns a valid RelayEnvelope (return contract preserved).
+    assert isinstance(envelope, RelayEnvelope)
+
+
+async def test_send_relay_envelope_with_no_visibility_repo_passes_through(env):
+    """When visibility_repo is None (default), DM_RELAY is sent normally."""
+    _, fed_repo, svc, fed = env
+    # visibility_repo is None by default in the env fixture.
+    assert svc._visibility_repo is None
+
+    await fed_repo.save_instance(_remote("target"))
+    await svc.send_relay_envelope(
+        conversation_id="c1",
+        sender_user_id="alice",
+        target_instance_id="target",
+        target_user_id="bob",
+        inner_event_type="dm_message",
+        sender_ephemeral_pk="pk",
+        encrypted_payload="ct",
+        payload_iv="iv",
+    )
+    assert len(fed.sent) == 1, "exactly one DM_RELAY envelope should be sent"
+    to_instance, event_type, _ = fed.sent[0]
+    assert to_instance == "target"
+    assert event_type == FederationEventType.DM_RELAY

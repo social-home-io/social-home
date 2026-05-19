@@ -31,7 +31,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
 from ..domain.federation import (
     FederationEventType,
@@ -43,6 +43,12 @@ from ..repositories.dm_routing_repo import (
     utcnow_iso,
 )
 from ..repositories.federation_repo import AbstractFederationRepo
+from .visibility import VisibilityMixin
+
+if TYPE_CHECKING:
+    from ..repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
 
 log = logging.getLogger(__name__)
 
@@ -154,7 +160,7 @@ class RelayEnvelope:
 # ─── Service ─────────────────────────────────────────────────────────────
 
 
-class DmRoutingService:
+class DmRoutingService(VisibilityMixin):
     """BFS-based DM relay routing across the paired instance graph."""
 
     __slots__ = (
@@ -173,12 +179,14 @@ class DmRoutingService:
         federation_service=None,
         own_instance_id: str = "",
         child_protection_service=None,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._repo = repo
         self._fed_repo = federation_repo
         self._federation = federation_service
         self._own_instance_id = own_instance_id
         self._child_protection = child_protection_service
+        self._visibility_repo = visibility_repo
 
     def attach_federation(
         self,
@@ -440,6 +448,19 @@ class DmRoutingService:
         await self._mark_seen(envelope.message_id)
 
         if self._federation is not None:
+            # Per-pair user-visibility filter. ``sender_user_id`` is the
+            # originating-side identity; if they're hidden from the
+            # next hop the envelope is dropped here (forwarding hops in
+            # ``handle_inbound_relay`` cannot gate — they see opaque
+            # ciphertext and don't know the sender).
+            hidden = await self.hidden_for_peer(next_hop)
+            if sender_user_id in hidden:
+                log.debug(
+                    "DM_RELAY suppressed: sender %s hidden from %s",
+                    sender_user_id,
+                    next_hop,
+                )
+                return envelope
             await self._federation.send_event(
                 to_instance_id=next_hop,
                 event_type=FederationEventType.DM_RELAY,
@@ -507,6 +528,9 @@ class DmRoutingService:
             rp.append(event.from_instance)
         forwarded_dict["return_path"] = rp
 
+        # Forwarding hops cannot gate on visibility: the payload is
+        # opaque ciphertext and the relay node doesn't know the sender.
+        # The gate is enforced once, at the origination node above.
         if self._federation is not None:
             await self._federation.send_event(
                 to_instance_id=next_hop,

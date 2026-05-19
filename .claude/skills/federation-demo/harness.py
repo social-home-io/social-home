@@ -1966,8 +1966,14 @@ def cmd_visibility() -> None:
     ``/api/friends`` confirms ada is mirrored locally, Alpha PATCHes
     ``/api/pairing/connections/{beta_id}/visible-users`` to hide ada,
     and we assert ada disappears from Beta's ``/api/friends`` after
-    federation settles. Then we flip ada back to visible and confirm
-    she reappears.
+    federation settles. While ada is hidden we also fire a DM, a
+    moment, and an ``all_paired`` highlight from ada and assert none
+    of them reach Beta — exercising every user-scoped outbound gate
+    added by feat/visibility-filter-full-coverage (DM_MESSAGE,
+    MOMENT_CREATED, HIGHLIGHT_CREATED/FRAME_APPENDED). Gamma is the
+    positive control: ada isn't hidden there, so the same highlight
+    is asserted to land on Gamma. Then we flip ada back to visible and
+    confirm she reappears in Beta's ``/api/friends``.
 
     Sequence:
     1. Provision a second user on Alpha via
@@ -1981,10 +1987,14 @@ def cmd_visibility() -> None:
        ``USER_REMOVED`` to Beta.
     5. Wait, then assert Beta's ``/api/friends`` no longer lists ada
        (the rest of the household stays).
+    5b. While ada is hidden, fire a moment + an ``audience_kind=
+        all_paired`` highlight + a 1:1 DM to Bob. Assert none of them
+        land on Beta. Assert the highlight DOES land on Gamma (proves
+        the filter is per-peer, not a global blackout on ada).
     6. Flip ada back to visible; the route fans a ``USER_UPDATED``.
     7. Wait, then assert Beta sees ada again.
 
-    Prereq: ``up`` + ``pair`` (a ↔ b must be confirmed).
+    Prereq: ``up`` + ``pair`` (a ↔ b ↔ c must be confirmed).
     """
     state = _load()
     if not state:
@@ -2083,6 +2093,93 @@ def cmd_visibility() -> None:
         )
     print(f"  pre-check: Beta sees ada via /api/friends ✓")
 
+    # 3b. Resolve Bob's user_id from Alpha's federated view (Alpha
+    #     mirrors Beta's users in ``remote_users`` after the USERS_SYNC
+    #     on pair-confirm). Used both for the pre-hide DM (step 3c) and
+    #     the during-hide DM (step 5b).
+    s, alpha_friends = _request(f"{a_url}/api/friends", token=a["token"])
+    _must("alpha friends list", s, alpha_friends)
+    bob_user_id: str | None = None
+    for h in alpha_friends.get("households") or []:
+        if h.get("instance_id") == b["instance_id"]:
+            for m in h.get("members") or []:
+                if m.get("remote_username") == "bob":
+                    bob_user_id = m.get("user_id")
+                    break
+    if bob_user_id is None:
+        raise SystemExit("visibility: cannot resolve bob user_id from Alpha")
+
+    # 3c. While ada is still visible, post a moment + highlight from
+    #     ada AND open a DM ada→bob so Beta receives them. Step 5
+    #     (hide) then proves the cascade purge: USER_REMOVED triggers
+    #     receiver-side hard-delete of every moment / highlight / DM
+    #     conversation involving the deprovisioned user.
+    pre_needle = f"pre-{int(time.time())}"
+    print(f"  pre-hide: ada posts moment + highlight + DM (needle={pre_needle})")
+
+    s, _mom = _request(
+        f"{a_url}/api/moments",
+        token=ada_token,
+        method="POST",
+        body={"content": f"[ada pre-hide] moment {pre_needle}"},
+    )
+    # Allow 429 (1-per-15-min); the cascade assertion below still
+    # holds when the moment never gets created (trivially no row to
+    # purge), and the highlight/DM legs are enough to prove cascade.
+    if s not in (201, 429):
+        _must("ada pre-hide moment(a)", s, _mom, ok=(201, 429))
+
+    s, _hl = _request(
+        f"{a_url}/api/highlights/frames",
+        token=ada_token,
+        method="POST",
+        body={
+            "media_url": "https://example.invalid/ada-pre.jpg",
+            "frame_type": "image",
+            "caption_text": f"[ada pre-hide] highlight {pre_needle}",
+            "audience_kind": "all_paired",
+        },
+    )
+    _must("ada pre-hide highlight(a)", s, _hl, ok=(201,))
+
+    s, conv = _request(
+        f"{a_url}/api/conversations/dm",
+        token=ada_token,
+        method="POST",
+        body={"user_id": bob_user_id},
+    )
+    _must("ada→bob dm conv (pre-hide)", s, conv, ok=(200, 201))
+    pre_conv_id = conv.get("id")
+    s, _dm = _request(
+        f"{a_url}/api/conversations/{pre_conv_id}/messages",
+        token=ada_token,
+        method="POST",
+        body={"content": f"[ada→bob pre-hide] dm {pre_needle}"},
+    )
+    _must("ada→bob dm message (pre-hide)", s, _dm, ok=(200, 201))
+
+    # Let federation settle so Beta has time to mirror the content.
+    time.sleep(6)
+
+    # Sanity: Beta has at least the highlight (the most reliable of
+    # the three to land — moment 429s on rate-limit, DM rides relay).
+    def _captions(url: str, token: str) -> set[str]:
+        s, hls = _request(f"{url}/api/highlights", token=token)
+        _must("highlights", s, hls)
+        caps: set[str] = set()
+        for h in hls if isinstance(hls, list) else []:
+            for f in h.get("frames") or []:
+                caps.add(f.get("caption_text") or "")
+        return caps
+
+    beta_pre_caps = _captions(b_url, b["token"])
+    if not any(pre_needle in cap for cap in beta_pre_caps):
+        raise SystemExit(
+            f"visibility precheck: Beta should have ada's pre-hide "
+            f"highlight before we hide her — saw {sorted(beta_pre_caps)!r}",
+        )
+    print(f"  pre-hide: Beta has ada's highlight ✓ (cascade-target seeded)")
+
     # 4. Hide ada from Beta.
     s, body = _request(
         f"{a_url}/api/pairing/connections/{b['instance_id']}/visible-users",
@@ -2107,6 +2204,189 @@ def cmd_visibility() -> None:
             f"saw {sorted(seen_after_hide)!r}",
         )
     print(f"  post-hide: Beta no longer lists ada ✓")
+
+    # 5a. Cascade purge. USER_REMOVED inbound on Beta hard-deletes
+    #     every moment / highlight authored by ada plus every DM
+    #     conversation she ever sent in. The pre-hide highlight we
+    #     seeded at step 3c must therefore be gone from Beta's
+    #     ``/api/highlights`` view.
+    beta_caps_after_hide = _captions(b_url, b["token"])
+    if any(pre_needle in cap for cap in beta_caps_after_hide):
+        raise SystemExit(
+            f"visibility cascade: Beta still has ada's pre-hide highlight "
+            f"after USER_REMOVED — purge didn't fire. needle={pre_needle}, "
+            f"caps={sorted(beta_caps_after_hide)!r}",
+        )
+    print("  cascade: Beta purged ada's pre-hide highlight ✓")
+
+    # And the pre-hide DM conversation is hard-deleted from Beta's
+    # side — walk every conversation and grep for the needle.
+    def _beta_message_bodies() -> list[str]:
+        s, beta_convs = _request(f"{b_url}/api/conversations", token=b["token"])
+        _must("beta conversations", s, beta_convs)
+        rows = (
+            beta_convs
+            if isinstance(beta_convs, list)
+            else beta_convs.get("conversations") or []
+        )
+        bodies: list[str] = []
+        for cv in rows:
+            cid = cv.get("id")
+            if not cid:
+                continue
+            s, msgs = _request(
+                f"{b_url}/api/conversations/{cid}/messages",
+                token=b["token"],
+            )
+            if s != 200:
+                continue
+            mrows = msgs if isinstance(msgs, list) else msgs.get("messages") or []
+            for m in mrows:
+                bodies.append(m.get("content") or "")
+        return bodies
+
+    beta_bodies_after_hide = _beta_message_bodies()
+    if any(pre_needle in body for body in beta_bodies_after_hide):
+        raise SystemExit(
+            f"visibility cascade: Beta still has ada's pre-hide DM body "
+            f"after USER_REMOVED — purge didn't fire. needle={pre_needle}",
+        )
+    print("  cascade: Beta purged ada's pre-hide DM conversation ✓")
+
+    # 5b. While ada is hidden, exercise the user-scoped outbound gates
+    #     added by feat/visibility-filter-full-coverage: DM, moment,
+    #     highlight. Beta must NOT receive any of them; Gamma (still
+    #     un-blocked) IS allowed to see ada's all_paired highlight,
+    #     so the filter is proven per-peer rather than global.
+    c = state["instances"]["c"]
+    c_url = f"http://127.0.0.1:{c['port']}"
+    needle = f"hide-{int(time.time())}"
+    print(f"  ada fires DM + moment + highlight while hidden (needle={needle})")
+
+    # 5b.i — moment (fans MOMENT_CREATED to every paired peer; gated
+    # per-peer on author_user_id == ada).
+    s, mom_resp = _request(
+        f"{a_url}/api/moments",
+        token=ada_token,
+        method="POST",
+        body={"content": f"[ada hidden] moment {needle}"},
+    )
+    # 429 is acceptable (a prior cmd_traffic run on the same ada
+    # could have hit the 1-per-15-min window; the per-peer assertions
+    # below don't need a fresh moment if the rate limit fired).
+    if s not in (201, 429):
+        _must("ada moment(a)", s, mom_resp, ok=(201, 429))
+
+    # 5b.ii — highlight with audience_kind=all_paired (fans
+    # HIGHLIGHT_CREATED to a's paired peers; Beta filtered, Gamma not).
+    s, _hl = _request(
+        f"{a_url}/api/highlights/frames",
+        token=ada_token,
+        method="POST",
+        body={
+            "media_url": "https://example.invalid/ada.jpg",
+            "frame_type": "image",
+            "caption_text": f"[ada hidden] highlight {needle}",
+            "audience_kind": "all_paired",
+        },
+    )
+    _must("ada highlight(a)", s, _hl, ok=(201,))
+
+    # 5b.iii — ada → bob DM (DM_MESSAGE; gated per-peer on
+    # sender_user_id == ada).
+    s, conv = _request(
+        f"{a_url}/api/conversations/dm",
+        token=ada_token,
+        method="POST",
+        body={"user_id": bob_user_id},
+    )
+    _must("ada→bob dm conv", s, conv, ok=(200, 201))
+    dm_conv_id = conv.get("id")
+    s, dm_msg = _request(
+        f"{a_url}/api/conversations/{dm_conv_id}/messages",
+        token=ada_token,
+        method="POST",
+        body={"content": f"[ada→bob hidden] dm {needle}"},
+    )
+    _must("ada→bob dm message", s, dm_msg, ok=(200, 201))
+
+    # Settle: gates fire at send-time so envelopes are dropped before
+    # they hit the outbox — but the local writes still happen, the
+    # event bus still publishes, and the local realtime path still
+    # runs. A few seconds is plenty for any cross-instance frame that
+    # *would* arrive to do so on a quiet loopback host.
+    time.sleep(6)
+
+    # 5b.iv — Beta must NOT see ada's moment.
+    s, beta_moments = _request(f"{b_url}/api/moments", token=b["token"])
+    _must("beta moments", s, beta_moments)
+    beta_moment_blobs = (
+        beta_moments
+        if isinstance(beta_moments, list)
+        else beta_moments.get("moments") or []
+    )
+    beta_moment_texts: list[str] = []
+    for m in beta_moment_blobs:
+        body = m.get("data") if isinstance(m.get("data"), dict) else m
+        beta_moment_texts.append(body.get("content") or "")
+    if any(needle in t for t in beta_moment_texts):
+        raise SystemExit(
+            f"visibility: Beta received ada's moment despite hide — needle={needle}",
+        )
+    print("  post-hide: ada's moment did NOT reach Beta ✓")
+
+    # 5b.v — Beta must NOT see ada's highlight.
+    beta_caps = _captions(b_url, b["token"])
+    if any(needle in c for c in beta_caps):
+        raise SystemExit(
+            f"visibility: Beta received ada's highlight despite hide — needle={needle}",
+        )
+    print("  post-hide: ada's highlight did NOT reach Beta ✓")
+
+    # 5b.vi — Beta must NOT see ada's DM body. Walk every conversation
+    # on Beta's side and grep message bodies for the needle.
+    s, beta_convs = _request(f"{b_url}/api/conversations", token=b["token"])
+    _must("beta conversations", s, beta_convs)
+    beta_conv_rows = (
+        beta_convs if isinstance(beta_convs, list) else beta_convs.get("conversations") or []
+    )
+    saw_dm = False
+    for cv in beta_conv_rows:
+        cid = cv.get("id")
+        if not cid:
+            continue
+        s, msgs = _request(
+            f"{b_url}/api/conversations/{cid}/messages",
+            token=b["token"],
+        )
+        if s != 200:
+            continue
+        rows = msgs if isinstance(msgs, list) else msgs.get("messages") or []
+        for m in rows:
+            if needle in (m.get("content") or ""):
+                saw_dm = True
+                break
+        if saw_dm:
+            break
+    if saw_dm:
+        raise SystemExit(
+            f"visibility: Beta received ada's DM body despite hide — needle={needle}",
+        )
+    print("  post-hide: ada's DM did NOT reach Beta ✓")
+
+    # 5b.vii — Positive control: Gamma is NOT in the hide set, so an
+    # ``audience_kind=all_paired`` highlight from ada must still fan
+    # there. This proves the filter is per-peer (peer_user_visibility
+    # is keyed on ``instance_id``) rather than a global blackout on
+    # the sender.
+    gamma_caps = _captions(c_url, c["token"])
+    if not any(needle in cap for cap in gamma_caps):
+        raise SystemExit(
+            f"visibility: Gamma should have seen ada's highlight "
+            f"(filter is per-peer, not global) — needle={needle}, "
+            f"gamma_caps={sorted(gamma_caps)!r}",
+        )
+    print("  positive: Gamma sees ada's highlight (filter is per-peer) ✓")
 
     # 6. Flip back to visible — Alpha's PATCH sends USER_UPDATED.
     s, body = _request(
@@ -2305,7 +2585,11 @@ def main() -> None:
         cmd_relay_pair()
         # ``visibility`` toggles a local user hidden from a peer and
         # asserts the peer's ``/api/friends`` mirror tracks the
-        # change. Validates the outbound peer-user-visibility filter.
+        # change. While the user is hidden the step also fires a DM,
+        # a moment, and an ``all_paired`` highlight and asserts none
+        # reach the blocked peer (DM_MESSAGE / MOMENT_CREATED /
+        # HIGHLIGHT_* gates) while a positive control on Gamma
+        # confirms the filter is per-peer rather than global.
         cmd_visibility()
         # ``replay`` exercises the §24 outbox redelivery path by
         # killing Carol, posting a highlight from Alpha, restarting

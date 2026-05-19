@@ -44,6 +44,7 @@ from ..federation import compat
 from ..infrastructure.event_bus import EventBus
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from .audio_transcription_service import AudioTranscriptionService  # noqa: F401
@@ -51,6 +52,9 @@ if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.dm_routing_repo import AbstractDmRoutingRepo
     from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
 
 
 log = logging.getLogger(__name__)
@@ -88,7 +92,7 @@ class MediaRequiresDirectPairingError(ValueError):
     """
 
 
-class DmService:
+class DmService(VisibilityMixin):
     """Conversation + message CRUD for household DMs."""
 
     __slots__ = (
@@ -118,6 +122,7 @@ class DmService:
         audio_transcription: "AudioTranscriptionService | None" = None,
         media_dir: pathlib.Path | None = None,
         own_instance_id: str = "",
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._convos = conversation_repo
         self._users = user_repo
@@ -145,6 +150,7 @@ class DmService:
         # untracked Task can be collected before completion).
         self._pending_transcribe_tasks: set[asyncio.Task[None]] = set()
         self._own_instance_id = own_instance_id
+        self._visibility_repo = visibility_repo
 
     def attach_audio_transcription(
         self,
@@ -570,6 +576,7 @@ class DmService:
             conversation_id=conversation_id,
             event_type=FederationEventType.DM_MESSAGE,
             payload=payload,
+            sender_user_id=sender.user_id,
         )
         # Enqueue the dm_media_outbox rows AFTER the DM_MESSAGE
         # envelope has been dispatched — the receiver needs to see
@@ -723,6 +730,7 @@ class DmService:
                 "occurred_at": edited_at.isoformat(),
                 "edited_at": edited_at.isoformat(),
             },
+            sender_user_id=sender_user_id,
         )
 
     async def edit_message(
@@ -759,6 +767,7 @@ class DmService:
                 "occurred_at": msg.created_at.isoformat(),
                 "edited_at": datetime.now(timezone.utc).isoformat(),
             },
+            sender_user_id=msg.sender_user_id,
         )
 
     async def delete_message(
@@ -779,6 +788,7 @@ class DmService:
                 "conversation_id": msg.conversation_id,
                 "message_id": msg.id,
             },
+            sender_user_id=msg.sender_user_id,
         )
 
     async def list_messages(
@@ -916,6 +926,7 @@ class DmService:
                 "emoji": clean,
                 "action": "add",
             },
+            sender_user_id=actor.user_id,
         )
 
     async def remove_reaction(
@@ -943,6 +954,7 @@ class DmService:
                 "emoji": clean,
                 "action": "remove",
             },
+            sender_user_id=actor.user_id,
         )
 
     async def list_reactions(
@@ -1064,6 +1076,7 @@ class DmService:
         conversation_id: str,
         event_type: FederationEventType,
         payload: dict,
+        sender_user_id: str | None = None,
     ) -> None:
         """Send ``event_type`` to every remote instance with a member in
         ``conversation_id``.
@@ -1074,6 +1087,11 @@ class DmService:
         browser/client drives multi-hop relay (§12.5) where the content
         is E2E-encrypted before leaving the device, and the DM history
         sync picks up anything the peer missed when they reconnect.
+
+        When ``sender_user_id`` is given and ``self._visibility_repo`` is
+        wired, peers where the sender is hidden are silently skipped —
+        forward-only semantics: the local conversation row is still
+        created, only the outbound envelope is suppressed.
         """
         if self._federation is None:
             return
@@ -1095,6 +1113,19 @@ class DmService:
                     inst,
                 )
                 continue
+            # Per-pair user-visibility filter (peer_user_visibility).
+            # When the sender is hidden from this peer, drop the envelope
+            # silently — the sender's local conversation row still records
+            # the message (forward-only semantics).
+            if sender_user_id is not None:
+                hidden = await self.hidden_for_peer(inst)
+                if sender_user_id in hidden:
+                    log.debug(
+                        "dm fan-out suppressed: sender %s hidden from %s",
+                        sender_user_id,
+                        inst,
+                    )
+                    continue
             # Per-peer compat shim. The canonical ``payload`` above is
             # the newest (``OURS``) wire shape; for each peer we ask the
             # registered transforms whether they need to rewrite (e.g.

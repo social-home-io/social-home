@@ -91,6 +91,10 @@ class AbstractConversationRepo(Protocol):
         self,
         instance_id: str,
     ) -> list[str]: ...
+    async def list_conversations_with_sender(
+        self,
+        sender_user_id: str,
+    ) -> list[str]: ...
     async def soft_delete_message(self, message_id: str) -> None: ...
     async def edit_message(self, message_id: str, new_content: str) -> None: ...
     async def find_pending_audio_transcripts(
@@ -531,6 +535,24 @@ class SqliteConversationRepo:
              WHERE instance_id=?
             """,
             (instance_id,),
+        )
+        return [r["conversation_id"] for r in rows]
+
+    async def list_conversations_with_sender(
+        self,
+        sender_user_id: str,
+    ) -> list[str]:
+        """Return conversation ids where ``sender_user_id`` ever
+        authored a message. Feeds the §Connection-Detail visibility
+        cascade (USER_REMOVED → hard-delete every conversation that
+        carries any message from the deprovisioned user)."""
+        rows = await self._db.fetchall(
+            """
+            SELECT DISTINCT conversation_id
+              FROM conversation_messages
+             WHERE sender_user_id=?
+            """,
+            (sender_user_id,),
         )
         return [r["conversation_id"] for r in rows]
 

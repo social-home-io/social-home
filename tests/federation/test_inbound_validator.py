@@ -11,10 +11,12 @@ from datetime import datetime, timezone
 import orjson
 import pytest
 
+from socialhome.domain.federation import FederationEvent, FederationEventType
 from socialhome.federation.inbound_validator import (
     InboundContext,
     InboundPipeline,
     make_ban_check,
+    make_check_deprovisioned_author,
     make_check_replay,
     make_check_timestamp,
     make_idempotency_check,
@@ -257,6 +259,146 @@ async def test_persist_replay_inserts():
     ctx.envelope = _minimal_envelope()
     await step(ctx)
     assert "m1" in repo.inserted
+
+
+# ─── Step 11: check_deprovisioned_author ─────────────────────────────────
+
+
+class _FakeRemoteUser:
+    """Stand-in for :class:`RemoteUser` — only ``deprovisioned_at`` is
+    read by the filter."""
+
+    def __init__(self, deprovisioned_at: str | None) -> None:
+        self.deprovisioned_at = deprovisioned_at
+
+
+class _FakeUserRepo:
+    def __init__(self, by_user_id: dict[str, _FakeRemoteUser]) -> None:
+        self._by_user_id = by_user_id
+
+    async def get_remote(self, user_id: str):
+        return self._by_user_id.get(user_id)
+
+
+def _event(event_type: FederationEventType, payload: dict) -> FederationEvent:
+    return FederationEvent(
+        msg_id="m1",
+        event_type=event_type,
+        from_instance="peer-x",
+        to_instance="self",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        payload=payload,
+    )
+
+
+async def test_deprovisioned_author_drops_user_scoped_event():
+    """A MOMENT_CREATED whose ``author_user_id`` is a deprovisioned
+    remote user is dropped — the pipeline's early-response is set so
+    the dispatch handler never sees it."""
+    user_repo = _FakeUserRepo(
+        {"u-hidden": _FakeRemoteUser(deprovisioned_at="2026-05-19 16:48:41")},
+    )
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.MOMENT_CREATED,
+        {"author_user_id": "u-hidden", "content": "should be dropped"},
+    )
+    await step(ctx)
+    assert ctx.early_response == {
+        "status": "ok",
+        "dropped": "deprovisioned-author",
+    }
+
+
+async def test_deprovisioned_author_passes_active_user():
+    """Author with no ``deprovisioned_at`` (active remote user) passes
+    the filter — the dispatch handler still gets the event."""
+    user_repo = _FakeUserRepo(
+        {"u-alive": _FakeRemoteUser(deprovisioned_at=None)},
+    )
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.MOMENT_CREATED,
+        {"author_user_id": "u-alive"},
+    )
+    await step(ctx)
+    assert ctx.early_response is None
+
+
+async def test_deprovisioned_author_passes_when_no_remote_user_row():
+    """A user we've never heard of (no ``remote_users`` row) passes
+    through. The USER_UPDATED upsert path mints the row later — we
+    don't preemptively block strangers."""
+    user_repo = _FakeUserRepo({})
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.MOMENT_CREATED,
+        {"author_user_id": "u-stranger"},
+    )
+    await step(ctx)
+    assert ctx.early_response is None
+
+
+async def test_deprovisioned_author_skips_unmapped_event_types():
+    """Space-scoped / routing-only events are not in the author-field
+    map and pass through unchanged. ``space_post_created`` is the
+    representative — its routing is via space_id, not author."""
+    user_repo = _FakeUserRepo(
+        {"u-hidden": _FakeRemoteUser(deprovisioned_at="2026-05-19 16:48:41")},
+    )
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.SPACE_POST_CREATED,
+        {"author_user_id": "u-hidden"},  # field present but type unmapped
+    )
+    await step(ctx)
+    assert ctx.early_response is None
+
+
+async def test_deprovisioned_author_does_not_drop_user_updated():
+    """USER_UPDATED is the un-hide signal — the sender re-publishing
+    a profile clears ``deprovisioned_at`` on our side via
+    ``upsert_remote``. Filtering it would lock the user in the
+    deprovisioned state forever and break the visibility-toggle
+    round-trip. Must pass through unconditionally."""
+    user_repo = _FakeUserRepo(
+        {"u-hidden": _FakeRemoteUser(deprovisioned_at="2026-05-19 16:48:41")},
+    )
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.USER_UPDATED,
+        {"user_id": "u-hidden", "display_name": "Ada"},
+    )
+    await step(ctx)
+    assert ctx.early_response is None
+
+
+async def test_deprovisioned_author_uses_per_event_field_name():
+    """``HIGHLIGHT_FRAME_VIEWED`` keys off ``viewer_user_id``, not
+    ``author_user_id`` — the receipt's actor is the viewer. A
+    deprovisioned viewer means the local user that's hidden from the
+    author's home instance; we should still drop it (the author would
+    otherwise see a view-receipt from someone they shouldn't be
+    receiving anything from)."""
+    user_repo = _FakeUserRepo(
+        {"u-hidden": _FakeRemoteUser(deprovisioned_at="2026-05-19 16:48:41")},
+    )
+    step = make_check_deprovisioned_author(user_repo=user_repo)
+    ctx = InboundContext()
+    ctx.event = _event(
+        FederationEventType.HIGHLIGHT_FRAME_VIEWED,
+        {
+            "viewer_user_id": "u-hidden",
+            "author_user_id": "u-author",  # not what's checked here
+        },
+    )
+    await step(ctx)
+    assert ctx.early_response is not None
 
 
 # ─── Pipeline composition ────────────────────────────────────────────────

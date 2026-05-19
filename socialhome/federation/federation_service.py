@@ -52,6 +52,7 @@ from .inbound_validator import (
     InboundPipeline,
     _InboxInstance,
     make_ban_check,
+    make_check_deprovisioned_author,
     make_check_replay,
     make_check_timestamp,
     make_decrypt_and_parse,
@@ -148,6 +149,7 @@ class FederationService:
         "_rtc_inbound_pipeline",
         "_event_registry",
         "_gfs_connection_service",
+        "_user_repo",
     )
 
     def __init__(
@@ -193,6 +195,12 @@ class FederationService:
         self._space_sync_service = None
         self._space_sync_receiver = None
         self._gfs_connection_service = None
+        # Set via :meth:`attach_user_repo` after construction. Enables
+        # the receiver-side deprovisioned-author filter (§24.11 step 11).
+        # When unset, the filter step is omitted from the pipeline — a
+        # legacy boot path / unit-test fixture without a user repo still
+        # functions, just without the visibility backstop.
+        self._user_repo = None
         # Envelope crypto delegate (encrypt/decrypt/sign/verify). Keeps the
         # AES-256-GCM + Ed25519 surface unit-testable in isolation. When
         # the hybrid suite is configured the PQ signer is attached so
@@ -261,7 +269,7 @@ class FederationService:
 
     def _common_pipeline_steps(self, *, lookup_step):
         """Return the shared step list for both inbox and RTC pipelines."""
-        return [
+        steps = [
             make_parse_json(loads=_loads),
             lookup_step,
             make_check_timestamp(),
@@ -278,12 +286,35 @@ class FederationService:
             make_ban_check(federation_repo=self._federation_repo),
             make_persist_replay(federation_repo=self._federation_repo),
         ]
+        # Receiver-side deprovisioned-author backstop. Runs LAST so the
+        # replay-id is recorded regardless — if we dropped this here on
+        # a later retry the sender's outbox would still get a 200 OK
+        # (early-response) and stop redelivering. ``user_repo`` is
+        # threaded in via :meth:`attach_user_repo`; if it's unset we
+        # skip the step so legacy fixtures still build a working
+        # pipeline.
+        if self._user_repo is not None:
+            steps.append(
+                make_check_deprovisioned_author(user_repo=self._user_repo),
+            )
+        return steps
 
     # ─── Wiring helpers ──────────────────────────────────────────────────
 
     def attach_sync_manager(self, sync_manager) -> None:
         """Attach a :class:`SyncSessionManager` after construction."""
         self._sync_manager = sync_manager
+
+    def attach_user_repo(self, user_repo) -> None:
+        """Attach an :class:`AbstractUserRepo` after construction.
+
+        Enables the §24.11 receiver-side deprovisioned-author filter —
+        envelopes whose author user is marked ``deprovisioned_at`` in
+        ``remote_users`` are dropped before dispatch. The check runs
+        last in the pipeline so the replay-id is still persisted (the
+        sender's outbox sees the 200 OK and stops redelivering).
+        """
+        self._user_repo = user_repo
 
     def attach_idempotency_cache(self, cache) -> None:
         """Attach an :class:`IdempotencyCache` for inbound dedup."""

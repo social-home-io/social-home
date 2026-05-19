@@ -183,6 +183,19 @@ class FakeFederation:
         )
 
 
+class _FakeVisibilityRepo:
+    """Per-peer hide list — Protocol-shape fake."""
+
+    def __init__(self) -> None:
+        self._hidden: dict[str, set[str]] = {}
+
+    def hide(self, peer: str, user_id: str) -> None:
+        self._hidden.setdefault(peer, set()).add(user_id)
+
+    async def hidden_user_ids_for_peer(self, peer: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer, set()))
+
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
@@ -667,3 +680,50 @@ async def test_flush_once_single_chunk_keeps_legacy_shape(stack):
     assert sent[0]["payload"]["chunk_index"] == 0
     assert sent[0]["payload"]["chunk_count"] == 1
     assert sent[0]["payload"]["final"] is True
+
+
+# ── Visibility-gate tests ──────────────────────────────────────────────
+
+
+async def test_dm_media_blob_suppressed_when_sender_hidden(stack):
+    """DM_MEDIA_BLOB is dropped (not retried) when the receiving peer
+    has hidden the sender."""
+    vis = _FakeVisibilityRepo()
+    vis.hide("peer-hider", "u-alice")
+    _make_test_image(stack["media_dir"])
+    # Seed outbox row for peer-hider (sender is u-alice, set in stack fixture).
+    await stack["svc"].enqueue_for_message(
+        message_id="m1",
+        media_url="api/media/cat.webp",
+        target_instance_ids=["peer-hider"],
+    )
+    # Rebuild the service with visibility_repo wired.
+    svc = DmMediaSyncService(
+        convos=stack["convos"],
+        outbox=stack["outbox"],
+        federation=stack["fed"],
+        media_dir=stack["media_dir"],
+        visibility_repo=vis,
+    )
+    shipped = await svc.flush_once()
+    # Nothing was sent.
+    assert shipped == 0
+    assert stack["fed"].sent == []
+    # The row was deleted (not rescheduled) — hidden blobs are dropped forever.
+    rows = await stack["outbox"].list_for_message("m1")
+    assert rows == []
+
+
+async def test_dm_media_blob_no_repo_passes_through(stack):
+    """When visibility_repo is None the send proceeds normally."""
+    _make_test_image(stack["media_dir"])
+    await stack["svc"].enqueue_for_message(
+        message_id="m1",
+        media_url="api/media/cat.webp",
+        target_instance_ids=["inst-bob"],
+    )
+    # stack fixture builds the service with visibility_repo=None (default).
+    shipped = await stack["svc"].flush_once()
+    assert shipped == 1
+    assert len(stack["fed"].sent) >= 1
+    assert stack["fed"].sent[0]["event"] == FederationEventType.DM_MEDIA_BLOB

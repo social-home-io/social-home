@@ -146,7 +146,31 @@ The spec is the source of truth — if code and spec disagree, fix the code.
   Route handlers catch them with `_map_exc()`.
 - Never add `*Addendum`, `*Extension`, or `*Complete` subclasses.
   Merge changes directly into the existing class.
-- Never use inheritance to patch gaps. Fix the original class.
+- **Prefer mixins for cross-cutting behaviour.** When the same
+  attribute + method pair recurs across multiple unrelated services
+  (presence, DMs, highlights, moments all need to filter on the
+  per-pair visibility hide list — that kind of "recurs"), pull it
+  into a small mixin class and inherit from it. One implementation,
+  one slot, one test surface. Pattern: the mixin owns the slot via
+  ``__slots__ = ("_field",)``; the subclass writes to that slot in
+  its own ``__init__`` and inherits the method that reads it. The
+  canonical example is
+  :class:`socialhome.services.visibility.VisibilityMixin` (consumed
+  by ~10 outbound services). Don't reach for inheritance to bolt
+  *one* new field onto an unrelated class — that's the "patch gap"
+  anti-pattern the `*Addendum` rule above already covers; the
+  mixin pattern is for behaviour that genuinely recurs, not for
+  threading a one-off dependency.
+- **Module filenames never start with a leading underscore.** A new
+  shared helper lives at `socialhome/services/visibility.py`, not
+  `socialhome/services/_visibility.py`; the matching test is
+  `tests/services/test_visibility.py`. Privacy is signalled by package
+  boundaries and what the package's `__init__.py` re-exports, not by
+  the filename. The same applies to repo-local DTOs and any other
+  internal module — pick a plain name. Existing `_`-prefixed modules
+  (e.g. `repositories/_spec.py`) are grandfathered; do not add new
+  ones, and rename when you touch them for unrelated reasons only if
+  the rename is mechanical.
 
 ### Frontend (SPA) & ingress
 

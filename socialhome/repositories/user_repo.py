@@ -596,4 +596,5 @@ def _row_to_remote_user(row: dict | None) -> RemoteUser | None:
         public_key=row.get("public_key"),
         public_key_version=int(row.get("public_key_version") or 0),
         synced_at=row.get("synced_at"),
+        deprovisioned_at=row.get("deprovisioned_at"),
     )
