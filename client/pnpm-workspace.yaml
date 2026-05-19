@@ -1,2 +1,26 @@
+# Single-package workspace declaration.
+#
+# We don't actually run a monorepo — ``client/`` is the only package.
+# We keep this file purely so we can declare ``onlyBuiltDependencies``,
+# which is pnpm 10+'s mechanism for whitelisting install scripts (the
+# pre-10 ``allowBuilds`` key is gone, and the equivalent ``pnpm`` field
+# in ``package.json`` is silently ignored by pnpm 11+ when no workspace
+# yaml exists).
+#
+# Without this file, pnpm 10+ refuses to run ``esbuild``'s install
+# script (esbuild ships a native binary that has to be installed per
+# host), which breaks Vite's ``pnpm dev`` and ``pnpm build`` paths.
+#
+# ``packages: ["."]`` is required by pnpm 10+: a workspace yaml without
+# the ``packages`` field is a hard error ("packages field missing or
+# empty"). That's the bug this file's previous shape hit on
+# release ``2026.5.19``.
+
+packages:
+  - "."
+
 allowBuilds:
-  esbuild: true
+  esbuild: set this to true or false
+
+onlyBuiltDependencies:
+  - esbuild
