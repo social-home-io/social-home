@@ -23,6 +23,17 @@ vi.mock('@/api', () => ({
 
 vi.mock('@/components/Toast', () => ({ showToast: vi.fn() }))
 
+vi.mock('./ShareHomeToggle', () => ({
+  ShareHomeToggle: ({ instanceId, peerName, initialValue }: {
+    instanceId: string; peerName: string; initialValue: boolean
+  }) => (
+    <div data-testid="share-home-toggle"
+         data-instance-id={instanceId}
+         data-peer-name={peerName}
+         data-initial-value={String(initialValue)} />
+  ),
+}))
+
 beforeEach(() => {
   apiGet.mockReset().mockResolvedValue({ users: [] })
   apiPatch.mockReset().mockResolvedValue({})
@@ -178,6 +189,52 @@ describe('Transport row', () => {
       />,
     )
     expect(screen.queryByText(/Transport/i)).toBeNull()
+  })
+})
+
+describe('ShareHomeToggle integration', () => {
+  it('renders ShareHomeToggle with correct props when share_home is true', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ share_home: true }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    const toggle = await screen.findByTestId('share-home-toggle')
+    expect(toggle).toBeTruthy()
+    expect(toggle.getAttribute('data-instance-id')).toBe('z7k63zfi')
+    expect(toggle.getAttribute('data-peer-name')).toBe('z7k63zfi')
+    expect(toggle.getAttribute('data-initial-value')).toBe('true')
+  })
+
+  it('passes share_home=false to ShareHomeToggle when disabled', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ share_home: false }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    const toggle = await screen.findByTestId('share-home-toggle')
+    expect(toggle.getAttribute('data-initial-value')).toBe('false')
+  })
+
+  it('defaults share_home to true when field is absent (old API response)', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    const connWithoutShareHome = _conn()
+    delete (connWithoutShareHome as any).share_home
+    render(
+      <ConnectionDetail
+        conn={connWithoutShareHome as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    const toggle = await screen.findByTestId('share-home-toggle')
+    expect(toggle.getAttribute('data-initial-value')).toBe('true')
   })
 })
 

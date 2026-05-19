@@ -10,11 +10,15 @@ import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Spinner } from './Spinner'
 import { showToast } from './Toast'
+import { ShareHomeToggle } from './ShareHomeToggle'
 
 interface Connection {
   instance_id: string; display_name: string; status: string
   inbox_url: string; intro_relay_enabled: boolean
   unreachable_since: string | null; paired_at: string | null
+  /** Whether our household's home pin is shared with this peer (§23.90).
+   *  Defaults to true when absent (old API responses pre-dating the field). */
+  share_home?: boolean
   /** The raw name the peer advertised via the federation handshake.
    *  Shown read-only so the admin sees "Peer advertises: <name>"
    *  alongside their own editable alias. */
@@ -248,6 +252,14 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
           <input type="checkbox" checked={conn.intro_relay_enabled} onChange={toggleRelay} />
           Allow introduced pairing (friend-of-a-friend)
         </label>
+        <section class="sh-connection-share-home">
+          <h4 style={{ margin: '12px 0 4px' }}>Home location</h4>
+          <ShareHomeToggle
+            instanceId={conn.instance_id}
+            peerName={conn.display_name}
+            initialValue={conn.share_home ?? true}
+          />
+        </section>
 
         {visUsers !== null && visUsers.length > 0 && (
           <>

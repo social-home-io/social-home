@@ -18,14 +18,35 @@ vi.mock('@/api', () => ({
   },
 }))
 
+// WS event handlers are captured so tests can fire synthetic events.
+const wsHandlers: Record<string, ((e: { data: unknown }) => void)[]> = {}
+const wsOnMock = vi.fn((event: string, handler: (e: { data: unknown }) => void) => {
+  if (!wsHandlers[event]) wsHandlers[event] = []
+  wsHandlers[event].push(handler)
+  return () => {
+    wsHandlers[event] = (wsHandlers[event] || []).filter(h => h !== handler)
+  }
+})
+function fireWs(event: string, data: unknown) {
+  for (const h of wsHandlers[event] ?? []) h({ data })
+}
+
 vi.mock('@/ws', () => ({
-  ws: { on: vi.fn(() => () => {}) },
+  ws: { on: (...args: Parameters<typeof wsOnMock>) => wsOnMock(...args) },
 }))
 
 vi.mock('@/i18n/i18n', () => ({
   t: (key: string) => key,
   locale: { value: 'en' },
   setLocale: vi.fn(),
+}))
+
+vi.mock('./ShareHomeToggle', () => ({
+  ShareHomeToggle: ({ instanceId, peerName }: { instanceId: string; peerName: string }) => (
+    <div data-testid="share-home-toggle"
+         data-instance-id={instanceId}
+         data-peer-name={peerName} />
+  ),
 }))
 
 // Trivial QR mock — the unit test isn't here to verify the QR
@@ -41,6 +62,8 @@ beforeEach(() => {
   vi.resetModules()
   apiPost.mockReset()
   writeText.mockReset().mockResolvedValue(undefined)
+  // Clear captured WS handlers so stale handlers from prior tests don't fire.
+  for (const k of Object.keys(wsHandlers)) delete wsHandlers[k]
   cleanup()
 })
 
@@ -189,5 +212,81 @@ describe('PairingFlow — GFS paste decoding', () => {
     fireEvent.click(screen.getByText('pairing.paste_submit'))
     await new Promise(r => setTimeout(r, 0))
     expect(apiPost).not.toHaveBeenCalled()
+  })
+})
+
+describe('PairingFlow — configure-sharing step', () => {
+  it('household success Done advances to configure-sharing', async () => {
+    const { PairingFlow, openPairing } = await import('./PairingFlow')
+    render(<PairingFlow />)
+    openPairing('household')
+
+    // Fire the pairing.confirmed WS event to flip to 'success'.
+    fireWs('pairing.confirmed', {
+      instance_id: 'peer-abc123',
+      display_name: 'Alice Home',
+    })
+    await new Promise(r => setTimeout(r, 0))
+
+    // The success screen shows "pairing.success" and a Done button.
+    await screen.findByText('pairing.success')
+    fireEvent.click(screen.getByText('pairing.done'))
+    await new Promise(r => setTimeout(r, 0))
+
+    // We should now see the configure-sharing step.
+    expect(screen.getByText('pairing.configure_sharing_title')).toBeTruthy()
+    // ShareHomeToggle should be rendered with the just-paired peer's id.
+    const toggle = screen.getByTestId('share-home-toggle')
+    expect(toggle.getAttribute('data-instance-id')).toBe('peer-abc123')
+    expect(toggle.getAttribute('data-peer-name')).toBe('Alice Home')
+  })
+
+  it('configure-sharing Done closes the wizard', async () => {
+    const { PairingFlow, openPairing } = await import('./PairingFlow')
+    render(<PairingFlow />)
+    openPairing('household')
+
+    // Drive to success via WS event.
+    fireWs('pairing.confirmed', {
+      instance_id: 'peer-xyz',
+      display_name: 'Bob Home',
+    })
+    await new Promise(r => setTimeout(r, 0))
+    await screen.findByText('pairing.success')
+
+    // Advance to configure-sharing.
+    fireEvent.click(screen.getByText('pairing.done'))
+    await new Promise(r => setTimeout(r, 0))
+    await screen.findByText('pairing.configure_sharing_title')
+
+    // Click Done on configure-sharing — wizard should close.
+    fireEvent.click(screen.getByText('pairing.done'))
+    await new Promise(r => setTimeout(r, 0))
+
+    // Modal is closed — success title is no longer visible.
+    expect(screen.queryByText('pairing.configure_sharing_title')).toBeNull()
+    expect(screen.queryByText('pairing.success')).toBeNull()
+  })
+
+  it('GFS success path is unchanged — Done closes directly without configure-sharing', async () => {
+    apiPost.mockResolvedValueOnce({})
+    const { PairingFlow, openPairing } = await import('./PairingFlow')
+    render(<PairingFlow />)
+    openPairing('gfs')
+
+    fireEvent.click(await screen.findByText('gfs.add'))
+    fireEvent.click(await screen.findByText('pairing.method_paste'))
+    const textarea = await screen.findByPlaceholderText('gfs.paste_placeholder')
+    const code = 'socialhome://gfs-pair/https://gfs.example.com/?token=tok-gfs'
+    fireEvent.input(textarea, { target: { value: code } })
+    fireEvent.click(screen.getByText('pairing.paste_submit'))
+    await new Promise(r => setTimeout(r, 0))
+
+    // GFS success — Done should close, not go to configure-sharing.
+    await screen.findByText('gfs.connected')
+    fireEvent.click(screen.getByText('pairing.done'))
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(screen.queryByText('pairing.configure_sharing_title')).toBeNull()
   })
 })

@@ -32,6 +32,7 @@ import { Button } from './Button'
 import { Spinner } from './Spinner'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
+import { ShareHomeToggle } from './ShareHomeToggle'
 
 type PairingMode = 'household' | 'gfs'
 type PairingRole = 'unset' | 'inviter' | 'scanner'
@@ -45,6 +46,7 @@ type PairingStep =
   | 'sas-display' // scanner: show the 6-digit SAS for out-of-band verify
   | 'verifying'   // inviter: POST /api/pairing/confirm
   | 'success'
+  | 'configure-sharing' // household: toggle home-location sharing after success
   | 'failed'
 
 const step = signal<PairingStep>('idle')
@@ -60,6 +62,11 @@ const open = signal(false)
 const onGfsConnectedCb = signal<(() => void) | null>(null)
 const peerHint = signal<string | null>(null)
 const scanError = signal<string | null>(null)
+/** Instance ID of the peer that was just paired — populated on ``pairing.confirmed``
+ *  so the configure-sharing step can PATCH the right connection. */
+const justPairedInstanceId = signal<string | null>(null)
+/** Display name of the peer that was just paired — shown in the toggle label. */
+const justPairedDisplayName = signal<string | null>(null)
 
 /**
  * Translate an API failure into a human-friendly hint shown under the
@@ -705,6 +712,8 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
       const d = e.data as { instance_id?: string; display_name?: string }
       if (!open.value) return
       peerHint.value = d.display_name ?? null
+      justPairedInstanceId.value = d.instance_id ?? null
+      justPairedDisplayName.value = d.display_name ?? null
       step.value = 'success'
       showToast(t('pairing.successful'), 'success')
     })
@@ -744,10 +753,16 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
   const verify = async () => {
     step.value = 'verifying'
     try {
-      await api.post('/api/pairing/confirm', {
+      const result = await api.post('/api/pairing/confirm', {
         token: pairingToken.value,
         verification_code: verificationCode.value,
-      })
+      }) as { instance_id?: string; display_name?: string }
+      // Capture peer identity for the configure-sharing step (the WS
+      // subscriber may have already done this; set only if not yet set).
+      if (result.instance_id) {
+        justPairedInstanceId.value = result.instance_id
+        justPairedDisplayName.value = result.display_name ?? null
+      }
       // Success is dispatched by the WS subscriber above.
       // As a fallback, mark success after the API call resolves:
       if (step.value === 'verifying') step.value = 'success'
@@ -842,6 +857,8 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     pairingToken.value = ''
     scannedSas.value = ''
     scanError.value = null
+    justPairedInstanceId.value = null
+    justPairedDisplayName.value = null
     setScanMethod('qr')
   }
 
@@ -859,7 +876,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
            onClose={() => { open.value = false }}
            title={modalTitle}>
       <div class="sh-pairing-flow">
-        {mode.value === 'household' && (
+        {mode.value === 'household' && step.value !== 'configure-sharing' && (
           <StepIndicator current={step.value} role={role.value} />
         )}
 
@@ -1009,6 +1026,23 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
                 ? t('pairing.success_named').replace('{peer}', peerHint.value)
                 : t('pairing.success_message')}
             </p>
+            <Button onClick={() => { step.value = 'configure-sharing' }}>
+              {t('pairing.done')}
+            </Button>
+          </div>
+        )}
+
+        {step.value === 'configure-sharing' && (
+          <div class="sh-pairing-configure-sharing">
+            <h3>{t('pairing.configure_sharing_title')}</h3>
+            <p class="sh-muted">{t('pairing.configure_sharing_intro')}</p>
+            {justPairedInstanceId.value && (
+              <ShareHomeToggle
+                instanceId={justPairedInstanceId.value}
+                peerName={justPairedDisplayName.value || justPairedInstanceId.value}
+                initialValue={true}
+              />
+            )}
             <Button onClick={() => { open.value = false }}>
               {t('pairing.done')}
             </Button>
