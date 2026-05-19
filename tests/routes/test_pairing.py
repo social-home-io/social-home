@@ -20,8 +20,30 @@ from socialhome.domain.federation import (
     PairingStatus,
     RemoteInstance,
 )
+from socialhome.repositories.dm_routing_repo import SqliteDmRoutingRepo
+from socialhome.services.dm_routing_service import DmRoutingService
 
 from .conftest import _auth
+
+
+async def _seed_relay(svc: DmRoutingService, *, target: str, via: str, ts: str) -> None:
+    """Seed a relay path row into the SQLite repo for test fixtures.
+
+    Calls the test-only :meth:`SqliteDmRoutingRepo.insert_relay_path_for_test`
+    directly on the concrete repo — keeping production service code free of
+    test-seeding logic.  The cast lives here (test boundary) where it belongs.
+    """
+    repo = svc._repo
+    assert isinstance(repo, SqliteDmRoutingRepo), (
+        "_seed_relay requires SqliteDmRoutingRepo"
+    )
+    await repo.insert_relay_path_for_test(
+        conversation_id=f"test-relay-{target}",
+        sender_user_id="test-sender",
+        target_instance=target,
+        via=via,
+        ts=ts,
+    )
 
 
 def _fake_instance(iid: str = "peer-1") -> RemoteInstance:
@@ -800,11 +822,7 @@ async def test_transport_detail_returns_recent_relay(client):
     {last_relay: {via, ts}}."""
     svc = client.app[dm_routing_service_key]
     now = datetime.now(timezone.utc).isoformat()
-    await svc._record_relay_for_test(
-        target="peer-target",
-        via="peer-relay",
-        ts=now,
-    )
+    await _seed_relay(svc, target="peer-target", via="peer-relay", ts=now)
 
     r = await client.get(
         "/api/pairing/connections/peer-target/transport-detail",

@@ -31,7 +31,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, cast
+from typing import Iterable
 
 from ..domain.federation import (
     FederationEventType,
@@ -39,7 +39,6 @@ from ..domain.federation import (
 )
 from ..repositories.dm_routing_repo import (
     AbstractDmRoutingRepo,
-    SqliteDmRoutingRepo,
     normalize_peers,
     utcnow_iso,
 )
@@ -565,30 +564,6 @@ class DmRoutingService:
         if not via:
             return None
         return RelayEntry(via=via, ts=row["last_used_at"])
-
-    async def _record_relay_for_test(
-        self,
-        *,
-        target: str,
-        via: str,
-        ts: str,
-    ) -> None:
-        """Test helper — direct insert of a relay path row.
-
-        The production write path is
-        :meth:`select_conversation_path` / :meth:`get_or_select_path`.
-        This shim lets unit tests seed a relay-path record with a
-        controlled ``target``, ``via``, and ``ts`` without going through
-        the full BFS + conversation machinery.
-        """
-        sqlite_repo = cast(SqliteDmRoutingRepo, self._repo)
-        await sqlite_repo.insert_relay_path_for_test(
-            conversation_id=f"test-relay-{target}",
-            sender_user_id="test-sender",
-            target_instance=target,
-            via=via,
-            ts=ts,
-        )
 
     # ─── Sender sequence ─────────────────────────────────────────────────
 
