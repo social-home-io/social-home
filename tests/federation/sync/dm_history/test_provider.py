@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-
-from socialhome.domain.conversation import ConversationMessage
+from socialhome.domain.conversation import ConversationMember, ConversationMessage
 from socialhome.domain.federation import FederationEventType
+from socialhome.domain.user import User
 from socialhome.federation.sync.dm_history.provider import (
     CHUNK_SIZE,
     DmHistoryProvider,
@@ -29,8 +29,9 @@ class _FakeFederation:
 
 
 class _FakeConvRepo:
-    def __init__(self, messages):
+    def __init__(self, messages, members: list | None = None):
         self._messages = messages
+        self._members: list = members or []
         self.last_since: str | None = None
         self.last_limit: int | None = None
 
@@ -40,6 +41,26 @@ class _FakeConvRepo:
         if since_iso is None:
             return list(self._messages)
         return [m for m in self._messages if m.created_at.isoformat() > since_iso]
+
+    async def list_members(self, conversation_id: str) -> list:
+        return list(self._members)
+
+
+class _FakeUserRepo:
+    def __init__(self, users: dict[str, User]) -> None:
+        # username -> User mapping
+        self._users = users
+
+    async def get(self, username: str) -> User | None:
+        return self._users.get(username)
+
+
+class _FakeVisibilityRepo:
+    def __init__(self, hidden: frozenset[str]) -> None:
+        self._hidden = hidden
+
+    async def hidden_user_ids_for_peer(self, peer_id: str) -> frozenset[str]:
+        return self._hidden
 
 
 def _msg(i: int, at: datetime) -> ConversationMessage:
@@ -160,3 +181,62 @@ async def test_missing_conversation_id_drops():
     )
     assert count == 0
     assert fed.sent == []
+
+
+async def test_history_chunks_suppressed_when_local_participant_hidden_from_peer():
+    """When the local participant is hidden from the requesting peer, no CHUNK
+    envelopes are sent but DM_HISTORY_COMPLETE still fires with chunks_sent=0
+    so the requester's catch-up state machine terminates cleanly."""
+    now = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    messages = [_msg(i, now + timedelta(minutes=i)) for i in range(3)]
+
+    local_user = User(
+        user_id="uid-alice",
+        username="alice",
+        display_name="Alice",
+    )
+    member = ConversationMember(
+        conversation_id="c-1",
+        username="alice",
+        joined_at="2026-01-01T00:00:00+00:00",
+    )
+
+    fed = _FakeFederation()
+    provider = DmHistoryProvider(
+        conversation_repo=_FakeConvRepo(messages, members=[member]),
+        federation_service=fed,
+        user_repo=_FakeUserRepo({"alice": local_user}),
+        visibility_repo=_FakeVisibilityRepo(frozenset({"uid-alice"})),
+    )
+    count = await provider.handle_request(
+        _event("peer-a", {"conversation_id": "c-1", "since": ""})
+    )
+
+    chunks = [s for s in fed.sent if s["type"] == FederationEventType.DM_HISTORY_CHUNK]
+    completes = [
+        s for s in fed.sent if s["type"] == FederationEventType.DM_HISTORY_COMPLETE
+    ]
+    assert count == 0
+    assert len(chunks) == 0
+    assert len(completes) == 1
+    assert completes[0]["payload"]["chunks_sent"] == 0
+
+
+async def test_history_streams_when_no_visibility_repo_back_compat():
+    """With visibility_repo=None and user_repo=None the original streaming
+    behaviour is preserved — no regressions for existing wiring."""
+    now = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    messages = [_msg(i, now + timedelta(minutes=i)) for i in range(2)]
+    fed = _FakeFederation()
+    provider = DmHistoryProvider(
+        conversation_repo=_FakeConvRepo(messages),
+        federation_service=fed,
+        user_repo=None,
+        visibility_repo=None,
+    )
+    count = await provider.handle_request(
+        _event("peer-a", {"conversation_id": "c-1", "since": ""})
+    )
+    chunks = [s for s in fed.sent if s["type"] == FederationEventType.DM_HISTORY_CHUNK]
+    assert count == 1
+    assert len(chunks) == 1

@@ -6,10 +6,15 @@ import logging
 from typing import TYPE_CHECKING
 
 from ....domain.federation import FederationEventType
+from ....services._visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ....domain.federation import FederationEvent
     from ....repositories.conversation_repo import AbstractConversationRepo
+    from ....repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
+    from ....repositories.user_repo import AbstractUserRepo
     from ...federation_service import FederationService
 
 
@@ -33,18 +38,34 @@ class DmHistoryProvider:
     includes a monotonic ``chunk_index``; when the receiver sends a
     :data:`DM_HISTORY_CHUNK_ACK` the provider records the ack so an
     operator / test harness can verify delivery without reading the DB.
+
+    If ``visibility_repo`` and ``user_repo`` are supplied, the provider checks
+    whether any local participant of the requested conversation has been hidden
+    from the requesting peer. When the check fires, the chunk stream is
+    suppressed and only :data:`DM_HISTORY_COMPLETE` (with ``chunks_sent=0``)
+    is sent so the requester's catch-up state machine terminates cleanly.
     """
 
-    __slots__ = ("_conversation_repo", "_federation", "_acks")
+    __slots__ = (
+        "_conversation_repo",
+        "_federation",
+        "_acks",
+        "_user_repo",
+        "_visibility_repo",
+    )
 
     def __init__(
         self,
         *,
         conversation_repo: "AbstractConversationRepo",
         federation_service: "FederationService",
+        user_repo: "AbstractUserRepo | None" = None,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._conversation_repo = conversation_repo
         self._federation = federation_service
+        self._user_repo = user_repo
+        self._visibility_repo = visibility_repo
         # (from_instance, conversation_id) → highest chunk_index ack'd.
         self._acks: dict[tuple[str, str], int] = {}
 
@@ -73,7 +94,10 @@ class DmHistoryProvider:
         """Stream messages newer than ``since`` for one conversation.
 
         Returns the number of chunks sent (including the empty one that
-        carries ``is_last=True`` when there are zero new messages).
+        carries ``is_last=True`` when there are zero new messages). Returns
+        0 when a visibility gate suppresses the stream — only
+        :data:`DM_HISTORY_COMPLETE` with ``chunks_sent=0`` is emitted so the
+        requester's state machine terminates cleanly.
         """
         payload = event.payload or {}
         conversation_id = str(payload.get("conversation_id") or "")
@@ -81,6 +105,28 @@ class DmHistoryProvider:
         if not conversation_id:
             log.debug("DM_HISTORY_REQUEST missing conversation_id")
             return 0
+
+        # Visibility gate: if any local participant is hidden from the peer,
+        # suppress the chunk stream entirely.
+        if self._visibility_repo is not None and self._user_repo is not None:
+            hidden = await hidden_for_peer(self._visibility_repo, event.from_instance)
+            if hidden:
+                members = await self._conversation_repo.list_members(conversation_id)
+                local_user_ids: set[str] = set()
+                for member in members:
+                    user = await self._user_repo.get(member.username)
+                    if user is not None:
+                        local_user_ids.add(user.user_id)
+                if local_user_ids & hidden:
+                    await self._federation.send_event(
+                        to_instance_id=event.from_instance,
+                        event_type=FederationEventType.DM_HISTORY_COMPLETE,
+                        payload={
+                            "conversation_id": conversation_id,
+                            "chunks_sent": 0,
+                        },
+                    )
+                    return 0
 
         messages = await self._conversation_repo.list_messages_since(
             conversation_id,

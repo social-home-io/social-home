@@ -877,6 +877,8 @@ def _wire_federation_stack(
     dm_history_provider = DmHistoryProvider(
         conversation_repo=conversation_repo,
         federation_service=federation_service,
+        user_repo=user_repo,
+        visibility_repo=peer_user_visibility_repo,
     )
     dm_history_receiver = DmHistoryReceiver(
         conversation_repo=conversation_repo,
