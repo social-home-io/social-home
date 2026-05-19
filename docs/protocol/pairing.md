@@ -148,6 +148,34 @@ Both are stored alongside the peer in `remote_instances` with a
 `PairingStatus.CONFIRMED` row. See `docs/crypto.md` for the full key
 schedule.
 
+## Local alias — household-only rename of a paired peer
+
+The peer's `display_name` is whatever it sent on the federation
+handshake. When it's empty or cryptic (e.g. the truncated
+`instance_id`, "z7k63zfi") the admin is stuck with that name in
+every UI surface — Friends dashboard, Connections list, DM picker.
+
+The `remote_instances.local_alias` column (added in migration
+`0005`) lets the admin pick a name they want to see for the
+connection without renaming the peer remotely. The choice is
+**never federated** — purely local UX state. Storage rules:
+
+- `NULL` (default) → SPA falls back to `display_name`.
+- Set via `PATCH /api/pairing/connections/{instance_id}/alias`
+  with `{"alias": "Brother's house"}` (admin-only, 80-char cap).
+- Cleared by posting `{"alias": null}` or a whitespace-only string.
+
+The HTTP read shapes (`GET /api/pairing/connections`,
+`GET /api/friends`) return `display_name` already resolved to the
+effective value — the SPA renders one field and gets the alias
+preference for free. The raw federated name stays available as
+`federated_display_name` so the manage modal can show "They
+advertise themselves as <federated_name>" alongside the editable
+alias input.
+
+A subsequent `save_instance` (e.g. URL rotation) preserves the
+alias because the upsert doesn't touch the `local_alias` column.
+
 ## Federation inbox base — per-adapter shape
 
 The pairing coordinator works with a "federation inbox base" URL —

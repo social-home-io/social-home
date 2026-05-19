@@ -51,9 +51,24 @@ def _instance_dict(inst) -> dict:
         inst.status.value if isinstance(inst.status, PairingStatus) else inst.status
     )
     reachable = inst.is_reachable() if hasattr(inst, "is_reachable") else True
+    local_alias = getattr(inst, "local_alias", None)
+    effective = (
+        inst.effective_display_name
+        if hasattr(inst, "effective_display_name")
+        else ((local_alias or "").strip() or inst.display_name)
+    )
     return {
         "instance_id": inst.id,
-        "display_name": inst.display_name,
+        # ``display_name`` carries the *effective* name — alias if the
+        # admin set one, else the peer's federated display_name. Most
+        # SPA call sites only need the rendered string; they get the
+        # post-alias value for free without checking ``local_alias``.
+        "display_name": effective,
+        # The raw federated display_name is preserved so the Manage
+        # modal can show "Peer advertises: <federated_name>" alongside
+        # the editable alias input.
+        "federated_display_name": inst.display_name,
+        "local_alias": local_alias,
         "status": status,
         "reachable": reachable,
         "paired_at": getattr(inst, "paired_at", None),
@@ -560,5 +575,68 @@ class PairingConnectionVisibleUsersView(BaseView):
                     }
                     for u in local_users
                 ]
+            }
+        )
+
+
+_ALIAS_MAX_LEN = 80
+
+
+class PairingConnectionAliasView(BaseView):
+    """``PATCH /api/pairing/connections/{instance_id}/alias`` — set or
+    clear the local alias for a paired peer.
+
+    The peer's ``display_name`` comes from the federation handshake;
+    when it's empty / cryptic (e.g. the truncated instance_id) the
+    admin is stuck. This local alias overrides the rendered name in
+    every view that surfaces the connection — Friends dashboard,
+    Connections list, DM picker — without renaming the peer remotely
+    or federating the choice. Pure local UX state.
+
+    Body: ``{"alias": "Brother's house"}`` to set,
+    ``{"alias": null}`` (or empty / whitespace-only string) to clear.
+    Admin-only.
+    """
+
+    async def patch(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        instance_id = self.match("instance_id")
+        fed_repo = self.svc(federation_repo_key)
+        inst = await fed_repo.get_instance(instance_id)
+        if inst is None:
+            return error_response(404, "NOT_FOUND", "Peer not found.")
+
+        body = await self.body()
+        raw = body.get("alias")
+        if raw is None:
+            alias: str | None = None
+        elif isinstance(raw, str):
+            cleaned = raw.strip()
+            alias = cleaned if cleaned else None
+        else:
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "alias must be a string or null.",
+            )
+        if alias is not None and len(alias) > _ALIAS_MAX_LEN:
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                f"alias must be {_ALIAS_MAX_LEN} characters or fewer.",
+            )
+
+        await fed_repo.update_alias(instance_id, alias)
+        # Re-read so the response reflects the persisted state.
+        updated = await fed_repo.get_instance(instance_id)
+        assert updated is not None  # we just upserted it
+        return web.json_response(
+            {
+                "instance_id": updated.id,
+                "display_name": updated.display_name,
+                "local_alias": updated.local_alias,
+                "effective_display_name": updated.effective_display_name,
             }
         )

@@ -16659,3 +16659,35 @@ a.sh-btn--ghost:hover {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ───── ConnectionDetail — alias rename row (PR A) ────────────────
+ *
+ * The peer's federated display_name is what shows by default; when
+ * it's empty / cryptic (truncated instance_id) the admin sets a
+ * local alias here. Stacked on every viewport — the Modal body is
+ * narrow on mobile and the Save button + the input would crush each
+ * other in a horizontal row.
+ */
+.sh-connection-alias {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xxs);
+}
+.sh-connection-alias__label {
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  color: var(--sh-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sh-connection-alias__row {
+  display: flex;
+  gap: var(--sh-space-xs);
+  align-items: center;
+}
+.sh-connection-alias__input { flex: 1 1 auto; min-width: 0; }
+.sh-connection-alias__hint {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
+  line-height: 1.35;
+}

@@ -351,3 +351,72 @@ async def test_list_instances_in_space_filters_membership_status_and_bans(env):
     got = await env.fed_repo.list_instances_in_space(space_id)
     got_ids = {i.id for i in got}
     assert got_ids == {member.id}
+
+
+# ─── local_alias (PR A — user-set rename for cryptic peer names) ─────────
+
+
+async def test_update_alias_sets_and_clears(env):
+    inst = RemoteInstance(
+        id="peer-alias",
+        display_name="z7k63zfi",  # what the user actually sees today
+        remote_identity_pk="aa" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="inbox-alias",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+    # No alias by default → effective name falls back to display_name.
+    got = await env.fed_repo.get_instance("peer-alias")
+    assert got.local_alias is None
+    assert got.effective_display_name == "z7k63zfi"
+
+    # Set the alias — effective name now wins.
+    await env.fed_repo.update_alias("peer-alias", "Brother's house")
+    got = await env.fed_repo.get_instance("peer-alias")
+    assert got.local_alias == "Brother's house"
+    assert got.effective_display_name == "Brother's house"
+
+    # Clear it (None) — falls back to federated display_name again.
+    await env.fed_repo.update_alias("peer-alias", None)
+    got = await env.fed_repo.get_instance("peer-alias")
+    assert got.local_alias is None
+    assert got.effective_display_name == "z7k63zfi"
+
+
+async def test_save_instance_does_not_clobber_alias(env):
+    """A subsequent ``save_instance`` (e.g. after URL_UPDATED, a
+    proto_version bump, or any other handshake-side write) must NOT
+    reset the user's locally-set alias to NULL. The alias is local-
+    only state and lives on a separate column the upsert doesn't
+    touch."""
+    inst = RemoteInstance(
+        id="peer-persist",
+        display_name="zzz1",
+        remote_identity_pk="aa" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="inbox-persist",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+    await env.fed_repo.update_alias("peer-persist", "My alias")
+
+    # Re-save the instance — e.g. URL_UPDATED would rewrite the URL.
+    inst2 = RemoteInstance(
+        id="peer-persist",
+        display_name="zzz1",  # peer hasn't renamed itself
+        remote_identity_pk="aa" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://x.NEW/wh",
+        local_inbox_id="inbox-persist",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst2)
+    got = await env.fed_repo.get_instance("peer-persist")
+    assert got.local_alias == "My alias"  # preserved across re-save
+    assert got.remote_inbox_url == "https://x.NEW/wh"  # URL did update

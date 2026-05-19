@@ -94,9 +94,20 @@ def _instance_safe_dict(inst, *, members: list[dict]) -> dict:
         inst.status.value if isinstance(inst.status, PairingStatus) else inst.status
     )
     reachable = inst.is_reachable() if hasattr(inst, "is_reachable") else True
+    effective = (
+        inst.effective_display_name
+        if hasattr(inst, "effective_display_name")
+        else inst.display_name
+    )
     return {
         "instance_id": inst.id,
-        "display_name": inst.display_name,
+        # The displayed household name. When the admin set a local
+        # alias ("Brother's house") it wins over whatever the peer
+        # advertised via the federation handshake — keeps the cryptic
+        # ``z7k63zfi``-style names out of the dashboard.
+        "display_name": effective,
+        "federated_display_name": inst.display_name,
+        "local_alias": getattr(inst, "local_alias", None),
         "home_lat": getattr(inst, "home_lat", None),
         "home_lon": getattr(inst, "home_lon", None),
         "status": status,
