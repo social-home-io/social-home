@@ -69,13 +69,13 @@ class _FakePictureRepo:
 
 class _FakeVisibilityRepo:
     def __init__(self) -> None:
-        self._hidden: set[tuple[str, str]] = set()
+        self._hidden: dict[str, set[str]] = {}
 
     def hide(self, peer: str, user_id: str) -> None:
-        self._hidden.add((peer, user_id))
+        self._hidden.setdefault(peer, set()).add(user_id)
 
-    async def is_visible(self, peer: str, user_id: str) -> bool:
-        return (peer, user_id) not in self._hidden
+    async def hidden_user_ids_for_peer(self, peer: str) -> frozenset[str]:
+        return frozenset(self._hidden.get(peer, set()))
 
 
 @pytest.fixture
