@@ -106,6 +106,7 @@ space_task_service_key: AppKey = AppKey("space_task_service")
 calendar_service_key: AppKey = AppKey("calendar_service")
 space_cal_service_key: AppKey = AppKey("space_cal_service")
 shopping_service_key: AppKey = AppKey("shopping_service")
+peer_home_sharing_service_key: AppKey = AppKey("peer_home_sharing_service")
 
 # ── Repos (exposed for routes / federation / inboxs) ───────────────────
 user_repo_key: AppKey = AppKey("user_repo")
