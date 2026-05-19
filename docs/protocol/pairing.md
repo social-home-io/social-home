@@ -135,6 +135,38 @@ check. Both legs of the ack are over established trust (A↔B and
 B↔C are confirmed pairs, set up via QR before the auto-pair flow
 started).
 
+## Roster catch-up on pair-confirm — `USERS_SYNC`
+
+Pairing carries the *instance's* metadata but no per-user roster.
+Without a roster push, the peer's local ``remote_users`` mirror sits
+empty until each member of the freshly-paired household happens to
+edit their profile — at which point the existing
+``USER_UPDATED`` outbound fans the change. In practice this means
+the household sees only the admin (or whoever first touched their
+profile) on the Friends dashboard / DM picker.
+
+`UsersSyncOutbound` closes the gap. On `PairingConfirmed` it sends
+a single `USERS_SYNC` envelope to the new peer:
+
+```
+{"users": [
+  {"user_id", "username", "display_name", "bio", "picture_hash",
+   "picture_webp_base64": <optional bytes>},
+  ...
+]}
+```
+
+The receiver-side handler (`FederationInboundService._on_users_sync`)
+iterates the list and upserts each row through the same
+``_upsert_remote_user`` path ``USER_UPDATED`` uses, so the inbound
+code is unchanged. The per-pair user-visibility filter applies on
+the sender — admins who have hidden a user from a peer keep that
+user out of the snapshot.
+
+When every local user is hidden from the peer (or there are no
+local users at all), the envelope is suppressed entirely — no
+empty-roster sync.
+
 ## Key derivation
 
 Each side holds an **Ed25519 identity key** (long-lived) and generates
