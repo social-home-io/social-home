@@ -72,7 +72,15 @@ from __future__ import annotations
 #:   today (the bug this version fixes); standalone-to-standalone
 #:   pairs with one upgraded side and one sub-v_4 side will fail too
 #:   and need both sides upgraded.
-OURS: int = 4
+#: * **v5** — :data:`FederationEventType.LOCAL_HOME_LOCATION_CHANGED`.
+#:   Senders use it to push their HA-sourced home coordinates to every
+#:   confirmed peer on every change. Sub-v_5 receivers reject the
+#:   unknown event_type with 400 (the §24.11 pipeline's standard
+#:   "Unknown event_type" path), which our outbox now treats as a
+#:   PERMANENT failure and drops cleanly — so the safety net is the
+#:   outbox-drop fix from PR #354. No user-visible regression for
+#:   sub-v_5 peers; they just don't get the map update.
+OURS: int = 5
 
 
 class FederationCapability:
@@ -99,6 +107,13 @@ class FederationCapability:
     #: carries useful information instead of vanishing — see the
     #: :mod:`socialhome.federation.compat.dm_media_v3` transform.
     MIN_FOR_DM_MEDIA_SYNC = 3
+
+    #: Minimum proto_version where the receiver knows
+    #: :data:`FederationEventType.LOCAL_HOME_LOCATION_CHANGED`.
+    #: Senders gate the broadcast on this; pre-v_5 peers are skipped
+    #: silently (they'll learn the coords on next re-pair or via the
+    #: peer-accept body if the operator unpairs / re-pairs).
+    MIN_FOR_HOME_LOCATION_BROADCAST = 5
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
