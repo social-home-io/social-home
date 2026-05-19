@@ -1,10 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, waitFor } from '@testing-library/preact'
+import { render, waitFor, fireEvent } from '@testing-library/preact'
 
 vi.mock('@/api', () => {
   const m = { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() }
   return { api: m, _mock: m }
 })
+
+const routeSpy = vi.fn()
+vi.mock('preact-iso', () => ({
+  useLocation: () => ({ route: routeSpy }),
+}))
+
+vi.mock('@/components/Toast', () => ({ showToast: vi.fn() }))
+
+vi.mock('@/store/auth', () => ({
+  currentUser: { value: { user_id: 'u-me', username: 'pascal', display_name: 'Pascal' } },
+}))
 
 // LocationMap pulls in Leaflet which doesn't initialise cleanly in
 // jsdom — stub it to a deterministic placeholder so the tests assert
@@ -58,9 +69,13 @@ function payload(over: Partial<{
   }
 }
 
+const apiPost = (api as unknown as { post: ReturnType<typeof vi.fn> }).post
+
 describe('FriendsPage', () => {
   beforeEach(() => {
     apiMock.get.mockReset()
+    apiPost.mockReset()
+    routeSpy.mockReset()
   })
 
   it('renders the local household block + empty-state copy when no pairs', async () => {
@@ -155,5 +170,105 @@ describe('FriendsPage', () => {
       expect(container.textContent).toContain('17')
     })
     expect(container.textContent).toContain('households')
+  })
+
+  // ── Quick DM affordance (PR C) ───────────────────────────────────────
+
+  it('local member chip exposes a 💬 button for everyone except the viewer', async () => {
+    apiMock.get.mockResolvedValueOnce(payload({
+      instance: {
+        instance_id: 'us', display_name: 'Vizeli Home',
+        home_lat: null, home_lon: null,
+        members: [
+          { user_id: 'u-me', username: 'pascal', display_name: 'Pascal',
+            picture_url: null, is_online: true, is_idle: false },
+          { user_id: 'u-mom', username: 'maria', display_name: 'Maria',
+            picture_url: null, is_online: false, is_idle: false },
+        ],
+        member_count: 2,
+      },
+    }))
+    const { container } = render(<FriendsPage />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-friends')).not.toBeNull()
+    })
+    const dmButtons = container.querySelectorAll(
+      '.sh-friends-member-chip__dm',
+    )
+    // Pascal (viewer) is excluded; only Maria gets a DM button.
+    expect(dmButtons.length).toBe(1)
+    expect(
+      (dmButtons[0] as HTMLButtonElement).getAttribute('aria-label'),
+    ).toBe('Message Maria')
+  })
+
+  it('clicking a local DM button POSTs /api/conversations/dm with {username}', async () => {
+    apiMock.get.mockResolvedValueOnce(payload({
+      instance: {
+        instance_id: 'us', display_name: 'Vizeli Home',
+        home_lat: null, home_lon: null,
+        members: [
+          { user_id: 'u-me', username: 'pascal', display_name: 'Pascal',
+            picture_url: null, is_online: true, is_idle: false },
+          { user_id: 'u-mom', username: 'maria', display_name: 'Maria',
+            picture_url: null, is_online: false, is_idle: false },
+        ],
+        member_count: 2,
+      },
+    }))
+    apiPost.mockResolvedValueOnce({ id: 'cdm-local' })
+    const { container } = render(<FriendsPage />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-friends-member-chip__dm'))
+        .not.toBeNull()
+    })
+    fireEvent.click(
+      container.querySelector('.sh-friends-member-chip__dm') as HTMLElement,
+    )
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/conversations/dm',
+        { username: 'maria' },
+      )
+    })
+    await waitFor(() => {
+      expect(routeSpy).toHaveBeenCalledWith('/dms/cdm-local')
+    })
+  })
+
+  it('clicking a remote member chip POSTs /api/conversations/dm with {user_id}', async () => {
+    apiMock.get.mockResolvedValueOnce(payload({
+      households: [
+        {
+          instance_id: 'p-bro', display_name: "Brother's house",
+          home_lat: null, home_lon: null,
+          paired_at: '2026-04-01T10:00:00Z', reachable: true,
+          members: [
+            { user_id: 'u-bro', instance_id: 'p-bro', remote_username: 'bob',
+              display_name: 'Bob', picture_url: null },
+          ],
+          member_count: 1,
+        },
+      ],
+      totals: { households: 2, people: 2 },
+    }))
+    apiPost.mockResolvedValueOnce({ id: 'cdm-cross' })
+    const { container } = render(<FriendsPage />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-friends-member-chip--button'))
+        .not.toBeNull()
+    })
+    fireEvent.click(
+      container.querySelector('.sh-friends-member-chip--button') as HTMLElement,
+    )
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/conversations/dm',
+        { user_id: 'u-bro' },
+      )
+    })
+    await waitFor(() => {
+      expect(routeSpy).toHaveBeenCalledWith('/dms/cdm-cross')
+    })
   })
 })

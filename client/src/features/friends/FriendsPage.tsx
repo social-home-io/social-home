@@ -17,6 +17,7 @@
  * (no follow-up fetches per household).
  */
 import { useEffect, useState } from 'preact/hooks'
+import { useLocation } from 'preact-iso'
 import { useTitle } from '@/store/pageTitle'
 import { currentUser } from '@/store/auth'
 import { Avatar } from '@/components/Avatar'
@@ -25,6 +26,7 @@ import { Spinner } from '@/components/Spinner'
 import { LocationMap, type LocationMarker } from '@/components/LocationMap'
 import { OnlinePill } from '@/components/OnlinePill'
 import { openPairing, PairingFlow } from '@/components/PairingFlow'
+import { showToast } from '@/components/Toast'
 import { api } from '@/api'
 
 interface LocalMember {
@@ -101,6 +103,44 @@ export default function FriendsPage() {
   useTitle('Friends')
   const [data, setData] = useState<FriendsPayload | null>(null)
   const [loading, setLoading] = useState(true)
+  /** Per-user "starting DM" tracking so a double-click can't spawn
+   *  two POSTs. The DM service is idempotent server-side (returns the
+   *  existing conversation), but a flashing spinner reassures the
+   *  user that the click is in flight. */
+  const [dmBusy, setDmBusy] = useState<Set<string>>(new Set())
+  const location = useLocation()
+
+  /** Open (or create) a 1:1 DM with the chosen household member and
+   *  navigate straight into the thread. Local members route via
+   *  ``{username}``; remote members route via ``{user_id}`` so the
+   *  conversation rides the federation envelope path. The service
+   *  layer is idempotent — clicking the same chip again jumps back
+   *  to the same conversation. */
+  const startDmWith = async (target: {
+    user_id: string
+    username: string
+    is_local: boolean
+  }) => {
+    if (dmBusy.has(target.user_id)) return
+    setDmBusy(b => new Set(b).add(target.user_id))
+    try {
+      const body = target.is_local
+        ? { username: target.username }
+        : { user_id: target.user_id }
+      const conv = await api.post('/api/conversations/dm', body) as {
+        id: string
+      }
+      location.route(`/dms/${conv.id}`)
+    } catch (e: any) {
+      showToast(e?.message || 'Couldn’t start the DM', 'error')
+    } finally {
+      setDmBusy(b => {
+        const n = new Set(b)
+        n.delete(target.user_id)
+        return n
+      })
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -197,23 +237,48 @@ export default function FriendsPage() {
           <span class="sh-friends-tag sh-muted">your household</span>
         </header>
         <div class="sh-friends-members">
-          {instance.members.map(m => (
-            <a
-              key={m.user_id}
-              href="/presence"
-              class="sh-friends-member-chip"
-              title={`${m.display_name} — see presence`}
-            >
-              <Avatar
-                name={m.display_name}
-                src={m.picture_url}
-                size={28}
-                online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
-              />
-              <span class="sh-friends-member-name">{m.display_name}</span>
-              <OnlinePill user_id={m.user_id} compact showZone={false} />
-            </a>
-          ))}
+          {instance.members.map(m => {
+            const isSelf = currentUser.value?.user_id === m.user_id
+            return (
+              <div
+                key={m.user_id}
+                class="sh-friends-member-chip sh-friends-member-chip--row"
+              >
+                <a
+                  href="/presence"
+                  class="sh-friends-member-chip__main"
+                  title={`${m.display_name} — see presence`}
+                >
+                  <Avatar
+                    name={m.display_name}
+                    src={m.picture_url}
+                    size={28}
+                    online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
+                  />
+                  <span class="sh-friends-member-name">
+                    {m.display_name}
+                  </span>
+                  <OnlinePill user_id={m.user_id} compact showZone={false} />
+                </a>
+                {!isSelf && (
+                  <button
+                    type="button"
+                    class="sh-friends-member-chip__dm"
+                    title={`Message ${m.display_name}`}
+                    aria-label={`Message ${m.display_name}`}
+                    disabled={dmBusy.has(m.user_id)}
+                    onClick={() => void startDmWith({
+                      user_id: m.user_id,
+                      username: m.username,
+                      is_local: true,
+                    })}
+                  >
+                    💬
+                  </button>
+                )}
+              </div>
+            )
+          })}
         </div>
       </section>
 
@@ -263,7 +328,19 @@ export default function FriendsPage() {
               ) : (
                 <div class="sh-friends-members">
                   {h.members.map(m => (
-                    <span key={m.user_id} class="sh-friends-member-chip">
+                    <button
+                      key={m.user_id}
+                      type="button"
+                      class="sh-friends-member-chip sh-friends-member-chip--button"
+                      title={`Message ${m.display_name}`}
+                      aria-label={`Message ${m.display_name}`}
+                      disabled={dmBusy.has(m.user_id)}
+                      onClick={() => void startDmWith({
+                        user_id: m.user_id,
+                        username: m.remote_username,
+                        is_local: false,
+                      })}
+                    >
                       <Avatar
                         name={m.display_name}
                         src={m.picture_url}
@@ -272,7 +349,13 @@ export default function FriendsPage() {
                       <span class="sh-friends-member-name">
                         {m.display_name}
                       </span>
-                    </span>
+                      <span
+                        class="sh-friends-member-chip__dm-hint"
+                        aria-hidden="true"
+                      >
+                        💬
+                      </span>
+                    </button>
                   ))}
                 </div>
               )}
