@@ -340,7 +340,11 @@ class PairingCoordinator:
                 "sig_suite": self._own_sig_suite,
             }
             local = await self._repo.get_local_identity()
-            if local and local.get("home_lat") is not None:
+            if (
+                local
+                and local.get("home_lat") is not None
+                and local.get("home_lon") is not None
+            ):
                 peer_accept_body["home_lat"] = float(local["home_lat"])
                 peer_accept_body["home_lon"] = float(local["home_lon"])
             if self._own_pq_pk is not None:
