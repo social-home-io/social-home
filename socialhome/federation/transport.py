@@ -157,6 +157,14 @@ def _build_rtc_config(ice_servers: list[dict]) -> rtc.RTCConfiguration:
     return rtc.RTCConfiguration(ice_servers=servers)
 
 
+#: How long an ICE candidate may sit in the buffer before being dropped.
+#: Longer than a typical SDP round-trip on a healthy WAN (~1s) but short
+#: enough that a stranded candidate doesn't pin memory if the handshake
+#: stalls. Tuned for the HA-add-on Nabu Casa relay path where SDP can
+#: cross continents.
+ICE_BUFFER_TIMEOUT_S: float = 10.0
+
+
 class _RtcPeer:
     """One DataChannel session for one paired peer."""
 
@@ -172,6 +180,7 @@ class _RtcPeer:
         "_loop",
         "_expected_answer_from",
         "_send_hwm",
+        "_remote_description_applied",
     )
 
     def __init__(
@@ -196,6 +205,17 @@ class _RtcPeer:
         # peer we invited. Mismatches are rejected with a warning.
         self._expected_answer_from: str | None = None
         self._send_hwm = send_hwm
+        # WebRTC requires every ``addRemoteCandidate`` call to land
+        # *after* ``setRemoteDescription`` — applying earlier throws
+        # ``rtcAddRemoteCandidate: runtime failure``. Trickle ICE
+        # routinely violates this on the wire because the offerer
+        # flushes candidates the moment the offer is sent, and the
+        # receiver may see ``FEDERATION_RTC_ICE`` envelopes before (or
+        # mid-construction of) the matching ``FEDERATION_RTC_OFFER``.
+        # The event is set by :meth:`accept_offer` and
+        # :meth:`apply_answer` once the remote description is in;
+        # :meth:`add_ice_candidate` waits on it.
+        self._remote_description_applied = asyncio.Event()
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -230,6 +250,10 @@ class _RtcPeer:
         self._pc.spawn_task(self._drain_ice())
 
         await self._pc.set_remote_description(sdp, "offer")
+        # Release any ICE candidates that arrived before the offer (or
+        # during the construction of the PC). They'll have been parked
+        # in :meth:`add_ice_candidate` waiting on this event.
+        self._remote_description_applied.set()
         local = await self._pc.set_local_description("answer")
         await self._signaling(
             FederationEventType.FEDERATION_RTC_ANSWER,
@@ -256,13 +280,60 @@ class _RtcPeer:
         self._expected_answer_from = None
         if self._pc is not None:
             await self._pc.set_remote_description(sdp, "answer")
+            # Offerer side: flush any ICE candidates the answerer
+            # trickled before we applied their SDP answer. Same
+            # rationale as :meth:`accept_offer`.
+            self._remote_description_applied.set()
         return True
 
     async def add_ice_candidate(self, *, candidate: str, sdp_mid: str) -> None:
-        if not candidate:
+        """Apply a trickled ICE candidate, buffering until the remote
+        description is in.
+
+        WebRTC requires every ``addRemoteCandidate`` call to land after
+        ``setRemoteDescription``; aiolibdatachannel surfaces a
+        violation as ``rtcAddRemoteCandidate: runtime failure (-2)``
+        and the candidate is silently lost — which then strands ICE
+        with no remote candidates, the connectivity timer expires, and
+        the PeerConnection transitions to ``failed``.
+
+        We sidestep the race by gating every candidate on
+        :attr:`_remote_description_applied`. The event is set by
+        :meth:`accept_offer` (answerer) and :meth:`apply_answer`
+        (offerer); until then the candidate parks here. If the
+        handshake never lands within :data:`ICE_BUFFER_TIMEOUT_S` we
+        drop the candidate rather than pinning memory forever.
+        """
+        if not candidate or self._closed:
             return
-        if self._pc is not None:
+        if not self._remote_description_applied.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._remote_description_applied.wait(),
+                    timeout=ICE_BUFFER_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "fed RTC: ICE candidate for %s dropped — remote "
+                    "description not applied within %.0fs",
+                    self.instance_id,
+                    ICE_BUFFER_TIMEOUT_S,
+                )
+                return
+        if self._pc is None or self._closed:
+            # Peer closed between event set and resume — race, drop.
+            return
+        try:
             await self._pc.add_remote_candidate(candidate, sdp_mid)
+        except rtc.RTCError as exc:
+            # Native layer can still reject a malformed or late
+            # candidate — log at debug rather than letting the
+            # exception bubble through the event dispatcher.
+            log.debug(
+                "fed RTC: add_remote_candidate failed for %s: %s",
+                self.instance_id,
+                exc,
+            )
 
     # ─── Internal drain loops ─────────────────────────────────────────────
 
@@ -377,6 +448,10 @@ class _RtcPeer:
         """
         self._closed = True
         self._open.clear()
+        # Wake any ICE candidates parked in
+        # :meth:`add_ice_candidate` so they unblock immediately and
+        # see ``_closed`` instead of waiting out the 10 s timeout.
+        self._remote_description_applied.set()
         if self._pc is not None:
             try:
                 self._pc.close()
@@ -600,10 +675,31 @@ class FederationTransport:
         from_instance: str,
         payload: dict,
     ) -> None:
-        """Handle a trickled ``FEDERATION_RTC_ICE`` candidate."""
-        peer = self._peers.get(from_instance)
-        if peer is None:
-            return
+        """Handle a trickled ``FEDERATION_RTC_ICE`` candidate.
+
+        Creates a buffering :class:`_RtcPeer` stub if no peer exists
+        yet for ``from_instance`` so an ICE envelope that overtook the
+        ``FEDERATION_RTC_OFFER`` doesn't end up silently dropped (which
+        previously stranded ICE with no remote candidates, expiring
+        the connectivity timer and failing the DataChannel). The stub
+        peer just queues candidates inside
+        :meth:`_RtcPeer.add_ice_candidate`; ``on_rtc_offer`` reuses the
+        same dict slot, builds the PeerConnection, and once
+        ``set_remote_description`` lands the buffered candidates flush
+        in :meth:`_RtcPeer.add_ice_candidate`. The §24.11 pipeline has
+        already authenticated the sender by signature, so the stub
+        peer can't be a DoS vector against unpaired instance_ids.
+        """
+        async with self._lock:
+            peer = self._peers.get(from_instance)
+            if peer is None:
+                peer = _RtcPeer(
+                    instance_id=from_instance,
+                    ice_servers=self._ice_servers,
+                    signaling=self._signaling_factory(from_instance),
+                    inbound=self._inbound_factory(from_instance),
+                )
+                self._peers[from_instance] = peer
         await peer.add_ice_candidate(
             candidate=str(payload.get("candidate") or ""),
             sdp_mid=str(payload.get("sdp_mid") or "0"),

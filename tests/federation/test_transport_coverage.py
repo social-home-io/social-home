@@ -204,6 +204,12 @@ async def test_peer_add_ice_candidate_real():
         inbound=_noop_inbound,
     )
     await peer.start_offer()
+    # The candidate path now gates on
+    # :attr:`_remote_description_applied`, which is only set when the
+    # SDP answer comes back. Without a real second peer to bounce an
+    # answer off, set the event manually so the candidate applies
+    # immediately rather than parking for the full buffer timeout.
+    peer._remote_description_applied.set()
     await peer.add_ice_candidate(
         candidate="candidate:1 udp 1 1.1.1.1 5000 typ host",
         sdp_mid="0",
@@ -211,7 +217,14 @@ async def test_peer_add_ice_candidate_real():
     peer.close()
 
 
-async def test_peer_add_ice_candidate_no_pc_is_safe():
+async def test_peer_add_ice_candidate_no_pc_is_safe(monkeypatch):
+    """A candidate arriving before the PC exists buffers, times out, and is
+    dropped — but the call never raises."""
+    from socialhome.federation import transport as transport_mod
+
+    # Short timeout so the test doesn't park for 10s on the default.
+    monkeypatch.setattr(transport_mod, "ICE_BUFFER_TIMEOUT_S", 0.05)
+
     events, signaling = await _collect_signals()
     peer = _RtcPeer(
         instance_id="p",
@@ -219,7 +232,125 @@ async def test_peer_add_ice_candidate_no_pc_is_safe():
         signaling=signaling,
         inbound=_noop_inbound,
     )
-    # No start_offer → _pc is None.
+    # No start_offer → _pc is None. The candidate parks waiting for the
+    # remote description to be applied; since it never will be, the wait
+    # times out and the candidate is dropped silently.
+    await peer.add_ice_candidate(candidate="c", sdp_mid="0")
+
+
+async def test_peer_add_ice_candidate_buffers_until_remote_description():
+    """ICE arriving before ``set_remote_description`` is buffered, then
+    applied when :attr:`_remote_description_applied` is set. Pins the
+    fix for the offer-vs-ICE race that previously stranded ICE with no
+    remote candidates and failed the connectivity timer (#354 sibling).
+
+    Uses a stub PC so the test doesn't depend on aiolibdatachannel's
+    real PeerConnection (which leaves lingering iterator tasks the
+    pytest_homeassistant_custom_component plugin would flag at
+    teardown).
+    """
+    events, signaling = await _collect_signals()
+    peer = _RtcPeer(
+        instance_id="p",
+        ice_servers=None,
+        signaling=signaling,
+        inbound=_noop_inbound,
+    )
+
+    applied: list[tuple[str, str]] = []
+
+    class _StubPc:
+        async def add_remote_candidate(self, candidate, sdp_mid):
+            applied.append((candidate, sdp_mid))
+
+    peer._pc = _StubPc()  # bypass start_offer / accept_offer machinery
+
+    # Park a candidate before the event is set.
+    park_task = asyncio.create_task(
+        peer.add_ice_candidate(
+            candidate="candidate:2 udp 1 1.1.1.1 5000 typ host",
+            sdp_mid="0",
+        ),
+    )
+    # Yield to let the task hit the await.
+    await asyncio.sleep(0)
+    assert not park_task.done()
+    assert applied == []
+
+    # Apply remote description — the parked candidate should flush.
+    peer._remote_description_applied.set()
+    await park_task
+    assert applied == [("candidate:2 udp 1 1.1.1.1 5000 typ host", "0")]
+
+
+async def test_peer_apply_answer_releases_buffered_ice():
+    """Offerer side: ICE candidates trickled by the answerer before our
+    :meth:`apply_answer` sets the event must flush the moment the
+    answer's remote description is applied. Symmetric counterpart to
+    :func:`test_peer_add_ice_candidate_buffers_until_remote_description`
+    (which covers the answerer side via the bare event)."""
+    events, signaling = await _collect_signals()
+    peer = _RtcPeer(
+        instance_id="p",
+        ice_servers=None,
+        signaling=signaling,
+        inbound=_noop_inbound,
+    )
+
+    applied: list[tuple[str, str]] = []
+
+    class _StubPc:
+        async def add_remote_candidate(self, candidate, sdp_mid):
+            applied.append((candidate, sdp_mid))
+
+        async def set_remote_description(self, sdp, type_):
+            # No-op stub: apply_answer just needs the call to return.
+            return None
+
+    # Skip start_offer (which would spin a real PC); inject the stub
+    # and pretend we already sent an offer (so apply_answer's S-14
+    # origin-guard is in "offerer expects answer from this peer" mode).
+    peer._pc = _StubPc()
+    peer._expected_answer_from = "p"
+
+    # Park a candidate before apply_answer.
+    park_task = asyncio.create_task(
+        peer.add_ice_candidate(
+            candidate="candidate:3 udp 1 1.1.1.1 5000 typ host",
+            sdp_mid="0",
+        ),
+    )
+    await asyncio.sleep(0)
+    assert not park_task.done()
+    assert applied == []
+
+    # Apply the answer — _remote_description_applied flips in
+    # apply_answer, releasing the parked candidate.
+    ok = await peer.apply_answer(sdp="x", from_instance="p")
+    assert ok is True
+    await park_task
+    assert applied == [("candidate:3 udp 1 1.1.1.1 5000 typ host", "0")]
+
+
+async def test_peer_add_ice_candidate_after_close_is_silent(monkeypatch):
+    """A candidate arriving after ``close()`` returns without touching
+    the (already torn-down) PC. ``close()`` sets the event so the
+    buffered wait unblocks immediately rather than timing out."""
+    from socialhome.federation import transport as transport_mod
+
+    monkeypatch.setattr(transport_mod, "ICE_BUFFER_TIMEOUT_S", 0.05)
+
+    events, signaling = await _collect_signals()
+    peer = _RtcPeer(
+        instance_id="p",
+        ice_servers=None,
+        signaling=signaling,
+        inbound=_noop_inbound,
+    )
+    await peer.start_offer()
+    peer.close()
+    # Should return promptly (the close() set the event); _pc is now
+    # None so the call is a silent no-op.
     await peer.add_ice_candidate(candidate="c", sdp_mid="0")
 
 

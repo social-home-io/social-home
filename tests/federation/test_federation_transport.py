@@ -288,7 +288,17 @@ async def test_on_rtc_answer_unknown_peer_is_noop():
     assert t.peer_count() == 0
 
 
-async def test_on_rtc_ice_unknown_peer_is_noop():
+async def test_on_rtc_ice_unknown_peer_creates_buffering_stub(monkeypatch):
+    """ICE arriving before the matching OFFER is buffered in a stub
+    :class:`_RtcPeer` so a later OFFER can flush it — previously the
+    candidate was silently dropped, stranding ICE with no remote
+    candidates and failing the WebRTC connectivity timer."""
+    from socialhome.federation import transport as transport_mod
+
+    # Short timeout so the buffered candidate doesn't park 10s and
+    # leave a lingering task at teardown.
+    monkeypatch.setattr(transport_mod, "ICE_BUFFER_TIMEOUT_S", 0.05)
+
     https_inbox = _RecordingHttpsInbox()
     signal = _FakeSignaler()
     t = FederationTransport(
@@ -296,14 +306,21 @@ async def test_on_rtc_ice_unknown_peer_is_noop():
         https_inbox=https_inbox,
         signaling_send=signal,
     )
-    # Should not raise.
+    # Should not raise — stub peer is created and buffers the candidate.
     await t.on_rtc_ice(
         from_instance="ghost",
         payload={"candidate": "c", "sdp_mid": "0"},
     )
+    # The stub peer is registered so a follow-up OFFER will reuse it.
+    assert "ghost" in t._peers
 
 
 async def test_on_rtc_ice_accepts_trickled_candidate():
+    """A candidate arriving after the remote description has been applied
+    flushes straight through to the PC. Uses a stub peer to avoid
+    spinning up a real aiolibdatachannel PeerConnection (whose
+    iterator tasks the pytest_homeassistant_custom_component plugin
+    would flag at teardown)."""
     https_inbox = _RecordingHttpsInbox()
     signal = _FakeSignaler()
     t = FederationTransport(
@@ -311,9 +328,26 @@ async def test_on_rtc_ice_accepts_trickled_candidate():
         https_inbox=https_inbox,
         signaling_send=signal,
     )
-    inst = _fake_instance("peer-9")
-    await t._ensure_handshake(inst)
-    # Should not raise — stub peer accepts candidates into its list.
+
+    applied: list[tuple[str, str]] = []
+
+    class _StubPc:
+        async def add_remote_candidate(self, candidate, sdp_mid):
+            applied.append((candidate, sdp_mid))
+
+    # Pre-seed a stub peer that pretends its remote description is
+    # already in. ``on_rtc_ice`` will find it in ``_peers`` and forward
+    # the candidate directly.
+    peer = _RtcPeer(
+        instance_id="peer-9",
+        ice_servers=None,
+        signaling=t._signaling_factory("peer-9"),
+        inbound=t._inbound_factory("peer-9"),
+    )
+    peer._pc = _StubPc()
+    peer._remote_description_applied.set()
+    t._peers["peer-9"] = peer
+
     await t.on_rtc_ice(
         from_instance="peer-9",
         payload={
@@ -321,6 +355,7 @@ async def test_on_rtc_ice_accepts_trickled_candidate():
             "sdp_mid": "0",
         },
     )
+    assert applied == [("candidate:1 udp 1 1.1.1.1 5000 typ host", "0")]
 
 
 # ─── Facade lifecycle ──────────────────────────────────────────────────────
