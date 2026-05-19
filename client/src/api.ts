@@ -15,20 +15,47 @@ import { showToast } from '@/components/Toast'
 const _rel = (p: string): string => p.replace(/^\/+/, '')
 
 /**
- * Error thrown by ``ApiClient`` for non-2xx responses. Carries the HTTP
- * status code so consumers can branch on it (``e.status === 501`` to
- * detect a not-implemented endpoint, ``=== 404`` for missing data,
- * etc.) — previously the bare ``Error`` only carried the formatted
- * message string, forcing consumers to regex-match the message. The
- * ``HaUsersPanel`` standalone-mode banner relies on this; without the
- * status field its ``e?.status === 501`` check silently fell through
- * and the raw ``"API 501: /api/admin/ha-users"`` message landed in the
- * UI.
+ * Error thrown by ``ApiClient`` for non-2xx responses.
+ *
+ * Carries the HTTP status code (``e.status === 501`` to detect a
+ * not-implemented endpoint, ``=== 404`` for missing data, etc.) and
+ * — when the response body matches the canonical
+ * ``{"error": {"code", "detail"}}`` shape from
+ * :func:`socialhome.security.error_response` — the parsed ``code`` +
+ * ``detail`` fields so call sites can branch on the machine-readable
+ * code while showing the human-readable detail to the user.
+ *
+ * ``message`` defaults to the ``detail`` when present so the common
+ * ``showToast(err.message)`` pattern lands the friendly text the
+ * backend already provides (e.g. "Home Assistant has no picture for
+ * this user.") instead of the bare ``"API 422: /api/..."`` string.
  */
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly path: string) {
-    super(`API ${status}: ${path}`)
+  /** Machine-readable code from ``{"error": {"code": ...}}`` (e.g.
+   *  ``"UNPROCESSABLE"``, ``"NOT_IMPLEMENTED"``). ``null`` if the
+   *  response body wasn't in the canonical shape. */
+  public readonly code: string | null
+  /** Human-readable string safe to display in the UI. ``null`` if the
+   *  body had no ``detail`` field. */
+  public readonly detail: string | null
+
+  constructor(
+    public readonly status: number,
+    public readonly path: string,
+    parsed?: { code?: unknown; detail?: unknown } | null,
+  ) {
+    const code = typeof parsed?.code === 'string' ? parsed.code : null
+    const detail = typeof parsed?.detail === 'string' ? parsed.detail : null
+    // Prefer the backend's detail string as the ``Error.message`` so
+    // call sites that do ``err.message`` (which is most of them — toast
+    // strings, status banners) light up with the friendly text.
+    // Fall back to the historic ``"API <status>: <path>"`` shape so a
+    // body-less / non-JSON error still produces an actionable string
+    // rather than ``""`` or ``undefined``.
+    super(detail || `API ${status}: ${path}`)
     this.name = 'ApiError'
+    this.code = code
+    this.detail = detail
   }
 }
 
@@ -62,7 +89,25 @@ class ApiClient {
       }
       throw new Error('Unauthorized')
     }
-    if (!res.ok) throw new ApiError(res.status, path)
+    if (!res.ok) {
+      // Try to parse the canonical ``{"error": {"code", "detail"}}``
+      // body so the thrown ``ApiError`` carries the friendly detail
+      // the backend already provides. Falls back to a body-less
+      // ``ApiError`` when the response isn't JSON (proxy errors,
+      // upstream 502s, etc.) — callers still get the historic
+      // ``"API <status>: <path>"`` message in that case.
+      let parsed: { code?: unknown; detail?: unknown } | null = null
+      try {
+        const body = await res.json() as { error?: unknown }
+        if (body && typeof body === 'object'
+            && body.error && typeof body.error === 'object') {
+          parsed = body.error as { code?: unknown; detail?: unknown }
+        }
+      } catch {
+        // Non-JSON body — leave ``parsed`` as null.
+      }
+      throw new ApiError(res.status, path, parsed)
+    }
     return res
   }
 

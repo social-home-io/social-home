@@ -2,7 +2,7 @@ import { useEffect } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { currentUser } from '@/store/auth'
-import { api } from '@/api'
+import { api, ApiError } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import type { User } from '@/types'
 import { Button } from '@/components/Button'
@@ -179,10 +179,31 @@ function ProfileTab() {
       await refresh()
       showToast('Synced picture from Home Assistant', 'success')
     } catch (err: unknown) {
-      showToast(
-        `Could not fetch from HA: ${(err as Error).message ?? err}`,
-        'error',
-      )
+      // 422 with the body the route returns when HA has no
+      // entity_picture for this person — the friendliest copy says
+      // "go set one in HA first", not the raw backend detail.
+      if (err instanceof ApiError && err.status === 422) {
+        showToast(
+          'Home Assistant has no profile picture for you yet. '
+          + 'Set one on your person entity in HA, then try again.',
+          'info',
+        )
+        return
+      }
+      // 501 — adapter doesn't expose HA pictures (standalone mode).
+      if (err instanceof ApiError && err.status === 501) {
+        showToast(
+          'This Social Home isn’t running in Home Assistant mode, '
+          + 'so there’s no HA picture to sync.',
+          'info',
+        )
+        return
+      }
+      // Generic fallthrough — ``err.message`` now carries the
+      // backend's ``detail`` field (or a helpful network-error
+      // string), so the toast already reads cleanly without us
+      // prefixing "Could not fetch from HA:".
+      showToast((err as Error).message || 'Couldn’t sync from HA', 'error')
     }
   }
 
