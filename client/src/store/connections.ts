@@ -14,9 +14,22 @@ import { ws } from '@/ws'
 
 export interface Connection {
   instance_id:   string
-  display_name?: string
-  pairing_status?: string
+  /** The displayed name — local alias when set, else the peer's
+   *  advertised display_name. The backend already resolves this. */
+  display_name: string
+  /** What the peer actually advertises via the federation handshake.
+   *  Used by ``ConnectionDetail`` to render "They advertise themselves
+   *  as <X>" alongside the editable alias input. */
+  federated_display_name?: string
+  local_alias?: string | null
+  status?: string
+  paired_at?: string | null
+  source?: string
   reachable:     boolean
+  inbox_url?: string
+  intro_relay_enabled?: boolean
+  unreachable_since?: string | null
+  transport?: 'rtc' | 'https' | null
   last_seen_at?: string | null
   home_lat?: number | null
   home_lon?: number | null

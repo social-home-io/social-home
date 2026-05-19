@@ -65,7 +65,7 @@ describe('wireConnectionsWs', () => {
 
   it('peer.home_changed for unknown instance_id is a no-op', () => {
     connections.value = [
-      { instance_id: 'peer-1', reachable: true, home_lat: 1.0, home_lon: 2.0 },
+      { instance_id: 'peer-1', display_name: 'Peer 1', reachable: true, home_lat: 1.0, home_lon: 2.0 },
     ]
     handlers['peer.home_changed']({
       data: { instance_id: 'peer-unknown', latitude: 99, longitude: 99 },
@@ -77,7 +77,7 @@ describe('wireConnectionsWs', () => {
 
   it('peer.home_changed is a no-op when instance_id is missing', () => {
     connections.value = [
-      { instance_id: 'peer-1', reachable: true, home_lat: 1.0, home_lon: 2.0 },
+      { instance_id: 'peer-1', display_name: 'Peer 1', reachable: true, home_lat: 1.0, home_lon: 2.0 },
     ]
     handlers['peer.home_changed']({
       data: { latitude: 99, longitude: 99 },
@@ -87,7 +87,7 @@ describe('wireConnectionsWs', () => {
 
   it('peer.home_changed is a no-op when latitude is null', () => {
     connections.value = [
-      { instance_id: 'peer-1', reachable: true, home_lat: 1.0, home_lon: 2.0 },
+      { instance_id: 'peer-1', display_name: 'Peer 1', reachable: true, home_lat: 1.0, home_lon: 2.0 },
     ]
     handlers['peer.home_changed']({
       data: { instance_id: 'peer-1', longitude: 9.99 },
