@@ -390,6 +390,11 @@ class RemoteInstance:
     #: Never federated — purely a display string for this household.
     #: When ``None`` the SPA falls back to :attr:`display_name`.
     local_alias: str | None = None
+    #: Whether to share this household's home location with this peer.
+    #: Never federated on its own — purely a local opt-in/opt-out toggle.
+    #: Defaults to ``True`` so existing paired peers keep the pre-toggle
+    #: behaviour (share coordinates when the peer supports §4.5).
+    share_home: bool = True
 
     def is_reachable(self) -> bool:
         return self.unreachable_since is None

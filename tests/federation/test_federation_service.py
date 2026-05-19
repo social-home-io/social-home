@@ -183,6 +183,17 @@ class InMemoryFederationRepo:
                 home_lon=round(float(longitude), 4),
             )
 
+    async def set_share_home(
+        self,
+        instance_id: str,
+        *,
+        value: bool,
+    ) -> None:
+        if instance_id in self._instances:
+            self._instances[instance_id] = dataclasses.replace(
+                self._instances[instance_id], share_home=value
+            )
+
     async def cleanup_expired_pairings(self) -> int:
         return 0
 

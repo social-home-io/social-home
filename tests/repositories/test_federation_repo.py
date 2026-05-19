@@ -527,3 +527,84 @@ async def test_update_instance_home_unknown_id_is_noop(env):
         longitude=2.0,
     )
     assert await env.fed_repo.get_instance("never-paired") is None
+
+
+# ─── share_home (per-pair home-location sharing toggle) ──────────────
+
+
+async def test_set_share_home_defaults_to_true(env):
+    """Freshly saved instance has share_home=True (DB DEFAULT 1)."""
+    inst = RemoteInstance(
+        id="peer-sh-default",
+        display_name="Dave",
+        remote_identity_pk="33" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://dave/wh",
+        local_inbox_id="wh-dave",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+    got = await env.fed_repo.get_instance("peer-sh-default")
+    assert got.share_home is True
+
+
+async def test_set_share_home_round_trips(env):
+    """set_share_home False then True — both values persist correctly."""
+    inst = RemoteInstance(
+        id="peer-sh-toggle",
+        display_name="Eve",
+        remote_identity_pk="44" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://eve/wh",
+        local_inbox_id="wh-eve",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+
+    # Disable sharing.
+    await env.fed_repo.set_share_home("peer-sh-toggle", value=False)
+    got = await env.fed_repo.get_instance("peer-sh-toggle")
+    assert got.share_home is False
+    assert got.display_name == "Eve"  # other columns untouched
+
+    # Re-enable sharing.
+    await env.fed_repo.set_share_home("peer-sh-toggle", value=True)
+    got = await env.fed_repo.get_instance("peer-sh-toggle")
+    assert got.share_home is True
+
+
+async def test_save_instance_does_not_clobber_share_home(env):
+    """A subsequent ``save_instance`` (e.g. after URL_UPDATED or a
+    proto_version bump) must NOT reset the operator's share_home flag.
+    The flag is local-only state and the UPSERT intentionally omits it
+    from the DO UPDATE SET list."""
+    inst = RemoteInstance(
+        id="peer-sh-persist",
+        display_name="Frank",
+        remote_identity_pk="55" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://frank/wh",
+        local_inbox_id="wh-frank",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+    await env.fed_repo.set_share_home("peer-sh-persist", value=False)
+
+    # Re-save the instance (e.g. URL_UPDATED rewrote the URL).
+    inst2 = RemoteInstance(
+        id="peer-sh-persist",
+        display_name="Frank",
+        remote_identity_pk="55" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://frank.NEW/wh",
+        local_inbox_id="wh-frank",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst2)
+    got = await env.fed_repo.get_instance("peer-sh-persist")
+    assert got.share_home is False  # preserved across re-save
+    assert got.remote_inbox_url == "https://frank.NEW/wh"  # URL did update
