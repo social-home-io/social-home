@@ -35,13 +35,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import aiolibdatachannel as rtc
 import orjson
 from aiohttp import ClientTimeout
 
+from ..domain.events import PeerTransportChanged
 from ..domain.federation import DeliveryResult, FederationEventType, RemoteInstance
+
+if TYPE_CHECKING:
+    from ..infrastructure.event_bus import EventBus
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +185,8 @@ class _RtcPeer:
         "_expected_answer_from",
         "_send_hwm",
         "_remote_description_applied",
+        "_bus",
+        "_published_open",
     )
 
     def __init__(
@@ -191,6 +197,7 @@ class _RtcPeer:
         signaling: Callable[[FederationEventType, dict], Awaitable[None]],
         inbound: _InboundCallback,
         send_hwm: int = SEND_HWM_BYTES,
+        bus: "EventBus | None" = None,
     ) -> None:
         self.instance_id = instance_id
         self._ice_servers = ice_servers or []
@@ -216,6 +223,25 @@ class _RtcPeer:
         # :meth:`apply_answer` once the remote description is in;
         # :meth:`add_ice_candidate` waits on it.
         self._remote_description_applied = asyncio.Event()
+        self._bus = bus
+        self._published_open = False
+
+    # ─── Transport change publication ─────────────────────────────────────
+
+    async def _publish_open_if_needed(self) -> None:
+        """Publish ``PeerTransportChanged(transport='rtc')`` exactly once
+        per channel-open edge. Called from ``_drain_channel`` when the
+        DataChannel transitions to OPEN.
+        """
+        if self._published_open or self._bus is None:
+            return
+        self._published_open = True
+        await self._bus.publish(
+            PeerTransportChanged(
+                instance_id=self.instance_id,
+                transport="rtc",
+            ),
+        )
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -382,6 +408,7 @@ class _RtcPeer:
             return
         log.info("fed RTC channel open to %s", self.instance_id)
         self._open.set()
+        await self._publish_open_if_needed()
         try:
             async for msg in channel:
                 try:
@@ -445,6 +472,12 @@ class _RtcPeer:
         ``pc.close()`` tears down the PeerConnection; aiolibdatachannel
         auto-cancels any tasks registered via ``pc.spawn_task`` so we
         don't need to track them ourselves.
+
+        If the DataChannel had previously been open, schedules a
+        ``PeerTransportChanged(transport='https')`` publication via the
+        running event loop so listeners know the peer has fallen back to
+        HTTPS inbox. No event is emitted if the channel never opened —
+        the transport never flipped away from HTTPS in the first place.
         """
         self._closed = True
         self._open.clear()
@@ -459,6 +492,16 @@ class _RtcPeer:
                 pass
         self._pc = None
         self._channel = None
+        if self._published_open and self._bus is not None and self._loop is not None:
+            self._published_open = False
+            self._loop.create_task(
+                self._bus.publish(
+                    PeerTransportChanged(
+                        instance_id=self.instance_id,
+                        transport="https",
+                    ),
+                )
+            )
 
 
 # ─── Facade ────────────────────────────────────────────────────────────────
@@ -491,6 +534,7 @@ class FederationTransport:
         "_peers",
         "_lock",
         "_inbound_handler",
+        "_bus",
     )
 
     def __init__(
@@ -503,6 +547,7 @@ class FederationTransport:
         ],
         ice_servers: list[dict] | None = None,
         inbound_handler: Callable[[str, bytes], Awaitable[dict]] | None = None,
+        bus: "EventBus | None" = None,
     ) -> None:
         self._own_instance_id = own_instance_id
         self._https_inbox = https_inbox
@@ -514,6 +559,7 @@ class FederationTransport:
         # Signature: ``async (instance_id, raw_body) -> dict``.
         # Attached by FederationService after construction.
         self._inbound_handler = inbound_handler
+        self._bus = bus
 
     def set_ice_servers(self, servers: list[dict]) -> None:
         """Update the ICE-server list used for *future* peer handshakes.
@@ -579,6 +625,7 @@ class FederationTransport:
                 ice_servers=self._ice_servers,
                 signaling=self._signaling_factory(instance.id),
                 inbound=self._inbound_factory(instance.id),
+                bus=self._bus,
             )
             self._peers[instance.id] = peer
         # Release lock before the network call — the signalling round
@@ -643,6 +690,7 @@ class FederationTransport:
                     ice_servers=self._ice_servers,
                     signaling=self._signaling_factory(from_instance),
                     inbound=self._inbound_factory(from_instance),
+                    bus=self._bus,
                 )
                 self._peers[from_instance] = peer
         sdp = str(payload.get("sdp") or "")
@@ -698,6 +746,7 @@ class FederationTransport:
                     ice_servers=self._ice_servers,
                     signaling=self._signaling_factory(from_instance),
                     inbound=self._inbound_factory(from_instance),
+                    bus=self._bus,
                 )
                 self._peers[from_instance] = peer
         await peer.add_ice_candidate(
