@@ -43,7 +43,7 @@ from ..repositories.dm_routing_repo import (
     utcnow_iso,
 )
 from ..repositories.federation_repo import AbstractFederationRepo
-from ._visibility import hidden_for_peer
+from .visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..repositories.peer_user_visibility_repo import (

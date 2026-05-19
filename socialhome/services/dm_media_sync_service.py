@@ -50,7 +50,7 @@ import aiofiles.os
 from ..domain.federation import FederationEventType
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
-from ._visibility import hidden_for_peer
+from .visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService

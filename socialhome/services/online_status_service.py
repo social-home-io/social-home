@@ -52,7 +52,7 @@ from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.ws_manager import WebSocketManager
 from ..repositories.user_repo import AbstractUserRepo
-from ._visibility import hidden_for_peer
+from .visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService

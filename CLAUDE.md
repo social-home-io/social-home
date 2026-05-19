@@ -147,6 +147,16 @@ The spec is the source of truth — if code and spec disagree, fix the code.
 - Never add `*Addendum`, `*Extension`, or `*Complete` subclasses.
   Merge changes directly into the existing class.
 - Never use inheritance to patch gaps. Fix the original class.
+- **Module filenames never start with a leading underscore.** A new
+  shared helper lives at `socialhome/services/visibility.py`, not
+  `socialhome/services/_visibility.py`; the matching test is
+  `tests/services/test_visibility.py`. Privacy is signalled by package
+  boundaries and what the package's `__init__.py` re-exports, not by
+  the filename. The same applies to repo-local DTOs and any other
+  internal module — pick a plain name. Existing `_`-prefixed modules
+  (e.g. `repositories/_spec.py`) are grandfathered; do not add new
+  ones, and rename when you touch them for unrelated reasons only if
+  the rename is mechanical.
 
 ### Frontend (SPA) & ingress
 

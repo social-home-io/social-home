@@ -35,7 +35,7 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
-from ._visibility import hidden_for_peer
+from .visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 from ..domain.federation import FederationEventType
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
-from ._visibility import hidden_for_peer
+from .visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..repositories.peer_user_visibility_repo import (

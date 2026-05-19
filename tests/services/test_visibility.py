@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-from socialhome.services._visibility import hidden_for_peer
+from socialhome.services.visibility import hidden_for_peer
 
 
 class _FakeRepo:

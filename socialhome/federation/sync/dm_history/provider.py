@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ....domain.federation import FederationEventType
-from ....services._visibility import hidden_for_peer
+from ....services.visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ....domain.federation import FederationEvent
