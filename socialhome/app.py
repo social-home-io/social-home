@@ -271,17 +271,39 @@ async def _redeliver_envelope(
 
     * 2xx → :attr:`DeliveryOutcome.SUCCESS`.
     * 4xx → :attr:`DeliveryOutcome.PERMANENT` (drop). The federation
-      inbox returns 4xx for replay-cache hits, expired timestamps,
-      banned senders, and malformed envelopes — none of which a retry
-      can fix. Most commonly this is 410 ``Replay detected``, fired
-      when a previously-mangled response (e.g. the HA integration's
-      pre-2026.5.18 charset bug) left the row queued even though the
-      peer already processed it.
+      inbox returns 4xx for several distinct reasons — most are
+      genuinely "the receiver has this state already" (success-
+      equivalent) and the rest are "the receiver will never accept
+      this envelope" (irrecoverable). Either way retrying won't help:
+
+      * **410 ``Replay detected``** — receiver already saw this
+        ``msg_id``; their state is consistent with ours. Most
+        commonly the residue of a previously-mangled response (e.g.
+        the HA integration's pre-2026.5.18 charset bug) that left
+        the row queued even though the peer processed it.
+      * **410 timestamp skew** — envelope is older than ±300s; the
+        receiver dropped it on §24.11 anti-replay grounds. Retrying
+        with a new timestamp would require resigning, which would
+        change ``msg_id`` — out of scope for the outbox.
+      * **403 banned / signature invalid** — receiver refuses this
+        sender. Dropping the entry is the right call: retrying gives
+        the sender no path to recover, and the ban / key revocation
+        is authoritative on the receiver side.
+      * **400 / 404** — malformed envelope or unknown inbox. Same
+        reasoning — the next attempt POSTs identical bytes.
+
     * 5xx, timeout, network error → :attr:`DeliveryOutcome.TRANSIENT`
       (reschedule with backoff).
     """
     instance = await federation_repo.get_instance(entry.instance_id)
     if instance is None:
+        # Peer was unpaired (the row in ``remote_instances`` is gone)
+        # between the original ``send_event`` enqueue and this retry —
+        # behaviour change vs. pre-:class:`DeliveryOutcome`, where this
+        # path returned False and burned through MAX_ATTEMPTS before
+        # giving up. Retrying serves no purpose: there is no row to
+        # mark reachable, no URL to POST to, and the operator already
+        # decided to drop the peer.
         log.warning("outbox: unknown instance %s — dropping", entry.instance_id)
         return DeliveryOutcome.PERMANENT
 
