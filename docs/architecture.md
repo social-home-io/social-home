@@ -124,6 +124,14 @@ event needs and whether the peer is reachable:
 | 2 — warm | WebRTC DataChannel `sync-v1` | Bulk content sync (initial sync after pairing, recovery after long offline). |
 | 3 — cold | HTTPS inbox `POST /federation/inbox/{id}` | Fallback before/while DataChannel is down, and for peers behind a blocked UDP path. |
 
+The Connections page renders the current per-peer transport tier as
+an inline glyph (⚡ for WebRTC, ☁ for HTTPS), updated live via the
+`peer.transport_changed` WS frame. The Manage detail panel adds a
+plain-English explanation of which tier is active and, for peers
+that recently received a relayed DM, the relay path. The signal is
+strictly diagnostic — federation behaviour is identical at every
+tier; only the latency differs.
+
 Both tiers run their inbound traffic through the same §24.11
 validation pipeline (parse → timestamp → instance lookup → ban check
 → Ed25519 verify → replay cache → decrypt → dispatch). Whether an
