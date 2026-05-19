@@ -157,24 +157,38 @@ That single command runs the full sequence:
      verify failure. New unexpected logs surface in the next run as
      "log audit — …" so they get either fixed or explicitly excused.
 
-5. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
+5. ``visibility`` — per-pair user-visibility filter. Provisions a
+   second local user on **a** (``ada``), confirms **b** mirrors her
+   in ``/api/friends``, then hides ada from **b** via
+   ``PATCH /api/pairing/connections/{b_id}/visible-users``. Asserts
+   **b**'s mirror drops ada. **While ada is hidden** the step also
+   fires a DM (ada → bob), a moment (ada), and an ``audience_kind=
+   all_paired`` highlight (ada) and asserts **none** of them reach
+   **b** — exercising the DM_MESSAGE, MOMENT_CREATED, and HIGHLIGHT_*
+   outbound gates. Gamma is the positive control: ada is **not**
+   hidden from **c**, so the same highlight is asserted to land on
+   Gamma's ``/api/highlights``. Then flips ada back to visible and
+   asserts **b** sees her again.
+
+6. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
    post one ``audience_kind=all_paired`` highlight while **c** is
    offline, restarts **c**, waits across the second outbox-backoff
    slot (~35 s), and asserts the queued highlight lands. Validates
    the §24 ``ResilientFederationOutbox`` flush-on-reachable path.
 
-6. The harness exits non-zero if any assertion fails or any process
+7. The harness exits non-zero if any assertion fails or any process
    crashed during the run.
 
 The canonical ``all`` sequence runs ``up → pair → traffic →
-calendar → verify → relay-pair → replay`` in that order. ``gfs-up`` /
-``gfs-pair`` / ``gfs-down`` stay opt-in (they spin up a separate
-GFS process and aren't required to validate the HFS↔HFS surface).
+calendar → verify → relay-pair → visibility → replay`` in that
+order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down`` stay opt-in (they
+spin up a separate GFS process and aren't required to validate the
+HFS↔HFS surface).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
-/ ``relay-pair`` / ``replay``); state is persisted to
-``/tmp/sh-demo/state.json`` between calls.
+/ ``relay-pair`` / ``visibility`` / ``replay``); state is persisted
+to ``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands
 
