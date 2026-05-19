@@ -10,7 +10,9 @@ fallback branches without the native binding.
 
 from __future__ import annotations
 
+import asyncio
 
+from socialhome.domain.events import PeerTransportChanged
 from socialhome.domain.federation import (
     DeliveryResult,
     FederationEventType,
@@ -23,6 +25,7 @@ from socialhome.federation.transport import (
     HttpsInboxTransport,
     _RtcPeer,
 )
+from socialhome.infrastructure.event_bus import EventBus
 
 
 # ─── Fakes ────────────────────────────────────────────────────────────────
@@ -471,3 +474,156 @@ async def test_https_inbox_transport_network_error_is_failure():
         envelope_dict={"x": 1},
     )
     assert ok is False and status is None
+
+
+# ─── PeerTransportChanged publication ─────────────────────────────────────
+
+
+async def test_rtc_peer_publishes_transport_changed_on_open():
+    """Opening the DataChannel publishes PeerTransportChanged(transport='rtc')."""
+    bus = EventBus()
+    received: list[PeerTransportChanged] = []
+
+    async def _record(e: PeerTransportChanged) -> None:
+        received.append(e)
+
+    bus.subscribe(PeerTransportChanged, _record)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+        bus=bus,
+    )
+
+    peer = _RtcPeer(
+        instance_id="peer-tx",
+        ice_servers=None,
+        signaling=t._signaling_factory("peer-tx"),
+        inbound=t._inbound_factory("peer-tx"),
+        bus=bus,
+    )
+    # Simulate the open edge — set the asyncio.Event the way
+    # _drain_channel does once the channel reports OPEN.
+    peer._open.set()
+    await peer._publish_open_if_needed()
+
+    assert len(received) == 1
+    assert received[0].instance_id == "peer-tx"
+    assert received[0].transport == "rtc"
+
+
+async def test_rtc_peer_publishes_transport_changed_on_close():
+    """Closing the peer (after a successful open) publishes
+    PeerTransportChanged(transport='https')."""
+    bus = EventBus()
+    received: list[PeerTransportChanged] = []
+
+    async def _record(e: PeerTransportChanged) -> None:
+        received.append(e)
+
+    bus.subscribe(PeerTransportChanged, _record)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+        bus=bus,
+    )
+    peer = _RtcPeer(
+        instance_id="peer-cx",
+        ice_servers=None,
+        signaling=t._signaling_factory("peer-cx"),
+        inbound=t._inbound_factory("peer-cx"),
+        bus=bus,
+    )
+    peer._open.set()
+    peer._loop = asyncio.get_running_loop()
+    await peer._publish_open_if_needed()
+    received.clear()
+
+    peer.close()
+    # close() schedules a task — yield to let it run.
+    await asyncio.sleep(0)
+
+    assert len(received) == 1
+    assert received[0].instance_id == "peer-cx"
+    assert received[0].transport == "https"
+
+
+async def test_rtc_peer_does_not_publish_close_without_prior_open():
+    """A peer that never opened doesn't publish a spurious 'https' on close.
+    The transport never *flipped* — it was always HTTPS."""
+    bus = EventBus()
+    received: list[PeerTransportChanged] = []
+
+    async def _record(e: PeerTransportChanged) -> None:
+        received.append(e)
+
+    bus.subscribe(PeerTransportChanged, _record)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+        bus=bus,
+    )
+    peer = _RtcPeer(
+        instance_id="peer-stub",
+        ice_servers=None,
+        signaling=t._signaling_factory("peer-stub"),
+        inbound=t._inbound_factory("peer-stub"),
+        bus=bus,
+    )
+    peer.close()
+    await asyncio.sleep(0)
+    assert received == []
+
+
+async def test_rtc_peer_close_is_idempotent():
+    """A double close() after a prior open publishes 'https' exactly once,
+    not twice — the second close() is a no-op for the bus."""
+    bus = EventBus()
+    received: list[PeerTransportChanged] = []
+
+    async def _record(e: PeerTransportChanged) -> None:
+        received.append(e)
+
+    bus.subscribe(PeerTransportChanged, _record)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+        bus=bus,
+    )
+    peer = _RtcPeer(
+        instance_id="peer-double-close",
+        ice_servers=None,
+        signaling=t._signaling_factory("peer-double-close"),
+        inbound=t._inbound_factory("peer-double-close"),
+        bus=bus,
+    )
+    peer._loop = asyncio.get_running_loop()
+    peer._open.set()
+    await peer._publish_open_if_needed()
+    received.clear()
+
+    peer.close()
+    peer.close()  # second call — must not publish again
+
+    # Let the create_task'd publishes settle.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert len(received) == 1
+    assert received[0].instance_id == "peer-double-close"
+    assert received[0].transport == "https"

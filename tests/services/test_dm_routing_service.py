@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -30,6 +30,29 @@ from socialhome.services.dm_routing_service import (
     RelayEnvelope,
     _hash_mod,
 )
+
+
+# ─── Test helpers ─────────────────────────────────────────────────────────
+
+
+async def _seed_relay(svc: DmRoutingService, *, target: str, via: str, ts: str) -> None:
+    """Seed a relay path row into the SQLite repo for test fixtures.
+
+    Calls the test-only :meth:`SqliteDmRoutingRepo.insert_relay_path_for_test`
+    directly on the concrete repo — keeping production service code free of
+    test-seeding logic.  The cast lives here (test boundary) where it belongs.
+    """
+    repo = svc._repo
+    assert isinstance(repo, SqliteDmRoutingRepo), (
+        "_seed_relay requires SqliteDmRoutingRepo"
+    )
+    await repo.insert_relay_path_for_test(
+        conversation_id=f"test-relay-{target}",
+        sender_user_id="test-sender",
+        target_instance=target,
+        via=via,
+        ts=ts,
+    )
 
 
 # ─── Fakes ────────────────────────────────────────────────────────────────
@@ -626,3 +649,30 @@ def test_hash_mod_distributes_across_range():
 
 def test_hash_mod_zero_n():
     assert _hash_mod("x", 0) == 0
+
+
+# ─── last_relay_for ───────────────────────────────────────────────────────
+
+
+async def test_last_relay_for_returns_recent_relay(env):
+    """A DM that relayed via instance X in the last hour shows up."""
+    _, _, svc, _ = env
+    now = datetime.now(timezone.utc).isoformat()
+    await _seed_relay(svc, target="peer-target", via="peer-relay", ts=now)
+    got = await svc.last_relay_for("peer-target")
+    assert got is not None
+    assert got.via == "peer-relay"
+
+
+async def test_last_relay_for_returns_none_when_older_than_24h(env):
+    """Relays older than 24h don't surface."""
+    _, _, svc, _ = env
+    long_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    await _seed_relay(svc, target="peer-target", via="peer-relay", ts=long_ago)
+    assert await svc.last_relay_for("peer-target") is None
+
+
+async def test_last_relay_for_returns_none_for_unknown_peer(env):
+    """Peer with no recorded relays returns None."""
+    _, _, svc, _ = env
+    assert await svc.last_relay_for("never-relayed") is None

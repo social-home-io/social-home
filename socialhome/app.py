@@ -1903,8 +1903,10 @@ def create_app(config: Config | None = None) -> web.Application:
             signaling_send=_signaling_send,
             ice_servers=_default_ice_servers(config),
             inbound_handler=federation_service.handle_inbound_rtc,
+            bus=bus,
         )
         federation_service.attach_transport(fed_transport)
+        app[K.federation_transport_key] = fed_transport
 
         # Replay any operator-pushed STUN/TURN list (PUT /api/ha/integration/
         # ice-servers) so the live FederationService + transport see the

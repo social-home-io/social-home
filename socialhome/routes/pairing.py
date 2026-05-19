@@ -20,14 +20,17 @@ frontend NetworkMap component consumes.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from aiohttp import web
 
 from ..app_keys import (
     auto_pair_coordinator_key,
     auto_pair_inbox_key,
+    dm_routing_service_key,
     federation_repo_key,
     federation_service_key,
+    federation_transport_key,
     pairing_relay_queue_key,
     peer_user_visibility_repo_key,
     platform_adapter_key,
@@ -40,12 +43,20 @@ from .base import BaseView
 log = logging.getLogger(__name__)
 
 
-def _instance_dict(inst) -> dict:
+def _instance_dict(
+    inst, *, transport_state: Literal["rtc", "https"] | None = None
+) -> dict:
     """Public-shape view of a :class:`RemoteInstance`.
 
     Omits the KEK-encrypted session keys (``key_self_to_remote`` /
     ``key_remote_to_self``) and the ``routing_secret`` — those are stored
     fields, never exposed over HTTP (§27.9 SENSITIVE_FIELDS).
+
+    ``transport_state`` is the current federation transport for this
+    peer: ``"rtc"`` (WebRTC DataChannel open), ``"https"`` (HTTPS
+    inbox fallback), or ``None`` (unreachable / pending — caller
+    short-circuits when reachability is False or status is not
+    confirmed).
     """
     status = (
         inst.status.value if isinstance(inst.status, PairingStatus) else inst.status
@@ -71,6 +82,7 @@ def _instance_dict(inst) -> dict:
         "local_alias": local_alias,
         "status": status,
         "reachable": reachable,
+        "transport": transport_state,
         "paired_at": getattr(inst, "paired_at", None),
         "source": (inst.source.value if hasattr(inst.source, "value") else inst.source),
         # Monotonic protocol version the peer last advertised via
@@ -211,7 +223,17 @@ class PairingConnectionCollectionView(BaseView):
     async def get(self) -> web.Response:
         self.user  # auth check
         instances = await self.svc(federation_repo_key).list_instances()
-        return web.json_response([_instance_dict(i) for i in instances])
+        transport = self.request.app.get(federation_transport_key)
+        rows = []
+        for inst in instances:
+            ts: Literal["rtc", "https"] | None = None
+            if inst.status is PairingStatus.CONFIRMED and inst.is_reachable():
+                if transport is not None and transport.is_ready(inst.id):
+                    ts = "rtc"
+                else:
+                    ts = "https"
+            rows.append(_instance_dict(inst, transport_state=ts))
+        return web.json_response(rows)
 
 
 class AutoPairViaView(BaseView):
@@ -639,4 +661,30 @@ class PairingConnectionAliasView(BaseView):
                 "local_alias": updated.local_alias,
                 "effective_display_name": updated.effective_display_name,
             }
+        )
+
+
+class PairingConnectionTransportDetailView(BaseView):
+    """``GET /api/pairing/connections/{instance_id}/transport-detail``.
+
+    Admin-only side panel data for the SPA's Manage detail view.
+    Returns ``{"last_relay": {"via": <iid>, "ts": <iso>} | null}`` —
+    the most recent DM that relayed via a third household within
+    the last 24 hours. Used to surface "Last DM took the relay path"
+    on the connection detail panel.
+    """
+
+    async def get(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        instance_id = self.match("instance_id")
+        svc = self.svc(dm_routing_service_key)
+        entry = await svc.last_relay_for(instance_id)
+        return web.json_response(
+            {
+                "last_relay": (
+                    {"via": entry.via, "ts": entry.ts} if entry is not None else None
+                ),
+            },
         )

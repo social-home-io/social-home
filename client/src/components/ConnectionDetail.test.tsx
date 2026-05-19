@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, fireEvent, screen, cleanup } from '@testing-library/preact'
+import { render, fireEvent, screen, cleanup, waitFor } from '@testing-library/preact'
 
 const apiGet = vi.fn()
 const apiPatch = vi.fn()
@@ -140,5 +140,106 @@ describe('ConnectionDetail — alias rename row', () => {
       '/api/pairing/connections/z7k63zfi/alias',
       { alias: 'Mom' },
     )
+  })
+})
+
+describe('Transport row', () => {
+  it('shows Direct (WebRTC DataChannel) for rtc', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ transport: 'rtc' }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(screen.getByText(/Direct \(WebRTC DataChannel\)/i)).toBeTruthy()
+  })
+
+  it('shows HTTPS inbox (fallback) for https', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ transport: 'https' }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(screen.getByText(/HTTPS inbox \(fallback\)/i)).toBeTruthy()
+  })
+
+  it('omits the Transport row when transport is null', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ transport: null }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(screen.queryByText(/Transport/i)).toBeNull()
+  })
+})
+
+describe('DM path row', () => {
+  it('renders when /transport-detail returns a recent relay', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url.includes('/transport-detail')) {
+        return Promise.resolve({ last_relay: { via: 'peer-relay', ts: '2026-05-19T07:30:00+00:00' } })
+      }
+      return Promise.resolve({ users: [] })
+    })
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ transport: 'https' }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText(/Last DM took the relay path/i)).toBeTruthy()
+      expect(screen.getByText(/peer-relay/)).toBeTruthy()
+    })
+  })
+
+  it('does not render when /transport-detail returns null', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url.includes('/transport-detail')) {
+        return Promise.resolve({ last_relay: null })
+      }
+      return Promise.resolve({ users: [] })
+    })
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ transport: 'rtc' }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    await waitFor(() =>
+      expect(screen.queryByText(/Last DM took the relay path/i)).toBeNull(),
+    )
+  })
+
+  it('hides the DM path row silently on fetch error', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url.includes('/transport-detail')) {
+        return Promise.reject(new Error('Network error'))
+      }
+      return Promise.resolve({ users: [] })
+    })
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ transport: 'https' }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    // The Transport row should still render — proves the panel didn't crash:
+    expect(screen.getByText(/HTTPS inbox \(fallback\)/i)).toBeTruthy()
+    expect(screen.queryByText(/Last DM took the relay path/i)).toBeNull()
   })
 })

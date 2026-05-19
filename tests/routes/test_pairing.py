@@ -3,15 +3,47 @@
 from __future__ import annotations
 
 
-from socialhome.app_keys import federation_repo_key
+from datetime import datetime, timezone
+
+from socialhome.app_keys import (
+    dm_routing_service_key,
+    federation_repo_key,
+    federation_transport_key,
+)
 from socialhome.config import Config
+from socialhome.crypto import (
+    derive_instance_id,
+    generate_identity_keypair,
+)
 from socialhome.domain.federation import (
     InstanceSource,
     PairingStatus,
     RemoteInstance,
 )
+from socialhome.repositories.dm_routing_repo import SqliteDmRoutingRepo
+from socialhome.services.dm_routing_service import DmRoutingService
 
 from .conftest import _auth
+
+
+async def _seed_relay(svc: DmRoutingService, *, target: str, via: str, ts: str) -> None:
+    """Seed a relay path row into the SQLite repo for test fixtures.
+
+    Calls the test-only :meth:`SqliteDmRoutingRepo.insert_relay_path_for_test`
+    directly on the concrete repo — keeping production service code free of
+    test-seeding logic.  The cast lives here (test boundary) where it belongs.
+    """
+    repo = svc._repo
+    assert isinstance(repo, SqliteDmRoutingRepo), (
+        "_seed_relay requires SqliteDmRoutingRepo"
+    )
+    await repo.insert_relay_path_for_test(
+        conversation_id=f"test-relay-{target}",
+        sender_user_id="test-sender",
+        target_instance=target,
+        via=via,
+        ts=ts,
+    )
 
 
 def _fake_instance(iid: str = "peer-1") -> RemoteInstance:
@@ -647,5 +679,183 @@ async def test_alias_patch_requires_admin(client):
         "/api/pairing/connections/peer-alias-6/alias",
         json={"alias": "nope"},
         headers=_auth(raw),
+    )
+    assert r.status == 403
+
+
+async def test_connections_response_carries_transport_rtc(client):
+    """A confirmed peer whose DataChannel is open reports transport='rtc'."""
+    kp = generate_identity_keypair()
+    peer = RemoteInstance(
+        id=derive_instance_id(kp.public_key),
+        display_name="peer-rtc",
+        remote_identity_pk=kp.public_key.hex(),
+        key_self_to_remote="k",
+        key_remote_to_self="k",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-rtc",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(peer)
+
+    class _AlwaysOpenTransport:
+        def is_ready(self, instance_id):
+            return True
+
+    client.app[federation_transport_key] = _AlwaysOpenTransport()
+
+    r = await client.get(
+        "/api/connections",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    rows = await r.json()
+    row = next(x for x in rows if x["instance_id"] == peer.id)
+    assert row["transport"] == "rtc"
+
+
+async def test_connections_response_transport_https_when_channel_down(client):
+    """Same peer, transport service reports not-ready → transport='https'."""
+    kp = generate_identity_keypair()
+    peer = RemoteInstance(
+        id=derive_instance_id(kp.public_key),
+        display_name="peer-https",
+        remote_identity_pk=kp.public_key.hex(),
+        key_self_to_remote="k",
+        key_remote_to_self="k",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-https",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(peer)
+
+    class _NeverOpenTransport:
+        def is_ready(self, instance_id):
+            return False
+
+    client.app[federation_transport_key] = _NeverOpenTransport()
+
+    r = await client.get(
+        "/api/connections",
+        headers=_auth(client._tok),
+    )
+    rows = await r.json()
+    row = next(x for x in rows if x["instance_id"] == peer.id)
+    assert row["transport"] == "https"
+
+
+async def test_connections_response_transport_null_when_unreachable(client):
+    """An unreachable confirmed peer has transport=null — we don't claim
+    a transport for a peer we can't reach."""
+    kp = generate_identity_keypair()
+    peer = RemoteInstance(
+        id=derive_instance_id(kp.public_key),
+        display_name="peer-unreach",
+        remote_identity_pk=kp.public_key.hex(),
+        key_self_to_remote="k",
+        key_remote_to_self="k",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-unreach",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(peer)
+    await fed_repo.mark_unreachable(peer.id)
+
+    class _NeverOpenTransport:
+        def is_ready(self, instance_id):
+            return False
+
+    client.app[federation_transport_key] = _NeverOpenTransport()
+
+    r = await client.get(
+        "/api/connections",
+        headers=_auth(client._tok),
+    )
+    rows = await r.json()
+    row = next(x for x in rows if x["instance_id"] == peer.id)
+    assert row["transport"] is None
+
+
+async def test_connections_response_transport_https_when_no_rtc_wired(client):
+    """No federation_transport_key in app → confirmed peer still gets
+    transport='https'. Models a deployment without RTC wiring (e.g. a
+    stripped harness) where federation has to fall back to HTTPS-only.
+    """
+    kp = generate_identity_keypair()
+    peer = RemoteInstance(
+        id=derive_instance_id(kp.public_key),
+        display_name="peer-no-rtc",
+        remote_identity_pk=kp.public_key.hex(),
+        key_self_to_remote="k",
+        key_remote_to_self="k",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-no-rtc",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(peer)
+
+    # Deliberately drop the transport key — simulate a no-RTC build.
+    client.app[federation_transport_key] = None
+
+    r = await client.get(
+        "/api/connections",
+        headers=_auth(client._tok),
+    )
+    rows = await r.json()
+    row = next(x for x in rows if x["instance_id"] == peer.id)
+    assert row["transport"] == "https"
+
+
+# ─── Transport detail (Task 6) ───────────────────────────────────────────────
+
+
+async def test_transport_detail_returns_recent_relay(client):
+    """For a peer with a recent DM relay, the endpoint returns
+    {last_relay: {via, ts}}."""
+    svc = client.app[dm_routing_service_key]
+    now = datetime.now(timezone.utc).isoformat()
+    await _seed_relay(svc, target="peer-target", via="peer-relay", ts=now)
+
+    r = await client.get(
+        "/api/pairing/connections/peer-target/transport-detail",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["last_relay"] is not None
+    assert body["last_relay"]["via"] == "peer-relay"
+    assert body["last_relay"]["ts"]  # non-empty
+
+
+async def test_transport_detail_returns_null_when_no_recent_relay(client):
+    r = await client.get(
+        "/api/pairing/connections/peer-no-relay/transport-detail",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["last_relay"] is None
+
+
+async def test_transport_detail_admin_only(client):
+    """Non-admin user gets 403."""
+    from socialhome.app_keys import db_key as _db_key
+
+    db = client.app[_db_key]
+    await db.enqueue(
+        "UPDATE users SET is_admin=0 WHERE user_id=?",
+        (client._uid,),
+    )
+    r = await client.get(
+        "/api/pairing/connections/peer-x/transport-detail",
+        headers=_auth(client._tok),
     )
     assert r.status == 403

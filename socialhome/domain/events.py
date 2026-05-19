@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .calendar import CalendarEvent
@@ -891,6 +891,27 @@ class ConnectionReachable(DomainEvent):
     """
 
     instance_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class PeerTransportChanged(DomainEvent):
+    """A paired peer's federation transport flipped between WebRTC
+    DataChannel and HTTPS inbox.
+
+    Published from :class:`socialhome.federation.transport._RtcPeer`
+    on every open/close edge. The realtime service re-emits this as
+    the ``peer.transport_changed`` WS frame so the Connections page
+    can patch the row in place without a refetch.
+
+    ``transport`` is the new effective transport from the perspective
+    of outbound delivery — ``"rtc"`` when the DataChannel just opened,
+    ``"https"`` when it just closed (the peer remains reachable via
+    HTTPS inbox).
+    """
+
+    instance_id: str
+    transport: Literal["rtc", "https"]
     occurred_at: datetime = field(default_factory=_now)
 
 

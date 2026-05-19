@@ -25,6 +25,7 @@ Security invariants enforced here (§CP):
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import uuid
 from collections import deque
@@ -56,6 +57,10 @@ MAX_SEARCH_NODES: int = 200
 #: How long a ``dm_relay_seen`` entry stays fresh.
 DEDUP_TTL_SECONDS: int = 3600
 
+#: Window used by :meth:`DmRoutingService.last_relay_for`.
+#: Relay decisions older than this are not surfaced to the UI.
+_LAST_RELAY_WINDOW_HOURS: int = 24
+
 
 # ─── Errors ──────────────────────────────────────────────────────────────
 
@@ -70,6 +75,23 @@ class NoRouteError(DmRoutingError):
 
 class RelayBlockedError(DmRoutingError):
     """§CP.F3 — protected minor cannot relay."""
+
+
+# ─── Domain types ────────────────────────────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class RelayEntry:
+    """Most-recent relay decision targeting a peer, within the
+    :data:`_LAST_RELAY_WINDOW_HOURS` window.
+
+    Returned by :meth:`DmRoutingService.last_relay_for`; consumed by
+    the SPA's Connections detail panel to surface "Last DM took the
+    relay path via X" to operators.
+    """
+
+    via: str  # instance_id of the first relay hop (B in A→B→C)
+    ts: str  # ISO 8601 ``last_used_at`` of the relay path record
 
 
 # ─── Envelope ────────────────────────────────────────────────────────────
@@ -514,6 +536,34 @@ class DmRoutingService:
             datetime.now(timezone.utc) - timedelta(seconds=DEDUP_TTL_SECONDS)
         )
         return await self._repo.prune_seen(cutoff_iso=cutoff_dt.isoformat())
+
+    # ─── Relay diagnostics ────────────────────────────────────────────────
+
+    async def last_relay_for(self, instance_id: str) -> RelayEntry | None:
+        """Return the most recent DM relay decision targeting ``instance_id``
+        within the last :data:`_LAST_RELAY_WINDOW_HOURS`.
+
+        Used by the federation Connections detail panel to surface
+        "Last DM took the relay path via X" to the operator. Returns
+        ``None`` outside the window or for peers we've never relayed to.
+
+        Only multi-hop paths are considered (``hop_count > 1``) — a
+        direct single-hop send to a paired peer is not a relay.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(hours=_LAST_RELAY_WINDOW_HOURS)
+        ).isoformat()
+        row = await self._repo.fetch_last_relay_for(instance_id, cutoff_iso=cutoff)
+        if row is None:
+            return None
+        try:
+            path = json.loads(row["relay_path"])
+            via = str(path[0]) if path else ""
+        except ValueError, IndexError, KeyError:
+            return None
+        if not via:
+            return None
+        return RelayEntry(via=via, ts=row["last_used_at"])
 
     # ─── Sender sequence ─────────────────────────────────────────────────
 
