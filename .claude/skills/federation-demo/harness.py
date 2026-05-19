@@ -1741,12 +1741,45 @@ def cmd_verify() -> None:
             else:
                 print(f"  {viewer} sees {other} at proto_version={pv} ✓")
 
-    # 8. Crash check — every instance still alive (WebRTC didn't blow up).
+    # 8. Transport: every confirmed inner-ring pair should have ridden the
+    #    WebRTC DataChannel up by the time ``verify`` runs. The traffic /
+    #    calendar round-trips give the channel ~30 s to settle. The
+    #    assertion catches a regression where the ``peer.transport_changed``
+    #    publication path silently breaks or the DataChannel fails to come
+    #    up.
+    for src in ("a", "b", "c"):
+        info = state["instances"][src]
+        s, conns = _request(
+            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+            token=info["token"],
+        )
+        _must(f"connections({src})", s, conns)
+        for row in conns:
+            if row.get("status") != "confirmed":
+                continue
+            # d isn't part of the inner-ring traffic test — it's only
+            # paired with b in the demo, so the channel may or may not
+            # have flipped to RTC by verify time.
+            d_iid = state["instances"]["d"]["instance_id"]
+            if row["instance_id"] == d_iid:
+                continue
+            transport = row.get("transport") or "https"
+            if transport != "rtc":
+                failures.append(
+                    f"{src} sees {row['display_name']!r} on transport "
+                    f"{transport!r}, expected 'rtc' after settle window"
+                )
+            else:
+                print(
+                    f"  {src} sees {row['display_name']} on transport=rtc ✓"
+                )
+
+    # 9. Crash check — every instance still alive (WebRTC didn't blow up).
     for label, info in state["instances"].items():
         if not _alive(info["pid"]):
             failures.append(f"{label}: process pid={info['pid']} is gone")
 
-    # 9. Log audit — scan each backend's stdout/stderr for unhandled
+    # 10. Log audit — scan each backend's stdout/stderr for unhandled
     #    exceptions, ERROR-level lines, federation-pipeline rejects.
     #    Anything we can't account for (i.e. doesn't match the
     #    benign-noise allow-list) becomes a verify failure so the
