@@ -15,3 +15,15 @@ def test_post_created_is_domain_event():
     e = PostCreated(post=p)
     assert isinstance(e, DomainEvent)
     assert e.occurred_at is not None
+
+
+def test_peer_transport_changed_shape():
+    """PeerTransportChanged has instance_id and transport fields."""
+    from socialhome.domain.events import PeerTransportChanged
+
+    e = PeerTransportChanged(instance_id="iid-1", transport="rtc")
+    assert e.instance_id == "iid-1"
+    assert e.transport == "rtc"
+
+    e2 = PeerTransportChanged(instance_id="iid-2", transport="https")
+    assert e2.transport == "https"

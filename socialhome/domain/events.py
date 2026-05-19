@@ -895,6 +895,27 @@ class ConnectionReachable(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class PeerTransportChanged(DomainEvent):
+    """A paired peer's federation transport flipped between WebRTC
+    DataChannel and HTTPS inbox.
+
+    Published from :class:`socialhome.federation.transport._RtcPeer`
+    on every open/close edge. The realtime service re-emits this as
+    the ``peer.transport_changed`` WS frame so the Connections page
+    can patch the row in place without a refetch.
+
+    ``transport`` is the new effective transport from the perspective
+    of outbound delivery — ``"rtc"`` when the DataChannel just opened,
+    ``"https"`` when it just closed (the peer remains reachable via
+    HTTPS inbox).
+    """
+
+    instance_id: str
+    transport: str  # "rtc" | "https"
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class PairingIntroReceived(DomainEvent):
     """Target side of §11.9 — a peer has introduced us to a new instance."""
 
