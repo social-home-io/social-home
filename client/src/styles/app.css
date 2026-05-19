@@ -16756,3 +16756,21 @@ a.sh-btn--ghost:hover {
   font-size: var(--sh-font-size-xs);
   line-height: 1.35;
 }
+
+/* Transport indicator glyph — inline ⚡ / ☁ between the display name
+ * and the type badge on each connection card. Fixed width so the card
+ * doesn't reflow when the transport flips live via WS. */
+.sh-transport-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.sh-transport-icon--rtc {
+  color: var(--sh-success);
+}
+.sh-transport-icon--https {
+  color: var(--sh-warning);
+}

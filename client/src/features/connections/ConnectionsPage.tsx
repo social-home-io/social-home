@@ -45,6 +45,7 @@ interface Connection {
   inbox_url?: string
   intro_relay_enabled?: boolean
   unreachable_since?: string | null
+  transport?: 'rtc' | 'https' | null
 }
 
 interface AutoPairRequest {
@@ -74,6 +75,38 @@ function hfsStatusDotClass(conn: Connection): string {
   if (!conn.reachable) return 'sh-status-dot sh-status-dot--unreachable'
   if (conn.status === 'confirmed') return 'sh-status-dot sh-status-dot--active'
   return 'sh-status-dot sh-status-dot--pending'
+}
+
+function transportIcon(t: Connection['transport']) {
+  if (t === 'rtc') {
+    return (
+      <span
+        class="sh-transport-icon sh-transport-icon--rtc"
+        title="Direct connection — low latency"
+        aria-label="Direct (WebRTC)"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24"
+             fill="currentColor" aria-hidden="true">
+          <path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />
+        </svg>
+      </span>
+    )
+  }
+  if (t === 'https') {
+    return (
+      <span
+        class="sh-transport-icon sh-transport-icon--https"
+        title="Via HTTPS — works, but slower than direct"
+        aria-label="Via HTTPS (fallback)"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24"
+             fill="currentColor" aria-hidden="true">
+          <path d="M19 18H6a4 4 0 010-8 5 5 0 019.6-2A4 4 0 0119 18z" />
+        </svg>
+      </span>
+    )
+  }
+  return null
 }
 
 async function loadConnections() {
@@ -181,7 +214,15 @@ export default function ConnectionsPage() {
     const off3 = ws.on('pairing.auto_pair_requested', () => {
       if (currentUser.value?.is_admin) void loadAutoPairRequests()
     })
-    return () => { off1(); off2(); off3() }
+    const off4 = ws.on('peer.transport_changed', (msg) => {
+      const { instance_id, transport } = msg.data as { instance_id: string; transport: 'rtc' | 'https' }
+      connections.value = connections.value.map(c =>
+        c.instance_id === instance_id
+          ? { ...c, transport }
+          : c,
+      )
+    })
+    return () => { off1(); off2(); off3(); off4() }
   }, [])
 
   const confirmed = connections.value.filter(c => c.status === 'confirmed')
@@ -284,6 +325,7 @@ export default function ConnectionsPage() {
                 <div class="sh-connection-info">
                   <span class={hfsStatusDotClass(c)} />
                   <strong>{c.display_name}</strong>
+                  {transportIcon(c.transport)}
                   <span class="sh-type-badge">Household</span>
                   {c.status !== 'confirmed' && (
                     <span class="sh-muted">
