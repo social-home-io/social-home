@@ -11,7 +11,7 @@
  *   3. Global Federation Servers.
  */
 import { useEffect, useState } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
@@ -22,6 +22,7 @@ import { ConnectionDetail } from '@/components/ConnectionDetail'
 import { showToast } from '@/components/Toast'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
+import { selfLat, selfLon } from '@/store/connections'
 import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
@@ -46,6 +47,8 @@ interface Connection {
   intro_relay_enabled?: boolean
   unreachable_since?: string | null
   transport?: 'rtc' | 'https' | null
+  home_lat?: number | null
+  home_lon?: number | null
 }
 
 interface AutoPairRequest {
@@ -64,6 +67,7 @@ const autoPairRequests = signal<AutoPairRequest[]>([])
 const loading = signal(true)
 const gfsLoading = signal(true)
 const disconnectTarget = signal<GfsConnection | null>(null)
+
 
 function statusDotClass(status: string): string {
   if (status === 'active' || status === 'confirmed') return 'sh-status-dot sh-status-dot--active'
@@ -201,6 +205,8 @@ export default function ConnectionsPage() {
   useTitle(t('connections.title'))
   const [autoPairBusy, setAutoPairBusy] = useState(false)
   const [detail, setDetail] = useState<Connection | null>(null)
+  /** Active view toggle — resets to 'list' on mount. */
+  const view = useSignal<'list' | 'map'>('list')
 
   useEffect(() => {
     void loadConnections()
@@ -224,7 +230,26 @@ export default function ConnectionsPage() {
           : c,
       )
     })
-    return () => { off1(); off2(); off3(); off4() }
+    const off5 = ws.on('peer.home_changed', (msg) => {
+      const d = msg.data as unknown as {
+        instance_id: string
+        latitude: number
+        longitude: number
+      }
+      if (!d?.instance_id || d?.latitude == null || d?.longitude == null) return
+      connections.value = connections.value.map(c =>
+        c.instance_id === d.instance_id
+          ? { ...c, home_lat: d.latitude, home_lon: d.longitude }
+          : c,
+      )
+    })
+    const off6 = ws.on('local.home_changed', (msg) => {
+      const d = msg.data as unknown as { latitude: number; longitude: number }
+      if (d?.latitude == null || d?.longitude == null) return
+      selfLat.value = d.latitude
+      selfLon.value = d.longitude
+    })
+    return () => { off1(); off2(); off3(); off4(); off5(); off6() }
   }, [])
 
   const confirmed = connections.value.filter(c => c.status === 'confirmed')
@@ -234,6 +259,37 @@ export default function ConnectionsPage() {
   return (
     <div class="sh-connections">
 
+      {/* ── List / Map toggle ─────────────────────────────────────── */}
+      <div class="sh-connections-view-toggle">
+        <div class="sh-shopping-grouptoggle" role="group" aria-label="View">
+          <button
+            type="button"
+            class={view.value === 'list' ? 'sh-chip sh-chip--active' : 'sh-chip'}
+            aria-pressed={view.value === 'list'}
+            onClick={() => { view.value = 'list' }}
+          >
+            List
+          </button>
+          <button
+            type="button"
+            class={view.value === 'map' ? 'sh-chip sh-chip--active' : 'sh-chip'}
+            aria-pressed={view.value === 'map'}
+            onClick={() => { view.value = 'map' }}
+          >
+            Map
+          </button>
+        </div>
+      </div>
+
+      {/* ── Map placeholder (Task 11 will replace this) ───────────── */}
+      {view.value === 'map' && (
+        <div class="sh-connections-map-placeholder">
+          Map coming in Task 11 (federation-map)
+        </div>
+      )}
+
+      {view.value === 'list' && (
+      <>
       {/* ── Incoming auto-pair requests (admin-only inbox) ─────────── */}
       {isAdmin && autoPairRequests.value.length > 0 && (
         <section class="sh-auto-pair-inbox">
@@ -399,6 +455,8 @@ export default function ConnectionsPage() {
           </div>
         )}
       </section>
+      </>
+      )}
 
       <PairingFlow onGfsConnected={loadGfsConnections} />
       <AutoPairDialog onPaired={() => void loadConnections()} />
