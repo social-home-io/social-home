@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ....domain.federation import FederationEventType
-from ....services.visibility import hidden_for_peer
+from ....services.visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ....domain.federation import FederationEvent
@@ -30,7 +30,7 @@ CHUNK_SIZE: int = 50
 MAX_MESSAGES_PER_REQUEST: int = 5_000
 
 
-class DmHistoryProvider:
+class DmHistoryProvider(VisibilityMixin):
     """Answers :data:`FederationEventType.DM_HISTORY_REQUEST` events.
 
     Streams missed messages back to the requester in order, then sends a
@@ -51,7 +51,6 @@ class DmHistoryProvider:
         "_federation",
         "_acks",
         "_user_repo",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -109,7 +108,7 @@ class DmHistoryProvider:
         # Visibility gate: if any local participant is hidden from the peer,
         # suppress the chunk stream entirely.
         if self._visibility_repo is not None and self._user_repo is not None:
-            hidden = await hidden_for_peer(self._visibility_repo, event.from_instance)
+            hidden = await self.hidden_for_peer(event.from_instance)
             if hidden:
                 members = await self._conversation_repo.list_members(conversation_id)
                 local_user_ids: set[str] = set()

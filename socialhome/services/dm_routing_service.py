@@ -43,7 +43,7 @@ from ..repositories.dm_routing_repo import (
     utcnow_iso,
 )
 from ..repositories.federation_repo import AbstractFederationRepo
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..repositories.peer_user_visibility_repo import (
@@ -160,7 +160,7 @@ class RelayEnvelope:
 # ─── Service ─────────────────────────────────────────────────────────────
 
 
-class DmRoutingService:
+class DmRoutingService(VisibilityMixin):
     """BFS-based DM relay routing across the paired instance graph."""
 
     __slots__ = (
@@ -169,7 +169,6 @@ class DmRoutingService:
         "_federation",
         "_own_instance_id",
         "_child_protection",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -454,10 +453,7 @@ class DmRoutingService:
             # next hop the envelope is dropped here (forwarding hops in
             # ``handle_inbound_relay`` cannot gate — they see opaque
             # ciphertext and don't know the sender).
-            hidden = await hidden_for_peer(
-                self._visibility_repo,
-                next_hop,
-            )
+            hidden = await self.hidden_for_peer(next_hop)
             if sender_user_id in hidden:
                 log.debug(
                     "DM_RELAY suppressed: sender %s hidden from %s",

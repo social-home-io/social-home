@@ -50,7 +50,7 @@ import aiofiles.os
 from ..domain.federation import FederationEventType
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -103,7 +103,7 @@ MAX_BLOB_CHUNK_BYTES: int = 256 * 1024
 SINGLE_CHUNK_BYTES_THRESHOLD: int = 1024 * 1024
 
 
-class DmMediaSyncService:
+class DmMediaSyncService(VisibilityMixin):
     """Build previews, enqueue + flush ``DM_MEDIA_BLOB`` outbox rows."""
 
     __slots__ = (
@@ -116,7 +116,6 @@ class DmMediaSyncService:
         "_interval",
         "_task",
         "_stop",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -367,10 +366,7 @@ class DmMediaSyncService:
                 )
                 message = None
             if message is not None:
-                hidden = await hidden_for_peer(
-                    self._visibility_repo,
-                    entry.target_instance_id,
-                )
+                hidden = await self.hidden_for_peer(entry.target_instance_id)
                 if message.sender_user_id in hidden:
                     log.debug(
                         "DM_MEDIA_BLOB suppressed: sender %s hidden from %s",

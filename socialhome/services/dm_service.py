@@ -44,7 +44,7 @@ from ..federation import compat
 from ..infrastructure.event_bus import EventBus
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from .audio_transcription_service import AudioTranscriptionService  # noqa: F401
@@ -92,7 +92,7 @@ class MediaRequiresDirectPairingError(ValueError):
     """
 
 
-class DmService:
+class DmService(VisibilityMixin):
     """Conversation + message CRUD for household DMs."""
 
     __slots__ = (
@@ -107,7 +107,6 @@ class DmService:
         "_media_dir",
         "_pending_transcribe_tasks",
         "_own_instance_id",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -1119,7 +1118,7 @@ class DmService:
             # silently — the sender's local conversation row still records
             # the message (forward-only semantics).
             if sender_user_id is not None:
-                hidden = await hidden_for_peer(self._visibility_repo, inst)
+                hidden = await self.hidden_for_peer(inst)
                 if sender_user_id in hidden:
                     log.debug(
                         "dm fan-out suppressed: sender %s hidden from %s",

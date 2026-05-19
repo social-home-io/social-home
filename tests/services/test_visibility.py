@@ -1,9 +1,9 @@
-"""Tests for the shared visibility helper."""
+"""Tests for the shared visibility mixin."""
 
 from __future__ import annotations
 
 
-from socialhome.services.visibility import hidden_for_peer
+from socialhome.services.visibility import VisibilityMixin
 
 
 class _FakeRepo:
@@ -19,23 +19,34 @@ class _BrokenRepo:
         raise RuntimeError("db went away")
 
 
+class _Service(VisibilityMixin):
+    """Minimal concrete subclass used to exercise the mixin in isolation."""
+
+    __slots__ = ()
+
+    def __init__(self, visibility_repo) -> None:
+        self._visibility_repo = visibility_repo
+
+
 async def test_hidden_for_peer_returns_set_for_known_peer():
-    repo = _FakeRepo({"peer-1": {"u-alice", "u-bob"}})
-    assert await hidden_for_peer(repo, "peer-1") == {"u-alice", "u-bob"}
+    svc = _Service(_FakeRepo({"peer-1": {"u-alice", "u-bob"}}))
+    assert await svc.hidden_for_peer("peer-1") == {"u-alice", "u-bob"}
 
 
 async def test_hidden_for_peer_returns_empty_for_unknown_peer():
-    repo = _FakeRepo({"peer-1": {"u-alice"}})
-    assert await hidden_for_peer(repo, "peer-2") == set()
+    svc = _Service(_FakeRepo({"peer-1": {"u-alice"}}))
+    assert await svc.hidden_for_peer("peer-2") == set()
 
 
 async def test_hidden_for_peer_returns_empty_when_repo_is_none():
     """Back-compat: tests that don't wire the repo default to visible."""
-    assert await hidden_for_peer(None, "peer-anything") == set()
+    svc = _Service(None)
+    assert await svc.hidden_for_peer("peer-anything") == set()
 
 
 async def test_hidden_for_peer_swallows_repo_errors_and_defaults_visible():
     """Fail-soft: a transient repo error must not block federation
     outbound. Default-visible matches the existing
     ``ProfileFederationOutbound`` behaviour."""
-    assert await hidden_for_peer(_BrokenRepo(), "peer-1") == set()
+    svc = _Service(_BrokenRepo())
+    assert await svc.hidden_for_peer("peer-1") == set()

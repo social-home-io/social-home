@@ -38,7 +38,7 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType
 from ..domain.moment import MOMENT_MAX_HOPS
 from ..infrastructure.event_bus import EventBus
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class MomentFederationOutbound:
+class MomentFederationOutbound(VisibilityMixin):
     """Publish moment mutations to the 3-hop peer mesh."""
 
     __slots__ = (
@@ -59,7 +59,6 @@ class MomentFederationOutbound:
         "_federation_repo",
         "_user_repo",
         "_relay_policy",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -157,7 +156,7 @@ class MomentFederationOutbound:
         target = await self._home_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
             return
-        hidden = await hidden_for_peer(self._visibility_repo, target)
+        hidden = await self.hidden_for_peer(target)
         if event.reactor_user_id in hidden:
             return
         await self._send_to(
@@ -246,9 +245,8 @@ class MomentFederationOutbound:
                 continue
             if author_user_id is not None:
                 if instance_id not in hidden_per_peer:
-                    hidden_per_peer[instance_id] = await hidden_for_peer(
-                        self._visibility_repo,
-                        instance_id,
+                    hidden_per_peer[instance_id] = await self.hidden_for_peer(
+                        instance_id
                     )
                 if author_user_id in hidden_per_peer[instance_id]:
                     continue

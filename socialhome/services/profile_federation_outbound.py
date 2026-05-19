@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 from ..domain.events import UserProfileUpdated
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -37,14 +37,13 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class ProfileFederationOutbound:
+class ProfileFederationOutbound(VisibilityMixin):
     """Publish :class:`UserProfileUpdated` events as ``USER_UPDATED``."""
 
     __slots__ = (
         "_bus",
         "_federation",
         "_federation_repo",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -96,10 +95,7 @@ class ProfileFederationOutbound:
             # ``hidden_for_peer`` is fail-soft — repo errors default to
             # visible so we never silently lose profile updates on a
             # transient infra blip.
-            hidden = await hidden_for_peer(
-                self._visibility_repo,
-                instance_id,
-            )
+            hidden = await self.hidden_for_peer(instance_id)
             if event.user_id in hidden:
                 continue
             try:

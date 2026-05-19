@@ -52,7 +52,7 @@ from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.ws_manager import WebSocketManager
 from ..repositories.user_repo import AbstractUserRepo
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -73,7 +73,7 @@ class _RemoteEntry:
     last_seen_at: datetime | None
 
 
-class OnlineStatusService:
+class OnlineStatusService(VisibilityMixin):
     """Track WS-session presence and publish online/idle/offline events."""
 
     #: A user is *idle* when every open session has been silent for at
@@ -98,7 +98,6 @@ class OnlineStatusService:
         "_federation",
         "_federation_repo",
         "_own_instance_id",
-        "_visibility_repo",
         "_sessions",
         "_idle_users",
         "_last_persisted",
@@ -389,7 +388,7 @@ class OnlineStatusService:
             inst_id = getattr(inst, "id", None) or getattr(inst, "instance_id", None)
             if not inst_id or inst_id == self._own_instance_id:
                 continue
-            hidden = await hidden_for_peer(self._visibility_repo, inst_id)
+            hidden = await self.hidden_for_peer(inst_id)
             if user_id in hidden:
                 continue
             try:

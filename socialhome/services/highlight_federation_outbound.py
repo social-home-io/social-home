@@ -35,7 +35,7 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
-from .visibility import hidden_for_peer
+from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class HighlightFederationOutbound:
+class HighlightFederationOutbound(VisibilityMixin):
     """Publish Highlight mutations to paired peer instances."""
 
     __slots__ = (
@@ -54,7 +54,6 @@ class HighlightFederationOutbound:
         "_federation",
         "_federation_repo",
         "_user_repo",
-        "_visibility_repo",
     )
 
     def __init__(
@@ -160,7 +159,7 @@ class HighlightFederationOutbound:
         target = await self._home_instance_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
             return
-        hidden = await hidden_for_peer(self._visibility_repo, target)
+        hidden = await self.hidden_for_peer(target)
         if event.viewer_user_id in hidden:
             return
         await self._send_to(
@@ -181,7 +180,7 @@ class HighlightFederationOutbound:
         target = await self._home_instance_or_none(event.author_user_id)
         if target is None or target == self._federation.own_instance_id:
             return
-        hidden = await hidden_for_peer(self._visibility_repo, target)
+        hidden = await self.hidden_for_peer(target)
         if event.reactor_user_id in hidden:
             return
         if event.emoji is None:
@@ -276,7 +275,7 @@ class HighlightFederationOutbound:
     ) -> None:
         targets = await self._resolve_audience(audience_kind, audience)
         for instance_id in targets:
-            hidden = await hidden_for_peer(self._visibility_repo, instance_id)
+            hidden = await self.hidden_for_peer(instance_id)
             if author_user_id in hidden:
                 continue
             await self._send_to(
