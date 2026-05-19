@@ -106,7 +106,9 @@ function transportIcon(t: Connection['transport']) {
       </span>
     )
   }
-  return null
+  return (
+    <span class="sh-transport-icon" aria-hidden="true" />
+  )
 }
 
 async function loadConnections() {

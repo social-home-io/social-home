@@ -153,7 +153,11 @@ describe('ConnectionsPage', () => {
         expect(container.querySelector('.sh-connection-card')).not.toBeNull()
       })
 
-      expect(container.querySelector('.sh-transport-icon')).toBeNull()
+      // Placeholder span reserves the 18px slot but renders nothing visible
+      const slot = container.querySelector('.sh-transport-icon')
+      expect(slot).not.toBeNull()
+      expect(slot?.querySelector('svg')).toBeNull()
+      expect(slot?.getAttribute('title')).toBeNull()
     })
 
     it('swaps the glyph in place when peer.transport_changed fires', async () => {
