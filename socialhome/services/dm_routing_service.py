@@ -31,7 +31,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import Iterable, cast
 
 from ..domain.federation import (
     FederationEventType,
@@ -39,6 +39,7 @@ from ..domain.federation import (
 )
 from ..repositories.dm_routing_repo import (
     AbstractDmRoutingRepo,
+    SqliteDmRoutingRepo,
     normalize_peers,
     utcnow_iso,
 )
@@ -580,7 +581,8 @@ class DmRoutingService:
         controlled ``target``, ``via``, and ``ts`` without going through
         the full BFS + conversation machinery.
         """
-        await self._repo.insert_relay_path_for_test(
+        sqlite_repo = cast(SqliteDmRoutingRepo, self._repo)
+        await sqlite_repo.insert_relay_path_for_test(
             conversation_id=f"test-relay-{target}",
             sender_user_id="test-sender",
             target_instance=target,

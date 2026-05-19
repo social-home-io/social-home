@@ -113,16 +113,6 @@ class AbstractDmRoutingRepo(Protocol):
         cutoff_iso: str,
     ) -> dict | None: ...
 
-    async def insert_relay_path_for_test(
-        self,
-        *,
-        conversation_id: str,
-        sender_user_id: str,
-        target_instance: str,
-        via: str,
-        ts: str,
-    ) -> None: ...
-
 
 class SqliteDmRoutingRepo:
     """SQLite-backed :class:`AbstractDmRoutingRepo`."""
@@ -494,7 +484,11 @@ class SqliteDmRoutingRepo:
         via: str,
         ts: str,
     ) -> None:
-        """Test helper — seed a multi-hop relay path row directly.
+        """Test seeding helper — deliberately NOT on the Protocol contract.
+
+        Direct INSERT into ``conversation_relay_paths`` for unit-test
+        fixtures. Production callers should use the regular
+        ``select_conversation_path`` / ``get_or_select_path`` write path.
 
         Avoids the full BFS + conversation machinery so unit tests can
         control the ``target_instance``, ``via`` (first hop), and
