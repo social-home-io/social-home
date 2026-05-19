@@ -30,6 +30,7 @@ class AbstractMomentRepo(Protocol):
     async def save(self, moment: Moment) -> Moment: ...
     async def get(self, moment_id: str) -> Moment | None: ...
     async def delete(self, moment_id: str) -> None: ...
+    async def delete_by_author(self, author_user_id: str) -> int: ...
     async def list_visible_to(
         self,
         viewer_user_id: str,
@@ -165,6 +166,28 @@ class SqliteMomentRepo:
             "DELETE FROM moments WHERE id=?",
             (moment_id,),
         )
+
+    async def delete_by_author(self, author_user_id: str) -> int:
+        """Hard-delete every moment authored by ``author_user_id``.
+
+        Drives the §Connection-Detail visibility cascade: when an inbound
+        ``USER_REMOVED`` lands for this user, every moment they ever
+        posted is removed from our local view. Forward-only would leave
+        orphan content from a user whose row was just deprovisioned —
+        the receiver-side rule treats hide as full removal, matching
+        the "hide = remove" UX the SPA copy promises.
+        """
+        row = await self._db.fetchone(
+            "SELECT COUNT(*) AS n FROM moments WHERE author_user_id=?",
+            (author_user_id,),
+        )
+        n = int(row["n"]) if row else 0
+        if n:
+            await self._db.enqueue(
+                "DELETE FROM moments WHERE author_user_id=?",
+                (author_user_id,),
+            )
+        return n
 
     async def list_visible_to(
         self,

@@ -509,6 +509,12 @@ def _wire_federation_stack(
         sig_suite=config.federation_sig_suite,
     )
     federation_service.attach_session(http_session)
+    # Enables the §24.11 receiver-side deprovisioned-author filter so
+    # envelopes from a remote user we've marked ``deprovisioned_at``
+    # (e.g. via an inbound ``USER_REMOVED``) get dropped before
+    # dispatch — backstops the sender-side per-pair gate for events
+    # that arrived via mesh relay (Momentum 3-hop).
+    federation_service.attach_user_repo(user_repo)
 
     async def _get_max_seq(space_id: str) -> int:
         row = await db.fetchone(

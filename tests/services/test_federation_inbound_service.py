@@ -566,6 +566,162 @@ async def test_user_removed_without_existing_remote_is_noop(inbound):
     )
 
 
+async def test_user_removed_cascades_to_moments_highlights_and_dms(db, bus):
+    """USER_REMOVED purges every moment, highlight, and conversation
+    the deprovisioned user is involved in. Matches the "hide = remove"
+    semantic the SPA copy promises in ConnectionDetail."""
+    from datetime import timedelta
+
+    from socialhome.domain.conversation import (
+        Conversation,
+        ConversationMessage,
+        ConversationType,
+    )
+    from socialhome.domain.highlight import Highlight, HighlightFrame
+    from socialhome.domain.moment import Moment
+    from socialhome.repositories.highlight_repo import SqliteHighlightRepo
+    from socialhome.repositories.moment_repo import SqliteMomentRepo
+
+    moment_repo = SqliteMomentRepo(db)
+    highlight_repo = SqliteHighlightRepo(db)
+    conv_repo = SqliteConversationRepo(db)
+
+    inbound = FederationInboundService(
+        bus=bus,
+        conversation_repo=conv_repo,
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        highlight_repo=highlight_repo,
+        moment_repo=moment_repo,
+    )
+
+    hidden_uid = "u-hidden"
+    other_uid = "u-other"
+    now = datetime.now(timezone.utc)
+
+    # Seed: a moment from the hidden user and one from someone else.
+    await moment_repo.save(
+        Moment(
+            id="m-hidden",
+            author_user_id=hidden_uid,
+            content="hidden-author moment",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id=None,
+            origin_instance_id="peer-a",
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(days=1)).isoformat(),
+            is_public=False,
+            received_via="household",
+        )
+    )
+    await moment_repo.save(
+        Moment(
+            id="m-other",
+            author_user_id=other_uid,
+            content="other moment",
+            media_url=None,
+            media_type=None,
+            duration_ms=None,
+            parent_moment_id=None,
+            origin_instance_id="peer-a",
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(days=1)).isoformat(),
+            is_public=False,
+            received_via="household",
+        )
+    )
+
+    # Seed: a highlight from the hidden user + one frame.
+    from socialhome.domain.highlight import (
+        HighlightAudience,
+        HighlightFrameType,
+    )
+
+    await highlight_repo.save_highlight(
+        Highlight(
+            id="h-hidden",
+            author_user_id=hidden_uid,
+            highlight_date=now.date().isoformat(),
+            audience_kind=HighlightAudience.ALL_PAIRED,
+            audience=(),
+            created_at=now.isoformat(),
+            expires_at=(now + timedelta(days=1)).isoformat(),
+        )
+    )
+    await highlight_repo.save_frame(
+        HighlightFrame(
+            id="f-hidden",
+            highlight_id="h-hidden",
+            sequence=0,
+            frame_type=HighlightFrameType.IMAGE,
+            media_url="https://example.invalid/h.jpg",
+            caption_text="hidden",
+            caption_emoji=None,
+            duration_ms=None,
+            created_at=now.isoformat(),
+        )
+    )
+
+    # Seed: a conversation with a message from the hidden user. Plus
+    # a second conversation untouched by the hidden user to confirm
+    # we don't over-purge.
+    await conv_repo.create(
+        Conversation(
+            id="conv-touched",
+            type=ConversationType.DM,
+            created_at=now,
+        )
+    )
+    await conv_repo.save_message(
+        ConversationMessage(
+            id="msg-1",
+            conversation_id="conv-touched",
+            sender_user_id=hidden_uid,
+            content="hi from hidden",
+            created_at=now,
+        )
+    )
+    await conv_repo.create(
+        Conversation(
+            id="conv-clean",
+            type=ConversationType.DM,
+            created_at=now,
+        )
+    )
+    await conv_repo.save_message(
+        ConversationMessage(
+            id="msg-2",
+            conversation_id="conv-clean",
+            sender_user_id=other_uid,
+            content="hi from other",
+            created_at=now,
+        )
+    )
+
+    # Fire USER_REMOVED for the hidden user.
+    await inbound._on_user_removed(
+        _event(
+            FederationEventType.USER_REMOVED,
+            {"user_id": hidden_uid},
+        )
+    )
+
+    # Hidden user's moment is gone; other user's moment survives.
+    assert await moment_repo.get("m-hidden") is None
+    assert await moment_repo.get("m-other") is not None
+
+    # Hidden user's highlight is gone.
+    assert await highlight_repo.get_highlight("h-hidden") is None
+
+    # Conversation touched by the hidden user is hard-deleted; the
+    # clean one survives.
+    assert await conv_repo.get("conv-touched") is None
+    assert await conv_repo.get("conv-clean") is not None
+
+
 async def test_space_comment_created_persists_and_publishes(db, bus, inbound):
     await db.enqueue(
         """INSERT INTO spaces(id, name, owner_instance_id, owner_username,

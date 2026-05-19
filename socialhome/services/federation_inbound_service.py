@@ -1062,18 +1062,88 @@ class FederationInboundService:
         await self._upsert_remote_user(event.from_instance, event.payload)
 
     async def _on_user_removed(self, event: "FederationEvent") -> None:
-        """Mark a remote user as deprovisioned locally.
+        """Mark a remote user as deprovisioned + cascade-purge their content.
 
-        The row stays in ``remote_users`` so historical posts / comments
-        keep resolving to a display name, but member-list and
-        autocomplete queries filter it out via
-        ``list_remote_for_instance``.
+        Two layers of effect:
+
+        * **Deprovision**: the ``remote_users`` row stays so historical
+          posts / comments keep resolving to a display name, but the
+          ``deprovisioned_at`` flag filters the user out of member
+          lists and autocomplete via
+          ``list_remote_for_instance``. The §24.11 receiver-side
+          filter also keys off this flag to drop future user-scoped
+          envelopes from the same user (even ones that arrive via
+          mesh relay).
+        * **Cascade purge**: every moment, highlight, and DM
+          conversation involving this user is hard-deleted. Matches
+          the "hide = remove" semantic the SPA copy promises in
+          ConnectionDetail — forward-only would leave orphan content
+          from a user who just disappeared from the household view.
         """
         user_id = str(event.payload.get("user_id") or "")
         if not user_id:
             return
         log.info("USER_REMOVED: flagging remote user %s as deprovisioned", user_id)
         await self._user_repo.mark_remote_deprovisioned(user_id)
+
+        if self._moment_repo is not None:
+            try:
+                n = await self._moment_repo.delete_by_author(user_id)
+                if n:
+                    log.info(
+                        "USER_REMOVED cascade: purged %d moments by %s",
+                        n,
+                        user_id,
+                    )
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning(
+                    "USER_REMOVED cascade: moment purge failed for %s: %s",
+                    user_id,
+                    exc,
+                )
+
+        if self._highlight_repo is not None:
+            try:
+                n = await self._highlight_repo.delete_by_author(user_id)
+                if n:
+                    log.info(
+                        "USER_REMOVED cascade: purged %d highlights by %s",
+                        n,
+                        user_id,
+                    )
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning(
+                    "USER_REMOVED cascade: highlight purge failed for %s: %s",
+                    user_id,
+                    exc,
+                )
+
+        try:
+            conv_ids = await self._conversation_repo.list_conversations_with_sender(
+                user_id,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning(
+                "USER_REMOVED cascade: conversation lookup failed for %s: %s",
+                user_id,
+                exc,
+            )
+            conv_ids = []
+        for conv_id in conv_ids:
+            try:
+                await self._conversation_repo.hard_delete(conv_id)
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning(
+                    "USER_REMOVED cascade: hard_delete(%s) failed: %s",
+                    conv_id,
+                    exc,
+                )
+        if conv_ids:
+            log.info(
+                "USER_REMOVED cascade: purged %d conversations involving %s",
+                len(conv_ids),
+                user_id,
+            )
 
     async def _on_user_status_updated(self, event: "FederationEvent") -> None:
         p = event.payload
