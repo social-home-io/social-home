@@ -159,7 +159,9 @@ class InMemoryFederationRepo:
         pass
 
     async def update_alias(self, instance_id: str, alias: str | None) -> None:
-        pass
+        raise NotImplementedError(
+            "update_alias not implemented in InMemoryFederationRepo"
+        )
 
     async def set_proto_version(self, instance_id: str, proto_version: int) -> None:
         if instance_id in self._instances:

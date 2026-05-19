@@ -873,7 +873,7 @@ class FederationService:
         try:
             latitude = round(float(lat_raw), 4)
             longitude = round(float(lon_raw), 4)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):  # fmt: skip
             log.warning(
                 "LOCAL_HOME_LOCATION_CHANGED from %s has non-numeric coordinates",
                 event.from_instance,
