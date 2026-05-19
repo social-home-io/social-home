@@ -1134,6 +1134,7 @@ def create_app(config: Config | None = None) -> web.Application:
         outbox=repos.dm_media_outbox,
         federation=None,  # set by attach_federation below
         media_dir=pathlib.Path(config.media_path),
+        visibility_repo=repos.peer_user_visibility,
     )
     # DmService starts without ``audio_transcription`` — the platform
     # adapter is built much later in ``create_app``, so the service is

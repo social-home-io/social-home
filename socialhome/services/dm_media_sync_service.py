@@ -50,11 +50,15 @@ import aiofiles.os
 from ..domain.federation import FederationEventType
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
+from ._visibility import hidden_for_peer
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.conversation_repo import AbstractConversationRepo
     from ..repositories.dm_media_outbox_repo import AbstractDmMediaOutboxRepo
+    from ..repositories.peer_user_visibility_repo import (
+        AbstractPeerUserVisibilityRepo,
+    )
 
 
 log = logging.getLogger(__name__)
@@ -112,6 +116,7 @@ class DmMediaSyncService:
         "_interval",
         "_task",
         "_stop",
+        "_visibility_repo",
     )
 
     def __init__(
@@ -122,11 +127,13 @@ class DmMediaSyncService:
         federation: FederationService | None,
         media_dir: pathlib.Path,
         interval_seconds: float = 5.0,
+        visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
     ) -> None:
         self._convos = convos
         self._outbox = outbox
         self._federation = federation
         self._media_dir = media_dir
+        self._visibility_repo = visibility_repo
         # One processor instance is fine — ``ImageProcessor`` is
         # stateless across calls (Pillow's Image objects are
         # short-lived per-call). ``VideoProcessor`` is the same shape
@@ -348,6 +355,36 @@ class DmMediaSyncService:
                 blob_id=entry.blob_id,
                 target_instance_id=entry.target_instance_id,
             )
+            # Per-pair user-visibility gate. Resolve the message's sender so
+            # we can ask whether the receiving peer has hidden them.
+            try:
+                message = await self._convos.get_message(entry.message_id)
+            except Exception as exc:  # pragma: no cover — defensive
+                log.debug(
+                    "dm-media-sync: get_message(%s) failed: %s",
+                    entry.message_id,
+                    exc,
+                )
+                message = None
+            if message is not None:
+                hidden = await hidden_for_peer(
+                    self._visibility_repo,
+                    entry.target_instance_id,
+                )
+                if message.sender_user_id in hidden:
+                    log.debug(
+                        "DM_MEDIA_BLOB suppressed: sender %s hidden from %s",
+                        message.sender_user_id,
+                        entry.target_instance_id,
+                    )
+                    # Drop the outbox row — the live DM_MESSAGE was already
+                    # suppressed by the DmService gate (Task 5) so this blob
+                    # has no recipient and should not be retried.
+                    await self._outbox.delete(
+                        blob_id=entry.blob_id,
+                        target_instance_id=entry.target_instance_id,
+                    )
+                    continue
             try:
                 payloads = await self._build_blob_payloads(entry)
             except Exception as exc:
