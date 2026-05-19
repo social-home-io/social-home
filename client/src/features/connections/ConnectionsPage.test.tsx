@@ -188,4 +188,55 @@ describe('ConnectionsPage', () => {
       })
     })
   })
+
+  describe('List / Map view toggle', () => {
+    beforeEach(() => {
+      wsHandlers.clear()
+      wsMock.on.mockClear()
+      apiMock.get.mockResolvedValue([])
+    })
+
+    it('renders both List and Map tab buttons', async () => {
+      const { getByRole } = render(<ConnectionsPage />)
+      expect(getByRole('button', { name: 'List' })).toBeDefined()
+      expect(getByRole('button', { name: 'Map' })).toBeDefined()
+    })
+
+    it('shows the lazy map fallback when Map tab is clicked', async () => {
+      const { getByRole } = render(<ConnectionsPage />)
+
+      // Click the Map tab — lazy Suspense fallback or map container appears
+      getByRole('button', { name: 'Map' }).click()
+
+      await waitFor(() => {
+        // Either the Suspense fallback "Loading map…" or the rendered
+        // FederationMap container is present.  In the test environment
+        // the lazy module resolves synchronously so the testid wins.
+        const container = document.querySelector('[data-testid="sh-federation-map"]')
+        const fallback = document.querySelector('.sh-federation-map__loading')
+        expect(container ?? fallback).not.toBeNull()
+        // Guard: old placeholder text must NOT appear
+        expect(document.body.textContent).not.toContain('Map coming in Task 11')
+      })
+    })
+
+    it('List tab is aria-pressed=true by default', async () => {
+      const { getByRole } = render(<ConnectionsPage />)
+      const listBtn = getByRole('button', { name: 'List' })
+      expect(listBtn.getAttribute('aria-pressed')).toBe('true')
+      const mapBtn = getByRole('button', { name: 'Map' })
+      expect(mapBtn.getAttribute('aria-pressed')).toBe('false')
+    })
+
+    it('Map tab becomes aria-pressed=true after click', async () => {
+      const { getByRole } = render(<ConnectionsPage />)
+      const mapBtn = getByRole('button', { name: 'Map' })
+      mapBtn.click()
+      await waitFor(() => {
+        expect(mapBtn.getAttribute('aria-pressed')).toBe('true')
+        expect(getByRole('button', { name: 'List' }).getAttribute('aria-pressed')).toBe('false')
+      })
+    })
+  })
+
 })

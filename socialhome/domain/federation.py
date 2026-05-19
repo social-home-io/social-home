@@ -52,6 +52,13 @@ class FederationEventType(str, enum.Enum):
     PAIRING_ABORT = "pairing_abort"
     UNPAIR = "unpair"
     URL_UPDATED = "url_updated"
+    #: Sent on startup when the local HA-sourced home GPS coordinates
+    #: change vs. the previously-stored value, and on first boot of
+    #: a fresh instance. Payload: ``{"latitude": float, "longitude":
+    #: float}`` (4dp-truncated per §25). Confirmed peers update
+    #: their :class:`RemoteInstance.home_lat` / ``home_lon`` columns
+    #: so the SPA's federation map renders the move.
+    LOCAL_HOME_LOCATION_CHANGED = "local_home_location_changed"
 
     # ── User sync ──
     USERS_SYNC = "users_sync"
@@ -288,6 +295,7 @@ PAIRING_EVENTS: frozenset[FederationEventType] = frozenset(
         FederationEventType.PAIRING_PEER_CONFIRM,
         FederationEventType.PAIRING_ABORT,
         FederationEventType.UNPAIR,
+        FederationEventType.LOCAL_HOME_LOCATION_CHANGED,
     }
 )
 

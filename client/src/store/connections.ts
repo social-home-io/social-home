@@ -3,6 +3,10 @@
  * reachability, driven by `connection.reachable` and
  * `connection.unreachable` WS frames (§23.71).
  *
+ * Also holds the local household's home coords (updated via
+ * `local.home_changed` WS frames) and patches peer coords on
+ * `peer.home_changed` WS frames so the federation map stays live.
+ *
  * NetworkMap + ConnectionsPage both read :data:`connections`.
  */
 import { signal } from '@preact/signals'
@@ -10,13 +14,33 @@ import { ws } from '@/ws'
 
 export interface Connection {
   instance_id:   string
-  display_name?: string
-  pairing_status?: string
+  /** The displayed name — local alias when set, else the peer's
+   *  advertised display_name. The backend already resolves this. */
+  display_name: string
+  /** What the peer actually advertises via the federation handshake.
+   *  Used by ``ConnectionDetail`` to render "They advertise themselves
+   *  as <X>" alongside the editable alias input. */
+  federated_display_name?: string
+  local_alias?: string | null
+  status?: string
+  paired_at?: string | null
+  source?: string
   reachable:     boolean
+  inbox_url?: string
+  intro_relay_enabled?: boolean
+  unreachable_since?: string | null
+  transport?: 'rtc' | 'https' | null
   last_seen_at?: string | null
+  home_lat?: number | null
+  home_lon?: number | null
 }
 
 export const connections = signal<Connection[]>([])
+
+/** Own household's home coordinates (updated live via local.home_changed). */
+export const selfLat = signal<number | null>(null)
+/** Own household's home coordinates (updated live via local.home_changed). */
+export const selfLon = signal<number | null>(null)
 
 function upsert(patch: Partial<Connection> & { instance_id: string }): void {
   const existing = connections.value.find((c) => c.instance_id === patch.instance_id)
@@ -56,5 +80,24 @@ export function wireConnectionsWs(): void {
     const d = e.data as unknown as { instance_id: string }
     if (!d?.instance_id) return
     connections.value = connections.value.filter((c) => c.instance_id !== d.instance_id)
+  })
+  ws.on('local.home_changed', (e) => {
+    const d = e.data as unknown as { latitude: number; longitude: number }
+    if (d?.latitude == null || d?.longitude == null) return
+    selfLat.value = d.latitude
+    selfLon.value = d.longitude
+  })
+  ws.on('peer.home_changed', (e) => {
+    const d = e.data as unknown as {
+      instance_id: string
+      latitude: number
+      longitude: number
+    }
+    if (!d?.instance_id || d?.latitude == null || d?.longitude == null) return
+    connections.value = connections.value.map((c) =>
+      c.instance_id === d.instance_id
+        ? { ...c, home_lat: d.latitude, home_lon: d.longitude }
+        : c,
+    )
   })
 }

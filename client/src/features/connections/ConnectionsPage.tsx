@@ -10,8 +10,8 @@
  *      outgoing "pair via a trusted peer" flow.
  *   3. Global Federation Servers.
  */
-import { useEffect, useState } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { useEffect, useState, lazy, Suspense } from 'preact/compat'
+import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
@@ -22,31 +22,20 @@ import { ConnectionDetail } from '@/components/ConnectionDetail'
 import { showToast } from '@/components/Toast'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
+import {
+  connections,
+  selfLat,
+  selfLon,
+  type Connection,
+} from '@/store/connections'
+
 import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
 import { t } from '@/i18n/i18n'
 import { confirmDialog } from '@/components/confirm'
 import { relativeDocsTime } from '@/utils/relativeTime'
 
-interface Connection {
-  instance_id: string
-  /** The displayed name — local alias when set, else the peer's
-   *  advertised display_name. The backend already resolves this. */
-  display_name: string
-  /** What the peer actually advertises via the federation handshake.
-   *  Used by ``ConnectionDetail`` to render "They advertise themselves
-   *  as <X>" alongside the editable alias input. */
-  federated_display_name?: string
-  local_alias?: string | null
-  status: string
-  paired_at?: string | null
-  source?: string
-  reachable: boolean
-  inbox_url?: string
-  intro_relay_enabled?: boolean
-  unreachable_since?: string | null
-  transport?: 'rtc' | 'https' | null
-}
+const FederationMap = lazy(() => import('./FederationMap'))
 
 interface AutoPairRequest {
   request_id: string
@@ -58,12 +47,12 @@ interface AutoPairRequest {
   received_at: string
 }
 
-const connections = signal<Connection[]>([])
 const gfsConnections = signal<GfsConnection[]>([])
 const autoPairRequests = signal<AutoPairRequest[]>([])
 const loading = signal(true)
 const gfsLoading = signal(true)
 const disconnectTarget = signal<GfsConnection | null>(null)
+
 
 function statusDotClass(status: string): string {
   if (status === 'active' || status === 'confirmed') return 'sh-status-dot sh-status-dot--active'
@@ -119,6 +108,22 @@ async function loadConnections() {
     connections.value = []
   }
   loading.value = false
+}
+
+async function loadSelfHome() {
+  try {
+    const j = await api.get('/api/friends') as {
+      instance?: { home_lat?: number | null; home_lon?: number | null }
+    }
+    if (j.instance?.home_lat != null && j.instance?.home_lon != null) {
+      selfLat.value = j.instance.home_lat
+      selfLon.value = j.instance.home_lon
+    }
+  } catch {
+    // Non-fatal — the federation map just won't show the "You" pin
+    // until a `local.home_changed` WS frame arrives. The List view
+    // doesn't need this data.
+  }
 }
 
 async function loadGfsConnections() {
@@ -201,9 +206,12 @@ export default function ConnectionsPage() {
   useTitle(t('connections.title'))
   const [autoPairBusy, setAutoPairBusy] = useState(false)
   const [detail, setDetail] = useState<Connection | null>(null)
+  /** Active view toggle — resets to 'list' on mount. */
+  const view = useSignal<'list' | 'map'>('list')
 
   useEffect(() => {
     void loadConnections()
+    void loadSelfHome()
     void loadGfsConnections()
     if (currentUser.value?.is_admin) void loadAutoPairRequests()
 
@@ -234,6 +242,37 @@ export default function ConnectionsPage() {
   return (
     <div class="sh-connections">
 
+      {/* ── List / Map toggle ─────────────────────────────────────── */}
+      <div class="sh-connections-view-toggle">
+        <div class="sh-shopping-grouptoggle" role="group" aria-label="View">
+          <button
+            type="button"
+            class={view.value === 'list' ? 'sh-chip sh-chip--active' : 'sh-chip'}
+            aria-pressed={view.value === 'list'}
+            onClick={() => { view.value = 'list' }}
+          >
+            List
+          </button>
+          <button
+            type="button"
+            class={view.value === 'map' ? 'sh-chip sh-chip--active' : 'sh-chip'}
+            aria-pressed={view.value === 'map'}
+            onClick={() => { view.value = 'map' }}
+          >
+            Map
+          </button>
+        </div>
+      </div>
+
+      {/* ── Federation Map ────────────────────────────────────────── */}
+      {view.value === 'map' && (
+        <Suspense fallback={<div class="sh-federation-map__loading">Loading map…</div>}>
+          <FederationMap />
+        </Suspense>
+      )}
+
+      {view.value === 'list' && (
+      <>
       {/* ── Incoming auto-pair requests (admin-only inbox) ─────────── */}
       {isAdmin && autoPairRequests.value.length > 0 && (
         <section class="sh-auto-pair-inbox">
@@ -399,6 +438,8 @@ export default function ConnectionsPage() {
           </div>
         )}
       </section>
+      </>
+      )}
 
       <PairingFlow onGfsConnected={loadGfsConnections} />
       <AutoPairDialog onPaired={() => void loadConnections()} />
@@ -409,7 +450,7 @@ export default function ConnectionsPage() {
             display_name: detail.display_name,
             federated_display_name: detail.federated_display_name,
             local_alias: detail.local_alias ?? null,
-            status: detail.status,
+            status: detail.status ?? 'confirmed',
             inbox_url: detail.inbox_url ?? '',
             intro_relay_enabled: detail.intro_relay_enabled ?? true,
             unreachable_since: detail.unreachable_since ?? null,

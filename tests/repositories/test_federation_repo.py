@@ -460,3 +460,70 @@ async def test_save_instance_does_not_clobber_alias(env):
     got = await env.fed_repo.get_instance("peer-persist")
     assert got.local_alias == "My alias"  # preserved across re-save
     assert got.remote_inbox_url == "https://x.NEW/wh"  # URL did update
+
+
+# ─── home_location (federation-map feature) ──────────────────────────
+
+
+async def test_update_instance_home_writes_lat_lon(env):
+    """Targeted UPDATE on the two columns; other columns untouched."""
+    inst = RemoteInstance(
+        id="peer-home",
+        display_name="Bob",
+        remote_identity_pk="11" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://bob/wh",
+        local_inbox_id="wh-bob",
+        status=PairingStatus.CONFIRMED,
+        home_lat=None,
+        home_lon=None,
+    )
+    await env.fed_repo.save_instance(inst)
+
+    await env.fed_repo.update_instance_home(
+        "peer-home",
+        latitude=52.52,
+        longitude=13.40,
+    )
+
+    got = await env.fed_repo.get_instance("peer-home")
+    assert got.home_lat == 52.52
+    assert got.home_lon == 13.40
+    assert got.display_name == "Bob"  # other columns intact
+
+
+async def test_update_instance_home_truncates_to_4dp(env):
+    """Inputs above 4dp precision are rounded — §25 invariant."""
+    inst = RemoteInstance(
+        id="peer-prec",
+        display_name="Carol",
+        remote_identity_pk="22" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://carol/wh",
+        local_inbox_id="wh-carol",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+
+    await env.fed_repo.update_instance_home(
+        "peer-prec",
+        latitude=52.523456,
+        longitude=13.401234,
+    )
+
+    got = await env.fed_repo.get_instance("peer-prec")
+    assert got.home_lat == 52.5235
+    assert got.home_lon == 13.4012
+
+
+async def test_update_instance_home_unknown_id_is_noop(env):
+    """Missing instance → silently noop (upstream pipeline already
+    rejected the envelope if the sender wasn't known)."""
+    await env.fed_repo.update_instance_home(
+        "never-paired",
+        latitude=1.0,
+        longitude=2.0,
+    )
+    assert await env.fed_repo.get_instance("never-paired") is None

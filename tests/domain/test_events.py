@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from socialhome.domain.events import DomainEvent, PeerTransportChanged, PostCreated
+from socialhome.domain.events import (
+    DomainEvent,
+    LocalHomeLocationUpdated,
+    PeerHomeChanged,
+    PeerTransportChanged,
+    PostCreated,
+)
 from socialhome.domain.post import Post, PostType
 
 
@@ -25,3 +31,26 @@ def test_peer_transport_changed_shape():
 
     e2 = PeerTransportChanged(instance_id="iid-2", transport="https")
     assert e2.transport == "https"
+
+
+def test_local_home_location_updated_shape():
+    """LocalHomeLocationUpdated is a DomainEvent with lat/lon fields."""
+    e = LocalHomeLocationUpdated(latitude=52.52, longitude=13.40)
+    assert isinstance(e, DomainEvent)
+    assert e.latitude == 52.52
+    assert e.longitude == 13.40
+    assert e.occurred_at is not None
+
+
+def test_peer_home_changed_shape():
+    """PeerHomeChanged has instance_id, latitude, and longitude fields."""
+    e = PeerHomeChanged(
+        instance_id="iid-1",
+        latitude=52.52,
+        longitude=13.40,
+    )
+    assert isinstance(e, DomainEvent)
+    assert e.instance_id == "iid-1"
+    assert e.latitude == 52.52
+    assert e.longitude == 13.40
+    assert e.occurred_at is not None

@@ -34,6 +34,7 @@ from ..adapter import (
     InstanceConfig,
     PlatformAdapter,
 )
+from ..ha_home_location import persist_home_location_from_ha
 from ..ha.client import HaClient, build_ha_client
 from ..ha.providers import (
     HaAIProvider,
@@ -292,6 +293,16 @@ class HaosAdapter(PlatformAdapter):
                 tz = (cfg or {}).get("time_zone")
                 if isinstance(tz, str) and tz.strip():
                     await household_svc.set_tz_from_ha(tz.strip())
+        # §25 — read HA's home coordinates from /api/config and persist them
+        # to instance_identity. Publishes LocalHomeLocationUpdated on change
+        # so the federation service can broadcast to confirmed peers.
+        instance_cfg = await self.get_instance_config()
+        await persist_home_location_from_ha(
+            db=self._db,
+            bus=app[K.event_bus_key],
+            latitude=instance_cfg.latitude,
+            longitude=instance_cfg.longitude,
+        )
 
     async def _sync_admin_picture_from_ha(
         self,

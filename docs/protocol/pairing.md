@@ -44,7 +44,7 @@ sequenceDiagram
     Note over A,B: user shows QR to B
 
     B->>B: scan QR → accept_pairing()<br/>derives shared DH secret,<br/>stores local RemoteInstance for A
-    B->>A: POST {A.inbox_url}<br/>{event_type: PAIRING_PEER_ACCEPT,<br/>B.identity_pk, B.dh_pk,<br/>B.inbox_url, B.display_name,<br/>token, SAS, Ed25519 signature}
+    B->>A: POST {A.inbox_url}<br/>{event_type: PAIRING_PEER_ACCEPT,<br/>B.identity_pk, B.dh_pk,<br/>B.inbox_url, B.display_name,<br/>token, SAS, home_lat?, home_lon?,<br/>Ed25519 signature}
 
     A->>A: federation-inbox view dispatches<br/>PAIRING_PEER_ACCEPT → handle_peer_accept:<br/>TOFU verify sig, derive shared secret,<br/>KEK-encrypt keys, save RemoteInstance for B,<br/>publish PairingAcceptReceived
     A-->>A: WS pairing.accept_received →<br/>admin UI auto-fills SAS digits
@@ -59,6 +59,29 @@ sequenceDiagram
     Note over A,B: both sides hold CONFIRMED pair;<br/>normal §24.11 federation starts here.
     A-->>B: URL_UPDATED<br/>(if URL changes later)
 ```
+
+### `PAIRING_PEER_ACCEPT` body fields
+
+| Field | Required | Notes |
+|---|---|---|
+| `event_type` | yes | `"PAIRING_PEER_ACCEPT"` |
+| `identity_pk` | yes | B's Ed25519 public key (base64). |
+| `dh_pk` | yes | B's X25519 ephemeral DH public key (base64). |
+| `inbox_url` | yes | B's federation inbox base URL. |
+| `display_name` | no | B's household display name. |
+| `token` | yes | The pairing token from A's QR / copy code. |
+| `verification_code` | yes | SAS digits to be verified out-of-band. |
+| `sig_suite` | no | `"ed25519+mldsa65"` when B supports hybrid PQ signatures. |
+| `pq_identity_pk` | no | B's ML-DSA-65 public key (when `sig_suite` is hybrid). |
+| `pq_algorithm` | no | PQ algorithm name (when `sig_suite` is hybrid). |
+| `home_lat` | no | B's household latitude, truncated to 4 decimal places. Sent only when both `home_lat` and `home_lon` are available (HA / HAOS mode, or operator-configured). See [home-location.md](./home-location.md). |
+| `home_lon` | no | B's household longitude, truncated to 4 decimal places. |
+| `signature` | yes | Ed25519 signature over the body (TOFU auth). |
+
+When `home_lat` / `home_lon` are present, A records them on B's newly-created
+`remote_instances` row immediately — the map pin is available as soon as the
+pair is confirmed, without waiting for a separate `LOCAL_HOME_LOCATION_CHANGED`
+broadcast.
 
 ## Manual code fallback — `socialhome://` URL scheme
 

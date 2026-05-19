@@ -916,6 +916,41 @@ class PeerTransportChanged(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class LocalHomeLocationUpdated(DomainEvent):
+    """The local instance's home GPS coordinates changed.
+
+    Published by :class:`HaAdapter` / :class:`HaosAdapter` on
+    startup when the value read from HA Core's ``/api/config``
+    differs from the previously-stored value (or on first boot of
+    a fresh instance). The federation service subscribes and fans
+    out :data:`FederationEventType.LOCAL_HOME_LOCATION_CHANGED` to
+    every confirmed peer (gated on
+    :data:`FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST`).
+    """
+
+    latitude: float
+    longitude: float
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class PeerHomeChanged(DomainEvent):
+    """A confirmed peer's home GPS coordinates changed.
+
+    Published by the inbound handler for
+    :data:`FederationEventType.LOCAL_HOME_LOCATION_CHANGED` after
+    the :class:`RemoteInstance` row has been updated. The realtime
+    service subscribes and re-emits as the ``peer.home_changed`` WS
+    frame so the SPA's federation map can patch the pin in place.
+    """
+
+    instance_id: str
+    latitude: float
+    longitude: float
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class PairingIntroReceived(DomainEvent):
     """Target side of §11.9 — a peer has introduced us to a new instance."""
 

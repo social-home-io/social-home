@@ -56,11 +56,13 @@ from ..domain.events import (
     DmMessageReactionChanged,
     DmMessageUpdated,
     HouseholdConfigChanged,
+    LocalHomeLocationUpdated,
     NotificationCreated,
     NotificationReadChanged,
     PageConflictEmitted,
     PageEditLockAcquired,
     PageEditLockReleased,
+    PeerHomeChanged,
     PostCreated,
     PostDeleted,
     PostEdited,
@@ -377,6 +379,15 @@ class RealtimeService:
             MomentReactionChanged,
             self._on_moment_reaction_changed,
         )
+        # Federation map — home location signals (§federation-map)
+        self._bus.subscribe(
+            LocalHomeLocationUpdated,
+            self._on_local_home_location_updated,
+        )
+        self._bus.subscribe(
+            PeerHomeChanged,
+            self._on_peer_home_changed,
+        )
 
     # ─── Household feed events ────────────────────────────────────────────
 
@@ -543,6 +554,32 @@ class RealtimeService:
                 "type": "peer.transport_changed",
                 "instance_id": event.instance_id,
                 "transport": event.transport,
+            }
+        )
+
+    # ─── Federation map — home location (§federation-map) ────────────────
+
+    async def _on_local_home_location_updated(
+        self,
+        event: LocalHomeLocationUpdated,
+    ) -> None:
+        """Broadcast our own home coords to every WS client."""
+        await self._broadcast_household(
+            {
+                "type": "local.home_changed",
+                "latitude": event.latitude,
+                "longitude": event.longitude,
+            }
+        )
+
+    async def _on_peer_home_changed(self, event: PeerHomeChanged) -> None:
+        """Broadcast a peer's new home coords to every WS client."""
+        await self._broadcast_household(
+            {
+                "type": "peer.home_changed",
+                "instance_id": event.instance_id,
+                "latitude": event.latitude,
+                "longitude": event.longitude,
             }
         )
 

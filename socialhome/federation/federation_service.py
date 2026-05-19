@@ -29,9 +29,12 @@ from ..crypto import (
 from ..db import AsyncDatabase
 from ..domain.events import (
     ConnectionReachable,
+    LocalHomeLocationUpdated,
     PairingIntroRelayReceived,
+    PeerHomeChanged,
     SpaceConfigChanged,
 )
+from ..domain.federation_capabilities import FederationCapability
 from ..domain.media_validator import validate_inbound_media_meta
 from ..domain.federation import (
     BroadcastResult,
@@ -235,6 +238,11 @@ class FederationService:
         # Handlers register themselves via attach_* methods.
         self._event_registry = EventDispatchRegistry()
         self._register_default_handlers()
+        # Subscribe to domain events that trigger outbound federation.
+        self._bus.subscribe(
+            LocalHomeLocationUpdated,
+            self._on_local_home_location_updated,
+        )
 
     def _build_inbound_pipeline(self):
         """Lazily construct the §24.11 validation middleware chain.
@@ -835,6 +843,12 @@ class FederationService:
             self._handle_instance_sync_status,
         )
 
+        # Peer home-location update — always active
+        self._event_registry.register(
+            FederationEventType.LOCAL_HOME_LOCATION_CHANGED,
+            self._on_local_home_location_changed,
+        )
+
         # Inbound media validation — strip non-conforming file_meta from
         # post payloads so the text is kept but invalid media is dropped.
         for _evt in (
@@ -876,6 +890,62 @@ class FederationService:
                 exc,
             )
             event.payload.pop("file_meta", None)
+
+    async def _on_local_home_location_changed(self, event: FederationEvent) -> None:
+        """Inbound LOCAL_HOME_LOCATION_CHANGED: update peer row + publish PeerHomeChanged."""
+        lat_raw = event.payload.get("latitude")
+        lon_raw = event.payload.get("longitude")
+        if lat_raw is None or lon_raw is None:
+            log.warning(
+                "LOCAL_HOME_LOCATION_CHANGED from %s missing latitude/longitude",
+                event.from_instance,
+            )
+            return
+        try:
+            latitude = round(float(lat_raw), 4)
+            longitude = round(float(lon_raw), 4)
+        except (TypeError, ValueError):  # fmt: skip
+            log.warning(
+                "LOCAL_HOME_LOCATION_CHANGED from %s has non-numeric coordinates",
+                event.from_instance,
+            )
+            return
+        await self._federation_repo.update_instance_home(
+            event.from_instance,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        await self._bus.publish(
+            PeerHomeChanged(
+                instance_id=event.from_instance,
+                latitude=latitude,
+                longitude=longitude,
+            ),
+        )
+
+    # ─── Domain-event subscribers (outbound fan-out) ─────────────────────────
+
+    async def _on_local_home_location_updated(
+        self,
+        event: LocalHomeLocationUpdated,
+    ) -> None:
+        """Fan out LOCAL_HOME_LOCATION_CHANGED to every confirmed peer at proto_version >= 5."""
+        peers = await self._federation_repo.list_instances(status="confirmed")
+        payload = {"latitude": event.latitude, "longitude": event.longitude}
+        for peer in peers:
+            if not await self.peer_supports(
+                peer.id,
+                min_version=FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST,
+            ):
+                continue
+            # Serial fanout: send_event does inline HTTP I/O; gather() would
+            # parallelise at the cost of more complex error handling — acceptable
+            # for the typical 1-3 peer count of a home instance.
+            await self.send_event(
+                to_instance_id=peer.id,
+                event_type=FederationEventType.LOCAL_HOME_LOCATION_CHANGED,
+                payload=payload,
+            )
 
     async def _handle_pairing_intro_relay(self, event: FederationEvent) -> None:
         """§11.9 friend-of-friend introduction request."""
