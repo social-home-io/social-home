@@ -57,12 +57,18 @@ class AbstractFederationRepo(Protocol):
         instance_id: str,
         alias: str | None,
     ) -> None: ...
+    async def set_share_home(
+        self,
+        instance_id: str,
+        *,
+        value: bool,
+    ) -> None: ...
     async def update_instance_home(
         self,
         instance_id: str,
         *,
-        latitude: float,
-        longitude: float,
+        latitude: float | None,
+        longitude: float | None,
     ) -> None: ...
 
     # Local instance identity (display_name + household coords) ----------
@@ -133,8 +139,8 @@ class SqliteFederationRepo:
                 remote_pq_algorithm, remote_pq_identity_pk, sig_suite,
                 intro_relay_enabled, relay_via,
                 home_lat, home_lon, paired_at, created_at,
-                last_reachable_at, unreachable_since
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')),?,?)
+                last_reachable_at, unreachable_since, share_home
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')),?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 display_name=excluded.display_name,
                 remote_identity_pk=excluded.remote_identity_pk,
@@ -177,6 +183,7 @@ class SqliteFederationRepo:
                 inst.created_at,
                 inst.last_reachable_at,
                 inst.unreachable_since,
+                int(inst.share_home),
             ),
         )
         return inst
@@ -288,12 +295,29 @@ class SqliteFederationRepo:
             (alias, instance_id),
         )
 
+    async def set_share_home(
+        self,
+        instance_id: str,
+        *,
+        value: bool,
+    ) -> None:
+        """Enable or disable home-location sharing with a specific peer.
+
+        A targeted single-column UPDATE so the much larger
+        :meth:`save_instance` doesn't accidentally clobber state set
+        separately. Local-only flag — never federated.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_instances SET share_home=? WHERE id=?",
+            (int(value), instance_id),
+        )
+
     async def update_instance_home(
         self,
         instance_id: str,
         *,
-        latitude: float,
-        longitude: float,
+        latitude: float | None,
+        longitude: float | None,
     ) -> None:
         """Update the peer's ``home_lat`` / ``home_lon`` columns only.
 
@@ -301,16 +325,15 @@ class SqliteFederationRepo:
         :data:`FederationEventType.LOCAL_HOME_LOCATION_CHANGED`
         handler. Values are 4dp-truncated on write per §25 — the
         inbound caller has already validated the body but we defend-
-        in-depth here. Missing rows are silent no-ops (the §24.11
+        in-depth here. Pass ``None`` for both to clear the columns
+        (revoke signal). Missing rows are silent no-ops (the §24.11
         inbound pipeline has already verified the sender is known).
         """
+        lat_db = round(float(latitude), 4) if latitude is not None else None
+        lon_db = round(float(longitude), 4) if longitude is not None else None
         await self._db.enqueue(
             "UPDATE remote_instances SET home_lat = ?, home_lon = ? WHERE id = ?",
-            (
-                round(float(latitude), 4),
-                round(float(longitude), 4),
-                instance_id,
-            ),
+            (lat_db, lon_db, instance_id),
         )
 
     async def get_local_identity(self) -> dict | None:
@@ -559,4 +582,5 @@ def _row_to_instance(row: dict | None) -> RemoteInstance | None:
         last_reachable_at=row.get("last_reachable_at"),
         unreachable_since=row.get("unreachable_since"),
         local_alias=row.get("local_alias"),
+        share_home=bool_col(row.get("share_home", 1)),
     )

@@ -173,14 +173,27 @@ class InMemoryFederationRepo:
         self,
         instance_id: str,
         *,
-        latitude: float,
-        longitude: float,
+        latitude: float | None,
+        longitude: float | None,
+    ) -> None:
+        if instance_id in self._instances:
+            lat_db = round(float(latitude), 4) if latitude is not None else None
+            lon_db = round(float(longitude), 4) if longitude is not None else None
+            self._instances[instance_id] = dataclasses.replace(
+                self._instances[instance_id],
+                home_lat=lat_db,
+                home_lon=lon_db,
+            )
+
+    async def set_share_home(
+        self,
+        instance_id: str,
+        *,
+        value: bool,
     ) -> None:
         if instance_id in self._instances:
             self._instances[instance_id] = dataclasses.replace(
-                self._instances[instance_id],
-                home_lat=round(float(latitude), 4),
-                home_lon=round(float(longitude), 4),
+                self._instances[instance_id], share_home=value
             )
 
     async def cleanup_expired_pairings(self) -> int:

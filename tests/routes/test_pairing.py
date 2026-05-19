@@ -6,9 +6,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from socialhome.app_keys import (
+    db_key as _db_key,
     dm_routing_service_key,
     federation_repo_key,
     federation_transport_key,
+    peer_home_sharing_service_key,
 )
 from socialhome.config import Config
 from socialhome.crypto import (
@@ -847,8 +849,6 @@ async def test_transport_detail_returns_null_when_no_recent_relay(client):
 
 async def test_transport_detail_admin_only(client):
     """Non-admin user gets 403."""
-    from socialhome.app_keys import db_key as _db_key
-
     db = client.app[_db_key]
     await db.enqueue(
         "UPDATE users SET is_admin=0 WHERE user_id=?",
@@ -859,3 +859,125 @@ async def test_transport_detail_admin_only(client):
         headers=_auth(client._tok),
     )
     assert r.status == 403
+
+
+# ─── PATCH /api/pairing/connections/{instance_id} share_home ────────────────
+
+
+class _CapturingShareHomeSvc:
+    """Stub for PeerHomeSharingService that records calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def set_share_home(
+        self, instance_id: str, *, value: bool, set_by: str | None
+    ) -> None:
+        self.calls.append((instance_id, value, set_by))
+
+
+async def test_patch_share_home_false_persists_and_calls_service(client):
+    """PATCH {share_home: false} returns 200 and the service sets the value."""
+    fed_repo = client.app[federation_repo_key]
+    inst = _fake_instance("peer-sh-1")
+    await fed_repo.save_instance(inst)
+
+    stub = _CapturingShareHomeSvc()
+    client.app[peer_home_sharing_service_key] = stub
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-sh-1",
+        json={"share_home": False},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["instance_id"] == "peer-sh-1"
+    assert stub.calls == [("peer-sh-1", False, client._uid)]
+
+
+async def test_patch_share_home_true_persists_and_calls_service(client):
+    """PATCH {share_home: true} returns 200 and the service sets the value."""
+    fed_repo = client.app[federation_repo_key]
+    inst = _fake_instance("peer-sh-2")
+    await fed_repo.save_instance(inst)
+
+    stub = _CapturingShareHomeSvc()
+    client.app[peer_home_sharing_service_key] = stub
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-sh-2",
+        json={"share_home": True},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["instance_id"] == "peer-sh-2"
+    assert stub.calls == [("peer-sh-2", True, client._uid)]
+
+
+async def test_patch_share_home_invalid_type_returns_400(client):
+    """PATCH with a non-bool share_home returns 422 UNPROCESSABLE."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-sh-3"))
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-sh-3",
+        json={"share_home": "yes"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_patch_share_home_requires_admin(client):
+    """Non-admin user is rejected with 403."""
+    from socialhome.auth import sha256_token_hash
+    from socialhome.crypto import derive_user_id
+
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_fake_instance("peer-sh-4"))
+
+    db = client.app[_db_key]
+    row = await db.fetchone(
+        "SELECT identity_public_key FROM instance_identity WHERE id='self'"
+    )
+    pk_bytes = bytes.fromhex(row["identity_public_key"])
+    uid = derive_user_id(pk_bytes, "member-sh")
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) VALUES(?,?,?,0)",
+        ("member-sh", uid, "Member"),
+    )
+    raw = "member-sh-tok"
+    await db.enqueue(
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash) VALUES(?,?,?,?)",
+        ("t-mem-sh", uid, "t", sha256_token_hash(raw)),
+    )
+
+    r = await client.patch(
+        "/api/pairing/connections/peer-sh-4",
+        json={"share_home": False},
+        headers=_auth(raw),
+    )
+    assert r.status == 403
+
+
+# ─── GET /api/connections includes share_home ───────────────────────────────
+
+
+async def test_get_connections_includes_share_home(client):
+    """GET /api/connections returns share_home on every row; default is True."""
+    fed_repo = client.app[federation_repo_key]
+    inst = _fake_instance("peer-sh-list-1")
+    await fed_repo.save_instance(inst)
+
+    r = await client.get(
+        "/api/connections",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    rows = await r.json()
+    row = next(x for x in rows if x["instance_id"] == "peer-sh-list-1")
+    # Default value is True — RemoteInstance.share_home defaults to True.
+    assert row["share_home"] is True

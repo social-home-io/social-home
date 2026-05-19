@@ -32,12 +32,14 @@ from ..app_keys import (
     federation_service_key,
     federation_transport_key,
     pairing_relay_queue_key,
+    peer_home_sharing_service_key,
     peer_user_visibility_repo_key,
     platform_adapter_key,
     user_repo_key,
 )
 from ..domain.federation import FederationEventType, PairingStatus
 from ..security import error_response
+from ..services.peer_home_sharing_service import UnknownInstanceError
 from .base import BaseView
 
 log = logging.getLogger(__name__)
@@ -80,6 +82,9 @@ def _instance_dict(
         # the editable alias input.
         "federated_display_name": inst.display_name,
         "local_alias": local_alias,
+        # Per-peer home-location sharing toggle (§share_home).  Default True.
+        # Listed next to local_alias because both are per-pair local toggles.
+        "share_home": getattr(inst, "share_home", True),
         "status": status,
         "reachable": reachable,
         "transport": transport_state,
@@ -376,7 +381,46 @@ class AutoPairInboxDeclineView(BaseView):
 
 
 class PairingConnectionDetailView(BaseView):
-    """``DELETE /api/pairing/connections/{instance_id}`` — unpair."""
+    """``PATCH /api/pairing/connections/{instance_id}`` — update per-peer toggles.
+    ``DELETE /api/pairing/connections/{instance_id}`` — unpair.
+
+    PATCH accepts one or both of:
+    - ``{"share_home": bool}`` — enable / disable home-location sharing with
+      this peer.  Handled by :class:`PeerHomeSharingService`.
+
+    Both fields are optional and may be combined in a single request.
+    Admin-only.
+    """
+
+    async def patch(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        instance_id = self.match("instance_id")
+        body = await self.body()
+
+        if "share_home" in body:
+            value = body["share_home"]
+            if not isinstance(value, bool):
+                return error_response(
+                    422,
+                    "UNPROCESSABLE",
+                    "share_home must be a boolean.",
+                )
+            try:
+                await self.svc(peer_home_sharing_service_key).set_share_home(
+                    instance_id,
+                    value=value,
+                    set_by=user.user_id,
+                )
+            except UnknownInstanceError:
+                return error_response(404, "NOT_FOUND", "Peer not found.")
+
+        # Re-read so the response reflects the persisted state.
+        inst = await self.svc(federation_repo_key).get_instance(instance_id)
+        if inst is None:
+            return error_response(404, "NOT_FOUND", "Peer not found.")
+        return web.json_response(_instance_dict(inst))
 
     async def delete(self) -> web.Response:
         self.user  # auth check

@@ -928,8 +928,8 @@ class LocalHomeLocationUpdated(DomainEvent):
     :data:`FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST`).
     """
 
-    latitude: float
-    longitude: float
+    latitude: float | None
+    longitude: float | None
     occurred_at: datetime = field(default_factory=_now)
 
 
@@ -942,11 +942,15 @@ class PeerHomeChanged(DomainEvent):
     the :class:`RemoteInstance` row has been updated. The realtime
     service subscribes and re-emits as the ``peer.home_changed`` WS
     frame so the SPA's federation map can patch the pin in place.
+
+    Both ``latitude`` and ``longitude`` are ``None`` when the peer
+    has revoked its location (sent a both-null payload) — the SPA
+    should clear the pin for that peer in this case.
     """
 
     instance_id: str
-    latitude: float
-    longitude: float
+    latitude: float | None
+    longitude: float | None
     occurred_at: datetime = field(default_factory=_now)
 
 

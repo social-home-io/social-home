@@ -33,6 +33,10 @@ export interface Connection {
   last_seen_at?: string | null
   home_lat?: number | null
   home_lon?: number | null
+  /** Whether this household shares its home location with the peer.
+   *  Defaults to true in the UI when the backend omits the field
+   *  (older peer that hasn't sent the field yet). */
+  share_home?: boolean
 }
 
 export const connections = signal<Connection[]>([])

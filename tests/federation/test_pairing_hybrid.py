@@ -38,6 +38,14 @@ class _FakeRepo:
     async def delete_pairing(self, token):
         self.pairings.pop(token, None)
 
+    async def get_local_identity(self):
+        return {
+            "instance_id": "self-inst",
+            "display_name": "Test Home",
+            "home_lat": None,
+            "home_lon": None,
+        }
+
 
 def _kek() -> KeyManager:
     import tempfile
@@ -70,6 +78,16 @@ async def test_initiate_classical_omits_pq_fields():
     assert payload["sig_suite"] == "ed25519"
     assert "pq_algorithm" not in payload
     assert "pq_identity_pk" not in payload
+
+
+async def test_initiate_carries_local_display_name_in_qr_payload():
+    """QR payload must include the inviter's display_name so the scanner can
+    save the new peer with a friendly name instead of the truncated id."""
+    kp = generate_identity_keypair()
+    repo = _FakeRepo()
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    payload = await coord.initiate(inbox_base_url="https://x/wh")
+    assert payload["display_name"] == "Test Home"
 
 
 async def test_accept_negotiates_hybrid_when_both_sides_support_it():

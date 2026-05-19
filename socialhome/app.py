@@ -245,6 +245,7 @@ from .services.report_service import ReportService
 from .services.realtime_service import RealtimeService
 from .services.search_service import SearchService
 from .services.shopping_service import ShoppingService
+from .services.peer_home_sharing_service import PeerHomeSharingService
 from .services.space_crypto_service import SpaceContentEncryption
 from .services.storage_quota_service import StorageQuotaService
 from .services.setup_service import SetupService
@@ -1935,6 +1936,15 @@ def create_app(config: Config | None = None) -> web.Application:
         app[K.federation_service_key] = federation_service
         app[K.sync_session_manager_key] = sync_manager
         app[K.dm_routing_service_key] = dm_routing_service
+
+        # PeerHomeSharingService — flips remote_instances.share_home and fires
+        # a one-shot LOCAL_HOME_LOCATION_CHANGED to the affected peer so its map
+        # updates immediately (null coords on OFF, current coords on ON).
+        peer_home_sharing_service = PeerHomeSharingService(
+            federation_repo=federation_repo,
+            federation_service=federation_service,
+        )
+        app[K.peer_home_sharing_service_key] = peer_home_sharing_service
 
         # CallSignalingService — backend relay for WebRTC voice/video.
         call_signaling = CallSignalingService(

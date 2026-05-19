@@ -311,6 +311,8 @@
   "pairing.success": "Connected!",
   "pairing.success_message": "You can now share spaces and send messages with this household.",
   "pairing.done": "Done",
+  "pairing.configure_sharing_title": "Configure sharing",
+  "pairing.configure_sharing_intro": "You can adjust this anytime under Manage. Defaults are friendly — your map pin shows up on their Connections page.",
   "pairing.failed": "Pairing failed",
   "pairing.failed_message": "The connection could not be established. Please try again.",
   "pairing.retry": "Retry",

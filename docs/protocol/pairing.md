@@ -308,6 +308,21 @@ alias input.
 A subsequent `save_instance` (e.g. URL rotation) preserves the
 alias because the upsert doesn't touch the `local_alias` column.
 
+## Pairing wizard — "Configure sharing" step
+
+After the SAS verification succeeds and the pair is confirmed, the pairing
+wizard advances to a **Configure sharing** step instead of closing
+immediately. The step shows the `<ShareHomeToggle/>` component for the
+just-paired peer, defaulting to ON (`share_home = true`). Operators can
+flip it before hitting the final **Done** button; the change is applied via
+`PATCH /api/pairing/connections/{instance_id}` with `{"share_home": false}`
+and fires the one-shot null-coord revoke envelope described in
+[home-location.md](./home-location.md#revoking-access). Leaving the toggle
+ON (the default) requires no extra API call.
+
+This step only appears for household pairings (the QR and copy-code flows);
+GFS pairings do not expose the toggle.
+
 ## Federation inbox base — per-adapter shape
 
 The pairing coordinator works with a "federation inbox base" URL —

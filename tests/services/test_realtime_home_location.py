@@ -127,3 +127,21 @@ async def test_peer_home_changed_frame_has_no_extra_keys(env):
     )
     frame = ws.calls[0]
     assert set(frame.keys()) == {"type", "instance_id", "latitude", "longitude"}
+
+
+async def test_peer_home_changed_null_coords_pass_through(env):
+    """PeerHomeChanged with None coords passes None through to the WS frame (no 0.0 substitution)."""
+    _svc, bus, ws = env
+    await bus.publish(
+        PeerHomeChanged(
+            instance_id="peer-revoke",
+            latitude=None,
+            longitude=None,
+        )
+    )
+    assert len(ws.calls) == 1
+    frame = ws.calls[0]
+    assert frame["type"] == "peer.home_changed"
+    assert frame["instance_id"] == "peer-revoke"
+    assert frame["latitude"] is None
+    assert frame["longitude"] is None
