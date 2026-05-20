@@ -212,6 +212,81 @@ async def test_inbound_replay_410(client, env):
     assert r2.status == 410
 
 
+async def test_inbound_replay_logs_info_for_ephemeral_event(client, env, caplog):
+    """A replayed ephemeral event (capabilities / presence / RTC
+    signaling / …) is the DataChannel → HTTPS-inbox failover doing its
+    job — log it at INFO so the noise doesn't crowd out real WARNING
+    signals. Content events stay WARNING; see the test below."""
+    import logging as _logging
+
+    body = _build_envelope(
+        own_iid=env["own_iid"],
+        peer_kp=env["peer_kp"],
+        session_key=env["session_key"],
+        payload={"x": 1},
+        msg_id="dup-ephemeral-1",
+        event_type=FederationEventType.PRESENCE_UPDATED,
+    )
+    r1 = await client.post("/federation/inbox/wh-test", data=body)
+    assert r1.status == 200
+
+    caplog.clear()
+    with caplog.at_level(_logging.INFO, logger="socialhome.routes.federation"):
+        r2 = await client.post("/federation/inbox/wh-test", data=body)
+    assert r2.status == 410
+
+    # No WARNING — the replay is expected noise on this event type.
+    warnings = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == _logging.WARNING
+        and rec.name == "socialhome.routes.federation"
+    ]
+    assert not warnings, [r.getMessage() for r in warnings]
+    # One INFO line at the demoted ``dedup`` level instead.
+    infos = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == _logging.INFO
+        and rec.name == "socialhome.routes.federation"
+        and "dedup" in rec.getMessage()
+    ]
+    assert len(infos) == 1, [r.getMessage() for r in caplog.records]
+
+
+async def test_inbound_replay_logs_warning_for_content_event(client, env, caplog):
+    """A replayed content event (DM / post / moment / …) stays at
+    WARNING — operators care if their DM apparently round-tripped
+    twice, because that's a symptom of a real bug, not the routine
+    transport failover."""
+    import logging as _logging
+
+    body = _build_envelope(
+        own_iid=env["own_iid"],
+        peer_kp=env["peer_kp"],
+        session_key=env["session_key"],
+        payload={"content": "hi"},
+        msg_id="dup-content-1",
+        event_type=FederationEventType.DM_MESSAGE,
+    )
+    r1 = await client.post("/federation/inbox/wh-test", data=body)
+    assert r1.status == 200
+
+    caplog.clear()
+    with caplog.at_level(_logging.WARNING, logger="socialhome.routes.federation"):
+        r2 = await client.post("/federation/inbox/wh-test", data=body)
+    assert r2.status == 410
+
+    warnings = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == _logging.WARNING
+        and rec.name == "socialhome.routes.federation"
+        and "rejected" in rec.getMessage()
+    ]
+    assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+
+
 # ─── Public path / no auth required ─────────────────────────────────────
 
 
