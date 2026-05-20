@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 
+import aiolibdatachannel as rtc
+
 from socialhome.domain.events import PeerTransportChanged
 from socialhome.domain.federation import (
     DeliveryResult,
@@ -359,6 +361,146 @@ async def test_on_rtc_ice_accepts_trickled_candidate():
         },
     )
     assert applied == [("candidate:1 udp 1 1.1.1.1 5000 typ host", "0")]
+
+
+# ─── Wire-ordering invariant: SDP before any trickled ICE ─────────────────
+#
+# Real-world regression: ``_drain_ice`` was spawned *before*
+# :meth:`_RtcPeer.accept_offer` (and ``start_offer``) awaited the SDP
+# signaling. The drain task and the SDP signaling were independent HTTPS
+# posts to the peer's inbox, so a candidate POST could outrun the
+# OFFER/ANSWER POST on the wire. The offerer (us) then dropped the
+# candidate at :data:`ICE_BUFFER_TIMEOUT_S` because its remote description
+# hadn't been applied yet, and ICE connectivity check failed with zero
+# remote candidates. federation-demo missed it because loopback HTTPS
+# latency is microseconds and the ANSWER always won the race.
+
+
+class _RacingPeerConnection(rtc.PeerConnection):  # type: ignore[misc]
+    """Fake PC whose ICE gathering emits a candidate the moment
+    ``set_local_description`` starts — models libdatachannel surfacing
+    host candidates immediately on the gathering pass, which is exactly
+    when the race window opens.
+    """
+
+    def __init__(self, config=None) -> None:
+        super().__init__(config)
+        self._ice_queue: asyncio.Queue = asyncio.Queue()
+
+    async def set_local_description(self, type_: str = "offer"):
+        self._ice_queue.put_nowait(
+            rtc.IceCandidate(
+                "candidate:host 1 udp 1 1.1.1.1 5000 typ host",
+                "0",
+            ),
+        )
+        return await super().set_local_description(type_)
+
+    async def ice_candidates(self):
+        while not self._closed:
+            cand = await self._ice_queue.get()
+            if cand is None:
+                return
+            yield cand
+
+    def close(self) -> None:
+        try:
+            self._ice_queue.put_nowait(None)
+        except Exception:  # noqa: BLE001
+            pass
+        super().close()
+
+
+async def _settle_drain(signal: "_FakeSignaler", *, attempts: int = 20) -> None:
+    """Yield until the drain task has emitted at least one ICE event
+    (or we run out of patience). Deterministic on the fake event loop —
+    a handful of ``sleep(0)`` cycles is enough because the fake signaler
+    completes synchronously."""
+    for _ in range(attempts):
+        if any(ev[1] is FederationEventType.FEDERATION_RTC_ICE for ev in signal.events):
+            return
+        await asyncio.sleep(0)
+
+
+async def test_accept_offer_signals_answer_before_ice_candidates(monkeypatch):
+    """Answerer side: ANSWER must hit the signaler before any ICE.
+
+    If the drain task starts before ``_signaling(ANSWER, ...)`` is
+    awaited, candidate POSTs can win the race to the offerer's inbox,
+    and the offerer drops them at :data:`ICE_BUFFER_TIMEOUT_S` before
+    its remote description has been applied.
+    """
+    monkeypatch.setattr(rtc, "PeerConnection", _RacingPeerConnection)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+    )
+
+    await t.on_rtc_offer(
+        from_instance="peer-race-a",
+        payload={
+            "sdp": "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\n",
+            "sdp_type": "offer",
+        },
+    )
+    await _settle_drain(signal)
+
+    event_types = [ev[1] for ev in signal.events]
+    answer_idx = event_types.index(FederationEventType.FEDERATION_RTC_ANSWER)
+    ice_indices = [
+        i
+        for i, et in enumerate(event_types)
+        if et is FederationEventType.FEDERATION_RTC_ICE
+    ]
+    assert ice_indices, "drain task should have flushed the host candidate"
+    assert all(answer_idx < i for i in ice_indices), (
+        f"wire order broken: ANSWER at {answer_idx}, "
+        f"ICE candidates at {ice_indices} — the answerer raced ICE "
+        "ahead of ANSWER (signaling race in _RtcPeer.accept_offer)"
+    )
+
+    await t.close_all()
+
+
+async def test_start_offer_signals_offer_before_ice_candidates(monkeypatch):
+    """Offerer side: OFFER must hit the signaler before any ICE.
+
+    Symmetric to the answerer invariant — the receiver buffers ICE that
+    overtakes an OFFER, but only inside :data:`ICE_BUFFER_TIMEOUT_S`,
+    so out-of-order trickle on a slow link still fails.
+    """
+    monkeypatch.setattr(rtc, "PeerConnection", _RacingPeerConnection)
+
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+    )
+
+    await t._ensure_handshake(_fake_instance("peer-race-o"))
+    await _settle_drain(signal)
+
+    event_types = [ev[1] for ev in signal.events]
+    offer_idx = event_types.index(FederationEventType.FEDERATION_RTC_OFFER)
+    ice_indices = [
+        i
+        for i, et in enumerate(event_types)
+        if et is FederationEventType.FEDERATION_RTC_ICE
+    ]
+    assert ice_indices, "drain task should have flushed the host candidate"
+    assert all(offer_idx < i for i in ice_indices), (
+        f"wire order broken: OFFER at {offer_idx}, "
+        f"ICE candidates at {ice_indices} — the offerer raced ICE "
+        "ahead of OFFER (signaling race in _RtcPeer.start_offer)"
+    )
+
+    await t.close_all()
 
 
 # ─── Facade lifecycle ──────────────────────────────────────────────────────
