@@ -163,6 +163,12 @@ That single command runs the full sequence:
      for Alpha's row are NULL in Bob's DB. Flips back ON and asserts the
      coords are restored. Exercises ``PeerHomeSharingService.set_share_home``
      end-to-end.
+   - **User preferences round-trip**: PATCHes ``/api/me/preferences``
+     with ``{hide_highlights: true}`` as Alice, re-fetches
+     ``GET /api/me/preferences``, and asserts the value persisted.
+     Then checks Bob's preferences via his own token and asserts
+     ``hide_highlights`` is still false — no cross-talk between users.
+     Alice's preference is restored to false before the step exits.
    - **Log audit**: every backend's ``log.txt`` is scanned for
      ``Traceback`` / ``ERROR:`` / ``WARNING:`` / ``Exception:``
      lines. Anything that doesn't match the benign-noise allow-list
