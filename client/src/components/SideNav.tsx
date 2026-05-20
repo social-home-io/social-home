@@ -62,8 +62,6 @@ interface SideNavState {
   feat_tasks: boolean
   feat_pages: boolean
   feat_stickies: boolean
-  feat_highlights: boolean
-  feat_momentum: boolean
 }
 
 const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall' | 'dmUnread'> = {
@@ -72,8 +70,6 @@ const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall' | 'd
   feat_tasks: true,
   feat_pages: true,
   feat_stickies: true,
-  feat_highlights: true,
-  feat_momentum: true,
 }
 
 const HOME_GROUP: SideNavGroup = {
@@ -211,8 +207,6 @@ export function SideNav() {
             feat_tasks: t.feat_tasks,
             feat_pages: t.feat_pages,
             feat_stickies: t.feat_stickies,
-            feat_highlights: t.feat_highlights,
-            feat_momentum: t.feat_momentum ?? true,
           }
         : ALL_ON),
     }

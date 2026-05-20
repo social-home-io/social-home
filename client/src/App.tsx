@@ -9,6 +9,7 @@ import { isAuthed, currentUser, loadCurrentUser, setToken, token } from '@/store
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
 import { isGuardian, loadGuardian } from '@/store/guardian'
 import { loadDmUnread } from '@/store/dms'
+import { loadUserPreferences } from '@/store/userPreferences'
 import { pageTitle, pageTitleAvatar } from '@/store/pageTitle'
 import { Avatar } from '@/components/Avatar'
 import { toggles, loadToggles } from '@/components/HouseholdToggles'
@@ -282,6 +283,11 @@ export function App() {
     // load — without this it stays at 0 until the user opens /dms or
     // the first ``dm.message`` WS frame triggers a refetch.
     void loadDmUnread()
+    // Load per-user section visibility preferences (hide_highlights,
+    // hide_momentum, hide_bazaar). Fires once per auth success and is
+    // kept live via ``user.preferences_changed`` WS frames wired in
+    // main.tsx.
+    void loadUserPreferences()
   }, [authed.value])
 
   // While the config is loading, render nothing (avoids a flash of

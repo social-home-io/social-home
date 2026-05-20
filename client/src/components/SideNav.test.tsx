@@ -15,8 +15,8 @@ import { SideNav } from './SideNav'
 
 const ALL_FEATURES_ON = {
   feat_feed: true, feat_pages: true, feat_tasks: true,
-  feat_stickies: true, feat_calendar: true, feat_highlights: true,
-  feat_momentum: true,
+  feat_stickies: true, feat_calendar: true,
+  feat_presence: true, feat_gallery: true,
   allow_text: true, allow_image: true, allow_video: true,
   allow_file: true, allow_poll: true, allow_schedule: true,
   allow_highlight_share: true,
@@ -319,12 +319,12 @@ describe('SideNav', () => {
     expect(link?.getAttribute('href')).toBe('/connections')
   })
 
-  it('renders Highlights and Momentum unconditionally — they are user-level, not household-toggled', () => {
+  it('renders Presence and Gallery from the household toggles', () => {
     setUser({ is_admin: true })
-    toggles.value = { ...ALL_FEATURES_ON, feat_highlights: false, feat_momentum: false }
+    toggles.value = { ...ALL_FEATURES_ON, feat_presence: true, feat_gallery: true }
     const { getByText } = renderAt('/')
-    expect(getByText('Highlights')).toBeTruthy()
-    expect(getByText('Momentum')).toBeTruthy()
+    expect(getByText('Presence')).toBeTruthy()
+    expect(getByText('Gallery')).toBeTruthy()
   })
 
   it('drops the standalone Highlight archive / Moments archive entries — those live as tabs now', () => {
