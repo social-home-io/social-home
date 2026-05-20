@@ -141,3 +141,50 @@ async def test_list_following_newest_first(env):
     )
     following = await env.user_repo.list_following(a.user_id)
     assert [uid for uid, _ in following] == [c.user_id, b.user_id]
+
+
+async def test_get_remote_by_member_roundtrip(env):
+    """``RemoteConversationMember`` carries ``(instance_id, remote_username)``
+    rather than the global ``user_id``, so the DM list / members endpoints
+    need a side index on ``remote_users`` to enrich a roster row with the
+    peer's display_name + picture hash."""
+    from socialhome.domain.user import RemoteUser
+
+    # ``remote_users.instance_id`` has a FK to ``remote_instances``; seed
+    # the parent row first so the upsert doesn't rollback.
+    await env.db.enqueue(
+        """INSERT INTO remote_instances(
+               id, display_name, remote_identity_pk, key_self_to_remote,
+               key_remote_to_self, remote_inbox_url, local_inbox_id,
+               status, source
+           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "peer-b",
+            "Peer B",
+            "00" * 32,
+            "k1",
+            "k2",
+            "https://peer-b.example/federation/inbox/x",
+            "local-inbox",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await env.user_repo.upsert_remote(
+        RemoteUser(
+            user_id="uid-brother-remote",
+            instance_id="peer-b",
+            remote_username="brother",
+            display_name="Brother",
+            picture_hash="pic-hash-abc",
+        ),
+    )
+    got = await env.user_repo.get_remote_by_member("peer-b", "brother")
+    assert got is not None
+    assert got.user_id == "uid-brother-remote"
+    assert got.display_name == "Brother"
+    assert got.picture_hash == "pic-hash-abc"
+    # Lookup with the wrong instance OR wrong username returns None —
+    # the index is on the composite, not either half alone.
+    assert await env.user_repo.get_remote_by_member("peer-x", "brother") is None
+    assert await env.user_repo.get_remote_by_member("peer-b", "sister") is None

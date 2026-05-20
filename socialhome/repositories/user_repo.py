@@ -40,6 +40,11 @@ class AbstractUserRepo(Protocol):
 
     # Remote users --------------------------------------------------------
     async def get_remote(self, user_id: str) -> RemoteUser | None: ...
+    async def get_remote_by_member(
+        self,
+        instance_id: str,
+        remote_username: str,
+    ) -> RemoteUser | None: ...
     async def upsert_remote(self, remote: RemoteUser) -> None: ...
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]: ...
     async def get_instance_for_user(self, user_id: str) -> str | None: ...
@@ -273,6 +278,25 @@ class SqliteUserRepo:
         row = await self._db.fetchone(
             "SELECT * FROM remote_users WHERE user_id=?",
             (user_id,),
+        )
+        return _row_to_remote_user(row_to_dict(row))
+
+    async def get_remote_by_member(
+        self,
+        instance_id: str,
+        remote_username: str,
+    ) -> RemoteUser | None:
+        """Look up a remote user by their conversation-member key.
+
+        ``RemoteConversationMember`` rows carry ``(instance_id,
+        remote_username)`` rather than the cryptographic ``user_id``,
+        so the DM list / members endpoints need this side index to
+        enrich a roster row with the peer's ``display_name``,
+        ``picture_hash``, and globally-unique ``user_id``.
+        """
+        row = await self._db.fetchone(
+            "SELECT * FROM remote_users WHERE instance_id=? AND remote_username=?",
+            (instance_id, remote_username),
         )
         return _row_to_remote_user(row_to_dict(row))
 
