@@ -25,7 +25,7 @@ async def _seed_user(db, user_id: str = "u1", username: str = "pascal") -> None:
 
 @pytest.fixture
 async def repo(db):
-    await db.enqueue("INSERT OR IGNORE INTO household_features(id) VALUES('default')")
+    await db.enqueue("INSERT OR IGNORE INTO preferences(id) VALUES('household')")
     return SqliteHighlightRepo(db)
 
 

@@ -107,7 +107,6 @@ class MomentCollectionView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         before = self.request.query.get("before")
         try:
@@ -132,7 +131,6 @@ class MomentCollectionView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         body = await self.body()
         svc = self.svc(moment_service_key)
         moment = await svc.create_moment(
@@ -168,7 +166,6 @@ class MomentArchiveView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         tag = self.request.query.get("tag")
         moments = await svc.list_inbox(
@@ -198,7 +195,6 @@ class MomentHashtagsView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         try:
             limit = int(self.request.query.get("limit", 20))
@@ -218,7 +214,6 @@ class MomentDetailView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         moment_id = self.match("id")
         moment = await svc.get_moment(moment_id)
@@ -244,7 +239,6 @@ class MomentDetailView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         moment_id = self.match("id")
         await svc.delete_moment(
@@ -262,7 +256,6 @@ class MomentReactionView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         body = await self.body()
         emoji = str(body.get("emoji") or "").strip()
         if not emoji:
@@ -276,7 +269,6 @@ class MomentReactionView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         svc = self.svc(moment_service_key)
         moment_id = self.match("id")
         await svc.clear_reaction(moment_id, reactor_user_id=ctx.user_id)
@@ -291,7 +283,6 @@ class MomentReportView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("momentum")
         body = await self.body()
         category = str(body.get("category") or "").strip()
         if not category:

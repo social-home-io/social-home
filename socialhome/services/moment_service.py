@@ -1,7 +1,7 @@
 """Momentum service — household-broadcast posts (§Momentum).
 
 Orchestrates :class:`AbstractMomentRepo`, :class:`AbstractUserRepo`,
-and :class:`HouseholdFeaturesService` to enforce the spec rules:
+and :class:`PreferencesService` to enforce the spec rules:
 
 * ≤ 1 000 chars text, optional image or ≤ 15-second video.
 * 1 top-level moment per author per 15 minutes (replies + reactions

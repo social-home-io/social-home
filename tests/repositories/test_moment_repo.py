@@ -41,7 +41,7 @@ def _moment(
 
 @pytest.fixture
 async def repo(db):
-    await db.enqueue("INSERT OR IGNORE INTO household_features(id) VALUES('default')")
+    await db.enqueue("INSERT OR IGNORE INTO preferences(id) VALUES('household')")
     return SqliteMomentRepo(db)
 
 

@@ -7,7 +7,7 @@ from dataclasses import replace
 from socialhome.app import create_app
 from socialhome.app_keys import (
     config_key,
-    household_features_service_key,
+    preferences_service_key,
     platform_adapter_key,
     setup_service_key,
 )
@@ -77,7 +77,7 @@ async def test_standalone_setup_persists_household_name(
         },
     )
     assert r.status == 201, await r.text()
-    feats = await tc._app[household_features_service_key].get()
+    feats = await tc._app[preferences_service_key].get_household()
     assert feats.household_name == "The Rivendells"
 
 
@@ -95,7 +95,7 @@ async def test_standalone_setup_blank_household_name_keeps_default(
         },
     )
     assert r.status == 201
-    feats = await tc._app[household_features_service_key].get()
+    feats = await tc._app[preferences_service_key].get_household()
     assert feats.household_name == "Home"
 
 
@@ -248,7 +248,7 @@ async def test_ha_owner_setup_persists_household_name(aiohttp_client, tmp_dir):
         },
     )
     assert r.status == 201, await r.text()
-    feats = await tc._app[household_features_service_key].get()
+    feats = await tc._app[preferences_service_key].get_household()
     assert feats.household_name == "Casa Vizeli"
 
 
@@ -330,7 +330,7 @@ async def test_haos_complete_persists_household_name(aiohttp_client, tmp_dir):
         json={"household_name": "Hearth"},
     )
     assert r.status == 200, await r.text()
-    feats = await tc._app[household_features_service_key].get()
+    feats = await tc._app[preferences_service_key].get_household()
     assert feats.household_name == "Hearth"
 
 

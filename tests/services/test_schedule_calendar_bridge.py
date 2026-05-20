@@ -7,9 +7,9 @@ import pytest
 
 from socialhome.domain.events import SchedulePollFinalized
 from socialhome.infrastructure.event_bus import EventBus
-from socialhome.services.household_features_service import (
+from socialhome.domain.preferences import (
     FeatureDisabledError,
-    HouseholdFeatures,
+    HouseholdPreferences,
 )
 from socialhome.services.schedule_calendar_bridge import (
     ScheduleCalendarBridge,
@@ -30,7 +30,7 @@ class _FakeFeaturesService:
 
     async def require_enabled(self, section):
         if self._enabled:
-            return HouseholdFeatures()
+            return HouseholdPreferences()
         raise FeatureDisabledError(section)
 
 

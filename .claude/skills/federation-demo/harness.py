@@ -1961,7 +1961,61 @@ def cmd_verify() -> None:
                     f"({row2[0]}, {row2[1]}) ✓"
                 )
 
-    # 11. Log audit — scan each backend's stdout/stderr for unhandled
+    # 12. User preferences round-trip — PATCH /api/me/preferences on
+    #    Alice's instance, re-fetch, assert the value persisted, and
+    #    verify Bob's preferences are unchanged (no cross-talk).
+    a = state["instances"]["a"]
+    b = state["instances"]["b"]
+    s, r = _request(
+        f"http://127.0.0.1:{a['port']}/api/me/preferences",
+        token=a["token"],
+        method="PATCH",
+        body={"hide_highlights": True},
+    )
+    if s not in (200, 204):
+        failures.append(
+            f"a: PATCH /api/me/preferences failed: HTTP {s} {r!r}"
+        )
+    else:
+        s2, r2 = _request(
+            f"http://127.0.0.1:{a['port']}/api/me/preferences",
+            token=a["token"],
+        )
+        if s2 != 200:
+            failures.append(
+                f"a: GET /api/me/preferences failed after PATCH: HTTP {s2}"
+            )
+        elif not r2.get("hide_highlights"):
+            failures.append(
+                f"a: hide_highlights not persisted (got {r2!r})"
+            )
+        else:
+            print("  a: user preferences round-trip (hide_highlights=True) ✓")
+        # No cross-talk — Bob's preferences should be unmodified.
+        s3, r3 = _request(
+            f"http://127.0.0.1:{b['port']}/api/me/preferences",
+            token=b["token"],
+        )
+        if s3 != 200:
+            failures.append(
+                f"b: GET /api/me/preferences failed: HTTP {s3}"
+            )
+        elif r3.get("hide_highlights"):
+            failures.append(
+                f"b: hide_highlights unexpectedly true after Alice's PATCH "
+                f"(cross-talk? got {r3!r})"
+            )
+        else:
+            print("  b: user preferences unchanged after Alice's PATCH ✓")
+        # Restore Alice's preference to avoid affecting other verify steps.
+        _request(
+            f"http://127.0.0.1:{a['port']}/api/me/preferences",
+            token=a["token"],
+            method="PATCH",
+            body={"hide_highlights": False},
+        )
+
+    # 13. Log audit — scan each backend's stdout/stderr for unhandled
     #    exceptions, ERROR-level lines, federation-pipeline rejects.
     #    Anything we can't account for (i.e. doesn't match the
     #    benign-noise allow-list) becomes a verify failure so the

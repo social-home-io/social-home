@@ -17,17 +17,13 @@ from socialhome.repositories.calendar_repo import (
     SqliteCalendarRepo,
     SqliteSpaceCalendarRepo,
 )
-from socialhome.repositories.household_features_repo import (
-    SqliteHouseholdFeaturesRepo,
-)
+from socialhome.repositories.preferences_repo import SqlitePreferencesRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.calendar_service import (
     CalendarService,
     SpaceCalendarService,
 )
-from socialhome.services.household_features_service import (
-    HouseholdFeaturesService,
-)
+from socialhome.services.preferences_service import PreferencesService
 
 
 @pytest.fixture
@@ -50,9 +46,8 @@ async def env(tmp_dir):
     e.cal_repo = SqliteCalendarRepo(db)
     e.space_cal_repo = SqliteSpaceCalendarRepo(db)
     e.user_repo = SqliteUserRepo(db)
-    e.household_repo = SqliteHouseholdFeaturesRepo(db)
-    await e.household_repo.ensure_row()
-    e.household_svc = HouseholdFeaturesService(e.household_repo)
+    e.household_repo = SqlitePreferencesRepo(db)
+    e.household_svc = PreferencesService(repo=e.household_repo)
     e.cal_svc = CalendarService(e.cal_repo)
     e.space_cal_svc = SpaceCalendarService(e.space_cal_repo)
 

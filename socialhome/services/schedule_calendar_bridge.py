@@ -20,10 +20,8 @@ from typing import TYPE_CHECKING
 
 from ..domain.events import SchedulePollFinalized
 from ..infrastructure.event_bus import EventBus
-from ..services.household_features_service import (
-    FeatureDisabledError,
-    HouseholdFeaturesService,
-)
+from ..domain.preferences import FeatureDisabledError
+from ..services.preferences_service import PreferencesService
 
 if TYPE_CHECKING:
     from ..services.calendar_service import SpaceCalendarService
@@ -42,7 +40,7 @@ class ScheduleCalendarBridge:
         *,
         bus: EventBus,
         space_calendar_service: "SpaceCalendarService",
-        household_features: HouseholdFeaturesService,
+        household_features: PreferencesService,
     ) -> None:
         self._bus = bus
         self._calendar = space_calendar_service

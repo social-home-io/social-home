@@ -58,7 +58,7 @@ class TaskService:
         self._users = user_repo
 
     def attach_household_features(self, svc) -> None:
-        """Wire :class:`HouseholdFeaturesService` so ``create_list`` /
+        """Wire :class:`PreferencesService` so ``create_list`` /
         ``create_task`` refuse with 403 when ``feat_tasks`` is off (§18).
         """
         self._household = svc

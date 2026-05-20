@@ -20,6 +20,7 @@ import { wireStickiesWs } from './store/stickies'
 import { wireDmWs } from './store/dms'
 import { wireCallsWs } from './store/calls'
 import { wireConnectionsWs } from './store/connections'
+import { wireUserPreferencesWs } from './store/userPreferences'
 
 // Wire WebSocket event handlers to local stores BEFORE connecting so
 // no events get lost between connect() and the subscribe() calls.
@@ -34,6 +35,7 @@ wireStickiesWs()
 wireDmWs()
 wireCallsWs()
 wireConnectionsWs()
+wireUserPreferencesWs()
 ws.connect()
 
 render(<App />, document.getElementById('root')!)

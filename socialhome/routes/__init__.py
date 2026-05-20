@@ -127,7 +127,8 @@ from .gallery import (
     SpaceAlbumCollectionView,
 )
 from .health import HealthView
-from .household import HouseholdFeaturesView
+from .household import HouseholdPreferencesView
+from .me_preferences import MePreferencesView
 from .media import MediaServeView, MediaUploadView
 from .notifications import (
     NotificationCollectionView,
@@ -987,8 +988,11 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/storage/usage", StorageUsageView)
     app.router.add_view("/api/admin/storage/quota", StorageQuotaView)
 
-    # ── Household features ──────────────────────────────────────────────
-    app.router.add_view("/api/household/features", HouseholdFeaturesView)
+    # ── Household preferences ────────────────────────────────────────────
+    app.router.add_view("/api/household/preferences", HouseholdPreferencesView)
+
+    # ── User preferences ─────────────────────────────────────────────────
+    app.router.add_view("/api/me/preferences", MePreferencesView)
 
     # ── Backup (adapter-agnostic) ────────────────────────────────────────
     app.router.add_view("/api/backup/pre_backup", BackupPreView)

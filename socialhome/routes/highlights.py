@@ -107,7 +107,6 @@ class HighlightFramesCollectionView(BaseView):
         ctx = self.user
         if ctx is None or ctx.user_id is None:
             return error_response(401, "UNAUTHENTICATED", "auth required")
-        await self.require_household_feature("highlights")
         body = await self.body()
         media_url = body.get("media_url")
         if not isinstance(media_url, str) or not media_url:
@@ -172,7 +171,6 @@ class HighlightsCollectionView(BaseView):
         ctx = self.user
         if ctx is None or ctx.user_id is None:
             return error_response(401, "UNAUTHENTICATED", "auth required")
-        await self.require_household_feature("highlights")
         svc = self.svc(highlight_service_key)
         rows = await svc.list_visible(ctx.user_id)
         out: list[dict] = []
@@ -368,7 +366,6 @@ class HighlightReportView(BaseView):
         ctx = self.user
         if ctx is None:
             return error_response(401, "UNAUTHENTICATED", "Login required.")
-        await self.require_household_feature("highlights")
         body = await self.body()
         category = str(body.get("category") or "").strip()
         if not category:

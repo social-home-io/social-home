@@ -25,6 +25,8 @@ from .. import app_keys as K
 from ..media_signer import sign_media_urls_in
 from .base import BaseView
 
+_GALLERY_SECTION = "gallery"
+
 
 def _album_dict(a) -> dict:
     return {
@@ -92,6 +94,7 @@ class HouseholdAlbumCollectionView(BaseView):
 
     async def get(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         before = self.request.query.get("before")
         try:
             limit = int(self.request.query.get("limit", 30))
@@ -107,6 +110,7 @@ class HouseholdAlbumCollectionView(BaseView):
 
     async def post(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         body = await self.body()
         album = await self.svc(K.gallery_service_key).create_album(
             space_id=None,
@@ -122,6 +126,7 @@ class SpaceAlbumCollectionView(BaseView):
 
     async def get(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         space_id = self.match("space_id")
         before = self.request.query.get("before")
         try:
@@ -138,6 +143,7 @@ class SpaceAlbumCollectionView(BaseView):
 
     async def post(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         space_id = self.match("space_id")
         body = await self.body()
         album = await self.svc(K.gallery_service_key).create_album(
@@ -154,6 +160,7 @@ class AlbumDetailView(BaseView):
 
     async def get(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         album = await self.svc(K.gallery_service_key).get_album(
             self.match("album_id"),
             actor_user_id=ctx.user_id,
@@ -162,6 +169,7 @@ class AlbumDetailView(BaseView):
 
     async def patch(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         body = await self.body()
         await self.svc(K.gallery_service_key).update_album(
             self.match("album_id"),
@@ -174,6 +182,7 @@ class AlbumDetailView(BaseView):
 
     async def delete(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         await self.svc(K.gallery_service_key).delete_album(
             self.match("album_id"),
             actor_user_id=ctx.user_id,
@@ -186,6 +195,7 @@ class AlbumRetentionView(BaseView):
 
     async def post(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         try:
             body = await self.body()
         except Exception:
@@ -204,6 +214,7 @@ class AlbumItemCollectionView(BaseView):
 
     async def get(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         before = self.request.query.get("before")
         try:
             limit = int(self.request.query.get("limit", 50))
@@ -221,6 +232,7 @@ class AlbumItemCollectionView(BaseView):
 
     async def post(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         album_id = self.match("album_id")
         caption = self.request.query.get("caption")
 
@@ -276,6 +288,7 @@ class GalleryItemDetailView(BaseView):
 
     async def delete(self) -> web.Response:
         ctx = self.user
+        await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         await self.svc(K.gallery_service_key).delete_item(
             self.match("item_id"),
             actor_user_id=ctx.user_id,

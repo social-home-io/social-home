@@ -11,12 +11,13 @@ import { instanceConfig } from '@/store/instance'
 import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
 import { toggles } from '@/components/HouseholdToggles'
+import { userPreferences } from '@/store/userPreferences'
 import { SideNav } from './SideNav'
 
 const ALL_FEATURES_ON = {
   feat_feed: true, feat_pages: true, feat_tasks: true,
-  feat_stickies: true, feat_calendar: true, feat_highlights: true,
-  feat_momentum: true,
+  feat_stickies: true, feat_calendar: true,
+  feat_presence: true, feat_gallery: true,
   allow_text: true, allow_image: true, allow_video: true,
   allow_file: true, allow_poll: true, allow_schedule: true,
   allow_highlight_share: true,
@@ -51,6 +52,12 @@ beforeEach(() => {
   activeCalls.value = []
   dmUnreadTotal.value = 0
   toggles.value = { ...ALL_FEATURES_ON }
+  userPreferences.value = {
+    user_id: 'u-1',
+    hide_highlights: false,
+    hide_momentum: false,
+    hide_bazaar: false,
+  }
   // Default to standalone for tests that don't care about platform
   // mode. The identity-strip behaviour test explicitly flips this to
   // ``'haos'`` to assert the strip disappears under HA Supervisor.
@@ -102,8 +109,9 @@ describe('SideNav', () => {
     expect(queryByText('Gallery')).toBeTruthy()
   })
 
-  it('shows Bazaar unconditionally — it is a per-space feature, not gated by household toggles', () => {
+  it('shows Bazaar when hide_bazaar is false — it renders unless the user opted out', () => {
     setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_bazaar: false }
     const { queryByText, container } = renderAt('/')
     expect(queryByText('Bazaar')).toBeTruthy()
     expect(queryByText('Spaces')).toBeTruthy()
@@ -319,12 +327,12 @@ describe('SideNav', () => {
     expect(link?.getAttribute('href')).toBe('/connections')
   })
 
-  it('renders Highlights and Momentum unconditionally — they are user-level, not household-toggled', () => {
+  it('renders Presence and Gallery from the household toggles', () => {
     setUser({ is_admin: true })
-    toggles.value = { ...ALL_FEATURES_ON, feat_highlights: false, feat_momentum: false }
+    toggles.value = { ...ALL_FEATURES_ON, feat_presence: true, feat_gallery: true }
     const { getByText } = renderAt('/')
-    expect(getByText('Highlights')).toBeTruthy()
-    expect(getByText('Momentum')).toBeTruthy()
+    expect(getByText('Presence')).toBeTruthy()
+    expect(getByText('Gallery')).toBeTruthy()
   })
 
   it('drops the standalone Highlight archive / Moments archive entries — those live as tabs now', () => {
@@ -332,5 +340,66 @@ describe('SideNav', () => {
     const { queryByText } = renderAt('/')
     expect(queryByText('Highlight archive')).toBeNull()
     expect(queryByText('Moments archive')).toBeNull()
+  })
+
+  it('hides Presence when feat_presence is false', () => {
+    setUser({ is_admin: true })
+    toggles.value = { ...ALL_FEATURES_ON, feat_presence: false }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Presence')).toBeNull()
+    // Gallery still visible
+    expect(queryByText('Gallery')).toBeTruthy()
+  })
+
+  it('hides Gallery when feat_gallery is false', () => {
+    setUser({ is_admin: true })
+    toggles.value = { ...ALL_FEATURES_ON, feat_gallery: false }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Gallery')).toBeNull()
+    // Presence still visible
+    expect(queryByText('Presence')).toBeTruthy()
+  })
+
+  it('hides Highlights when userPreferences.hide_highlights is true', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_highlights: true }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Highlights')).toBeNull()
+    // Momentum and Chats still visible
+    expect(queryByText('Momentum')).toBeTruthy()
+    expect(queryByText('Chats')).toBeTruthy()
+  })
+
+  it('hides Momentum when userPreferences.hide_momentum is true', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_momentum: true }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Momentum')).toBeNull()
+    // Highlights still visible
+    expect(queryByText('Highlights')).toBeTruthy()
+  })
+
+  it('hides Bazaar when userPreferences.hide_bazaar is true', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_bazaar: true }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Bazaar')).toBeNull()
+    // Spaces and Corner still visible
+    expect(queryByText('Spaces')).toBeTruthy()
+    expect(queryByText('Corner')).toBeTruthy()
+  })
+
+  it('shows all three user-pref sections when hide_* flags are false', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = {
+      user_id: 'u-1',
+      hide_highlights: false,
+      hide_momentum: false,
+      hide_bazaar: false,
+    }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Highlights')).toBeTruthy()
+    expect(queryByText('Momentum')).toBeTruthy()
+    expect(queryByText('Bazaar')).toBeTruthy()
   })
 })

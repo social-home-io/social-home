@@ -79,7 +79,7 @@ class FeedService:
         self._quota = None  # set via attach_storage_quota
 
     def attach_household_features(self, svc) -> None:
-        """Wire :class:`HouseholdFeaturesService` for toggle enforcement
+        """Wire :class:`PreferencesService` for toggle enforcement
         (§18). When attached, ``create_post`` gates on both the feed
         section toggle and the per-post-type allowlist.
         """

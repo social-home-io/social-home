@@ -6,6 +6,7 @@ from aiohttp import web
 
 from ..app_keys import (
     online_status_service_key,
+    preferences_service_key,
     presence_service_key,
     user_repo_key,
 )
@@ -44,6 +45,7 @@ class PresenceCollectionView(BaseView):
 
     async def get(self) -> web.Response:
         ctx = self.user
+        await self.svc(preferences_service_key).require_enabled("presence")
         entries = await self.svc(presence_service_key).list_presence()
         online_svc = self.request.app.get(online_status_service_key)
         # ``user_repo.list_by_ids`` is the source for offline users'
@@ -102,6 +104,7 @@ class PresenceLocationView(BaseView):
 
     async def post(self) -> web.Response:
         ctx = self.user
+        await self.svc(preferences_service_key).require_enabled("presence")
         body = await self.body()
 
         username = body.get("username")

@@ -113,7 +113,7 @@ from .repositories.dm_media_outbox_repo import SqliteDmMediaOutboxRepo
 from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
-from .repositories.household_features_repo import SqliteHouseholdFeaturesRepo
+from .repositories.preferences_repo import SqlitePreferencesRepo
 from .repositories.pairing_relay_repo import SqlitePairingRelayRepo
 from .repositories.password_reset_repo import SqlitePasswordResetRepo
 from .repositories.auth_audit_log_repo import SqliteAuthAuditLogRepo
@@ -233,7 +233,7 @@ from .services.gallery_service import GalleryService
 from .services.system_album_bridge import SystemAlbumBridge
 from .services.pairing_relay_queue import PairingRelayQueue
 from .services.alias_service import AliasResolver, AliasService
-from .services.household_features_service import HouseholdFeaturesService
+from .services.preferences_service import PreferencesService
 from .services.page_conflict_service import PageConflictService
 from .services.poll_service import PollService
 from .services.online_status_service import OnlineStatusService
@@ -413,7 +413,7 @@ def _build_repos(db: AsyncDatabase):
         dm_routing=SqliteDmRoutingRepo(db),
         dm_contact=SqliteDmContactRepo(db),
         dm_media_outbox=SqliteDmMediaOutboxRepo(db),
-        household_features=SqliteHouseholdFeaturesRepo(db),
+        preferences=SqlitePreferencesRepo(db),
         presence=SqlitePresenceRepo(db),
         public_space=SqlitePublicSpaceRepo(db),
         peer_space_directory=SqlitePeerSpaceDirectoryRepo(db),
@@ -1274,22 +1274,22 @@ def create_app(config: Config | None = None) -> web.Application:
     alias_service = AliasService(repos.alias, repos.user)
     alias_resolver = AliasResolver(repos.alias)
 
-    # ── Household feature toggles (§22) ─────────────────────────────────
-    household_features_service = HouseholdFeaturesService(
-        repos.household_features,
+    # ── Preferences service (household-wide + per-user toggles) ─────────
+    preferences_service = PreferencesService(
+        repo=repos.preferences,
         bus=bus,
     )
 
     # Feature gating for §18: wire household toggle enforcement into
     # every service that owns a toggleable surface. Disabling
     # ``feat_tasks`` immediately makes POST /api/tasks return 403.
-    feed_service.attach_household_features(household_features_service)
-    task_service.attach_household_features(household_features_service)
-    calendar_service.attach_household_features(household_features_service)
+    feed_service.attach_household_features(preferences_service)
+    task_service.attach_household_features(preferences_service)
+    calendar_service.attach_household_features(preferences_service)
     # Space-calendar event creation walks the same tz resolution chain
     # as personal events. Wire the helpers it needs: the household
     # service (final UTC fallback) and the space repo (per-space tz).
-    space_cal_service.attach_household_features(household_features_service)
+    space_cal_service.attach_household_features(preferences_service)
     space_cal_service.attach_space_repo(space_repo)
     feed_service.attach_storage_quota(storage_quota)
 
@@ -1299,7 +1299,7 @@ def create_app(config: Config | None = None) -> web.Application:
     schedule_calendar_bridge = ScheduleCalendarBridge(
         bus=bus,
         space_calendar_service=space_cal_service,
-        household_features=household_features_service,
+        household_features=preferences_service,
     )
     schedule_calendar_bridge.wire()
 
@@ -1599,7 +1599,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.gallery_repo_key] = gallery_repo
     app[K.child_protection_service_key] = child_protection_service
     app[K.typing_service_key] = typing_service
-    app[K.household_features_service_key] = household_features_service
+    app[K.preferences_service_key] = preferences_service
     app[K.alias_service_key] = alias_service
     app[K.alias_resolver_key] = alias_resolver
     app[K.data_export_service_key] = data_export_service

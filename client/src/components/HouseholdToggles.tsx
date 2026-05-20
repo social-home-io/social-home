@@ -12,8 +12,8 @@ import { showToast } from './Toast'
 
 interface Toggles {
   feat_feed: boolean; feat_pages: boolean; feat_tasks: boolean
-  feat_stickies: boolean; feat_calendar: boolean; feat_highlights: boolean
-  feat_momentum: boolean
+  feat_stickies: boolean; feat_calendar: boolean; feat_presence: boolean
+  feat_gallery: boolean
   allow_text: boolean; allow_image: boolean; allow_video: boolean
   allow_file: boolean; allow_poll: boolean; allow_schedule: boolean
   allow_highlight_share: boolean
@@ -24,7 +24,7 @@ export const toggles = signal<Toggles | null>(null)
 
 export async function loadToggles(): Promise<void> {
   try {
-    toggles.value = await api.get('/api/household/features') as Toggles
+    toggles.value = await api.get('/api/household/preferences') as Toggles
   } catch {
     /* auth failure or offline — leave prior state */
   }
@@ -46,7 +46,7 @@ export function HouseholdToggles() {
     const updated = { ...toggles.value, [key]: !val }
     toggles.value = updated
     try {
-      await api.put('/api/household/features', { toggles: { [key]: !val } })
+      await api.put('/api/household/preferences', { toggles: { [key]: !val } })
     } catch {
       showToast('Failed to update', 'error')
       void loadToggles()
@@ -59,7 +59,7 @@ export function HouseholdToggles() {
   const features: [keyof Toggles, string][] = [
     ['feat_feed', 'Feed'], ['feat_pages', 'Pages'], ['feat_tasks', 'Tasks'],
     ['feat_stickies', 'Stickies'], ['feat_calendar', 'Calendar'],
-    ['feat_highlights', 'Highlights'], ['feat_momentum', 'Momentum'],
+    ['feat_presence', 'Presence'], ['feat_gallery', 'Gallery'],
   ]
   const postTypes: [keyof Toggles, string][] = [
     ['allow_text', 'Text'], ['allow_image', 'Image'], ['allow_video', 'Video'],
