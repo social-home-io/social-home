@@ -898,6 +898,47 @@ def cmd_pair() -> None:
                 f"got {len(confirmed)} "
                 f"({[c['display_name'] for c in conns]})"
             )
+
+    # Simulate the configure-sharing wizard step: every operator opts
+    # in to home-location sharing for every peer they just paired with.
+    # The pairing handshake itself ships no coords (privacy-by-default);
+    # the flip from ``share_home=False`` (the new default) to ``True``
+    # is what fires the one-off ``LOCAL_HOME_LOCATION_CHANGED`` carrying
+    # the actual coords. Down-stream verify assertions assume the user
+    # said yes here.
+    #
+    # The ``/api/pairing/*`` bucket is rate-limited at 5 calls per 60 s
+    # per token, and the ``_pair_two`` calls above already burned through
+    # most of it. Let the bucket drain before issuing PATCHes — a fresh
+    # window means each instance has the full quota for the ~3 PATCHes
+    # it needs to opt in to all its paired peers.
+    print("waiting for pairing rate-limit bucket to drain (~62s)...")
+    time.sleep(62)
+    for label, info in state["instances"].items():
+        s, conns = _request(
+            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+            token=info["token"],
+        )
+        _must(f"connections({label})", s, conns)
+        for c in conns:
+            if c.get("status") != "confirmed":
+                continue
+            ps, _ = _request(
+                f"http://127.0.0.1:{info['port']}/api/pairing/connections/"
+                f"{c['instance_id']}",
+                token=info["token"],
+                method="PATCH",
+                body={"share_home": True},
+            )
+            if ps not in (200, 204):
+                raise SystemExit(
+                    f"{label}: share_home PATCH for {c['instance_id'][:8]} "
+                    f"returned HTTP {ps}"
+                )
+
+    # Give the LOCAL_HOME_LOCATION_CHANGED envelopes time to fan out.
+    time.sleep(2)
+
     print("pair: ok (a↔b, b↔c, a↔c, b↔d)")
 
 

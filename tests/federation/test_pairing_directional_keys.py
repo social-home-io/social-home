@@ -153,10 +153,15 @@ async def test_accept_carries_acceptor_inbox_url_in_peer_accept_body():
     assert captured[0]["peer_inbox_url"] == a_inbox_url
 
 
-async def test_accept_peer_accept_body_carries_home_coords_when_set():
-    """accept() (B-side) includes home_lat/home_lon in the peer-accept
-    body when the local identity has coordinates set, so A's RemoteInstance
-    row learns B's home location immediately on pairing."""
+async def test_accept_peer_accept_body_never_carries_home_coords():
+    """Privacy contract: the peer-accept body MUST NOT include
+    ``home_lat`` / ``home_lon`` even when the local identity has
+    coords set. The pairing handshake completes before the operator
+    reaches the configure-sharing wizard step, so sharing has to wait
+    for the explicit ``share_home=True`` flip — which fires its own
+    ``LOCAL_HOME_LOCATION_CHANGED`` envelope. A previous shape (v5,
+    #366) shipped coords in this body unconditionally; that was the
+    leak this test now guards against."""
     captured: list[dict] = []
 
     class _RecordingPeerClient:
@@ -171,6 +176,8 @@ async def test_accept_peer_accept_body_carries_home_coords_when_set():
             return _R()
 
     kp = generate_identity_keypair()
+    # Local identity HAS coords — the privacy contract is that we
+    # still don't ship them in the peer-accept body.
     repo = _FakeRepo(local_identity={"home_lat": 52.52, "home_lon": 13.40})
     coord = PairingCoordinator(repo, _kek(), kp.public_key)
     coord.attach_peer_pairing_client(_RecordingPeerClient())
@@ -178,7 +185,7 @@ async def test_accept_peer_accept_body_carries_home_coords_when_set():
     peer_kp = generate_identity_keypair()
     peer_dh = generate_x25519_keypair()
     qr = {
-        "token": "tok-coords-1",
+        "token": "tok-no-leak",
         "instance_id": derive_instance_id(peer_kp.public_key),
         "identity_pk": peer_kp.public_key.hex(),
         "dh_pk": peer_dh.public_key.hex(),
@@ -189,50 +196,17 @@ async def test_accept_peer_accept_body_carries_home_coords_when_set():
 
     assert len(captured) == 1
     body = captured[0]["body"]
-    assert body.get("home_lat") == 52.52
-    assert body.get("home_lon") == 13.40
+    assert "home_lat" not in body
+    assert "home_lon" not in body
 
 
-async def test_accept_peer_accept_body_omits_home_coords_when_none():
-    """accept() omits home_lat/home_lon from the body when the local
-    identity has NULL coords (not yet configured)."""
-    captured: list[dict] = []
-
-    class _RecordingPeerClient:
-        async def send_peer_accept(self, *, peer_inbox_url, body):
-            captured.append(body)
-
-            class _R:
-                ok = True
-                status_code = 200
-                error = None
-
-            return _R()
-
-    kp = generate_identity_keypair()
-    repo = _FakeRepo(local_identity={"home_lat": None, "home_lon": None})
-    coord = PairingCoordinator(repo, _kek(), kp.public_key)
-    coord.attach_peer_pairing_client(_RecordingPeerClient())
-
-    peer_kp = generate_identity_keypair()
-    peer_dh = generate_x25519_keypair()
-    qr = {
-        "token": "tok-no-coords",
-        "identity_pk": peer_kp.public_key.hex(),
-        "dh_pk": peer_dh.public_key.hex(),
-        "inbox_url": "https://alpha.example/federation/inbox/A-INBOX2",
-    }
-
-    await coord.accept(qr)
-
-    assert len(captured) == 1
-    assert "home_lat" not in captured[0]
-    assert "home_lon" not in captured[0]
-
-
-async def test_handle_peer_accept_populates_home_coords_on_remote_instance():
-    """handle_peer_accept() (A-side) reads home_lat/home_lon from the
-    incoming body and stores them on the new RemoteInstance row."""
+async def test_handle_peer_accept_ignores_home_coords_in_body():
+    """Privacy contract: even if a forward-incompatible peer ships
+    ``home_lat`` / ``home_lon`` in the peer-accept body, the receiver
+    must silently ignore them — the row stays NULL until the peer's
+    explicit ``share_home=True`` flip fires a
+    ``LOCAL_HOME_LOCATION_CHANGED`` envelope. Mirrors the sender-side
+    guarantee on the receiver."""
     kp_a = generate_identity_keypair()
     kp_b = generate_identity_keypair()
     dh_b = generate_x25519_keypair()
@@ -244,7 +218,8 @@ async def test_handle_peer_accept_populates_home_coords_on_remote_instance():
     qr = await coord_a.initiate(inbox_base_url="https://a.example/federation/inbox")
     token = qr["token"]
 
-    # Build the peer-accept body as B would send it, including home coords.
+    # A hostile/legacy peer ships coords in the body anyway. We assert
+    # the receiver discards them.
     peer_accept: dict = {
         "token": token,
         "verification_code": "123456",
@@ -264,39 +239,20 @@ async def test_handle_peer_accept_populates_home_coords_on_remote_instance():
     b_iid = derive_instance_id(kp_b.public_key)
     stored = repo_a.instances.get(b_iid)
     assert stored is not None
-    assert stored.home_lat == 52.52
-    assert stored.home_lon == 13.40
-
-
-async def test_handle_peer_accept_home_coords_none_when_absent_from_body():
-    """handle_peer_accept() stores None for home_lat/home_lon when the
-    body doesn't include those fields (older peers / coords not set)."""
-    kp_a = generate_identity_keypair()
-    kp_b = generate_identity_keypair()
-    dh_b = generate_x25519_keypair()
-
-    repo_a = _FakeRepo()
-    coord_a = PairingCoordinator(repo_a, _kek(), kp_a.public_key)
-
-    qr = await coord_a.initiate(inbox_base_url="https://a.example/federation/inbox")
-    token = qr["token"]
-
-    peer_accept: dict = {
-        "token": token,
-        "verification_code": "654321",
-        "identity_pk": kp_b.public_key.hex(),
-        "instance_id": derive_instance_id(kp_b.public_key),
-        "dh_pk": dh_b.public_key.hex(),
-        "inbox_url": "https://b.example/federation/inbox/B-LOCAL2",
-        "display_name": "Household B",
-        "sig_suite": "ed25519",
-    }
-    signed_body = sign_peer_body(peer_accept, own_identity_seed=kp_b.private_key)
-
-    await coord_a.handle_peer_accept(signed_body)
-
-    b_iid = derive_instance_id(kp_b.public_key)
-    stored = repo_a.instances.get(b_iid)
-    assert stored is not None
     assert stored.home_lat is None
     assert stored.home_lon is None
+
+
+async def test_initiate_qr_payload_never_carries_home_coords():
+    """Privacy contract: the QR payload MUST NOT include
+    ``home_lat`` / ``home_lon`` — even when the local identity has
+    coords set, the scanner can't know the operator's sharing
+    preference yet (the wizard's configure-sharing step runs after
+    pairing completes)."""
+    kp = generate_identity_keypair()
+    repo = _FakeRepo(local_identity={"home_lat": 52.52, "home_lon": 13.405})
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+
+    payload = await coord.initiate("https://us.example/federation/inbox")
+    assert "home_lat" not in payload
+    assert "home_lon" not in payload

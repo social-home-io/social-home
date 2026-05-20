@@ -343,16 +343,18 @@ class PairingCoordinator:
                 "display_name": own_display_name,
                 "sig_suite": self._own_sig_suite,
             }
-            if (
-                local
-                and local.get("home_lat") is not None
-                and local.get("home_lon") is not None
-            ):
-                peer_accept_body["home_lat"] = float(local["home_lat"])
-                peer_accept_body["home_lon"] = float(local["home_lon"])
             if self._own_pq_pk is not None:
                 peer_accept_body["pq_algorithm"] = "mldsa65"
                 peer_accept_body["pq_identity_pk"] = self._own_pq_pk.hex()
+            # Privacy: the peer-accept body deliberately does **not**
+            # carry ``home_lat`` / ``home_lon``. The operator hasn't
+            # reached the wizard's configure-sharing step yet, so we
+            # can't know whether they want this pair to see our home
+            # coords. Sharing kicks in only after the explicit
+            # ``share_home=True`` flip via ``PeerHomeSharingService``,
+            # which then fires a one-off ``LOCAL_HOME_LOCATION_CHANGED``
+            # carrying the actual coords. Until that flip lands the
+            # remote row stays NULL.
             # The QR's ``inbox_url`` is A's federation inbox. The
             # peer-accept rides it as a ``PAIRING_PEER_ACCEPT``
             # federation event so the HA integration's existing inbox
@@ -502,6 +504,15 @@ class PairingCoordinator:
         peer_pq_alg = body.get("pq_algorithm")
         negotiated = negotiate(self._own_sig_suite, peer_suite)
 
+        # Privacy: ``home_lat`` / ``home_lon`` are deliberately **not**
+        # read off ``body`` here. Even if a forward-incompatible peer
+        # ships them, we silently ignore — the operator hasn't yet
+        # been given the chance (configure-sharing wizard step) to
+        # decide whether this peer should see our coords. The receiver
+        # mirrors the same opt-in gate the sender already enforces.
+        # Coords land on this row only via a later
+        # ``LOCAL_HOME_LOCATION_CHANGED`` envelope sent by the peer
+        # after their own ``share_home`` flip.
         now = datetime.now(timezone.utc)
         remote_inst = RemoteInstance(
             id=peer_instance_id,
@@ -517,16 +528,6 @@ class PairingCoordinator:
             remote_pq_identity_pk=str(peer_pq_pk) if peer_pq_pk else None,
             sig_suite=negotiated,
             paired_at=now.isoformat(),
-            home_lat=(
-                round(float(body["home_lat"]), 4)
-                if body.get("home_lat") is not None
-                else None
-            ),
-            home_lon=(
-                round(float(body["home_lon"]), 4)
-                if body.get("home_lon") is not None
-                else None
-            ),
         )
         await self._repo.save_instance(remote_inst)
 
@@ -698,6 +699,16 @@ class PairingCoordinator:
             )
 
         # Replace with a confirmed instance (frozen dataclass — rebuild).
+        # ``home_lat`` / ``home_lon`` carry across the rebuild so that
+        # an inbound ``LOCAL_HOME_LOCATION_CHANGED`` arriving between
+        # ``handle_peer_accept`` and ``confirm`` doesn't get wiped by
+        # the status flip. The pairing handshake itself never populates
+        # these fields (see the privacy notes on ``handle_peer_accept``
+        # and the peer-accept body in ``accept``), so in steady-state
+        # the values being preserved are NULL — the carry-through is
+        # defensive against future flows that might populate the row
+        # before the wizard's configure-sharing step completes.
+        # Mirrors :meth:`peer_confirm` below.
         confirmed = RemoteInstance(
             id=instance.id,
             display_name=instance.display_name,
@@ -711,6 +722,8 @@ class PairingCoordinator:
             remote_pq_algorithm=instance.remote_pq_algorithm,
             remote_pq_identity_pk=instance.remote_pq_identity_pk,
             sig_suite=instance.sig_suite,
+            home_lat=instance.home_lat,
+            home_lon=instance.home_lon,
             paired_at=instance.paired_at,
             created_at=instance.created_at,
             last_reachable_at=instance.last_reachable_at,

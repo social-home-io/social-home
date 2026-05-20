@@ -967,7 +967,9 @@ async def test_patch_share_home_requires_admin(client):
 
 
 async def test_get_connections_includes_share_home(client):
-    """GET /api/connections returns share_home on every row; default is True."""
+    """GET /api/connections returns share_home on every row; default is
+    False (privacy-by-default — operators must explicitly opt in via the
+    configure-sharing wizard step)."""
     fed_repo = client.app[federation_repo_key]
     inst = _fake_instance("peer-sh-list-1")
     await fed_repo.save_instance(inst)
@@ -979,5 +981,4 @@ async def test_get_connections_includes_share_home(client):
     assert r.status == 200
     rows = await r.json()
     row = next(x for x in rows if x["instance_id"] == "peer-sh-list-1")
-    # Default value is True — RemoteInstance.share_home defaults to True.
-    assert row["share_home"] is True
+    assert row["share_home"] is False

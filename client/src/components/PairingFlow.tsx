@@ -1040,7 +1040,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
               <ShareHomeToggle
                 instanceId={justPairedInstanceId.value}
                 peerName={justPairedDisplayName.value || justPairedInstanceId.value}
-                initialValue={true}
+                initialValue={false}
               />
             )}
             <Button onClick={() => { open.value = false }}>

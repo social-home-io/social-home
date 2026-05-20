@@ -82,9 +82,12 @@ def _instance_dict(
         # the editable alias input.
         "federated_display_name": inst.display_name,
         "local_alias": local_alias,
-        # Per-peer home-location sharing toggle (§share_home).  Default True.
-        # Listed next to local_alias because both are per-pair local toggles.
-        "share_home": getattr(inst, "share_home", True),
+        # Per-peer home-location sharing toggle (§share_home). Defaults
+        # to False — operators opt in via the wizard's configure-sharing
+        # step, which PATCHes this column to True and triggers a one-off
+        # LOCAL_HOME_LOCATION_CHANGED. The getattr fallback is defensive;
+        # the dataclass field always exists on a healthy row.
+        "share_home": getattr(inst, "share_home", False),
         "status": status,
         "reachable": reachable,
         "transport": transport_state,

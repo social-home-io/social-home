@@ -392,9 +392,19 @@ class RemoteInstance:
     local_alias: str | None = None
     #: Whether to share this household's home location with this peer.
     #: Never federated on its own — purely a local opt-in/opt-out toggle.
-    #: Defaults to ``True`` so existing paired peers keep the pre-toggle
-    #: behaviour (share coordinates when the peer supports §4.5).
-    share_home: bool = True
+    #: Defaults to ``False`` so a fresh pair never sees our coords until
+    #: the operator opts in via the configure-sharing wizard step (the
+    #: pairing handshake itself carries no coords — see the privacy
+    #: notes in ``pairing_coordinator``). Opting in flips this to
+    #: ``True`` and fires a one-off ``LOCAL_HOME_LOCATION_CHANGED``
+    #: carrying the current local coords; subsequent HA-Core location
+    #: pushes fan out to every confirmed peer with ``share_home=True``.
+    #: Existing rows on disk keep whatever value the previous schema
+    #: default wrote — this is only the default for new ``RemoteInstance``
+    #: dataclass instances and for the ``federation_repo``'s explicit
+    #: INSERT (the schema's ``DEFAULT 1`` from migration 0006 is dead
+    #: code: every write path sets the column explicitly).
+    share_home: bool = False
 
     def is_reachable(self) -> bool:
         return self.unreachable_since is None
