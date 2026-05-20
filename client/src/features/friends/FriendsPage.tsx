@@ -45,6 +45,9 @@ interface RemoteMember {
   remote_username: string
   display_name: string
   picture_url: string | null
+  is_online?: boolean
+  is_idle?: boolean
+  last_seen_at?: string | null
 }
 
 interface LocalInstance {
@@ -345,10 +348,12 @@ export default function FriendsPage() {
                         name={m.display_name}
                         src={m.picture_url}
                         size={28}
+                        online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
                       />
                       <span class="sh-friends-member-name">
                         {m.display_name}
                       </span>
+                      <OnlinePill user_id={m.user_id} compact showZone={false} />
                       <span
                         class="sh-friends-member-chip__dm-hint"
                         aria-hidden="true"

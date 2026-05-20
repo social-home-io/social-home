@@ -62,10 +62,22 @@ def _local_user_to_dict(u, *, online_svc=None) -> dict:
     }
 
 
-def _remote_user_to_dict(ru) -> dict:
+def _remote_user_to_dict(ru, *, online_svc=None) -> dict:
     """Public-shape view of a :class:`RemoteUser`. Picture is served
     via the existing per-user route; same cache-busting hash convention
-    as the local users."""
+    as the local users. The presence triple matches
+    :func:`_local_user_to_dict` — federation ``USER_ONLINE`` /
+    ``USER_OFFLINE`` envelopes already populate
+    :class:`OnlineStatusService`'s remote cache keyed on ``user_id``, so
+    the same calls used for local rows surface remote presence
+    transparently. ``remote_users`` has no persisted ``last_seen_at``
+    column, so both online + offline branches read the service's
+    remote cache (returns ``None`` until the first presence envelope
+    lands)."""
+    is_online = bool(online_svc and online_svc.is_online(ru.user_id))
+    is_idle = bool(online_svc and online_svc.is_idle(ru.user_id))
+    last_dt = online_svc.last_seen(ru.user_id) if online_svc else None
+    last_seen = last_dt.isoformat() if last_dt is not None else None
     return {
         "user_id": ru.user_id,
         "instance_id": ru.instance_id,
@@ -77,6 +89,9 @@ def _remote_user_to_dict(ru) -> dict:
             if ru.picture_hash
             else None
         ),
+        "is_online": is_online,
+        "is_idle": is_idle,
+        "last_seen_at": last_seen,
     }
 
 
@@ -168,7 +183,10 @@ class FriendsView(BaseView):
             households.append(
                 _instance_safe_dict(
                     inst,
-                    members=[_remote_user_to_dict(ru) for ru in remote_members],
+                    members=[
+                        _remote_user_to_dict(ru, online_svc=online_svc)
+                        for ru in remote_members
+                    ],
                 ),
             )
 
