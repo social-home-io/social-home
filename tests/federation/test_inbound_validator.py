@@ -103,6 +103,30 @@ async def test_lookup_instance_rejects_unknown():
         await step(ctx)
 
 
+async def test_lookup_instance_rejects_provisional_row():
+    """``AutoPairCoordinator.request_via`` plants a provisional row with
+    an empty ``remote_identity_pk`` before the relay ack lands. If the
+    other side's first envelope arrives during that window, the inbox
+    lookup must surface a 404-equivalent so the outbox retries —
+    otherwise sig verify runs against an empty pk and 403s, and the
+    outbox drops the row terminally."""
+
+    class _Provisional:
+        # A row that exists (lookup succeeded) but isn't ready to
+        # validate against yet.
+        remote_identity_pk = ""
+        key_remote_to_self = ""
+        from_instance = "remote-iid"
+
+    async def _lookup(repo, wh_id):
+        return _Provisional() if wh_id == "wh-prov" else None
+
+    step = make_lookup_instance(repo=None, lookup_fn=_lookup)
+    ctx = InboundContext(inbox_id="wh-prov")
+    with pytest.raises(ValueError, match="No instance found"):
+        await step(ctx)
+
+
 # ─── Step 3: check_timestamp ─────────────────────────────────────────────
 
 
