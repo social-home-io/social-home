@@ -114,6 +114,7 @@ from ..domain.events import (
     TaskListDeleted,
     TaskListUpdated,
     TaskUpdated,
+    UserPreferencesChanged,
     UserStatusChanged,
 )
 from ..infrastructure.event_bus import EventBus
@@ -388,6 +389,11 @@ class RealtimeService:
             PeerHomeChanged,
             self._on_peer_home_changed,
         )
+        # User preferences — unicast to the owner only (not household-wide)
+        self._bus.subscribe(
+            UserPreferencesChanged,
+            self._on_user_preferences_changed,
+        )
 
     # ─── Household feed events ────────────────────────────────────────────
 
@@ -581,6 +587,22 @@ class RealtimeService:
                 "latitude": event.latitude,
                 "longitude": event.longitude,
             }
+        )
+
+    # ─── User preferences (§preferences) ─────────────────────────────────
+
+    async def _on_user_preferences_changed(
+        self,
+        event: UserPreferencesChanged,
+    ) -> None:
+        """Broadcast user.preferences_changed to the owner user only."""
+        await self._ws.broadcast_to_users(
+            [event.user_id],
+            {
+                "type": "user.preferences_changed",
+                "user_id": event.user_id,
+                "changed": dict(event.changed),
+            },
         )
 
     async def _on_pairing_intro_received(
