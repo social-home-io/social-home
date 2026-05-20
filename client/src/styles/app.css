@@ -2136,6 +2136,10 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   font-size: var(--sh-font-size-xs);
   font-style: italic;
 }
+/* Household reachability indicator — rendered only when *unreachable*
+ * so the green session-presence dot on the avatars stays the
+ * unambiguous "good news" indicator on each row. Amber matches the
+ * idle-state colour palette and reads as a warning without alarming. */
 .sh-friends-status-dot {
   width: 10px;
   height: 10px;
@@ -2143,7 +2147,6 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
   flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--sh-bg);
 }
-.sh-friends-status-dot--reachable   { background: #22c55e; }
 .sh-friends-status-dot--unreachable { background: #fbbf24; }
 
 .sh-friends-members {
@@ -2178,52 +2181,10 @@ button.sh-friends-member-chip:not(:disabled):hover {
   font-style: italic;
 }
 
-/* Member chip variants — local rows are split into a presence link
- * + a separate 💬 DM action so the user keeps both affordances;
- * remote rows go straight to DM on click since presence isn't
- * synced for remote members today. */
-.sh-friends-member-chip--row {
-  padding: 0;
-  background: transparent;
-  border: 0;
-  gap: 0;
-}
-.sh-friends-member-chip__main {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px 2px 2px;
-  border-radius: var(--sh-radius-full) 0 0 var(--sh-radius-full);
-  background: var(--sh-bg);
-  border: 1px solid var(--sh-border);
-  border-right: 0;
-  text-decoration: none;
-  color: var(--sh-text);
-  font-size: var(--sh-font-size-sm);
-  transition: transform var(--sh-transition-fast),
-              box-shadow var(--sh-transition-fast);
-}
-.sh-friends-member-chip__dm {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border-radius: 0 var(--sh-radius-full) var(--sh-radius-full) 0;
-  background: var(--sh-bg);
-  border: 1px solid var(--sh-border);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  transition: background var(--sh-transition-fast),
-              transform var(--sh-transition-fast);
-}
-.sh-friends-member-chip__dm:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--sh-primary) 12%, var(--sh-bg));
-  transform: translateY(-1px);
-}
-.sh-friends-member-chip__dm:disabled { opacity: 0.5; cursor: progress; }
+/* Member chip variants — every chip's whole-area click starts a 1:1
+ * DM (local + remote, symmetric); the caller's own chip switches to
+ * a non-interactive ``--self`` variant so a button leading nowhere
+ * doesn't appear. */
 .sh-friends-member-chip--button {
   cursor: pointer;
   font: inherit;
@@ -2231,6 +2192,12 @@ button.sh-friends-member-chip:not(:disabled):hover {
 .sh-friends-member-chip--button:disabled {
   opacity: 0.5;
   cursor: progress;
+}
+.sh-friends-member-chip--self {
+  cursor: default;
+}
+.sh-friends-member-chip--self .sh-friends-member-name {
+  font-weight: 600;
 }
 .sh-friends-member-chip__dm-hint {
   font-size: 13px;

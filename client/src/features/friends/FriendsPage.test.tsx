@@ -174,7 +174,7 @@ describe('FriendsPage', () => {
 
   // ── Quick DM affordance (PR C) ───────────────────────────────────────
 
-  it('local member chip exposes a 💬 button for everyone except the viewer', async () => {
+  it('local member chip is click-to-DM for everyone except the viewer', async () => {
     apiMock.get.mockResolvedValueOnce(payload({
       instance: {
         instance_id: 'us', display_name: 'Vizeli Home',
@@ -192,17 +192,20 @@ describe('FriendsPage', () => {
     await waitFor(() => {
       expect(container.querySelector('.sh-friends')).not.toBeNull()
     })
+    // Pascal (viewer) is rendered as a passive ``--self`` card; only
+    // Maria becomes a click-to-DM button.
+    expect(container.querySelector('.sh-friends-member-chip--self'))
+      .not.toBeNull()
     const dmButtons = container.querySelectorAll(
-      '.sh-friends-member-chip__dm',
+      'button.sh-friends-member-chip',
     )
-    // Pascal (viewer) is excluded; only Maria gets a DM button.
     expect(dmButtons.length).toBe(1)
     expect(
       (dmButtons[0] as HTMLButtonElement).getAttribute('aria-label'),
     ).toBe('Message Maria')
   })
 
-  it('clicking a local DM button POSTs /api/conversations/dm with {username}', async () => {
+  it('clicking a local member chip POSTs /api/conversations/dm with {username}', async () => {
     apiMock.get.mockResolvedValueOnce(payload({
       instance: {
         instance_id: 'us', display_name: 'Vizeli Home',
@@ -219,11 +222,11 @@ describe('FriendsPage', () => {
     apiPost.mockResolvedValueOnce({ id: 'cdm-local' })
     const { container } = render(<FriendsPage />)
     await waitFor(() => {
-      expect(container.querySelector('.sh-friends-member-chip__dm'))
+      expect(container.querySelector('button.sh-friends-member-chip'))
         .not.toBeNull()
     })
     fireEvent.click(
-      container.querySelector('.sh-friends-member-chip__dm') as HTMLElement,
+      container.querySelector('button.sh-friends-member-chip') as HTMLElement,
     )
     await waitFor(() => {
       expect(apiPost).toHaveBeenCalledWith(
