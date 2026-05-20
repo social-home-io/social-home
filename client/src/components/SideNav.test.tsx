@@ -11,6 +11,7 @@ import { instanceConfig } from '@/store/instance'
 import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
 import { toggles } from '@/components/HouseholdToggles'
+import { userPreferences } from '@/store/userPreferences'
 import { SideNav } from './SideNav'
 
 const ALL_FEATURES_ON = {
@@ -51,6 +52,12 @@ beforeEach(() => {
   activeCalls.value = []
   dmUnreadTotal.value = 0
   toggles.value = { ...ALL_FEATURES_ON }
+  userPreferences.value = {
+    user_id: 'u-1',
+    hide_highlights: false,
+    hide_momentum: false,
+    hide_bazaar: false,
+  }
   // Default to standalone for tests that don't care about platform
   // mode. The identity-strip behaviour test explicitly flips this to
   // ``'haos'`` to assert the strip disappears under HA Supervisor.
@@ -102,8 +109,9 @@ describe('SideNav', () => {
     expect(queryByText('Gallery')).toBeTruthy()
   })
 
-  it('shows Bazaar unconditionally — it is a per-space feature, not gated by household toggles', () => {
+  it('shows Bazaar when hide_bazaar is false — it renders unless the user opted out', () => {
     setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_bazaar: false }
     const { queryByText, container } = renderAt('/')
     expect(queryByText('Bazaar')).toBeTruthy()
     expect(queryByText('Spaces')).toBeTruthy()
@@ -332,5 +340,66 @@ describe('SideNav', () => {
     const { queryByText } = renderAt('/')
     expect(queryByText('Highlight archive')).toBeNull()
     expect(queryByText('Moments archive')).toBeNull()
+  })
+
+  it('hides Presence when feat_presence is false', () => {
+    setUser({ is_admin: true })
+    toggles.value = { ...ALL_FEATURES_ON, feat_presence: false }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Presence')).toBeNull()
+    // Gallery still visible
+    expect(queryByText('Gallery')).toBeTruthy()
+  })
+
+  it('hides Gallery when feat_gallery is false', () => {
+    setUser({ is_admin: true })
+    toggles.value = { ...ALL_FEATURES_ON, feat_gallery: false }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Gallery')).toBeNull()
+    // Presence still visible
+    expect(queryByText('Presence')).toBeTruthy()
+  })
+
+  it('hides Highlights when userPreferences.hide_highlights is true', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_highlights: true }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Highlights')).toBeNull()
+    // Momentum and Chats still visible
+    expect(queryByText('Momentum')).toBeTruthy()
+    expect(queryByText('Chats')).toBeTruthy()
+  })
+
+  it('hides Momentum when userPreferences.hide_momentum is true', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_momentum: true }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Momentum')).toBeNull()
+    // Highlights still visible
+    expect(queryByText('Highlights')).toBeTruthy()
+  })
+
+  it('hides Bazaar when userPreferences.hide_bazaar is true', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = { ...userPreferences.value, hide_bazaar: true }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Bazaar')).toBeNull()
+    // Spaces and Corner still visible
+    expect(queryByText('Spaces')).toBeTruthy()
+    expect(queryByText('Corner')).toBeTruthy()
+  })
+
+  it('shows all three user-pref sections when hide_* flags are false', () => {
+    setUser({ is_admin: true })
+    userPreferences.value = {
+      user_id: 'u-1',
+      hide_highlights: false,
+      hide_momentum: false,
+      hide_bazaar: false,
+    }
+    const { queryByText } = renderAt('/')
+    expect(queryByText('Highlights')).toBeTruthy()
+    expect(queryByText('Momentum')).toBeTruthy()
+    expect(queryByText('Bazaar')).toBeTruthy()
   })
 })

@@ -23,6 +23,7 @@ import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
 import { spaces, loadSpaces } from '@/store/spaces'
 import { toggles } from '@/components/HouseholdToggles'
+import { userPreferences } from '@/store/userPreferences'
 import { Avatar } from '@/components/Avatar'
 import { Wordmark } from '@/components/Wordmark'
 import { SideNavIcon, type SideNavIconName } from '@/components/SideNavIcon'
@@ -62,6 +63,11 @@ interface SideNavState {
   feat_tasks: boolean
   feat_pages: boolean
   feat_stickies: boolean
+  feat_presence: boolean
+  feat_gallery: boolean
+  hide_highlights: boolean
+  hide_momentum: boolean
+  hide_bazaar: boolean
 }
 
 const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall' | 'dmUnread'> = {
@@ -70,6 +76,11 @@ const ALL_ON: Omit<SideNavState, 'isAdmin' | 'isGuardian' | 'hasActiveCall' | 'd
   feat_tasks: true,
   feat_pages: true,
   feat_stickies: true,
+  feat_presence: true,
+  feat_gallery: true,
+  hide_highlights: false,
+  hide_momentum: false,
+  hide_bazaar: false,
 }
 
 const HOME_GROUP: SideNavGroup = {
@@ -92,8 +103,10 @@ const HOME_GROUP: SideNavGroup = {
     // showing a dead nav row.
     { key: 'organize', label: 'Organize', href: '/organize', icon: 'tasks',
       gate: s => s.feat_tasks || s.feat_stickies },
-    { key: 'presence', label: 'Presence', href: '/presence', icon: 'presence' },
-    { key: 'gallery',  label: 'Gallery',  href: '/gallery',  icon: 'gallery' },
+    { key: 'presence', label: 'Presence', href: '/presence', icon: 'presence',
+      gate: s => s.feat_presence },
+    { key: 'gallery',  label: 'Gallery',  href: '/gallery',  icon: 'gallery',
+      gate: s => s.feat_gallery },
     { key: 'pages',    label: 'Pages',    href: '/pages',    icon: 'pages',
       gate: s => s.feat_pages },
   ],
@@ -110,10 +123,12 @@ const TALK_GROUP: SideNavGroup = {
     // tab stays the canonical surface (history, hang-up controls).
     { key: 'calls',    label: 'Calls',    href: '/dms?tab=calls', icon: 'calls',
       gate: s => s.hasActiveCall },
-    // Highlights + Momentum are user-level features — not gated by the
-    // household feature toggles. They always render in the sidebar.
-    { key: 'highlights',  label: 'Highlights',  href: '/highlights', icon: 'highlights' },
-    { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum' },
+    // Highlights + Momentum are user-level features — gated by the user's own
+    // hide_* preferences (from /api/me/preferences), not household toggles.
+    { key: 'highlights',  label: 'Highlights',  href: '/highlights', icon: 'highlights',
+      gate: s => !s.hide_highlights },
+    { key: 'momentum', label: 'Momentum', href: '/momentum', icon: 'momentum',
+      gate: s => !s.hide_momentum },
   ],
 }
 
@@ -123,7 +138,8 @@ const BROWSE_GROUP: SideNavGroup = {
   items: [
     { key: 'spaces',  label: 'Spaces', href: '/spaces',  icon: 'spaces' },
     { key: 'friends', label: 'Friends', href: '/friends', icon: 'connections' },
-    { key: 'bazaar',  label: 'Bazaar', href: '/bazaar',  icon: 'bazaar' },
+    { key: 'bazaar',  label: 'Bazaar', href: '/bazaar',  icon: 'bazaar',
+      gate: s => !s.hide_bazaar },
     { key: 'corner',  label: 'Corner', href: '/corner',  icon: 'corner' },
   ],
 }
@@ -191,6 +207,7 @@ export function SideNav() {
     // user's only "who am I signed in as" cue when SH is the primary
     // UI surface.
     const isHaos = instanceConfig.value?.mode === 'haos'
+    const up = userPreferences.value
     const state: SideNavState = {
       isAdmin: !!user?.is_admin,
       // null = still loading; treat as "not a guardian" so the link
@@ -207,8 +224,15 @@ export function SideNav() {
             feat_tasks: t.feat_tasks,
             feat_pages: t.feat_pages,
             feat_stickies: t.feat_stickies,
+            feat_presence: t.feat_presence,
+            feat_gallery: t.feat_gallery,
           }
         : ALL_ON),
+      // User-level hide_* prefs — default to false (show) while prefs
+      // haven't loaded yet so links don't flash off then on.
+      hide_highlights: up.hide_highlights,
+      hide_momentum: up.hide_momentum,
+      hide_bazaar: up.hide_bazaar,
     }
     const filter = (g: SideNavGroup) => g.items.filter(i => i.gate ? i.gate(state) : true)
     return {

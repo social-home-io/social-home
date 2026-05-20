@@ -26,6 +26,7 @@ import {
   loadHouseholdUsers,
 } from '@/store/householdUsers'
 import { relativeDocsTime } from '@/utils/relativeTime'
+import { userPreferences } from '@/store/userPreferences'
 
 type SettingsTab = 'profile' | 'privacy' | 'notifications' | 'appearance'
 
@@ -384,6 +385,7 @@ function PrivacyTab() {
         />
         Show online status to other household members
       </label>
+      <SidebarVisibilityPanel />
       <HighlightsPreferencesPanel />
       <MomentumPanel />
       <BlockedAccountsPanel />
@@ -392,6 +394,77 @@ function PrivacyTab() {
   )
 }
 
+
+/**
+ * SidebarVisibilityPanel — lets the signed-in user show or hide the three
+ * personal sidebar sections (Highlights, Momentum, Bazaar) that are owned at
+ * the user level, not the household level.  PATCH /api/me/preferences is
+ * called optimistically; a failure reverts the local signal and shows a toast.
+ *
+ * The flag semantics are intentionally inverted from the label: the API stores
+ * ``hide_*`` booleans, but the checkbox reads "Show … in my sidebar" so a
+ * checked box means the section IS visible (hide_* = false).
+ */
+function SidebarVisibilityPanel() {
+  const prefs = userPreferences.value
+
+  const toggle = async (field: 'hide_highlights' | 'hide_momentum' | 'hide_bazaar') => {
+    const prev = userPreferences.value[field]
+    const next = !prev
+    // Optimistic update
+    userPreferences.value = { ...userPreferences.value, [field]: next }
+    try {
+      await api.patch('/api/me/preferences', { [field]: next })
+    } catch (e: unknown) {
+      // Revert on error
+      userPreferences.value = { ...userPreferences.value, [field]: prev }
+      showToast((e as Error).message || 'Failed to update sidebar visibility', 'error')
+    }
+  }
+
+  return (
+    <div class="sh-settings-subcard sh-sidebar-visibility-panel" id="sidebar-visibility">
+      <h3 class="sh-settings-panel-heading">Show in my sidebar</h3>
+      <p class="sh-muted sh-settings-panel-blurb">
+        Choose which sections appear in your sidebar. These are personal
+        preferences — other household members are not affected.
+      </p>
+      <label class="sh-toggle-row">
+        <input
+          type="checkbox"
+          checked={!prefs.hide_highlights}
+          onChange={() => void toggle('hide_highlights')}
+        />
+        Highlights
+        <span class="sh-toggle-row-hint sh-muted">
+          Your curated photo and moment archive.
+        </span>
+      </label>
+      <label class="sh-toggle-row">
+        <input
+          type="checkbox"
+          checked={!prefs.hide_momentum}
+          onChange={() => void toggle('hide_momentum')}
+        />
+        Momentum
+        <span class="sh-toggle-row-hint sh-muted">
+          Federated moments from people you follow across households.
+        </span>
+      </label>
+      <label class="sh-toggle-row">
+        <input
+          type="checkbox"
+          checked={!prefs.hide_bazaar}
+          onChange={() => void toggle('hide_bazaar')}
+        />
+        Bazaar
+        <span class="sh-toggle-row-hint sh-muted">
+          Browse listings shared across connected households.
+        </span>
+      </label>
+    </div>
+  )
+}
 
 function FollowingPanel() {
   useEffect(() => {
