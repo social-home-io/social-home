@@ -25,9 +25,10 @@ from socialhome.infrastructure.key_manager import KeyManager
 
 
 class _FakeRepo:
-    def __init__(self) -> None:
+    def __init__(self, *, local_identity: dict | None = None) -> None:
         self.instances: dict = {}
         self.pairings: dict = {}
+        self._local_identity = local_identity
 
     async def save_instance(self, inst):
         self.instances[inst.id] = inst
@@ -44,6 +45,9 @@ class _FakeRepo:
 
     async def delete_pairing(self, token):
         self.pairings.pop(token, None)
+
+    async def get_local_identity(self):
+        return self._local_identity
 
 
 def _kek() -> KeyManager:
@@ -90,6 +94,105 @@ async def test_confirm_publishes_pairing_confirmed_on_local_bus():
         f"expected one PairingConfirmed publish, got {len(captured)}"
     )
     assert captured[0].instance_id == confirmed.id
+
+
+async def test_initiate_carries_home_coords_in_qr_payload():
+    """The QR payload has to ship the initiator's own coords so the
+    scanner can seed their RemoteInstance for us with coords on the
+    spot. The peer-accept body covers the reverse direction (scanner
+    → initiator), so a missing carry here meant only one direction
+    of the pair ever picked up coords during the handshake — the
+    other side had to wait for a subsequent
+    ``LOCAL_HOME_LOCATION_CHANGED`` envelope (which only fires on
+    share_home flips, not on idle pairings)."""
+    kp = generate_identity_keypair()
+    repo = _FakeRepo(
+        local_identity={
+            "instance_id": "self",
+            "display_name": "Alpha House",
+            "home_lat": 52.52,
+            "home_lon": 13.405,
+        }
+    )
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    payload = await coord.initiate("https://us.example/federation/inbox")
+    assert payload["home_lat"] == 52.52
+    assert payload["home_lon"] == 13.405
+
+
+async def test_initiate_omits_home_coords_when_unset():
+    """Operators who haven't set a home location must still be able
+    to pair — the carry is conditional on coords being set, not
+    mandatory."""
+    kp = generate_identity_keypair()
+    repo = _FakeRepo(
+        local_identity={
+            "instance_id": "self",
+            "display_name": "Alpha House",
+            # No home coords set.
+        }
+    )
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    payload = await coord.initiate("https://us.example/federation/inbox")
+    assert "home_lat" not in payload
+    assert "home_lon" not in payload
+
+
+async def test_accept_persists_home_coords_from_qr_payload():
+    """The scanner side has to write the initiator's coords into the
+    new RemoteInstance row at ``accept`` time — otherwise the
+    coords from the QR are read off the payload and silently
+    discarded."""
+    kp = generate_identity_keypair()
+    repo = _FakeRepo()
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    peer_kp = generate_identity_keypair()
+    peer_dh = generate_x25519_keypair()
+    await coord.accept(
+        {
+            "token": "tok-accept-coords",
+            "identity_pk": peer_kp.public_key.hex(),
+            "dh_pk": peer_dh.public_key.hex(),
+            "inbox_url": "https://peer/wh",
+            "home_lat": 52.52,
+            "home_lon": 13.405,
+        }
+    )
+    assert len(repo.instances) == 1
+    saved = next(iter(repo.instances.values()))
+    assert saved.home_lat == 52.52
+    assert saved.home_lon == 13.405
+
+
+async def test_confirm_preserves_home_coords():
+    """Regression: ``confirm()`` rebuilds the RemoteInstance to flip
+    its status to CONFIRMED. The rebuild used to drop ``home_lat`` /
+    ``home_lon`` so every cross-household viewer saw the peer with
+    NULL coords until a subsequent ``LOCAL_HOME_LOCATION_CHANGED``
+    event refilled them. ``peer_confirm()`` already preserves the
+    pair (see line ~649); ``confirm()`` now follows the same shape."""
+    kp = generate_identity_keypair()
+    repo = _FakeRepo()
+    coord = PairingCoordinator(repo, _kek(), kp.public_key)
+    peer_kp = generate_identity_keypair()
+    peer_dh = generate_x25519_keypair()
+    accept_result = await coord.accept(
+        {
+            "token": "tok-confirm-coords",
+            "identity_pk": peer_kp.public_key.hex(),
+            "dh_pk": peer_dh.public_key.hex(),
+            "inbox_url": "https://peer/wh",
+            "home_lat": 52.52,
+            "home_lon": 13.405,
+        }
+    )
+    confirmed = await coord.confirm(
+        "tok-confirm-coords",
+        accept_result["verification_code"],
+    )
+    assert confirmed.status.value == "confirmed"
+    assert confirmed.home_lat == 52.52, "confirm dropped home_lat"
+    assert confirmed.home_lon == 13.405, "confirm dropped home_lon"
 
 
 async def test_confirm_skips_publish_when_no_bus_wired():
