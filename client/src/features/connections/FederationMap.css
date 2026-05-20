@@ -6,6 +6,10 @@
   overflow: hidden;
   background: #fff;
   margin-bottom: 16px;
+  /* Confine Leaflet's internal z-indices (panes 200–700, controls
+   * 800) so they don't float over the sticky sidebar, which has no
+   * z-index of its own. */
+  isolation: isolate;
 }
 
 /* ── Map canvas ──────────────────────────────────────────────────── */
