@@ -114,6 +114,7 @@ from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
 from .repositories.household_features_repo import SqliteHouseholdFeaturesRepo
+from .repositories.preferences_repo import SqlitePreferencesRepo
 from .repositories.pairing_relay_repo import SqlitePairingRelayRepo
 from .repositories.password_reset_repo import SqlitePasswordResetRepo
 from .repositories.auth_audit_log_repo import SqliteAuthAuditLogRepo
@@ -234,6 +235,7 @@ from .services.system_album_bridge import SystemAlbumBridge
 from .services.pairing_relay_queue import PairingRelayQueue
 from .services.alias_service import AliasResolver, AliasService
 from .services.household_features_service import HouseholdFeaturesService
+from .services.preferences_service import PreferencesService
 from .services.page_conflict_service import PageConflictService
 from .services.poll_service import PollService
 from .services.online_status_service import OnlineStatusService
@@ -414,6 +416,7 @@ def _build_repos(db: AsyncDatabase):
         dm_contact=SqliteDmContactRepo(db),
         dm_media_outbox=SqliteDmMediaOutboxRepo(db),
         household_features=SqliteHouseholdFeaturesRepo(db),
+        preferences=SqlitePreferencesRepo(db),
         presence=SqlitePresenceRepo(db),
         public_space=SqlitePublicSpaceRepo(db),
         peer_space_directory=SqlitePeerSpaceDirectoryRepo(db),
@@ -1280,6 +1283,12 @@ def create_app(config: Config | None = None) -> web.Application:
         bus=bus,
     )
 
+    # ── Preferences service (household-wide + per-user toggles) ─────────
+    preferences_service = PreferencesService(
+        repo=repos.preferences,
+        bus=bus,
+    )
+
     # Feature gating for §18: wire household toggle enforcement into
     # every service that owns a toggleable surface. Disabling
     # ``feat_tasks`` immediately makes POST /api/tasks return 403.
@@ -1600,6 +1609,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.child_protection_service_key] = child_protection_service
     app[K.typing_service_key] = typing_service
     app[K.household_features_service_key] = household_features_service
+    app[K.preferences_service_key] = preferences_service
     app[K.alias_service_key] = alias_service
     app[K.alias_resolver_key] = alias_resolver
     app[K.data_export_service_key] = data_export_service

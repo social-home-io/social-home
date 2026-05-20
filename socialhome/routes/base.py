@@ -25,6 +25,8 @@ from aiohttp import web
 from ..app_keys import household_features_service_key
 from ..auth import current_user
 from ..domain.household_features import FeatureDisabledError
+from ..domain.preferences import FeatureDisabledError as PreferencesFeatureDisabledError
+from ..services.preferences_service import ScopeMismatchError
 from ..domain.space import (
     ModerationAlreadyDecidedError,
     PublicSpaceLimitError,
@@ -192,7 +194,14 @@ class BaseView(web.View):
             # "Insufficient Storage" (not 413) so clients can
             # disambiguate from per-file size limits.
             return error_response(507, "STORAGE_FULL", str(exc))
-        except FeatureDisabledError as exc:
+        except ScopeMismatchError as exc:
+            log.warning(
+                "%s: ScopeMismatchError from handler: %s",
+                type(self).__name__,
+                exc,
+            )
+            return error_response(400, "UNPROCESSABLE", str(exc))
+        except (FeatureDisabledError, PreferencesFeatureDisabledError) as exc:
             return error_response(
                 403,
                 "FEATURE_DISABLED",
