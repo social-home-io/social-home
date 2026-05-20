@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, waitFor } from '@testing-library/preact'
 
-// Mock the API module before importing the page
-const mockPatch = vi.fn().mockResolvedValue({})
+// Mock the API module before importing the page. ``vi.hoisted`` is the
+// only way to define a ``vi.fn`` that is reachable from a ``vi.mock``
+// factory — vitest hoists the factory above plain ``const`` declarations,
+// so plain assignment hits a ReferenceError at module-init time.
+const { mockPatch } = vi.hoisted(() => ({ mockPatch: vi.fn().mockResolvedValue({}) }))
 
 vi.mock('@/api', () => ({
   api: {
@@ -55,9 +58,11 @@ describe('SettingsPage', () => {
 describe('SidebarVisibilityPanel', () => {
   async function renderPrivacyTab() {
     const { default: SettingsPage } = await import('./SettingsPage')
-    // The Privacy tab needs to be active to see the panel; simulate clicking it.
+    // The Privacy tab needs to be active to see the panel; simulate clicking
+    // the tab button (the section heading also reads "Privacy", which makes
+    // `getByText` ambiguous — scope to role=button to grab the tab only).
     const result = render(<SettingsPage />)
-    const privacyTab = result.getByText('Privacy')
+    const privacyTab = result.getByRole('tab', { name: 'Privacy' })
     fireEvent.click(privacyTab)
     return result
   }
