@@ -7968,7 +7968,17 @@ body.sh-dm-thread-open .sh-messages {
   background: var(--sh-text-muted);
   flex-shrink: 0;
 }
-.sh-dot--home, .sh-status-dot--active { background: var(--sh-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sh-success) 25%, transparent); }
+/* Status dots use a brighter green than ``--sh-success`` (which is the
+ * deep #1F4438 moss for accents / borders). At 10px on a high-DPI
+ * mobile screen the moss reads as black; the avatar / friends pages
+ * already standardised on Tailwind's green-500 #22c55e for the same
+ * "this thing is alive" signal. We do the same here so the dot is
+ * unambiguously green on every viewport.  The 3px halo keeps the
+ * existing visual emphasis on desktop. */
+.sh-dot--home, .sh-status-dot--active {
+  background: #22c55e;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 25%, transparent);
+}
 .sh-dot--away, .sh-status-dot--pending { background: var(--sh-warning); }
 .sh-dot--not-home, .sh-status-dot--unreachable { background: var(--sh-danger); }
 .sh-dot--unknown { background: var(--sh-text-muted); }
