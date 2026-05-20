@@ -986,6 +986,31 @@ def cmd_relay_pair() -> None:
             raise SystemExit(f"{label} → {peer[:8]}: expected confirmed, got {match!r}")
     state["relay_pair_ran"] = True
     _save(state)
+    # On-pair capability exchange — same handshake the QR-pair path
+    # validates inside ``cmd_verify``. Pulled into ``cmd_relay_pair``
+    # itself so the canonical ``all`` flow (verify → relay-pair)
+    # surfaces a regression in the trust-relay session-key derivation
+    # or the outbox 404-retry path. Without this assert, a broken
+    # relay-pair hands off as "confirmed" but the first inbound
+    # envelope decryption fails silently and both sides stay at
+    # proto_version=1.
+    time.sleep(2)  # outbox retry for the on-pair CAPABILITIES envelope
+    for label, peer in (("a", d["instance_id"]), ("d", a["instance_id"])):
+        info = state["instances"][label]
+        s, conns = _request(
+            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+            token=info["token"],
+        )
+        _must(f"connections({label})", s, conns)
+        match = [c for c in conns if c["instance_id"] == peer]
+        pv = int(match[0].get("proto_version") or 1) if match else 1
+        if pv < 2:
+            raise SystemExit(
+                f"{label} → {peer[:8]}: relay-paired peer stuck at "
+                f"proto_version={pv} — INSTANCE_CAPABILITIES_UPDATED "
+                "never landed on the trust-relay path",
+            )
+        print(f"  {label} sees {peer[:8]} at proto_version={pv} (trust-relay) ✓")
     print("relay-pair: ok (a ↔ d confirmed via b)")
 
 
@@ -1817,36 +1842,71 @@ def cmd_verify() -> None:
 
     # 8. Transport: every confirmed inner-ring pair should have ridden the
     #    WebRTC DataChannel up by the time ``verify`` runs. The traffic /
-    #    calendar round-trips give the channel ~30 s to settle. The
-    #    assertion catches a regression where the ``peer.transport_changed``
-    #    publication path silently breaks or the DataChannel fails to come
-    #    up.
-    for src in ("a", "b", "c"):
-        info = state["instances"][src]
-        s, conns = _request(
-            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
-            token=info["token"],
-        )
-        _must(f"connections({src})", s, conns)
-        for row in conns:
-            if row.get("status") != "confirmed":
-                continue
-            # d isn't part of the inner-ring traffic test — it's only
-            # paired with b in the demo, so the channel may or may not
-            # have flipped to RTC by verify time.
-            d_iid = state["instances"]["d"]["instance_id"]
-            if row["instance_id"] == d_iid:
-                continue
-            transport = row.get("transport") or "https"
-            if transport != "rtc":
-                failures.append(
-                    f"{src} sees {row['display_name']!r} on transport "
-                    f"{transport!r}, expected 'rtc' after settle window"
-                )
-            else:
-                print(
-                    f"  {src} sees {row['display_name']} on transport=rtc ✓"
-                )
+    #    calendar round-trips give the channel ~30 s to settle.
+    #
+    #    On a busy container the ICE handshake (STUN gather, connectivity
+    #    checks, DTLS) can stretch past that. Poll every 2 s for up to
+    #    60 s before declaring a fallback — a real ``https`` regression
+    #    will stay stuck across all polls; a slow-settle just needs the
+    #    extra patience. Each poll re-reads ``/api/pairing/connections``
+    #    on every src, so the inner-ring view is taken atomically per
+    #    pass.
+    d_iid = state["instances"]["d"]["instance_id"]
+
+    def _check_transports() -> tuple[list[str], list[str]]:
+        """Probe every inner-ring confirmed peer's transport once.
+
+        Returns ``(success_lines, failure_lines)`` so the caller can
+        emit the success ✓ messages on the final pass without
+        double-printing during the poll loop.
+        """
+        ok_lines: list[str] = []
+        fail_lines: list[str] = []
+        for src in ("a", "b", "c"):
+            info = state["instances"][src]
+            s, conns = _request(
+                f"http://127.0.0.1:{info['port']}/api/pairing/connections",
+                token=info["token"],
+            )
+            _must(f"connections({src})", s, conns)
+            for row in conns:
+                if row.get("status") != "confirmed":
+                    continue
+                # d isn't part of the inner-ring traffic test — it's
+                # only paired with b in the demo, so the channel may
+                # or may not have flipped to RTC by verify time.
+                if row["instance_id"] == d_iid:
+                    continue
+                transport = row.get("transport") or "https"
+                if transport == "rtc":
+                    ok_lines.append(
+                        f"  {src} sees {row['display_name']} "
+                        "on transport=rtc ✓"
+                    )
+                else:
+                    fail_lines.append(
+                        f"{src} sees {row['display_name']!r} on transport "
+                        f"{transport!r}, expected 'rtc' after settle window"
+                    )
+        return ok_lines, fail_lines
+
+    # The ``/api/pairing/*`` bucket is 5 calls per 60s per instance,
+    # and we already spent the budget in earlier verify steps and
+    # share_home OFF→ON. Cap the poll at 3 attempts spaced 15s apart
+    # (≤3 calls per instance per minute — well within budget) so a
+    # slow RTC handshake gets ~30s of patience without exhausting
+    # the limiter.
+    ok_lines: list[str] = []
+    fail_lines: list[str] = []
+    for attempt in range(3):
+        ok_lines, fail_lines = _check_transports()
+        if not fail_lines:
+            break
+        if attempt < 2:
+            time.sleep(15)
+    failures.extend(fail_lines)
+    for line in ok_lines:
+        print(line)
 
     # 9. Crash check — every instance still alive (WebRTC didn't blow up).
     for label, info in state["instances"].items():

@@ -162,10 +162,41 @@ def test_derive_session_keys_produces_32_bytes():
 
     a = generate_x25519_keypair()
     b = generate_x25519_keypair()
-    k1, k2 = _derive_session_keys(a.private_key, b.public_key.hex())
+    k1, k2 = _derive_session_keys(a.private_key, b.public_key.hex(), is_initiator=True)
     assert len(k1) == 32
     assert len(k2) == 32
     assert k1 != k2
+
+
+def test_derive_session_keys_role_mirrors_between_sides():
+    """A's outbound key must equal D's inbound key, and vice versa.
+
+    Both sides derive the same shared ECDH secret, but the
+    ``self``/``remote`` labels they apply to the derived keys are
+    *mirror images*: the initiator's ``self-to-remote`` is the
+    acceptor's ``remote-to-self``. Without role-anchored info strings
+    in :func:`_derive_session_keys`, both sides label the keys
+    identically — every envelope across the relay-paired link
+    decrypts with the wrong key and the federation inbox surfaces it
+    as ``400 Failed to decrypt payload``."""
+    from socialhome.crypto import generate_x25519_keypair
+
+    a = generate_x25519_keypair()
+    c = generate_x25519_keypair()
+
+    a_self, a_remote = _derive_session_keys(
+        a.private_key, c.public_key.hex(), is_initiator=True
+    )
+    c_self, c_remote = _derive_session_keys(
+        c.private_key, a.public_key.hex(), is_initiator=False
+    )
+
+    # A→C: encrypted with a_self, decrypted with c_remote.
+    assert a_self == c_remote
+    # C→A: encrypted with c_self, decrypted with a_remote.
+    assert c_self == a_remote
+    # Each side's two directional keys are distinct.
+    assert a_self != a_remote
 
 
 # ── request_via error paths ────────────────────────────────────────

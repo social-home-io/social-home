@@ -332,6 +332,24 @@ async def _redeliver_envelope(
                 # online indicator never goes green even though every
                 # outbox tick is succeeding from the receiver's view.
                 await federation_repo.mark_reachable(entry.instance_id)
+                # 404 ``No instance found`` is *transient*: the peer just
+                # hasn't installed its RemoteInstance row for us yet,
+                # which happens in the relay-pair handshake window where
+                # our ``INSTANCE_CAPABILITIES_UPDATED`` (fired from the
+                # synchronous ``PairingConfirmed`` bus subscriber) races
+                # ahead of the ack reaching the peer. Retry through the
+                # outbox so the envelope lands once the peer's mirror
+                # catches up. Other 4xx (410 ``Replay detected`` / ``Skew
+                # too old``, 422 ``Malformed`` etc.) stay PERMANENT —
+                # those are genuinely "the peer will never accept this".
+                if resp.status == 404:
+                    log.info(
+                        "outbox: %s returned 404 (no instance) for %s — "
+                        "retrying (pair-window race)",
+                        entry.instance_id,
+                        entry.id,
+                    )
+                    return DeliveryOutcome.TRANSIENT
                 log.warning(
                     "outbox: %s returned terminal HTTP %d for %s — dropping",
                     entry.instance_id,
