@@ -24,7 +24,6 @@ import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { LocationMap, type LocationMarker } from '@/components/LocationMap'
-import { OnlinePill } from '@/components/OnlinePill'
 import { openPairing, PairingFlow } from '@/components/PairingFlow'
 import { showToast } from '@/components/Toast'
 import { api } from '@/api'
@@ -45,6 +44,9 @@ interface RemoteMember {
   remote_username: string
   display_name: string
   picture_url: string | null
+  is_online?: boolean
+  is_idle?: boolean
+  last_seen_at?: string | null
 }
 
 interface LocalInstance {
@@ -239,15 +241,16 @@ export default function FriendsPage() {
         <div class="sh-friends-members">
           {instance.members.map(m => {
             const isSelf = currentUser.value?.user_id === m.user_id
-            return (
-              <div
-                key={m.user_id}
-                class="sh-friends-member-chip sh-friends-member-chip--row"
-              >
-                <a
-                  href="/presence"
-                  class="sh-friends-member-chip__main"
-                  title={`${m.display_name} — see presence`}
+            // Self: render a passive card — a button leading nowhere
+            // would be worse UX than no button. Everyone else: whole
+            // chip clicks to start a DM, matching the remote-household
+            // chips so the interaction model is symmetric.
+            if (isSelf) {
+              return (
+                <div
+                  key={m.user_id}
+                  class="sh-friends-member-chip sh-friends-member-chip--self"
+                  title={`${m.display_name} (you)`}
                 >
                   <Avatar
                     name={m.display_name}
@@ -255,28 +258,39 @@ export default function FriendsPage() {
                     size={28}
                     online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
                   />
-                  <span class="sh-friends-member-name">
-                    {m.display_name}
-                  </span>
-                  <OnlinePill user_id={m.user_id} compact showZone={false} />
-                </a>
-                {!isSelf && (
-                  <button
-                    type="button"
-                    class="sh-friends-member-chip__dm"
-                    title={`Message ${m.display_name}`}
-                    aria-label={`Message ${m.display_name}`}
-                    disabled={dmBusy.has(m.user_id)}
-                    onClick={() => void startDmWith({
-                      user_id: m.user_id,
-                      username: m.username,
-                      is_local: true,
-                    })}
-                  >
-                    💬
-                  </button>
-                )}
-              </div>
+                  <span class="sh-friends-member-name">{m.display_name}</span>
+                  <span class="sh-friends-tag sh-muted">you</span>
+                </div>
+              )
+            }
+            return (
+              <button
+                key={m.user_id}
+                type="button"
+                class="sh-friends-member-chip sh-friends-member-chip--button"
+                title={`Message ${m.display_name}`}
+                aria-label={`Message ${m.display_name}`}
+                disabled={dmBusy.has(m.user_id)}
+                onClick={() => void startDmWith({
+                  user_id: m.user_id,
+                  username: m.username,
+                  is_local: true,
+                })}
+              >
+                <Avatar
+                  name={m.display_name}
+                  src={m.picture_url}
+                  size={28}
+                  online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
+                />
+                <span class="sh-friends-member-name">{m.display_name}</span>
+                <span
+                  class="sh-friends-member-chip__dm-hint"
+                  aria-hidden="true"
+                >
+                  💬
+                </span>
+              </button>
             )
           })}
         </div>
@@ -308,17 +322,22 @@ export default function FriendsPage() {
               data-instance-id={h.instance_id}
             >
               <header class="sh-friends-household-head">
-                <span
-                  class={`sh-friends-status-dot sh-friends-status-dot--${
-                    h.reachable ? 'reachable' : 'unreachable'}`}
-                  aria-hidden="true"
-                  title={h.reachable ? 'Reachable' : 'Unreachable'}
-                />
                 <strong>{h.display_name}</strong>
                 {pairedAgo && (
                   <span class="sh-friends-tag sh-muted">
                     paired {pairedAgo}
                   </span>
+                )}
+                {/* Reachable is the default expectation — only paint a
+                 * dot when something is wrong, so the green session-
+                 * presence dot on the avatars is the only "good news"
+                 * indicator on the row. */}
+                {!h.reachable && (
+                  <span
+                    class="sh-friends-status-dot sh-friends-status-dot--unreachable"
+                    aria-label="Unreachable"
+                    title="Unreachable"
+                  />
                 )}
               </header>
               {h.members.length === 0 ? (
@@ -345,6 +364,7 @@ export default function FriendsPage() {
                         name={m.display_name}
                         src={m.picture_url}
                         size={28}
+                        online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
                       />
                       <span class="sh-friends-member-name">
                         {m.display_name}

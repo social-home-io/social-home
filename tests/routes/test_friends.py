@@ -106,6 +106,36 @@ async def test_friends_lists_confirmed_remote_household(client):
     assert {m["user_id"] for m in h["members"]} == {"ru-1", "ru-2"}
 
 
+async def test_friends_carries_presence_triple_for_remote_members(client):
+    """Regression: a remote-household member used to render on the
+    Friends page without an online indicator because
+    :func:`_remote_user_to_dict` skipped the presence triple.
+    Local rows already carry ``is_online`` / ``is_idle`` /
+    ``last_seen_at`` so the SPA can draw the avatar dot + OnlinePill;
+    remote rows need the same shape so the indicator appears for
+    federated peers too. Offline by default in a fresh test (no
+    ``USER_ONLINE`` envelope landed).
+    """
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-a"))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-1",
+        instance_id="peer-a",
+        name="Bob",
+    )
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    h = body["households"][0]
+    m = next(x for x in h["members"] if x["user_id"] == "ru-1")
+    # The presence triple is part of the contract — same field names,
+    # same shape as the local block.
+    assert m["is_online"] is False
+    assert m["is_idle"] is False
+    assert "last_seen_at" in m
+    assert m["last_seen_at"] is None
+
+
 async def test_friends_omits_pending_pair(client):
     fed_repo = client.app[federation_repo_key]
     await fed_repo.save_instance(
