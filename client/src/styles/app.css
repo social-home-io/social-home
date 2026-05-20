@@ -13655,6 +13655,13 @@ a.sh-welcome-card:hover {
   overflow: hidden;
   border: 1px solid var(--sh-border);
   background: var(--sh-bg);
+  /* Confine Leaflet's internal z-indices (panes 200–700, controls
+   * 800) so they don't float over the sticky sidebar, which has no
+   * z-index of its own. Mirrors the same fix on ``.sh-federation-map``
+   * (#369) — this rule covers every other LocationMap consumer
+   * (Friends, Presence, Dashboard, SpaceLocationCard, LocationPicker,
+   * LocationPostCard). */
+  isolation: isolate;
 }
 .sh-location-map__canvas {
   width: 100%;
