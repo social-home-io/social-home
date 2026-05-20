@@ -166,6 +166,22 @@ class PairingCoordinator:
         if self._own_pq_pk is not None:
             payload["pq_algorithm"] = "mldsa65"
             payload["pq_identity_pk"] = self._own_pq_pk.hex()
+        # Carry the initiator's home coords in the QR so the scanner
+        # seats our row with coords immediately on ``accept`` — without
+        # this, only the reverse direction (scanner → initiator, via
+        # the peer-accept body) ever picked up coords during the
+        # handshake, and the scanner's view of the initiator stayed
+        # NULL until a later ``LOCAL_HOME_LOCATION_CHANGED`` envelope.
+        # The QR is a one-shot, in-person exchange — exposing the
+        # 4dp-truncated household coords (already a paired-peer
+        # surface) doesn't widen the information set.
+        if (
+            local
+            and local.get("home_lat") is not None
+            and local.get("home_lon") is not None
+        ):
+            payload["home_lat"] = float(local["home_lat"])
+            payload["home_lon"] = float(local["home_lon"])
         return payload
 
     def _derive_directional_keys(
@@ -307,7 +323,12 @@ class PairingCoordinator:
         peer_pq_alg = qr_payload.get("pq_algorithm")
         negotiated = negotiate(self._own_sig_suite, peer_suite)
 
-        # Persist a provisional RemoteInstance.
+        # Persist a provisional RemoteInstance. Mirror the QR's
+        # optional ``home_lat`` / ``home_lon`` onto the row at 4dp
+        # precision (same rule the schema enforces). The peer-confirm
+        # rebuild downstream preserves these, so a confirmed pair lands
+        # with coords already populated — no wait for the next
+        # ``LOCAL_HOME_LOCATION_CHANGED`` envelope.
         remote_inst = RemoteInstance(
             id=peer_instance_id,
             display_name=qr_payload.get("display_name", peer_instance_id[:8]),
@@ -322,6 +343,16 @@ class PairingCoordinator:
             remote_pq_identity_pk=str(peer_pq_pk) if peer_pq_pk else None,
             sig_suite=negotiated,
             paired_at=now.isoformat(),
+            home_lat=(
+                round(float(qr_payload["home_lat"]), 4)
+                if qr_payload.get("home_lat") is not None
+                else None
+            ),
+            home_lon=(
+                round(float(qr_payload["home_lon"]), 4)
+                if qr_payload.get("home_lon") is not None
+                else None
+            ),
         )
         await self._repo.save_instance(remote_inst)
 
@@ -698,6 +729,10 @@ class PairingCoordinator:
             )
 
         # Replace with a confirmed instance (frozen dataclass — rebuild).
+        # ``home_lat`` / ``home_lon`` mirror :meth:`peer_confirm` —
+        # without them the rebuild silently drops the coords carried
+        # via the peer-accept body and the row goes NULL until the next
+        # ``LOCAL_HOME_LOCATION_CHANGED`` envelope refills it.
         confirmed = RemoteInstance(
             id=instance.id,
             display_name=instance.display_name,
@@ -711,6 +746,8 @@ class PairingCoordinator:
             remote_pq_algorithm=instance.remote_pq_algorithm,
             remote_pq_identity_pk=instance.remote_pq_identity_pk,
             sig_suite=instance.sig_suite,
+            home_lat=instance.home_lat,
+            home_lon=instance.home_lon,
             paired_at=instance.paired_at,
             created_at=instance.created_at,
             last_reachable_at=instance.last_reachable_at,
