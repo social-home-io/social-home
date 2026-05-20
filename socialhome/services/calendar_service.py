@@ -185,7 +185,7 @@ class CalendarService:
         self._user_repo: AbstractUserRepo | None = None
 
     def attach_household_features(self, svc) -> None:
-        """Wire :class:`HouseholdFeaturesService` for toggle enforcement (§18)."""
+        """Wire :class:`PreferencesService` for toggle enforcement (§18)."""
         self._household = svc
 
     def attach_federation(
@@ -248,7 +248,7 @@ class CalendarService:
             if owner is not None and owner.tz and owner.tz != "UTC":
                 return owner.tz
         if self._household is not None:
-            household = await self._household.get()
+            household = await self._household.get_household()
             return household.tz
         return "UTC"
 
@@ -910,7 +910,7 @@ class SpaceCalendarService:
         self._federation = federation_service
 
     def attach_household_features(self, svc) -> None:
-        """Wire :class:`HouseholdFeaturesService` so newly-created
+        """Wire :class:`PreferencesService` so newly-created
         space events fall back to the household tz when neither the
         request nor the space row carries one."""
         self._household = svc
@@ -949,7 +949,7 @@ class SpaceCalendarService:
             if space is not None and space.tz and space.tz != "UTC":
                 return space.tz
         if self._household is not None:
-            household = await self._household.get()
+            household = await self._household.get_household()
             return household.tz
         return "UTC"
 

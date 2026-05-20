@@ -95,9 +95,8 @@ async def test_put_preferences_empty_name_422(client):
 # These tests verify that the NEW preferences_service gate works end-to-end
 # for the two features newly gated in this task.
 #
-# NOTE: Pages, stickies, tasks, calendar, and feed-post-type gates still
-# route through the old HouseholdFeaturesService — those cross-route
-# assertions will be re-added in Task 5 when those services are migrated.
+# NOTE: Pages, stickies, tasks, calendar, and feed-post-type gates are
+# enforced via PreferencesService (same as presence + gallery).
 
 
 async def _disable(client, **toggles):

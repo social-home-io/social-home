@@ -99,8 +99,7 @@ class SqlitePreferencesRepo:
         """Insert the row with table-level defaults if it does not yet exist.
 
         Idempotent — ``INSERT OR IGNORE`` is a no-op when the row already
-        exists.  Mirrors the singleton-creation pattern used by the old
-        ``SqliteHouseholdFeaturesRepo.ensure_row``.
+        exists.
         """
         await self._db.enqueue(
             "INSERT OR IGNORE INTO preferences(id) VALUES(?)",
@@ -113,8 +112,7 @@ class SqlitePreferencesRepo:
         Callers (service layer) are responsible for validating *key* against
         :data:`~socialhome.domain.preferences.PREFERENCE_SCOPE` before
         calling here; the ``_HOUSEHOLD_KEYS`` allow-list is a second line of
-        defence against SQL injection — same idiom used by
-        :meth:`SqliteHouseholdFeaturesRepo.set_toggle`.
+        defence against SQL injection.
         """
         if key not in _HOUSEHOLD_KEYS:
             raise KeyError(f"unknown household preference key: {key!r}")

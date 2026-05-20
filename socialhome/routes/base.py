@@ -22,10 +22,9 @@ from typing import Any
 
 from aiohttp import web
 
-from ..app_keys import household_features_service_key
+from ..app_keys import preferences_service_key
 from ..auth import current_user
-from ..domain.household_features import FeatureDisabledError
-from ..domain.preferences import FeatureDisabledError as PreferencesFeatureDisabledError
+from ..domain.preferences import FeatureDisabledError
 from ..services.preferences_service import ScopeMismatchError
 from ..domain.space import (
     ModerationAlreadyDecidedError,
@@ -98,7 +97,7 @@ class BaseView(web.View):
         rather than through a service layer — the service-layer check
         stays the authoritative gate for everything else (§18).
         """
-        svc = self.request.app.get(household_features_service_key)
+        svc = self.request.app.get(preferences_service_key)
         if svc is not None:
             await svc.require_enabled(section)
 
@@ -201,7 +200,7 @@ class BaseView(web.View):
                 exc,
             )
             return error_response(400, "UNPROCESSABLE", str(exc))
-        except (FeatureDisabledError, PreferencesFeatureDisabledError) as exc:
+        except FeatureDisabledError as exc:
             return error_response(
                 403,
                 "FEATURE_DISABLED",

@@ -1,13 +1,11 @@
 """PreferencesService — household-wide + per-user toggles.
 
-Single service replaces the old HouseholdFeaturesService. Both scopes
-live in the same ``preferences`` table; this service enforces the
-Python-side scope policy via ``PREFERENCE_SCOPE``.
+Both scopes live in the same ``preferences`` table; this service
+enforces the Python-side scope policy via ``PREFERENCE_SCOPE``.
 
 * update_household — rejects any key whose scope is not 'household'.
 * update_user — rejects any key whose scope is not 'user'.
-* require_enabled / require_post_type — household-only; unchanged from the
-  HouseholdFeaturesService surface.
+* require_enabled / require_post_type — household-only gating.
 """
 
 from __future__ import annotations

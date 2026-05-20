@@ -31,7 +31,7 @@ from aiohttp import web
 from ..app_keys import (
     config_key,
     db_key,
-    household_features_service_key,
+    preferences_service_key,
     platform_adapter_key,
     setup_service_key,
 )
@@ -66,7 +66,7 @@ def _validate_household_name(
     Returns ``(name, None)`` on success (with ``name=None`` meaning
     "no override — keep the default"), or ``(None, response)`` with a
     422 error response on validation failure. Length cap mirrors
-    :meth:`HouseholdFeaturesService.update` so we fail-fast before
+    :meth:`PreferencesService.update_household` so we fail-fast before
     provisioning touches the DB.
     """
     if raw is None:
@@ -87,7 +87,7 @@ async def _apply_household_name(view: BaseView, name: str | None) -> None:
     """Persist a pre-validated household name. No-op when ``name`` is None."""
     if name is None:
         return
-    await view.svc(household_features_service_key).update(
+    await view.svc(preferences_service_key).update_household(
         actor_is_admin=True,
         household_name=name,
     )
