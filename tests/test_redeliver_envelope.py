@@ -161,8 +161,8 @@ async def test_redeliver_4xx_is_permanent(env):
     """A 4xx response — replay-cache hit, expired timestamp, banned —
     must be dropped, not retried. Specifically pins the 410 ``Replay
     detected`` shape that left thousands of zombie outbox entries
-    behind during the HA-integration charset bug.
-    """
+    behind during the HA-integration charset bug. ``404`` is **not**
+    in the PERMANENT set — see :func:`test_redeliver_404_is_transient`."""
     svc, fed_repo, kek = env
     peer_kp = generate_identity_keypair()
     wrapped = kek.encrypt(b"\x04" * 32)
@@ -196,11 +196,55 @@ async def test_redeliver_4xx_is_permanent(env):
         def post(self, url, **kw):
             return _Resp(self._status)
 
-    for status in (400, 403, 404, 410, 422):
+    for status in (400, 403, 410, 422):
         svc._http_client = _Client(status)
         entry = _OutboxEntry(id=f"e-{status}", instance_id=peer.id, payload_json="{}")
         outcome = await _redeliver_envelope(svc, fed_repo, entry)
         assert outcome is DeliveryOutcome.PERMANENT, (status, outcome)
+
+
+async def test_redeliver_404_is_transient(env):
+    """A 404 ``No instance found`` is transient — the peer just hasn't
+    installed its RemoteInstance row for us yet. Common in the
+    trust-relay pairing window where our PairingConfirmed-driven
+    ``INSTANCE_CAPABILITIES_UPDATED`` races ahead of the ack reaching
+    the peer through the relay. Retry until the peer's mirror catches
+    up; ``MAX_ATTEMPTS`` still bounds the loop for genuinely stale
+    rows."""
+    svc, fed_repo, kek = env
+    peer_kp = generate_identity_keypair()
+    wrapped = kek.encrypt(b"\x04" * 32)
+    peer = RemoteInstance(
+        id=derive_instance_id(peer_kp.public_key),
+        display_name="peer",
+        remote_identity_pk=peer_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-404",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(peer)
+
+    class _Resp:
+        def __init__(self, status):
+            self.status = status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Client:
+        def post(self, url, **kw):
+            return _Resp(404)
+
+    svc._http_client = _Client()
+    entry = _OutboxEntry(id="e-404", instance_id=peer.id, payload_json="{}")
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.TRANSIENT
 
 
 async def test_redeliver_4xx_marks_peer_reachable(env):

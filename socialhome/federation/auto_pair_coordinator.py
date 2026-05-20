@@ -140,8 +140,23 @@ def _ack_blob(
 def _derive_session_keys(
     own_sk: bytes,
     peer_pk_hex: str,
+    *,
+    is_initiator: bool,
 ) -> tuple[bytes, bytes]:
-    """ECDH → HKDF → two directional 32-byte keys."""
+    """ECDH → HKDF → two directional 32-byte keys.
+
+    Both sides produce the same ECDH shared secret, but the
+    ``self``/``remote`` labels they apply to the derived keys are
+    *mirror images*. Anchor the HKDF info strings to the **role**
+    (initiator vs acceptor) so each side's ``key_self_to_remote``
+    (the key it encrypts outbound with) equals the peer's
+    ``key_remote_to_self`` (the key the peer decrypts inbound with)
+    — and vice versa. Without this gating, both sides labelled their
+    keys identically and every envelope decrypted with the wrong key,
+    surfacing as ``400 Failed to decrypt payload`` in the receiver's
+    federation inbox. Mirrors
+    :meth:`PairingCoordinator._derive_directional_keys`.
+    """
     shared = x25519_exchange(own_sk, bytes.fromhex(peer_pk_hex))
 
     def _derive(info: bytes) -> bytes:
@@ -153,10 +168,14 @@ def _derive_session_keys(
         )
         return hkdf.derive(shared)
 
-    return (
-        _derive(b"socialhome/session/self-to-remote"),
-        _derive(b"socialhome/session/remote-to-self"),
-    )
+    key_i_to_a = _derive(b"socialhome/session/initiator-to-acceptor")
+    key_a_to_i = _derive(b"socialhome/session/acceptor-to-initiator")
+    if is_initiator:
+        # ``self`` here is the initiator (A in the auto-pair flow).
+        return key_i_to_a, key_a_to_i
+    # ``self`` is the acceptor (C / Delta): outbound is acceptor-to-
+    # initiator, inbound is initiator-to-acceptor.
+    return key_a_to_i, key_i_to_a
 
 
 class AutoPairCoordinator:
@@ -492,9 +511,13 @@ class AutoPairCoordinator:
             )
 
         dh_kp = generate_x25519_keypair()
+        # This side (C / Delta) is the acceptor in the §11 simple-pairing
+        # flow — A initiated the request via B. The role binds the
+        # directional-key labels (see ``_derive_session_keys``).
         k_self_to_remote, k_remote_to_self = _derive_session_keys(
             dh_kp.private_key,
             req.from_a_dh_pk,
+            is_initiator=False,
         )
         now = datetime.now(timezone.utc).isoformat()
         existing = await self._repo.get_instance(req.from_a_id)
@@ -688,9 +711,12 @@ class AutoPairCoordinator:
             log.warning("auto-pair ack: ack sig invalid")
             return
 
+        # This side (A / Alpha) is the initiator — the §11 simple-pair
+        # request originated here and B vouched on our behalf.
         k_self_to_remote, k_remote_to_self = _derive_session_keys(
             session.dh_sk,
             c_dh_pk_hex,
+            is_initiator=True,
         )
         existing = await self._repo.get_instance(c_id)
         display_name = existing.display_name if existing else c_id[:8]
