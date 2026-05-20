@@ -162,11 +162,14 @@ def _build_rtc_config(ice_servers: list[dict]) -> rtc.RTCConfiguration:
 
 
 #: How long an ICE candidate may sit in the buffer before being dropped.
-#: Longer than a typical SDP round-trip on a healthy WAN (~1s) but short
-#: enough that a stranded candidate doesn't pin memory if the handshake
-#: stalls. Tuned for the HA-add-on Nabu Casa relay path where SDP can
-#: cross continents.
-ICE_BUFFER_TIMEOUT_S: float = 10.0
+#: A trickled candidate can outrun the matching OFFER/ANSWER on independent
+#: HTTPS inbox round-trips (separate sockets, separate retry timers), and a
+#: stale outbox at the sender can stretch that gap to tens of seconds. The
+#: timeout has to cover that — dropping the candidate is unrecoverable,
+#: while parking it costs a few KiB of memory until the handshake either
+#: completes or the peer is torn down. Tuned for the HA-add-on relay path
+#: where SDP can cross continents and queue behind retries.
+ICE_BUFFER_TIMEOUT_S: float = 30.0
 
 
 class _RtcPeer:
@@ -258,13 +261,20 @@ class _RtcPeer:
         self._channel.set_buffered_amount_low_threshold(self._send_hwm // 2)
         # Tasks bound to the pc: auto-cancelled on pc.close().
         self._pc.spawn_task(self._drain_channel(self._channel))
-        self._pc.spawn_task(self._drain_ice())
 
         local = await self._pc.set_local_description("offer")
         await self._signaling(
             FederationEventType.FEDERATION_RTC_OFFER,
             {"sdp": local.sdp, "sdp_type": local.type},
         )
+        # Only now: start forwarding trickled ICE candidates. ``_drain_ice``
+        # and the OFFER/ANSWER signaling are independent HTTPS posts to the
+        # peer's inbox; if the drain task starts before the OFFER is queued,
+        # a candidate POST can outrun the OFFER POST on the wire and the
+        # receiver drops the candidate at the §24.12.5 buffer timeout.
+        # Gathering keeps producing candidates inside libdatachannel's queue
+        # until we start consuming, so deferral is lossless.
+        self._pc.spawn_task(self._drain_ice())
 
     async def accept_offer(self, *, sdp: str, from_instance: str) -> None:
         """Receive an SDP offer (answerer role) and reply with an answer."""
@@ -273,7 +283,6 @@ class _RtcPeer:
         self._pc = rtc.PeerConnection(_build_rtc_config(self._ice_servers))
 
         self._pc.spawn_task(self._drain_incoming_channel())
-        self._pc.spawn_task(self._drain_ice())
 
         await self._pc.set_remote_description(sdp, "offer")
         # Release any ICE candidates that arrived before the offer (or
@@ -285,6 +294,14 @@ class _RtcPeer:
             FederationEventType.FEDERATION_RTC_ANSWER,
             {"sdp": local.sdp, "sdp_type": local.type},
         )
+        # Only now: start forwarding trickled ICE candidates — see the
+        # matching comment in :meth:`start_offer` for the wire-ordering
+        # rationale. The original code spawned this task before
+        # ``set_local_description("answer")``, which let a candidate POST
+        # race the ANSWER POST and arrive at the offerer first; the
+        # offerer then dropped the candidate at the buffer timeout
+        # because its remote description hadn't been applied yet.
+        self._pc.spawn_task(self._drain_ice())
 
     async def apply_answer(self, *, sdp: str, from_instance: str) -> bool:
         """Apply the peer's SDP answer to our pending offer.

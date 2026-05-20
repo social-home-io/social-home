@@ -70,17 +70,26 @@ class _FakeDataChannel:
         # Tests rarely want real inbound frames on fakes; the queue
         # stays empty so the async-for loop awaits until the channel
         # closes. Fake the behaviour by waiting on the close event.
-        done, _ = await asyncio.wait(
-            [
-                asyncio.create_task(self._inbox.get()),
-                asyncio.create_task(self._closed.wait()),
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        # Bind the sub-tasks so the pending one (and both on cancel)
+        # can be cancelled — otherwise they orphan and the HA-custom-
+        # component pytest plugin flags them as lingering at teardown.
+        get_task = asyncio.create_task(self._inbox.get())
+        close_task = asyncio.create_task(self._closed.wait())
+        try:
+            done, pending = await asyncio.wait(
+                [get_task, close_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            get_task.cancel()
+            close_task.cancel()
+            raise
+        for task in pending:
+            task.cancel()
         if self._closed.is_set():
             raise StopAsyncIteration
         for task in done:
-            if task.done():
+            if task.done() and not task.cancelled():
                 return task.result()
         raise StopAsyncIteration
 
