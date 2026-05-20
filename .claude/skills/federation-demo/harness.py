@@ -972,8 +972,18 @@ def cmd_relay_pair() -> None:
     _must("auto-pair approve(d)", s, _resp)
     print(f"  d approves request {request_id}")
 
-    # Settle and assert both ends now see each other CONFIRMED.
-    time.sleep(3)
+    # Settle: both the confirmed-status flip AND the on-pair
+    # ``INSTANCE_CAPABILITIES_UPDATED`` need a moment to land. The
+    # capabilities envelope races ahead of the ack — the receiver's
+    # provisional row has an empty ``remote_identity_pk`` until the
+    # ack lands, so the first send returns 404 and the outbox retries
+    # on a 5/10/20s backoff. Sleep past the first retry slot before
+    # checking, so we hit each token's ``/api/pairing/*`` bucket only
+    # once for this step (the bucket is 5 calls per 60 s; we've
+    # already spent ~2 on the request/approve round).
+    time.sleep(10)
+    state["relay_pair_ran"] = True
+    _save(state)
     for label, peer in (("a", d["instance_id"]), ("d", a["instance_id"])):
         info = state["instances"][label]
         s, conns = _request(
@@ -983,27 +993,10 @@ def cmd_relay_pair() -> None:
         _must(f"connections({label})", s, conns)
         match = [c for c in conns if c["instance_id"] == peer]
         if not match or match[0]["status"] != "confirmed":
-            raise SystemExit(f"{label} → {peer[:8]}: expected confirmed, got {match!r}")
-    state["relay_pair_ran"] = True
-    _save(state)
-    # On-pair capability exchange — same handshake the QR-pair path
-    # validates inside ``cmd_verify``. Pulled into ``cmd_relay_pair``
-    # itself so the canonical ``all`` flow (verify → relay-pair)
-    # surfaces a regression in the trust-relay session-key derivation
-    # or the outbox 404-retry path. Without this assert, a broken
-    # relay-pair hands off as "confirmed" but the first inbound
-    # envelope decryption fails silently and both sides stay at
-    # proto_version=1.
-    time.sleep(2)  # outbox retry for the on-pair CAPABILITIES envelope
-    for label, peer in (("a", d["instance_id"]), ("d", a["instance_id"])):
-        info = state["instances"][label]
-        s, conns = _request(
-            f"http://127.0.0.1:{info['port']}/api/pairing/connections",
-            token=info["token"],
-        )
-        _must(f"connections({label})", s, conns)
-        match = [c for c in conns if c["instance_id"] == peer]
-        pv = int(match[0].get("proto_version") or 1) if match else 1
+            raise SystemExit(
+                f"{label} → {peer[:8]}: expected confirmed, got {match!r}",
+            )
+        pv = int(match[0].get("proto_version") or 1)
         if pv < 2:
             raise SystemExit(
                 f"{label} → {peer[:8]}: relay-paired peer stuck at "

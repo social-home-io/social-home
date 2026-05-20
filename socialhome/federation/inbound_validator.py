@@ -186,6 +186,19 @@ def make_lookup_instance(*, repo, lookup_fn) -> InboundStep:
         instance = await lookup_fn(repo, ctx.inbox_id)
         if instance is None:
             raise ValueError(f"No instance found for inbox_id={ctx.inbox_id!r}")
+        # Provisional row written by ``AutoPairCoordinator.request_via``
+        # before the ack from C arrives: the inbox_id is real but the
+        # ``remote_identity_pk`` / session keys haven't been filled in
+        # yet. If C's first envelope races ahead of the relay ack,
+        # downstream signature verification reads an empty pk and 403s.
+        # Treat the row as not-yet-ready so the response surfaces as
+        # 404 ``No instance found`` — the outbox retries 404 (see
+        # ``_redeliver_envelope``), the ack lands on us in the meantime,
+        # the next retry decodes cleanly.
+        if not instance.remote_identity_pk:
+            raise ValueError(
+                f"No instance found for inbox_id={ctx.inbox_id!r}",
+            )
         ctx.instance = instance
 
     return lookup_instance
@@ -204,6 +217,14 @@ def make_lookup_instance_by_id(*, repo) -> InboundStep:
         instance = await repo.get_instance(ctx.instance_id)
         if instance is None:
             raise ValueError(f"No instance found for instance_id={ctx.instance_id!r}")
+        # See :func:`make_lookup_instance` — a provisional row (created
+        # at ``request_via`` time, before the relay ack lands) has an
+        # empty ``remote_identity_pk`` and would 403 at sig verify.
+        # Mirror the 404 path so the outbox retry layer picks up.
+        if not instance.remote_identity_pk:
+            raise ValueError(
+                f"No instance found for instance_id={ctx.instance_id!r}",
+            )
         # Wrap in the same shape the HTTPS inbox lookup returns so the
         # remaining pipeline steps (sig verify, decrypt) work unchanged.
         ctx.instance = _InboxInstance(instance)
