@@ -1532,6 +1532,21 @@ class HouseholdConfigChanged(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+@dataclass(slots=True, frozen=True)
+class UserPreferencesChanged(DomainEvent):
+    """A user's row in ``preferences`` was mutated.
+
+    ``changed`` is a sparse ``{key: new_value}`` dict — only fields that
+    actually changed are included. Fired only to that user's WS session(s)
+    so they can refresh surfaces they have personalised (highlights tab,
+    momentum strip, bazaar pill).
+    """
+
+    user_id: str
+    changed: dict
+    occurred_at: datetime = field(default_factory=_now)
+
+
 # ─── Personal user blocks (§Privacy) ──────────────────────────────────────
 
 
