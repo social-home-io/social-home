@@ -190,6 +190,123 @@ async def test_list_dm_members_carries_online_status(client):
     assert sum(1 for m in rows if m["is_self"]) == 1
 
 
+async def _seed_remote_brother(client) -> str:
+    """Seat a federated peer ('brother@peer-b') in both ``remote_instances``
+    and ``remote_users`` the way the peer-directory snapshot would after
+    a successful pairing. Returns the remote ``user_id``."""
+    db = client.app[_db_key]
+    remote_uid = "uid-brother-remote"
+    await db.enqueue(
+        """INSERT OR IGNORE INTO remote_instances(
+               id, display_name, remote_identity_pk, key_self_to_remote,
+               key_remote_to_self, remote_inbox_url, local_inbox_id,
+               status, source
+           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "peer-b",
+            "Peer B",
+            "00" * 32,
+            "k1",
+            "k2",
+            "https://peer-b.example/federation/inbox/x",
+            "local-inbox",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await db.enqueue(
+        """INSERT OR IGNORE INTO remote_users(
+               user_id, instance_id, remote_username, display_name, alias,
+               visible_to, picture_hash, bio, status_json,
+               public_key, public_key_version, synced_at
+           ) VALUES(?, ?, ?, ?, NULL, '\"all\"', ?, NULL, NULL,
+                    NULL, 0, datetime('now'))""",
+        (
+            remote_uid,
+            "peer-b",
+            "brother",
+            "Brother",
+            "pic-hash-abc",
+        ),
+    )
+    return remote_uid
+
+
+async def test_list_conversations_includes_remote_peer_preview(client):
+    """Regression: a cross-household DM (creator + ``RemoteConversationMember``
+    for a federated peer) used to render as "Direct message" with no avatar
+    in the inbox because the endpoint only joined the local member table.
+    The remote peer must appear in ``members`` with display_name + picture
+    URL so ``DmInboxPage`` can build the row title and avatar stack."""
+    remote_uid = await _seed_remote_brother(client)
+
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"user_id": remote_uid},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 201
+
+    resp = await client.get(
+        "/api/conversations",
+        headers=_auth(client._admin_token),
+    )
+    rows = await resp.json()
+    assert len(rows) == 1
+    row = rows[0]
+    # The caller is local + the brother is remote → member_count covers
+    # both rosters even though only the brother survives the self-filter.
+    assert row["member_count"] == 2
+    assert {m["username"] for m in row["members"]} == {"brother"}
+    peer = row["members"][0]
+    assert peer["user_id"] == remote_uid
+    assert peer["display_name"] == "Brother"
+    # ``picture_url`` is the cache-busting relative path the SPA already
+    # resolves against ``document.baseURI`` — same shape as for local
+    # users, just keyed on the federated peer's globally-unique user_id.
+    assert peer["picture_url"] == f"api/users/{remote_uid}/picture?v=pic-hash-abc"
+
+
+async def test_list_dm_members_includes_remote_peer(client):
+    """Regression mirror for the thread-header path: ``GET
+    /api/conversations/{id}/members`` has to surface the federated peer
+    so the DM thread header can render the brother's name + avatar
+    without a follow-up fetch."""
+    remote_uid = await _seed_remote_brother(client)
+
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"user_id": remote_uid},
+        headers=_auth(client._admin_token),
+    )
+    conv_id = (await r.json())["id"]
+
+    resp = await client.get(
+        f"/api/conversations/{conv_id}/members",
+        headers=_auth(client._admin_token),
+    )
+    assert resp.status == 200
+    rows = await resp.json()
+    assert len(rows) == 2
+    by_user_id = {m["user_id"]: m for m in rows}
+    assert remote_uid in by_user_id
+    brother = by_user_id[remote_uid]
+    assert brother["display_name"] == "Brother"
+    assert brother["username"] == "brother"
+    assert brother["picture_url"] == (f"api/users/{remote_uid}/picture?v=pic-hash-abc")
+    # A remote peer is never the caller.
+    assert brother["is_self"] is False
+    # Presence fields are part of the contract — the SPA renders the
+    # status line uniformly for local and remote rows. Offline by
+    # default in a fresh test (no USER_ONLINE envelope landed).
+    assert brother["is_online"] is False
+    assert brother["is_idle"] is False
+    # Exactly one ``is_self`` row, and it's the local caller (Pascal).
+    assert sum(1 for m in rows if m["is_self"]) == 1
+    self_row = next(m for m in rows if m["is_self"])
+    assert self_row["username"] == "pascal"
+
+
 async def test_create_dm(client):
     """POST /api/conversations/dm creates a DM and returns 201."""
     resp = await client.post(

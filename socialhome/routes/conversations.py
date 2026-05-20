@@ -37,6 +37,14 @@ class ConversationCollectionView(BaseView):
         rows: list[dict] = []
         for c in convos:
             members = await repo.list_members(c.id)
+            # Cross-household DMs / group DMs may seat a federated peer
+            # as a :class:`RemoteConversationMember`. The two member
+            # tables share no schema, so this endpoint has to fold both
+            # rosters into a single preview the SPA can render — without
+            # this, a 1:1 DM with a remote peer surfaces as "Direct
+            # message" with no avatar because the local-members list
+            # contains only the caller (filtered out as "self" below).
+            remote_members = await repo.list_remote_members(c.id)
             preview: list[dict] = []
             own_last_read_at: str | None = None
             for m in members:
@@ -54,11 +62,26 @@ class ConversationCollectionView(BaseView):
                         "user_id": u.user_id,
                         "username": u.username,
                         "display_name": u.display_name,
-                        "picture_url": (
-                            f"api/users/{u.user_id}/picture?v={u.picture_hash}"
-                            if u.picture_hash
-                            else None
-                        ),
+                        "picture_url": _picture_url(u.user_id, u.picture_hash),
+                    }
+                )
+            for rm in remote_members:
+                ru = await user_repo.get_remote_by_member(
+                    rm.instance_id,
+                    rm.remote_username,
+                )
+                if ru is None:
+                    # Member row exists but the peer-directory snapshot
+                    # hasn't landed yet — skip the preview entry (the SPA
+                    # falls back to ``member_count`` for the avatar stub)
+                    # rather than synthesising a fake display name.
+                    continue
+                preview.append(
+                    {
+                        "user_id": ru.user_id,
+                        "username": ru.remote_username,
+                        "display_name": ru.display_name,
+                        "picture_url": _picture_url(ru.user_id, ru.picture_hash),
                     }
                 )
             unread = await svc.count_unread(c.id, username=ctx.username)
@@ -71,7 +94,7 @@ class ConversationCollectionView(BaseView):
                     if c.last_message_at
                     else None,
                     "members": preview,
-                    "member_count": len(members),
+                    "member_count": len(members) + len(remote_members),
                     "unread": unread,
                     # ISO 8601 timestamp the caller last marked-as-read on
                     # this conversation. ``null`` for brand-new threads.
@@ -221,6 +244,12 @@ class ConversationMembersView(BaseView):
         conv_id = self.match("id")
         repo = self.svc(conversation_repo_key)
         members = await repo.list_members(conv_id)
+        # See :class:`ConversationCollectionView` for why the remote
+        # member roster has to be folded in alongside the local one —
+        # the thread header reads its title + avatar from this endpoint,
+        # and without the remote rows a cross-household DM renders with
+        # no peer name and a placeholder avatar.
+        remote_members = await repo.list_remote_members(conv_id)
         # Member rows hold ``username``; the user_repo lookup gives us
         # display_name + user_id (and the persisted last_seen_at fallback
         # for offline users).
@@ -249,6 +278,37 @@ class ConversationMembersView(BaseView):
                     "display_name": u.display_name,
                     "picture_url": _picture_url(u.user_id, u.picture_hash),
                     "is_self": ctx is not None and ctx.user_id == u.user_id,
+                    "is_online": is_online,
+                    "is_idle": is_idle,
+                    "last_seen_at": last_seen,
+                }
+            )
+        for rm in remote_members:
+            ru = await user_repo.get_remote_by_member(
+                rm.instance_id,
+                rm.remote_username,
+            )
+            if ru is None:
+                continue
+            # Presence for remote users is tracked through the same
+            # OnlineStatusService — federation USER_ONLINE / USER_OFFLINE
+            # envelopes populate its remote cache, keyed on the global
+            # ``user_id``. ``remote_users`` has no persisted
+            # ``last_seen_at`` column, so we fall through to the
+            # presence cache for both the online and offline branches.
+            is_online = bool(online_svc and online_svc.is_online(ru.user_id))
+            is_idle = bool(online_svc and online_svc.is_idle(ru.user_id))
+            last_dt = online_svc.last_seen(ru.user_id) if online_svc else None
+            last_seen = last_dt.isoformat() if last_dt is not None else None
+            rows.append(
+                {
+                    "user_id": ru.user_id,
+                    "username": ru.remote_username,
+                    "display_name": ru.display_name,
+                    "picture_url": _picture_url(ru.user_id, ru.picture_hash),
+                    # A remote member is by definition not ``self`` —
+                    # ctx is always a local user.
+                    "is_self": False,
                     "is_online": is_online,
                     "is_idle": is_idle,
                     "last_seen_at": last_seen,
