@@ -46,6 +46,56 @@ log = logging.getLogger(__name__)
 INBOX_RATE_LIMIT = 1000
 INBOX_RATE_WINDOW_S = 60
 
+#: Event types whose replay-cache hit is expected noise rather than
+#: a signal. The federation transport's DataChannel → HTTPS-inbox
+#: failover path is intentionally "duplicate-and-dedup": if a send
+#: hits a post-queue ``ConnectionClosedError``, the wrapper falls back
+#: to HTTPS with the same ``msg_id``, the receiver dedups via the
+#: replay cache, and the second copy lands as a 410. That's working
+#: as designed — we prefer noise to silent loss. These ephemeral /
+#: idempotent events show up in that fallback path constantly; the
+#: noisy WARNING log is reserved for content events (DM_MESSAGE,
+#: POST_CREATED, MOMENT_CREATED, …) where a true replay reading
+#: matters more for ops triage.
+_EXPECTED_REPLAY_EVENTS: frozenset[str] = frozenset(
+    {
+        FederationEventType.INSTANCE_CAPABILITIES_UPDATED.value,
+        FederationEventType.PRESENCE_UPDATED.value,
+        FederationEventType.USER_ONLINE.value,
+        FederationEventType.USER_IDLE.value,
+        FederationEventType.USER_OFFLINE.value,
+        FederationEventType.USER_UPDATED.value,
+        FederationEventType.USERS_SYNC.value,
+        FederationEventType.LOCAL_HOME_LOCATION_CHANGED.value,
+        FederationEventType.FEDERATION_RTC_OFFER.value,
+        FederationEventType.FEDERATION_RTC_ANSWER.value,
+        FederationEventType.FEDERATION_RTC_ICE.value,
+    }
+)
+
+
+def _is_expected_replay(reason: str, raw_body: bytes) -> bool:
+    """Return True if a 410 ``Replay detected`` rejection is benign log
+    noise rather than an operational concern.
+
+    The rejection happens after the envelope has been canonical-bytes
+    parsed but before signature verification — so we re-peek the body
+    here just to read ``event_type``. The peek failing (malformed body)
+    counts as "not expected" so the WARNING fires; the validator's
+    earlier parse step would have surfaced a 400 in that case anyway.
+    """
+    if not reason.startswith("Replay detected"):
+        return False
+    try:
+        envelope = orjson.loads(raw_body)
+    except Exception:
+        return False
+    event_type = envelope.get("event_type")
+    if not isinstance(event_type, str):
+        return False
+    return event_type in _EXPECTED_REPLAY_EVENTS
+
+
 #: Generic strings returned to the wire on rejection. Never echo the
 #: raw exception (#7) — that text leaks ban-list / replay-cache state to
 #: an attacker probing inbox IDs.
@@ -197,13 +247,26 @@ class FederationInboxView(BaseView):
             # §Audit #7: never echo ``str(exc)`` to the wire — that
             # leaks ban-list, replay-cache, and inbox-existence state
             # to an attacker probing IDs. Log full detail server-side
-            # at warn so operators can still triage.
-            log.warning(
-                "federation inbox: rejected inbox_id=%s status=%d reason=%s",
-                inbox_id,
-                status,
-                exc,
-            )
+            # so operators can still triage. Demote the ``Replay
+            # detected`` line to INFO for ephemeral / idempotent
+            # events (capabilities, presence, RTC signaling, …) since
+            # those are the transport's DataChannel→HTTPS failover
+            # noise (see ``_EXPECTED_REPLAY_EVENTS``); content-event
+            # replays still WARNING so a real ops signal stays loud.
+            if _is_expected_replay(str(exc), raw_body):
+                log.info(
+                    "federation inbox: dedup inbox_id=%s status=%d reason=%s",
+                    inbox_id,
+                    status,
+                    exc,
+                )
+            else:
+                log.warning(
+                    "federation inbox: rejected inbox_id=%s status=%d reason=%s",
+                    inbox_id,
+                    status,
+                    exc,
+                )
             return web.json_response(
                 {"error": _GENERIC_ERROR_BY_STATUS.get(status, "rejected")},
                 status=status,
