@@ -299,6 +299,27 @@ def _seed_home_coords(label: str) -> None:
 
 def cmd_up() -> None:
     """Wipe data dirs, write configs, boot all three instances, run /setup."""
+    # The SPA bundle is part of the demo contract — every harness step
+    # that talks to a backend assumes ``<base href>`` rewriting,
+    # ``/api/...`` routing, ``/friends`` and friends are all live. A
+    # missing bundle reduces the backends to ``/api/*``-only stubs and
+    # then every visual / E2E test against the harness silently shows
+    # 404s instead of the page under test. Probe the static dir before
+    # we spawn anything so a missing build doesn't leave orphan
+    # backends behind for the next ``up`` to trip over.
+    static_index = (
+        Path(__file__).resolve().parents[3]
+        / "socialhome"
+        / "static"
+        / "index.html"
+    )
+    if not static_index.is_file():
+        raise SystemExit(
+            f"SPA bundle missing at {static_index} — run "
+            "``pnpm --dir client run build`` from the worktree root "
+            "before re-running the harness.",
+        )
+
     if ROOT.exists():
         shutil.rmtree(ROOT)
     ROOT.mkdir()
@@ -1914,7 +1935,7 @@ def cmd_verify() -> None:
         con = sqlite3.connect(str(db_path))
         try:
             row = con.execute(
-                "SELECT home_lat, home_lon FROM remote_instances WHERE instance_id = ?",
+                "SELECT home_lat, home_lon FROM remote_instances WHERE id = ?",
                 (a_id,),
             ).fetchone()
         finally:
@@ -1945,7 +1966,7 @@ def cmd_verify() -> None:
             con = sqlite3.connect(str(db_path))
             try:
                 row2 = con.execute(
-                    "SELECT home_lat, home_lon FROM remote_instances WHERE instance_id = ?",
+                    "SELECT home_lat, home_lon FROM remote_instances WHERE id = ?",
                     (a_id,),
                 ).fetchone()
             finally:
