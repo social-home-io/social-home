@@ -4704,10 +4704,10 @@ body.sh-dm-thread-open .sh-messages {
  * + the swipe-right gesture (see ``MessageContextSheet`` below);
  * the chip stays in the DOM for screen-reader / external-keyboard
  * users (focus-visible reveals it). */
-.sh-message-reply-btn {
+.sh-message-reply-btn,
+.sh-message-react-btn {
   position: absolute;
   top: 4px;
-  right: -28px;
   width: 24px;
   height: 24px;
   border: 1px solid var(--sh-border);
@@ -4725,26 +4725,42 @@ body.sh-dm-thread-open .sh-messages {
               color var(--sh-transition-fast);
   box-shadow: var(--sh-shadow-xs);
 }
+/* Hover-side stacking: react ⤴ reply for incoming bubbles (chips on
+ * the right edge). The react chip lives further out so the reply
+ * chip stays closest to the bubble — Reply is the more common
+ * action, so it gets the closer reach target. */
+.sh-message-reply-btn { right: -28px; }
+.sh-message-react-btn { right: -56px; }
 .sh-message:hover .sh-message-reply-btn,
+.sh-message:hover .sh-message-react-btn,
 .sh-message:focus-within .sh-message-reply-btn,
-.sh-message-reply-btn:focus { opacity: 1; }
-.sh-message-reply-btn:hover {
+.sh-message:focus-within .sh-message-react-btn,
+.sh-message-reply-btn:focus,
+.sh-message-react-btn:focus { opacity: 1; }
+.sh-message-reply-btn:hover,
+.sh-message-react-btn:hover {
   background: var(--sh-primary);
   color: var(--sh-bg);
   border-color: var(--sh-primary);
 }
+/* Own bubbles sit on the right edge of the column — flip the chips
+ * to the left side and mirror the ordering (reply closer to the
+ * bubble, react further out). */
 .sh-message--mine .sh-message-reply-btn { right: auto; left: -28px; }
-/* Touch devices: hide the chip + let the long-press menu / swipe
- * gesture be the primary reply trigger. The chip stays focusable
- * via the tab order — ``opacity: 0`` + ``pointer-events: none``
- * keeps it accessible to assistive tech but invisible to touch
- * users so each bubble doesn't carry a permanent visual cue. */
+.sh-message--mine .sh-message-react-btn { right: auto; left: -56px; }
+/* Touch devices: hide both chips + let the long-press menu / swipe
+ * gesture be the primary trigger. The chips stay focusable via the
+ * tab order — ``opacity: 0`` + ``pointer-events: none`` keeps them
+ * accessible to assistive tech but invisible to touch users so each
+ * bubble doesn't carry a permanent visual cue. */
 @media (hover: none) {
-  .sh-message-reply-btn {
+  .sh-message-reply-btn,
+  .sh-message-react-btn {
     opacity: 0;
     pointer-events: none;
   }
-  .sh-message-reply-btn:focus-visible {
+  .sh-message-reply-btn:focus-visible,
+  .sh-message-react-btn:focus-visible {
     opacity: 1;
     pointer-events: auto;
   }

@@ -79,6 +79,13 @@ export default function ShoppingPage() {
   const [draft, setDraft] = useState('')
   const [showSuggest, setShowSuggest] = useState(false)
   const [suggestHeld, setSuggestHeld] = useState(false)
+  /** Caret position inside the quick-add input. Updated on every key
+   *  / click / selection change so the ``@ store`` autocomplete can
+   *  scope its query to the *current* segment when the user pastes
+   *  ``Milk @ Aldi, Bread @ Ba`` and is mid-edit on the second
+   *  ``@`` — only the last ``@`` before the caret matters, and only
+   *  when there's no ``,`` separator between it and the caret. */
+  const [caretPos, setCaretPos] = useState(0)
   const [groupPref, setGroupPref] = useState<GroupPref>(readGroupPref())
   const [editingId, setEditingId] = useState<string | null>(null)
   /** Currently-dragged store name (header drag), or ``null``. */
@@ -91,6 +98,59 @@ export default function ShoppingPage() {
   /** Section currently hovered as a drop target while a row is being
    *  dragged. Drives the section's drop-zone highlight. */
   const [dropTarget, setDropTarget] = useState<string | null>(null)
+
+  /** ``@ store`` autocomplete context. ``null`` when the caret isn't
+   *  inside a store-name suffix (no ``@`` before the caret on this
+   *  comma-segment, or no stores defined yet). Otherwise carries the
+   *  range to splice over on selection plus the partial query the
+   *  user has typed so far (which the dropdown filters against —
+   *  empty query shows every store). */
+  const storeContext = useMemo(() => {
+    if (stores.value.length === 0) return null
+    // Constrain to the current comma-segment so we don't autocomplete
+    // across a finished ``…, Bread`` boundary.
+    const segStart = (draft.lastIndexOf(',', caretPos - 1) + 1) || 0
+    const atIndex = draft.lastIndexOf('@', caretPos - 1)
+    if (atIndex < 0 || atIndex < segStart) return null
+    const between = draft.slice(atIndex + 1, caretPos)
+    // The caret must be on the store-name side of the ``@`` separator
+    // (no commas have been typed yet on this segment).
+    if (between.includes(',')) return null
+    const query = between.trim()
+    return { atIndex, query }
+  }, [draft, caretPos, stores.value])
+
+  const storeMatches = useMemo(() => {
+    if (!storeContext) return []
+    const q = storeContext.query.toLowerCase()
+    const all = stores.value.map(s => s.name)
+    if (!q) return all.slice(0, 8)
+    return all
+      .filter(n => n.toLowerCase().includes(q))
+      .slice(0, 8)
+  }, [storeContext, stores.value])
+
+  /** Splice the chosen store name into ``draft`` over the
+   *  ``@…<caret>`` range so the segment ends as ``"Milk @ Aldi "``
+   *  (single trailing space — sets up the next comma-separated
+   *  segment without forcing the user to type another). */
+  const pickStore = (name: string) => {
+    if (!storeContext) return
+    const before = draft.slice(0, storeContext.atIndex)
+    const after = draft.slice(caretPos)
+    const next = `${before}@ ${name} ${after}`
+    setDraft(next)
+    // Restore caret to right after the inserted store + space so the
+    // user can immediately ``,`` into another item.
+    const newCaret = before.length + `@ ${name} `.length
+    requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(newCaret, newCaret)
+      setCaretPos(newCaret)
+    })
+  }
 
   // Suggest re-adding any completed item by name (existing pattern).
   const pastNames = useMemo(() => {
@@ -315,8 +375,24 @@ export default function ShoppingPage() {
           value={draft}
           placeholder="Add one — or paste several. Tip: end with @ Store"
           autoComplete="off"
-          onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-          onFocus={() => setShowSuggest(true)}
+          onInput={(e) => {
+            const el = e.target as HTMLInputElement
+            setDraft(el.value)
+            setCaretPos(el.selectionStart ?? el.value.length)
+          }}
+          onKeyUp={(e) => {
+            const el = e.target as HTMLInputElement
+            setCaretPos(el.selectionStart ?? el.value.length)
+          }}
+          onClick={(e) => {
+            const el = e.target as HTMLInputElement
+            setCaretPos(el.selectionStart ?? el.value.length)
+          }}
+          onFocus={(e) => {
+            const el = e.target as HTMLInputElement
+            setCaretPos(el.selectionStart ?? el.value.length)
+            setShowSuggest(true)
+          }}
           onBlur={() => {
             setTimeout(() => {
               if (!suggestHeld) setShowSuggest(false)
@@ -327,25 +403,51 @@ export default function ShoppingPage() {
         <Button type="submit" disabled={!draft.trim()}>Add</Button>
       </form>
 
-      {showSuggest && pastNames.length > 0 && (
+      {/* Store-name autocomplete takes priority over the re-add chips
+       *  whenever the user is in a ``@ …<caret>`` context. Both
+       *  popovers share the ``.sh-shopping-suggest`` shell so blur
+       *  handling (the suggestHeld latch) stays uniform. */}
+      {storeMatches.length > 0 ? (
         <div
           class="sh-shopping-suggest" role="listbox"
+          aria-label="Pick a store"
           onMouseDown={() => setSuggestHeld(true)}
           onMouseUp={() => setSuggestHeld(false)}
         >
-          <span class="sh-muted">Re-add recent:</span>
-          {pastNames.map((name) => (
+          <span class="sh-muted">Store:</span>
+          {storeMatches.map((name) => (
             <button
               key={name}
               type="button"
               class="sh-chip"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void addSuggestion(name)}
+              onClick={() => pickStore(name)}
             >
               {name}
             </button>
           ))}
         </div>
+      ) : (
+        showSuggest && pastNames.length > 0 && (
+          <div
+            class="sh-shopping-suggest" role="listbox"
+            onMouseDown={() => setSuggestHeld(true)}
+            onMouseUp={() => setSuggestHeld(false)}
+          >
+            <span class="sh-muted">Re-add recent:</span>
+            {pastNames.map((name) => (
+              <button
+                key={name}
+                type="button"
+                class="sh-chip"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => void addSuggestion(name)}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        )
       )}
 
       {items.value.length === 0 ? (

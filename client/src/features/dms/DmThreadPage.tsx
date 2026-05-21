@@ -1468,7 +1468,8 @@ export default function DmThreadPage() {
         + '.sh-audio-bubble,'
         + '.sh-message-quote,'
         + '.sh-reaction-strip,'
-        + '.sh-message-reply-btn',
+        + '.sh-message-reply-btn,'
+        + '.sh-message-react-btn',
       )
     ) {
       return
@@ -2012,15 +2013,28 @@ export default function DmThreadPage() {
                 })()
               )}
               {!m.deleted && (
-                <button
-                  type="button"
-                  class="sh-message-reply-btn"
-                  title="Reply"
-                  aria-label={`Reply to ${senderName(m.sender_user_id)}`}
-                  onClick={() => { replyTo.value = m }}
-                >
-                  ↩
-                </button>
+                <Fragment>
+                  <button
+                    type="button"
+                    class="sh-message-react-btn"
+                    title="Add reaction"
+                    aria-label={
+                      `Add reaction to ${senderName(m.sender_user_id)}'s message`
+                    }
+                    onClick={() => { contextSheetFor.value = m }}
+                  >
+                    😊
+                  </button>
+                  <button
+                    type="button"
+                    class="sh-message-reply-btn"
+                    title="Reply"
+                    aria-label={`Reply to ${senderName(m.sender_user_id)}`}
+                    onClick={() => { replyTo.value = m }}
+                  >
+                    ↩
+                  </button>
+                </Fragment>
               )}
             </div>
             </Fragment>
