@@ -13544,33 +13544,18 @@ a.sh-welcome-card:hover {
   font-family: var(--sh-font-family-mono);
   font-size: var(--sh-font-size-sm);
 }
-/* Spaces dashboard — "Join with invite code" card.
- * Sits above the spaces list, below the remote-invite inbox banner.
- * Light surface treatment so it doesn't compete with the primary
- * "Create / Browse" CTA pair in the page header. */
+/* Spaces dashboard — "Join with invite code" dialog body. Modal
+ * supplies the surface chrome (background, border, padding); this
+ * just tightens the inner layout and pins the monospace look on the
+ * code textarea. */
 .sh-join-by-code {
   display: flex;
   flex-direction: column;
   gap: var(--sh-space-sm);
-  padding: var(--sh-space-md);
-  background: var(--sh-bg-secondary);
-  border: 1px solid var(--sh-border);
-  border-radius: var(--sh-radius-md);
-  margin-bottom: var(--sh-space-md);
-}
-.sh-join-by-code h3 {
-  margin: 0;
-  font-size: var(--sh-font-size-md);
 }
 .sh-join-by-code .sh-textarea {
   font-family: var(--sh-font-family-mono);
   font-size: var(--sh-font-size-sm);
-}
-.sh-join-by-code .sh-form-actions {
-  display: flex;
-  gap: var(--sh-space-sm);
-  justify-content: flex-end;
-  flex-wrap: wrap;
 }
 .sh-share-btn {
   display: inline-flex;
@@ -14408,7 +14393,7 @@ a.sh-welcome-card:hover {
 }
 
 .sh-page-header__actions {
-  display: flex; gap: var(--sh-space-xs);
+  display: flex; gap: var(--sh-space-xs); flex-wrap: wrap;
 }
 
 /* Mobile tweaks */

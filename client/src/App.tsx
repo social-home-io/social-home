@@ -40,6 +40,7 @@ import { OfflineIndicator } from '@/components/OfflineIndicator'
 import { BackToTop } from '@/components/BackToTop'
 import { SpaceInviteDialog } from '@/components/SpaceInviteDialog'
 import { RemoteInviteDialog } from '@/components/RemoteInviteDialog'
+import { SpaceJoinByCodeDialog } from '@/features/spaces/SpaceJoinByCodeDialog'
 import IncomingCallDialog from '@/features/calls/IncomingCallDialog'
 import { FormError } from '@/components/FormError'
 import { Wordmark } from '@/components/Wordmark'
@@ -370,6 +371,7 @@ export function App() {
           <StickyDialog />
           <SpaceInviteDialog />
           <RemoteInviteDialog />
+          <SpaceJoinByCodeDialog />
           <RejectReasonDialog />
           <ReportDialog />
           <IncomingCallDialog />
