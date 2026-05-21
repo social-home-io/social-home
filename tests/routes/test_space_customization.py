@@ -176,7 +176,34 @@ async def test_get_notif_prefs_default_is_all(client):
         headers=_auth(client._tok),
     )
     assert r.status == 200
-    assert (await r.json())["level"] == "all"
+    body = await r.json()
+    assert body["level"] == "all"
+    # Defaults: feature is off (schema default), member hasn't opted in.
+    assert body["feature_location"] is False
+    assert body["location_share_enabled"] is False
+
+
+async def test_get_notif_prefs_returns_location_state(client):
+    """When the admin has turned the feature on AND the caller has opted
+    in, the GET surfaces both flags so the SPA's per-space @-menu can
+    render the location toggle without a second round-trip."""
+    await _seed_space(client, role="member")
+    await client._db.enqueue(
+        "UPDATE spaces SET feature_location=1 WHERE id='sp-cust'",
+    )
+    await client._db.enqueue(
+        "UPDATE space_members SET location_share_enabled=1"
+        " WHERE space_id='sp-cust' AND user_id=?",
+        (client._uid,),
+    )
+    r = await client.get(
+        "/api/spaces/sp-cust/notif-prefs",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["feature_location"] is True
+    assert body["location_share_enabled"] is True
 
 
 async def test_put_notif_prefs_sets_level(client):

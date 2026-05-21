@@ -10595,6 +10595,11 @@ a.sh-welcome-card:hover {
   margin-left: auto;
   color: var(--sh-accent);
 }
+.sh-notif-prefs-menu__divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--sh-border);
+}
 
 /* Admin Quick-links editor in SpaceSettingsPage. */
 .sh-space-links-tab h2 {
