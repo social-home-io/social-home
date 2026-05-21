@@ -103,10 +103,10 @@ async def test_event_cover_round_trips_create_edit_clear(client):
 
 async def _seed_space(client):
     db = client._db
-    # ``feature_calendar`` schema default is 0 — pre-0009. The 0009
-    # migration backfills existing rows to 1 and the SpaceFeatures
-    # dataclass default is True, but raw INSERTs in test fixtures
-    # still need an explicit value or the new route-level gate 403s.
+    # ``feature_calendar`` schema default is 0 — the 0008 migration
+    # backfills existing rows to 1 and the SpaceFeatures dataclass
+    # default is True, but raw INSERTs in test fixtures still need
+    # an explicit value or the new route-level gate 403s.
     await db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username, "
         "identity_public_key, space_type, feature_calendar) "
