@@ -39,6 +39,7 @@ import { InstallPrompt } from '@/components/InstallPrompt'
 import { OfflineIndicator } from '@/components/OfflineIndicator'
 import { BackToTop } from '@/components/BackToTop'
 import { SpaceInviteDialog } from '@/components/SpaceInviteDialog'
+import { RemoteInviteDialog } from '@/components/RemoteInviteDialog'
 import IncomingCallDialog from '@/features/calls/IncomingCallDialog'
 import { FormError } from '@/components/FormError'
 import { Wordmark } from '@/components/Wordmark'
@@ -368,6 +369,7 @@ export function App() {
           <ImageLightbox />
           <StickyDialog />
           <SpaceInviteDialog />
+          <RemoteInviteDialog />
           <RejectReasonDialog />
           <ReportDialog />
           <IncomingCallDialog />
