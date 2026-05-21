@@ -26,12 +26,18 @@ import { Spinner } from '@/components/Spinner'
 import { LocationMap, type LocationMarker } from '@/components/LocationMap'
 import { openPairing, PairingFlow } from '@/components/PairingFlow'
 import { showToast } from '@/components/Toast'
+import { AliasDialog } from '@/components/AliasDialog'
+import { FriendActionSheet, openFriendActions } from './FriendActionSheet'
 import { api } from '@/api'
 
 interface LocalMember {
   user_id: string
   username: string
   display_name: string
+  /** Viewer's private nickname (§4.1.6 personal_alias). Renders in
+   *  place of ``display_name`` when set; only visible to this viewer.
+   *  Edited via the action sheet on each chip. */
+  personal_alias?: string | null
   picture_url: string | null
   is_online?: boolean
   is_idle?: boolean
@@ -43,6 +49,8 @@ interface RemoteMember {
   instance_id: string
   remote_username: string
   display_name: string
+  /** See :type:`LocalMember.personal_alias`. */
+  personal_alias?: string | null
   picture_url: string | null
   is_online?: boolean
   is_idle?: boolean
@@ -263,33 +271,43 @@ export default function FriendsPage() {
                 </div>
               )
             }
+            const shown = m.personal_alias || m.display_name
+            const isAliased = !!m.personal_alias
+              && m.personal_alias !== m.display_name
             return (
               <button
                 key={m.user_id}
                 type="button"
                 class="sh-friends-member-chip sh-friends-member-chip--button"
-                title={`Message ${m.display_name}`}
-                aria-label={`Message ${m.display_name}`}
+                title={`Open actions for ${shown}`}
+                aria-label={`Open actions for ${shown}`}
                 disabled={dmBusy.has(m.user_id)}
-                onClick={() => void startDmWith({
+                onClick={() => openFriendActions({
                   user_id: m.user_id,
                   username: m.username,
+                  display_name: m.display_name,
+                  personal_alias: m.personal_alias ?? null,
+                  picture_url: m.picture_url,
+                  household: instance.display_name,
                   is_local: true,
                 })}
               >
                 <Avatar
-                  name={m.display_name}
+                  name={shown}
                   src={m.picture_url}
                   size={28}
                   online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
                 />
-                <span class="sh-friends-member-name">{m.display_name}</span>
-                <span
-                  class="sh-friends-member-chip__dm-hint"
-                  aria-hidden="true"
-                >
-                  💬
-                </span>
+                <span class="sh-friends-member-name">{shown}</span>
+                {isAliased && (
+                  <span
+                    class="sh-friends-member-chip__alias-hint"
+                    aria-label="Your nickname"
+                    title={`Your nickname · their name: ${m.display_name}`}
+                  >
+                    ✏
+                  </span>
+                )}
               </button>
             )
           })}
@@ -346,37 +364,49 @@ export default function FriendsPage() {
                 </p>
               ) : (
                 <div class="sh-friends-members">
-                  {h.members.map(m => (
-                    <button
-                      key={m.user_id}
-                      type="button"
-                      class="sh-friends-member-chip sh-friends-member-chip--button"
-                      title={`Message ${m.display_name}`}
-                      aria-label={`Message ${m.display_name}`}
-                      disabled={dmBusy.has(m.user_id)}
-                      onClick={() => void startDmWith({
-                        user_id: m.user_id,
-                        username: m.remote_username,
-                        is_local: false,
-                      })}
-                    >
-                      <Avatar
-                        name={m.display_name}
-                        src={m.picture_url}
-                        size={28}
-                        online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
-                      />
-                      <span class="sh-friends-member-name">
-                        {m.display_name}
-                      </span>
-                      <span
-                        class="sh-friends-member-chip__dm-hint"
-                        aria-hidden="true"
+                  {h.members.map(m => {
+                    const shown = m.personal_alias || m.display_name
+                    const isAliased = !!m.personal_alias
+                      && m.personal_alias !== m.display_name
+                    return (
+                      <button
+                        key={m.user_id}
+                        type="button"
+                        class="sh-friends-member-chip sh-friends-member-chip--button"
+                        title={`Open actions for ${shown}`}
+                        aria-label={`Open actions for ${shown}`}
+                        disabled={dmBusy.has(m.user_id)}
+                        onClick={() => openFriendActions({
+                          user_id: m.user_id,
+                          username: m.remote_username,
+                          display_name: m.display_name,
+                          personal_alias: m.personal_alias ?? null,
+                          picture_url: m.picture_url,
+                          household: h.display_name,
+                          is_local: false,
+                        })}
                       >
-                        💬
-                      </span>
-                    </button>
-                  ))}
+                        <Avatar
+                          name={shown}
+                          src={m.picture_url}
+                          size={28}
+                          online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
+                        />
+                        <span class="sh-friends-member-name">
+                          {shown}
+                        </span>
+                        {isAliased && (
+                          <span
+                            class="sh-friends-member-chip__alias-hint"
+                            aria-label="Your nickname"
+                            title={`Your nickname · their name: ${m.display_name}`}
+                          >
+                            ✏
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </section>
@@ -386,6 +416,46 @@ export default function FriendsPage() {
       {/* Mount the pairing dialog so the hero / empty-state CTAs can
        *  open it inline, rather than routing through ``/connections``. */}
       <PairingFlow />
+      {/* Friend chip click opens this action sheet (Message / Rename).
+       *  The alias dialog is its sibling so saving a new nickname
+       *  flips back into the main view without leaving a stale modal
+       *  z-stack. */}
+      <FriendActionSheet
+        onStartDm={async (t) => {
+          await startDmWith({
+            user_id: t.user_id,
+            username: t.username ?? '',
+            is_local: t.is_local,
+          })
+        }}
+        onAliasChanged={(user_id, newAlias) => {
+          // Optimistic patch — both local + remote member rows live in
+          // the same payload; just walk the structure once.
+          setData(prev => {
+            if (!prev) return prev
+            const patch = <T extends { user_id: string; personal_alias?: string | null }>(
+              rows: T[],
+            ): T[] =>
+              rows.map(r =>
+                r.user_id === user_id
+                  ? { ...r, personal_alias: newAlias }
+                  : r,
+              )
+            return {
+              ...prev,
+              instance: {
+                ...prev.instance,
+                members: patch(prev.instance.members),
+              },
+              households: prev.households.map(h => ({
+                ...h,
+                members: patch(h.members),
+              })),
+            }
+          })
+        }}
+      />
+      <AliasDialog />
     </div>
   )
 }

@@ -291,3 +291,73 @@ async def test_friends_drops_blocked_local_and_remote_users(client):
     assert "ru-blocked" not in remote_ids
     assert "ru-visible" in remote_ids
     assert h["member_count"] == 1
+
+
+# ─── Personal alias surfacing ────────────────────────────────────────────
+
+
+async def test_friends_returns_personal_alias_per_remote_member(client):
+    """Sets a personal alias for a remote peer's member via the
+    alias API, then asserts ``/api/friends`` carries it on that
+    member's row so the SPA can render it in place of display_name
+    + show the "your nickname" ✏ indicator."""
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-x", home_lat=52.5, home_lon=13.4))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-bob",
+        instance_id="peer-x",
+        name="Bob",
+    )
+
+    # Set alias via the existing endpoint.
+    put = await client.put(
+        "/api/aliases/users/ru-bob",
+        json={"alias": "Brother"},
+        headers=_auth(client._tok),
+    )
+    assert put.status in (200, 201), await put.text()
+
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    h = next(h for h in body["households"] if h["instance_id"] == "peer-x")
+    bob_row = next(m for m in h["members"] if m["user_id"] == "ru-bob")
+    assert bob_row["personal_alias"] == "Brother"
+    # Original display_name still travels — the SPA shows the alias
+    # but falls back to display_name when the user clears it.
+    assert bob_row["display_name"] == "Bob"
+
+
+async def test_friends_personal_alias_does_not_leak_across_viewers(client):
+    """Aliases are viewer-private: a row in ``user_aliases`` set by a
+    DIFFERENT viewer must not surface on the caller's
+    ``/api/friends`` payload. We seed a second local user and insert
+    that user's alias row directly so we don't need a second login.
+    """
+    fed_repo = client.app[federation_repo_key]
+    await fed_repo.save_instance(_peer("peer-y", home_lat=53, home_lon=14))
+    await _seed_remote_user(
+        client._db,
+        user_id="ru-c",
+        instance_id="peer-y",
+        name="Carol",
+    )
+    # Seed a second local user so the FK on user_aliases.viewer_user_id
+    # is satisfied; pretend she aliased Carol.
+    await client._db.enqueue(
+        "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+        ("eve", "uid-eve", "Eve"),
+    )
+    await client._db.enqueue(
+        "INSERT INTO user_aliases(viewer_user_id, target_user_id, alias) "
+        "VALUES(?, ?, ?)",
+        ("uid-eve", "ru-c", "NotForYou"),
+    )
+    # The default caller hasn't aliased Carol — alias must come back null.
+    r = await client.get("/api/friends", headers=_auth(client._tok))
+    body = await r.json()
+    h = next(h for h in body["households"] if h["instance_id"] == "peer-y")
+    carol = next(m for m in h["members"] if m["user_id"] == "ru-c")
+    assert carol["personal_alias"] is None, (
+        "alias leaked across viewers — resolver should key on viewer_user_id"
+    )

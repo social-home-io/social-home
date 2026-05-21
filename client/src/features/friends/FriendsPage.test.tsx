@@ -174,7 +174,7 @@ describe('FriendsPage', () => {
 
   // ── Quick DM affordance (PR C) ───────────────────────────────────────
 
-  it('local member chip is click-to-DM for everyone except the viewer', async () => {
+  it('local member chip opens the action sheet for everyone except the viewer', async () => {
     apiMock.get.mockResolvedValueOnce(payload({
       instance: {
         instance_id: 'us', display_name: 'Vizeli Home',
@@ -193,7 +193,9 @@ describe('FriendsPage', () => {
       expect(container.querySelector('.sh-friends')).not.toBeNull()
     })
     // Pascal (viewer) is rendered as a passive ``--self`` card; only
-    // Maria becomes a click-to-DM button.
+    // Maria becomes a click-to-actions button. Chip click now opens
+    // the action sheet (Message / Rename) rather than going straight
+    // to a DM.
     expect(container.querySelector('.sh-friends-member-chip--self'))
       .not.toBeNull()
     const dmButtons = container.querySelectorAll(
@@ -202,10 +204,10 @@ describe('FriendsPage', () => {
     expect(dmButtons.length).toBe(1)
     expect(
       (dmButtons[0] as HTMLButtonElement).getAttribute('aria-label'),
-    ).toBe('Message Maria')
+    ).toBe('Open actions for Maria')
   })
 
-  it('clicking a local member chip POSTs /api/conversations/dm with {username}', async () => {
+  it('clicking a local member chip then Message POSTs /api/conversations/dm with {username}', async () => {
     apiMock.get.mockResolvedValueOnce(payload({
       instance: {
         instance_id: 'us', display_name: 'Vizeli Home',
@@ -228,6 +230,13 @@ describe('FriendsPage', () => {
     fireEvent.click(
       container.querySelector('button.sh-friends-member-chip') as HTMLElement,
     )
+    // Action sheet appears with Message + Rename. Click Message.
+    const messageBtn = await waitFor(() => {
+      const b = container.querySelector('[data-testid="friend-action-message"]')
+      if (!b) throw new Error('action sheet did not open')
+      return b as HTMLButtonElement
+    })
+    fireEvent.click(messageBtn)
     await waitFor(() => {
       expect(apiPost).toHaveBeenCalledWith(
         '/api/conversations/dm',
@@ -239,7 +248,7 @@ describe('FriendsPage', () => {
     })
   })
 
-  it('clicking a remote member chip POSTs /api/conversations/dm with {user_id}', async () => {
+  it('clicking a remote member chip then Message POSTs /api/conversations/dm with {user_id}', async () => {
     apiMock.get.mockResolvedValueOnce(payload({
       households: [
         {
@@ -264,6 +273,12 @@ describe('FriendsPage', () => {
     fireEvent.click(
       container.querySelector('.sh-friends-member-chip--button') as HTMLElement,
     )
+    const messageBtn = await waitFor(() => {
+      const b = container.querySelector('[data-testid="friend-action-message"]')
+      if (!b) throw new Error('action sheet did not open')
+      return b as HTMLButtonElement
+    })
+    fireEvent.click(messageBtn)
     await waitFor(() => {
       expect(apiPost).toHaveBeenCalledWith(
         '/api/conversations/dm',
