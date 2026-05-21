@@ -1109,3 +1109,59 @@ async def test_user_followed_remote_recipient_silent(stack):
         )
     )
     assert await stack.notif_repo.list(a.user_id, limit=10) == []
+
+
+async def test_space_location_feature_enabled_notifies_non_actor_members(stack):
+    """Enabling feature_location creates a notification for every member
+    except the actor who flipped the toggle."""
+    from socialhome.domain.events import SpaceLocationFeatureEnabled
+    from socialhome.services.space_service import SpaceService
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+    from socialhome.crypto import derive_instance_id, generate_identity_keypair
+
+    # Need a space service to create a proper space with members.
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    from socialhome.repositories.space_repo import SqliteSpaceRepo
+
+    space_repo = SqliteSpaceRepo(stack.db)
+    space_post_repo = SqliteSpacePostRepo(stack.db)
+    space_svc = SpaceService(
+        space_repo,
+        space_post_repo,
+        stack.notif_svc._users,
+        stack.bus,
+        own_instance_id=iid,
+    )
+
+    anna = await stack.provision_user("anna", is_admin=True)
+    bob = await stack.provision_user("bob")
+    carol = await stack.provision_user("carol")
+
+    space = await space_svc.create_space(owner_username="anna", name="FamSpace")
+    await space_svc.add_member(space.id, actor_username="anna", user_id=bob.user_id)
+    await space_svc.add_member(space.id, actor_username="anna", user_id=carol.user_id)
+
+    await stack.bus.publish(
+        SpaceLocationFeatureEnabled(
+            space_id=space.id,
+            space_name="FamSpace",
+            actor_user_id=anna.user_id,
+        )
+    )
+
+    # Actor (anna) should NOT get a notification.
+    anna_notifs = await stack.notif_repo.list(anna.user_id, limit=10)
+    assert all(n.type != "space_location_enabled" for n in anna_notifs)
+
+    # bob and carol SHOULD each get one.
+    bob_notifs = await stack.notif_repo.list(bob.user_id, limit=10)
+    assert any(n.type == "space_location_enabled" for n in bob_notifs)
+
+    carol_notifs = await stack.notif_repo.list(carol.user_id, limit=10)
+    assert any(n.type == "space_location_enabled" for n in carol_notifs)
+
+    # Verify the notification body points at the settings page.
+    loc_notif = next(n for n in bob_notifs if n.type == "space_location_enabled")
+    assert "FamSpace" in loc_notif.title
+    assert loc_notif.link_url == "/settings#privacy"

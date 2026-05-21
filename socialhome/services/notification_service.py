@@ -50,6 +50,7 @@ from ..domain.events import (
     SpaceJoinApproved,
     SpaceJoinDenied,
     SpaceJoinRequested,
+    SpaceLocationFeatureEnabled,
     SpaceMemberJoined,
     SpaceModerationQueued,
     SpacePostCreated,
@@ -299,6 +300,11 @@ class NotificationService:
         self._bus.subscribe(MomentReactionChanged, self.on_moment_reaction_changed)
         self._bus.subscribe(MomentCreated, self.on_moment_created)
         self._bus.subscribe(UserFollowed, self.on_user_followed)
+        # Space location feature enabled — nudge members to opt in.
+        self._bus.subscribe(
+            SpaceLocationFeatureEnabled,
+            self.on_space_location_feature_enabled,
+        )
 
     # ── Handlers ───────────────────────────────────────────────────────
 
@@ -1118,4 +1124,36 @@ class NotificationService:
                 title=f"{name} started following you",
                 link_url="/momentum",
             )
+        )
+
+    # ── Space location feature (§23.8.6) ──────────────────────────────
+
+    async def on_space_location_feature_enabled(
+        self,
+        event: SpaceLocationFeatureEnabled,
+    ) -> None:
+        """Nudge every space member (except the actor) to opt in.
+
+        Fired only on the OFF→ON transition — see
+        :class:`SpaceService.update_config`. The link points at the
+        Personal Settings → Privacy → 'Space location sharing' panel
+        so members can discover and manage their per-space sharing in
+        one place.
+        """
+        members = await self._spaces.list_members(event.space_id)
+        user_ids = [m.user_id for m in members if m.user_id != event.actor_user_id]
+        for uid in user_ids:
+            await self._save_notif(
+                new_notification(
+                    user_id=uid,
+                    type="space_location_enabled",
+                    title=f"Location sharing turned on in {event.space_name}",
+                    link_url="/settings#privacy",
+                )
+            )
+        await self._fan_push(
+            user_ids,
+            title=f"Location sharing turned on in {event.space_name}",
+            click_url="/settings#privacy",
+            space_id=event.space_id,
         )

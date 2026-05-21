@@ -39,6 +39,7 @@ from ..domain.events import (
     PostEdited,
     RemoteJoinRequestApproved,
     SpaceConfigChanged,
+    SpaceLocationFeatureEnabled,
     SpaceLocationModeChanged,
     SpaceJoinApproved,
     SpaceJoinDenied,
@@ -421,9 +422,14 @@ class SpaceService:
             new_fields["emoji"] = emoji or None
             payload["emoji"] = new_fields["emoji"]
         location_mode_changed = False
+        location_feature_just_enabled = False
         if features is not None:
             location_mode_changed = (
                 features.location_mode != space.features.location_mode
+            )
+            # Track OFF→ON transition so we can nudge members after the write.
+            location_feature_just_enabled = (
+                not space.features.location and features.location
             )
             new_fields["features"] = features
             payload["features"] = features.to_wire_dict()
@@ -500,6 +506,18 @@ class SpaceService:
                     space_id=space_id,
                     new_mode=updated.features.location_mode,
                 ),
+            )
+        if location_feature_just_enabled:
+            # Nudge members to opt in. Look up the actor's user_id so the
+            # notification handler can exclude them.
+            actor = await self._users.get(actor_username)
+            actor_user_id = actor.user_id if actor is not None else ""
+            await self._bus.publish(
+                SpaceLocationFeatureEnabled(
+                    space_id=space_id,
+                    space_name=updated.name,
+                    actor_user_id=actor_user_id,
+                )
             )
         return updated
 
