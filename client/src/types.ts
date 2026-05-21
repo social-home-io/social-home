@@ -286,7 +286,15 @@ export interface SpaceFeatures {
   location_mode?: 'gps' | 'zone_only'
   stickies: boolean
   pages: boolean
+  /** Per-space gallery tab (§23.119). When false the gallery tab is
+   *  hidden in the SPA shell; existing albums remain in storage. */
+  gallery: boolean
   posts_access: 'open' | 'moderated' | 'admin_only'
+  /** Subscriber-engagement opt-ins (§23.49). Subscribers are
+   *  read-only by default; admins flip these to let followers leave
+   *  reactions / comments without promoting them to full members. */
+  allow_subscriber_comment?: boolean
+  allow_subscriber_react?: boolean
 }
 
 /** Per-space display zone (§23.8.7). Members' GPS pins are matched to

@@ -100,6 +100,11 @@ class SpaceFeatures:
     location_mode: Literal["gps", "zone_only"] = "gps"
     stickies: bool = False
     pages: bool = True
+    #: Per-space toggle for the gallery tab (§23.119). Defaults to ON so
+    #: pre-0008 rows that lack the column still surface as enabled
+    #: (matches the migration default and keeps existing spaces working
+    #: without admin action).
+    gallery: bool = True
 
     posts_access: SpaceFeatureAccess = SpaceFeatureAccess.OPEN
     pages_access: SpaceFeatureAccess = SpaceFeatureAccess.OPEN
@@ -184,6 +189,7 @@ class SpaceFeatures:
             location_mode=location_mode,
             stickies=bool(row.get("feature_stickies", 0)),
             pages=bool(row.get("feature_pages", 1)),
+            gallery=bool(row.get("feature_gallery", 1)),
             posts_access=SpaceFeatureAccess(row.get("posts_access", "open")),
             pages_access=SpaceFeatureAccess(row.get("pages_access", "open")),
             stickies_access=SpaceFeatureAccess(row.get("stickies_access", "open")),
@@ -202,6 +208,7 @@ class SpaceFeatures:
             "location_mode": self.location_mode,
             "feature_stickies": int(self.stickies),
             "feature_pages": int(self.pages),
+            "feature_gallery": int(self.gallery),
             "posts_access": self.posts_access.value,
             "pages_access": self.pages_access.value,
             "stickies_access": self.stickies_access.value,
@@ -233,6 +240,7 @@ class SpaceFeatures:
             "location_mode": self.location_mode,
             "stickies": self.stickies,
             "pages": self.pages,
+            "gallery": self.gallery,
             "posts_access": self.posts_access.value,
             "pages_access": self.pages_access.value,
             "stickies_access": self.stickies_access.value,

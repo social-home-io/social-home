@@ -22,7 +22,7 @@ from typing import Any
 
 from aiohttp import web
 
-from ..app_keys import preferences_service_key
+from ..app_keys import preferences_service_key, space_repo_key
 from ..auth import current_user
 from ..domain.preferences import FeatureDisabledError
 from ..services.preferences_service import ScopeMismatchError
@@ -100,6 +100,29 @@ class BaseView(web.View):
         svc = self.request.app.get(preferences_service_key)
         if svc is not None:
             await svc.require_enabled(section)
+
+    async def require_space_feature(self, space_id: str, feature: str) -> None:
+        """Raise :class:`FeatureDisabledError` if the space has *feature* off.
+
+        ``feature`` is a :class:`SpaceFeatures` field name (``pages``,
+        ``calendar``, ``todo``, ``stickies``, ``gallery``). When the
+        admin has flipped the toggle off in SpaceSettings, every
+        space-scoped handler for that surface returns 403
+        FEATURE_DISABLED with section ``"space:<feature>"`` — the
+        SPA hides the tab in parallel, so members never see the
+        endpoint, but this gate keeps the surface honest against a
+        client that constructs the URL directly. Silent no-op when
+        the space row doesn't exist; the caller's membership check
+        owns the 403 in that case.
+        """
+        space_repo = self.request.app.get(space_repo_key)
+        if space_repo is None:
+            return
+        space = await space_repo.get(space_id)
+        if space is None:
+            return
+        if not getattr(space.features, feature, True):
+            raise FeatureDisabledError(f"space:{feature}")
 
     async def body(self) -> dict:
         """Parse JSON request body; returns 400 on bad input."""

@@ -269,7 +269,7 @@ class SqliteSpaceRepo:
                 config_sequence, space_type, join_mode, join_code,
                 retention_days, retention_exempt_json,
                 feature_calendar, feature_todo, feature_location, location_mode,
-                feature_stickies, feature_pages,
+                feature_stickies, feature_pages, feature_gallery,
                 posts_access, pages_access, stickies_access,
                 calendar_access, tasks_access,
                 allow_subscriber_comment, allow_subscriber_react,
@@ -285,7 +285,7 @@ class SqliteSpaceRepo:
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
                 ?, ?,                         -- retention_days, retention_exempt_json
                 ?, ?, ?, ?,                   -- feature_calendar, feature_todo, feature_location, location_mode
-                ?, ?,                         -- feature_stickies, feature_pages
+                ?, ?, ?,                      -- feature_stickies, feature_pages, feature_gallery
                 ?, ?, ?,                      -- posts_access, pages_access, stickies_access
                 ?, ?,                         -- calendar_access, tasks_access
                 ?, ?,                         -- allow_subscriber_comment, allow_subscriber_react
@@ -311,6 +311,7 @@ class SqliteSpaceRepo:
                 location_mode=excluded.location_mode,
                 feature_stickies=excluded.feature_stickies,
                 feature_pages=excluded.feature_pages,
+                feature_gallery=excluded.feature_gallery,
                 posts_access=excluded.posts_access,
                 pages_access=excluded.pages_access,
                 stickies_access=excluded.stickies_access,
@@ -356,6 +357,7 @@ class SqliteSpaceRepo:
                 cols["location_mode"],
                 cols["feature_stickies"],
                 cols["feature_pages"],
+                cols["feature_gallery"],
                 cols["posts_access"],
                 cols["pages_access"],
                 cols["stickies_access"],

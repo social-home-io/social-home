@@ -43,6 +43,11 @@ interface SpaceDetail {
   cover_url: string | null
   cover_hash: string | null
   features?: {
+    pages?: boolean
+    calendar?: boolean
+    todo?: boolean
+    stickies?: boolean
+    gallery?: boolean
     location?: boolean
   }
 }
@@ -221,9 +226,19 @@ export default function SpaceFeedPage() {
   const canAdmin = viewerRole.value === 'owner' || viewerRole.value === 'admin'
   const s = spaceDetail.value
 
+  // Per-space feature toggles (set by an admin in SpaceSettings) hide
+  // their tab when off. Feed + members stay visible always — they
+  // anchor the page. Defaults track the SpaceFeatures dataclass on
+  // the backend: pages/todo/gallery default on; calendar/stickies
+  // and location are opt-in.
+  const f = s?.features
   const visibleTabs: readonly SpaceTab[] = [
-    'feed', 'members', 'pages', 'calendar', 'tasks', 'gallery',
-    ...(s?.features?.location ? (['map'] as const) : []),
+    'feed', 'members',
+    ...((f?.pages ?? true) ? (['pages'] as const) : []),
+    ...(f?.calendar ? (['calendar'] as const) : []),
+    ...((f?.todo ?? true) ? (['tasks'] as const) : []),
+    ...((f?.gallery ?? true) ? (['gallery'] as const) : []),
+    ...(f?.location ? (['map'] as const) : []),
     ...(canAdmin ? (['moderation'] as const) : []),
   ]
 

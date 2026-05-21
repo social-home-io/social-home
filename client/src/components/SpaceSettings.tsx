@@ -87,23 +87,29 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   const description = useSignal(space.description || '')
   const emoji = useSignal(space.emoji || '')
   const joinMode = useSignal(space.join_mode)
-  const locationEnabled = useSignal(
-    Boolean((space.features as { location?: boolean } | undefined)?.location),
-  )
+  const locationEnabled = useSignal(Boolean(space.features?.location))
   const locationMode = useSignal<'gps' | 'zone_only'>(
-    ((space.features as { location_mode?: 'gps' | 'zone_only' } | undefined)
-      ?.location_mode) ?? 'gps',
+    space.features?.location_mode ?? 'gps',
   )
+  // Per-space feature visibility (§23.91). Admins toggle these to hide
+  // tabs that aren't used in the space; existing data (pages, events,
+  // tasks, stickies, gallery albums) stays in storage and reappears
+  // when the flag flips back. Defaults mirror the SpaceFeatures
+  // dataclass: pages/todo/gallery default on, calendar/stickies off
+  // (admin opts those in deliberately).
+  const featurePages = useSignal(space.features?.pages ?? true)
+  const featureCalendar = useSignal(space.features?.calendar ?? false)
+  const featureTodo = useSignal(space.features?.todo ?? true)
+  const featureStickies = useSignal(space.features?.stickies ?? false)
+  const featureGallery = useSignal(space.features?.gallery ?? true)
   // Subscriber-engagement opt-ins (§23.49) — admins flip these when
   // they want followers to be able to react / comment without being
   // promoted to full members.  Posts always remain member-only.
   const allowSubscriberComment = useSignal(
-    Boolean((space.features as { allow_subscriber_comment?: boolean } | undefined)
-      ?.allow_subscriber_comment),
+    Boolean(space.features?.allow_subscriber_comment),
   )
   const allowSubscriberReact = useSignal(
-    Boolean((space.features as { allow_subscriber_react?: boolean } | undefined)
-      ?.allow_subscriber_react),
+    Boolean(space.features?.allow_subscriber_react),
   )
   // Retention is "delete posts older than N days". ``null`` means
   // "keep forever" — that's the legacy default and what fresh spaces
@@ -119,8 +125,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   }, [space.id])
 
   const save = async () => {
-    const previousMode = (space.features as { location_mode?: string } | undefined)
-      ?.location_mode ?? 'gps'
+    const previousMode = space.features?.location_mode ?? 'gps'
     const modeChanged = locationEnabled.value
       && locationMode.value !== previousMode
     // Empty / zero / negative → 0 sentinel which the backend normalises
@@ -144,6 +149,11 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
           : {}),
         features: {
           ...(space.features as object),
+          pages: featurePages.value,
+          calendar: featureCalendar.value,
+          todo: featureTodo.value,
+          stickies: featureStickies.value,
+          gallery: featureGallery.value,
           location: locationEnabled.value,
           location_mode: locationMode.value,
           allow_subscriber_comment: allowSubscriberComment.value,
@@ -213,6 +223,65 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             events and pages are exempt by default.
           </p>
         </fieldset>
+        <fieldset class="sh-form-fieldset" data-testid="space-features">
+          <legend>🧩 Features</legend>
+          <p class="sh-muted" style={{ marginTop: 0 }}>
+            Hide tabs that aren't used in this space. Existing pages,
+            events, tasks, stickies, or gallery albums stay in storage
+            and reappear when you turn the toggle back on.
+          </p>
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={featurePages.value}
+              onChange={(e) => {
+                featurePages.value = (e.target as HTMLInputElement).checked
+              }}
+            />
+            📄 Pages
+          </label>
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={featureCalendar.value}
+              onChange={(e) => {
+                featureCalendar.value = (e.target as HTMLInputElement).checked
+              }}
+            />
+            🗓 Calendar
+          </label>
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={featureTodo.value}
+              onChange={(e) => {
+                featureTodo.value = (e.target as HTMLInputElement).checked
+              }}
+            />
+            ✅ Tasks
+          </label>
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={featureStickies.value}
+              onChange={(e) => {
+                featureStickies.value = (e.target as HTMLInputElement).checked
+              }}
+            />
+            📝 Stickies
+          </label>
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={featureGallery.value}
+              onChange={(e) => {
+                featureGallery.value = (e.target as HTMLInputElement).checked
+              }}
+            />
+            🖼 Gallery
+          </label>
+        </fieldset>
+
         <fieldset class="sh-form-fieldset">
           <legend>📍 Location sharing</legend>
           <label class="sh-toggle-row">

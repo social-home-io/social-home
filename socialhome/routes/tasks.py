@@ -362,7 +362,13 @@ class _SpaceTasksBase(BaseView):
 
     async def _require_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(K.space_repo_key)
-        return await space_repo.get_member(space_id, user_id) is not None
+        if await space_repo.get_member(space_id, user_id) is None:
+            return False
+        # The admin's per-space ``todo`` toggle drives the tasks tab in
+        # the SPA; mirror that here so a direct API call returns 403
+        # FEATURE_DISABLED when the feature is off.
+        await self.require_space_feature(space_id, "todo")
+        return True
 
 
 class SpaceTaskListCollectionView(_SpaceTasksBase):

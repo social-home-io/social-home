@@ -469,7 +469,10 @@ class SpacePageCollectionView(BaseView):
     async def _require_space_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(space_repo_key)
         member = await space_repo.get_member(space_id, user_id)
-        return member is not None
+        if member is None:
+            return False
+        await self.require_space_feature(space_id, "pages")
+        return True
 
     async def get(self) -> web.Response:
         ctx = self.user
@@ -517,7 +520,10 @@ class SpacePageDetailView(BaseView):
     async def _require_space_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(space_repo_key)
         member = await space_repo.get_member(space_id, user_id)
-        return member is not None
+        if member is None:
+            return False
+        await self.require_space_feature(space_id, "pages")
+        return True
 
     async def _load(self, space_id: str, page_id: str):
         repo = self.svc(page_repo_key)

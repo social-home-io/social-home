@@ -8,9 +8,13 @@ from .conftest import _auth
 
 async def _make_space(client, *, sid: str = "sp-1") -> None:
     db = client._db
+    # ``feature_gallery`` defaults to 0 in the 0001 schema but real
+    # spaces created through SpaceService get 1 (the dataclass default).
+    # Set it explicitly so the new route-level gate doesn't 403.
     await db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
-        " identity_public_key) VALUES(?, 'X', 'inst', 'admin', ?)",
+        " identity_public_key, feature_gallery)"
+        " VALUES(?, 'X', 'inst', 'admin', ?, 1)",
         (sid, "ab" * 32),
     )
     await db.enqueue(
