@@ -160,19 +160,42 @@ export function LocationMap({
     if (!map || !zoneLayer) return
     zoneLayer.clearLayers()
     if (!zones) return
+    const circles: L.Circle[] = []
     for (const z of zones) {
       const colour = _zoneColor(z)
-      L.circle([z.latitude, z.longitude], {
+      // Filled, slightly more opaque so the zone reads at a glance
+      // without a permanent white label box on top of it. The name
+      // appears in a hover tooltip and in the colour-coded legend
+      // the consumer renders below the map.
+      const c = L.circle([z.latitude, z.longitude], {
         radius: z.radius_m,
         color: colour,
-        opacity: 0.6,
-        fillOpacity: 0.10,
-        weight: 1.5,
+        opacity: 0.85,
+        fillColor: colour,
+        // Light fill so two overlapping zones don't compound into a
+        // muddy grey blob. The crisp coloured border is what
+        // distinguishes one zone from the next on the map; the
+        // legend underneath spells out the names.
+        fillOpacity: 0.12,
+        weight: 2,
       }).addTo(zoneLayer).bindTooltip(z.name, {
-        permanent: true,
-        direction: 'center',
+        direction: 'top',
+        offset: [0, -4],
         className: 'sh-zone-label',
       })
+      circles.push(c)
+    }
+    // When there are no marker pins to drive the viewport, fit the
+    // map to the zones so the user actually sees the configured
+    // zones instead of a globe-zoom of "somewhere in Europe".
+    if (circles.length > 0 && map.getZoom() < 6) {
+      const bounds = circles
+        .map((c) => c.getBounds())
+        .reduce((acc, b) => acc.extend(b), L.latLngBounds(
+          circles[0].getBounds().getSouthWest(),
+          circles[0].getBounds().getNorthEast(),
+        ))
+      map.fitBounds(bounds.pad(0.4), { maxZoom: 15 })
     }
   }, [zones])
 

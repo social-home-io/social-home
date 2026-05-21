@@ -28,6 +28,7 @@ import { Button } from './Button'
 import { LocationMap, type LocationMarker } from './LocationMap'
 import { Modal } from './Modal'
 import { showToast } from './Toast'
+import { ZoneLegend } from './ZoneLegend'
 import type { SpaceZone } from '@/types'
 
 const _ZONE_PALETTE = [
@@ -323,16 +324,19 @@ export function SpaceLocationCard({
           })}
         </ul>
       ) : (
-        <LocationMap
-          markers={markers}
-          zones={zones}
-          height={380}
-          emptyLabel={
-            total === 0
-              ? 'No one in this space is sharing GPS yet.'
-              : 'No one in this space is sharing GPS right now.'
-          }
-        />
+        <>
+          <LocationMap
+            markers={markers}
+            zones={zones}
+            height={380}
+            emptyLabel={
+              total === 0
+                ? 'No one in this space is sharing GPS yet.'
+                : 'No one in this space is sharing GPS right now.'
+            }
+          />
+          {zones.length > 0 && <ZoneLegend zones={zones} />}
+        </>
       )}
       <div class="sh-location-map-footer sh-muted">
         <span>
