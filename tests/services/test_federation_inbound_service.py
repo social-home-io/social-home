@@ -23,6 +23,7 @@ from socialhome.repositories import (
     SqliteSpaceRepo,
     SqliteUserRepo,
 )
+from socialhome.repositories.dm_routing_repo import SqliteDmRoutingRepo
 from socialhome.services.federation_inbound_service import (
     FederationInboundService,
 )
@@ -97,6 +98,138 @@ async def test_dm_message_missing_fields_drops(inbound):
         )
     )
     # Nothing raised, nothing persisted — test passes when no exception
+
+
+async def test_dm_message_first_inbound_sweeps_bogus_gaps(db, bus):
+    """End-to-end regression for the receiver-side high-watermark fix.
+
+    Pre-fix, the gap detector never advanced its high-watermark on the
+    inbound path, so every message after the first re-tripped a bogus
+    ``missing=1..N-1`` gap that landed in ``conversation_message_gaps``.
+    The SPA's DmThreadPage renders those rows as a "X messages may be
+    missing" banner.
+
+    Repro shape:
+      * pre-existing bogus gap rows for the (conv, sender) pair
+      * ``conversation_sender_sequences`` row is empty (watermark = 0)
+      * inbound ``DM_MESSAGE`` arrives with ``sender_seq=5``
+
+    After the fix: gap rows are swept, watermark is seeded to 5, no new
+    gap is inserted.
+    """
+    routing_repo = SqliteDmRoutingRepo(db)
+    inbound = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        dm_routing_repo=routing_repo,
+    )
+    await db.enqueue(
+        "INSERT INTO conversations(id, type, created_at) VALUES(?,?, datetime('now'))",
+        ("conv-1", "dm"),
+    )
+    # Pre-seed the bogus rows the pre-fix detector would have inserted.
+    await routing_repo.insert_gaps(
+        conversation_id="conv-1",
+        sender_user_id="user-remote",
+        expected_seqs=[1, 2, 3, 4],
+    )
+    assert len(await routing_repo.list_open_gaps("conv-1")) == 4
+
+    await inbound._on_dm_message(
+        _event(
+            FederationEventType.DM_MESSAGE,
+            {
+                "conversation_id": "conv-1",
+                "message_id": "m-5",
+                "sender_user_id": "user-remote",
+                "content": "hi",
+                "sender_seq": 5,
+            },
+        ),
+    )
+
+    # All bogus rows for (conv-1, user-remote) are gone.
+    assert await routing_repo.list_open_gaps("conv-1") == []
+    # Watermark seeded to the first observed seq.
+    assert (
+        await routing_repo.peek_sender_seq(
+            conversation_id="conv-1",
+            sender_user_id="user-remote",
+        )
+        == 5
+    )
+
+    # Follow-up message at the next seq — must NOT re-trip any gap.
+    await inbound._on_dm_message(
+        _event(
+            FederationEventType.DM_MESSAGE,
+            {
+                "conversation_id": "conv-1",
+                "message_id": "m-6",
+                "sender_user_id": "user-remote",
+                "content": "next",
+                "sender_seq": 6,
+            },
+        ),
+    )
+    assert await routing_repo.list_open_gaps("conv-1") == []
+    assert (
+        await routing_repo.peek_sender_seq(
+            conversation_id="conv-1",
+            sender_user_id="user-remote",
+        )
+        == 6
+    )
+
+
+async def test_dm_message_first_inbound_does_not_disturb_other_senders_gaps(db, bus):
+    """The bogus-gap sweep is scoped to (conv, sender). Other senders'
+    legitimately-recorded gap rows in the same conversation survive."""
+    routing_repo = SqliteDmRoutingRepo(db)
+    inbound = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        dm_routing_repo=routing_repo,
+    )
+    await db.enqueue(
+        "INSERT INTO conversations(id, type, created_at) VALUES(?,?, datetime('now'))",
+        ("conv-1", "dm"),
+    )
+    # Two senders, both with rows in conversation_message_gaps.
+    await routing_repo.insert_gaps(
+        conversation_id="conv-1",
+        sender_user_id="user-alice",
+        expected_seqs=[1, 2],
+    )
+    await routing_repo.insert_gaps(
+        conversation_id="conv-1",
+        sender_user_id="user-bob",
+        expected_seqs=[3],
+    )
+
+    # First inbound from alice triggers the sweep — only her rows go.
+    await inbound._on_dm_message(
+        _event(
+            FederationEventType.DM_MESSAGE,
+            {
+                "conversation_id": "conv-1",
+                "message_id": "m-3",
+                "sender_user_id": "user-alice",
+                "content": "hi",
+                "sender_seq": 3,
+            },
+        ),
+    )
+    remaining = await routing_repo.list_open_gaps("conv-1")
+    assert [(g["sender_user_id"], g["expected_seq"]) for g in remaining] == [
+        ("user-bob", 3),
+    ]
 
 
 async def test_dm_message_deleted_soft_deletes(db, bus, inbound):
