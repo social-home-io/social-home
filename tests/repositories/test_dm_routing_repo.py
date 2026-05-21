@@ -55,6 +55,86 @@ async def test_peek_sender_seq_reflects_next_seq(env):
     assert peek == 2
 
 
+# ── record_received_seq (inbound high-watermark) ───────────────────────────
+
+
+async def test_record_received_seq_advances_high_watermark(env):
+    """First inbound message lifts the watermark from 0 to 1, second to 2, …"""
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=1,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 1
+    )
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=2,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 2
+    )
+
+
+async def test_record_received_seq_never_rewinds(env):
+    """Out-of-order late arrival must not lower the watermark."""
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=5,
+    )
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=2,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 5
+    )
+
+
+async def test_record_received_seq_isolates_senders(env):
+    """Different senders in the same conv are independent rows."""
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=3,
+    )
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-b",
+        seq=7,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 3
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-b",
+        )
+        == 7
+    )
+
+
 # ── Gap persistence ────────────────────────────────────────────────────────
 
 
@@ -89,6 +169,26 @@ async def test_resolve_gap_removes_one(env):
     )
     gaps = await env.repo.list_open_gaps("c1")
     assert [g["expected_seq"] for g in gaps] == [2, 4]
+
+
+async def test_clear_all_gaps_for_sender_wipes_only_that_sender(env):
+    """``clear_all_gaps_for_sender`` sweeps every row for the (conv, sender)
+    pair — used to scrub the false-positive rows left behind by the
+    pre-fix gap detector. Other senders' rows must survive."""
+    await env.repo.insert_gaps(
+        conversation_id="c1", sender_user_id="uid-a", expected_seqs=[1, 2, 3]
+    )
+    await env.repo.insert_gaps(
+        conversation_id="c1", sender_user_id="uid-b", expected_seqs=[7]
+    )
+    await env.repo.clear_all_gaps_for_sender(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+    )
+    remaining = await env.repo.list_open_gaps("c1")
+    assert [(g["sender_user_id"], g["expected_seq"]) for g in remaining] == [
+        ("uid-b", 7),
+    ]
 
 
 # ── Relay-path listing ─────────────────────────────────────────────────────
