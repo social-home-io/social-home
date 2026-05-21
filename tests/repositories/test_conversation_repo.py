@@ -485,3 +485,54 @@ async def test_upsert_delivery_state_rejects_invalid_state(env):
             user_id="uid-bob",
             state="seen",
         )
+
+
+# ── Race-safe save_message_returning_created ──────────────────────────────
+
+
+async def test_save_message_returning_created_reports_insert_then_update(env):
+    """First call inserts → True; second call to the same id is an
+    update → False. Used by the federation inbound DM handler to
+    distinguish a brand-new message from a redelivered envelope so
+    the notification only fires once."""
+    await env.repo.create(_conv("conv-rc"))
+    msg = _message("m-rc-1", "conv-rc", content="hi")
+    _, created = await env.repo.save_message_returning_created(msg)
+    assert created is True
+
+    # Same id, different content (e.g. an edit / voice-note transcript).
+    msg2 = _message("m-rc-1", "conv-rc", content="hi (edited)")
+    _, created2 = await env.repo.save_message_returning_created(msg2)
+    assert created2 is False
+
+    # The UPDATE path applied — content was patched.
+    fetched = await env.repo.get_message("m-rc-1")
+    assert fetched is not None
+    assert fetched.content == "hi (edited)"
+
+
+async def test_save_message_returning_created_is_race_safe(env):
+    """Two concurrent transports (perfect-negotiation WebRTC +
+    HTTPS-inbox failover) racing the same DM_MESSAGE envelope: only
+    one call returns ``created=True``. Without ``BEGIN IMMEDIATE``
+    around INSERT OR IGNORE + UPDATE, both could see "no existing
+    row" and both publish DmMessageCreated → user gets two
+    notifications for one message."""
+    import asyncio
+
+    await env.repo.create(_conv("conv-race"))
+
+    # Schedule N concurrent saves of the same message id.
+    results = await asyncio.gather(
+        *[
+            env.repo.save_message_returning_created(
+                _message("m-race-1", "conv-race", content="hello")
+            )
+            for _ in range(5)
+        ]
+    )
+    created_flags = [created for _, created in results]
+    assert sum(created_flags) == 1, (
+        f"expected exactly one INSERT, got {sum(created_flags)} "
+        f"out of {len(created_flags)} concurrent saves"
+    )

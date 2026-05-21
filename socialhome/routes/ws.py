@@ -132,7 +132,7 @@ class WebSocketView(BaseView):
                     if msg.data == "ping":
                         await ws.send_str("pong")
                     else:
-                        await self._on_text(ctx, msg.data)
+                        await self._on_text(ctx, ws, msg.data)
                 elif msg.type == WSMsgType.ERROR:
                     log.warning("ws error from %s: %s", ctx.user_id, ws.exception())
                     break
@@ -152,7 +152,7 @@ class WebSocketView(BaseView):
 
         return ws
 
-    async def _on_text(self, ctx, data: str) -> None:
+    async def _on_text(self, ctx, ws, data: str) -> None:
         """Handle an inbound text frame."""
         try:
             payload = json.loads(data)
@@ -161,6 +161,18 @@ class WebSocketView(BaseView):
         if not isinstance(payload, dict):
             return
         cmd = payload.get("type")
+        if cmd == "dm.active":
+            body = payload.get("data") or {}
+            if not isinstance(body, dict):
+                return
+            cid = body.get("conversation_id")
+            manager = self.svc(K.ws_manager_key)
+            await manager.set_active_conversation(
+                ctx.user_id,
+                ws,
+                str(cid) if cid else None,
+            )
+            return
         if cmd == "typing":
             typing_svc = self.request.app.get(K.typing_service_key)
             if typing_svc is None:

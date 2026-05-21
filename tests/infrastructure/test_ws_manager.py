@@ -165,3 +165,68 @@ async def test_close_all_swallows_close_failures():
     # Should not raise.
     await mgr.close_all()
     assert good.close_calls  # the good socket still got the close frame
+
+
+# ─── Active-conversation tracking (DM-notif suppression) ─────────────────
+
+
+async def test_active_conversation_starts_unset():
+    """A freshly registered session has no active conversation —
+    notifications fan out as normal until the SPA emits dm.active."""
+    mgr = WebSocketManager()
+    ws = _FakeWS()
+    await mgr.register("alice", ws)
+    assert mgr.is_user_active_in_conversation("alice", "c-1") is False
+
+
+async def test_set_active_conversation_makes_user_active():
+    mgr = WebSocketManager()
+    ws = _FakeWS()
+    await mgr.register("alice", ws)
+    await mgr.set_active_conversation("alice", ws, "c-1")
+    assert mgr.is_user_active_in_conversation("alice", "c-1") is True
+    # Same user, different conversation — no match.
+    assert mgr.is_user_active_in_conversation("alice", "c-2") is False
+
+
+async def test_set_active_conversation_none_clears():
+    """SPA emits ``conversation_id: null`` on unmount / tab blur."""
+    mgr = WebSocketManager()
+    ws = _FakeWS()
+    await mgr.register("alice", ws)
+    await mgr.set_active_conversation("alice", ws, "c-1")
+    await mgr.set_active_conversation("alice", ws, None)
+    assert mgr.is_user_active_in_conversation("alice", "c-1") is False
+
+
+async def test_multi_tab_any_active_counts_as_viewing():
+    """If any of the user's tabs has the thread open, the user is
+    viewing — the DM doesn't fire a notif on the other tabs either."""
+    mgr = WebSocketManager()
+    tab_a = _FakeWS()
+    tab_b = _FakeWS()
+    await mgr.register("alice", tab_a)
+    await mgr.register("alice", tab_b)
+    await mgr.set_active_conversation("alice", tab_a, "c-1")
+    # tab_b never marked active — but tab_a is enough.
+    assert mgr.is_user_active_in_conversation("alice", "c-1") is True
+
+
+async def test_unregister_clears_active_marker():
+    """Disconnect of the active tab → user no longer viewing."""
+    mgr = WebSocketManager()
+    ws = _FakeWS()
+    await mgr.register("alice", ws)
+    await mgr.set_active_conversation("alice", ws, "c-1")
+    await mgr.unregister("alice", ws)
+    assert mgr.is_user_active_in_conversation("alice", "c-1") is False
+
+
+async def test_set_active_on_unregistered_session_is_noop():
+    """A stale dm.active frame from a tab whose registration already
+    tore down must not blow up — set is a no-op."""
+    mgr = WebSocketManager()
+    ws = _FakeWS()
+    # ws never registered.
+    await mgr.set_active_conversation("alice", ws, "c-1")
+    assert mgr.is_user_active_in_conversation("alice", "c-1") is False

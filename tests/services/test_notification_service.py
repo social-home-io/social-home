@@ -486,6 +486,58 @@ async def test_dm_dedupe_does_not_span_read_boundary(stack):
     assert sum(1 for r in dm_rows if r.read_at is None) == 1
 
 
+async def test_dm_message_skipped_when_recipient_viewing_thread(stack):
+    """When the recipient has the DM thread open in any of their tabs
+    (SPA emits ``dm.active`` over WS), the notification service skips
+    both the bell row AND the push fan-out. The message itself still
+    renders via the regular DM broadcast path; only the notification
+    noise is suppressed.
+    """
+    from socialhome.domain.events import DmMessageCreated
+
+    class _FakeWsMgr:
+        def __init__(self, active_conv: dict[str, str | None]) -> None:
+            self._active = active_conv
+
+        def is_user_active_in_conversation(
+            self, user_id: str, conversation_id: str
+        ) -> bool:
+            return self._active.get(user_id) == conversation_id
+
+    sender = await stack.provision_user("anna-av")
+    bob = await stack.provision_user("bob-av")
+    carol = await stack.provision_user("carol-av")
+
+    push = _CapturingPush()
+    stack.notif_svc.attach_push_service(push)
+    # Bob is on the thread; Carol is not.
+    stack.notif_svc.attach_ws_manager(
+        _FakeWsMgr({bob.user_id: "c-av", carol.user_id: None})
+    )
+
+    await stack.bus.publish(
+        DmMessageCreated(
+            conversation_id="c-av",
+            message_id="m-av-1",
+            sender_user_id=sender.user_id,
+            sender_display_name="Anna",
+            recipient_user_ids=(bob.user_id, carol.user_id),
+        )
+    )
+
+    pushed_to = {uid for user_ids, _ in push.calls for uid in user_ids}
+
+    # Bob (viewing) — no bell row, no push.
+    assert await stack.notif_repo.count_unread(bob.user_id) == 0
+    assert bob.user_id not in pushed_to, (
+        "push fired for bob even though he had the thread open"
+    )
+
+    # Carol (not viewing) — gets the notification as usual.
+    assert await stack.notif_repo.count_unread(carol.user_id) == 1
+    assert carol.user_id in pushed_to, "push did not fire for carol who wasn't viewing"
+
+
 async def test_mark_read_for_dm_clears_unread_rows(stack):
     """``mark_read_for_dm`` flips the (collapsed) ``dm_message`` row
     for a conversation to read — opening the thread clears the bell

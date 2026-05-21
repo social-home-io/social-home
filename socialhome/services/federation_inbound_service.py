@@ -423,17 +423,6 @@ class FederationInboundService:
             msg_type=msg_type,
         )
 
-        # Detect whether this DM_MESSAGE is an in-place update of a row
-        # we already have (sender re-fanned the envelope to deliver an
-        # edit or a voice-note transcript) vs a brand-new message. The
-        # save_message UPSERT below doesn't tell us the difference, so
-        # we peek before writing. An existing row published as
-        # ``DmMessageCreated`` would land in the SPA as a duplicate
-        # bubble — :class:`RealtimeService` distinguishes the two via
-        # the event class and emits ``dm.message`` vs
-        # ``dm.message_updated`` accordingly.
-        existing = await self._conversation_repo.get_message(message_id)
-
         msg = ConversationMessage(
             id=message_id,
             conversation_id=conv_id,
@@ -453,16 +442,31 @@ class FederationInboundService:
             media_blob_id=p.get("media_blob_id"),
             media_sync_status=media_sync_status,
         )
-        await self._conversation_repo.save_message(msg)
+        # ``save_message_returning_created`` is race-safe: when the
+        # same envelope arrives via two transports (perfect-negotiation
+        # WebRTC + HTTPS-inbox failover) only the first call returns
+        # ``created=True``. The previous peek-then-save pattern raced
+        # — both transports could see ``existing=None`` before either
+        # wrote — and the user got two bell rows + two pushes for one
+        # message.
+        _, created = await self._conversation_repo.save_message_returning_created(msg)
 
-        if existing is not None:
-            # In-place patch — the sender re-fanned the envelope to
-            # ship updated ``content`` (the voice-note transcript, an
-            # edit, …). Publish ``DmMessageUpdated`` so the WS layer
-            # patches the existing bubble instead of appending a new
-            # one. The carrier still upserts so any other fields
-            # (``edited_at``) stay in sync.
-            edited_at_iso = p.get("edited_at") or p.get("occurred_at")
+        if not created:
+            # Two cases land here:
+            #   (a) sender re-fanned the envelope with updated ``content``
+            #       — a voice-note transcript or an explicit edit, signalled
+            #       by ``edited_at`` in the payload.
+            #   (b) the same envelope arrived a second time via a different
+            #       transport (perfect-negotiation WebRTC + HTTPS-inbox
+            #       failover) with no real edit.
+            # Only (a) is worth firing ``DmMessageUpdated`` for. (b) is a
+            # silent no-op — the row is already in the DB and the SPA has
+            # already painted the bubble from the first delivery; emitting
+            # a redundant ``dm.message_updated`` frame would falsely trip
+            # any future "(edited)" indicator the SPA picks up.
+            edited_at_iso = p.get("edited_at")
+            if edited_at_iso is None:
+                return
             await self._bus.publish(
                 DmMessageUpdated(
                     conversation_id=conv_id,

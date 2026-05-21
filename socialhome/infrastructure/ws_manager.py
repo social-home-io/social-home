@@ -40,11 +40,20 @@ log = logging.getLogger(__name__)
 class WebSocketManager:
     """Per-user registry of live WebSocket sessions."""
 
-    __slots__ = ("_by_user", "_lock")
+    __slots__ = ("_by_user", "_active_conv", "_lock")
 
     def __init__(self) -> None:
         # ``set`` so duplicate registrations are idempotent.
         self._by_user: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
+        # Per-session "I have this DM thread open right now" marker. The
+        # SPA emits ``{type: 'dm.active', data: {conversation_id}}`` on
+        # mount of a DM thread and ``conversation_id=null`` on unmount /
+        # tab blur. ``NotificationService.on_dm_message_created`` reads
+        # this to skip the bell row + device push when the receiver is
+        # actively watching the thread — the message itself still
+        # renders via the regular DM broadcast, but the notification
+        # noise that the user would have to clear manually is gone.
+        self._active_conv: dict[web.WebSocketResponse, str | None] = {}
         self._lock = asyncio.Lock()
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
@@ -52,6 +61,7 @@ class WebSocketManager:
     async def register(self, user_id: str, ws: web.WebSocketResponse) -> None:
         async with self._lock:
             self._by_user[user_id].add(ws)
+            self._active_conv.setdefault(ws, None)
         log.debug("ws.register: user=%s total=%d", user_id, self.connection_count())
 
     async def unregister(self, user_id: str, ws: web.WebSocketResponse) -> None:
@@ -61,6 +71,7 @@ class WebSocketManager:
                 sessions.discard(ws)
                 if not sessions:
                     self._by_user.pop(user_id, None)
+            self._active_conv.pop(ws, None)
         log.debug("ws.unregister: user=%s total=%d", user_id, self.connection_count())
 
     # ─── Inspection ───────────────────────────────────────────────────────
@@ -73,6 +84,46 @@ class WebSocketManager:
 
     def connected_users(self) -> set[str]:
         return set(self._by_user.keys())
+
+    # ─── Active-conversation tracking ─────────────────────────────────────
+
+    async def set_active_conversation(
+        self,
+        user_id: str,
+        ws: web.WebSocketResponse,
+        conversation_id: str | None,
+    ) -> None:
+        """Mark *ws* as actively viewing *conversation_id* (or clear).
+
+        The session must already be registered; otherwise this is a
+        no-op (a stale ``dm.active`` frame from a tab whose registration
+        already tore down).
+        """
+        async with self._lock:
+            if ws not in self._active_conv:
+                return
+            self._active_conv[ws] = conversation_id
+
+    def is_user_active_in_conversation(
+        self,
+        user_id: str,
+        conversation_id: str,
+    ) -> bool:
+        """Return True if *user_id* has any session focused on
+        *conversation_id*. Driven by the SPA's ``dm.active`` frame.
+
+        Multi-tab semantics: if **any** of the user's tabs has the
+        thread open, the user counts as "viewing" — so a DM that
+        arrives while one tab is on the thread and another is on the
+        feed won't fire a notification on either tab. That matches
+        what users expect ("I'm in the conversation, don't ping me")
+        and avoids the fiddly "which tab has focus" question that
+        ``Document.hasFocus`` doesn't answer reliably across browsers.
+        """
+        sessions = self._by_user.get(user_id)
+        if not sessions:
+            return False
+        return any(self._active_conv.get(ws) == conversation_id for ws in sessions)
 
     # ─── Fan-out ──────────────────────────────────────────────────────────
 

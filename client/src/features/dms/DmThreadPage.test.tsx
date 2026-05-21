@@ -126,7 +126,7 @@ vi.mock('@/api', async () => ({
 }))
 
 vi.mock('@/ws', () => ({
-  ws: { on: vi.fn(() => () => {}) },
+  ws: { on: vi.fn(() => () => {}), send: vi.fn() },
 }))
 
 vi.mock('@/store/auth', () => ({
@@ -416,6 +416,48 @@ describe('DmThreadPage — jump-down chip integration', () => {
       const replyBtn = container.querySelector('.sh-message-reply-btn')
       expect(reactBtn).not.toBeNull()
       expect(replyBtn).not.toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
+  it('emits ws.send(\'dm.active\', {conversation_id}) on mount and clears on unmount', async () => {
+    // The active-conversation signal — tells the backend "don't fire
+    // the bell row + push for me on this thread, I'm reading it right
+    // now". Without it the user gets a notification for a DM they're
+    // actively typing a reply to, which is the exact noise we're
+    // fixing.
+    const restore = stubScrollMetrics({
+      scrollTop: 0, scrollHeight: 600, clientHeight: 600,
+    })
+    try {
+      wireApiMock({
+        conversations: [{
+          id: 'conv-test', type: 'dm', name: null,
+          last_message_at: '2026-05-17T13:00:42+00:00',
+          members: [{ user_id: 'u-bob', username: 'bob', display_name: 'Bob', picture_url: null }],
+          member_count: 2, unread: 0, last_read_at: '2026-05-17T13:00:42+00:00',
+        }],
+        messages: [],
+        members: [{
+          user_id: 'u-bob', username: 'bob', display_name: 'Bob',
+          picture_url: null, is_online: false, is_idle: false, last_seen_at: null,
+        }],
+      })
+      const { render, waitFor } = await import('@testing-library/preact')
+      const { default: DmThreadPage } = await import('./DmThreadPage')
+      const { ws } = await import('@/ws')
+      const sendMock = ws.send as unknown as ReturnType<typeof vi.fn>
+      sendMock.mockClear()
+      const { unmount } = render(<DmThreadPage />)
+      await waitFor(() => {
+        expect(sendMock).toHaveBeenCalledWith('dm.active', { conversation_id: 'conv-test' })
+      }, { timeout: 3000 })
+      sendMock.mockClear()
+      unmount()
+      // Cleanup effect must clear the marker so backgrounded threads
+      // start emitting notifications again.
+      expect(sendMock).toHaveBeenCalledWith('dm.active', { conversation_id: null })
     } finally {
       restore()
     }
