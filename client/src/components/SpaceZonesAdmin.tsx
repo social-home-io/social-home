@@ -298,15 +298,23 @@ function ZonesPreviewMap({
     layer.clearLayers()
     for (const z of zones) {
       const colour = z.color || PALETTE[0]
+      // Circle is the only on-map mark for the zone — the name +
+      // radius + coords live in the left-pane list (the admin's
+      // legend). A hover tooltip surfaces the name without
+      // cluttering the map with a permanent white label box.
       L.circle([z.latitude, z.longitude], {
         radius: z.radius_m,
         color: colour,
-        opacity: 0.6,
-        fillOpacity: 0.10,
-        weight: 1.5,
+        opacity: 0.85,
+        fillColor: colour,
+        // Light fill so overlapping zones don't compound into a muddy
+        // blob; the coloured border is what distinguishes a zone
+        // visually, the left-pane list names every one.
+        fillOpacity: 0.12,
+        weight: 2,
       }).addTo(layer).bindTooltip(z.name, {
-        permanent: true,
-        direction: 'center',
+        direction: 'top',
+        offset: [0, -4],
         className: 'sh-zone-label',
       })
     }
