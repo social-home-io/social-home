@@ -123,7 +123,7 @@ describe('SpaceJoinByCodeDialog', () => {
     })
     await act(async () => { fireEvent.click(getByText('Join')) })
     expect(api.post).not.toHaveBeenCalled()
-    expect(container.querySelector('.sh-error')?.textContent)
+    expect(container.querySelector('.sh-scan-error-inline')?.textContent)
       .toContain("doesn't look like a Social Home invite code")
   })
 
@@ -136,7 +136,7 @@ describe('SpaceJoinByCodeDialog', () => {
     })
     await act(async () => { fireEvent.click(getByText('Join')) })
     await waitFor(() => {
-      expect(container.querySelector('.sh-error')?.textContent)
+      expect(container.querySelector('.sh-scan-error-inline')?.textContent)
         .toContain('expired or already been used')
     })
     expect(routeSpy).not.toHaveBeenCalled()
@@ -155,7 +155,7 @@ describe('SpaceJoinByCodeDialog', () => {
     })
     await act(async () => { fireEvent.click(getByText('Join')) })
     expect(api.post).not.toHaveBeenCalled()
-    expect(container.querySelector('.sh-error')?.textContent)
+    expect(container.querySelector('.sh-scan-error-inline')?.textContent)
       .toContain('another Social Home instance')
   })
 
@@ -167,7 +167,7 @@ describe('SpaceJoinByCodeDialog', () => {
       fireEvent.input(input, { target: { value: 'garbage' } })
     })
     await act(async () => { fireEvent.click(result.getByText('Join')) })
-    expect(result.container.querySelector('.sh-error')).not.toBeNull()
+    expect(result.container.querySelector('.sh-scan-error-inline')).not.toBeNull()
     // Close via the modal's overlay-click escape (the close handler).
     // The component re-renders to null when ``open`` flips.
     await act(async () => { result.unmount() })
@@ -175,6 +175,6 @@ describe('SpaceJoinByCodeDialog', () => {
     result = await renderAndOpen()
     input = result.container.querySelector('[data-testid="join-by-code-input"]') as HTMLTextAreaElement
     expect(input.value).toBe('')
-    expect(result.container.querySelector('.sh-error')).toBeNull()
+    expect(result.container.querySelector('.sh-scan-error-inline')).toBeNull()
   })
 })
