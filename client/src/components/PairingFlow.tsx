@@ -24,15 +24,17 @@
  */
 import { signal } from '@preact/signals'
 import { useEffect, useRef, useState } from 'preact/hooks'
-import QRCode from 'qrcode'
 import { api, ApiError } from '@/api'
 import { ws } from '@/ws'
+import { base64UrlEncode, base64UrlDecode } from '@/lib/base64Url'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { Spinner } from './Spinner'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import { ShareHomeToggle } from './ShareHomeToggle'
+import { QrCodeImg } from './QrCodeImg'
+import { QrScanner } from './QrScanner'
 
 type PairingMode = 'household' | 'gfs'
 type PairingRole = 'unset' | 'inviter' | 'scanner'
@@ -124,28 +126,8 @@ function friendlyPairError(err: unknown, stage?: 'initiate'): string {
  * pairing string. Payload sits in the URL fragment so a stray paste
  * into a browser address bar (or a URL preview generator) never sends
  * the secret to the receiving instance's server logs — fragments stay
- * client-side.
+ * client-side. The base64url codec lives in ``@/lib/base64Url``.
  */
-function base64UrlEncode(text: string): string {
-  const utf8 = new TextEncoder().encode(text)
-  let bin = ''
-  for (const byte of utf8) bin += String.fromCharCode(byte)
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-function base64UrlDecode(text: string): string | null {
-  const normalised = text.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalised + '='.repeat((4 - (normalised.length % 4)) % 4)
-  try {
-    const bin = atob(padded)
-    const bytes = new Uint8Array(bin.length)
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    return new TextDecoder().decode(bytes)
-  } catch {
-    return null
-  }
-}
-
 export function buildPairingCode(payloadJson: string): string {
   return `socialhome://pair#${base64UrlEncode(payloadJson)}`
 }
@@ -226,38 +208,6 @@ export function openPairing(pairingMode: PairingMode = 'household') {
   qrPayload.value = ''
   pairingCode.value = ''
   pairingToken.value = ''
-}
-
-/**
- * Real QR renderer — encodes ``data`` to a PNG data-URL via the
- * ``qrcode`` library and displays it as an <img>. Uses error-
- * correction level M (15% redundancy) which is plenty for a
- * short URL and keeps the code visually clean.
- */
-function QrCodeImg({ data, size = 220 }: { data: string; size?: number }) {
-  const [src, setSrc] = useState<string | null>(null)
-  useEffect(() => {
-    let stopped = false
-    QRCode.toDataURL(data, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: size * 2,   // 2× for retina
-      color: { dark: '#0f172a', light: '#ffffff' },
-    }).then(url => { if (!stopped) setSrc(url) })
-      .catch(() => { /* leave src null */ })
-    return () => { stopped = true }
-  }, [data, size])
-  if (!src) {
-    return (
-      <div class="sh-qr-skeleton"
-           style={{ width: size, height: size }}
-           aria-label="Generating QR code" />
-    )
-  }
-  return (
-    <img src={src} width={size} height={size}
-         class="sh-qr-code" alt="Pairing QR code" />
-  )
 }
 
 function SasInput({ autofilled }: { autofilled?: boolean }) {
@@ -377,192 +327,6 @@ function StepIndicator({ current, role: currentRole }: {
         </li>
       ))}
     </ol>
-  )
-}
-
-// ────────────────────────────────────────────────────────────────
-//  Scanner — camera + image-upload fallback (same method)
-// ────────────────────────────────────────────────────────────────
-
-type BarcodeDetectorLike = {
-  detect: (source: CanvasImageSource | ImageBitmap | Blob) => Promise<Array<{ rawValue: string }>>
-}
-
-function barcodeDetectorSupported(): boolean {
-  return typeof (window as unknown as { BarcodeDetector?: unknown }).BarcodeDetector === 'function'
-}
-
-function createDetector(): BarcodeDetectorLike | null {
-  const Ctor = (window as unknown as {
-    BarcodeDetector?: new (opts: { formats: string[] }) => BarcodeDetectorLike
-  }).BarcodeDetector
-  if (!Ctor) return null
-  try {
-    return new Ctor({ formats: ['qr_code'] })
-  } catch {
-    return null
-  }
-}
-
-/**
- * Camera preview + continuous QR decode loop.
- *
- * onPayload is called once with the decoded raw string (the JSON
- * printed in the inviter's QR). Stream + detection loop tear down
- * cleanly on unmount.
- */
-function QrCameraScanner({ onPayload }: { onPayload: (raw: string) => void }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null)
-  const [starting, setStarting] = useState(true)
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    let rafId: number | null = null
-    let stream: MediaStream | null = null
-    const detector = createDetector()
-    if (!detector) {
-      setErrorMsg(t('pairing.scan_no_detector'))
-      setStarting(false)
-      return
-    }
-    (async () => {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-        })
-        if (cancelled || !videoRef.current) {
-          stream.getTracks().forEach(t => t.stop())
-          return
-        }
-        videoRef.current.srcObject = stream
-        await videoRef.current.play().catch(() => null)
-        setStarting(false)
-        const loop = async () => {
-          if (cancelled || !videoRef.current) return
-          try {
-            const results = await detector.detect(videoRef.current)
-            const match = results.find(r => !!r.rawValue)
-            if (match) {
-              cancelled = true
-              onPayload(match.rawValue)
-              return
-            }
-          } catch {
-            // keep trying — detector throws on empty frames sometimes
-          }
-          rafId = requestAnimationFrame(() => { void loop() })
-        }
-        void loop()
-      } catch (err: unknown) {
-        const name = (err as { name?: string }).name ?? ''
-        if (name === 'NotAllowedError') {
-          setErrorMsg(t('pairing.scan_permission_denied'))
-        } else if (name === 'NotFoundError') {
-          setErrorMsg(t('pairing.scan_no_camera'))
-        } else {
-          setErrorMsg(t('pairing.scan_failed'))
-        }
-        setStarting(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-      if (rafId !== null) cancelAnimationFrame(rafId)
-      if (stream) stream.getTracks().forEach(t => t.stop())
-    }
-  }, [onPayload])
-
-  if (errorMsg) {
-    return (
-      <div class="sh-scan-error" role="alert">
-        <div aria-hidden="true" class="sh-scan-error-icon">📷</div>
-        <p>{errorMsg}</p>
-      </div>
-    )
-  }
-  return (
-    <div class="sh-scan-camera">
-      <video ref={videoRef} playsInline muted class="sh-scan-video" />
-      <div class="sh-scan-frame" aria-hidden="true" />
-      {starting && (
-        <div class="sh-scan-starting">
-          <Spinner />
-          <span>{t('pairing.scan_starting')}</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * Try to decode a QR from an uploaded image file. Uses
- * BarcodeDetector — for browsers without it, onPayload is never
- * called and we report a fallback-to-paste message.
- */
-async function decodeImage(file: File): Promise<string | null> {
-  if (!barcodeDetectorSupported()) return null
-  const detector = createDetector()
-  if (!detector) return null
-  const bitmap = await createImageBitmap(file)
-  try {
-    const results = await detector.detect(bitmap)
-    const match = results.find(r => !!r.rawValue)
-    return match?.rawValue ?? null
-  } finally {
-    bitmap.close?.()
-  }
-}
-
-function ScanQrPanel({ onPayload }: { onPayload: (raw: string) => void }) {
-  const [decoding, setDecoding] = useState(false)
-
-  const handleFile = async (ev: Event) => {
-    const input = ev.target as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
-    setDecoding(true)
-    scanError.value = null
-    try {
-      const raw = await decodeImage(file)
-      if (!raw) {
-        scanError.value = t('pairing.scan_no_code_in_image')
-        return
-      }
-      onPayload(raw)
-    } catch {
-      scanError.value = t('pairing.scan_decode_failed')
-    } finally {
-      setDecoding(false)
-      input.value = ''
-    }
-  }
-
-  return (
-    <div class="sh-scan-options">
-      {barcodeDetectorSupported() && (
-        <QrCameraScanner onPayload={onPayload} />
-      )}
-      {!barcodeDetectorSupported() && (
-        <div class="sh-scan-no-camera">
-          <p class="sh-muted">{t('pairing.scan_no_camera_hint')}</p>
-        </div>
-      )}
-      {scanError.value && (
-        <p class="sh-scan-error-inline" role="alert">{scanError.value}</p>
-      )}
-      <label class="sh-link sh-scan-upload-label">
-        <input
-          type="file"
-          accept="image/*"
-          hidden
-          onChange={handleFile}
-          disabled={decoding}
-        />
-        {t('pairing.scan_upload')}
-      </label>
-      {decoding && <Spinner />}
-    </div>
   )
 }
 
@@ -929,7 +693,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
             <div class="sh-pairing-share">
               <div class="sh-pairing-share-qr">
                 <p class="sh-muted">{t('pairing.show_qr')}</p>
-                <QrCodeImg data={qrPayload.value} size={220} />
+                <QrCodeImg data={qrPayload.value} size={220} alt="Pairing QR code" />
               </div>
               <div class="sh-pairing-or" aria-hidden="true">
                 <span>{t('pairing.or_divider')}</span>
@@ -971,7 +735,12 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
               scanError.value = null
               setScanMethod(m)
             }} />
-            {scanMethod === 'qr' && <ScanQrPanel onPayload={onPayload} />}
+            {scanMethod === 'qr' && (
+              <QrScanner
+                onPayload={onPayload}
+                onError={(msg) => { scanError.value = msg }}
+              />
+            )}
             {scanMethod === 'paste' && (
               <PastePanel
                 onSubmit={onPayload}
@@ -979,6 +748,11 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
                 label={pasteLabel}
                 mode={mode.value}
               />
+            )}
+            {scanMethod === 'paste' && scanError.value && (
+              <p class="sh-scan-error-inline" role="alert">
+                {scanError.value}
+              </p>
             )}
             <div class="sh-pairing-actions">
               <button type="button" class="sh-link" onClick={resetAll}>

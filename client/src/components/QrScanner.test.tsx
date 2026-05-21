@@ -1,0 +1,107 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, fireEvent, waitFor } from '@testing-library/preact'
+import { QrScanner } from './QrScanner'
+
+// Stable references so the inline detector mock decides yes/no.
+let detectReturn: string | null = null
+class MockBarcodeDetector {
+  constructor(_opts: { formats: string[] }) {}
+  detect = vi.fn(async () =>
+    detectReturn === null ? [] : [{ rawValue: detectReturn }],
+  )
+}
+
+const originalDetector = (window as unknown as { BarcodeDetector?: unknown })
+  .BarcodeDetector
+const originalCreateImageBitmap = (window as unknown as {
+  createImageBitmap?: unknown
+}).createImageBitmap
+
+beforeEach(() => {
+  detectReturn = null
+  ;(window as unknown as { BarcodeDetector?: unknown })
+    .BarcodeDetector = MockBarcodeDetector
+  ;(window as unknown as {
+    createImageBitmap?: (file: File) => Promise<{ close?: () => void }>
+  }).createImageBitmap = vi.fn(async () => ({ close: vi.fn() }))
+  // ``getUserMedia`` blocks under JSDOM — make the camera startup
+  // bail with a permission denial so the loop tears down quickly.
+  ;(navigator as unknown as { mediaDevices: MediaDevices }).mediaDevices = {
+    getUserMedia: vi.fn(async () => {
+      const err = new Error('denied')
+      ;(err as { name?: string }).name = 'NotAllowedError'
+      throw err
+    }),
+  } as unknown as MediaDevices
+})
+
+afterEach(() => {
+  if (originalDetector === undefined) {
+    delete (window as unknown as { BarcodeDetector?: unknown }).BarcodeDetector
+  } else {
+    (window as unknown as { BarcodeDetector?: unknown }).BarcodeDetector =
+      originalDetector
+  }
+  if (originalCreateImageBitmap === undefined) {
+    delete (window as unknown as { createImageBitmap?: unknown })
+      .createImageBitmap
+  } else {
+    (window as unknown as { createImageBitmap?: unknown }).createImageBitmap =
+      originalCreateImageBitmap
+  }
+  vi.clearAllMocks()
+})
+
+describe('QrScanner', () => {
+  it('uploads an image and emits the decoded payload', async () => {
+    detectReturn = 'socialhome://invite#xyz'
+    const onPayload = vi.fn()
+    const { container } = render(<QrScanner onPayload={onPayload} />)
+
+    const input = container.querySelector('input[type=file]') as HTMLInputElement
+    const file = new File(['fake'], 'qr.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+
+    await waitFor(() => {
+      expect(onPayload).toHaveBeenCalledWith('socialhome://invite#xyz')
+    })
+  })
+
+  it('shows an inline error and calls onError when no QR is found in the image', async () => {
+    detectReturn = null  // detector returns []
+    const onPayload = vi.fn()
+    const onError = vi.fn()
+    const { container } = render(
+      <QrScanner onPayload={onPayload} onError={onError} />,
+    )
+
+    const input = container.querySelector('input[type=file]') as HTMLInputElement
+    const file = new File(['x'], 'blank.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+
+    await waitFor(() => {
+      expect(container.querySelector('.sh-scan-error-inline')).not.toBeNull()
+      expect(onError).toHaveBeenCalled()
+      expect(onPayload).not.toHaveBeenCalled()
+    })
+  })
+
+  it('renders the no-camera hint when BarcodeDetector is unavailable', () => {
+    delete (window as unknown as { BarcodeDetector?: unknown }).BarcodeDetector
+    const { container } = render(<QrScanner onPayload={vi.fn()} />)
+    expect(container.querySelector('.sh-scan-no-camera')).not.toBeNull()
+  })
+
+  it('renders a Cancel button only when onCancel is provided', () => {
+    const onCancel = vi.fn()
+    const { container, rerender } = render(<QrScanner onPayload={vi.fn()} />)
+    expect(container.querySelector('.sh-pairing-actions')).toBeNull()
+    rerender(<QrScanner onPayload={vi.fn()} onCancel={onCancel} />)
+    const btn = container.querySelector('.sh-pairing-actions button')
+    expect(btn).not.toBeNull()
+    fireEvent.click(btn!)
+    expect(onCancel).toHaveBeenCalled()
+  })
+})
