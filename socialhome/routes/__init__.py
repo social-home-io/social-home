@@ -129,6 +129,7 @@ from .gallery import (
 from .health import HealthView
 from .household import HouseholdPreferencesView
 from .me_preferences import MePreferencesView
+from .me_space_location import MeSpaceLocationSharingView
 from .media import MediaServeView, MediaUploadView
 from .notifications import (
     NotificationCollectionView,
@@ -993,6 +994,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
 
     # ── User preferences ─────────────────────────────────────────────────
     app.router.add_view("/api/me/preferences", MePreferencesView)
+    app.router.add_view(
+        "/api/me/space-location-sharing",
+        MeSpaceLocationSharingView,
+    )
 
     # ── Backup (adapter-agnostic) ────────────────────────────────────────
     app.router.add_view("/api/backup/pre_backup", BackupPreView)

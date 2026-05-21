@@ -28,6 +28,16 @@ import {
 import { relativeDocsTime } from '@/utils/relativeTime'
 import { userPreferences } from '@/store/userPreferences'
 
+interface SpaceLocationRow {
+  space_id: string
+  space_name: string
+  space_emoji: string | null
+  location_share_enabled: boolean
+}
+
+export const spaceLocationRows = signal<SpaceLocationRow[]>([])
+export const spaceLocationLoading = signal(false)
+
 type SettingsTab = 'profile' | 'privacy' | 'notifications' | 'appearance'
 
 const activeTab = signal<SettingsTab>('profile')
@@ -386,6 +396,7 @@ function PrivacyTab() {
         Show online status to other household members
       </label>
       <SidebarVisibilityPanel />
+      <SpaceLocationSharingPanel />
       <HighlightsPreferencesPanel />
       <MomentumPanel />
       <BlockedAccountsPanel />
@@ -462,6 +473,75 @@ function SidebarVisibilityPanel() {
           Browse listings shared across connected households.
         </span>
       </label>
+    </div>
+  )
+}
+
+/**
+ * SpaceLocationSharingPanel — lists every space where the user is a member
+ * and ``feature_location`` is on. Each row has a toggle that optimistically
+ * flips local state and PATCHes the existing
+ * ``/api/spaces/{id}/members/me/location-sharing`` endpoint.
+ *
+ * Discovery + audit in one place: users no longer have to open each space's
+ * Map tab individually.
+ */
+function SpaceLocationSharingPanel() {
+  useEffect(() => {
+    spaceLocationLoading.value = true
+    api.get('/api/me/space-location-sharing')
+      .then((data: { spaces: SpaceLocationRow[] }) => {
+        spaceLocationRows.value = data.spaces
+        spaceLocationLoading.value = false
+      })
+      .catch(() => {
+        spaceLocationLoading.value = false
+      })
+  }, [])
+
+  const toggle = async (spaceId: string, currentValue: boolean) => {
+    const rows = spaceLocationRows.value
+    // Optimistic update
+    spaceLocationRows.value = rows.map(r =>
+      r.space_id === spaceId ? { ...r, location_share_enabled: !currentValue } : r,
+    )
+    try {
+      await api.patch(`/api/spaces/${spaceId}/members/me/location-sharing`, {
+        enabled: !currentValue,
+      })
+    } catch (e: unknown) {
+      // Revert on error
+      spaceLocationRows.value = rows
+      showToast((e as Error).message || 'Failed to update location sharing', 'error')
+    }
+  }
+
+  return (
+    <div
+      class="sh-settings-subcard sh-space-location-panel"
+      id="space-location-sharing"
+    >
+      <h3 class="sh-settings-panel-heading">Space location sharing</h3>
+      <p class="sh-muted sh-settings-panel-blurb">
+        Choose which spaces see your live location. Admins enable the
+        feature per-space; you decide whether to opt in.
+      </p>
+      {!spaceLocationLoading.value && spaceLocationRows.value.length === 0 && (
+        <p class="sh-muted sh-settings-panel-blurb">
+          No spaces with location sharing turned on. Ask an admin to
+          enable Location in a space's settings.
+        </p>
+      )}
+      {spaceLocationRows.value.map(row => (
+        <label key={row.space_id} class="sh-toggle-row">
+          <input
+            type="checkbox"
+            checked={row.location_share_enabled}
+            onChange={() => void toggle(row.space_id, row.location_share_enabled)}
+          />
+          {row.space_emoji ? `${row.space_emoji} ` : ''}{row.space_name}
+        </label>
+      ))}
     </div>
   )
 }
