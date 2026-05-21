@@ -1659,25 +1659,39 @@ _NOTIF_LEVELS = frozenset({"all", "mentions", "muted"})
 
 
 class SpaceNotifPrefsView(BaseView):
-    """``GET /api/spaces/{id}/notif-prefs`` — caller's level for this space.
+    """``GET /api/spaces/{id}/notif-prefs`` — caller's per-space prefs.
 
-    ``PUT /api/spaces/{id}/notif-prefs`` — set level.
+    ``PUT /api/spaces/{id}/notif-prefs`` — set notification level.
     Body: ``{level: 'all' | 'mentions' | 'muted'}``.
     Returns ``{level}``.
+
+    GET piggy-backs the caller's location-sharing state so the SPA's
+    per-space "@" menu can render the toggle without a second round-trip:
+    ``feature_location`` mirrors the admin-controlled space flag,
+    ``location_share_enabled`` mirrors this member's opt-in.
     """
 
     async def get(self) -> web.Response:
         ctx = self.user
         space_id = self.match("id")
         space_repo = self.svc(space_repo_key)
-        if await space_repo.get_member(space_id, ctx.user_id) is None:
+        member = await space_repo.get_member(space_id, ctx.user_id)
+        if member is None:
             return error_response(403, "FORBIDDEN", "Not a space member.")
+        space = await space_repo.get(space_id)
+        feature_location = bool(space and space.features.location)
         notif_repo = self.svc(notification_repo_key)
         level = await notif_repo.get_space_notif_level(
             user_id=ctx.user_id,
             space_id=space_id,
         )
-        return web.json_response({"level": level})
+        return web.json_response(
+            {
+                "level": level,
+                "feature_location": feature_location,
+                "location_share_enabled": bool(member.location_share_enabled),
+            }
+        )
 
     async def put(self) -> web.Response:
         ctx = self.user
