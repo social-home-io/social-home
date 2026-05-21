@@ -95,12 +95,12 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   // tabs that aren't used in the space; existing data (pages, events,
   // tasks, stickies, gallery albums) stays in storage and reappears
   // when the flag flips back. Defaults mirror the SpaceFeatures
-  // dataclass: pages/todo/gallery default on, calendar/stickies off
-  // (admin opts those in deliberately).
+  // dataclass — every tab on by default. Pre-0008/0009 spaces with
+  // a column at 0 are backfilled to 1 by the migrations.
   const featurePages = useSignal(space.features?.pages ?? true)
-  const featureCalendar = useSignal(space.features?.calendar ?? false)
+  const featureCalendar = useSignal(space.features?.calendar ?? true)
   const featureTodo = useSignal(space.features?.todo ?? true)
-  const featureStickies = useSignal(space.features?.stickies ?? false)
+  const featureStickies = useSignal(space.features?.stickies ?? true)
   const featureGallery = useSignal(space.features?.gallery ?? true)
   // Subscriber-engagement opt-ins (§23.49) — admins flip these when
   // they want followers to be able to react / comment without being

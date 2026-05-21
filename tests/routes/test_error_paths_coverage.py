@@ -38,9 +38,14 @@ async def _add_second_user(
 
 
 async def _seed_space(client, *, sid: str = "sp-x", role: str = "admin") -> str:
+    # Explicit feature flags so the new route-level gates (calendar /
+    # stickies / gallery) don't 403 — see _seed_space in
+    # tests/routes/test_calendar.py for the rationale.
     await client._db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
-        " identity_public_key) VALUES(?, 'X', 'inst', 'admin', ?)",
+        " identity_public_key, feature_calendar, feature_stickies,"
+        " feature_gallery)"
+        " VALUES(?, 'X', 'inst', 'admin', ?, 1, 1, 1)",
         (sid, "ab" * 32),
     )
     await client._db.enqueue(

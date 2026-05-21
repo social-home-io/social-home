@@ -103,10 +103,14 @@ async def test_event_cover_round_trips_create_edit_clear(client):
 
 async def _seed_space(client):
     db = client._db
+    # ``feature_calendar`` schema default is 0 — pre-0009. The 0009
+    # migration backfills existing rows to 1 and the SpaceFeatures
+    # dataclass default is True, but raw INSERTs in test fixtures
+    # still need an explicit value or the new route-level gate 403s.
     await db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username, "
-        "identity_public_key, space_type) "
-        "VALUES('sp-cal', 'Cal', 'iid', 'admin', ?, 'household')",
+        "identity_public_key, space_type, feature_calendar) "
+        "VALUES('sp-cal', 'Cal', 'iid', 'admin', ?, 'household', 1)",
         ("aa" * 32,),
     )
     # Membership is required to create / RSVP / edit — the test user
@@ -735,8 +739,8 @@ async def test_feed_token_for_wrong_space_rejected(client):
     # Create a second space + add the test user as a member.
     await client._db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username, "
-        "identity_public_key, space_type) "
-        "VALUES('sp-other', 'Other', 'iid', 'admin', ?, 'household')",
+        "identity_public_key, space_type, feature_calendar) "
+        "VALUES('sp-other', 'Other', 'iid', 'admin', ?, 'household', 1)",
         ("aa" * 32,),
     )
     await client._db.enqueue(

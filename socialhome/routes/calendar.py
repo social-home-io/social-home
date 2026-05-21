@@ -484,6 +484,7 @@ class SpaceCalendarEventsView(BaseView):
                 "UNPROCESSABLE",
                 "Query params 'start' and 'end' are required.",
             )
+        await self.require_space_feature(space_id, "calendar")
         space_cal_svc = self.svc(K.space_cal_service_key)
         events = await space_cal_svc.list_events_in_range(
             space_id,
@@ -496,7 +497,10 @@ class SpaceCalendarEventsView(BaseView):
 
     async def _require_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(K.space_repo_key)
-        return await space_repo.get_member(space_id, user_id) is not None
+        if await space_repo.get_member(space_id, user_id) is None:
+            return False
+        await self.require_space_feature(space_id, "calendar")
+        return True
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -536,7 +540,10 @@ class SpaceCalendarEventDetailView(BaseView):
 
     async def _require_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(K.space_repo_key)
-        return await space_repo.get_member(space_id, user_id) is not None
+        if await space_repo.get_member(space_id, user_id) is None:
+            return False
+        await self.require_space_feature(space_id, "calendar")
+        return True
 
     async def patch(self) -> web.Response:
         ctx = self.user
@@ -625,6 +632,7 @@ class CalendarEventRsvpView(BaseView):
             space_id, ctx.user_id
         ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
+        await self.require_space_feature(space_id, "calendar")
 
         try:
             await space_cal_svc.rsvp(
@@ -660,6 +668,7 @@ class CalendarEventRsvpView(BaseView):
             space_id, ctx.user_id
         ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
+        await self.require_space_feature(space_id, "calendar")
 
         try:
             await space_cal_svc.remove_rsvp(
@@ -760,6 +769,7 @@ class CalendarEventApprovalView(BaseView):
         member = await space_repo.get_member(space_id, ctx.user_id)
         if member is None:
             return error_response(403, "FORBIDDEN", "Not a space member.")
+        await self.require_space_feature(space_id, "calendar")
         result = await space_cal_svc._repo.get_event(event_id)
         if result is None:
             return error_response(404, "NOT_FOUND", "Event not found.")
@@ -822,6 +832,7 @@ class CalendarEventPendingView(BaseView):
             space_id, ctx.user_id
         ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
+        await self.require_space_feature(space_id, "calendar")
         result = await space_cal_svc._repo.get_event(event_id)
         if result is None:
             return error_response(404, "NOT_FOUND", "Event not found.")
@@ -871,6 +882,7 @@ class CalendarEventRemindersView(BaseView):
             space_id, ctx.user_id
         ):
             return error_response(403, "FORBIDDEN", "Not a space member.")
+        await self.require_space_feature(space_id, "calendar")
         return space_id, ctx.user_id
 
     async def get(self) -> web.Response:
