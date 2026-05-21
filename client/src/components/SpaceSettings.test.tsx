@@ -134,6 +134,30 @@ describe('SpaceSettings', () => {
     ])
   })
 
+  it('defaults Features toggles to the SpaceFeatures dataclass defaults when keys are missing', () => {
+    const space = makeSpace({
+      features: {
+        // Empty-ish payload — simulates an upstream that doesn't
+        // surface the per-space feature flags. The SPA mirrors the
+        // SpaceFeatures dataclass defaults: pages/todo/gallery on,
+        // calendar/stickies off.
+        location: false,
+        posts_access: 'open', pages_access: 'open',
+        stickies_access: 'open', calendar_access: 'open',
+        tasks_access: 'open',
+      },
+    })
+    const { getByTestId } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-features')
+    const checkboxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    // pages, calendar, tasks, stickies, gallery
+    expect(checkboxes.map((c) => c.checked)).toEqual([true, false, true, false, true])
+  })
+
   it('sends all five feature toggles in the PATCH body on save', async () => {
     apiMock.patch.mockResolvedValueOnce({})
     const space = makeSpace()

@@ -128,6 +128,7 @@ class SpaceAlbumCollectionView(BaseView):
         ctx = self.user
         await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         space_id = self.match("space_id")
+        await self.require_space_feature(space_id, "gallery")
         before = self.request.query.get("before")
         try:
             limit = int(self.request.query.get("limit", 30))
@@ -145,6 +146,7 @@ class SpaceAlbumCollectionView(BaseView):
         ctx = self.user
         await self.svc(K.preferences_service_key).require_enabled(_GALLERY_SECTION)
         space_id = self.match("space_id")
+        await self.require_space_feature(space_id, "gallery")
         body = await self.body()
         album = await self.svc(K.gallery_service_key).create_album(
             space_id=space_id,

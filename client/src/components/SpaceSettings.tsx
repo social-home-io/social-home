@@ -95,8 +95,8 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   // tabs that aren't used in the space; existing data (pages, events,
   // tasks, stickies, gallery albums) stays in storage and reappears
   // when the flag flips back. Defaults mirror the SpaceFeatures
-  // dataclass defaults so a pre-migration row reads as
-  // pages=todo=gallery on, calendar=stickies off.
+  // dataclass: pages/todo/gallery default on, calendar/stickies off
+  // (admin opts those in deliberately).
   const featurePages = useSignal(space.features?.pages ?? true)
   const featureCalendar = useSignal(space.features?.calendar ?? false)
   const featureTodo = useSignal(space.features?.todo ?? true)

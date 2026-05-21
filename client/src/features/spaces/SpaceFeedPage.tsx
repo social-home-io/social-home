@@ -228,14 +228,14 @@ export default function SpaceFeedPage() {
 
   // Per-space feature toggles (set by an admin in SpaceSettings) hide
   // their tab when off. Feed + members stay visible always — they
-  // anchor the page. Pre-migration spaces lack ``gallery``; default to
-  // ON to preserve historical behaviour, matching the SpaceFeatures
-  // dataclass default on the backend.
+  // anchor the page. Defaults track the SpaceFeatures dataclass on
+  // the backend: pages/todo/gallery default on; calendar/stickies
+  // and location are opt-in.
   const f = s?.features
   const visibleTabs: readonly SpaceTab[] = [
     'feed', 'members',
     ...((f?.pages ?? true) ? (['pages'] as const) : []),
-    ...((f?.calendar ?? false) ? (['calendar'] as const) : []),
+    ...(f?.calendar ? (['calendar'] as const) : []),
     ...((f?.todo ?? true) ? (['tasks'] as const) : []),
     ...((f?.gallery ?? true) ? (['gallery'] as const) : []),
     ...(f?.location ? (['map'] as const) : []),

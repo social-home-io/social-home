@@ -154,7 +154,8 @@ async def test_list_space_albums_invalid_limit_falls_back(client):
     db = client._db
     await db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
-        " identity_public_key) VALUES('sp-y', 'Y', 'inst', 'admin', ?)",
+        " identity_public_key, feature_gallery)"
+        " VALUES('sp-y', 'Y', 'inst', 'admin', ?, 1)",
         ("ab" * 32,),
     )
     await db.enqueue(
