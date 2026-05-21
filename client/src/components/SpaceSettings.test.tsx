@@ -134,13 +134,14 @@ describe('SpaceSettings', () => {
     ])
   })
 
-  it('defaults Features toggles to the SpaceFeatures dataclass defaults when keys are missing', () => {
+  it('defaults Features toggles ON for a space whose features payload omits the keys', () => {
     const space = makeSpace({
       features: {
         // Empty-ish payload — simulates an upstream that doesn't
-        // surface the per-space feature flags. The SPA mirrors the
-        // SpaceFeatures dataclass defaults: pages/todo/gallery on,
-        // calendar/stickies off.
+        // surface the per-space feature flags. The SpaceFeatures
+        // dataclass default on the backend is all-on (except
+        // location, which is an opt-in privacy contract); the SPA
+        // mirrors that.
         location: false,
         posts_access: 'open', pages_access: 'open',
         stickies_access: 'open', calendar_access: 'open',
@@ -154,8 +155,8 @@ describe('SpaceSettings', () => {
     const checkboxes = Array.from(
       fieldset.querySelectorAll('input[type="checkbox"]'),
     ) as HTMLInputElement[]
-    // pages, calendar, tasks, stickies, gallery
-    expect(checkboxes.map((c) => c.checked)).toEqual([true, false, true, false, true])
+    // pages, calendar, tasks, stickies, gallery — all on.
+    expect(checkboxes.map((c) => c.checked)).toEqual([true, true, true, true, true])
   })
 
   it('sends all five feature toggles in the PATCH body on save', async () => {

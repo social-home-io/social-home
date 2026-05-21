@@ -141,7 +141,10 @@ class SpaceStickyCollectionView(BaseView):
 
     async def _require_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(space_repo_key)
-        return await space_repo.get_member(space_id, user_id) is not None
+        if await space_repo.get_member(space_id, user_id) is None:
+            return False
+        await self.require_space_feature(space_id, "stickies")
+        return True
 
     async def get(self) -> web.Response:
         ctx = self.user
@@ -187,7 +190,10 @@ class SpaceStickyDetailView(BaseView):
 
     async def _require_member(self, space_id: str, user_id: str) -> bool:
         space_repo = self.svc(space_repo_key)
-        return await space_repo.get_member(space_id, user_id) is not None
+        if await space_repo.get_member(space_id, user_id) is None:
+            return False
+        await self.require_space_feature(space_id, "stickies")
+        return True
 
     async def _load(self, space_id: str, sticky_id: str):
         repo = self.svc(sticky_repo_key)

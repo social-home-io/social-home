@@ -85,7 +85,12 @@ _ALL_POST_TYPES: tuple[str, ...] = (
 class SpaceFeatures:
     """Per-space feature toggles and access levels."""
 
-    calendar: bool = False
+    # Every per-space feature defaults to ON so a fresh space mirrors
+    # the SPA's historical "every tab is visible" behaviour. Admins
+    # opt OUT of tabs they don't want. The sole exception is
+    # ``location`` — it carries an opt-in privacy contract (§23.8.6),
+    # so the admin has to flip it on deliberately.
+    calendar: bool = True
     todo: bool = True
     location: bool = False
     #: Privacy tier for the per-space map (§23.8.6). Only meaningful
@@ -98,7 +103,7 @@ class SpaceFeatures:
     #:   originating household. Updates outside every zone are silently
     #:   skipped.
     location_mode: Literal["gps", "zone_only"] = "gps"
-    stickies: bool = False
+    stickies: bool = True
     pages: bool = True
     #: Per-space toggle for the gallery tab (§23.119). Defaults to ON so
     #: pre-0008 rows that lack the column still surface as enabled
