@@ -24,6 +24,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from ..app_keys import (
+    alias_resolver_key,
     federation_repo_key,
     media_signer_key,
     online_status_service_key,
@@ -34,11 +35,21 @@ from ..media_signer import sign_media_urls_in
 from .base import BaseView
 
 
-def _local_user_to_dict(u, *, online_svc=None) -> dict:
+def _local_user_to_dict(
+    u,
+    *,
+    online_svc=None,
+    aliases: dict[str, str] | None = None,
+) -> dict:
     """Public-shape view of a local :class:`User`. Mirrors
     ``GET /api/users`` (same fields the SPA already renders) plus the
     online-status triple from :class:`OnlineStatusService` when
-    available — saves the Friends page a follow-up fetch."""
+    available — saves the Friends page a follow-up fetch.
+
+    ``aliases`` is the viewer's ``{target_user_id: alias}`` map from
+    :class:`AliasResolver`; when present, the row carries the viewer's
+    private nickname so the SPA can render it without a second fetch.
+    """
     is_online = bool(online_svc and online_svc.is_online(u.user_id))
     is_idle = bool(online_svc and online_svc.is_idle(u.user_id))
     if is_online and online_svc is not None:
@@ -50,6 +61,7 @@ def _local_user_to_dict(u, *, online_svc=None) -> dict:
         "user_id": u.user_id,
         "username": u.username,
         "display_name": u.display_name,
+        "personal_alias": (aliases or {}).get(u.user_id),
         "picture_hash": u.picture_hash,
         "picture_url": (
             f"api/users/{u.user_id}/picture?v={u.picture_hash}"
@@ -62,7 +74,12 @@ def _local_user_to_dict(u, *, online_svc=None) -> dict:
     }
 
 
-def _remote_user_to_dict(ru, *, online_svc=None) -> dict:
+def _remote_user_to_dict(
+    ru,
+    *,
+    online_svc=None,
+    aliases: dict[str, str] | None = None,
+) -> dict:
     """Public-shape view of a :class:`RemoteUser`. Picture is served
     via the existing per-user route; same cache-busting hash convention
     as the local users. The presence triple matches
@@ -83,6 +100,7 @@ def _remote_user_to_dict(ru, *, online_svc=None) -> dict:
         "instance_id": ru.instance_id,
         "remote_username": ru.remote_username,
         "display_name": ru.display_name,
+        "personal_alias": (aliases or {}).get(ru.user_id),
         "picture_hash": ru.picture_hash,
         "picture_url": (
             f"api/users/{ru.user_id}/picture?v={ru.picture_hash}"
@@ -148,6 +166,7 @@ class FriendsView(BaseView):
         fed_repo = self.svc(federation_repo_key)
         user_repo = self.svc(user_repo_key)
         online_svc = self.request.app.get(online_status_service_key)
+        alias_resolver = self.request.app.get(alias_resolver_key)
 
         # Personal blocks (§Privacy) — drop blocked household members so
         # the constellation doesn't surface someone the viewer hid.
@@ -158,33 +177,56 @@ class FriendsView(BaseView):
         local_users = [
             u for u in await user_repo.list_active() if u.user_id not in blocked_ids
         ]
+
+        # Confirmed remote households + their members.
+        instances = await fed_repo.list_instances(
+            status=PairingStatus.CONFIRMED.value,
+        )
+        remote_members_by_instance: list[tuple] = []
+        for inst in instances:
+            members = [
+                ru
+                for ru in await user_repo.list_remote_for_instance(inst.id)
+                if ru.user_id not in blocked_ids
+            ]
+            remote_members_by_instance.append((inst, members))
+
+        # Bulk-fetch the viewer's personal aliases for every user we're
+        # about to render — one round-trip instead of N. Resolver is
+        # optional (older deployments without it degrade to no aliases).
+        all_target_ids: list[str] = [u.user_id for u in local_users]
+        for _, members in remote_members_by_instance:
+            all_target_ids.extend(ru.user_id for ru in members)
+        aliases: dict[str, str] = {}
+        if alias_resolver is not None and all_target_ids:
+            aliases = await alias_resolver.resolve_users(
+                ctx.user_id,
+                all_target_ids,
+            )
+
         local_block = {
             "instance_id": local_id["instance_id"] if local_id else None,
             "display_name": (local_id or {}).get("display_name") or "Home",
             "home_lat": (local_id or {}).get("home_lat"),
             "home_lon": (local_id or {}).get("home_lon"),
             "members": [
-                _local_user_to_dict(u, online_svc=online_svc) for u in local_users
+                _local_user_to_dict(u, online_svc=online_svc, aliases=aliases)
+                for u in local_users
             ],
             "member_count": len(local_users),
         }
 
-        # Confirmed remote households + their members.
-        instances = await fed_repo.list_instances(
-            status=PairingStatus.CONFIRMED.value,
-        )
         households: list[dict] = []
-        for inst in instances:
-            remote_members = [
-                ru
-                for ru in await user_repo.list_remote_for_instance(inst.id)
-                if ru.user_id not in blocked_ids
-            ]
+        for inst, remote_members in remote_members_by_instance:
             households.append(
                 _instance_safe_dict(
                     inst,
                     members=[
-                        _remote_user_to_dict(ru, online_svc=online_svc)
+                        _remote_user_to_dict(
+                            ru,
+                            online_svc=online_svc,
+                            aliases=aliases,
+                        )
                         for ru in remote_members
                     ],
                 ),

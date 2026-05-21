@@ -2208,6 +2208,53 @@ button.sh-friends-member-chip:not(:disabled):hover {
 .sh-friends-member-chip--button:hover:not(:disabled) .sh-friends-member-chip__dm-hint {
   opacity: 0.95;
 }
+/* Tiny ✏ marker on a chip whose display name has been overridden by
+ * the viewer's personal_alias. Sits next to the name as a quiet hint
+ * that "this is your nickname, not their real one". Hover (or focus
+ * for a11y) reveals it more strongly to confirm the chip's state.
+ * Title attribute carries the original display name. */
+.sh-friends-member-chip__alias-hint {
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0.55;
+  margin-left: 2px;
+}
+.sh-friends-member-chip--button:hover:not(:disabled) .sh-friends-member-chip__alias-hint,
+.sh-friends-member-chip--button:focus-visible .sh-friends-member-chip__alias-hint {
+  opacity: 0.95;
+}
+
+/* Friend action sheet — opens when a chip is tapped. Layout:
+ *  avatar + identity column on top, two-button row below. */
+.sh-friend-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-md);
+}
+.sh-friend-actions__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-md);
+}
+.sh-friend-actions__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sh-friend-actions__identity strong {
+  font-size: var(--sh-font-size-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sh-friend-actions__real-name,
+.sh-friend-actions__household {
+  font-size: var(--sh-font-size-xs);
+}
+.sh-friend-actions__buttons {
+  flex-wrap: wrap;
+}
 
 .sh-feed {
   display: flex;
