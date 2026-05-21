@@ -10,7 +10,7 @@ import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
 import { openSpaceCreate } from '@/components/SpaceCreateDialog'
 import { RemoteInviteInboxBanner } from '@/components/RemoteInviteInboxBanner'
-import { SpaceJoinByCodeCard } from './SpaceJoinByCodeCard'
+import { openSpaceJoinByCode } from './SpaceJoinByCodeDialog'
 
 /** One row in the caller's /api/me/subscriptions list. */
 interface MySubscription { space_id: string; subscribed_at: string }
@@ -133,11 +133,13 @@ export default function SpaceListPage() {
           >
             🔭 Browse spaces
           </Button>
+          <Button variant="secondary" onClick={openSpaceJoinByCode}>
+            🎟 Join with code
+          </Button>
           <Button onClick={openSpaceCreate}>+ Create space</Button>
         </div>
       </div>
       <RemoteInviteInboxBanner />
-      <SpaceJoinByCodeCard />
       {memberSpaces.length === 0 && subscribedSpaces.length === 0 && (
         <div class="sh-empty-state">
           <div aria-hidden="true">🏘️</div>
