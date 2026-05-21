@@ -90,6 +90,103 @@ async def test_dm_message_persists_and_publishes_event(db, bus, inbound):
     assert captured[0].recipient_user_ids == ("user-local",)
 
 
+async def test_dm_message_duplicate_transport_does_not_publish_created_twice(
+    db,
+    bus,
+    inbound,
+):
+    """Second arrival of the same envelope (e.g. WebRTC delivers, then
+    HTTPS-inbox redelivers) must NOT republish ``DmMessageCreated`` —
+    otherwise the user gets two bell rows + two pushes for one
+    message. Race-safety is at the repo layer; this test pins the
+    end-to-end contract that the inbound handler honours it."""
+    from socialhome.domain.events import DmMessageUpdated
+
+    await db.enqueue(
+        "INSERT INTO conversations(id, type, created_at) VALUES(?,?, datetime('now'))",
+        ("conv-dup", "dm"),
+    )
+    created: list[DmMessageCreated] = []
+    updated: list[DmMessageUpdated] = []
+    bus.subscribe(DmMessageCreated, created.append)
+    bus.subscribe(DmMessageUpdated, updated.append)
+
+    payload = {
+        "conversation_id": "conv-dup",
+        "message_id": "m-dup",
+        "sender_user_id": "user-remote",
+        "sender_display_name": "Alice",
+        "content": "hi",
+        "recipient_user_ids": ["user-local"],
+    }
+    await inbound._on_dm_message(_event(FederationEventType.DM_MESSAGE, payload))
+    await inbound._on_dm_message(_event(FederationEventType.DM_MESSAGE, payload))
+
+    # First arrival fired Created; second arrival is a silent no-op
+    # (no Created, and no Updated either — there was no real edit).
+    assert len(created) == 1
+    assert len(updated) == 0
+
+
+async def test_dm_message_edit_replay_publishes_updated(db, bus, inbound):
+    """A genuine edit (payload carries ``edited_at``) on an existing
+    row still publishes ``DmMessageUpdated`` so the SPA can patch
+    the bubble in place. The audit pass that suppresses the no-op
+    updated-publish for duplicate-transport replays must not also
+    suppress legitimate edits."""
+    from socialhome.domain.events import DmMessageUpdated
+
+    await db.enqueue(
+        "INSERT INTO conversations(id, type, created_at) VALUES(?,?, datetime('now'))",
+        ("conv-edit", "dm"),
+    )
+    created: list[DmMessageCreated] = []
+    updated: list[DmMessageUpdated] = []
+    bus.subscribe(DmMessageCreated, created.append)
+    bus.subscribe(DmMessageUpdated, updated.append)
+
+    # First delivery — brand-new message.
+    await inbound._on_dm_message(
+        _event(
+            FederationEventType.DM_MESSAGE,
+            {
+                "conversation_id": "conv-edit",
+                "message_id": "m-edit",
+                "sender_user_id": "user-remote",
+                "sender_display_name": "Alice",
+                "content": "original",
+                "recipient_user_ids": ["user-local"],
+            },
+        )
+    )
+    # Sender re-fans the envelope with edited content + an
+    # ``edited_at`` timestamp — the signal that this is a real edit.
+    await inbound._on_dm_message(
+        _event(
+            FederationEventType.DM_MESSAGE,
+            {
+                "conversation_id": "conv-edit",
+                "message_id": "m-edit",
+                "sender_user_id": "user-remote",
+                "sender_display_name": "Alice",
+                "content": "edited content",
+                "recipient_user_ids": ["user-local"],
+                "edited_at": "2026-05-21T12:00:00+00:00",
+            },
+        )
+    )
+
+    assert len(created) == 1
+    assert len(updated) == 1
+    assert updated[0].content == "edited content"
+    row = await db.fetchone(
+        "SELECT content FROM conversation_messages WHERE id=?",
+        ("m-edit",),
+    )
+    assert row is not None
+    assert row["content"] == "edited content"
+
+
 async def test_dm_message_missing_fields_drops(inbound):
     await inbound._on_dm_message(
         _event(

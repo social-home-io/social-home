@@ -452,13 +452,21 @@ class FederationInboundService:
         _, created = await self._conversation_repo.save_message_returning_created(msg)
 
         if not created:
-            # In-place patch — the sender re-fanned the envelope to
-            # ship updated ``content`` (the voice-note transcript, an
-            # edit, …) or the same envelope arrived a second time via
-            # a different transport. Publish ``DmMessageUpdated`` so
-            # the WS layer patches the existing bubble instead of
-            # appending a new one.
-            edited_at_iso = p.get("edited_at") or p.get("occurred_at")
+            # Two cases land here:
+            #   (a) sender re-fanned the envelope with updated ``content``
+            #       — a voice-note transcript or an explicit edit, signalled
+            #       by ``edited_at`` in the payload.
+            #   (b) the same envelope arrived a second time via a different
+            #       transport (perfect-negotiation WebRTC + HTTPS-inbox
+            #       failover) with no real edit.
+            # Only (a) is worth firing ``DmMessageUpdated`` for. (b) is a
+            # silent no-op — the row is already in the DB and the SPA has
+            # already painted the bubble from the first delivery; emitting
+            # a redundant ``dm.message_updated`` frame would falsely trip
+            # any future "(edited)" indicator the SPA picks up.
+            edited_at_iso = p.get("edited_at")
+            if edited_at_iso is None:
+                return
             await self._bus.publish(
                 DmMessageUpdated(
                     conversation_id=conv_id,
