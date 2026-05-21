@@ -55,7 +55,12 @@ export function ZoneLegend({ zones, emptyLabel }: ZoneLegendProps) {
             style={`background: ${_zoneColor(z)}`}
             aria-hidden="true"
           />
-          <span class="sh-zone-legend__name">{z.name}</span>
+          <div class="sh-zone-legend__text">
+            <span class="sh-zone-legend__name">{z.name}</span>
+            <span class="sh-zone-legend__coords">
+              {z.latitude.toFixed(4)}, {z.longitude.toFixed(4)}
+            </span>
+          </div>
           <span class="sh-zone-legend__meta">{_fmtRadius(z.radius_m)}</span>
         </div>
       ))}

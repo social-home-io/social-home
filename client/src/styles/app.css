@@ -14698,14 +14698,14 @@ a.sh-welcome-card:hover {
   isolation: isolate;
 }
 
-/* Hover-only zone label drawn at the centre of a zone circle.
+/* Hover-only zone-name pill drawn at the centre of a zone circle.
  * The previous design used a permanent white box per zone, which
  * piled up as "white squares" on top of the colored circles and
  * obscured the map. Now the circles speak for themselves; the
- * label only surfaces on hover, and a colour-coded legend
- * (.sh-zone-legend) underneath the map lists every zone with
- * its details. */
-.sh-zone-label.leaflet-tooltip {
+ * tooltip only surfaces on hover (touch users get the tap popup
+ * bound alongside), and a colour-coded legend (.sh-zone-legend)
+ * underneath the map lists every zone with its details. */
+.sh-zone-tooltip.leaflet-tooltip {
   background: rgba(26, 24, 20, 0.78);
   color: #fff;
   border: none;
@@ -14716,7 +14716,7 @@ a.sh-welcome-card:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   pointer-events: none;
 }
-.sh-zone-label.leaflet-tooltip::before {
+.sh-zone-tooltip.leaflet-tooltip::before {
   display: none;
 }
 
@@ -14738,7 +14738,7 @@ a.sh-welcome-card:hover {
   align-items: center;
   gap: var(--sh-space-xs);
   font-size: var(--sh-font-size-sm);
-  min-height: 32px;
+  min-height: 36px;
 }
 .sh-zone-legend__swatch {
   width: 14px;
@@ -14748,12 +14748,24 @@ a.sh-welcome-card:hover {
   border: 2px solid var(--sh-bg);
   box-shadow: 0 0 0 1px var(--sh-border);
 }
+.sh-zone-legend__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
 .sh-zone-legend__name {
   font-weight: 600;
   color: var(--sh-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.sh-zone-legend__coords {
+  font-family: var(--sh-font-family-mono);
+  font-size: calc(var(--sh-font-size-xs) - 1px);
+  color: var(--sh-text-muted);
+  letter-spacing: 0.02em;
+  line-height: 1.2;
 }
 .sh-zone-legend__meta {
   color: var(--sh-text-muted);
