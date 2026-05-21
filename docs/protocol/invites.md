@@ -71,6 +71,32 @@ sequenceDiagram
     end
 ```
 
+## Receiver-side handoff (SPA)
+
+The SPA layers three equivalent artifacts on top of the same backend
+invite token so the receiver can choose the easiest channel:
+
+- **Invite code** — `socialhome://invite#<base64url(JSON)>`. Single-line,
+  chat-safe. The receiver pastes it into their own Social Home's
+  Spaces → "Join with invite code" card. The payload sits in the URL
+  fragment so a stray paste into a browser address bar never sends the
+  token to anyone's server logs.
+- **Link** — an HTTPS URL anchored on the issuer's `document.baseURI`
+  (so the HA Supervisor ingress prefix is honoured rather than skipped).
+  Lands on `SpaceJoinLanding` which redeems the token via
+  `POST /api/spaces/join`. When the receiver follows this link from
+  the wrong instance, the landing renders the same token back as an
+  invite code + QR so the receiver can finish the handoff on their own
+  home.
+- **QR** — encodes the `socialhome://invite#…` form. For same-room
+  handoffs.
+
+The wire contract between client and server is unchanged: only
+`{token}` ever travels in the `POST /api/spaces/join` body. The
+metadata in the encoded JSON (space_id, space_display_hint,
+issuer_instance_url) is for client-side preview + wrong-instance
+detection only — the server never sees it.
+
 ## Zero-leak guarantee (§D1b)
 
 Every field that would identify which space, which invitee, or which
@@ -93,15 +119,35 @@ home instance so the UI clears local state.
 
 ## Implementation
 
+Backend (federation + persistence):
+
 - `socialhome/services/federation_inbound/space_invites.py` —
   inbound handlers.
 - `socialhome/federation/private_invite_handler.py` — encrypted
   private-invite logic.
 - `socialhome/services/space_service.py` —
   `invite_remote_user()`, `accept_remote_invite()`,
-  `decline_remote_invite()`, `request_join_remote()`.
+  `decline_remote_invite()`, `request_join_remote()`,
+  `create_invite_token()`, `accept_invite_token()`.
 - `socialhome/repositories/space_invitation_repo.py` — pending
   invitations.
+- `socialhome/routes/spaces.py` — REST endpoints
+  (`/api/spaces/{id}/invite-tokens`, `/api/spaces/{id}/remote-invites`,
+  `/api/spaces/join`, `/api/remote_invites/{token}/accept|decline`).
+
+SPA (issuer + receiver side):
+
+- `client/src/lib/spaceInviteCode.ts` — `socialhome://invite#…`
+  build / decode. Decoder accepts the URI form, raw JSON, and bare
+  hex tokens.
+- `client/src/components/SpaceInviteDialog.tsx` — issuer-side share
+  dialog with code / link / QR.
+- `client/src/components/RemoteInviteDialog.tsx` — admin-side
+  targeted-peer picker over `/api/friends`.
+- `client/src/features/spaces/SpaceJoinByCodeCard.tsx` — receiver-side
+  paste-or-scan card on the Spaces dashboard.
+- `client/src/features/spaces/SpaceJoinLanding.tsx` — legacy
+  `/join?token=…` deep-link handler with wrong-instance fallback.
 
 ## Spec references
 
