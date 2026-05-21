@@ -55,6 +55,86 @@ async def test_peek_sender_seq_reflects_next_seq(env):
     assert peek == 2
 
 
+# ── record_received_seq (inbound high-watermark) ───────────────────────────
+
+
+async def test_record_received_seq_advances_high_watermark(env):
+    """First inbound message lifts the watermark from 0 to 1, second to 2, …"""
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=1,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 1
+    )
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=2,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 2
+    )
+
+
+async def test_record_received_seq_never_rewinds(env):
+    """Out-of-order late arrival must not lower the watermark."""
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=5,
+    )
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=2,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 5
+    )
+
+
+async def test_record_received_seq_isolates_senders(env):
+    """Different senders in the same conv are independent rows."""
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+        seq=3,
+    )
+    await env.repo.record_received_seq(
+        conversation_id="c1",
+        sender_user_id="uid-b",
+        seq=7,
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-a",
+        )
+        == 3
+    )
+    assert (
+        await env.repo.peek_sender_seq(
+            conversation_id="c1",
+            sender_user_id="uid-b",
+        )
+        == 7
+    )
+
+
 # ── Gap persistence ────────────────────────────────────────────────────────
 
 

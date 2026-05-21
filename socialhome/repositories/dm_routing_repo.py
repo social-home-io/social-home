@@ -79,6 +79,14 @@ class AbstractDmRoutingRepo(Protocol):
         sender_user_id: str,
     ) -> int: ...
 
+    async def record_received_seq(
+        self,
+        *,
+        conversation_id: str,
+        sender_user_id: str,
+        seq: int,
+    ) -> None: ...
+
     # Gap detection -------------------------------------------------------
     async def insert_gaps(
         self,
@@ -350,6 +358,38 @@ class SqliteDmRoutingRepo:
             (conversation_id, sender_user_id),
         )
         return int(row["last_seq"]) if row else 0
+
+    async def record_received_seq(
+        self,
+        *,
+        conversation_id: str,
+        sender_user_id: str,
+        seq: int,
+    ) -> None:
+        """Advance the (conv, sender) high-watermark to ``seq``.
+
+        Called by the inbound DM handler after each forward (non-replay)
+        envelope. Without this, ``peek_sender_seq`` stays at 0 forever on
+        the receiver side and every message after the first trips a
+        false ``missing=1..N-1`` gap warning. The ``MAX`` clause makes
+        the call safe for late-arriving out-of-order envelopes — they
+        don't rewind the watermark.
+
+        Note: this writes a row keyed on (conv, sender=peer). The
+        ``next_sender_seq`` path writes its own row keyed on
+        (conv, sender=me), so the two callers never contend on the
+        same row.
+        """
+        await self._db.enqueue(
+            """
+            INSERT INTO conversation_sender_sequences(
+                conversation_id, sender_user_id, last_seq
+            ) VALUES(?, ?, ?)
+            ON CONFLICT(conversation_id, sender_user_id) DO UPDATE SET
+                last_seq = MAX(last_seq, excluded.last_seq)
+            """,
+            (conversation_id, sender_user_id, int(seq)),
+        )
 
     # ── Gap detection ──────────────────────────────────────────────────
 

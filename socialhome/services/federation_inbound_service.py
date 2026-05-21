@@ -357,6 +357,18 @@ class FederationInboundService:
                         sender_user_id=sender_user_id,
                         expected_seq=incoming,
                     )
+                # Advance the per-(conv, sender) high-watermark so the
+                # next inbound message compares against the latest seen
+                # value. Without this, ``peek_sender_seq`` stays at 0
+                # forever and every message after the first re-trips the
+                # gap warning above (the symptom that produced the
+                # "missing=1..N" log spam).
+                if incoming > last:
+                    await self._dm_routing_repo.record_received_seq(
+                        conversation_id=conv_id,
+                        sender_user_id=sender_user_id,
+                        seq=incoming,
+                    )
 
         # Cross-household DMs arrive without the conversation ever
         # being created on this instance — the *sender's* household
