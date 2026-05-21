@@ -20,6 +20,24 @@ def test_space_features_roundtrip():
     assert f == f2
 
 
+def test_space_features_gallery_roundtrip():
+    """gallery flag survives to_columns / from_row + appears on the wire."""
+    on = SpaceFeatures(gallery=True)
+    off = SpaceFeatures(gallery=False)
+    assert SpaceFeatures.from_row(on.to_columns()).gallery is True
+    assert SpaceFeatures.from_row(off.to_columns()).gallery is False
+    assert on.to_wire_dict()["gallery"] is True
+    assert off.to_wire_dict()["gallery"] is False
+
+
+def test_space_features_gallery_default_on_missing_column():
+    """A row missing ``feature_gallery`` (pre-0008 spaces from a peer
+    that hasn't migrated yet) defaults to gallery=True so the tab
+    stays visible — matches the dataclass default."""
+    f = SpaceFeatures.from_row({})  # no feature_gallery column at all
+    assert f.gallery is True
+
+
 def test_space_features_access_decision():
     """access_decision returns proceed/queue/deny based on access level and admin status."""
     f = SpaceFeatures(posts_access=SpaceFeatureAccess.MODERATED)

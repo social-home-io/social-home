@@ -34,7 +34,7 @@ function makeSpace(overrides: Partial<{
     join_mode: 'invite_only' as const,
     features: overrides.features ?? {
       calendar: true, todo: true, location: false,
-      stickies: false, pages: true,
+      stickies: false, pages: true, gallery: true,
       posts_access: 'open', pages_access: 'open',
       stickies_access: 'open', calendar_access: 'open',
       tasks_access: 'open',
@@ -99,6 +99,93 @@ describe('SpaceSettings', () => {
     await new Promise(r => setTimeout(r, 0))
     const [, body] = apiMock.patch.mock.calls[0]
     expect(body.retention_days).toBe(0)
+  })
+
+  it('renders the Features fieldset with five toggle checkboxes', () => {
+    const space = makeSpace()
+    const { getByTestId } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-features')
+    const checkboxes = fieldset.querySelectorAll('input[type="checkbox"]')
+    expect(checkboxes.length).toBe(5)
+  })
+
+  it('mirrors the space features in the Features fieldset', () => {
+    const space = makeSpace({
+      features: {
+        calendar: false, todo: true, location: false,
+        stickies: true, pages: false, gallery: true,
+        posts_access: 'open', pages_access: 'open',
+        stickies_access: 'open', calendar_access: 'open',
+        tasks_access: 'open',
+      },
+    })
+    const { getByTestId } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-features')
+    const checkboxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    // Order matches the JSX: pages, calendar, tasks, stickies, gallery.
+    expect(checkboxes.map((c) => c.checked)).toEqual([
+      false, false, true, true, true,
+    ])
+  })
+
+  it('sends all five feature toggles in the PATCH body on save', async () => {
+    apiMock.patch.mockResolvedValueOnce({})
+    const space = makeSpace()
+    const { getByTestId, getByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-features')
+    const checkboxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    // Flip pages OFF (was true) and gallery OFF (was true).
+    fireEvent.change(checkboxes[0], { target: { checked: false } })
+    fireEvent.change(checkboxes[4], { target: { checked: false } })
+    fireEvent.click(getByText('Save changes'))
+    await new Promise(r => setTimeout(r, 0))
+    expect(apiMock.patch).toHaveBeenCalledOnce()
+    const [, body] = apiMock.patch.mock.calls[0]
+    expect(body.features.pages).toBe(false)
+    expect(body.features.calendar).toBe(true)
+    expect(body.features.todo).toBe(true)
+    expect(body.features.stickies).toBe(false)
+    expect(body.features.gallery).toBe(false)
+  })
+
+  it('defaults gallery=true for a pre-migration space whose features lack the key', async () => {
+    apiMock.patch.mockResolvedValueOnce({})
+    const space = makeSpace({
+      features: {
+        // No ``gallery`` key — simulates a row that pre-dates the
+        // 0008 migration. The dataclass default on the backend is
+        // True; the SPA mirrors that so existing spaces still expose
+        // the gallery toggle as on.
+        calendar: false, todo: true, location: false,
+        stickies: false, pages: true,
+        posts_access: 'open', pages_access: 'open',
+        stickies_access: 'open', calendar_access: 'open',
+        tasks_access: 'open',
+      },
+    })
+    const { getByTestId, getByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-features')
+    const checkboxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    // Gallery is the 5th checkbox — should default to checked.
+    expect(checkboxes[4].checked).toBe(true)
+    fireEvent.click(getByText('Save changes'))
+    await new Promise(r => setTimeout(r, 0))
+    const [, body] = apiMock.patch.mock.calls[0]
+    expect(body.features.gallery).toBe(true)
   })
 
   it('preserves typed name across re-renders triggered by sibling state', async () => {
