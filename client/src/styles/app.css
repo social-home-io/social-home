@@ -13502,6 +13502,43 @@ a.sh-welcome-card:hover {
   padding: 0;
   user-select: all;
 }
+/* The three-artifact layout (code / link / QR) used by the invite
+ * dialog. Each artifact is a self-contained card with a label, the
+ * artifact body (code / link / QR image), and one copy button.
+ * Stacks vertically; the QR shrinks on narrow viewports. */
+.sh-invite-artifact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  padding: var(--sh-space-md);
+  background: var(--sh-bg-secondary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+}
+.sh-invite-artifact--primary {
+  border-color: var(--sh-accent);
+  background: var(--sh-bg);
+}
+.sh-invite-artifact--qr {
+  align-items: center;
+  text-align: center;
+}
+.sh-invite-artifact-label {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.sh-invite-artifact .sh-invite-link {
+  /* Override the bordered-block look from .sh-invite-link itself —
+   * the parent .sh-invite-artifact card carries the chrome now. */
+  background: transparent;
+  border: none;
+  padding: 0;
+  word-break: break-all;
+  font-family: var(--sh-font-family-mono);
+  font-size: var(--sh-font-size-sm);
+}
 .sh-share-btn {
   display: inline-flex;
   align-items: center;
