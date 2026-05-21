@@ -10419,6 +10419,54 @@ a.sh-welcome-card:hover {
   .sh-space-subheader {
     margin: 0 calc(-1 * var(--sh-space-md));
     padding: var(--sh-space-sm) var(--sh-space-md);
+    gap: var(--sh-space-xs);
+  }
+  /* Reclaim ~80 px from the tab strip by dropping the "N MEMBERS"
+   * chip below 768 px — the member count is one tap away in the
+   * Members tab and in Space Settings, so the chip is pure
+   * decoration on a viewport where every pixel is fighting for
+   * the user's section nav. */
+  .sh-space-subheader .sh-space-subheader-meta {
+    display: none;
+  }
+  /* Settings action collapses to its glyph on mobile; the full
+   * "Settings" label is desktop-only. The button reshapes into a
+   * proper square 36×36 icon button (matching the @-menu trigger
+   * next to it) so it stops looking like a half-baked pill with
+   * the text hidden — and the aria-label keeps screen readers
+   * informed. */
+  .sh-space-subheader .sh-space-settings-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    font-size: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sh-space-subheader .sh-space-settings-btn::before {
+    content: '⚙';
+    font-size: var(--sh-font-size-md);
+    line-height: 1;
+  }
+}
+
+/* Tap targets on touch screens: 44 px is the Apple HIG /
+ * Material minimum for any primary navigation control. The
+ * underlying ``.sh-tab`` rule sets a smaller padding that's
+ * fine for cursor-driven hover-to-confirm but cramped for
+ * thumbs. */
+@media (pointer: coarse) {
+  .sh-space-subheader .sh-tab {
+    min-height: 44px;
+  }
+  /* Bring every action button up to the 44 px touch-target floor
+   * so a thumb can land on Settings or the @-menu trigger without
+   * a wrist twist. */
+  .sh-space-subheader .sh-space-settings-btn,
+  .sh-space-subheader .sh-notif-prefs-menu__trigger {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 
@@ -10467,6 +10515,95 @@ a.sh-welcome-card:hover {
   box-shadow: var(--sh-shadow-pinned);
   color: var(--sh-primary);
   font-weight: 600;
+}
+
+/* Overflow ⋯ button next to the actions slot. Appears only when
+ * the inline strip has tabs the viewport can't fit (measured via
+ * ResizeObserver on .sh-space-tabs). Clicking opens a vertical
+ * menu of every section so the user never has to guess what's
+ * hidden behind the fade-mask scroll. Visually mirrors the
+ * SpaceNotifPrefsMenu so the two popovers feel like siblings. */
+.sh-space-tabs-overflow {
+  position: relative;
+  flex-shrink: 0;
+}
+.sh-space-tabs-overflow__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: var(--sh-bg);
+  color: var(--sh-text);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  font-size: var(--sh-font-size-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--sh-transition-fast),
+              border-color var(--sh-transition-fast);
+}
+.sh-space-tabs-overflow__trigger:hover,
+.sh-space-tabs-overflow__trigger[aria-expanded='true'] {
+  background: var(--sh-bg-secondary);
+  border-color: var(--sh-border-strong);
+}
+.sh-space-tabs-overflow__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--sh-bg-tertiary);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  box-shadow:
+    0 1px 0 var(--sh-border),
+    0 18px 36px -22px rgba(26, 24, 20, 0.55);
+  z-index: 51;
+}
+.sh-space-tabs-overflow__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--sh-radius-sm);
+  color: var(--sh-text);
+  font-size: var(--sh-font-size-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--sh-transition-fast);
+}
+.sh-space-tabs-overflow__item:hover {
+  background: var(--sh-surface-2);
+}
+.sh-space-tabs-overflow__item:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: -2px;
+  background: var(--sh-surface-2);
+}
+.sh-space-tabs-overflow__item--active {
+  font-weight: 600;
+  color: var(--sh-primary);
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+}
+.sh-space-tabs-overflow__label {
+  flex: 1;
+  min-width: 0;
+}
+.sh-space-tabs-overflow__check {
+  flex-shrink: 0;
+  margin-left: var(--sh-space-sm);
+  color: var(--sh-primary);
+  font-weight: 600;
+}
+@media (pointer: coarse) {
+  .sh-space-tabs-overflow__trigger { min-height: 44px; min-width: 44px; }
+  .sh-space-tabs-overflow__item { min-height: 44px; }
 }
 
 /* Settings button: lives inline in the sub-header on a cream surface

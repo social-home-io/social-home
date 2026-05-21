@@ -11,9 +11,21 @@
  *
  * Purely presentational: the page owns the ``activeTab`` signal and
  * the data-loading callback. We only render and dispatch.
+ *
+ * Mobile overflow: when the strip can't fit every tab in its
+ * container (measured by ``useTabStripOverflow``), a ⋯ More button
+ * appears next to the actions slot and opens a vertical popover
+ * listing every section. The active tab is auto-scrolled into view
+ * on mount + when it changes via ``useScrollActiveTabIntoView``.
  */
 import type { Signal } from '@preact/signals'
+import { useRef } from 'preact/hooks'
 import { Avatar } from './Avatar'
+import {
+  TabOverflowMenu,
+  useScrollActiveTabIntoView,
+  useTabStripOverflow,
+} from './TabStripOverflow'
 
 export type SpaceTab =
   | 'feed'
@@ -45,6 +57,14 @@ export function SpaceSubHeader({
   name, emoji, coverUrl, memberCount,
   activeTab, visibleTabs, onSelectTab, actions,
 }: SpaceSubHeaderProps) {
+  const stripRef = useRef<HTMLElement | null>(null)
+  const overflowing = useTabStripOverflow(stripRef, [visibleTabs])
+  useScrollActiveTabIntoView(stripRef, activeTab.value)
+
+  const labels = Object.fromEntries(
+    visibleTabs.map((t) => [t, tabLabel(t)]),
+  ) as Record<SpaceTab, string>
+
   return (
     <div class="sh-space-subheader" role="presentation">
       <div class="sh-space-subheader-identity">
@@ -56,6 +76,7 @@ export function SpaceSubHeader({
         )}
       </div>
       <nav
+        ref={stripRef}
         class="sh-space-tabs"
         role="tablist"
         aria-label="Space sections"
@@ -77,6 +98,14 @@ export function SpaceSubHeader({
           </button>
         ))}
       </nav>
+      {overflowing && (
+        <TabOverflowMenu<SpaceTab>
+          visibleTabs={visibleTabs}
+          activeTab={activeTab.value}
+          labels={labels}
+          onSelectTab={onSelectTab}
+        />
+      )}
       {actions && (
         <div class="sh-space-subheader-actions">{actions}</div>
       )}

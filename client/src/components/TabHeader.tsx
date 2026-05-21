@@ -1,14 +1,26 @@
 /**
  * TabHeader — generic tab strip used by single-page surfaces that
- * need an in-page tab nav (DM panel, future Bazaar / Calendar
- * sub-views, etc.).
+ * need an in-page tab nav (DM panel, Organize, Highlights, Momentum).
  *
- * Mirrors the visual treatment of :class:`SpaceSubHeader` (terracotta
- * accent on the active tab, pill-shaped buttons, sticky under the
- * TopBar) without the space-specific avatar / member-count chrome.
+ * Mirrors the visual + interaction treatment of :class:`SpaceSubHeader`
+ * (terracotta accent on the active tab, pill-shaped buttons, sticky
+ * under the TopBar) — including the mobile overflow-menu pattern via
+ * the shared :file:`TabStripOverflow` helpers: a ⋯ More button
+ * surfaces next to the actions slot whenever the inline strip can't
+ * fit every tab, opening a vertical popover listing every section
+ * with the active one highlighted. Active tab is auto-scrolled into
+ * view on mount / when it changes so a user who lands on a far-right
+ * tab doesn't see a strip scrolled to the start.
+ *
  * Purely presentational — the host page owns tab state.
  */
 import type { ComponentChildren } from 'preact'
+import { useRef } from 'preact/hooks'
+import {
+  TabOverflowMenu,
+  useScrollActiveTabIntoView,
+  useTabStripOverflow,
+} from './TabStripOverflow'
 
 interface TabHeaderProps<T extends string> {
   /** Identifier of the tab the page treats as active. */
@@ -35,9 +47,13 @@ export function TabHeader<T extends string>({
   ariaLabel,
   actions,
 }: TabHeaderProps<T>) {
+  const stripRef = useRef<HTMLElement | null>(null)
+  const overflowing = useTabStripOverflow(stripRef, [visibleTabs])
+  useScrollActiveTabIntoView(stripRef, activeTab)
+
   return (
     <div class="sh-space-subheader" role="presentation">
-      <nav class="sh-space-tabs" role="tablist" aria-label={ariaLabel}>
+      <nav ref={stripRef} class="sh-space-tabs" role="tablist" aria-label={ariaLabel}>
         {visibleTabs.map((tab) => (
           <button
             key={tab}
@@ -55,6 +71,14 @@ export function TabHeader<T extends string>({
           </button>
         ))}
       </nav>
+      {overflowing && (
+        <TabOverflowMenu<T>
+          visibleTabs={visibleTabs}
+          activeTab={activeTab}
+          labels={labels}
+          onSelectTab={onSelectTab}
+        />
+      )}
       {actions && (
         <div class="sh-space-subheader-actions">{actions}</div>
       )}

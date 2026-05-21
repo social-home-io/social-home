@@ -1,9 +1,49 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, fireEvent } from '@testing-library/preact'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, fireEvent, waitFor } from '@testing-library/preact'
 import { signal } from '@preact/signals'
 import { SpaceSubHeader, type SpaceTab } from './SpaceSubHeader'
 
 const TABS: readonly SpaceTab[] = ['feed', 'members', 'pages', 'calendar', 'gallery']
+const FULL_TABS: readonly SpaceTab[] = [
+  'feed', 'members', 'pages', 'calendar', 'tasks', 'gallery', 'moderation',
+]
+
+// jsdom doesn't lay out, so the overflow detector reads 0 for both
+// ``scrollWidth`` and ``clientWidth`` and the ⋯ button never appears.
+// We monkey-patch ``scrollWidth`` on .sh-space-tabs to simulate an
+// over-stuffed strip the user would see on a 390-px phone.
+function forceOverflow() {
+  Object.defineProperty(HTMLElement.prototype, 'scrollWidth', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.classList?.contains('sh-space-tabs') ? 9999 : 0
+    },
+  })
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    configurable: true,
+    get() { return 300 },
+  })
+}
+
+function restoreLayout() {
+  // ``scrollWidth``/``clientWidth`` are not normally
+  // configurable own properties on HTMLElement — the cast
+  // sidesteps that so the next test starts from the jsdom default.
+  delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth
+  delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth
+}
+
+beforeEach(() => {
+  restoreLayout()
+  // ResizeObserver isn't in jsdom — stub it so the component's
+  // useLayoutEffect doesn't crash.
+  ;(window as unknown as Record<string, unknown>).ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  HTMLElement.prototype.scrollIntoView = vi.fn()
+})
 
 describe('SpaceSubHeader', () => {
   it('renders one tab button per visibleTabs entry, marks the active one selected', () => {
@@ -106,5 +146,124 @@ describe('SpaceSubHeader', () => {
       />,
     )
     expect(getByText('⚙ Settings')).toBeTruthy()
+  })
+
+  // ── Overflow menu ─────────────────────────────────────────────────────
+
+  it('hides the ⋯ overflow trigger when the strip fits', () => {
+    const activeTab = signal<SpaceTab>('feed')
+    const { queryByLabelText } = render(
+      <SpaceSubHeader
+        name="Garden"
+        emoji={null}
+        coverUrl={null}
+        memberCount={null}
+        activeTab={activeTab}
+        visibleTabs={TABS}
+        onSelectTab={() => {}}
+      />,
+    )
+    // jsdom layout = 0 width, so the detector reads "no overflow"
+    // and the trigger never mounts — same as a desktop viewport
+    // where every tab fits.
+    expect(queryByLabelText('More sections')).toBeNull()
+  })
+
+  it('renders the ⋯ overflow trigger when the strip overflows', async () => {
+    forceOverflow()
+    const activeTab = signal<SpaceTab>('feed')
+    const { findByLabelText } = render(
+      <SpaceSubHeader
+        name="Garden"
+        emoji={null}
+        coverUrl={null}
+        memberCount={null}
+        activeTab={activeTab}
+        visibleTabs={FULL_TABS}
+        onSelectTab={() => {}}
+      />,
+    )
+    const trigger = await findByLabelText('More sections')
+    expect(trigger).toBeTruthy()
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('opens the popover with every tab when ⋯ is clicked', async () => {
+    forceOverflow()
+    const activeTab = signal<SpaceTab>('moderation')
+    const { findByLabelText, getByRole } = render(
+      <SpaceSubHeader
+        name="Garden"
+        emoji={null}
+        coverUrl={null}
+        memberCount={null}
+        activeTab={activeTab}
+        visibleTabs={FULL_TABS}
+        onSelectTab={() => {}}
+      />,
+    )
+    const trigger = await findByLabelText('More sections')
+    fireEvent.click(trigger)
+    await waitFor(() => {
+      expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    })
+    const menu = getByRole('menu', { name: 'All sections' })
+    const items = menu.querySelectorAll('button[role="menuitemradio"]')
+    expect(items.length).toBe(FULL_TABS.length)
+    const moderationItem = Array.from(items).find(
+      (el) => el.querySelector('.sh-space-tabs-overflow__label')?.textContent === 'Moderation',
+    )!
+    expect(moderationItem.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('selecting a tab in the popover fires onSelectTab and closes the menu', async () => {
+    forceOverflow()
+    const onSelect = vi.fn()
+    const activeTab = signal<SpaceTab>('feed')
+    const { findByLabelText, getByRole, queryByRole } = render(
+      <SpaceSubHeader
+        name="Garden"
+        emoji={null}
+        coverUrl={null}
+        memberCount={null}
+        activeTab={activeTab}
+        visibleTabs={FULL_TABS}
+        onSelectTab={onSelect}
+      />,
+    )
+    fireEvent.click(await findByLabelText('More sections'))
+    const menu = getByRole('menu', { name: 'All sections' })
+    const gallery = Array.from(
+      menu.querySelectorAll('button[role="menuitemradio"]'),
+    ).find(
+      (el) => el.querySelector('.sh-space-tabs-overflow__label')?.textContent === 'Gallery',
+    ) as HTMLButtonElement
+    fireEvent.click(gallery)
+    expect(onSelect).toHaveBeenCalledWith('gallery')
+    await waitFor(() => {
+      expect(queryByRole('menu', { name: 'All sections' })).toBeNull()
+    })
+  })
+
+  it('Escape closes the overflow menu', async () => {
+    forceOverflow()
+    const activeTab = signal<SpaceTab>('feed')
+    const { findByLabelText, getByRole, queryByRole } = render(
+      <SpaceSubHeader
+        name="Garden"
+        emoji={null}
+        coverUrl={null}
+        memberCount={null}
+        activeTab={activeTab}
+        visibleTabs={FULL_TABS}
+        onSelectTab={() => {}}
+      />,
+    )
+    fireEvent.click(await findByLabelText('More sections'))
+    getByRole('menu', { name: 'All sections' })
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => {
+      expect(queryByRole('menu', { name: 'All sections' })).toBeNull()
+    })
   })
 })
