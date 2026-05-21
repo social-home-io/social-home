@@ -533,4 +533,110 @@ describe('ShoppingPage', () => {
       expect(deletes).toContain('/api/shopping/stores/Aldi')
     })
   })
+
+  it('typing "Milk @" in the quick-add input pops the store autocomplete', async () => {
+    wireApi({
+      items: [],
+      stores: [
+        { name: 'Aldi', sort_order: 0 },
+        { name: 'Migros', sort_order: 1 },
+      ],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-add input')).not.toBeNull()
+    })
+    const input = container.querySelector(
+      '.sh-shopping-add input',
+    ) as HTMLInputElement
+    // Type "Milk @" and put the caret at the end so the autocomplete
+    // sees the @ context.
+    input.value = 'Milk @'
+    input.setSelectionRange(input.value.length, input.value.length)
+    fireEvent.input(input, { target: input })
+
+    await waitFor(() => {
+      const popover = container.querySelector(
+        '.sh-shopping-suggest[aria-label="Pick a store"]',
+      )
+      expect(popover).not.toBeNull()
+    })
+    const chips = Array.from(
+      container.querySelectorAll(
+        '.sh-shopping-suggest[aria-label="Pick a store"] .sh-chip',
+      ),
+    ).map(el => el.textContent)
+    expect(chips).toEqual(expect.arrayContaining(['Aldi', 'Migros']))
+  })
+
+  it('picking a store from the autocomplete splices "@ Store " into the draft', async () => {
+    wireApi({
+      items: [],
+      stores: [
+        { name: 'Aldi', sort_order: 0 },
+        { name: 'Migros', sort_order: 1 },
+      ],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-add input')).not.toBeNull()
+    })
+    const input = container.querySelector(
+      '.sh-shopping-add input',
+    ) as HTMLInputElement
+    input.value = 'Milk @ Al'
+    input.setSelectionRange(input.value.length, input.value.length)
+    fireEvent.input(input, { target: input })
+    await waitFor(() => {
+      const popover = container.querySelector(
+        '.sh-shopping-suggest[aria-label="Pick a store"]',
+      )
+      expect(popover).not.toBeNull()
+    })
+    // The partial "Al" should narrow Aldi but exclude Migros.
+    const chips = Array.from(
+      container.querySelectorAll(
+        '.sh-shopping-suggest[aria-label="Pick a store"] .sh-chip',
+      ),
+    )
+    expect(chips.map(el => el.textContent)).toEqual(['Aldi'])
+
+    fireEvent.click(chips[0] as HTMLElement)
+    await waitFor(() => {
+      expect(input.value).toBe('Milk @ Aldi ')
+    })
+  })
+
+  it('autocomplete is scoped to the current comma-segment', async () => {
+    // Pasting "Milk @ Aldi, Bread" with the caret after "Bread" must
+    // NOT keep the autocomplete open against Aldi's "@" — the comma
+    // ends the previous segment.
+    wireApi({
+      items: [],
+      stores: [{ name: 'Aldi', sort_order: 0 }],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-add input')).not.toBeNull()
+    })
+    const input = container.querySelector(
+      '.sh-shopping-add input',
+    ) as HTMLInputElement
+    input.value = 'Milk @ Aldi, Bread'
+    input.setSelectionRange(input.value.length, input.value.length)
+    fireEvent.input(input, { target: input })
+
+    // Give Preact a tick to re-render then assert NO store popover.
+    await new Promise(r => setTimeout(r, 10))
+    const popover = container.querySelector(
+      '.sh-shopping-suggest[aria-label="Pick a store"]',
+    )
+    expect(popover).toBeNull()
+  })
 })

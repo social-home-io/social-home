@@ -363,4 +363,61 @@ describe('DmThreadPage — jump-down chip integration', () => {
       restore()
     }
   })
+
+  it('renders an inline react chip on each message bubble (desktop affordance)', async () => {
+    // Pre-fix the desktop user had no way to add a reaction: the
+    // ``ReactionPicker`` was only reachable from the touch-only
+    // ``MessageContextSheet`` (long-press). The hover affordance now
+    // sits as a ``.sh-message-react-btn`` next to the existing
+    // ``.sh-message-reply-btn`` so mouse users can open the picker
+    // by clicking the smiley.
+    const restore = stubScrollMetrics({
+      scrollTop: 0, scrollHeight: 600, clientHeight: 600,
+    })
+    try {
+      wireApiMock({
+        conversations: [{
+          id: 'conv-test',
+          type: 'dm',
+          name: null,
+          last_message_at: '2026-05-17T13:00:42+00:00',
+          members: [{ user_id: 'u-bob', username: 'bob', display_name: 'Bob', picture_url: null }],
+          member_count: 2,
+          unread: 0,
+          last_read_at: '2026-05-17T13:00:42+00:00',
+        }],
+        messages: [{
+          id: 'msg-1',
+          sender_user_id: 'u-bob',
+          content: 'hello',
+          type: 'text',
+          media_url: null, file_name: null, mime_type: null,
+          file_size_bytes: null, reply_to_id: null,
+          reactions: [], deleted: false,
+          created_at: '2026-05-17T13:00:42+00:00',
+          edited_at: null,
+        }],
+        members: [{
+          user_id: 'u-bob', username: 'bob', display_name: 'Bob',
+          picture_url: null, is_online: false, is_idle: false, last_seen_at: null,
+        }],
+      })
+      const { render, waitFor } = await import('@testing-library/preact')
+      const { default: DmThreadPage } = await import('./DmThreadPage')
+      const { container } = render(<DmThreadPage />)
+      await waitFor(() => {
+        expect(container.textContent ?? '').toContain('hello')
+      }, { timeout: 3000 })
+      // Both buttons are siblings on the bubble — Reply ↩ closer to
+      // the bubble, React 😊 the further-out chip. The privacy /
+      // hover-CSS contract lives in app.css; this test just pins
+      // that the DOM nodes exist on a non-deleted message.
+      const reactBtn = container.querySelector('.sh-message-react-btn')
+      const replyBtn = container.querySelector('.sh-message-reply-btn')
+      expect(reactBtn).not.toBeNull()
+      expect(replyBtn).not.toBeNull()
+    } finally {
+      restore()
+    }
+  })
 })
