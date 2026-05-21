@@ -1181,3 +1181,95 @@ async def test_update_config_publishes_location_mode_changed(stack):
     )
     assert len(captured) == 2
     assert captured[1].new_mode == "gps"
+
+
+async def test_update_config_publishes_location_feature_enabled_on_off_to_on(stack):
+    """Flipping ``feature_location`` from OFF→ON publishes
+    :class:`SpaceLocationFeatureEnabled` exactly once."""
+    from socialhome.domain.events import SpaceLocationFeatureEnabled
+
+    captured: list[SpaceLocationFeatureEnabled] = []
+
+    async def _capture(ev: SpaceLocationFeatureEnabled) -> None:
+        captured.append(ev)
+
+    stack.space_svc._bus.subscribe(SpaceLocationFeatureEnabled, _capture)
+
+    anna = await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="LocSpace",
+    )
+    # Default feature_location=False → flip to True.
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(location=True),
+    )
+    assert len(captured) == 1
+    assert captured[0].space_id == space.id
+    assert captured[0].space_name == "LocSpace"
+    assert captured[0].actor_user_id == anna.user_id
+
+
+async def test_update_config_does_not_republish_on_idempotent_enable(stack):
+    """Flipping ``feature_location`` True→True does NOT publish."""
+    from socialhome.domain.events import SpaceLocationFeatureEnabled
+
+    captured: list[SpaceLocationFeatureEnabled] = []
+
+    async def _capture(ev: SpaceLocationFeatureEnabled) -> None:
+        captured.append(ev)
+
+    stack.space_svc._bus.subscribe(SpaceLocationFeatureEnabled, _capture)
+
+    _anna = await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="IdempSpace",
+    )
+    # First enable — should publish.
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(location=True),
+    )
+    assert len(captured) == 1
+    # Second enable (True→True) — must NOT publish again.
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(location=True),
+    )
+    assert len(captured) == 1
+
+
+async def test_update_config_does_not_publish_on_off(stack):
+    """Flipping ``feature_location`` True→False does NOT publish."""
+    from socialhome.domain.events import SpaceLocationFeatureEnabled
+
+    captured: list[SpaceLocationFeatureEnabled] = []
+
+    async def _capture(ev: SpaceLocationFeatureEnabled) -> None:
+        captured.append(ev)
+
+    stack.space_svc._bus.subscribe(SpaceLocationFeatureEnabled, _capture)
+
+    _anna = await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="OffSpace",
+    )
+    # Enable then immediately disable — should NOT publish on the disable.
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(location=True),
+    )
+    assert len(captured) == 1
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(location=False),
+    )
+    assert len(captured) == 1  # No additional publish

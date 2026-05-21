@@ -185,6 +185,23 @@ class SpaceLocationModeChanged(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SpaceLocationFeatureEnabled(DomainEvent):
+    """Admin flipped ``feature_location`` from OFF to ON (§23.8.6).
+
+    Published by :class:`SpaceService.update_config` only on the
+    OFF→ON transition (not on idempotent re-enables or other feature
+    toggles). :class:`NotificationService` subscribes and nudges
+    every space member — except the actor — to visit Personal
+    Settings → Privacy → Space location sharing to opt in.
+    """
+
+    space_id: str
+    space_name: str
+    actor_user_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class SpaceZoneUpserted(DomainEvent):
     """A per-space display zone was created or modified (§23.8.7).
 

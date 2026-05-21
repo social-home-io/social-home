@@ -42,10 +42,8 @@ type ExpiryDuration = '30m' | '1h' | '4h' | 'today' | 'none'
 
 const presenceList = signal<PresenceEntry[]>([])
 const loading = signal(true)
-const dndEnabled = signal(false)
 const statusExpiry = signal<ExpiryDuration>('none')
 const showStatusEditor = signal(false)
-const locationSharing = signal(true)
 
 function presenceDot(state: string): string {
   switch (state) {
@@ -72,22 +70,7 @@ export default function PresencePage() {
       presenceList.value = data
       loading.value = false
     })
-    api.get('/api/me/preferences').then((data: { dnd?: boolean; location_sharing?: boolean }) => {
-      if (typeof data.dnd === 'boolean') dndEnabled.value = data.dnd
-      if (typeof data.location_sharing === 'boolean') locationSharing.value = data.location_sharing
-    }).catch(() => {})
   }, [])
-
-  const toggleDnd = async () => {
-    dndEnabled.value = !dndEnabled.value
-    try {
-      await api.patch('/api/me/preferences', { dnd: dndEnabled.value })
-      showToast(dndEnabled.value ? 'Do Not Disturb enabled' : 'Do Not Disturb disabled', 'info')
-    } catch {
-      dndEnabled.value = !dndEnabled.value
-      showToast('Failed to update DND', 'error')
-    }
-  }
 
   const setExpiry = async (duration: ExpiryDuration) => {
     statusExpiry.value = duration
@@ -104,33 +87,12 @@ export default function PresencePage() {
     }
   }
 
-  const toggleLocationSharing = async () => {
-    locationSharing.value = !locationSharing.value
-    try {
-      await api.patch('/api/me/preferences', { location_sharing: locationSharing.value })
-      showToast(locationSharing.value ? 'Location sharing enabled' : 'Location sharing disabled', 'info')
-    } catch {
-      locationSharing.value = !locationSharing.value
-      showToast('Failed to update', 'error')
-    }
-  }
-
   if (loading.value) return <Spinner />
 
   return (
     <div class="sh-presence">
 
       <div class="sh-presence-controls">
-        <label class="sh-toggle-row">
-          <input type="checkbox" checked={dndEnabled.value} onChange={toggleDnd} />
-          Do Not Disturb
-        </label>
-
-        <label class="sh-toggle-row">
-          <input type="checkbox" checked={locationSharing.value} onChange={toggleLocationSharing} />
-          Share my location
-        </label>
-
         <div class="sh-status-expiry">
           <span>Clear status after:</span>
           <div class="sh-expiry-options">
@@ -171,11 +133,7 @@ export default function PresencePage() {
               state: p.state,
             }))}
           height={360}
-          emptyLabel={
-            locationSharing.value
-              ? 'No one is sharing their location right now.'
-              : 'Turn on location sharing above to see the map.'
-          }
+          emptyLabel="No one is sharing their location right now."
         />
         <div class="sh-location-map-footer sh-muted">
           <span>

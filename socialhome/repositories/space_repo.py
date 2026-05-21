@@ -58,6 +58,9 @@ class AbstractSpaceRepo(Protocol):
     async def list_location_shared_spaces_for_user(
         self, user_id: str
     ) -> list[Space]: ...
+    async def list_user_memberships_with_location_feature(
+        self, user_id: str
+    ) -> list[dict]: ...
     async def list_subscriptions_for_user(self, user_id: str) -> list[dict]: ...
     async def list_all(self) -> list[Space]: ...
     async def mark_dissolved(self, space_id: str) -> None: ...
@@ -457,6 +460,42 @@ class SqliteSpaceRepo:
             (user_id,),
         )
         return [s for s in (_row_to_space(d) for d in rows_to_dicts(rows)) if s]
+
+    async def list_user_memberships_with_location_feature(
+        self, user_id: str
+    ) -> list[dict]:
+        """Return every space where *user_id* is a member AND
+        ``feature_location = 1``, sorted by space name.
+
+        Each row carries the fields needed by
+        ``GET /api/me/space-location-sharing``:
+        ``space_id``, ``space_name``, ``space_emoji``,
+        ``location_share_enabled``.
+        """
+        rows = await self._db.fetchall(
+            """
+            SELECT s.id         AS space_id,
+                   s.name       AS space_name,
+                   s.emoji      AS space_emoji,
+                   m.location_share_enabled AS location_share_enabled
+              FROM spaces s
+              JOIN space_members m ON m.space_id = s.id
+             WHERE m.user_id = ?
+               AND s.feature_location = 1
+               AND s.dissolved = 0
+             ORDER BY s.name
+            """,
+            (user_id,),
+        )
+        return [
+            {
+                "space_id": r["space_id"],
+                "space_name": r["space_name"],
+                "space_emoji": r["space_emoji"],
+                "location_share_enabled": bool(r["location_share_enabled"]),
+            }
+            for r in rows_to_dicts(rows)
+        ]
 
     async def list_subscriptions_for_user(self, user_id: str) -> list[dict]:
         """Return ``[{space_id, subscribed_at}]`` for every space where
