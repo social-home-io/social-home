@@ -107,6 +107,13 @@ class AbstractDmRoutingRepo(Protocol):
         expected_seq: int,
     ) -> None: ...
 
+    async def clear_all_gaps_for_sender(
+        self,
+        *,
+        conversation_id: str,
+        sender_user_id: str,
+    ) -> None: ...
+
     # Relay-path diagnostics (service-layer path selection read) ----------
     async def list_relay_paths(
         self,
@@ -446,6 +453,27 @@ class SqliteDmRoutingRepo:
             "DELETE FROM conversation_message_gaps "
             "WHERE conversation_id=? AND sender_user_id=? AND expected_seq=?",
             (conversation_id, sender_user_id, int(expected_seq)),
+        )
+
+    async def clear_all_gaps_for_sender(
+        self,
+        *,
+        conversation_id: str,
+        sender_user_id: str,
+    ) -> None:
+        """Drop every open-gap row for ``(conversation_id, sender_user_id)``.
+
+        Used to clean up the false-positive rows the pre-fix gap detector
+        inserted while the receiver's high-watermark never advanced past 0.
+        Safe to call only when the caller has confirmed the prior watermark
+        WAS 0 — at that point any existing gap row is by construction
+        bogus (you cannot legitimately track "I expected seq=X but it
+        never came" before you've ever received anything).
+        """
+        await self._db.enqueue(
+            "DELETE FROM conversation_message_gaps "
+            "WHERE conversation_id=? AND sender_user_id=?",
+            (conversation_id, sender_user_id),
         )
 
     # ── Relay-path diagnostics ─────────────────────────────────────────

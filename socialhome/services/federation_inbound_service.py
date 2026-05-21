@@ -335,7 +335,26 @@ class FederationInboundService:
                     conversation_id=conv_id,
                     sender_user_id=sender_user_id,
                 )
-                if incoming > last + 1:
+                if last == 0:
+                    # First message ever from this sender on this conv.
+                    # We have no baseline — claiming "everything below
+                    # ``incoming`` is missing" is meaningless. Seed the
+                    # watermark to ``incoming`` and sweep any open-gap
+                    # rows that the pre-fix detector inserted while the
+                    # watermark stayed pinned at 0 (those rows are
+                    # bogus by construction — you can't legitimately
+                    # track missing seqs before you've received
+                    # anything).
+                    await self._dm_routing_repo.clear_all_gaps_for_sender(
+                        conversation_id=conv_id,
+                        sender_user_id=sender_user_id,
+                    )
+                    await self._dm_routing_repo.record_received_seq(
+                        conversation_id=conv_id,
+                        sender_user_id=sender_user_id,
+                        seq=incoming,
+                    )
+                elif incoming > last + 1:
                     missing = list(range(last + 1, incoming))
                     log.warning(
                         "DM gap detected conv=%s sender=%s missing=%d..%d",
@@ -349,6 +368,11 @@ class FederationInboundService:
                         sender_user_id=sender_user_id,
                         expected_seqs=missing,
                     )
+                    await self._dm_routing_repo.record_received_seq(
+                        conversation_id=conv_id,
+                        sender_user_id=sender_user_id,
+                        seq=incoming,
+                    )
                 elif incoming <= last:
                     # Out-of-order delivery resolving a previously-
                     # recorded gap; clear it so the UI banner disappears.
@@ -357,13 +381,9 @@ class FederationInboundService:
                         sender_user_id=sender_user_id,
                         expected_seq=incoming,
                     )
-                # Advance the per-(conv, sender) high-watermark so the
-                # next inbound message compares against the latest seen
-                # value. Without this, ``peek_sender_seq`` stays at 0
-                # forever and every message after the first re-trips the
-                # gap warning above (the symptom that produced the
-                # "missing=1..N" log spam).
-                if incoming > last:
+                else:
+                    # Normal forward case (incoming == last + 1). Just
+                    # advance the high-watermark.
                     await self._dm_routing_repo.record_received_seq(
                         conversation_id=conv_id,
                         sender_user_id=sender_user_id,

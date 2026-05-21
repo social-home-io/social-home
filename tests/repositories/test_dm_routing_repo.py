@@ -171,6 +171,26 @@ async def test_resolve_gap_removes_one(env):
     assert [g["expected_seq"] for g in gaps] == [2, 4]
 
 
+async def test_clear_all_gaps_for_sender_wipes_only_that_sender(env):
+    """``clear_all_gaps_for_sender`` sweeps every row for the (conv, sender)
+    pair — used to scrub the false-positive rows left behind by the
+    pre-fix gap detector. Other senders' rows must survive."""
+    await env.repo.insert_gaps(
+        conversation_id="c1", sender_user_id="uid-a", expected_seqs=[1, 2, 3]
+    )
+    await env.repo.insert_gaps(
+        conversation_id="c1", sender_user_id="uid-b", expected_seqs=[7]
+    )
+    await env.repo.clear_all_gaps_for_sender(
+        conversation_id="c1",
+        sender_user_id="uid-a",
+    )
+    remaining = await env.repo.list_open_gaps("c1")
+    assert [(g["sender_user_id"], g["expected_seq"]) for g in remaining] == [
+        ("uid-b", 7),
+    ]
+
+
 # ── Relay-path listing ─────────────────────────────────────────────────────
 
 
