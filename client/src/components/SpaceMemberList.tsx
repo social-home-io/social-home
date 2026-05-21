@@ -21,6 +21,7 @@ import {
   openSpaceProfileDialog,
 } from './SpaceProfileDialog'
 import { openSpaceInvite } from './SpaceInviteDialog'
+import { openRemoteInviteDialog } from './RemoteInviteDialog'
 import { currentUser } from '@/store/auth'
 
 /** Friendly relative duration for "joined …" — drops the
@@ -205,9 +206,17 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
         <div class="sh-member-list-header">
           <h3>{members.value.length} members</h3>
           {canManage.value && (
-            <Button onClick={() => openSpaceInvite(spaceId)}>
-              + Invite
-            </Button>
+            <div class="sh-member-list-invite-actions">
+              <Button onClick={() => openSpaceInvite(spaceId)}>
+                + Invite
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => openRemoteInviteDialog(spaceId)}
+              >
+                + Invite friend
+              </Button>
+            </div>
           )}
         </div>
         {members.value.map(m => {

@@ -14291,6 +14291,51 @@ a.sh-welcome-card:hover {
   display: flex; justify-content: flex-end; gap: var(--sh-space-xs);
   margin-top: var(--sh-space-md);
 }
+/* RemoteInviteDialog — peer-member picker. Flat list (matches
+ * NewDmDialog's pattern); each row carries a primary name + a muted
+ * "household · last-seen" meta line. */
+.sh-remote-invite-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  max-height: 280px;
+  overflow-y: auto;
+  margin-top: var(--sh-space-sm);
+}
+.sh-remote-invite-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: var(--sh-space-sm) var(--sh-space-md);
+  min-height: 44px;
+  background: var(--sh-bg);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-md);
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+.sh-remote-invite-row:hover { border-color: var(--sh-accent); }
+.sh-remote-invite-row--picked {
+  border-color: var(--sh-accent);
+  background: var(--sh-bg-secondary);
+}
+.sh-remote-invite-row__name {
+  font-weight: 600;
+}
+.sh-remote-invite-row__meta {
+  font-size: var(--sh-font-size-xs);
+  color: var(--sh-text-secondary);
+}
+.sh-remote-invite-picker__empty {
+  padding: var(--sh-space-md);
+}
+.sh-member-list-invite-actions {
+  display: flex;
+  gap: var(--sh-space-xs);
+  flex-wrap: wrap;
+}
 
 .sh-page-header__actions {
   display: flex; gap: var(--sh-space-xs);
