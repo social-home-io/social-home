@@ -2,24 +2,35 @@
  * SpaceJoinLanding — handler for ``/join?token=...`` invite deep-links
  * (spec §23.62).
  *
- * The invite dialog (``SpaceInviteDialog``) generates a URL of the form
- * ``${origin}/join?token=X``. Pasting it into a desktop browser or
- * tapping it on mobile lands here: the page pulls the token out of the
- * query string, POSTs ``/api/spaces/join``, and redirects to the space
- * feed on success. Displays a contextual error message on failure.
+ * Three branches:
+ *
+ *  1. Token consumed cleanly → success card, "Open space" CTA.
+ *  2. Token rejected by the API (404 / 410 / 403) → "wrong instance"
+ *     fallback panel that re-renders the token as a
+ *     ``socialhome://invite#…`` code + QR + Copy CTA, with copy
+ *     telling the receiver to paste it into their own Social Home's
+ *     Spaces → Join with code card. This is the common case under
+ *     HA ingress where a sender shares an HTTPS link that lands the
+ *     receiver on the issuer's instance instead of their own.
+ *  3. Other errors → bare "Couldn't join" message + back button.
  */
 import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
-import { api } from '@/api'
+import { api, ApiError } from '@/api'
+import { addBase } from '@/baseUrl'
+import { buildInviteCode } from '@/lib/spaceInviteCode'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
+import { QrCodeImg } from '@/components/QrCodeImg'
+import { showToast } from '@/components/Toast'
 
-type Status = 'loading' | 'joined' | 'error'
+type Status = 'loading' | 'joined' | 'wrong-instance' | 'error'
 
 const status  = signal<Status>('loading')
 const message = signal<string>('')
 const joined  = signal<{ space_id: string } | null>(null)
+const pasteCode = signal<string>('')
 
 async function consumeToken(token: string) {
   try {
@@ -30,9 +41,23 @@ async function consumeToken(token: string) {
     joined.value = r
     status.value = 'joined'
   } catch (err: unknown) {
+    if (err instanceof ApiError && [403, 404, 410].includes(err.status)) {
+      pasteCode.value = buildInviteCode({ token })
+      status.value = 'wrong-instance'
+      return
+    }
     const msg = (err as Error)?.message ?? String(err)
     message.value = msg || 'Invite link rejected'
     status.value = 'error'
+  }
+}
+
+async function copyCode() {
+  try {
+    await navigator.clipboard.writeText(pasteCode.value)
+    showToast('Code copied!', 'success')
+  } catch {
+    showToast('Could not copy — select the code to copy manually.', 'error')
   }
 }
 
@@ -63,9 +88,33 @@ export default function SpaceJoinLanding() {
       <div class="sh-join-landing sh-card">
         <h2>You're in! 🎉</h2>
         <p>Welcome to the space.</p>
-        <Button onClick={() => loc.route(`/spaces/${joined.value!.space_id}`)}>
+        <Button onClick={() => loc.route(addBase(`/spaces/${joined.value!.space_id}`))}>
           Open space
         </Button>
+      </div>
+    )
+  }
+  if (status.value === 'wrong-instance') {
+    return (
+      <div class="sh-join-landing sh-card" data-testid="join-landing-wrong-instance">
+        <h2>This invite is for another Social Home</h2>
+        <p>
+          Open <strong>your own</strong> Social Home, go to{' '}
+          <strong>Spaces</strong>, and paste this code into the
+          "Join with invite code" card:
+        </p>
+        <code class="sh-invite-link" data-testid="fallback-code">
+          {pasteCode.value}
+        </code>
+        <div class="sh-invite-artifact sh-invite-artifact--qr">
+          <QrCodeImg data={pasteCode.value} size={180} alt="Invite QR code" />
+        </div>
+        <div class="sh-form-actions">
+          <Button variant="secondary" onClick={() => loc.route(addBase('/spaces'))}>
+            Back to spaces
+          </Button>
+          <Button onClick={copyCode}>Copy code</Button>
+        </div>
       </div>
     )
   }
@@ -73,7 +122,7 @@ export default function SpaceJoinLanding() {
     <div class="sh-join-landing sh-card sh-error">
       <h2>Couldn't join</h2>
       <p>{message.value}</p>
-      <Button onClick={() => loc.route('/spaces')}>Back to spaces</Button>
+      <Button onClick={() => loc.route(addBase('/spaces'))}>Back to spaces</Button>
     </div>
   )
 }
