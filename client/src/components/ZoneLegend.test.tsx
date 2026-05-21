@@ -18,13 +18,13 @@ const zone = (over: Partial<SpaceZone> = {}): SpaceZone => ({
 })
 
 describe('ZoneLegend', () => {
-  it('renders one row per zone with name + formatted radius', () => {
+  it('renders one row per zone with name + formatted radius + coords', () => {
     const { container, getByText } = render(
       <ZoneLegend
         zones={[
-          zone({ id: 'a', name: 'Home', radius_m: 150 }),
-          zone({ id: 'b', name: 'Office', radius_m: 1500 }),
-          zone({ id: 'c', name: 'Long range', radius_m: 12000 }),
+          zone({ id: 'a', name: 'Home', radius_m: 150, latitude: 47.3769, longitude: 8.5417 }),
+          zone({ id: 'b', name: 'Office', radius_m: 1500, latitude: 47.3801, longitude: 8.5410 }),
+          zone({ id: 'c', name: 'Long range', radius_m: 12000, latitude: 47.0000, longitude: 8.0000 }),
         ]}
       />,
     )
@@ -34,6 +34,9 @@ describe('ZoneLegend', () => {
     expect(getByText('150 m')).toBeTruthy()
     expect(getByText('1.5 km')).toBeTruthy()
     expect(getByText('12 km')).toBeTruthy()
+    // Coords land on their own row, monospace styled.
+    expect(getByText('47.3769, 8.5417')).toBeTruthy()
+    expect(getByText('47.3801, 8.5410')).toBeTruthy()
   })
 
   it('uses the zone color on the swatch when provided', () => {

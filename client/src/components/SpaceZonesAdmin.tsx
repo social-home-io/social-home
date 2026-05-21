@@ -228,6 +228,7 @@ export function SpaceZonesAdmin({ spaceId }: { spaceId: string }) {
       {draft !== null && (
         <ZoneEditDialog
           draft={draft}
+          existingZones={zones}
           onChange={setDraft}
           onCancel={closeDraft}
           onSave={saveDraft}
@@ -312,11 +313,18 @@ function ZonesPreviewMap({
         // visually, the left-pane list names every one.
         fillOpacity: 0.12,
         weight: 2,
-      }).addTo(layer).bindTooltip(z.name, {
-        direction: 'top',
-        offset: [0, -4],
-        className: 'sh-zone-label',
       })
+        .addTo(layer)
+        .bindTooltip(z.name, {
+          // Desktop hover surface — touch users get the tap popup below.
+          direction: 'top',
+          offset: [0, -4],
+          className: 'sh-zone-tooltip',
+        })
+        .bindPopup(
+          `<strong>${z.name}</strong>`,
+          { closeButton: false, autoPan: false },
+        )
     }
     if (draft && draft.latitude != null && draft.longitude != null) {
       L.circle([draft.latitude, draft.longitude], {
@@ -353,9 +361,13 @@ function ZonesPreviewMap({
 
 
 function ZoneEditDialog({
-  draft, onChange, onCancel, onSave, busy,
+  draft, existingZones, onChange, onCancel, onSave, busy,
 }: {
   draft: DraftZone
+  /** Every zone currently configured on the space. The picker draws
+   *  the OTHERS (excluding the one being edited, if any) as faint
+   *  ghost circles so the admin can avoid accidental overlap. */
+  existingZones: SpaceZone[]
   onChange: (next: DraftZone) => void
   onCancel: () => void
   onSave: () => void
@@ -364,6 +376,7 @@ function ZoneEditDialog({
   const pickerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const markerRef = useRef<L.Circle | null>(null)
+  const ghostLayerRef = useRef<L.LayerGroup | null>(null)
   // Latch the latest draft in a ref so the click-handler closure
   // (registered once at mount) can read fresh radius / colour values.
   const draftRef = useRef(draft)
@@ -374,13 +387,24 @@ function ZoneEditDialog({
   useEffect(() => {
     if (!pickerRef.current) return
     if (mapRef.current) return
-    const initial: L.LatLngExpression =
-      draft.latitude != null && draft.longitude != null
-        ? [draft.latitude, draft.longitude]
-        : [52.0, 5.0]
+    // First-paint centre. If the draft already has coordinates use
+    // those; otherwise fall back to a fit-to-existing-zones rectangle
+    // so the user opens the picker looking at the neighbourhood
+    // they're working in, not a zoom-4 Europe view that hides
+    // everything.
+    const others = existingZones.filter((z) => z.id !== draft.id)
+    let initial: L.LatLngExpression = [52.0, 5.0]
+    let initialZoom = 4
+    if (draft.latitude != null && draft.longitude != null) {
+      initial = [draft.latitude, draft.longitude]
+      initialZoom = 13
+    } else if (others.length > 0) {
+      initial = [others[0].latitude, others[0].longitude]
+      initialZoom = 13
+    }
     const map = L.map(pickerRef.current, {
       center: initial,
-      zoom: draft.latitude != null ? 13 : 4,
+      zoom: initialZoom,
       scrollWheelZoom: 'center',
     })
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -389,6 +413,10 @@ function ZoneEditDialog({
         '&copy; <a href="https://www.openstreetmap.org/copyright">'
         + 'OpenStreetMap</a> contributors',
     }).addTo(map)
+    // Layer for the OTHER zones, drawn beneath the active draft so the
+    // admin can see where existing zones sit and avoid placing the new
+    // one on top of them. Refreshed in a dependent effect below.
+    ghostLayerRef.current = L.layerGroup().addTo(map)
     map.on('click', (ev: L.LeafletMouseEvent) => {
       const lat = Math.round(ev.latlng.lat * 10_000) / 10_000
       const lon = Math.round(ev.latlng.lng * 10_000) / 10_000
@@ -406,8 +434,32 @@ function ZoneEditDialog({
       map.remove()
       mapRef.current = null
       markerRef.current = null
+      ghostLayerRef.current = null
     }
   }, [])
+
+  // Paint every existing zone (except the one being edited) as a faint
+  // ghost circle on the picker so the admin can see overlap before
+  // committing.
+  useEffect(() => {
+    const layer = ghostLayerRef.current
+    if (!layer) return
+    layer.clearLayers()
+    for (const z of existingZones) {
+      if (z.id === draft.id) continue
+      const colour = z.color || PALETTE[0]
+      L.circle([z.latitude, z.longitude], {
+        radius: z.radius_m,
+        color: colour,
+        opacity: 0.45,
+        fillColor: colour,
+        fillOpacity: 0.06,
+        weight: 1.5,
+        dashArray: '3 4',
+        interactive: false,
+      }).addTo(layer)
+    }
+  }, [existingZones, draft.id])
 
   useEffect(() => {
     const map = mapRef.current

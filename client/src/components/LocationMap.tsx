@@ -178,11 +178,21 @@ export function LocationMap({
         // legend underneath spells out the names.
         fillOpacity: 0.12,
         weight: 2,
-      }).addTo(zoneLayer).bindTooltip(z.name, {
-        direction: 'top',
-        offset: [0, -4],
-        className: 'sh-zone-label',
       })
+        .addTo(zoneLayer)
+        .bindTooltip(z.name, {
+          // Desktop hover surface — invisible to touch devices,
+          // so we also bind a popup below for tap discoverability.
+          direction: 'top',
+          offset: [0, -4],
+          className: 'sh-zone-tooltip',
+        })
+        .bindPopup(
+          // Tap-on-touch surface. Plain text keeps the popup small;
+          // the legend below the map has the full detail row.
+          `<strong>${z.name}</strong>`,
+          { closeButton: false, autoPan: false },
+        )
       circles.push(c)
     }
     // When there are no marker pins to drive the viewport, fit the
