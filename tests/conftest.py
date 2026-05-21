@@ -107,6 +107,25 @@ class _FakePeerConnection:
         self._incoming_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
         self._tasks: list[asyncio.Task] = []
+        # Tracks the last set_local_description / set_remote_description calls
+        # to expose a realistic ``signaling_state`` used by perfect negotiation.
+        self._local_type: str | None = None
+        self._remote_type: str | None = None
+
+    @property
+    def signaling_state(self) -> str:
+        """Return a WebRTC-style signaling state based on local/remote types."""
+        if self._closed:
+            return "closed"
+        if self._local_type == "offer" and self._remote_type is None:
+            return "have-local-offer"
+        if self._remote_type == "offer" and self._local_type is None:
+            return "have-remote-offer"
+        if self._local_type == "answer":
+            return "have-local-answer"
+        if self._remote_type == "answer":
+            return "stable"
+        return "stable"
 
     async def create_data_channel(self, label: str, options=None):
         ch = _FakeDataChannel(label)
@@ -114,9 +133,11 @@ class _FakePeerConnection:
         return ch
 
     async def set_local_description(self, type_: str = "offer"):
+        self._local_type = type_
         return _FakeLocalDescription(sdp=_STUB_SDP, type=type_)
 
     async def set_remote_description(self, sdp: str, type_: str) -> None:
+        self._remote_type = type_
         return None
 
     async def add_remote_candidate(self, candidate: str, mid: str = "") -> None:
