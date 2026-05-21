@@ -547,7 +547,14 @@ class _RtcPeer:
                 pass
             self._pc = None
         self._channel = None
-        # Reset the ICE-candidate gate so the new PC starts clean.
+        # Wake any coroutines parked in ``add_ice_candidate`` on the OLD
+        # event before swapping in a fresh one. Without this they sit on
+        # the old (never-set) event until the 30-second buffer timeout
+        # fires — re-creating exactly the dropped-candidate symptom
+        # PR #371 fixed. Once they wake, they either find ``_pc is None``
+        # and return, or hit the new PC's ``add_remote_candidate`` and
+        # get harmlessly rejected by the existing ``RTCError`` guard.
+        self._remote_description_applied.set()
         self._remote_description_applied = asyncio.Event()
 
     def close(self) -> None:
