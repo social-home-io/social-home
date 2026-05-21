@@ -457,6 +457,30 @@ export default function DmThreadPage() {
     return () => document.body.classList.remove('sh-dm-thread-open')
   }, [])
 
+  // Tell the backend "I have this thread open right now" so inbound
+  // DMs on this conversation skip the notification bell + push for
+  // this user. Mirrors the backend's ``WebSocketManager
+  // .set_active_conversation``; the SPA side only sends the frame
+  // (no reply expected). Re-emitted on tab visibility flip so the
+  // backend stops suppressing when the user tabs away — without
+  // that, a backgrounded tab would silently swallow notifications
+  // forever, which is worse than the original bug.
+  useEffect(() => {
+    if (!convId) return
+    const emit = (id: string | null) => {
+      ws.send('dm.active', { conversation_id: id })
+    }
+    emit(convId)
+    const onVis = () => {
+      emit(document.visibilityState === 'visible' ? convId : null)
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      emit(null)
+    }
+  }, [convId])
+
   const messageCount = messages.value.length
   const lastTailMessageId = useRef<string | null>(null)
   const isLoading = loading.value

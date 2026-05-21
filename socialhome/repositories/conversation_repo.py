@@ -72,6 +72,9 @@ class AbstractConversationRepo(Protocol):
     async def save_message(
         self, message: ConversationMessage
     ) -> ConversationMessage: ...
+    async def save_message_returning_created(
+        self, message: ConversationMessage
+    ) -> tuple[ConversationMessage, bool]: ...
     async def get_message(self, message_id: str) -> ConversationMessage | None: ...
     async def list_messages(
         self,
@@ -394,54 +397,60 @@ class SqliteConversationRepo:
 
     # ── Messages ───────────────────────────────────────────────────────
 
+    _MESSAGE_UPSERT_SQL = """
+        INSERT INTO conversation_messages(
+            id, conversation_id, sender_user_id, content, type, media_url,
+            file_name, mime_type, file_size_bytes,
+            media_blob_id, media_sync_status,
+            reply_to_id, reply_to_highlight_frame_id,
+            reply_to_highlight_frame_snapshot,
+            deleted, edited_at, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
+        ON CONFLICT(id) DO UPDATE SET
+            content=excluded.content,
+            media_url=excluded.media_url,
+            file_name=excluded.file_name,
+            mime_type=excluded.mime_type,
+            file_size_bytes=excluded.file_size_bytes,
+            media_blob_id=excluded.media_blob_id,
+            media_sync_status=excluded.media_sync_status,
+            type=excluded.type,
+            reply_to_id=excluded.reply_to_id,
+            reply_to_highlight_frame_id=excluded.reply_to_highlight_frame_id,
+            reply_to_highlight_frame_snapshot=excluded.reply_to_highlight_frame_snapshot,
+            deleted=excluded.deleted,
+            edited_at=excluded.edited_at
+        """
+
+    @staticmethod
+    def _message_upsert_params(message: ConversationMessage) -> tuple:
+        return (
+            message.id,
+            message.conversation_id,
+            message.sender_user_id,
+            message.content,
+            message.type,
+            message.media_url,
+            message.file_name,
+            message.mime_type,
+            message.file_size_bytes,
+            message.media_blob_id,
+            message.media_sync_status,
+            message.reply_to_id,
+            message.reply_to_highlight_frame_id,
+            message.reply_to_highlight_frame_snapshot,
+            int(message.deleted),
+            _iso(message.edited_at),
+            _iso(message.created_at),
+        )
+
     async def save_message(
         self,
         message: ConversationMessage,
     ) -> ConversationMessage:
         await self._db.enqueue(
-            """
-            INSERT INTO conversation_messages(
-                id, conversation_id, sender_user_id, content, type, media_url,
-                file_name, mime_type, file_size_bytes,
-                media_blob_id, media_sync_status,
-                reply_to_id, reply_to_highlight_frame_id,
-                reply_to_highlight_frame_snapshot,
-                deleted, edited_at, created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
-            ON CONFLICT(id) DO UPDATE SET
-                content=excluded.content,
-                media_url=excluded.media_url,
-                file_name=excluded.file_name,
-                mime_type=excluded.mime_type,
-                file_size_bytes=excluded.file_size_bytes,
-                media_blob_id=excluded.media_blob_id,
-                media_sync_status=excluded.media_sync_status,
-                type=excluded.type,
-                reply_to_id=excluded.reply_to_id,
-                reply_to_highlight_frame_id=excluded.reply_to_highlight_frame_id,
-                reply_to_highlight_frame_snapshot=excluded.reply_to_highlight_frame_snapshot,
-                deleted=excluded.deleted,
-                edited_at=excluded.edited_at
-            """,
-            (
-                message.id,
-                message.conversation_id,
-                message.sender_user_id,
-                message.content,
-                message.type,
-                message.media_url,
-                message.file_name,
-                message.mime_type,
-                message.file_size_bytes,
-                message.media_blob_id,
-                message.media_sync_status,
-                message.reply_to_id,
-                message.reply_to_highlight_frame_id,
-                message.reply_to_highlight_frame_snapshot,
-                int(message.deleted),
-                _iso(message.edited_at),
-                _iso(message.created_at),
-            ),
+            self._MESSAGE_UPSERT_SQL,
+            self._message_upsert_params(message),
         )
         # Bump conversation timestamp so list_for_user ordering is fresh.
         await self.touch_last_message(
@@ -449,6 +458,98 @@ class SqliteConversationRepo:
             at=_iso(message.created_at),
         )
         return message
+
+    async def save_message_returning_created(
+        self,
+        message: ConversationMessage,
+    ) -> tuple[ConversationMessage, bool]:
+        """Upsert *message* and report whether the row was newly
+        inserted (True) or replaced an existing row (False).
+
+        Used by the federation inbound DM handler to distinguish
+        "this is a brand-new message → publish DmMessageCreated"
+        from "this is a redelivery / edit of a message I already
+        have → publish DmMessageUpdated (or nothing for an exact
+        replay)".
+
+        The check is **race-safe**: a transport that races a second
+        copy of the same envelope under perfect-negotiation WebRTC +
+        HTTPS-inbox failover sees exactly one ``created=True`` even
+        when both copies hit the repo concurrently. The previous
+        peek-then-save pattern in the inbound handler raced because
+        both transports could see ``existing=None`` before either
+        wrote, and both would then publish ``DmMessageCreated`` →
+        the user got two bell rows + two pushes for one message.
+        ``BEGIN IMMEDIATE`` here serialises against any concurrent
+        writer.
+        """
+        params = self._message_upsert_params(message)
+
+        def _do(conn):
+            # ``INSERT OR IGNORE`` returns rowcount=0 when the row
+            # already exists; rowcount=1 means we inserted. Either
+            # way the conversation timestamp gets bumped below.
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO conversation_messages(
+                    id, conversation_id, sender_user_id, content, type,
+                    media_url, file_name, mime_type, file_size_bytes,
+                    media_blob_id, media_sync_status,
+                    reply_to_id, reply_to_highlight_frame_id,
+                    reply_to_highlight_frame_snapshot,
+                    deleted, edited_at, created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
+                """,
+                params,
+            )
+            inserted = cur.rowcount == 1
+            if not inserted:
+                # Existing row — apply the same UPDATE the upsert
+                # path would have done, so an edit / voice-note
+                # transcript still patches the bubble in place.
+                conn.execute(
+                    """
+                    UPDATE conversation_messages SET
+                        content=?,
+                        media_url=?,
+                        file_name=?,
+                        mime_type=?,
+                        file_size_bytes=?,
+                        media_blob_id=?,
+                        media_sync_status=?,
+                        type=?,
+                        reply_to_id=?,
+                        reply_to_highlight_frame_id=?,
+                        reply_to_highlight_frame_snapshot=?,
+                        deleted=?,
+                        edited_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        message.content,
+                        message.media_url,
+                        message.file_name,
+                        message.mime_type,
+                        message.file_size_bytes,
+                        message.media_blob_id,
+                        message.media_sync_status,
+                        message.type,
+                        message.reply_to_id,
+                        message.reply_to_highlight_frame_id,
+                        message.reply_to_highlight_frame_snapshot,
+                        int(message.deleted),
+                        _iso(message.edited_at),
+                        message.id,
+                    ),
+                )
+            return inserted
+
+        inserted = await self._db.transact(_do)
+        await self.touch_last_message(
+            message.conversation_id,
+            at=_iso(message.created_at),
+        )
+        return message, inserted
 
     async def get_message(
         self,

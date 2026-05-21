@@ -97,6 +97,7 @@ class NotificationService:
         "_adapter",
         "_calendar_repo",
         "_personal_calendar_repo",
+        "_ws_manager",
     )
 
     def __init__(
@@ -124,6 +125,11 @@ class NotificationService:
         # handler degrades to "no personal notifications", which is safer
         # than the old "fan to every household member" behavior.
         self._personal_calendar_repo = None
+        # WebSocketManager — optional. Used by :meth:`on_dm_message_created`
+        # to skip the bell row + push when the recipient has the DM
+        # thread open in any of their tabs. Without it the service
+        # degrades to the pre-fix behaviour (always notify).
+        self._ws_manager = None
 
     def attach_push_service(self, push_service) -> None:
         """Attach a :class:`PushService` to fan out Web Push alongside the
@@ -155,6 +161,13 @@ class NotificationService:
         so the user gets the notification on every registered surface.
         """
         self._adapter = adapter
+
+    def attach_ws_manager(self, ws_manager) -> None:
+        """Attach the :class:`WebSocketManager` so DM notifications can
+        skip recipients who have the thread open right now. See the
+        docstring on :meth:`on_dm_message_created` for the rationale.
+        """
+        self._ws_manager = ws_manager
 
     async def _save_notif(self, note, *, dedupe_by_link: bool = False):
         """Persist + publish ``NotificationCreated`` + fire title-only
@@ -404,6 +417,16 @@ class NotificationService:
         bell with N entries. The companion :meth:`mark_read_for_dm`
         clears that row when the recipient opens the thread, so the
         next message after opening starts a fresh row.
+
+        Active-viewer suppression: when the recipient already has the
+        DM thread open in any of their tabs (the SPA emits
+        ``{type: 'dm.active', data: {conversation_id}}`` over WS on
+        mount), we skip the bell row AND the push for that recipient.
+        The message itself still renders via the regular DM broadcast
+        path; only the notification noise is gone. Without an attached
+        ``WebSocketManager`` we degrade to the pre-fix behaviour
+        (always notify) so unit tests that don't wire the manager
+        don't have to mock it.
         """
         if not event.recipient_user_ids:
             return
@@ -419,6 +442,13 @@ class NotificationService:
             # cross-household DM.
             local = await self._users.get_by_user_id(recipient_id)
             if local is None:
+                continue
+            if self._ws_manager is not None and (
+                self._ws_manager.is_user_active_in_conversation(
+                    recipient_id,
+                    event.conversation_id,
+                )
+            ):
                 continue
             await self._save_notif(
                 new_notification(

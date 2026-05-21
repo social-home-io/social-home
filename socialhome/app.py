@@ -1221,6 +1221,9 @@ def create_app(config: Config | None = None) -> web.Application:
     push_service = PushService(sub_repo=push_sub_repo, vapid=vapid)
     # Hook push fan-out into the notification service (§25.3 — title only).
     notification_service.attach_push_service(push_service)
+    # Let the DM notification path skip recipients with the thread
+    # open — see :meth:`NotificationService.on_dm_message_created`.
+    notification_service.attach_ws_manager(ws_manager)
 
     # ── Search (FTS5) ─────────────────────────────────────────────────────
     search_service = SearchService(bus, search_repo)

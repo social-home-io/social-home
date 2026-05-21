@@ -50,6 +50,13 @@ def _evt(
 def svc():
     bus = _RecordingBus()
     convo = AsyncMock()
+    # The inbound DM handler now calls
+    # ``save_message_returning_created`` (race-safe insert detection).
+    # AsyncMock's default return shape is a MagicMock, which won't
+    # unpack — give it a real 2-tuple so the handler sees ``created=
+    # True`` and publishes ``DmMessageCreated`` as the old peek-then-
+    # save path used to.
+    convo.save_message_returning_created.return_value = (object(), True)
     sp_post = AsyncMock()
     sp_repo = AsyncMock()
     user_repo = AsyncMock()
@@ -78,7 +85,7 @@ def svc():
 
 async def test_dm_message_missing_fields_noops(svc):
     await svc.svc._on_dm_message(_evt("DM_MESSAGE", {}))
-    svc.convo.save_message.assert_not_awaited()
+    svc.convo.save_message_returning_created.assert_not_awaited()
     assert svc.bus.events == []
 
 
@@ -96,7 +103,7 @@ async def test_dm_message_bad_type_falls_back_to_text(svc):
             },
         ),
     )
-    svc.convo.save_message.assert_awaited_once()
+    svc.convo.save_message_returning_created.assert_awaited_once()
 
 
 async def test_dm_deleted_missing_id_noops(svc):
