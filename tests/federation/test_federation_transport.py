@@ -769,3 +769,265 @@ async def test_rtc_peer_close_is_idempotent():
     assert len(received) == 1
     assert received[0].instance_id == "peer-double-close"
     assert received[0].transport == "https"
+
+
+# ─── Perfect negotiation (glare resolution) ───────────────────────────────
+#
+# When two paired peers both fire ``start_offer`` simultaneously, both
+# sides POST an OFFER via HTTPS inbox. Without perfect negotiation both
+# sides' ``accept_offer`` would clobber their own pending PeerConnection
+# and ICE would never converge. The tests below pin the correct behaviour:
+#
+#  - impolite side (lex-smaller own_id > peer_id = False) ignores
+#    the incoming OFFER and keeps its own pending offer alive.
+#  - polite side (lex-smaller own_id > peer_id = True) rolls back its
+#    pending offer and accepts the impolite peer's OFFER instead.
+#  - After rollback a stale ANSWER (for the polite side's now-cancelled
+#    offer) is silently dropped.
+#  - The politeness role is symmetric and deterministic for any pair
+#    of instance-ids.
+
+_STUB_SDP = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\na=mock\r\n"
+
+
+async def _make_peer(
+    own_id: str,
+    peer_id: str,
+    *,
+    signal: _FakeSignaler | None = None,
+) -> tuple[_RtcPeer, _FakeSignaler]:
+    """Helper: create a ``_RtcPeer`` for *peer_id* as seen from *own_id*."""
+    if signal is None:
+        signal = _FakeSignaler()
+
+    async def _signaling(et, payload):
+        signal.events.append((peer_id, et, payload))
+        return DeliveryResult(instance_id=peer_id, ok=True, status_code=200)
+
+    async def _inbound(_envelope):
+        return None
+
+    peer = _RtcPeer(
+        instance_id=peer_id,
+        ice_servers=None,
+        signaling=_signaling,
+        inbound=_inbound,
+        polite=own_id > peer_id,
+    )
+    return peer, signal
+
+
+async def test_politeness_role_assignment():
+    """Lex comparison is deterministic regardless of call-site perspective.
+
+    If own_id="aaaa" and peer_id="bbbb":
+      - A's perspective: own "aaaa" > peer "bbbb" = False → A is impolite
+      - B's perspective: own "bbbb" > peer "aaaa" = True  → B is polite
+    """
+    peer_a_for_b, _ = await _make_peer("aaaa", "bbbb")  # A's _RtcPeer for B
+    peer_b_for_a, _ = await _make_peer("bbbb", "aaaa")  # B's _RtcPeer for A
+
+    assert peer_a_for_b._polite is False, "A (smaller id) should be impolite"
+    assert peer_b_for_a._polite is True, "B (larger id) should be polite"
+
+
+async def test_no_glare_baseline():
+    """Only A initiates; B receives the OFFER and replies normally.
+
+    Assert: A ends in have-local-offer (after start_offer), B ends in
+    have-local-answer (after accept_offer), no rollback logged.
+    """
+    signal_a = _FakeSignaler()
+    signal_b = _FakeSignaler()
+    peer_a, _ = await _make_peer("aaaa", "bbbb", signal=signal_a)
+    peer_b, _ = await _make_peer("bbbb", "aaaa", signal=signal_b)
+
+    # A starts an offer.
+    await peer_a.start_offer()
+    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._making_offer is True
+
+    # B receives A's offer and replies.
+    offer_sdp = _STUB_SDP
+    await peer_b.accept_offer(sdp=offer_sdp, from_instance="aaaa")
+    assert peer_b._pc is not None
+    assert peer_b._pc.signaling_state in ("have-local-answer", "stable")
+
+    # Verify no rollback log: peer_b sent an ANSWER, not just silence.
+    answer_events = [
+        e for e in signal_b.events if e[1] is FederationEventType.FEDERATION_RTC_ANSWER
+    ]
+    assert answer_events, "B should have sent an ANSWER"
+
+    # A applies B's answer.
+    ok = await peer_a.apply_answer(sdp=_STUB_SDP, from_instance="bbbb")
+    assert ok is True
+    assert peer_a._making_offer is False
+
+    peer_a.close()
+    peer_b.close()
+
+
+async def test_glare_impolite_ignores_incoming_offer():
+    """Impolite side (own_id < peer_id) ignores an incoming OFFER while
+    making its own offer.  The impolite PC stays in have-local-offer and
+    no ANSWER is posted.
+    """
+    # A ("aaaa") is impolite: "aaaa" > "bbbb" is False.
+    signal_a = _FakeSignaler()
+    peer_a, _ = await _make_peer("aaaa", "bbbb", signal=signal_a)
+
+    # A starts its own offer.
+    await peer_a.start_offer()
+    assert peer_a._making_offer is True
+    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+
+    # B's OFFER arrives — impolite A should ignore it.
+    await peer_a.accept_offer(sdp=_STUB_SDP, from_instance="bbbb")
+
+    # A's PC must still be the original one (in have-local-offer state).
+    assert peer_a._pc is not None
+    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._making_offer is True  # still in "making offer" window
+
+    # A must NOT have sent an ANSWER.
+    answer_events = [
+        e for e in signal_a.events if e[1] is FederationEventType.FEDERATION_RTC_ANSWER
+    ]
+    assert not answer_events, "Impolite side must not send an ANSWER on glare"
+
+    peer_a.close()
+
+
+async def test_glare_polite_side_rolls_back_and_accepts():
+    """Polite side (own_id > peer_id) rolls back its pending offer and
+    accepts the impolite peer's incoming OFFER.
+
+    Sequence:
+      1. B starts an offer (B is polite: "bbbb" > "aaaa").
+      2. B receives A's OFFER while its own is pending → rollback.
+      3. B builds a fresh answerer PC and sends an ANSWER.
+    """
+    signal_b = _FakeSignaler()
+    peer_b, _ = await _make_peer("bbbb", "aaaa", signal=signal_b)
+
+    # B starts its own offer.
+    await peer_b.start_offer()
+    original_pc = peer_b._pc
+    assert peer_b._making_offer is True
+    assert original_pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+
+    # A's OFFER arrives while B is making an offer → polite rollback.
+    await peer_b.accept_offer(sdp=_STUB_SDP, from_instance="aaaa")
+
+    # B must have built a NEW PC (the original was closed on rollback).
+    assert peer_b._pc is not original_pc, "Polite side must create a fresh PC"
+    assert peer_b._making_offer is False, "making_offer must be cleared after rollback"
+
+    # B must have sent an ANSWER.
+    answer_events = [
+        e for e in signal_b.events if e[1] is FederationEventType.FEDERATION_RTC_ANSWER
+    ]
+    assert answer_events, "Polite side must send an ANSWER after rollback"
+
+    peer_b.close()
+
+
+async def test_late_answer_after_rollback_is_ignored():
+    """After polite rollback, a stale ANSWER arriving for the cancelled
+    offer is silently dropped — no exception, no state corruption.
+    """
+    signal_b = _FakeSignaler()
+    peer_b, _ = await _make_peer("bbbb", "aaaa", signal=signal_b)
+
+    # B starts offer, then rolls back by accepting A's offer.
+    await peer_b.start_offer()
+    await peer_b.accept_offer(sdp=_STUB_SDP, from_instance="aaaa")
+
+    # Now B is in answerer mode; a late ANSWER for B's cancelled offer
+    # arrives.  The PC is no longer in have-local-offer → ignored.
+    ok = await peer_b.apply_answer(sdp=_STUB_SDP, from_instance="aaaa")
+    assert ok is False, "Stale ANSWER after rollback must be ignored"
+
+    peer_b.close()
+
+
+async def test_full_glare_resolution_end_to_end():
+    """Full glare scenario: A and B both call start_offer simultaneously.
+
+    A ("aaaa") is impolite; B ("bbbb") is polite.
+
+    Expected outcome:
+      - A ignores B's OFFER (impolite path).
+      - B rolls back and sends ANSWER for A's OFFER (polite path).
+      - A applies B's ANSWER; ICE converges on one OFFER→ANSWER cycle.
+      - Only one ANSWER is delivered end-to-end.
+    """
+    signal_a = _FakeSignaler()
+    signal_b = _FakeSignaler()
+    peer_a, _ = await _make_peer("aaaa", "bbbb", signal=signal_a)
+    peer_b, _ = await _make_peer("bbbb", "aaaa", signal=signal_b)
+
+    # Both sides fire start_offer "simultaneously".
+    await peer_a.start_offer()
+    await peer_b.start_offer()
+
+    # Cross-deliver the offers.
+    await peer_a.accept_offer(sdp=_STUB_SDP, from_instance="bbbb")  # A ignores
+    await peer_b.accept_offer(sdp=_STUB_SDP, from_instance="aaaa")  # B rolls back
+
+    # A's PC must still be the original offerer (have-local-offer).
+    assert peer_a._pc is not None
+    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._making_offer is True
+
+    # B must have sent exactly one ANSWER.
+    b_answers = [
+        e for e in signal_b.events if e[1] is FederationEventType.FEDERATION_RTC_ANSWER
+    ]
+    assert len(b_answers) == 1, (
+        f"Expected exactly one ANSWER from B, got {len(b_answers)}"
+    )
+
+    # A applies B's ANSWER.
+    ok = await peer_a.apply_answer(sdp=_STUB_SDP, from_instance="bbbb")
+    assert ok is True
+    assert peer_a._making_offer is False
+
+    # No ANSWER from A (impolite; kept its own offer).
+    a_answers = [
+        e for e in signal_a.events if e[1] is FederationEventType.FEDERATION_RTC_ANSWER
+    ]
+    assert not a_answers, "Impolite side must never send an ANSWER on glare"
+
+    peer_a.close()
+    peer_b.close()
+
+
+async def test_no_glare_on_subsequent_send():
+    """After pairing, a second ``transport.send`` does NOT re-trigger
+    ``_ensure_handshake`` — the peer is already in ``_peers``.
+    """
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+    )
+    inst = _fake_instance("peer-ng")
+
+    # First send: no peer yet → creates peer + starts handshake.
+    await t.send(instance=inst, envelope_dict={"msg_id": "1"})
+    offer_count_after_first = sum(
+        1 for e in signal.events if e[1] is FederationEventType.FEDERATION_RTC_OFFER
+    )
+    assert offer_count_after_first == 1, "First send must trigger exactly one OFFER"
+    assert "peer-ng" in t._peers
+
+    # Second send: peer already registered → no new handshake, no new OFFER.
+    await t.send(instance=inst, envelope_dict={"msg_id": "2"})
+    offer_count_after_second = sum(
+        1 for e in signal.events if e[1] is FederationEventType.FEDERATION_RTC_OFFER
+    )
+    assert offer_count_after_second == 1, "Second send must NOT trigger another OFFER"

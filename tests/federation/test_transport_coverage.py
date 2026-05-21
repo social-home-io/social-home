@@ -168,7 +168,9 @@ async def test_peer_apply_answer_match_returns_true():
 
 
 async def test_peer_apply_answer_when_pc_missing_is_safe():
-    """After ``close()`` the pc is None — apply_answer must not crash."""
+    """After ``close()`` the pc is None — apply_answer must not crash and
+    returns ``False`` (perfect-negotiation guard: no pending offer, so
+    this ANSWER is stale and should be silently dropped)."""
     events, signaling = await _collect_signals()
     peer = _RtcPeer(
         instance_id="p",
@@ -176,9 +178,10 @@ async def test_peer_apply_answer_when_pc_missing_is_safe():
         signaling=signaling,
         inbound=_noop_inbound,
     )
-    # No start_offer called → no expected_answer_from set → no S-14 block.
+    # No start_offer called → pc is None → signaling_state guard fires,
+    # returns False (stale ANSWER is ignored rather than crashing).
     ok = await peer.apply_answer(sdp="x", from_instance="whoever")
-    assert ok is True
+    assert ok is False
 
 
 async def test_peer_add_ice_candidate_empty_is_noop():
@@ -300,6 +303,8 @@ async def test_peer_apply_answer_releases_buffered_ice():
     applied: list[tuple[str, str]] = []
 
     class _StubPc:
+        signaling_state = "have-local-offer"
+
         async def add_remote_candidate(self, candidate, sdp_mid):
             applied.append((candidate, sdp_mid))
 

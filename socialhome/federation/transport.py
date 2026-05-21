@@ -190,6 +190,8 @@ class _RtcPeer:
         "_remote_description_applied",
         "_bus",
         "_published_open",
+        "_polite",
+        "_making_offer",
     )
 
     def __init__(
@@ -201,6 +203,7 @@ class _RtcPeer:
         inbound: _InboundCallback,
         send_hwm: int = SEND_HWM_BYTES,
         bus: "EventBus | None" = None,
+        polite: bool = False,
     ) -> None:
         self.instance_id = instance_id
         self._ice_servers = ice_servers or []
@@ -228,6 +231,14 @@ class _RtcPeer:
         self._remote_description_applied = asyncio.Event()
         self._bus = bus
         self._published_open = False
+        # Perfect-negotiation role: polite peer defers to an incoming
+        # OFFER by rolling back its own pending offer; impolite peer
+        # ignores an incoming OFFER when one is already in flight.
+        # Determined lexicographically: own_instance_id > peer_id.
+        self._polite = polite
+        # Set True between ``start_offer`` initiation and either the
+        # successful ``apply_answer`` call or a polite rollback.
+        self._making_offer: bool = False
 
     # ─── Transport change publication ─────────────────────────────────────
 
@@ -250,6 +261,7 @@ class _RtcPeer:
 
     async def start_offer(self) -> None:
         """Initiate the SDP offer/answer handshake (offerer role)."""
+        self._making_offer = True
         self._expected_answer_from = self.instance_id
         self._loop = asyncio.get_running_loop()
         self._pc = rtc.PeerConnection(_build_rtc_config(self._ice_servers))
@@ -277,7 +289,33 @@ class _RtcPeer:
         self._pc.spawn_task(self._drain_ice())
 
     async def accept_offer(self, *, sdp: str, from_instance: str) -> None:
-        """Receive an SDP offer (answerer role) and reply with an answer."""
+        """Receive an SDP offer (answerer role) and reply with an answer.
+
+        Implements perfect-negotiation glare resolution: if we are
+        already making an offer (or the PC is not in stable state),
+        the impolite peer ignores this incoming OFFER and the polite
+        peer rolls back its own offer before accepting.
+        """
+        collision = self._making_offer or (
+            self._pc is not None and self._pc.signaling_state != "stable"
+        )
+        if collision and not self._polite:
+            log.info(
+                "RTC glare: impolite side ignoring incoming OFFER from %s "
+                "(making_offer=%s, signaling_state=%s)",
+                from_instance,
+                self._making_offer,
+                self._pc.signaling_state if self._pc else None,
+            )
+            return
+        if collision and self._polite:
+            log.info(
+                "RTC glare: polite side rolling back our OFFER to accept %s's",
+                from_instance,
+            )
+            await self._close_pc()
+            self._making_offer = False
+
         self._expected_answer_from = None  # answerer, no outstanding offer
         self._loop = asyncio.get_running_loop()
         self._pc = rtc.PeerConnection(_build_rtc_config(self._ice_servers))
@@ -308,7 +346,9 @@ class _RtcPeer:
 
         Returns ``True`` when accepted. Rejects (returns ``False``) if
         ``from_instance`` doesn't match the peer we sent the offer to —
-        S-14 answer-origin guard.
+        S-14 answer-origin guard. Also ignores late answers that arrive
+        after a polite-side rollback (signaling_state will no longer be
+        ``have-local-offer``).
         """
         if (
             self._expected_answer_from is not None
@@ -320,13 +360,23 @@ class _RtcPeer:
                 from_instance,
             )
             return False
+        # Perfect-negotiation guard: if we rolled back our offer (polite
+        # side) the PC is either None or no longer in have-local-offer
+        # state — silently drop this stale ANSWER.
+        if self._pc is None or self._pc.signaling_state != "have-local-offer":
+            log.info(
+                "RTC answer from %s ignored — pc is %s",
+                from_instance,
+                self._pc.signaling_state if self._pc else "absent",
+            )
+            return False
         self._expected_answer_from = None
-        if self._pc is not None:
-            await self._pc.set_remote_description(sdp, "answer")
-            # Offerer side: flush any ICE candidates the answerer
-            # trickled before we applied their SDP answer. Same
-            # rationale as :meth:`accept_offer`.
-            self._remote_description_applied.set()
+        await self._pc.set_remote_description(sdp, "answer")
+        # Offerer side: flush any ICE candidates the answerer
+        # trickled before we applied their SDP answer. Same
+        # rationale as :meth:`accept_offer`.
+        self._remote_description_applied.set()
+        self._making_offer = False
         return True
 
     async def add_ice_candidate(self, *, candidate: str, sdp_mid: str) -> None:
@@ -482,6 +532,30 @@ class _RtcPeer:
         except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
             log.warning("fed RTC send to %s failed: %s", self.instance_id, exc)
             return False
+
+    async def _close_pc(self) -> None:
+        """Close and discard the current PeerConnection, resetting negotiation state.
+
+        Idempotent: safe to call when ``_pc`` is already ``None``.
+        Used by the polite-side rollback path in perfect negotiation to
+        tear down our pending offer so we can accept the peer's instead.
+        """
+        if self._pc is not None:
+            try:
+                self._pc.close()
+            except rtc.RTCError:
+                pass
+            self._pc = None
+        self._channel = None
+        # Wake any coroutines parked in ``add_ice_candidate`` on the OLD
+        # event before swapping in a fresh one. Without this they sit on
+        # the old (never-set) event until the 30-second buffer timeout
+        # fires — re-creating exactly the dropped-candidate symptom
+        # PR #371 fixed. Once they wake, they either find ``_pc is None``
+        # and return, or hit the new PC's ``add_remote_candidate`` and
+        # get harmlessly rejected by the existing ``RTCError`` guard.
+        self._remote_description_applied.set()
+        self._remote_description_applied = asyncio.Event()
 
     def close(self) -> None:
         """Close the underlying connection and mark the peer closed.
@@ -643,6 +717,7 @@ class FederationTransport:
                 signaling=self._signaling_factory(instance.id),
                 inbound=self._inbound_factory(instance.id),
                 bus=self._bus,
+                polite=self._own_instance_id > instance.id,
             )
             self._peers[instance.id] = peer
         # Release lock before the network call — the signalling round
@@ -708,6 +783,7 @@ class FederationTransport:
                     signaling=self._signaling_factory(from_instance),
                     inbound=self._inbound_factory(from_instance),
                     bus=self._bus,
+                    polite=self._own_instance_id > from_instance,
                 )
                 self._peers[from_instance] = peer
         sdp = str(payload.get("sdp") or "")
@@ -764,6 +840,7 @@ class FederationTransport:
                     signaling=self._signaling_factory(from_instance),
                     inbound=self._inbound_factory(from_instance),
                     bus=self._bus,
+                    polite=self._own_instance_id > from_instance,
                 )
                 self._peers[from_instance] = peer
         await peer.add_ice_candidate(
