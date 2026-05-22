@@ -199,6 +199,66 @@ describe('SpaceLocationCard', () => {
     await findByText(/2 of 2 in a zone/i)
   })
 
+  it('hydrates the sharing chip from /members on cold load', async () => {
+    // Regression for "I shared my location, came back, and the map
+    // page rendered as if it was reset" — the chip's ``sharingMe``
+    // state derives from the ``location_share_enabled`` field on the
+    // viewer's row in /members. Pre-fix the backend dropped the
+    // field, so the chip always rendered OFF on re-entry even
+    // though the row was actually enabled.
+    mockApi.get.mockImplementation((url: string) => {
+      if (url.includes('/presence')) {
+        return Promise.resolve({
+          feature_enabled: true,
+          location_mode: 'gps',
+          entries: [],
+        })
+      }
+      if (url.includes('/members')) {
+        return Promise.resolve([
+          {
+            user_id: 'u_pascal',
+            role: 'owner',
+            location_share_enabled: true,
+          },
+        ])
+      }
+      return Promise.resolve({ zones: [] })
+    })
+    const { findByText, queryByText } = render(
+      <SpaceLocationCard spaceId="sp_test" currentUserId="u_pascal" />,
+    )
+    // The "you are sharing" copy shows up, NOT the "private here" copy.
+    await findByText(/You are sharing your location/i)
+    expect(queryByText(/Your location is private here/i)).toBeNull()
+  })
+
+  it('renders the OFF chip when the viewer has not opted in', async () => {
+    mockApi.get.mockImplementation((url: string) => {
+      if (url.includes('/presence')) {
+        return Promise.resolve({
+          feature_enabled: true,
+          location_mode: 'gps',
+          entries: [],
+        })
+      }
+      if (url.includes('/members')) {
+        return Promise.resolve([
+          {
+            user_id: 'u_pascal',
+            role: 'owner',
+            location_share_enabled: false,
+          },
+        ])
+      }
+      return Promise.resolve({ zones: [] })
+    })
+    const { findByText } = render(
+      <SpaceLocationCard spaceId="sp_test" currentUserId="u_pascal" />,
+    )
+    await findByText(/Your location is private here/i)
+  })
+
   it('subscribes to space_zone_changed WS events', async () => {
     mockApi.get.mockResolvedValue({
       feature_enabled: true, location_mode: 'gps', entries: [],

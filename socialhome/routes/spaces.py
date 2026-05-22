@@ -298,6 +298,13 @@ def _member_to_dict(
         "is_online": is_online,
         "is_idle": is_idle,
         "last_seen_at": last_seen_at,
+        # §23.8.8 — per-space location-share opt-in. The map tab's
+        # "sharing chip" reads this off the member row to decide whether
+        # to render "You are sharing your location" vs. "Your location
+        # is private here". Without it, the SPA always renders the OFF
+        # state on a cold load even though the user IS sharing — the
+        # backend keeps the opt-in across sessions.
+        "location_share_enabled": bool(m.location_share_enabled),
     }
 
 
