@@ -217,6 +217,15 @@ class _FakePeerConnection:
         self._local_type = type_
         return _FakeLocalDescription(sdp=_STUB_SDP, type=type_)
 
+    async def create_answer(self):
+        """Non-trickle answer: waits for ICE gathering to finish (no-op
+        in the stub) and returns an SDP with candidates inlined.
+        Matches the real library's :meth:`PeerConnection.create_answer`
+        contract used by ``HighlightSignalingHandler``'s production
+        peer factory."""
+        self._local_type = "answer"
+        return _FakeLocalDescription(sdp=_STUB_SDP, type="answer")
+
     async def set_remote_description(self, sdp: str, type_: str) -> None:
         self._remote_type = type_
         return None
@@ -257,6 +266,13 @@ class _FakePeerConnection:
             if not task.done():
                 task.cancel()
         self._tasks.clear()
+
+    async def aclose(self) -> None:
+        """Async-close — mirrors the real library's contract of waiting
+        for spawned tasks to drain before returning. Production code
+        uses ``aclose()`` for guaranteed teardown order."""
+        self.close()
+        await asyncio.sleep(0)
 
 
 class _FakeRTCConfiguration:

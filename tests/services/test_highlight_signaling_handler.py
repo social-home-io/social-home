@@ -591,11 +591,23 @@ async def test_resolve_media_path_rejects_traversal(repos):
     assert handler._resolve_media_path(None) is None
 
 
-async def test_default_peer_factory_raises_until_overridden():
-    from socialhome.services.highlight_signaling_handler import _default_peer_factory
+async def test_default_peer_factory_returns_a_real_aiolib_peer():
+    """The default factory wraps ``aiolibdatachannel.PeerConnection``; an
+    earlier revision raised ``NotImplementedError`` until wired in at
+    startup — public highlight viewing was silently broken because the
+    handler was instantiated without ``peer_factory=``. Now the default
+    constructs a working peer."""
 
-    with pytest.raises(NotImplementedError):
-        _default_peer_factory([])
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+        _default_peer_factory,
+    )
+
+    peer = _default_peer_factory([])
+    assert isinstance(peer, _AiolibAnswererPeer)
+    # Tear down so we don't leave a native handle / spawn task lying
+    # around in the test loop.
+    await peer.close()
 
 
 async def test_content_type_helper_picks_extensions():
@@ -605,3 +617,93 @@ async def test_content_type_helper_picks_extensions():
     assert _content_type_for("/api/media/a.mp4") == "video/mp4"
     assert _content_type_for("/api/media/a.unknown") == "application/octet-stream"
     assert _content_type_for(None) == "application/octet-stream"
+
+
+# ── Production peer-factory adapter ────────────────────────────────────
+
+
+async def test_aiolib_answerer_peer_set_remote_offer_and_create_answer():
+    """The ``_AiolibAnswererPeer`` proxies the SDP exchange through the
+    underlying ``PeerConnection``. ``create_answer`` returns inline-ICE
+    SDP (the production wire protocol between SH and GFS doesn't
+    trickle ICE separately)."""
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+    )
+
+    peer = _AiolibAnswererPeer([])
+    await peer.set_remote_offer("v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\na=offer\r\n")
+    sdp = await peer.create_answer()
+    assert sdp  # non-empty SDP string
+    assert "v=0" in sdp
+    await peer.close()
+
+
+async def test_aiolib_answerer_peer_add_ice_candidate_accepts_both_keys():
+    """Production peer accepts both ``sdpMid`` (standard WebRTC key) and
+    ``sdp_mid`` (snake-case from older signalling payloads)."""
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+    )
+
+    peer = _AiolibAnswererPeer([])
+    # Either key shape is accepted; absence-of-error is the success
+    # criterion (the stubbed PC just records the call).
+    await peer.add_ice_candidate({"candidate": "candidate:1", "sdpMid": "0"})
+    await peer.add_ice_candidate({"candidate": "candidate:2", "sdp_mid": "1"})
+    # Empty candidate is a silent no-op rather than a crash.
+    await peer.add_ice_candidate({"candidate": "", "sdpMid": "0"})
+    await peer.close()
+
+
+async def test_aiolib_answerer_peer_send_before_channel_raises():
+    """``send`` before the viewer-opened DataChannel arrives raises
+    ConnectionClosedError instead of silently dropping the frame."""
+    import aiolibdatachannel as _rtc
+
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+    )
+
+    peer = _AiolibAnswererPeer([])
+    with pytest.raises(_rtc.ConnectionClosedError):
+        await peer.send(b"frame")
+    await peer.close()
+
+
+async def test_aiolib_answerer_peer_wait_open_and_send_round_trip():
+    """When the viewer's DataChannel arrives, ``wait_open`` resolves and
+    ``send`` proxies to it. Drives the test by manually pushing a
+    channel into the stub PC's incoming-channels queue."""
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+    )
+
+    peer = _AiolibAnswererPeer([])
+    # Stub PC exposes ``_incoming_queue`` — push a fake DC onto it so
+    # ``_drain_incoming_channel`` latches it.
+    fake_dc = await peer._pc.create_data_channel("public-viewer")  # type: ignore[union-attr]
+    await peer._pc._incoming_queue.put(fake_dc)  # type: ignore[attr-defined]
+    # Mark it open so wait_open can return.
+    fake_dc.is_open = True
+    fake_dc._open.set()
+    await asyncio.wait_for(peer.wait_open(), timeout=1.0)
+    await peer.send(b"frame")
+    # The fake DC records sent frames on its ``sent`` list.
+    assert b"frame" in fake_dc.sent
+    await peer.close()
+
+
+async def test_aiolib_answerer_peer_close_is_idempotent():
+    """``close()`` swallows :class:`RTCError` from an already-closed PC
+    so callers can safely ``await peer.close()`` multiple times — the
+    handler does this in ``_serve``'s finally even when the PC was
+    already torn down by the drain task."""
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+    )
+
+    peer = _AiolibAnswererPeer([])
+    await peer.close()
+    # Second close is a no-op, no exception escapes.
+    await peer.close()

@@ -33,6 +33,7 @@ from typing import Any, Protocol, runtime_checkable
 import aiofiles
 import aiofiles.os
 import aiohttp
+import aiolibdatachannel as rtc
 
 from ..crypto import b64url_encode, sign_ed25519
 from ..repositories.gfs_connection_repo import AbstractGfsConnectionRepo
@@ -462,13 +463,102 @@ def _content_type_for(media_url: str | None) -> str:
     }.get(ext, "application/octet-stream")
 
 
-def _default_peer_factory(_ice: list[dict[str, Any]]) -> _AnswererPeer:
-    """Lazy-imports :mod:`aiolibdatachannel` so unit tests that swap
-    the factory don't pay the import cost. Production code wires in
-    this factory at startup; tests inject a stub.
+class _AiolibAnswererPeer:
+    """Production :class:`_AnswererPeer` backed by
+    :class:`aiolibdatachannel.PeerConnection`.
+
+    The viewer side is the **offerer** — it sends the SDP offer and
+    opens the DataChannel. We answer with a non-trickle SDP
+    (``pc.create_answer()`` waits for ICE gathering to finish before
+    returning, so candidates are inlined). That keeps the wire
+    protocol simple — only an offer + answer + the eventual bytes,
+    no separate ICE-trickling channel needs to exist between the SH
+    and the GFS.
+
+    Once the channel opens we proxy ``send`` straight through and
+    ``close()`` tears down the PC (the spawned drain task is
+    auto-cancelled via :meth:`pc.spawn_task` ownership).
     """
-    raise NotImplementedError(
-        "Production peer factory not yet wired — set "
-        "``HighlightSignalingHandler(peer_factory=...)`` at construction "
-        "or call ``attach_peer_factory`` from app startup."
-    )
+
+    __slots__ = ("_pc", "_channel", "_channel_event")
+
+    def __init__(self, ice_servers: list[dict[str, Any]]) -> None:
+        cfg = rtc.RTCConfiguration(
+            ice_servers=[
+                rtc.IceServer(
+                    # Wire shape is ``{"urls": "..."} `` or ``{"url": "..."}``
+                    # depending on the dict provenance — accept both.
+                    url=str(entry.get("urls") or entry.get("url") or ""),
+                    username=entry.get("username"),
+                    credential=entry.get("credential"),
+                )
+                if isinstance(entry, dict)
+                else entry
+                for entry in ice_servers
+            ],
+        )
+        self._pc: rtc.PeerConnection = rtc.PeerConnection(cfg)
+        self._channel: rtc.DataChannel | None = None
+        # Set when the viewer-opened DataChannel arrives so ``wait_open``
+        # can return — replaces the missing
+        # ``asyncio.Event``-style hook on incoming_data_channels.
+        self._channel_event: asyncio.Event = asyncio.Event()
+        self._pc.spawn_task(self._drain_incoming_channel())
+
+    async def _drain_incoming_channel(self) -> None:
+        """Wait for the viewer's DataChannel and latch it on the peer."""
+        try:
+            async for ch in self._pc.incoming_data_channels():
+                self._channel = ch
+                self._channel_event.set()
+                return
+        except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
+            log.debug("highlight_signal incoming-channel drain ended: %s", exc)
+
+    async def set_remote_offer(self, sdp: str) -> None:
+        await self._pc.set_remote_description(sdp, "offer")
+
+    async def create_answer(self) -> str:
+        # Non-trickle: ``create_answer`` waits for ICE gathering to
+        # finish and returns the SDP with all candidates inlined. The
+        # signalling endpoint between SH and GFS only ferries the
+        # answer SDP — there's no ICE-trickle channel to drain into.
+        local = await self._pc.create_answer()
+        return local.sdp
+
+    async def add_ice_candidate(self, candidate: dict) -> None:
+        cand = str(candidate.get("candidate") or "")
+        mid = str(candidate.get("sdpMid") or candidate.get("sdp_mid") or "0")
+        if not cand:
+            return
+        await self._pc.add_remote_candidate(cand, mid)
+
+    async def wait_open(self) -> None:
+        # Wait for the channel to arrive (viewer opens it), then wait
+        # for libdatachannel to transition it to OPEN.
+        await self._channel_event.wait()
+        assert self._channel is not None  # set alongside the event
+        await self._channel.wait_open()
+
+    async def send(self, frame_bytes: bytes) -> None:
+        if self._channel is None:
+            raise rtc.ConnectionClosedError("channel not yet open")
+        await self._channel.send(frame_bytes)
+
+    async def close(self) -> None:
+        # ``aclose`` drains the spawn_task we registered, releases the
+        # native handle, and ensures the channel goes away with the PC.
+        try:
+            await self._pc.aclose()
+        except rtc.RTCError as exc:  # defensive on already-closed paths
+            log.debug("highlight_signal peer close error: %s", exc)
+
+
+def _default_peer_factory(ice: list[dict[str, Any]]) -> _AnswererPeer:
+    """Production peer factory — wraps an
+    :class:`aiolibdatachannel.PeerConnection` to satisfy the
+    :class:`_AnswererPeer` Protocol. The constructor injects this by
+    default; tests pass a stub via the ``peer_factory`` keyword to
+    avoid spinning a real native handle.
+    """
+    return _AiolibAnswererPeer(ice)
