@@ -3340,7 +3340,29 @@ button.sh-friends-member-chip:not(:disabled):hover {
   border-radius: var(--sh-radius-full);
   padding: 3px;
   margin-left: auto;
+  /* The composer's post-type strip can hold up to nine buttons
+   * (text / image / video / file / poll / schedule / location /
+   * bazaar / highlight). At desktop widths the strip fits next to
+   * the author avatar without trouble, but on a 360–390 px phone
+   * the natural width is ~290 px and the header only has ~250 px
+   * left for it once the avatar + gap are accounted for. The
+   * historical layout let it overflow the composer card to the
+   * right — that's the "doesn't fit the size" Pascal saw. Allow the
+   * strip to share space with its siblings and scroll horizontally
+   * inside its own bounds instead, same shape used by
+   * ``.sh-space-tabs``: hide the scrollbar (it reads as broken
+   * chrome) and mask both edges so the user notices it's
+   * scrollable. */
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0, #000 8px, #000 calc(100% - 8px), transparent 100%);
 }
+.sh-composer-type-picker::-webkit-scrollbar { display: none; }
 .sh-type-btn {
   background: transparent;
   border: none;
@@ -3353,6 +3375,10 @@ button.sh-friends-member-chip:not(:disabled):hover {
   align-items: center;
   justify-content: center;
   transition: background var(--sh-transition-fast);
+  /* In a horizontally-scrolling flex track, items must not shrink —
+   * otherwise the inner content (emoji) loses its hit-target and the
+   * row's natural width collapses to nothing. */
+  flex-shrink: 0;
 }
 .sh-type-btn:hover { background: var(--sh-bg); }
 .sh-type-btn--active {
