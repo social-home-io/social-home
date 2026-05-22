@@ -584,7 +584,7 @@ async def test_stop_when_not_started_is_safe(stack):
     await stack["svc"].stop()
 
 
-async def test_flush_once_reschedules_on_failure(stack):
+async def test_flush_once_reschedules_on_failure(stack, monkeypatch):
     _make_test_image(stack["media_dir"])
     await stack["svc"].enqueue_for_message(
         message_id="m1",
@@ -592,9 +592,18 @@ async def test_flush_once_reschedules_on_failure(stack):
         target_instance_ids=["inst-bob"],
     )
     stack["fed"].should_fail = True
+    # Pin the jittered backoff to a known mid-range value so this test
+    # never flakes: ``random.uniform(0, 30)`` (the first-attempt cap)
+    # otherwise rolls below ~1 s about 1 in 10 runs, which leaves the
+    # rescheduled row already past its ``next_attempt_at`` by the time
+    # the ``list_due`` assertion runs.
+    monkeypatch.setattr(
+        "socialhome.services.dm_media_sync_service.random.uniform",
+        lambda _lo, _hi: 30.0,
+    )
     shipped = await stack["svc"].flush_once()
     assert shipped == 0
-    # No rows due-now (reschedule pushed the timestamp out).
+    # No rows due-now (reschedule pushed the timestamp 30 s out).
     immediate = await stack["outbox"].list_due()
     assert immediate == []
     all_rows = await stack["outbox"].list_for_message("m1")
