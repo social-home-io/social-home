@@ -17,6 +17,7 @@ import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api, ApiError } from '@/api'
 import { addBase } from '@/baseUrl'
+import { instanceConfig } from '@/store/instance'
 import { decodeInviteCode } from '@/lib/spaceInviteCode'
 import { Button } from '@/components/Button'
 import { Modal } from '@/components/Modal'
@@ -40,20 +41,19 @@ export function openSpaceJoinByCode() {
   open.value = true
 }
 
-function isWrongInstance(payload: ReturnType<typeof decodeInviteCode>): boolean {
-  if (!payload?.issuer_instance_url) return false
-  // The invite was minted by ``document.baseURI`` of the issuer. If
-  // that doesn't match our own ``document.baseURI``, the receiver is
-  // either on a different household or a different ingress tunnel —
-  // either way the join will fail and we should pre-flight that with
-  // a more honest error than ``404`` from the API.
-  try {
-    const ours = new URL('.', document.baseURI).href
-    const theirs = new URL('.', payload.issuer_instance_url).href
-    return ours !== theirs
-  } catch {
-    return false
-  }
+/** Returns the issuer's instance id when the invite was minted on a
+ *  DIFFERENT instance than ours — the cross-instance redeem path
+ *  needs that id to route the SPACE_INVITE_TOKEN_REDEEM envelope.
+ *  Returns ``null`` for a same-instance code (or one without an
+ *  embedded id at all — bare-token pastes go through the local
+ *  endpoint as before). */
+function crossInstanceIssuer(
+  payload: ReturnType<typeof decodeInviteCode>,
+): string | null {
+  if (!payload?.issuer_instance_id) return null
+  const ours = instanceConfig.value?.instance_id
+  if (ours && payload.issuer_instance_id === ours) return null
+  return payload.issuer_instance_id
 }
 
 export function SpaceJoinByCodeDialog() {
@@ -80,16 +80,19 @@ export function SpaceJoinByCodeDialog() {
       errorMsg.value = "That doesn't look like a Social Home invite code."
       return
     }
-    if (isWrongInstance(payload)) {
-      errorMsg.value = (
-        'This invite is for another Social Home instance — open your ' +
-        'own home and paste it from there.'
-      )
-      return
-    }
     submitting.value = true
     try {
-      const r = await api.post('/api/spaces/join', { token: payload.token }) as {
+      // When the issuer is a different instance than ours, hand the
+      // backend the issuer_instance_id so it can route the redeem
+      // over the SPACE_INVITE_TOKEN_REDEEM federation flow. Same-
+      // instance + bare-token pastes use the original local path
+      // (issuer_instance_id omitted).
+      const issuer = crossInstanceIssuer(payload)
+      const body: { token: string; issuer_instance_id?: string } = {
+        token: payload.token,
+      }
+      if (issuer) body.issuer_instance_id = issuer
+      const r = await api.post('/api/spaces/join', body) as {
         space_id: string
       }
       open.value = false

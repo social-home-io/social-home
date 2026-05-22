@@ -24,6 +24,20 @@ vi.mock('qrcode', () => ({
   default: { toDataURL: vi.fn(async () => 'data:fake') },
 }))
 
+const OUR_INSTANCE_ID = 'aaaabbbbccccddddeeeeffff00001111'
+vi.mock('@/store/instance', () => ({
+  instanceConfig: {
+    value: {
+      mode: 'standalone',
+      instance_name: 'Test home',
+      instance_id: OUR_INSTANCE_ID,
+      capabilities: [],
+      setup_required: false,
+    },
+  },
+  loadInstanceConfig: vi.fn(),
+}))
+
 const routeSpy = vi.fn()
 vi.mock('preact-iso', async () => {
   const actual = await vi.importActual<typeof import('preact-iso')>('preact-iso')
@@ -78,13 +92,15 @@ describe('SpaceJoinByCodeDialog', () => {
     ).toBeNull()
   })
 
-  it('joins when given a valid socialhome://invite#... code', async () => {
+  it('joins same-instance — issuer matches our id, no issuer_instance_id in the POST', async () => {
     api.post.mockResolvedValueOnce({ space_id: 'space-uuid-xyz' })
-    // Match document.baseURI exactly so isWrongInstance() returns false.
+    // Same instance id as the mock store — local redeem path; the
+    // SPA must NOT forward issuer_instance_id so the backend takes
+    // the local code branch in /api/spaces/join.
     const code = buildInviteCode({
       token: 'a1b2c3d4e5f60718',
       space_id: 'space-uuid-xyz',
-      issuer_instance_url: document.baseURI,
+      issuer_instance_id: OUR_INSTANCE_ID,
     })
     const { container, getByText } = await renderAndOpen()
     const input = container.querySelector('[data-testid="join-by-code-input"]') as HTMLTextAreaElement
@@ -97,6 +113,29 @@ describe('SpaceJoinByCodeDialog', () => {
         token: 'a1b2c3d4e5f60718',
       })
       expect(routeSpy).toHaveBeenCalledWith('/spaces/space-uuid-xyz')
+    })
+  })
+
+  it('forwards issuer_instance_id when the code was minted on another instance', async () => {
+    api.post.mockResolvedValueOnce({ space_id: 'space-uuid-fed' })
+    // Different instance id — the backend has to route the redeem
+    // over the SPACE_INVITE_TOKEN_REDEEM federation flow.
+    const code = buildInviteCode({
+      token: 'a1b2c3d4e5f60718',
+      space_id: 'space-uuid-fed',
+      issuer_instance_id: 'ffffeeeeddddccccbbbb111122223333',
+    })
+    const { container, getByText } = await renderAndOpen()
+    const input = container.querySelector('[data-testid="join-by-code-input"]') as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.input(input, { target: { value: code } })
+    })
+    await act(async () => { fireEvent.click(getByText('Join')) })
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/api/spaces/join', {
+        token: 'a1b2c3d4e5f60718',
+        issuer_instance_id: 'ffffeeeeddddccccbbbb111122223333',
+      })
     })
   })
 
@@ -142,22 +181,12 @@ describe('SpaceJoinByCodeDialog', () => {
     expect(routeSpy).not.toHaveBeenCalled()
   })
 
-  it('shows the wrong-instance message before calling the API when issuer URLs disagree', async () => {
-    const code = buildInviteCode({
-      token: 'a1b2c3d4e5f60718',
-      space_id: 'space-x',
-      issuer_instance_url: 'http://some-other-host/',
-    })
-    const { container, getByText } = await renderAndOpen()
-    const input = container.querySelector('[data-testid="join-by-code-input"]') as HTMLTextAreaElement
-    await act(async () => {
-      fireEvent.input(input, { target: { value: code } })
-    })
-    await act(async () => { fireEvent.click(getByText('Join')) })
-    expect(api.post).not.toHaveBeenCalled()
-    expect(container.querySelector('.sh-scan-error-inline')?.textContent)
-      .toContain('another Social Home instance')
-  })
+  // Removed: the SPA no longer pre-flights "wrong instance" with
+  // a hard block. Cross-instance codes now route through the
+  // /api/spaces/join endpoint, which forwards a federation redeem
+  // when the issuer is reachable as a CONFIRMED peer and 422s with
+  // a "pair with X first" error otherwise. The error-rendering
+  // test below covers the unreachable case.
 
   it('reopen after a prior error resets the draft + error message', async () => {
     // First open: trigger the decoder error.

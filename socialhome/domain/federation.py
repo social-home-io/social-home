@@ -89,6 +89,13 @@ class FederationEventType(str, enum.Enum):
     SPACE_JOIN_REQUEST_DENIED = "space_join_request_denied"
     SPACE_JOIN_REQUEST_EXPIRED = "space_join_request_expired"
     SPACE_JOIN_REQUEST_WITHDRAWN = "space_join_request_withdrawn"
+    # ── Token-based invite redeem (receiver-initiated, no admin
+    # approval — the token IS the approval). Mirrors
+    # ``SPACE_JOIN_REQUEST`` but for the open-invite token-paste
+    # flow surfaced by the SPA's "Join with invite code" card. ──
+    SPACE_INVITE_TOKEN_REDEEM = "space_invite_token_redeem"
+    SPACE_INVITE_TOKEN_REDEEM_ACK = "space_invite_token_redeem_ack"
+    SPACE_INVITE_TOKEN_REDEEM_DENY = "space_invite_token_redeem_deny"
 
     # ── Space content ──
     SPACE_POST_CREATED = "space_post_created"

@@ -98,6 +98,7 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         # not the join action itself.
         "create_space",  # creator becomes owner
         "accept_invite_token",  # token validates the actor
+        "redeem_invite_token",  # token validates the actor; cross-instance route
         "accept_remote_invite",  # cross-instance — own user
         "decline_remote_invite",  # cross-instance — own user
         "request_join",  # any user may request; gate is on approval

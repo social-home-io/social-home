@@ -15,6 +15,7 @@ from aiohttp import web
 
 from ..app_keys import (
     config_key,
+    federation_repo_key,
     platform_adapter_key,
     setup_service_key,
 )
@@ -42,10 +43,25 @@ class InstanceConfigView(BaseView):
         static_dir = self.request.app.get(_spa_static_dir_key)
         if static_dir is not None:
             spa_bundle_hash = get_spa_bundle_hash(static_dir)
+        # Surface this instance's stable id so SPA features that embed
+        # the id in cross-instance payloads (e.g. space-invite codes)
+        # don't have to round-trip through /api/friends to discover it.
+        # Pre-setup the federation tables don't exist yet — degrade to
+        # ``None`` rather than fail the cold-start config probe.
+        instance_id: str | None = None
+        fed_repo = self.request.app.get(federation_repo_key)
+        if fed_repo is not None:
+            try:
+                identity = await fed_repo.get_local_identity()
+                if identity is not None:
+                    instance_id = identity.get("instance_id")
+            except Exception:
+                instance_id = None
         return web.json_response(
             {
                 "mode": config.mode,
                 "instance_name": config.instance_name,
+                "instance_id": instance_id,
                 "capabilities": capabilities,
                 "setup_required": await setup.is_required(),
                 "spa_bundle_hash": spa_bundle_hash,

@@ -190,25 +190,39 @@ That single command runs the full sequence:
    Gamma's ``/api/highlights``. Then flips ada back to visible and
    asserts **b** sees her again.
 
-6. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
+6. ``invite-redeem`` — cross-instance space-invite token redeem
+   over federation. Carol creates a private space on **c**, mints
+   an invite token, Alice POSTs the token to her own
+   ``/api/spaces/join`` with ``issuer_instance_id=<carol's id>``.
+   The backend routes the redeem over
+   ``SPACE_INVITE_TOKEN_REDEEM``; Carol's instance validates the
+   token, seats Alice as a remote space member, ACKs back. The
+   harness asserts both legs: Alice's HTTP response carries the
+   right ``space_id`` (proves the ACK round-tripped), and Carol's
+   ``space_remote_members`` DB row exists (direct check —
+   ``/api/spaces/{id}/members`` only surfaces local members).
+   PR 1 baseline for the relayed case (a wants to join d's space
+   via b) that will land as ``invite-redeem-via`` in PR 2.
+
+7. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
    post one ``audience_kind=all_paired`` highlight while **c** is
    offline, restarts **c**, waits across the second outbox-backoff
    slot (~35 s), and asserts the queued highlight lands. Validates
    the §24 ``ResilientFederationOutbox`` flush-on-reachable path.
 
-7. The harness exits non-zero if any assertion fails or any process
+8. The harness exits non-zero if any assertion fails or any process
    crashed during the run.
 
 The canonical ``all`` sequence runs ``up → pair → traffic →
-calendar → verify → relay-pair → visibility → replay`` in that
-order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down`` stay opt-in (they
-spin up a separate GFS process and aren't required to validate the
-HFS↔HFS surface).
+calendar → verify → relay-pair → visibility → invite-redeem →
+replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
+stay opt-in (they spin up a separate GFS process and aren't
+required to validate the HFS↔HFS surface).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
-/ ``relay-pair`` / ``visibility`` / ``replay``); state is persisted
-to ``/tmp/sh-demo/state.json`` between calls.
+/ ``relay-pair`` / ``visibility`` / ``invite-redeem`` / ``replay``);
+state is persisted to ``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands
 

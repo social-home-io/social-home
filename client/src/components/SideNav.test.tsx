@@ -63,7 +63,7 @@ beforeEach(() => {
   // ``'haos'`` to assert the strip disappears under HA Supervisor.
   instanceConfig.value = {
     mode: 'standalone',
-    instance_name: 'Hearth',
+    instance_name: 'Hearth', instance_id: null,
     capabilities: [],
     setup_required: false,
   }
@@ -193,7 +193,7 @@ describe('SideNav', () => {
   it('renders the identity strip in standalone mode with avatar + display name linking to /settings', () => {
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'Hearth',
+      instance_name: 'Hearth', instance_id: null,
       capabilities: [],
       setup_required: false,
     }
@@ -212,7 +212,7 @@ describe('SideNav', () => {
   it('also renders the identity strip in ha mode (SH is the primary UI surface)', () => {
     instanceConfig.value = {
       mode: 'ha',
-      instance_name: 'Hearth',
+      instance_name: 'Hearth', instance_id: null,
       capabilities: ['ha_person_directory'],
       setup_required: false,
     }
@@ -224,7 +224,7 @@ describe('SideNav', () => {
   it('hides the identity strip in haos mode (HA Core sidebar already shows the signed-in user)', () => {
     instanceConfig.value = {
       mode: 'haos',
-      instance_name: 'Hearth',
+      instance_name: 'Hearth', instance_id: null,
       capabilities: ['ingress', 'ha_person_directory'],
       setup_required: false,
     }

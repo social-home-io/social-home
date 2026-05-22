@@ -13,18 +13,21 @@ vi.mock('@/api', () => ({
 vi.mock('qrcode', () => ({
   default: { toDataURL: vi.fn(async (data: string) => `data:fake;${data}`) },
 }))
-// Force ``basePath`` / ``addBase`` to the ingress shape — the bug
-// Slice B is fixing is that ``location.origin`` skips this prefix.
-const INGRESS_PREFIX = '/api/hassio_ingress/abc'
-vi.mock('@/baseUrl', () => ({
-  basePath: `${INGRESS_PREFIX}/`,
-  addBase: (path: string) => {
-    const [pathOnly, ...rest] = path.split(/(?=[?#])/, 2)
-    const suffix = rest.join('')
-    const normalised = pathOnly.startsWith('/') ? pathOnly : '/' + pathOnly
-    return INGRESS_PREFIX + normalised + suffix
+
+// The dialog reads our own instance id from the SPA's
+// :class:`instanceConfig` store and stamps it into the code.
+const OUR_INSTANCE_ID = 'aaaabbbbccccddddeeeeffff00001111'
+vi.mock('@/store/instance', () => ({
+  instanceConfig: {
+    value: {
+      mode: 'standalone',
+      instance_name: 'Test home',
+      instance_id: OUR_INSTANCE_ID,
+      capabilities: [],
+      setup_required: false,
+    },
   },
-  stripBase: (p: string) => p,
+  loadInstanceConfig: vi.fn(),
 }))
 
 const { api } = await import('@/api') as unknown as {
@@ -32,25 +35,13 @@ const { api } = await import('@/api') as unknown as {
 }
 const { openSpaceInvite, SpaceInviteDialog } = await import('./SpaceInviteDialog')
 
-const INGRESS_BASE = `http://homeassistant.local${INGRESS_PREFIX}/`
-const originalBaseURI = Object.getOwnPropertyDescriptor(
-  Document.prototype, 'baseURI',
-)
-
 beforeEach(() => {
-  Object.defineProperty(document, 'baseURI', {
-    configurable: true,
-    get: () => INGRESS_BASE,
-  })
   api.get.mockReset()
   api.post.mockReset()
 })
 
 afterEach(() => {
   cleanup()
-  if (originalBaseURI) {
-    Object.defineProperty(Document.prototype, 'baseURI', originalBaseURI)
-  }
 })
 
 async function openAndGenerate(
@@ -76,18 +67,19 @@ async function openAndGenerate(
 }
 
 describe('SpaceInviteDialog', () => {
-  it('builds an HTTPS link that honours basePath (ingress-aware)', async () => {
+  it('does NOT render an HTTPS link artifact', async () => {
+    // The clickable-link path can't redeem cross-instance — the
+    // receiver has to be on their own instance to call the redeem
+    // RPC. Until a GFS-mediated redirect exists, the code paste is
+    // the only path we offer.
     const { container } = await openAndGenerate({
       hint: 'Pascal\'s family',
       returnedToken: 'tok-aaaa-bbbb-cccc',
     })
-    const link = container.querySelector('[data-testid="invite-link"]')!
-      .textContent!
-    expect(link.startsWith(INGRESS_BASE)).toBe(true)
-    expect(link).toContain('join?token=tok-aaaa-bbbb-cccc')
+    expect(container.querySelector('[data-testid="invite-link"]')).toBeNull()
   })
 
-  it('emits a socialhome://invite#... code that decodes back to the token + metadata', async () => {
+  it('emits a socialhome://invite#... code that decodes back to the token + issuer instance id', async () => {
     const { container } = await openAndGenerate({
       hint: 'Pascal\'s family',
       returnedToken: 'tok-xxxx-yyyy-zzzz',
@@ -98,7 +90,9 @@ describe('SpaceInviteDialog', () => {
     const decoded = decodeInviteCode(code)!
     expect(decoded.token).toBe('tok-xxxx-yyyy-zzzz')
     expect(decoded.space_display_hint).toBe('Pascal\'s family')
-    expect(decoded.issuer_instance_url).toBe(INGRESS_BASE)
+    // The new wire shape — issuer's stable id, not a URL — so the
+    // receiver's instance can route the redeem over federation.
+    expect(decoded.issuer_instance_id).toBe(OUR_INSTANCE_ID)
   })
 
   it('fetches the space name when the caller does not supply a hint', async () => {

@@ -27,6 +27,29 @@ without ever seeing which space, which user, or which household.
 `SPACE_JOIN_REQUEST_DENIED`, `SPACE_JOIN_REQUEST_EXPIRED`,
 `SPACE_JOIN_REQUEST_WITHDRAWN`.
 
+**Token-based invite redeem** (receiver-initiated, no admin approval —
+the token IS the approval)
+
+`SPACE_INVITE_TOKEN_REDEEM`, `SPACE_INVITE_TOKEN_REDEEM_ACK`,
+`SPACE_INVITE_TOKEN_REDEEM_DENY`.
+
+Used when a member shares a `socialhome://invite#…` code with someone
+on a paired peer instance. The receiver pastes the code locally; their
+backend recognises ``issuer_instance_id`` as a CONFIRMED peer and
+sends ``SPACE_INVITE_TOKEN_REDEEM`` to the issuer carrying the token
+and the receiving user's identity. The issuer validates the token
+(exists, not expired, ``uses_remaining > 0``), atomically decrements,
+seats the receiver as a ``SpaceRemoteMember`` + records the
+``(space, instance)`` mapping, then sends ``SPACE_INVITE_TOKEN_REDEEM_ACK``
+back with ``{space_id, role}``. Any failure (token unknown, expired,
+exhausted, banned, persistence error) → ``SPACE_INVITE_TOKEN_REDEEM_DENY``
+with a string ``reason``.
+
+The receiver awaits the ACK on a nonce-keyed Future inside the
+``POST /api/spaces/join`` handler (10 s timeout). On success the
+endpoint returns ``{space_id, role}`` like the local path; on DENY
+returns 422 with the reason; on timeout returns 504.
+
 ## Flow — private invite (paired peers)
 
 ```mermaid
