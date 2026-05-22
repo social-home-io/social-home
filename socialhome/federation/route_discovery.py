@@ -40,8 +40,9 @@ import asyncio
 import logging
 import secrets
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
@@ -58,6 +59,42 @@ log = logging.getLogger(__name__)
 #: Required peer ``proto_version`` for participating in mesh routing.
 #: Anything below v_6 doesn't know SPACE_FIND_ROUTE / SPACE_ROUTED.
 _MIN_MESH_PROTO_VERSION = FederationCapability.MIN_FOR_SPACE_INVITE_REDEEM
+
+#: Hard cap on each in-memory state dict (``_seen_requests``,
+#: ``_caller_cache``, ``_route_cache``, ``_target_eph_state``). The
+#: TTL prune handles steady-state cleanup; this cap is the
+#: defense-in-depth ceiling so a hostile authenticated peer that
+#: pumps unique ``request_id`` / ``target_eph_pk`` values faster than
+#: the TTL window can't push us into unbounded memory growth. At ~150
+#: bytes per entry the cap costs ~750 KiB per dict in the worst case
+#: — small enough to swallow, large enough that a real federation
+#: graph won't hit it during normal operation. The §24.11 signature +
+#: replay pipeline already bounds attack input to *confirmed* peers,
+#: so the cap is the floor of a layered defence rather than the only
+#: line.
+_MAX_CACHE_ENTRIES: int = 5000
+
+
+def cap_by_expiry(
+    items: dict,
+    *,
+    key: Callable[[tuple[Any, Any]], float],
+    cap: int = _MAX_CACHE_ENTRIES,
+) -> dict:
+    """Return ``items`` truncated to at most ``cap`` entries, keeping
+    the ones with the latest expiry. Used by the prune step in both
+    :class:`RouteDiscoveryService` and
+    :class:`socialhome.federation.routed_envelope.SpaceRoutedHandler`
+    to cap each in-memory state dict — entries that haven't expired
+    yet but would push us over the cap are evicted oldest-first.
+
+    Package-public (no leading underscore) so ``routed_envelope`` can
+    re-use the same eviction policy without duplicating the logic.
+    """
+    if len(items) <= cap:
+        return items
+    sorted_items = sorted(items.items(), key=key, reverse=True)
+    return dict(sorted_items[:cap])
 
 
 @dataclass(slots=True)
@@ -591,20 +628,32 @@ class RouteDiscoveryService:
 
     def _prune_expired(self, now: float) -> None:
         """Drop dedup / caller / route / target-eph entries whose TTL
-        has elapsed."""
+        has elapsed.
+
+        Each dict additionally has a hard size cap
+        (:data:`_MAX_CACHE_ENTRIES`) so a peer that pumps unique
+        ``request_id`` / ``target_eph_pk`` values faster than the TTL
+        can't push us into unbounded memory growth (audit finding —
+        defense-in-depth). At-cap behaviour is FIFO: the
+        oldest-by-expiry entries are evicted to make room.
+        """
         if self._seen_requests:
-            self._seen_requests = {
-                k: v for k, v in self._seen_requests.items() if v > now
-            }
+            self._seen_requests = cap_by_expiry(
+                {k: v for k, v in self._seen_requests.items() if v > now},
+                key=lambda kv: kv[1],
+            )
         if self._caller_cache:
-            self._caller_cache = {
-                k: v for k, v in self._caller_cache.items() if v[1] > now
-            }
+            self._caller_cache = cap_by_expiry(
+                {k: v for k, v in self._caller_cache.items() if v[1] > now},
+                key=lambda kv: kv[1][1],
+            )
         if self._route_cache:
-            self._route_cache = {
-                k: v for k, v in self._route_cache.items() if v.expires_at > now
-            }
+            self._route_cache = cap_by_expiry(
+                {k: v for k, v in self._route_cache.items() if v.expires_at > now},
+                key=lambda kv: kv[1].expires_at,
+            )
         if self._target_eph_state:
-            self._target_eph_state = {
-                k: v for k, v in self._target_eph_state.items() if v[1] > now
-            }
+            self._target_eph_state = cap_by_expiry(
+                {k: v for k, v in self._target_eph_state.items() if v[1] > now},
+                key=lambda kv: kv[1][1],
+            )

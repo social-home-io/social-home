@@ -891,3 +891,45 @@ async def test_mesh_capable_peers_filters_unsupported(monkeypatch):
     monkeypatch.setattr(fed_a, "peer_supports", _not_supported)
     peers = await nodes["a"].service._mesh_capable_peers(exclude=set())
     assert peers == []
+
+
+def test_cap_by_expiry_keeps_newest():
+    """``cap_by_expiry`` evicts oldest-by-expiry first — defense-in-
+    depth against an attacker pumping unique entries faster than the
+    TTL window can prune them."""
+    from socialhome.federation.route_discovery import cap_by_expiry
+
+    items = {f"k{i}": (None, float(i)) for i in range(10)}
+    capped = cap_by_expiry(items, key=lambda kv: kv[1][1], cap=3)
+    assert set(capped) == {"k7", "k8", "k9"}
+
+
+def test_cap_by_expiry_below_cap_is_identity():
+    """No-op when under the cap — the hot path is the common case."""
+    from socialhome.federation.route_discovery import cap_by_expiry
+
+    items = {"a": (None, 1.0), "b": (None, 2.0)}
+    capped = cap_by_expiry(items, key=lambda kv: kv[1][1], cap=10)
+    assert capped is items
+
+
+def test_prune_caps_oversized_target_eph_state():
+    """Even with a hostile peer pumping unique probes the
+    target-side ephemeral state dict stays bounded by
+    ``_MAX_CACHE_ENTRIES``."""
+    from socialhome.federation.route_discovery import _MAX_CACHE_ENTRIES
+
+    repo = _FakeFederationRepo()
+    svc = RouteDiscoveryService(
+        federation_service=SimpleNamespace(own_instance_id="self"),  # type: ignore[arg-type]
+        federation_repo=repo,  # type: ignore[arg-type]
+    )
+    now = time.monotonic()
+    overshoot = 50  # 5050 vs 5000 — fast enough.
+    cap = _MAX_CACHE_ENTRIES
+    for i in range(cap + overshoot):
+        svc._target_eph_state[f"pub{i}"] = (f"priv{i}", now + 60.0 + i)
+    svc._prune_expired(now)
+    assert len(svc._target_eph_state) == cap
+    assert "pub0" not in svc._target_eph_state
+    assert f"pub{cap + overshoot - 1}" in svc._target_eph_state

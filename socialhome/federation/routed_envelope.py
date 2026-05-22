@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEvent, FederationEventType
 from . import routed_crypto
+from .route_discovery import cap_by_expiry
 
 if TYPE_CHECKING:
     from ..repositories.federation_repo import AbstractFederationRepo
@@ -587,15 +588,24 @@ class SpaceRoutedHandler:
 
     def _prune_expired(self, now: float) -> None:
         if self._seen_routes:
-            self._seen_routes = {k: v for k, v in self._seen_routes.items() if v > now}
+            self._seen_routes = cap_by_expiry(
+                {k: v for k, v in self._seen_routes.items() if v > now},
+                key=lambda kv: kv[1],
+            )
         self._prune_eph_state(now)
 
     def _prune_eph_state(self, now: float) -> None:
+        # Same defense-in-depth cap as the discovery service: TTL
+        # prune handles steady-state, ``cap_by_expiry`` is the
+        # ceiling against an attacker pumping unique route_ids faster
+        # than the TTL window.
         if self._origin_eph_state:
-            self._origin_eph_state = {
-                k: v for k, v in self._origin_eph_state.items() if v[2] > now
-            }
+            self._origin_eph_state = cap_by_expiry(
+                {k: v for k, v in self._origin_eph_state.items() if v[2] > now},
+                key=lambda kv: kv[1][2],
+            )
         if self._reply_eph_state:
-            self._reply_eph_state = {
-                k: v for k, v in self._reply_eph_state.items() if v[4] > now
-            }
+            self._reply_eph_state = cap_by_expiry(
+                {k: v for k, v in self._reply_eph_state.items() if v[4] > now},
+                key=lambda kv: kv[1][4],
+            )
