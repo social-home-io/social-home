@@ -258,6 +258,13 @@ class _FakePeerConnection:
                 task.cancel()
         self._tasks.clear()
 
+    async def aclose(self) -> None:
+        """Async-close — mirrors the real library's contract of waiting
+        for spawned tasks to drain before returning. Production code
+        uses ``aclose()`` for guaranteed teardown order."""
+        self.close()
+        await asyncio.sleep(0)
+
 
 class _FakeRTCConfiguration:
     """Stand-in for :class:`aiolibdatachannel.RTCConfiguration`."""

@@ -591,11 +591,23 @@ async def test_resolve_media_path_rejects_traversal(repos):
     assert handler._resolve_media_path(None) is None
 
 
-async def test_default_peer_factory_raises_until_overridden():
-    from socialhome.services.highlight_signaling_handler import _default_peer_factory
+async def test_default_peer_factory_returns_a_real_aiolib_peer():
+    """The default factory wraps ``aiolibdatachannel.PeerConnection``; an
+    earlier revision raised ``NotImplementedError`` until wired in at
+    startup — public highlight viewing was silently broken because the
+    handler was instantiated without ``peer_factory=``. Now the default
+    constructs a working peer."""
 
-    with pytest.raises(NotImplementedError):
-        _default_peer_factory([])
+    from socialhome.services.highlight_signaling_handler import (
+        _AiolibAnswererPeer,
+        _default_peer_factory,
+    )
+
+    peer = _default_peer_factory([])
+    assert isinstance(peer, _AiolibAnswererPeer)
+    # Tear down so we don't leave a native handle / spawn task lying
+    # around in the test loop.
+    await peer.close()
 
 
 async def test_content_type_helper_picks_extensions():
