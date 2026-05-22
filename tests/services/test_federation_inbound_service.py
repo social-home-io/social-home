@@ -197,6 +197,67 @@ async def test_dm_message_missing_fields_drops(inbound):
     # Nothing raised, nothing persisted — test passes when no exception
 
 
+async def test_dm_message_lazy_creates_conversation_before_seq_record(db, bus):
+    """Regression: DM_MESSAGE for an unknown conversation must not trip
+    a FOREIGN KEY constraint on ``conversation_sender_sequences``.
+
+    Pre-fix, ``_on_dm_message`` called ``record_received_seq`` (which
+    FK-references ``conversations(id)``) *before* the
+    ``_ensure_remote_dm_conversation`` lazy-create that builds the
+    conversation row on the receiver. On a cross-household first send
+    the receiver had no row yet → ``sqlite3.IntegrityError: FOREIGN
+    KEY constraint failed`` → the handler crashed → the message never
+    landed in ``/api/conversations``. Federation-demo's ``verify`` step
+    surfaced this on the a→c DM check.
+
+    After the fix: the conversation row is upserted up-front so the
+    sequence record always finds its FK target.
+    """
+    routing_repo = SqliteDmRoutingRepo(db)
+    inbound = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        dm_routing_repo=routing_repo,
+    )
+
+    # Deliberately do NOT pre-seed the conversation row. The handler
+    # must lazy-create it.
+    await inbound._on_dm_message(
+        _event(
+            FederationEventType.DM_MESSAGE,
+            {
+                "conversation_id": "conv-fresh",
+                "message_id": "m-1",
+                "sender_user_id": "user-remote",
+                "content": "first contact",
+                # Seq must be carried so the sequence-record path
+                # (which is where the FK trips) actually runs.
+                "sender_seq": 1,
+                "recipient_user_ids": ["user-local"],
+            },
+        ),
+    )
+
+    # The conversation row was created on the receiver.
+    conv_rows = await db.fetchall(
+        "SELECT id FROM conversations WHERE id = ?",
+        ("conv-fresh",),
+    )
+    assert conv_rows, "conversation row should be lazy-created by _on_dm_message"
+
+    # The sequence row landed (no FK violation; watermark = 1).
+    assert (
+        await routing_repo.peek_sender_seq(
+            conversation_id="conv-fresh",
+            sender_user_id="user-remote",
+        )
+        == 1
+    )
+
+
 async def test_dm_message_first_inbound_sweeps_bogus_gaps(db, bus):
     """End-to-end regression for the receiver-side high-watermark fix.
 
