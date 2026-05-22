@@ -247,3 +247,60 @@ async def test_close_marks_session_closed():
     s.close()
     assert s.is_closed
     assert not s.is_ready
+
+
+async def test_local_ice_drain_invokes_callback_per_candidate():
+    """Issue #412 item 1: ``SyncRtcSession`` now forwards each
+    locally-gathered ICE candidate via the injected ``on_local_ice``
+    callback. Same-LAN handshakes used to work because host
+    candidates are inline in the SDP; without this drain, cross-NAT
+    handshakes hit the 15 s connectivity timeout because the
+    reflexive / relayed candidates were never sent."""
+    emitted: list[tuple[str, str, str]] = []
+
+    async def _capture(sync_id: str, cand: str, mid: str) -> None:
+        emitted.append((sync_id, cand, mid))
+
+    s = SyncRtcSession(
+        sync_id="sid",
+        space_id="sp1",
+        requester_instance_id="r",
+        provider_instance_id="p",
+        role="provider",
+        on_local_ice=_capture,
+    )
+    # Push two ICE candidates into the stub's queue *before*
+    # ``create_offer`` to ensure the drain task picks them up.
+    from aiolibdatachannel import IceCandidate
+
+    s._pc._ice_queue.put_nowait(IceCandidate(candidate="cand-A", mid="0"))
+    s._pc._ice_queue.put_nowait(IceCandidate(candidate="cand-B", mid="1"))
+    await s.create_offer()
+    # Yield to let the spawn task drain both candidates.
+    import asyncio
+
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if len(emitted) == 2:
+            break
+    assert emitted == [("sid", "cand-A", "0"), ("sid", "cand-B", "1")]
+    # Tear down so the spawn task doesn't linger past test exit.
+    s.close()
+
+
+async def test_local_ice_drain_skipped_without_callback():
+    """Without the callback there's no drain task — backward-compat
+    for callers that don't wire the outbound path (older test code,
+    or sites where the routing layer doesn't yet need it)."""
+    s = SyncRtcSession(
+        sync_id="sid",
+        space_id="sp1",
+        requester_instance_id="r",
+        provider_instance_id="p",
+        role="provider",
+    )
+    # No on_local_ice → ``_drain_local_ice`` returns early. Nothing
+    # to assert beyond "doesn't raise" — the legacy code path stays
+    # functional.
+    await s.create_offer()
+    s.close()

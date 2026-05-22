@@ -116,6 +116,7 @@ class SyncSessionManager:
         "_rate_buckets",
         "_get_max_seq",
         "_check_member",
+        "_on_local_ice",
     )
 
     def __init__(
@@ -124,6 +125,7 @@ class SyncSessionManager:
         *,
         get_max_seq=None,
         check_member=None,
+        on_local_ice=None,
     ) -> None:
         self._federation_repo = federation_repo
         self._sessions: dict[str, SyncSessionRecord] = {}
@@ -138,6 +140,12 @@ class SyncSessionManager:
         # the corresponding check is skipped.
         self._get_max_seq = get_max_seq
         self._check_member = check_member
+        # Forwards each session's locally-gathered ICE candidate to the
+        # opposite peer via ``SPACE_SYNC_ICE``. Signature:
+        # ``async (sync_id, candidate, sdp_mid) -> None``. Injected by
+        # ``FederationService`` so the manager stays free of routing
+        # knowledge.
+        self._on_local_ice = on_local_ice
 
     # ─── Public registry methods ──────────────────────────────────────────
 
@@ -302,6 +310,7 @@ class SyncSessionManager:
             sync_mode=sync_mode,
             role="provider",
             ice_servers=ice_servers,
+            on_local_ice=self._on_local_ice,
         )
         record = SyncSessionRecord(
             sync_id=sync_id,
@@ -345,6 +354,7 @@ class SyncSessionManager:
                 sync_mode=sync_mode,
                 role="requester",
                 ice_servers=ice_servers,
+                on_local_ice=self._on_local_ice,
             )
             record = SyncSessionRecord(
                 sync_id=sync_id,
@@ -388,7 +398,13 @@ class SyncSessionManager:
         await record.rtc.set_answer(sdp_answer)
         return True
 
-    async def apply_ice(self, *, sync_id: str, candidate: str) -> bool:
+    async def apply_ice(
+        self,
+        *,
+        sync_id: str,
+        candidate: str,
+        sdp_mid: str = "0",
+    ) -> bool:
         """Apply a single ICE candidate after S-7 validation."""
         if not self.validate_ice_candidate(candidate):
             log.debug("apply_ice: dropped invalid candidate (sync=%s)", sync_id)
@@ -396,7 +412,7 @@ class SyncSessionManager:
         record = self._sessions.get(sync_id)
         if record is None or record.rtc is None:
             return False
-        await record.rtc.add_ice_candidate(candidate)
+        await record.rtc.add_ice_candidate(candidate, sdp_mid)
         return True
 
     # ─── S-15: relay fallback ─────────────────────────────────────────────

@@ -164,6 +164,7 @@ class _FakePeerConnection:
         self._config = config
         self._channels: list[_FakeDataChannel] = []
         self._incoming_queue: asyncio.Queue = asyncio.Queue()
+        self._ice_queue: asyncio.Queue = asyncio.Queue()
         self._closed = False
         self._tasks: list[asyncio.Task] = []
         # Tracks the last set_local_description / set_remote_description calls
@@ -234,10 +235,23 @@ class _FakePeerConnection:
         return None
 
     async def ice_candidates(self):
-        # Yield nothing — equivalent to "gathering produced no
-        # candidates", enough for tests that only care about SDP flow.
-        if False:
-            yield _FakeIceCandidate("", "")
+        # Tests inject candidates by pushing onto ``self._ice_queue``
+        # before triggering the gathering path. ``None`` is the
+        # close-sentinel that mirrors the real lib's iterator-exit
+        # contract. By default the queue is empty so callers that
+        # don't push anything see an empty stream — same shape as
+        # "gathering produced no candidates".
+        while not self._closed:
+            try:
+                cand = await asyncio.wait_for(
+                    self._ice_queue.get(),
+                    timeout=0.01,
+                )
+            except asyncio.TimeoutError:
+                return
+            if cand is None:
+                return
+            yield cand
 
     async def incoming_data_channels(self):
         # Drain the queue until closed.
