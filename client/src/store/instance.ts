@@ -13,6 +13,11 @@ import { api } from '@/api'
 export interface InstanceConfig {
   mode: 'standalone' | 'ha' | 'haos'
   instance_name: string
+  /** Stable base32 id of this Social Home. Surfaced so cross-instance
+   *  payloads (space-invite codes, the future GFS-redirect path) can
+   *  embed it without an extra /api/friends round-trip. ``null`` when
+   *  the federation tables aren't seeded yet (pre-setup cold start). */
+  instance_id: string | null
   capabilities: string[]
   setup_required: boolean
   /** Vite content hash of the entry bundle the backend is currently

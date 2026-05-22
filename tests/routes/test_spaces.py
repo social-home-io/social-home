@@ -341,6 +341,95 @@ async def test_join_via_invite_token(client):
     assert (await resp.json())["role"] == "member"
 
 
+async def test_join_forwards_issuer_instance_id_to_service(client, monkeypatch):
+    """POST /api/spaces/join with a foreign ``issuer_instance_id`` forwards
+    the field to ``space_service.redeem_invite_token`` and surfaces the
+    service's ``{space_id, role}`` response on success."""
+    from socialhome.services.space_service import SpaceService
+
+    captured: dict = {}
+
+    async def _fake_redeem(self, token, *, user_id, issuer_instance_id=None):
+        captured["token"] = token
+        captured["user_id"] = user_id
+        captured["issuer_instance_id"] = issuer_instance_id
+        return {"space_id": "sp-remote", "role": "member"}
+
+    monkeypatch.setattr(SpaceService, "redeem_invite_token", _fake_redeem)
+    resp = await client.post(
+        "/api/spaces/join",
+        json={"token": "tkn", "issuer_instance_id": "issuer-abc"},
+        headers=_auth(client._bob_token),
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body == {"space_id": "sp-remote", "role": "member"}
+    assert captured["issuer_instance_id"] == "issuer-abc"
+    assert captured["token"] == "tkn"
+    assert captured["user_id"] == client._bob_uid
+
+
+async def test_join_remote_redeem_denied_maps_to_422(client, monkeypatch):
+    """A ``SpacePermissionError`` from the cross-instance path (token
+    denied / expired / issuer unpaired) maps to 422 with ``REDEEM_DENIED``
+    so the SPA can render the issuer's reason verbatim."""
+    from socialhome.domain.space import SpacePermissionError
+    from socialhome.services.space_service import SpaceService
+
+    async def _fake_redeem(self, token, *, user_id, issuer_instance_id=None):
+        raise SpacePermissionError(
+            "invite token invalid, expired, or exhausted",
+        )
+
+    monkeypatch.setattr(SpaceService, "redeem_invite_token", _fake_redeem)
+    resp = await client.post(
+        "/api/spaces/join",
+        json={"token": "tkn", "issuer_instance_id": "issuer-abc"},
+        headers=_auth(client._bob_token),
+    )
+    assert resp.status == 422
+    body = await resp.json()
+    assert body["error"]["code"] == "REDEEM_DENIED"
+    assert "expired" in body["error"]["detail"]
+
+
+async def test_join_remote_redeem_timeout_maps_to_504(client, monkeypatch):
+    """A ``TimeoutError`` (issuer didn't ACK / DENY in time) maps to 504."""
+    from socialhome.services.space_service import SpaceService
+
+    async def _fake_redeem(self, token, *, user_id, issuer_instance_id=None):
+        raise TimeoutError("issuer did not respond")
+
+    monkeypatch.setattr(SpaceService, "redeem_invite_token", _fake_redeem)
+    resp = await client.post(
+        "/api/spaces/join",
+        json={"token": "tkn", "issuer_instance_id": "issuer-abc"},
+        headers=_auth(client._bob_token),
+    )
+    assert resp.status == 504
+    body = await resp.json()
+    assert body["error"]["code"] == "ISSUER_TIMEOUT"
+
+
+async def test_join_local_ban_still_maps_to_403(client, monkeypatch):
+    """A local-only join attempt where the user is banned keeps the
+    existing 403 ``FORBIDDEN`` mapping — the 422 remap only applies to
+    cross-instance redeems."""
+    from socialhome.domain.space import SpacePermissionError
+    from socialhome.services.space_service import SpaceService
+
+    async def _fake_redeem(self, token, *, user_id, issuer_instance_id=None):
+        raise SpacePermissionError("banned from this space", banned=True)
+
+    monkeypatch.setattr(SpaceService, "redeem_invite_token", _fake_redeem)
+    resp = await client.post(
+        "/api/spaces/join",
+        json={"token": "tkn"},  # no issuer_instance_id → local path
+        headers=_auth(client._bob_token),
+    )
+    assert resp.status == 403
+
+
 async def test_create_space_post(client):
     """POST /api/spaces/{id}/posts creates a post in the space."""
     r = await client.post(

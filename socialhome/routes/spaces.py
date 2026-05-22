@@ -28,7 +28,12 @@ from ..app_keys import (
     user_repo_key,
 )
 from ..domain.post import LocationData
-from ..domain.space import SpaceFeatureAccess, SpaceFeatures, SpaceZone
+from ..domain.space import (
+    SpaceFeatureAccess,
+    SpaceFeatures,
+    SpacePermissionError,
+    SpaceZone,
+)
 from ..domain.user import SYSTEM_AUTHOR
 from ..domain.federation import PairingStatus
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
@@ -829,22 +834,42 @@ class RemoteInviteDecisionView(BaseView):
 
 
 class SpaceJoinView(BaseView):
-    """POST /api/spaces/join — accept an invite token."""
+    """POST /api/spaces/join — accept an invite token.
+
+    Accepts an optional ``issuer_instance_id`` body field. When present
+    and not equal to our own instance, the service runs a §D2
+    cross-instance handshake with the issuer; the issuer validates the
+    token, seats us as a remote member, and ACKs back. Errors map to:
+
+    * 422 — issuer not paired / token denied (``SpacePermissionError``)
+    * 504 — issuer didn't respond within the timeout (``TimeoutError``)
+    """
 
     async def post(self) -> web.Response:
         ctx = self.user
         svc = self.svc(space_service_key)
         body = await self.body()
-        member = await svc.accept_invite_token(
-            body["token"],
-            user_id=ctx.user_id,
-        )
-        return web.json_response(
-            {
-                "space_id": member.space_id,
-                "role": member.role,
-            }
-        )
+        issuer_raw = body.get("issuer_instance_id") if isinstance(body, dict) else None
+        issuer_instance_id = str(issuer_raw).strip() if issuer_raw else None
+        try:
+            result = await svc.redeem_invite_token(
+                body["token"],
+                user_id=ctx.user_id,
+                issuer_instance_id=issuer_instance_id or None,
+            )
+        except TimeoutError as exc:
+            return error_response(504, "ISSUER_TIMEOUT", str(exc))
+        # ``SpacePermissionError`` from the cross-instance path means
+        # the issuer wouldn't / couldn't honour the token — map to 422
+        # so the SPA can render the issuer's reason verbatim. The local
+        # path raises the same exception on a ban (banned=True), which
+        # ``BaseView._iter`` already maps to 403; only catch and remap
+        # here when the redeem actually went out over the wire.
+        except SpacePermissionError as exc:
+            if issuer_instance_id and not exc.banned:
+                return error_response(422, "REDEEM_DENIED", str(exc))
+            raise
+        return web.json_response(result)
 
 
 class SpaceModerationQueueView(BaseView):

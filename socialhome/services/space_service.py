@@ -118,6 +118,7 @@ class SpaceService:
         "_federation_repo",
         "_federation",
         "_remote_members",
+        "_redeem_coordinator",
     )
 
     def __init__(
@@ -141,6 +142,7 @@ class SpaceService:
         self._federation_repo = None
         self._federation = None
         self._remote_members = None
+        self._redeem_coordinator = None
 
     def attach_child_protection(self, child_protection_service) -> None:
         """Wire §CP.F1 enforcement into add_member."""
@@ -182,6 +184,16 @@ class SpaceService:
             RemoteJoinRequestApproved,
             self._on_remote_join_request_approved_bus,
         )
+
+    def attach_redeem_coordinator(self, coordinator) -> None:
+        """Wire the §D2 cross-instance invite-token redeem driver.
+
+        Optional: when not attached (early boot / unit tests),
+        :meth:`redeem_invite_token` falls back to the local-only
+        :meth:`accept_invite_token` path and refuses non-local
+        ``issuer_instance_id`` requests.
+        """
+        self._redeem_coordinator = coordinator
 
     async def _on_remote_join_request_approved_bus(
         self,
@@ -1072,6 +1084,36 @@ class SpaceService:
             to_instance_id=instance_id,
             event_type=FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
             payload={"space_id": space_id, "user_id": user_id},
+        )
+
+    async def redeem_invite_token(
+        self,
+        token: str,
+        *,
+        user_id: str,
+        issuer_instance_id: str | None = None,
+    ) -> dict:
+        """Consume an invite token, possibly via a cross-instance round-trip.
+
+        When ``issuer_instance_id`` is None or matches our own instance,
+        falls through to the local :meth:`accept_invite_token` and
+        returns ``{space_id, role}``. Otherwise delegates to the
+        attached :class:`SpaceInviteTokenRedeemCoordinator` which
+        handshakes with the issuer and returns the same shape. Raises
+        :class:`SpacePermissionError` (unpaired / banned / denied) or
+        ``TimeoutError`` (issuer unreachable).
+        """
+        if issuer_instance_id is None or issuer_instance_id == self._own_instance_id:
+            member = await self.accept_invite_token(token, user_id=user_id)
+            return {"space_id": member.space_id, "role": member.role}
+        if self._redeem_coordinator is None:
+            raise SpacePermissionError(
+                "cross-instance invite redeem is not available on this host",
+            )
+        return await self._redeem_coordinator.request_redeem(
+            token,
+            viewer_user_id=user_id,
+            issuer_instance_id=issuer_instance_id,
         )
 
     async def accept_invite_token(

@@ -181,6 +181,7 @@ from .services.schedule_federation_outbound import ScheduleFederationOutbound
 from .services.comment_federation_outbound import CommentFederationOutbound
 from .services.corner_service import CornerService
 from .federation.peer_directory_handler import PeerDirectoryHandler
+from .federation.invite_token_redeem import SpaceInviteTokenRedeemCoordinator
 from .federation.private_invite_handler import PrivateSpaceInviteHandler
 from .services.peer_directory_service import PeerDirectoryService
 from .services.profile_federation_outbound import ProfileFederationOutbound
@@ -1893,6 +1894,20 @@ def create_app(config: Config | None = None) -> web.Application:
             federation_repo=federation_repo,
             remote_member_repo=repos.space_remote_member,
         )
+        # §D2 cross-instance invite-token redeem — wires the
+        # ``SPACE_INVITE_TOKEN_REDEEM*`` family into the federation
+        # event registry and gives ``space_service`` the driver it
+        # delegates to when a local user pastes a peer's token.
+        invite_redeem_coordinator = SpaceInviteTokenRedeemCoordinator(
+            bus=bus,
+            federation_service=federation_service,
+            space_repo=space_repo,
+            space_remote_member_repo=repos.space_remote_member,
+            user_repo=user_repo,
+            federation_repo=federation_repo,
+        )
+        invite_redeem_coordinator.attach_to(federation_service)
+        real_space_service.attach_redeem_coordinator(invite_redeem_coordinator)
         # Wire RSVP propagation onto the calendar service. Done after
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).

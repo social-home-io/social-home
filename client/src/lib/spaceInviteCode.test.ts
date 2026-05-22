@@ -8,7 +8,11 @@ describe('spaceInviteCode', () => {
         token: 'a1b2c3d4e5f60718',
         space_id: 'space-uuid-here',
         space_display_hint: "Pascal's family · 🏠",
-        issuer_instance_url: 'https://example.com/api/hassio_ingress/abc/',
+        issuer_instance_id: 'abcdef1234567890abcdef1234567890',
+        via_gfs: {
+          gfs_url: 'https://gfs.example.com/',
+          gfs_space_id: 'gfs-space-id-here',
+        },
       }
       const code = buildInviteCode(payload)
       expect(code).toMatch(/^socialhome:\/\/invite#/)

@@ -26,7 +26,7 @@ describe('SpaUpdateBanner', () => {
   it('renders nothing when the backend reports the same hash', () => {
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'X',
+      instance_name: 'X', instance_id: null,
       capabilities: [],
       setup_required: false,
       spa_bundle_hash: 'BOOT123',
@@ -38,7 +38,7 @@ describe('SpaUpdateBanner', () => {
   it('renders nothing when the backend reports a null hash (dev mode)', () => {
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'X',
+      instance_name: 'X', instance_id: null,
       capabilities: [],
       setup_required: false,
       spa_bundle_hash: null,
@@ -50,7 +50,7 @@ describe('SpaUpdateBanner', () => {
   it('renders the banner when the backend hash differs', () => {
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'X',
+      instance_name: 'X', instance_id: null,
       capabilities: [],
       setup_required: false,
       spa_bundle_hash: 'NEWER456',
@@ -66,7 +66,7 @@ describe('SpaUpdateBanner', () => {
   it('hides the banner after the user clicks "Later" for this hash', () => {
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'X',
+      instance_name: 'X', instance_id: null,
       capabilities: [],
       setup_required: false,
       spa_bundle_hash: 'NEWER456',
@@ -85,7 +85,7 @@ describe('SpaUpdateBanner', () => {
     _test.dismissedFor.value = 'NEWER456'
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'X',
+      instance_name: 'X', instance_id: null,
       capabilities: [],
       setup_required: false,
       spa_bundle_hash: 'EVEN_NEWER789',  // a second deploy
@@ -97,7 +97,7 @@ describe('SpaUpdateBanner', () => {
   it('clicking Reload calls window.location.reload', () => {
     instanceConfig.value = {
       mode: 'standalone',
-      instance_name: 'X',
+      instance_name: 'X', instance_id: null,
       capabilities: [],
       setup_required: false,
       spa_bundle_hash: 'NEWER456',

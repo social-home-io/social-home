@@ -9,29 +9,43 @@
  *
  * Payload fields:
  *
- *  - ``token`` — the bearer credential the receiver POSTs to
- *    ``/api/spaces/join``. Mandatory.
+ *  - ``token`` — the bearer credential the receiver redeems against
+ *    the issuer's instance. Mandatory.
  *  - ``space_id`` — for client-side preview / post-join navigation.
  *    Optional for back-compat with bare-token pastes.
  *  - ``space_display_hint`` — human-readable space name so the join
  *    card can render "You're about to join Pascal's family" without
  *    a round-trip to the issuer. Optional.
- *  - ``issuer_instance_url`` — the document.baseURI of the issuing
- *    instance. Lets the receiver detect "you landed on the wrong
- *    instance" when the same code is opened via the legacy
- *    ``/join?token=…`` URL. Optional.
+ *  - ``issuer_instance_id`` — the base32 instance id of the issuing
+ *    Social Home. Lets the receiver decide whether they can redeem
+ *    locally (same instance), over federation (CONFIRMED peer), or
+ *    need to pair first. **Never** an HTTPS URL — a clickable URL
+ *    would land the receiver on the issuer's instance where they
+ *    can't redeem against their own account. A future GFS-mediated
+ *    redirect can make a real link work; until then the code paste
+ *    is the only path.
+ *  - ``via_gfs`` — for GFS-published spaces, the GFS reference the
+ *    receiver can use to redeem if their household is paired with
+ *    that GFS. Optional; ``null`` for private peer-to-peer spaces.
  *
- * Backend wire contract is unchanged — only ``token`` ever travels in
- * the HTTP body. All metadata sits on top of the token for SPA-side
- * UX.
+ * Backend redeems travel through the §24.11 federation pipeline
+ * (``SPACE_INVITE_TOKEN_REDEEM`` family) when issuer ≠ receiver.
  */
 import { base64UrlEncode, base64UrlDecode } from './base64Url'
+
+export interface SpaceInviteGfsRef {
+  /** Base URL of the GFS the space is published on. */
+  gfs_url: string
+  /** Space id under that GFS (may differ from the local space id). */
+  gfs_space_id: string
+}
 
 export interface SpaceInvitePayload {
   token: string
   space_id?: string | null
   space_display_hint?: string | null
-  issuer_instance_url?: string | null
+  issuer_instance_id?: string | null
+  via_gfs?: SpaceInviteGfsRef | null
 }
 
 export function buildInviteCode(payload: SpaceInvitePayload): string {
