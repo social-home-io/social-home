@@ -811,20 +811,24 @@ class FederationService:
         """Fan out to every member household of ``space_id``.
 
         Each per-peer ship goes through :meth:`send_with_mesh_fallback`
-        so a member whose household isn't currently a direct CONFIRMED
-        peer (post-pairing churn, transient unpair) still receives the
-        envelope via SPACE_ROUTED when the mesh is wired.
-
-        Currently :meth:`list_instances_in_space` only returns CONFIRMED
-        members so the mesh-fallback branch is inert in practice; the
-        architectural change lets future widenings of the member-query
-        light up mesh delivery without further wiring.
+        so a member whose household is *not* a direct CONFIRMED peer
+        (admin-initiated private invite accepted via mesh, post-pairing
+        churn, transient unpair) still receives the envelope via
+        SPACE_ROUTED when the mesh is wired. Mesh-only members are
+        looked up via :meth:`AbstractFederationRepo.list_member_instance_ids`
+        — that path skips the ``remote_instances.status = CONFIRMED``
+        filter so an unconfirmed-but-reachable member still appears
+        in the broadcast set; the per-peer ``send_with_mesh_fallback``
+        decides direct vs mesh based on the actual pairing state at
+        send time.
         """
-        instances = await self._federation_repo.list_instances_in_space(space_id)
+        instance_ids = await self._federation_repo.list_member_instance_ids(
+            space_id,
+        )
         results: list[DeliveryResult] = []
-        for inst in instances:
+        for iid in instance_ids:
             result = await self.send_with_mesh_fallback(
-                to_instance_id=inst.id,
+                to_instance_id=iid,
                 event_type=event_type,
                 payload=payload,
                 space_id=space_id,
