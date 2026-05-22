@@ -192,6 +192,8 @@ class _RtcPeer:
         "_published_open",
         "_polite",
         "_making_offer",
+        "_on_failed",
+        "_teardown_task",
     )
 
     def __init__(
@@ -204,6 +206,7 @@ class _RtcPeer:
         send_hwm: int = SEND_HWM_BYTES,
         bus: "EventBus | None" = None,
         polite: bool = False,
+        on_failed: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.instance_id = instance_id
         self._ice_servers = ice_servers or []
@@ -214,6 +217,15 @@ class _RtcPeer:
         self._open = asyncio.Event()
         self._closed = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Notified when the PC transitions to ``RTCState.FAILED`` so the
+        # parent transport can evict this peer from its registry and
+        # let the next ``send()`` build a fresh handshake instead of
+        # silently falling back to HTTPS forever.
+        self._on_failed = on_failed
+        # Strong ref so a teardown publish from ``close()`` doesn't get
+        # GC'd before it runs (CPython's loop holds tasks via a weakref
+        # set in some implementations).
+        self._teardown_task: asyncio.Task | None = None
         # S-14: on the offerer side we lock the answer origin to the
         # peer we invited. Mismatches are rejected with a warning.
         self._expected_answer_from: str | None = None
@@ -273,6 +285,7 @@ class _RtcPeer:
         self._channel.set_buffered_amount_low_threshold(self._send_hwm // 2)
         # Tasks bound to the pc: auto-cancelled on pc.close().
         self._pc.spawn_task(self._drain_channel(self._channel))
+        self._pc.spawn_task(self._drain_events())
 
         local = await self._pc.set_local_description("offer")
         await self._signaling(
@@ -296,8 +309,15 @@ class _RtcPeer:
         the impolite peer ignores this incoming OFFER and the polite
         peer rolls back its own offer before accepting.
         """
+        # The signaling state comes back as ``aiolibdatachannel.SignalingState``
+        # which is an ``IntEnum`` — comparing it against the string
+        # ``"stable"`` always returns ``True`` (IntEnum vs str), so before
+        # this fix every legitimate handshake was treated as a glare
+        # collision. Compare against the enum value directly. See also
+        # :meth:`apply_answer` below.
         collision = self._making_offer or (
-            self._pc is not None and self._pc.signaling_state != "stable"
+            self._pc is not None
+            and self._pc.signaling_state != rtc.SignalingState.STABLE
         )
         if collision and not self._polite:
             log.info(
@@ -321,6 +341,7 @@ class _RtcPeer:
         self._pc = rtc.PeerConnection(_build_rtc_config(self._ice_servers))
 
         self._pc.spawn_task(self._drain_incoming_channel())
+        self._pc.spawn_task(self._drain_events())
 
         await self._pc.set_remote_description(sdp, "offer")
         # Release any ICE candidates that arrived before the offer (or
@@ -362,8 +383,15 @@ class _RtcPeer:
             return False
         # Perfect-negotiation guard: if we rolled back our offer (polite
         # side) the PC is either None or no longer in have-local-offer
-        # state — silently drop this stale ANSWER.
-        if self._pc is None or self._pc.signaling_state != "have-local-offer":
+        # state — silently drop this stale ANSWER.  ``signaling_state``
+        # is ``IntEnum``; comparing against the string ``"have-local-offer"``
+        # was always True (IntEnum vs str), so prior to this fix every
+        # legitimate answer was rejected and the offerer's handshake
+        # never completed → silent HTTPS fallback.
+        if (
+            self._pc is None
+            or self._pc.signaling_state != rtc.SignalingState.HAVE_LOCAL_OFFER
+        ):
             log.info(
                 "RTC answer from %s ignored — pc is %s",
                 from_instance,
@@ -429,6 +457,77 @@ class _RtcPeer:
             )
 
     # ─── Internal drain loops ─────────────────────────────────────────────
+
+    async def _drain_events(self) -> None:
+        """Log every PC state transition and trigger auto-recovery on
+        ``RTCState.FAILED``.
+
+        The library exposes a unified async iterator (`pc.events()`)
+        that fires for every connection / ICE / signaling / gathering
+        transition. Before this loop, the only visible signal at the
+        federation layer was ``channel open`` / ``channel closed`` —
+        an operator looking at a stuck handshake had no way to tell
+        whether ICE never gathered, DTLS failed, the answer was
+        rejected, or the peer just dropped. Now every transition is
+        a log line tagged with the instance.
+
+        When the connection enters ``FAILED`` we evict ourselves from
+        the parent transport via ``_on_failed`` so the next ``send()``
+        builds a fresh handshake instead of returning False forever.
+        """
+        pc = self._pc
+        if pc is None:
+            return
+        try:
+            async for ev in pc.events():
+                if isinstance(ev, rtc.StateChangeEvent):
+                    log.info(
+                        "fed RTC peer %s: connection_state=%s",
+                        self.instance_id,
+                        ev.state.name,
+                    )
+                    if ev.state in (rtc.RTCState.FAILED, rtc.RTCState.CLOSED):
+                        self._closed = True
+                        self._open.clear()
+                        if (
+                            ev.state == rtc.RTCState.FAILED
+                            and self._on_failed is not None
+                        ):
+                            try:
+                                await self._on_failed(self.instance_id)
+                            except Exception as exc:  # noqa: BLE001
+                                log.warning(
+                                    "fed RTC on_failed handler raised for %s: %s",
+                                    self.instance_id,
+                                    exc,
+                                )
+                elif isinstance(ev, rtc.IceStateChangeEvent):
+                    log.info(
+                        "fed RTC peer %s: ice_state=%s",
+                        self.instance_id,
+                        ev.state.name,
+                    )
+                elif isinstance(ev, rtc.SignalingStateChangeEvent):
+                    log.debug(
+                        "fed RTC peer %s: signaling_state=%s",
+                        self.instance_id,
+                        ev.state.name,
+                    )
+                elif isinstance(ev, rtc.GatheringStateChangeEvent):
+                    log.debug(
+                        "fed RTC peer %s: gathering_state=%s",
+                        self.instance_id,
+                        ev.state.name,
+                    )
+                # LocalDescription / LocalCandidate / DataChannel events
+                # are consumed by their specialised iterators
+                # (``ice_candidates``, ``incoming_data_channels``,
+                # ``set_local_description``); skip them here so we don't
+                # double-log.
+        except asyncio.CancelledError:
+            raise
+        except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
+            log.debug("fed RTC events drain to %s ended: %s", self.instance_id, exc)
 
     async def _drain_ice(self) -> None:
         """Pump local ICE candidates out to the peer over signalling."""
@@ -585,13 +684,19 @@ class _RtcPeer:
         self._channel = None
         if self._published_open and self._bus is not None and self._loop is not None:
             self._published_open = False
-            self._loop.create_task(
+            # Stash the task on the instance so asyncio doesn't garbage-
+            # collect it before the publish coro runs. ``create_task``
+            # only holds a weak ref via the loop's task set, so a
+            # never-awaited handle can be reclaimed mid-flight and the
+            # publish silently drops.
+            self._teardown_task = self._loop.create_task(
                 self._bus.publish(
                     PeerTransportChanged(
                         instance_id=self.instance_id,
                         transport="https",
                     ),
-                )
+                ),
+                name=f"fed-rtc-teardown[{self.instance_id}]",
             )
 
 
@@ -718,6 +823,7 @@ class FederationTransport:
                 inbound=self._inbound_factory(instance.id),
                 bus=self._bus,
                 polite=self._own_instance_id > instance.id,
+                on_failed=self._evict_peer,
             )
             self._peers[instance.id] = peer
         # Release lock before the network call — the signalling round
@@ -784,6 +890,7 @@ class FederationTransport:
                     inbound=self._inbound_factory(from_instance),
                     bus=self._bus,
                     polite=self._own_instance_id > from_instance,
+                    on_failed=self._evict_peer,
                 )
                 self._peers[from_instance] = peer
         sdp = str(payload.get("sdp") or "")
@@ -841,12 +948,37 @@ class FederationTransport:
                     inbound=self._inbound_factory(from_instance),
                     bus=self._bus,
                     polite=self._own_instance_id > from_instance,
+                    on_failed=self._evict_peer,
                 )
                 self._peers[from_instance] = peer
         await peer.add_ice_candidate(
             candidate=str(payload.get("candidate") or ""),
             sdp_mid=str(payload.get("sdp_mid") or "0"),
         )
+
+    async def _evict_peer(self, instance_id: str) -> None:
+        """Drop a ``_RtcPeer`` after its underlying PC entered FAILED.
+
+        Without this hook a failed PC stayed in ``_peers`` forever and
+        every subsequent ``send()`` short-circuited to HTTPS fallback
+        without trying to rebuild the channel. Removing the entry lets
+        the next outbound envelope call ``_ensure_handshake`` again.
+
+        Bound to ``_RtcPeer(on_failed=...)`` at instantiation.
+        """
+        async with self._lock:
+            peer = self._peers.pop(instance_id, None)
+        if peer is None:
+            return
+        log.info(
+            "fed RTC peer %s evicted after FAILED state; next send will "
+            "rebuild the handshake",
+            instance_id,
+        )
+        try:
+            peer.close()
+        except Exception as exc:  # noqa: BLE001 — defensive on shutdown path
+            log.debug("fed RTC peer %s close after evict: %s", instance_id, exc)
 
     # ─── Inspection + shutdown ───────────────────────────────────────────
 

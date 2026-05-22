@@ -302,8 +302,10 @@ async def test_peer_apply_answer_releases_buffered_ice():
 
     applied: list[tuple[str, str]] = []
 
+    import aiolibdatachannel as _rtc  # noqa: PLC0415 — late import for stub
+
     class _StubPc:
-        signaling_state = "have-local-offer"
+        signaling_state = _rtc.SignalingState.HAVE_LOCAL_OFFER
 
         async def add_remote_candidate(self, candidate, sdp_mid):
             applied.append((candidate, sdp_mid))

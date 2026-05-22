@@ -6,8 +6,10 @@ import asyncio
 import sys
 import tempfile
 from dataclasses import dataclass
+from enum import IntEnum
 from pathlib import Path
 from types import ModuleType
+from typing import AsyncIterator
 
 # ── Fake aiolibdatachannel ───────────────────────────────────────────────
 # Injected into sys.modules BEFORE any production code imports it. The CI
@@ -15,6 +17,63 @@ from types import ModuleType
 # contain stub branches — test-level mocks are the only mechanism.
 
 _STUB_SDP = "v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\na=mock\r\n"
+
+
+# Vendored copies of the enum values + state-event dataclasses the
+# library publishes. Production code references these (e.g.
+# ``rtc.SignalingState.STABLE``); the fake module needs to expose the
+# same names so production import paths resolve identically.
+class _FakeSignalingState(IntEnum):
+    STABLE = 0
+    HAVE_LOCAL_OFFER = 1
+    HAVE_REMOTE_OFFER = 2
+    HAVE_LOCAL_PRANSWER = 3
+    HAVE_REMOTE_PRANSWER = 4
+
+
+class _FakeRTCState(IntEnum):
+    NEW = 0
+    CONNECTING = 1
+    CONNECTED = 2
+    DISCONNECTED = 3
+    FAILED = 4
+    CLOSED = 5
+
+
+class _FakeICEState(IntEnum):
+    NEW = 0
+    CHECKING = 1
+    CONNECTED = 2
+    COMPLETED = 3
+    FAILED = 4
+    DISCONNECTED = 5
+    CLOSED = 6
+
+
+class _FakeGatheringState(IntEnum):
+    NEW = 0
+    IN_PROGRESS = 1
+    COMPLETE = 2
+
+
+@dataclass(slots=True, frozen=True)
+class _FakeStateChangeEvent:
+    state: _FakeRTCState
+
+
+@dataclass(slots=True, frozen=True)
+class _FakeIceStateChangeEvent:
+    state: _FakeICEState
+
+
+@dataclass(slots=True, frozen=True)
+class _FakeSignalingStateChangeEvent:
+    state: _FakeSignalingState
+
+
+@dataclass(slots=True, frozen=True)
+class _FakeGatheringStateChangeEvent:
+    state: _FakeGatheringState
 
 
 @dataclass(slots=True)
@@ -113,19 +172,41 @@ class _FakePeerConnection:
         self._remote_type: str | None = None
 
     @property
-    def signaling_state(self) -> str:
-        """Return a WebRTC-style signaling state based on local/remote types."""
+    def signaling_state(self):
+        """Return a ``SignalingState`` IntEnum value based on local/remote
+        types.  Earlier versions of this stub returned plain strings, which
+        masked a production bug: ``transport.py`` compared the real
+        ``aiolibdatachannel.SignalingState`` (an ``IntEnum``) against
+        string literals and the comparison always returned True
+        (IntEnum != str), so every legitimate RTC handshake was silently
+        rejected.  Returning the IntEnum here keeps the stub honest
+        against the library's contract."""
         if self._closed:
-            return "closed"
+            # No ``CLOSED`` in this enum — the lib drops the PC; the
+            # closest neutral pre-close state is STABLE.
+            return _FakeSignalingState.STABLE
         if self._local_type == "offer" and self._remote_type is None:
-            return "have-local-offer"
+            return _FakeSignalingState.HAVE_LOCAL_OFFER
         if self._remote_type == "offer" and self._local_type is None:
-            return "have-remote-offer"
+            return _FakeSignalingState.HAVE_REMOTE_OFFER
         if self._local_type == "answer":
-            return "have-local-answer"
+            # The lib doesn't surface "have-local-answer" as a distinct
+            # state; transition straight to STABLE the moment the answer
+            # is set locally.
+            return _FakeSignalingState.STABLE
         if self._remote_type == "answer":
-            return "stable"
-        return "stable"
+            return _FakeSignalingState.STABLE
+        return _FakeSignalingState.STABLE
+
+    def events(self) -> AsyncIterator:
+        """Empty events iterator — production code uses this to drain
+        state-change events; tests don't exercise transitions."""
+
+        async def _empty():
+            if False:
+                yield  # pragma: no cover
+
+        return _empty()
 
     async def create_data_channel(self, label: str, options=None):
         ch = _FakeDataChannel(label)
@@ -224,6 +305,16 @@ _fake_rtc.LocalDescription = _FakeLocalDescription  # type: ignore[attr-defined]
 _fake_rtc.ConnectionClosedError = _FakeConnectionClosedError  # type: ignore[attr-defined]
 _fake_rtc.RTCError = _FakeRTCError  # type: ignore[attr-defined]
 _fake_rtc.install_python_logger = _fake_install_python_logger  # type: ignore[attr-defined]
+# Vendored enums + state-event dataclasses for code paths that reference
+# them by ``rtc.SignalingState`` / ``rtc.RTCState`` / etc.
+_fake_rtc.SignalingState = _FakeSignalingState  # type: ignore[attr-defined]
+_fake_rtc.RTCState = _FakeRTCState  # type: ignore[attr-defined]
+_fake_rtc.ICEState = _FakeICEState  # type: ignore[attr-defined]
+_fake_rtc.GatheringState = _FakeGatheringState  # type: ignore[attr-defined]
+_fake_rtc.StateChangeEvent = _FakeStateChangeEvent  # type: ignore[attr-defined]
+_fake_rtc.IceStateChangeEvent = _FakeIceStateChangeEvent  # type: ignore[attr-defined]
+_fake_rtc.SignalingStateChangeEvent = _FakeSignalingStateChangeEvent  # type: ignore[attr-defined]
+_fake_rtc.GatheringStateChangeEvent = _FakeGatheringStateChangeEvent  # type: ignore[attr-defined]
 sys.modules["aiolibdatachannel"] = _fake_rtc
 
 # ── Regular fixtures ─────────────────────────────────────────────────────
