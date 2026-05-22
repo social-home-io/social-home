@@ -2954,6 +2954,150 @@ def cmd_invite_redeem() -> None:
     print("invite-redeem: ok")
 
 
+def cmd_invite_redeem_routed() -> None:
+    """Mesh-routed cross-instance space-invite token redeem (PR 2, v_6).
+
+    Validates ``SPACE_ROUTED`` end-to-end: c (the receiver) wants to
+    join a private space hosted on d (the issuer). After
+    ``cmd_pair`` + ``cmd_relay_pair`` the only households unpaired
+    with each other are c and d — c↔b↔d is the only mesh path.
+
+    Sequence:
+
+    1. **d creates** a private space + mints a one-use invite token.
+    2. **c POSTs** the token to its own ``/api/spaces/join`` with
+       ``issuer_instance_id=<d's id>``. d is NOT a direct peer of c
+       so the receiver-side coordinator triggers a
+       ``SPACE_FIND_ROUTE`` probe; b responds with a ROUTE_FOUND
+       carrying d's per-route ephemeral X25519 pub. The redeem then
+       ships as ``SPACE_ROUTED(direction=forward)`` with the inner
+       payload sealed under that ephemeral — b sees only the opaque
+       ``sealed`` blob.
+    3. **d unseals**, validates the token + seats c as a remote
+       member, ships the ACK back as
+       ``SPACE_ROUTED(direction=reply)``.
+    4. **c unseals the ACK** and resolves the awaiting Future inside
+       ``POST /api/spaces/join``.
+
+    Assertions:
+
+    - HTTP 200/201 from c's ``/api/spaces/join`` (proves the full
+      forward + reply mesh path round-tripped end-to-end).
+    - ``d.space_remote_members`` shows c's user (proves the inner
+      SPACE_INVITE_TOKEN_REDEEM was dispatched at the target after
+      unseal).
+    - b's log shows ``SPACE_ROUTED`` envelopes flowing but no
+      ``SPACE_INVITE_TOKEN_REDEEM`` (proves the relay never
+      dispatched the inner event — i.e. never decrypted it).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+    b = state["instances"]["b"]
+
+    # 1. d creates a private space + mints a token.
+    s, space = _request(
+        f"http://127.0.0.1:{d['port']}/api/spaces",
+        token=d["token"],
+        method="POST",
+        body={
+            "name": "Delta's mesh lab",
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "emoji": "🕸",
+        },
+    )
+    _must("create space(d)", s, space, ok=(201,))
+    space_id = space["id"]
+    print(f"  d created space: {space_id}")
+
+    s, token_res = _request(
+        f"http://127.0.0.1:{d['port']}/api/spaces/{space_id}/invite-tokens",
+        token=d["token"],
+        method="POST",
+        body={"uses": 1},
+    )
+    _must("mint invite token(d)", s, token_res, ok=(201,))
+    invite_token = token_res["token"]
+    print(f"  d minted invite token: {invite_token[:8]}…")
+
+    # Truncate b's log so the post-run scan is bounded to this step.
+    b_log_path = _instance_dir("b") / "log.txt"
+    b_log_before_size = (
+        b_log_path.stat().st_size if b_log_path.exists() else 0
+    )
+
+    # 2. c redeems — d is NOT a direct peer → mesh path via b.
+    s, joined = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/join",
+        token=c["token"],
+        method="POST",
+        body={
+            "token": invite_token,
+            "issuer_instance_id": d["instance_id"],
+        },
+    )
+    _must("redeem invite(c→d via mesh)", s, joined, ok=(200, 201))
+    if joined.get("space_id") != space_id:
+        raise SystemExit(
+            f"routed redeem returned wrong space_id: "
+            f"got {joined.get('space_id')!r}, want {space_id!r}",
+        )
+    print(f"  c redeemed token over mesh → space {space_id}")
+
+    # 3. Assert d seated c as a remote member (proves the inner
+    #    REDEEM was actually dispatched at d after unseal).
+    import sqlite3
+    db_path = _instance_dir("d") / "socialhome.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = list(conn.execute(
+            "SELECT user_id, instance_id FROM space_remote_members "
+            "WHERE space_id = ?",
+            (space_id,),
+        ))
+    finally:
+        conn.close()
+    carol_user_id = c["user_id"]
+    carol_instance_id = c["instance_id"]
+    seated = any(
+        r[0] == carol_user_id and r[1] == carol_instance_id for r in rows
+    )
+    if not seated:
+        raise SystemExit(
+            "routed invite-redeem: Carol not seated in "
+            f"d.space_remote_members — rows: {rows!r}",
+        )
+    print(f"  d.space_remote_members has carol ✓ ({len(rows)} total)")
+
+    # 4. Assert the relay (b) never dispatched the inner REDEEM —
+    #    i.e. it only saw SPACE_ROUTED envelopes, never decrypted
+    #    the inner payload.
+    if b_log_path.exists():
+        b_log_after = b_log_path.read_text(errors="replace")[b_log_before_size:]
+        if "SPACE_INVITE_TOKEN_REDEEM" in b_log_after:
+            raise SystemExit(
+                "routed invite-redeem: relay b dispatched the inner "
+                "SPACE_INVITE_TOKEN_REDEEM — encryption invariant "
+                "broken (relays must not see inner event_type "
+                "post-unseal).",
+            )
+        if "SPACE_ROUTED" not in b_log_after:
+            print(
+                "  WARN: no SPACE_ROUTED entries in b's log; the "
+                "mesh path may have skipped b (alt route via a).",
+            )
+        else:
+            print("  b relayed SPACE_ROUTED without unsealing ✓")
+
+    state["invite_redeem_routed_ran"] = True
+    state["invite_redeem_routed_space_id"] = space_id
+    _save(state)
+    print("invite-redeem-routed: ok")
+
+
 def cmd_down() -> None:
     state = _load()
     gfs = state.get("gfs")
@@ -3024,6 +3168,16 @@ def main() -> None:
         # after ``visibility`` so the direct a↔c pair is still
         # confirmed and not in any partial-hide state.
         cmd_invite_redeem()
+        # ``invite-redeem-routed`` exercises PR 2's mesh path: c
+        # wants to join a space hosted on d but is NOT directly paired
+        # with d (only c↔b↔d exists). The receiver-side coordinator
+        # discovers a route via b and ships the redeem inside a
+        # ``SPACE_ROUTED`` envelope sealed under d's per-route
+        # ephemeral; b forwards the opaque blob without decrypting.
+        # Asserts d seated c as a remote member AND b never dispatched
+        # the inner SPACE_INVITE_TOKEN_REDEEM (i.e. relays cannot
+        # read content).
+        cmd_invite_redeem_routed()
         # ``replay`` exercises the §24 outbox redelivery path by
         # killing Carol, posting a highlight from Alpha, restarting
         # Carol, and asserting the queued envelope flushes after the

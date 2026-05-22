@@ -96,6 +96,35 @@ class FederationEventType(str, enum.Enum):
     SPACE_INVITE_TOKEN_REDEEM = "space_invite_token_redeem"
     SPACE_INVITE_TOKEN_REDEEM_ACK = "space_invite_token_redeem_ack"
     SPACE_INVITE_TOKEN_REDEEM_DENY = "space_invite_token_redeem_deny"
+    # ── Federation mesh routing (v_6 PR 2) ──
+    #
+    # Generic source-routed envelope. Wraps **any** inner
+    # FederationEventType for multi-hop forwarding through a chain of
+    # confirmed peers when the origin isn't directly paired with the
+    # target. One envelope shape for every flow — invite redeem, space
+    # posts, comments, future events — so adding mesh-aware support
+    # for a new event type doesn't need a new wire definition. Payload:
+    # ``{route_id, path, position, inner_event_type, inner_payload}``.
+    # Each hop:
+    #
+    # * drops if ``route_id`` seen recently (loop prevention);
+    # * drops if self appears in ``path`` past current position (cycle);
+    # * if next hop in ``path`` after ``position`` is self → unwrap,
+    #   dispatch the inner event tagged with ``origin_instance_id =
+    #   path[0]``;
+    # * else forward to ``path[position+1]`` with position bumped.
+    #
+    # The response (ACK / DENY for redeems, future per-handler results
+    # for other flows) wraps in a new SPACE_ROUTED with the reverse
+    # path so both directions use one envelope.
+    SPACE_ROUTED = "space_routed"
+    # Route discovery — origin probes the federation graph for a
+    # path to a target that isn't a direct peer. Loop prevention:
+    # drop on seen request_id, drop if self is in ``hops_traversed``.
+    # Response routes back along the same chain via cached
+    # ``{request_id: caller_instance_id}`` (TTL ~60 s).
+    SPACE_FIND_ROUTE = "space_find_route"
+    SPACE_ROUTE_FOUND = "space_route_found"
 
     # ── Space content ──
     SPACE_POST_CREATED = "space_post_created"
@@ -527,6 +556,31 @@ class FederationEvent:
     payload: dict
     space_id: str | None = None
     epoch: int | None = None
+    #: Source-route the event traversed when it arrived via
+    #: :data:`FederationEventType.SPACE_ROUTED`. ``None`` for any event
+    #: delivered directly (the common case). When set, this is the
+    #: full path from origin (``path[0]``) to target (``path[-1]``,
+    #: which equals ``to_instance`` on the unwrap step) — handlers
+    #: that ship a response (ACK / DENY / …) read it to ship the
+    #: reply back via the reverse path so both legs use mesh routing.
+    #:
+    #: Wire-invisible: only ever populated by
+    #: :class:`socialhome.federation.routed_envelope.SpaceRoutedHandler`
+    #: when it unwraps an inbound SPACE_ROUTED envelope and
+    #: synthesises a fresh :class:`FederationEvent` for the inner
+    #: event_type. The inbound validator (which constructs
+    #: :class:`FederationEvent` from the wire envelope) never sets
+    #: it — there is no on-disk / on-wire field for ``routed_path``.
+    routed_path: list[str] | None = None
+    #: Forward-leg ``route_id`` nonce when this event arrived via
+    #: :data:`FederationEventType.SPACE_ROUTED`. ``None`` for direct
+    #: deliveries. Set together with ``routed_path`` by the unwrap
+    #: step so a handler that wants to ship an encrypted reply can
+    #: hand it back to
+    #: :meth:`SpaceRoutedHandler.send_routed_reply` — the reply leg
+    #: re-uses the forward leg's ephemeral keypairs keyed on the same
+    #: ``route_id``. Wire-invisible; never persisted.
+    routed_route_id: str | None = None
 
 
 # ─── GFS connection types (§24 — Global Federation Server) ──────────────
