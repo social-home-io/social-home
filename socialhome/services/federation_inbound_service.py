@@ -319,6 +319,26 @@ class FederationInboundService:
         if msg_type not in MESSAGE_TYPES:
             msg_type = "text"
 
+        # Cross-household DMs arrive without the conversation ever
+        # being created on this instance — the *sender's* household
+        # built it locally via :meth:`DmService.create_dm` and we just
+        # got the first DM_MESSAGE for it. Auto-create the conversation
+        # row + seat the local recipient(s) FIRST so the §12.5
+        # gap-detection block below (which writes
+        # ``conversation_sender_sequences`` with an FK → ``conversations``)
+        # doesn't trip a FOREIGN KEY constraint failure on the receiver
+        # the very first time a sender ships a DM. Idempotent —
+        # ``conversation_repo`` upserts.
+        recipients = tuple(p.get("recipient_user_ids") or ())
+        await self._ensure_remote_dm_conversation(
+            conv_id=conv_id,
+            sender_instance_id=event.from_instance,
+            sender_user_id=sender_user_id,
+            sender_display_name=str(p.get("sender_display_name") or ""),
+            recipient_user_ids=recipients,
+            occurred_at=p.get("occurred_at"),
+        )
+
         # §12.5 gap detection — when the sender stamps a monotonic
         # ``sender_seq`` on the envelope, compare against our last-seen
         # value and persist one ``conversation_message_gaps`` row per
@@ -389,24 +409,6 @@ class FederationInboundService:
                         sender_user_id=sender_user_id,
                         seq=incoming,
                     )
-
-        # Cross-household DMs arrive without the conversation ever
-        # being created on this instance — the *sender's* household
-        # built it locally via :meth:`DmService.create_dm` with
-        # ``other_user_id`` and we just got the first DM_MESSAGE for
-        # it. Auto-create the conversation row + seat the local
-        # recipient(s) as ``ConversationMember`` so
-        # ``GET /api/conversations`` finds the conv. Idempotent —
-        # ``conversation_repo`` upserts.
-        recipients = tuple(p.get("recipient_user_ids") or ())
-        await self._ensure_remote_dm_conversation(
-            conv_id=conv_id,
-            sender_instance_id=event.from_instance,
-            sender_user_id=sender_user_id,
-            sender_display_name=str(p.get("sender_display_name") or ""),
-            recipient_user_ids=recipients,
-            occurred_at=p.get("occurred_at"),
-        )
 
         # ── v_3: cross-household media preview ───────────────────────
         # When the sender embedded a ``preview_bytes_b64`` we save it
