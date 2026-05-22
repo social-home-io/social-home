@@ -48,6 +48,7 @@ class AbstractFederationRepo(Protocol):
         status: str | None = None,
     ) -> list[RemoteInstance]: ...
     async def list_instances_in_space(self, space_id: str) -> list[RemoteInstance]: ...
+    async def list_member_instance_ids(self, space_id: str) -> list[str]: ...
     async def delete_instance(self, instance_id: str) -> None: ...
     async def mark_reachable(self, instance_id: str) -> None: ...
     async def mark_unreachable(self, instance_id: str) -> None: ...
@@ -250,6 +251,32 @@ class SqliteFederationRepo:
             (space_id, PairingStatus.CONFIRMED.value),
         )
         return [i for i in (_row_to_instance(d) for d in rows_to_dicts(rows)) if i]
+
+    async def list_member_instance_ids(self, space_id: str) -> list[str]:
+        """Every instance ID in ``space_instances`` for this space,
+        minus bans. Unlike :meth:`list_instances_in_space` this does
+        NOT filter on ``remote_instances.status = CONFIRMED`` — so a
+        mesh-only member (private invite accepted via SPACE_ROUTED,
+        no direct pair) is included. The caller is expected to route
+        each ID through :meth:`FederationService.send_with_mesh_fallback`
+        which decides direct vs mesh based on the per-peer pairing
+        state. This is what makes the space-content fanout
+        mesh-capable in steady state.
+        """
+        rows = await self._db.fetchall(
+            """
+            SELECT si.instance_id FROM space_instances si
+            WHERE si.space_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM space_instance_bans sib
+                  WHERE sib.space_id = si.space_id
+                    AND sib.instance_id = si.instance_id
+              )
+            ORDER BY si.instance_id
+            """,
+            (space_id,),
+        )
+        return [str(r[0]) for r in rows]
 
     async def delete_instance(self, instance_id: str) -> None:
         await self._db.enqueue(

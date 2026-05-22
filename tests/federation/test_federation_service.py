@@ -146,6 +146,19 @@ class InMemoryFederationRepo:
             out.append(inst)
         return out
 
+    async def list_member_instance_ids(self, space_id: str) -> list[str]:
+        # Mirrors the production query: every instance in
+        # ``space_instances`` for this space minus bans, no filter on
+        # ``remote_instances.status`` so a mesh-only member surfaces.
+        out: list[str] = []
+        for sid, iid in self._space_members:
+            if sid != space_id:
+                continue
+            if (space_id, iid) in self._bans:
+                continue
+            out.append(iid)
+        return sorted(out)
+
     async def delete_instance(self, instance_id: str) -> None:
         self._instances.pop(instance_id, None)
 
@@ -1277,14 +1290,16 @@ async def test_broadcast_to_space_members_uses_mesh_fallback(monkeypatch):
     fed_repo.add_space_member(space_id, confirmed_inst.id)
     fed_repo.add_space_member(space_id, pending_inst.id)
 
-    # The production ``list_instances_in_space`` filters to CONFIRMED;
-    # for this test we want to prove the per-peer broadcast loop calls
-    # the mesh-aware helper for *every* member regardless of status, so
-    # widen the listing here to include both.
-    async def _list_all(space):
-        return [confirmed_inst, pending_inst]
+    # The ``list_member_instance_ids`` query is the unfiltered surface
+    # that ``broadcast_to_space_members`` consults — no
+    # ``remote_instances.status`` filter — so the mesh branch sees
+    # PENDING members too. The InMemory fake already does the right
+    # thing (no status filter); just confirm by overriding to return
+    # both ids deterministically here.
+    async def _list_member_ids(space):
+        return [confirmed_inst.id, pending_inst.id]
 
-    monkeypatch.setattr(fed_repo, "list_instances_in_space", _list_all)
+    monkeypatch.setattr(fed_repo, "list_member_instance_ids", _list_member_ids)
 
     mock_resp = AsyncMock()
     mock_resp.status = 200
