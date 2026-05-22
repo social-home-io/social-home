@@ -1919,6 +1919,10 @@ def create_app(config: Config | None = None) -> web.Application:
             target_eph_lookup=route_discovery.lookup_target_eph_priv,
         )
         routed_handler.attach_to(federation_service)
+        real_space_service.attach_mesh(
+            route_service=route_discovery,
+            routed_handler=routed_handler,
+        )
         # §D2 cross-instance invite-token redeem — wires the
         # ``SPACE_INVITE_TOKEN_REDEEM*`` family into the federation
         # event registry and gives ``space_service`` the driver it

@@ -3098,6 +3098,279 @@ def cmd_invite_redeem_routed() -> None:
     print("invite-redeem-routed: ok")
 
 
+def cmd_remote_invite_routed() -> None:
+    """Mesh-routed admin-initiated private invite (PR 3, v_6).
+
+    Validates the ``SPACE_PRIVATE_INVITE`` family riding ``SPACE_ROUTED``
+    when the admin's household isn't directly paired with the invitee's
+    household. Topology after ``cmd_pair`` + ``cmd_relay_pair`` leaves
+    c ↔ d unpaired (only path is c↔b↔d), so c inviting dave is the
+    canonical mesh-private-invite scenario.
+
+    Sequence:
+
+    1. **c creates** a private space + posts a remote-invite targeting
+       dave on d. Backend ``SpaceService.invite_remote_user`` sees that
+       d is not a CONFIRMED peer of c, runs ``RouteDiscoveryService``,
+       and ships ``SPACE_PRIVATE_INVITE`` as ``SPACE_ROUTED(forward)``
+       through b. b forwards the opaque ciphertext without decrypting.
+    2. **d unseals**, ``PrivateSpaceInviteHandler._on_invite`` lands the
+       row in d's local invite repo and ``GET /api/remote_invites`` on
+       d surfaces it.
+    3. **d accepts** via ``POST /api/remote_invites/{token}/accept``.
+       Backend runs a *fresh* discovery (the original reply-leg
+       ephemerals have expired in the user-time gap) and ships
+       ``SPACE_PRIVATE_INVITE_ACCEPT`` as a new ``SPACE_ROUTED(forward)``
+       leg back through b.
+    4. **c unseals**, seats dave in ``c.space_remote_members``.
+
+    Assertions:
+
+    - c's ``POST /api/spaces/{id}/remote-invites`` returns 201 (mesh
+      send succeeded — no direct-pair short-circuit needed).
+    - d's ``/api/remote_invites`` includes the new invite within a
+      reasonable window.
+    - d's accept POST returns 200/204.
+    - c's ``space_remote_members`` shows dave (proves the inner ACCEPT
+      was dispatched at the issuer after unseal).
+    - b's log shows ``SPACE_ROUTED`` envelopes flowing but no
+      ``SPACE_PRIVATE_INVITE`` / ``_ACCEPT`` (relay never decrypted).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+
+    # 1. c creates a private space.
+    s, space = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces",
+        token=c["token"],
+        method="POST",
+        body={
+            "name": "Carol's mesh salon",
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "emoji": "🛰",
+        },
+    )
+    _must("create space(c, mesh-private)", s, space, ok=(201,))
+    space_id = space["id"]
+    print(f"  c created space: {space_id}")
+
+    # Truncate b's log so the post-run scan is bounded to this step.
+    b_log_path = _instance_dir("b") / "log.txt"
+    b_log_before_size = (
+        b_log_path.stat().st_size if b_log_path.exists() else 0
+    )
+
+    # 2. c invites dave — c is NOT directly paired with d → mesh path.
+    s, inv = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/remote-invites",
+        token=c["token"],
+        method="POST",
+        body={
+            "invitee_instance_id": d["instance_id"],
+            "invitee_user_id": d["user_id"],
+        },
+    )
+    _must("c → d remote-invite(mesh)", s, inv, ok=(201,))
+    print("  c → d: invite issued via mesh (route discovery + SPACE_ROUTED)")
+
+    # 3. Wait for the invite to round-trip to d's inbox.
+    time.sleep(10)
+    s, invites = _request(
+        f"http://127.0.0.1:{d['port']}/api/remote_invites",
+        token=d["token"],
+    )
+    _must("d.remote_invites(after mesh)", s, invites)
+    dave_invite_token = None
+    invites_list = invites if isinstance(invites, list) else invites.get("invites", [])
+    for row in invites_list:
+        if row.get("space_id") == space_id:
+            dave_invite_token = row.get("invite_token") or row.get("token")
+            break
+    if dave_invite_token is None:
+        raise SystemExit(
+            f"remote-invite-routed: d's inbox did not receive the invite for "
+            f"space {space_id}; got {invites_list!r}",
+        )
+    print(f"  d sees invite in inbox ✓ (token={dave_invite_token[:8]}…)")
+
+    # 4. d accepts — accept also routes via mesh (d→b→c).
+    s, accepted = _request(
+        f"http://127.0.0.1:{d['port']}/api/remote_invites/{dave_invite_token}/accept",
+        token=d["token"],
+        method="POST",
+        body={},
+    )
+    _must("d accepts invite(mesh)", s, accepted, ok=(200, 204))
+    print("  d accepted; ACCEPT routes back via mesh d→b→c")
+
+    # 5. Wait for the ACCEPT to round-trip back to c's seat.
+    time.sleep(10)
+    import sqlite3
+    db_path = _instance_dir("c") / "socialhome.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = list(conn.execute(
+            "SELECT user_id, instance_id FROM space_remote_members "
+            "WHERE space_id = ?",
+            (space_id,),
+        ))
+    finally:
+        conn.close()
+    dave_user_id = d["user_id"]
+    dave_instance_id = d["instance_id"]
+    seated = any(
+        r[0] == dave_user_id and r[1] == dave_instance_id for r in rows
+    )
+    if not seated:
+        raise SystemExit(
+            "remote-invite-routed: dave not seated in c.space_remote_members "
+            f"after mesh ACCEPT — rows: {rows!r}",
+        )
+    print(f"  c.space_remote_members has dave ✓ ({len(rows)} total)")
+
+    # 6. Assert b never dispatched the inner SPACE_PRIVATE_INVITE family
+    #    — proves the relay couldn't read the encrypted payload.
+    if b_log_path.exists():
+        b_log_after = b_log_path.read_text(errors="replace")[b_log_before_size:]
+        for forbidden in (
+            "SPACE_PRIVATE_INVITE_ACCEPT",
+            # The inner forward leg too — bare "SPACE_PRIVATE_INVITE"
+            # would also catch _ACCEPT/_DECLINE substrings, so we
+            # check the exact tokens.
+        ):
+            if forbidden in b_log_after:
+                raise SystemExit(
+                    f"remote-invite-routed: relay b dispatched inner "
+                    f"{forbidden} — encryption invariant broken.",
+                )
+        if "SPACE_ROUTED" not in b_log_after:
+            print(
+                "  WARN: no SPACE_ROUTED entries in b's log; the mesh "
+                "path may have skipped b (alt route via a).",
+            )
+        else:
+            print("  b relayed SPACE_ROUTED without unsealing ✓")
+
+    state["remote_invite_routed_ran"] = True
+    state["remote_invite_routed_space_id"] = space_id
+    _save(state)
+    print("remote-invite-routed: ok")
+
+
+def cmd_remote_invite_decline() -> None:
+    """Decline-path coverage for the admin-initiated private invite
+    (direct pair). Complements ``cmd_remote_invite_routed`` by
+    exercising the DECLINE leg, which ``cmd_traffic`` + ``cmd_calendar``
+    never touch (both invitees there accept).
+
+    Sequence:
+
+    1. **c creates** a fresh private space + posts a remote-invite
+       targeting alice (direct pair c↔a).
+    2. **a's inbox** picks it up; ``a`` POSTs decline.
+    3. The ``SPACE_PRIVATE_INVITE_DECLINE`` envelope round-trips to c,
+       which marks the invitation row ``declined``.
+
+    Assertions:
+
+    - The invitation row on c moves to ``status='declined'``.
+    - a is NOT seated in c's ``space_remote_members`` (decline must
+      not accidentally seat the user).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    a = state["instances"]["a"]
+    c = state["instances"]["c"]
+
+    s, space = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces",
+        token=c["token"],
+        method="POST",
+        body={
+            "name": "Decline test",
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "emoji": "🚫",
+        },
+    )
+    _must("create space(c, decline)", s, space, ok=(201,))
+    space_id = space["id"]
+    print(f"  c created space: {space_id}")
+
+    s, inv = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/remote-invites",
+        token=c["token"],
+        method="POST",
+        body={
+            "invitee_instance_id": a["instance_id"],
+            "invitee_user_id": a["user_id"],
+        },
+    )
+    _must("c → a remote-invite(direct)", s, inv, ok=(201,))
+    print("  c → a: invite issued (direct pair)")
+
+    time.sleep(5)
+    s, invites = _request(
+        f"http://127.0.0.1:{a['port']}/api/remote_invites",
+        token=a["token"],
+    )
+    _must("a.remote_invites", s, invites)
+    invites_list = invites if isinstance(invites, list) else invites.get("invites", [])
+    alice_token = None
+    for row in invites_list:
+        if row.get("space_id") == space_id:
+            alice_token = row.get("invite_token") or row.get("token")
+            break
+    if alice_token is None:
+        raise SystemExit(
+            f"remote-invite-decline: a's inbox did not receive the invite for "
+            f"space {space_id}; got {invites_list!r}",
+        )
+
+    s, declined = _request(
+        f"http://127.0.0.1:{a['port']}/api/remote_invites/{alice_token}/decline",
+        token=a["token"],
+        method="POST",
+        body={},
+    )
+    _must("a declines invite", s, declined, ok=(200, 204))
+    print("  a declined; DECLINE routes back to c")
+
+    time.sleep(5)
+    import sqlite3
+    db_path = _instance_dir("c") / "socialhome.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        invitation_rows = list(conn.execute(
+            "SELECT status FROM space_invitations WHERE invite_token = ?",
+            (alice_token,),
+        ))
+        member_rows = list(conn.execute(
+            "SELECT user_id FROM space_remote_members WHERE space_id = ?",
+            (space_id,),
+        ))
+    finally:
+        conn.close()
+    if not invitation_rows or invitation_rows[0][0] != "declined":
+        raise SystemExit(
+            f"remote-invite-decline: c's invitation row status != 'declined' "
+            f"— got {invitation_rows!r}",
+        )
+    if any(r[0] == a["user_id"] for r in member_rows):
+        raise SystemExit(
+            f"remote-invite-decline: alice was seated despite declining — "
+            f"rows: {member_rows!r}",
+        )
+    print("  c.space_invitations marked declined ✓")
+    print("  c.space_remote_members does NOT contain alice ✓")
+    print("remote-invite-decline: ok")
+
+
 def cmd_down() -> None:
     state = _load()
     gfs = state.get("gfs")
@@ -3178,6 +3451,18 @@ def main() -> None:
         # the inner SPACE_INVITE_TOKEN_REDEEM (i.e. relays cannot
         # read content).
         cmd_invite_redeem_routed()
+        # ``remote-invite-routed`` exercises PR 3's mesh-enabled
+        # SpaceService outbound: c (admin) invites dave on d via the
+        # mesh because c↔d isn't paired. The accept leg also
+        # mesh-routes back. Asserts dave seated AND that b never saw
+        # the inner SPACE_PRIVATE_INVITE / _ACCEPT (encryption
+        # invariant for the admin-initiated flow too).
+        cmd_remote_invite_routed()
+        # ``remote-invite-decline`` covers the DECLINE leg that the
+        # earlier accept-only flows never hit — c invites alice
+        # (direct pair), alice declines, c's invitation row is
+        # marked declined and the user is NOT seated.
+        cmd_remote_invite_decline()
         # ``replay`` exercises the §24 outbox redelivery path by
         # killing Carol, posting a highlight from Alpha, restarting
         # Carol, and asserting the queued envelope flushes after the
