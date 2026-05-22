@@ -76,15 +76,17 @@ async function openAndGenerate(
 }
 
 describe('SpaceInviteDialog', () => {
-  it('builds an HTTPS link that honours basePath (ingress-aware)', async () => {
+  it('does NOT render an HTTPS link — receiver has to be on their own instance', async () => {
+    // The dialog used to surface a "Link · clickable from email"
+    // artifact, but plain HTTPS links can't redeem the token (the
+    // receiver has to be on their own instance to call
+    // /api/spaces/join). Until a GFS-mediated redirect lifts that
+    // limitation, the code + QR are the only artifacts that work.
     const { container } = await openAndGenerate({
       hint: 'Pascal\'s family',
       returnedToken: 'tok-aaaa-bbbb-cccc',
     })
-    const link = container.querySelector('[data-testid="invite-link"]')!
-      .textContent!
-    expect(link.startsWith(INGRESS_BASE)).toBe(true)
-    expect(link).toContain('join?token=tok-aaaa-bbbb-cccc')
+    expect(container.querySelector('[data-testid="invite-link"]')).toBeNull()
   })
 
   it('emits a socialhome://invite#... code that decodes back to the token + metadata', async () => {

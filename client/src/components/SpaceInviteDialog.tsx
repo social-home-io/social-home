@@ -1,20 +1,21 @@
 /**
  * SpaceInviteDialog — generate and share an invite to a space.
  *
- * Three artifacts side-by-side: a copyable ``socialhome://invite#…``
- * code (primary — works cross-instance regardless of ingress shape),
- * an ingress-aware HTTPS link, and a QR (handy for same-room
- * handoffs).
+ * Two artifacts: a copyable ``socialhome://invite#…`` code (primary
+ * — paste into chat) and a QR (handy for same-room handoff). The
+ * receiver pastes the code into their own Social Home →
+ * Spaces → "Join with invite code".
  *
- * URL anchoring matters: the share link is built from
- * ``document.baseURI`` (honoured by `addBase`) so it works under HA
- * Supervisor ingress. Hard-coding ``location.origin`` would skip the
- * ingress prefix and bounce the iframe to HA Core's frontend.
+ * Why no clickable HTTPS link? The receiver has to be on **their
+ * own** instance to call ``/api/spaces/join`` — a link to the
+ * issuer's instance can't redeem on the receiver's behalf. A
+ * future GFS-mediated redirect could lift that limitation; until
+ * then offering a link that doesn't actually work is worse than
+ * not offering one at all.
  */
 import { signal } from '@preact/signals'
 import { useEffect } from 'preact/hooks'
 import { api } from '@/api'
-import { addBase } from '@/baseUrl'
 import { buildInviteCode } from '@/lib/spaceInviteCode'
 import { Modal } from './Modal'
 import { Button } from './Button'
@@ -40,12 +41,6 @@ export function openSpaceInvite(sid: string, hint: string | null = null) {
   inviteToken.value = ''
   uses.value = 1
   open.value = true
-}
-
-function buildLink(token: string): string {
-  // ``addBase`` adds the ingress prefix; ``new URL`` resolves the
-  // result against ``document.baseURI`` to produce the full URL.
-  return new URL(addBase('/join?token=' + token), document.baseURI).toString()
 }
 
 function buildCode(token: string): string {
@@ -75,7 +70,6 @@ export function SpaceInviteDialog() {
   }, [open.value, spaceId.value])
 
   const token = inviteToken.value
-  const link = token ? buildLink(token) : ''
   const code = token ? buildCode(token) : ''
 
   const createToken = async () => {
@@ -142,12 +136,18 @@ export function SpaceInviteDialog() {
           <>
             <p class="sh-muted" style={{ marginTop: 0 }}>
               Good for {uses.value} {uses.value === 1 ? 'use' : 'uses'}.
-              Pick whichever format the receiver finds easiest:
+              The receiver pastes this into their own Social Home →
+              Spaces → "Join with invite code".
             </p>
 
-            {/* Primary — the cross-instance code. Works regardless of
-             *  the receiver's ingress / hosting shape because they
-             *  paste it into their own SPA. */}
+            {/* Primary — the cross-instance code. The receiver pastes
+             *  it into their own Social Home → Spaces → Join with
+             *  invite code. Plain HTTPS links can't redeem here today
+             *  because the receiver has to be on **their own**
+             *  instance to call /api/spaces/join — a future
+             *  GFS-mediated redirect could lift that, but for now the
+             *  copy-the-code path is the only one that actually
+             *  works. */}
             <div class="sh-invite-artifact sh-invite-artifact--primary">
               <div class="sh-invite-artifact-label">
                 Invite code · paste into chat
@@ -160,20 +160,7 @@ export function SpaceInviteDialog() {
               </div>
             </div>
 
-            {/* Secondary — clickable link with the ingress prefix. */}
-            <div class="sh-invite-artifact">
-              <div class="sh-invite-artifact-label">
-                Link · clickable from email
-              </div>
-              <code class="sh-invite-link" data-testid="invite-link">{link}</code>
-              <div class="sh-form-actions">
-                <Button variant="secondary" onClick={() => copy(link, 'Link')}>
-                  Copy link
-                </Button>
-              </div>
-            </div>
-
-            {/* Tertiary — QR for same-room handoff. */}
+            {/* Secondary — QR for same-room handoff. */}
             <div class="sh-invite-artifact sh-invite-artifact--qr">
               <div class="sh-invite-artifact-label">
                 QR · scan with another device
