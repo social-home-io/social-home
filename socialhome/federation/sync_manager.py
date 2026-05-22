@@ -116,6 +116,7 @@ class SyncSessionManager:
         "_rate_buckets",
         "_get_max_seq",
         "_check_member",
+        "_signaling_send",
     )
 
     def __init__(
@@ -124,6 +125,7 @@ class SyncSessionManager:
         *,
         get_max_seq=None,
         check_member=None,
+        signaling_send=None,
     ) -> None:
         self._federation_repo = federation_repo
         self._sessions: dict[str, SyncSessionRecord] = {}
@@ -138,6 +140,14 @@ class SyncSessionManager:
         # the corresponding check is skipped.
         self._get_max_seq = get_max_seq
         self._check_member = check_member
+        # ``signaling_send(to_instance_id, event_type, payload)``: closure
+        # that wraps :meth:`FederationService.send_event`. Used by
+        # :class:`SyncRtcSession` to ship ``SPACE_SYNC_ICE`` envelopes for
+        # local trickle candidates. When ``None`` (test harnesses that
+        # don't care about real RTC), local candidates are silently
+        # dropped — but every production wiring in ``app.py`` injects
+        # this so the peer actually sees the candidates.
+        self._signaling_send = signaling_send
 
     # ─── Public registry methods ──────────────────────────────────────────
 
@@ -159,6 +169,22 @@ class SyncSessionManager:
         sess = self._sessions.pop(sync_id, None)
         if sess and sess.rtc is not None:
             sess.rtc.close()
+
+    def _wrap_signaling(self, to_instance_id: str, space_id: str):
+        """Build a per-session ``signaling_send(event_type, payload)``
+        closure that ships ``SPACE_SYNC_ICE`` envelopes to the given
+        peer via the manager's injected federation-service callback.
+        Returns ``None`` when no callback was wired (test harness, or
+        a manager constructed before federation_service is ready).
+        """
+        send = self._signaling_send
+        if send is None:
+            return None
+
+        async def _signal(event_type, payload):
+            await send(to_instance_id, event_type, payload, space_id)
+
+        return _signal
 
     # ─── S-6: rate limit ──────────────────────────────────────────────────
 
@@ -302,6 +328,7 @@ class SyncSessionManager:
             sync_mode=sync_mode,
             role="provider",
             ice_servers=ice_servers,
+            signaling_send=self._wrap_signaling(requester_instance_id, space_id),
         )
         record = SyncSessionRecord(
             sync_id=sync_id,
@@ -326,6 +353,7 @@ class SyncSessionManager:
         space_id: str,
         sync_mode: str = "initial",
         ice_servers: list[dict] | None = None,
+        provider_instance_id: str | None = None,
     ) -> str:
         """Requester-side handling of ``SPACE_SYNC_OFFER``.
 
@@ -334,6 +362,10 @@ class SyncSessionManager:
         an SDP answer via :meth:`SyncRtcSession.create_answer`, and
         returns the answer string for the caller to embed in
         ``SPACE_SYNC_ANSWER``.
+
+        ``provider_instance_id`` is the OFFER envelope's
+        ``from_instance`` — used to wire the SPACE_SYNC_ICE outbound
+        target so the requester can ship its trickle candidates back.
         """
         record = self._sessions.get(sync_id)
         if record is None:
@@ -345,6 +377,11 @@ class SyncSessionManager:
                 sync_mode=sync_mode,
                 role="requester",
                 ice_servers=ice_servers,
+                # Requester ships ICE candidates back to the provider —
+                # but we don't know the provider's id until ``apply_offer``
+                # observes ``event.from_instance``. Set in
+                # ``apply_offer`` after that line below.
+                signaling_send=None,
             )
             record = SyncSessionRecord(
                 sync_id=sync_id,
@@ -359,6 +396,19 @@ class SyncSessionManager:
 
         if record.rtc is None:  # defensive
             raise RuntimeError("sync record missing rtc handle")
+
+        # Now that we know the provider's id, wire the outbound-ICE
+        # signaling closure on the existing requester-side session.
+        # Without this, requester-side local candidates never reach
+        # the provider and ICE pair-checks fail (DataChannel never
+        # opens → relay fallback every time).
+        if provider_instance_id and record.rtc._signaling_send is None:
+            record.provider_instance_id = provider_instance_id
+            record.rtc.provider_instance_id = provider_instance_id
+            record.rtc._signaling_send = self._wrap_signaling(
+                provider_instance_id,
+                space_id,
+            )
 
         return await record.rtc.create_answer(sdp_offer)  # S-13
 
@@ -388,7 +438,13 @@ class SyncSessionManager:
         await record.rtc.set_answer(sdp_answer)
         return True
 
-    async def apply_ice(self, *, sync_id: str, candidate: str) -> bool:
+    async def apply_ice(
+        self,
+        *,
+        sync_id: str,
+        candidate: str,
+        sdp_mid: str = "0",
+    ) -> bool:
         """Apply a single ICE candidate after S-7 validation."""
         if not self.validate_ice_candidate(candidate):
             log.debug("apply_ice: dropped invalid candidate (sync=%s)", sync_id)
@@ -396,7 +452,7 @@ class SyncSessionManager:
         record = self._sessions.get(sync_id)
         if record is None or record.rtc is None:
             return False
-        await record.rtc.add_ice_candidate(candidate)
+        await record.rtc.add_ice_candidate(candidate, sdp_mid)
         return True
 
     # ─── S-15: relay fallback ─────────────────────────────────────────────

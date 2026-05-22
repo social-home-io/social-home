@@ -26,10 +26,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import aiolibdatachannel as rtc
+
+from ..domain.federation import FederationEventType
 
 log = logging.getLogger(__name__)
 
@@ -119,6 +122,8 @@ class SyncRtcSession:
         "_ice_candidates",
         "_loop",
         "_closed",
+        "_signaling_send",
+        "_local_description_applied",
     )
 
     def __init__(
@@ -132,6 +137,8 @@ class SyncRtcSession:
         role: str = "provider",
         ice_servers: list[dict] | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
+        signaling_send: Callable[[FederationEventType, dict], Awaitable[None]]
+        | None = None,
     ) -> None:
         if sync_mode not in ("initial", "incremental", "full"):
             raise ValueError(f"Invalid sync_mode: {sync_mode!r}")
@@ -153,6 +160,22 @@ class SyncRtcSession:
         self._ice_candidates: list[str] = []
         self._loop = loop
         self._closed = False
+        #: Outbound signaling callback for ``SPACE_SYNC_ICE`` envelopes.
+        #: When ``None`` (older call sites or tests that don't need
+        #: outbound ICE), local candidates are silently dropped — but
+        #: that's exactly the bug PR-RTC-fix-3 fixed: every production
+        #: SyncSessionManager wires this so the peer ever sees our
+        #: candidates.
+        self._signaling_send = signaling_send
+        #: Set once :meth:`create_offer` or :meth:`create_answer` lands
+        #: a local SDP so :meth:`_drain_ice` knows it can start
+        #: forwarding candidates. ICE gathering on aiolibdatachannel
+        #: starts at ``set_local_description`` (auto-negotiation
+        #: disabled) — but firing ``SPACE_SYNC_ICE`` envelopes before
+        #: the peer has our OFFER/ANSWER is the same race pattern that
+        #: ``transport.py:`` solved by deferring ``_drain_ice`` spawn
+        #: until after the signaling envelope was queued.
+        self._local_description_applied = asyncio.Event()
 
         self._init_real_pc()
 
@@ -179,6 +202,20 @@ class SyncRtcSession:
             self._pc.spawn_task(self._watch_channel(self._channel))
         else:
             self._pc.spawn_task(self._watch_incoming())
+        # Drain local ICE candidates outbound via ``SPACE_SYNC_ICE`` so
+        # the peer can complete connectivity checks. Pre-PR-RTC-fix-3
+        # this drain didn't exist — local candidates were generated
+        # into ``pc.ice_candidates()``'s queue but nothing consumed
+        # them, so the peer only ever saw the SDP offer's host
+        # candidate (loopback only) and ICE failed on anything that
+        # required STUN-mapped candidates. Tier 2/3 sync would then
+        # time out on ``wait_ready`` and fall back to relay every
+        # time. Deferred-spawn pattern mirrors ``transport.py``'s
+        # ``_drain_ice`` — local candidates must not race past the
+        # OFFER/ANSWER envelope, so we wait on
+        # ``_local_description_applied`` inside the loop.
+        if self._signaling_send is not None:
+            self._pc.spawn_task(self._drain_ice())
 
     async def _watch_incoming(self) -> None:
         try:
@@ -194,6 +231,50 @@ class SyncRtcSession:
         except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
             log.debug(
                 "SyncRtcSession[%s]: incoming-channel wait ended: %s",
+                self.sync_id,
+                exc,
+            )
+
+    async def _drain_ice(self) -> None:
+        """Forward every local ICE candidate to the peer over signalling.
+
+        Gates the first send on :attr:`_local_description_applied` so
+        we don't ship candidates before the OFFER/ANSWER envelope is
+        on its way to the peer — the same race-protection
+        ``transport.py:_drain_ice`` (PR #371) added for the federation
+        channel. Without this drain the peer never receives our
+        candidates and ICE connectivity-checks fail; the DataChannel
+        never opens; sync falls back to relay.
+        """
+        pc = self._pc
+        if pc is None or self._signaling_send is None:
+            return
+        await self._local_description_applied.wait()
+        try:
+            async for cand in pc.ice_candidates():
+                if pc is not self._pc:  # PC swapped under us (close)
+                    return
+                payload = {
+                    "sync_id": self.sync_id,
+                    "candidate": cand.candidate,
+                    "sdp_mid": cand.mid,
+                }
+                try:
+                    await self._signaling_send(
+                        FederationEventType.SPACE_SYNC_ICE,
+                        payload,
+                    )
+                except Exception:
+                    log.warning(
+                        "SyncRtcSession[%s]: SPACE_SYNC_ICE signal failed",
+                        self.sync_id,
+                        exc_info=True,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
+            log.debug(
+                "SyncRtcSession[%s]: ICE drain ended: %s",
                 self.sync_id,
                 exc,
             )
@@ -232,6 +313,11 @@ class SyncRtcSession:
         await self._open_channel_async()
         local = await self._pc.set_local_description("offer")
         self._local_sdp = local.sdp
+        # Unblock ``_drain_ice`` — the caller will ship the SDP offer
+        # via ``SPACE_SYNC_OFFER`` right after this returns, so
+        # candidates that fire next are race-safe against the peer's
+        # ``apply_offer``.
+        self._local_description_applied.set()
         return local.sdp
 
     async def set_answer(self, sdp_answer: str) -> None:
@@ -263,6 +349,9 @@ class SyncRtcSession:
         await self._pc.set_remote_description(sdp_offer, "offer")
         local = await self._pc.set_local_description("answer")
         self._local_sdp = local.sdp
+        # Unblock ``_drain_ice`` (see ``create_offer`` for the
+        # rationale).
+        self._local_description_applied.set()
         return local.sdp
 
     # ─── Shared ───────────────────────────────────────────────────────────

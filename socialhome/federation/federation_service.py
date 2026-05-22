@@ -1261,6 +1261,12 @@ class FederationService:
             requester_instance_id=self._own_instance_id,
             space_id=space_id,
             ice_servers=payload.get("ice_servers"),
+            # Provider's id — used inside the manager to wire the
+            # outbound-ICE signaling closure for the requester-side
+            # session. Without this the requester never ships
+            # SPACE_SYNC_ICE back to the provider and the DataChannel
+            # never opens.
+            provider_instance_id=event.from_instance,
         )
         await self.send_event(
             to_instance_id=event.from_instance,
@@ -1293,7 +1299,15 @@ class FederationService:
         candidate = payload.get("candidate") or ""
         if not sync_id or not candidate:
             return
-        await self._sync_manager.apply_ice(sync_id=sync_id, candidate=candidate)
+        # ``sdp_mid`` defaults to "0" for the single DataChannel m-line;
+        # honour whatever the sender included so multi-mid setups (if
+        # any future variant) keep round-tripping the right value.
+        sdp_mid = str(payload.get("sdp_mid") or "0")
+        await self._sync_manager.apply_ice(
+            sync_id=sync_id,
+            candidate=candidate,
+            sdp_mid=sdp_mid,
+        )
 
     async def _handle_space_sync_direct_ready(self, event) -> None:
         """DataChannel open → provider starts streaming content (§25.6)."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from socialhome.domain.federation import FederationEventType
 from socialhome.federation.sync_rtc import (
     CHANNEL_LABEL,
     ICE_TIMEOUT_SECONDS,
@@ -95,6 +96,56 @@ async def test_provider_create_offer_returns_sdp():
     sdp = await s.create_offer()
     assert sdp.startswith("v=0")
     assert isinstance(sdp, str)
+
+
+async def test_provider_spawns_ice_drain_when_signaling_send_wired():
+    """REGRESSION: pre-fix, ``SyncRtcSession`` never consumed
+    ``pc.ice_candidates()`` outbound, so local trickle candidates
+    never reached the peer and the DataChannel never opened. Wiring
+    ``signaling_send`` arms the new ``_drain_ice`` task, which
+    blocks on ``_local_description_applied`` until the OFFER is
+    queued and then forwards every candidate via
+    ``SPACE_SYNC_ICE``.
+
+    We assert two narrow invariants:
+      * Constructing with ``signaling_send=None`` parses + runs
+        (back-compat — tests without a wired federation service).
+      * Constructing with ``signaling_send=<callable>`` arms the
+        ``_local_description_applied`` event guard that the drain
+        loop awaits — and ``create_offer`` sets it so the drain
+        can proceed.
+    """
+    s_none = SyncRtcSession(
+        sync_id="sid-no-sig",
+        space_id="sp1",
+        requester_instance_id="r",
+        provider_instance_id="p",
+        role="provider",
+        signaling_send=None,
+    )
+    assert s_none._signaling_send is None
+    s_none.close()
+
+    captured: list[tuple[FederationEventType, dict]] = []
+
+    async def _sig(event_type, payload):
+        captured.append((event_type, payload))
+
+    s = SyncRtcSession(
+        sync_id="sid2",
+        space_id="sp1",
+        requester_instance_id="r",
+        provider_instance_id="p",
+        role="provider",
+        signaling_send=_sig,
+    )
+    assert s._signaling_send is _sig
+    assert not s._local_description_applied.is_set()
+    await s.create_offer()
+    # create_offer must flip the local-description-applied event so
+    # the drain loop stops waiting and can forward candidates.
+    assert s._local_description_applied.is_set()
+    s.close()
 
 
 async def test_requester_cannot_create_offer_s13():

@@ -552,10 +552,32 @@ def _wire_federation_stack(
         )
         return row is not None
 
+    # Wrap ``federation_service.send_event`` as the manager's outbound-
+    # signaling closure so trickle ICE candidates produced by
+    # :class:`SyncRtcSession` can be shipped to the peer via
+    # ``SPACE_SYNC_ICE`` envelopes. Without this the sync DataChannel
+    # never establishes — local candidates produced into
+    # ``pc.ice_candidates()`` had no consumer pre-fix; the peer only
+    # saw the SDP offer's host candidate (loopback) and pair-checks
+    # failed on anything that required STUN-mapped reflexives.
+    async def _sync_signal(
+        to_instance_id: str,
+        event_type,
+        payload: dict,
+        space_id: str | None = None,
+    ) -> None:
+        await federation_service.send_event(
+            to_instance_id=to_instance_id,
+            event_type=event_type,
+            payload=payload,
+            space_id=space_id,
+        )
+
     sync_manager = SyncSessionManager(
         federation_repo,
         get_max_seq=_get_max_seq,
         check_member=_check_member,
+        signaling_send=_sync_signal,
     )
     federation_service.attach_sync_manager(sync_manager)
     federation_service.attach_idempotency_cache(idempotency_cache)

@@ -474,6 +474,17 @@ class _RtcPeer:
         When the connection enters ``FAILED`` we evict ourselves from
         the parent transport via ``_on_failed`` so the next ``send()``
         builds a fresh handshake instead of returning False forever.
+
+        **Race guard**: ``pc`` is captured at task entry and every
+        state-change handler checks ``self._pc is pc`` before mutating
+        ``_closed`` / ``_open``. The polite-rollback path in
+        :meth:`accept_offer` calls :meth:`_close_pc` which both closes
+        the old PC AND swaps ``self._pc`` to a freshly-built one. If
+        we react to a stale ``CLOSED`` / ``FAILED`` event from the
+        old PC without this guard, we flip ``self._closed = True`` on
+        the **reused** ``_RtcPeer`` and the freshly-handshaked
+        DataChannel reports ``is_ready=False`` for the rest of the
+        session — silent permanent HTTPS fallback.
         """
         pc = self._pc
         if pc is None:
@@ -487,20 +498,35 @@ class _RtcPeer:
                         ev.state.name,
                     )
                     if ev.state in (rtc.RTCState.FAILED, rtc.RTCState.CLOSED):
+                        # Stale event for a PC we've already
+                        # rolled back away from — leave the
+                        # rebuilt connection alone.
+                        if self._pc is not pc:
+                            continue
                         self._closed = True
                         self._open.clear()
                         if (
                             ev.state == rtc.RTCState.FAILED
                             and self._on_failed is not None
                         ):
-                            try:
-                                await self._on_failed(self.instance_id)
-                            except Exception as exc:  # noqa: BLE001
-                                log.warning(
-                                    "fed RTC on_failed handler raised for %s: %s",
-                                    self.instance_id,
-                                    exc,
-                                )
+                            # Schedule the eviction as a separate
+                            # task so we don't await it here — the
+                            # callback may call ``peer.close()`` which
+                            # closes ``self._pc`` which would cancel
+                            # the very ``_drain_events`` task we're
+                            # in the middle of. Decoupling avoids
+                            # the self-cancel.
+                            assert self._loop is not None
+                            evict_cb = self._on_failed
+                            instance_id = self.instance_id
+
+                            async def _evict_async() -> None:
+                                await evict_cb(instance_id)
+
+                            self._loop.create_task(
+                                _evict_async(),
+                                name=f"fed-rtc-evict[{instance_id}]",
+                            )
                 elif isinstance(ev, rtc.IceStateChangeEvent):
                     log.info(
                         "fed RTC peer %s: ice_state=%s",
@@ -530,11 +556,26 @@ class _RtcPeer:
             log.debug("fed RTC events drain to %s ended: %s", self.instance_id, exc)
 
     async def _drain_ice(self) -> None:
-        """Pump local ICE candidates out to the peer over signalling."""
+        """Pump local ICE candidates out to the peer over signalling.
+
+        **Race guard**: ``pc`` is captured at task entry. The polite-
+        rollback path in :meth:`accept_offer` calls :meth:`_close_pc`
+        which both closes the old PC AND swaps ``self._pc`` to a new
+        one. Before this check, the OLD-PC's ``_drain_ice`` (still
+        alive in the moment between ``pc.close()`` and task
+        cancellation) could read one more candidate from the dying
+        PC and ship it via ``_signaling`` — useless to the peer (the
+        socket is about to close) and worse, briefly fooling the
+        peer's ICE state machine into ``connected`` only to lose it
+        again on DTLS. That looks exactly like "ICE connects then
+        DTLS times out" in the operator log.
+        """
         pc = self._pc
         assert pc is not None  # spawned from start_offer/accept_offer
         try:
             async for cand in pc.ice_candidates():
+                if self._pc is not pc:
+                    return
                 await self._signaling(
                     FederationEventType.FEDERATION_RTC_ICE,
                     {"candidate": cand.candidate, "sdp_mid": cand.mid},
