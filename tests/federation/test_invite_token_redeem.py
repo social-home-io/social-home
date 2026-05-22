@@ -119,13 +119,18 @@ class _FakeRemoteMemberRepo:
 class _FakeFederationService:
     """Captures outbound ``send_event`` calls for assertion."""
 
-    def __init__(self, *, peer_min_version: int = 99):
+    def __init__(self, *, peer_min_version: int = 99, own_instance_id: str = "self"):
         self._event_registry = _FakeRegistry()
         self.sent: list[dict] = []
         # Tests can lower this to simulate a pre-v_6 issuer; the
         # coordinator's outbound gate checks ``peer_supports`` before
         # sending REDEEM, so a v_5 issuer should be 422'd up front.
         self._peer_min_version = peer_min_version
+        self._own_instance_id = own_instance_id
+
+    @property
+    def own_instance_id(self) -> str:
+        return self._own_instance_id
 
     async def send_event(self, *, to_instance_id, event_type, payload, space_id=None):
         self.sent.append(
@@ -158,8 +163,8 @@ class _LinkedFederationService(_FakeFederationService):
     round-trip test can run without any real transport.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *, own_instance_id: str = "self"):
+        super().__init__(own_instance_id=own_instance_id)
         self.peer: SpaceInviteTokenRedeemCoordinator | None = None
         self.from_instance: str = ""
         self.to_instance: str = ""
@@ -729,6 +734,177 @@ async def test_send_deny_swallows_transport_errors():
     coord = _make_coordinator(federation=_ExplodingFed())
     # Should not raise.
     await coord._send_deny("issuer-1", "n-explode", "test reason")
+
+
+# ── Mesh-routing tests ────────────────────────────────────────────────
+
+
+class _FakeRouteService:
+    """Stand-in for :class:`RouteDiscoveryService` used by the redeem
+    coordinator when the issuer isn't a direct peer.
+
+    Returns whatever ``discover_route`` was preconfigured to surface;
+    the matching ``lookup_target_eph_priv`` resolves the priv for
+    the pub the test minted.
+    """
+
+    def __init__(self):
+        self._result: tuple[list[str], str] | None = None
+        self._eph_store: dict[str, str] = {}
+
+    def configure(self, path: list[str], pub_b64: str, priv_b64: str) -> None:
+        self._result = (path, pub_b64)
+        self._eph_store[pub_b64] = priv_b64
+
+    async def discover_route(self, target_instance_id):
+        return self._result
+
+    def lookup_target_eph_priv(self, pub_b64: str) -> str | None:
+        return self._eph_store.get(pub_b64)
+
+
+async def test_redeem_round_trip_via_mesh_routing():
+    """End-to-end: origin's issuer is *not* a direct peer; the redeem
+    coordinator runs route discovery (mocked), wraps REDEEM inside
+    SPACE_ROUTED, ships along the discovered path, the issuer unwraps
+    the inner event, processes the token, and ships an ACK as another
+    SPACE_ROUTED with direction=reply. The origin unseals the ACK and
+    resolves the in-flight Future with ``{space_id, role}``.
+
+    Demonstrates that relays never see plaintext: assert the on-wire
+    SPACE_ROUTED payload bears no resemblance to the redeem fields.
+    """
+    from socialhome.federation import routed_crypto
+    from socialhome.federation.routed_envelope import SpaceRoutedHandler
+
+    # ── Sender side ───────────────────────────────────────────────────
+    sender_fed = _LinkedFederationService(own_instance_id="sender-1")
+    # Crucially, the sender's federation_repo has NO entry for
+    # "issuer-1" — so direct-peer path is rejected and the mesh path
+    # is taken.
+    sender_repo = _FakeFederationRepo()
+    sender_route_svc = _FakeRouteService()
+    # ``send_routed`` ships against ``path[1]`` — make that the issuer
+    # directly (single-hop mesh). The forward leg lands at the issuer,
+    # the reply leg comes straight back.
+    target_priv, target_pub = routed_crypto.generate_ephemeral_keypair()
+    sender_route_svc.configure(["sender-1", "issuer-1"], target_pub, target_priv)
+
+    # ── Issuer side ───────────────────────────────────────────────────
+    issuer_fed = _LinkedFederationService(own_instance_id="issuer-1")
+    issuer_repo = _FakeSpaceRepo()
+    issuer_repo.tokens["good-token"] = {
+        "space_id": "sp-routed",
+        "created_by": "owner",
+        "uses_remaining": 1,
+    }
+    issuer_members = _FakeRemoteMemberRepo()
+    # The issuer's route service holds the priv for the pub it would
+    # have minted in case 4 of FIND_ROUTE. We seed it here so the
+    # routed handler can unseal the inbound forward leg.
+    issuer_route_svc = _FakeRouteService()
+    issuer_route_svc._eph_store[target_pub] = target_priv
+
+    # ── Wire SpaceRoutedHandlers (forward = sender→issuer, reply = issuer→sender) ──
+    # Each handler re-dispatches the unwrapped inner event through
+    # the local federation registry so coordinator handlers
+    # (_on_redeem*) fire — same shape as production
+    # ``FederationService._dispatch_event``.
+    sender_routed = SpaceRoutedHandler(
+        federation_service=sender_fed,  # type: ignore[arg-type]
+        federation_repo=_FakeFederationRepo(),  # type: ignore[arg-type]
+        event_dispatcher=lambda ev: _dispatch_via_registry(sender_fed, ev),
+        target_eph_lookup=sender_route_svc.lookup_target_eph_priv,
+    )
+    issuer_routed = SpaceRoutedHandler(
+        federation_service=issuer_fed,  # type: ignore[arg-type]
+        federation_repo=_FakeFederationRepo(),  # type: ignore[arg-type]
+        event_dispatcher=lambda ev: _dispatch_via_registry(issuer_fed, ev),
+        target_eph_lookup=issuer_route_svc.lookup_target_eph_priv,
+    )
+
+    # ── Coordinators ──────────────────────────────────────────────────
+    sender = _make_coordinator(
+        federation=sender_fed,
+        federation_repo=sender_repo,
+    )
+    sender._route_service = sender_route_svc
+    sender._routed_handler = sender_routed
+    issuer = _make_coordinator(
+        federation=issuer_fed,
+        space_repo=issuer_repo,
+        remote_members=issuer_members,
+    )
+    issuer._route_service = issuer_route_svc
+    issuer._routed_handler = issuer_routed
+    sender.attach_to(sender_fed)
+    issuer.attach_to(issuer_fed)
+
+    # The sender's SpaceRoutedHandler ships SPACE_ROUTED via
+    # ``sender_fed.send_event``. Re-route those into the issuer's
+    # SpaceRoutedHandler (and vice-versa for the reply leg).
+    # ``_LinkedFederationService`` dispatches via the peer
+    # coordinator's registry — register SPACE_ROUTED there too.
+    sender_fed._event_registry.bindings[FederationEventType.SPACE_ROUTED] = [
+        sender_routed._on_routed,
+    ]
+    issuer_fed._event_registry.bindings[FederationEventType.SPACE_ROUTED] = [
+        issuer_routed._on_routed,
+    ]
+    sender_fed.peer = issuer
+    sender_fed.from_instance = "sender-1"
+    sender_fed.to_instance = "issuer-1"
+    issuer_fed.peer = sender
+    issuer_fed.from_instance = "issuer-1"
+    issuer_fed.to_instance = "sender-1"
+
+    # ── Run the round-trip ────────────────────────────────────────────
+    result = await sender.request_redeem(
+        "good-token",
+        viewer_user_id="u-local",
+        issuer_instance_id="issuer-1",
+    )
+    assert result == {"space_id": "sp-routed", "role": "member"}
+
+    # The sender's outbound was wrapped in SPACE_ROUTED, not a bare
+    # SPACE_INVITE_TOKEN_REDEEM.
+    outbound = [
+        s
+        for s in sender_fed.sent
+        if s["event_type"] is FederationEventType.SPACE_ROUTED
+    ]
+    assert outbound, "redeem coordinator did not ship via SPACE_ROUTED"
+    # Plaintext leak check: the on-wire envelope must not contain the
+    # invite_token or redeemer_user_id verbatim.
+    import json as _json
+
+    wire = _json.dumps(outbound[0]["payload"], sort_keys=True)
+    assert "good-token" not in wire
+    assert "u-local" not in wire
+    # The reply leg ships SPACE_ROUTED back with direction=reply.
+    reply = [
+        s
+        for s in issuer_fed.sent
+        if s["event_type"] is FederationEventType.SPACE_ROUTED
+        and s["payload"].get("direction") == "reply"
+    ]
+    assert reply, "issuer did not ship ACK via SPACE_ROUTED reply leg"
+    # Issuer seated the redeemer + token consumed.
+    assert len(issuer_members.added) == 1
+    assert issuer_repo.tokens["good-token"]["uses_remaining"] == 0
+
+
+async def _noop_dispatcher(_ev):
+    pass
+
+
+async def _dispatch_via_registry(fed_svc, ev):
+    """Re-dispatch a synthesised event through ``fed_svc``'s
+    registry — emulates what FederationService._dispatch_event does
+    in production for the unwrap step."""
+    handlers = fed_svc._event_registry.bindings.get(ev.event_type, [])
+    for h in handlers:
+        await h(ev)
 
 
 async def test_redeem_against_sub_v6_issuer_raises_with_upgrade_hint():

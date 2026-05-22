@@ -50,6 +50,17 @@ The receiver awaits the ACK on a nonce-keyed Future inside the
 endpoint returns ``{space_id, role}`` like the local path; on DENY
 returns 422 with the reason; on timeout returns 504.
 
+When the receiving HFS is **not** directly paired with the issuer
+(the user pasted a code from a friend-of-a-friend), the redeem flows
+through the federation mesh — see [`spaces.md` → "Mesh routing
+(SPACE_ROUTED)"](spaces.md#mesh-routing-space_routed). The
+``SPACE_INVITE_TOKEN_REDEEM`` envelope is sealed under an ephemeral
+X25519 key only the issuer can read; relays forward the opaque
+ciphertext along a source-route discovered via
+``SPACE_FIND_ROUTE`` / ``SPACE_ROUTE_FOUND``. The ACK / DENY rides
+the reply leg of the same envelope so the discovery cost is paid
+once per redeem regardless of hop count.
+
 ## Flow — private invite (paired peers)
 
 ```mermaid
@@ -157,6 +168,11 @@ Backend (federation + persistence):
 - `socialhome/routes/spaces.py` — REST endpoints
   (`/api/spaces/{id}/invite-tokens`, `/api/spaces/{id}/remote-invites`,
   `/api/spaces/join`, `/api/remote_invites/{token}/accept|decline`).
+- `socialhome/federation/invite_token_redeem.py` — receiver-side
+  coordinator for the ``SPACE_INVITE_TOKEN_REDEEM`` /
+  ``_ACK`` / ``_DENY`` round-trip; transparently ships via
+  ``SPACE_ROUTED`` for non-paired issuers and falls back to direct
+  delivery for paired ones.
 
 SPA (issuer + receiver side):
 

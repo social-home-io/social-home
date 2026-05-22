@@ -122,6 +122,19 @@ events the sender's instance ID is separately encrypted under the
 space key, so a passive GFS operator sees `space_id` + `epoch` for
 routing and nothing else.
 
+**Routed-envelope seal** (`federation/routed_crypto.py`) — for
+multi-hop `SPACE_ROUTED` events the inner payload is sealed with a
+per-route ephemeral X25519+HKDF directional key (HKDF info
+``socialhome/space_routed/{origin-to-target,target-to-origin}``).
+The target generates a fresh ephemeral on each `SPACE_FIND_ROUTE`
+probe and ships the public via `SPACE_ROUTE_FOUND`; the origin
+generates its own ephemeral on `send_routed` and stashes the priv
+for the matching reply. Relays only ever see the opaque ciphertext.
+The wire carries a `kem_suite` field (today only `"x25519"`) so a
+future hybrid (`x25519+mlkem768`, Phase 2) is a suite-bump rather
+than a wire-format break — see [`protocol/spaces.md` → "Mesh
+routing"](protocol/spaces.md#mesh-routing-space_routed).
+
 **WebRTC SDP signing** (`federation/sdp_signing.py`) — Ed25519
 signature over `<sdp_type>:<sdp>` so a MITM can't swap DTLS endpoints.
 

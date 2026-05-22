@@ -182,6 +182,8 @@ from .services.comment_federation_outbound import CommentFederationOutbound
 from .services.corner_service import CornerService
 from .federation.peer_directory_handler import PeerDirectoryHandler
 from .federation.invite_token_redeem import SpaceInviteTokenRedeemCoordinator
+from .federation.route_discovery import RouteDiscoveryService
+from .federation.routed_envelope import SpaceRoutedHandler
 from .federation.private_invite_handler import PrivateSpaceInviteHandler
 from .services.peer_directory_service import PeerDirectoryService
 from .services.profile_federation_outbound import ProfileFederationOutbound
@@ -1894,10 +1896,36 @@ def create_app(config: Config | None = None) -> web.Application:
             federation_repo=federation_repo,
             remote_member_repo=repos.space_remote_member,
         )
+        # §D2 PR 2 — federation-mesh routing primitives. The discovery
+        # service runs BFS-flooded probes to find a chain of confirmed
+        # peers leading to an instance we aren't directly paired with;
+        # the routed-envelope handler wraps an inner event for
+        # multi-hop forwarding along the discovered chain. Both wire
+        # into the federation event registry via attach_to().
+        route_discovery = RouteDiscoveryService(
+            federation_service=federation_service,
+            federation_repo=federation_repo,
+            max_hops=config.max_route_hops,
+        )
+        route_discovery.attach_to(federation_service)
+        routed_handler = SpaceRoutedHandler(
+            federation_service=federation_service,
+            federation_repo=federation_repo,
+            event_dispatcher=federation_service._dispatch_event,  # noqa: SLF001
+            # The discovery service holds the target-side ephemeral
+            # privates it minted in response to FIND_ROUTE probes;
+            # the routed handler asks it for the matching priv when
+            # an inbound SPACE_ROUTED forward leg lands here.
+            target_eph_lookup=route_discovery.lookup_target_eph_priv,
+        )
+        routed_handler.attach_to(federation_service)
         # §D2 cross-instance invite-token redeem — wires the
         # ``SPACE_INVITE_TOKEN_REDEEM*`` family into the federation
         # event registry and gives ``space_service`` the driver it
-        # delegates to when a local user pastes a peer's token.
+        # delegates to when a local user pastes a peer's token. PR 2
+        # injects the mesh-routing pair so REDEEMs against unpaired
+        # issuers transparently route through a discovered chain
+        # rather than fail-fast with "pair first".
         invite_redeem_coordinator = SpaceInviteTokenRedeemCoordinator(
             bus=bus,
             federation_service=federation_service,
@@ -1905,6 +1933,8 @@ def create_app(config: Config | None = None) -> web.Application:
             space_remote_member_repo=repos.space_remote_member,
             user_repo=user_repo,
             federation_repo=federation_repo,
+            route_service=route_discovery,
+            routed_handler=routed_handler,
         )
         invite_redeem_coordinator.attach_to(federation_service)
         real_space_service.attach_redeem_coordinator(invite_redeem_coordinator)

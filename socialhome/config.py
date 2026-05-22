@@ -159,6 +159,16 @@ class Config:
     #: (``liboqs-python``) at runtime. See ``docs/crypto.md``.
     federation_sig_suite: str = "ed25519"
 
+    #: Maximum hop budget for federation-mesh route discovery
+    #: (:data:`FederationEventType.SPACE_FIND_ROUTE`). A probe is
+    #: forwarded to each confirmed peer until ``len(hops_traversed)
+    #: == max_route_hops``, at which point each receiving peer
+    #: silently drops the probe rather than fan it out further.
+    #: Default ``3`` matches the typical "friend-of-a-friend"
+    #: federation graph (A — B — C — D); raising it allows deeper
+    #: reachability at the cost of more discovery traffic.
+    max_route_hops: int = 3
+
     # Per-platform TOML sections — opaque to the core. Each adapter reads
     # its own section (e.g. config.platform_options["homeassistant"]).
     platform_options: Mapping[str, Mapping[str, Any]] = field(
@@ -331,6 +341,11 @@ class Config:
                 "federation_sig_suite",
                 "SH_FEDERATION_SIG_SUITE",
                 "ed25519",
+            ),
+            max_route_hops=_int_opt(
+                "max_route_hops",
+                "SH_MAX_ROUTE_HOPS",
+                3,
             ),
             db_write_batch_max=_int_opt(
                 "db_write_batch_max",

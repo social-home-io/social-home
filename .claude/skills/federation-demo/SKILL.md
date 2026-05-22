@@ -202,9 +202,26 @@ That single command runs the full sequence:
    ``space_remote_members`` DB row exists (direct check —
    ``/api/spaces/{id}/members`` only surfaces local members).
    PR 1 baseline for the relayed case (a wants to join d's space
-   via b) that will land as ``invite-redeem-via`` in PR 2.
+   via b) that lands as ``invite-redeem-routed`` in step 7.
 
-7. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
+7. ``invite-redeem-routed`` (PR 2, v_6 mesh) — c (receiver) joins
+   a space hosted on d (issuer) but is **not** directly paired with
+   d; the only path is c↔b↔d. The receiver-side coordinator runs
+   ``SPACE_FIND_ROUTE`` to discover the path, gets back d's per-
+   route X25519 ephemeral pub via ``SPACE_ROUTE_FOUND``, and ships
+   the redeem as a ``SPACE_ROUTED`` envelope with the inner
+   payload sealed end-to-end (HKDF-derived directional AES-256-GCM
+   key, AAD bound to ``route_id`` + ``inner_event_type``). b
+   forwards the opaque ciphertext without decrypting it; d unseals,
+   seats c as a remote member, and ships the ACK back as
+   ``SPACE_ROUTED(direction=reply)``. Asserts: c's
+   ``POST /api/spaces/join`` resolved 200/201 (full round-trip
+   completed), ``d.space_remote_members`` contains c (inner REDEEM
+   dispatched at the target after unseal), AND b's log contains
+   ``SPACE_ROUTED`` but **not** ``SPACE_INVITE_TOKEN_REDEEM``
+   (encryption invariant — relays never see the inner event_type).
+
+8. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
    post one ``audience_kind=all_paired`` highlight while **c** is
    offline, restarts **c**, waits across the second outbox-backoff
    slot (~35 s), and asserts the queued highlight lands. Validates
@@ -215,14 +232,15 @@ That single command runs the full sequence:
 
 The canonical ``all`` sequence runs ``up → pair → traffic →
 calendar → verify → relay-pair → visibility → invite-redeem →
-replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
-stay opt-in (they spin up a separate GFS process and aren't
-required to validate the HFS↔HFS surface).
+invite-redeem-routed → replay`` in that order. ``gfs-up`` /
+``gfs-pair`` / ``gfs-down`` stay opt-in (they spin up a separate
+GFS process and aren't required to validate the HFS↔HFS surface).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
-/ ``relay-pair`` / ``visibility`` / ``invite-redeem`` / ``replay``);
-state is persisted to ``/tmp/sh-demo/state.json`` between calls.
+/ ``relay-pair`` / ``visibility`` / ``invite-redeem`` /
+``invite-redeem-routed`` / ``replay``); state is persisted to
+``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands
 
