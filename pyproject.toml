@@ -32,7 +32,12 @@ dependencies = [
     # 2026.5.10 also includes the remote-candidate buffering fix that
     # eliminates spurious ``rtcAddRemoteCandidate: runtime failure
     # (-2)`` tracebacks during normal trickle-ICE flow.
-    "aiolibdatachannel>=2026.5.10",
+    # 2026.5.22 fixes a hang in ``DataChannel.send(wait_for_drain=True)``
+    # when the channel closes mid-wait — without this, a sender whose
+    # buffer was above HWM at the moment the peer disconnected would
+    # park on ``_buffered_low_event`` forever
+    # (social-home-io/aiolibdatachannel#13).
+    "aiolibdatachannel>=2026.5.22",
 ]
 
 [project.optional-dependencies]
