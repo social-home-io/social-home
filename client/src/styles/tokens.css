@@ -76,6 +76,15 @@
   --sh-font-size-xs:    0.75rem;
   --sh-font-size-sm:    0.875rem;
   --sh-font-size-base:  1rem;
+  /* A dozen rules reach for ``var(--sh-font-size-md)`` as a synonym
+   * for the body-text size. Without this alias they evaluate to the
+   * empty string, the declaration is dropped, and ``font-size`` falls
+   * back to the inherited value — which in most places happens to be
+   * fine, but breaks badly when a parent zeroes its own font-size to
+   * hide a label (e.g. ``.sh-space-settings-btn`` collapsing its
+   * text on mobile so only the ::before ⚙ glyph remains). Aliasing
+   * to ``-base`` keeps the existing renders unchanged. */
+  --sh-font-size-md:    var(--sh-font-size-base);
   --sh-font-size-lg:    1.125rem;
   --sh-font-size-xl:    1.5rem;
   --sh-font-size-2xl:   2rem;
