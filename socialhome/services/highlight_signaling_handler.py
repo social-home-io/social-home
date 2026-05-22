@@ -249,7 +249,7 @@ class HighlightSignalingHandler:
         frames = await self._highlights.list_frames(sess.highlight_id)
         manifest = []
         for f in frames:
-            byte_length = self._media_size(f.media_url)
+            byte_length = await self._media_size(f.media_url)
             manifest.append(
                 {
                     "frame_id": f.id,
@@ -322,10 +322,12 @@ class HighlightSignalingHandler:
             return None
         return pathlib.Path(self._media_dir) / filename
 
-    def _media_size(self, media_url: str | None) -> int:
+    async def _media_size(self, media_url: str | None) -> int:
         path = self._resolve_media_path(media_url)
+        if path is None:
+            return 0
         try:
-            return path.stat().st_size if path is not None else 0
+            return (await aiofiles.os.stat(path)).st_size
         except OSError:
             return 0
 

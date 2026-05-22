@@ -185,7 +185,7 @@ class DmMediaSyncService(VisibilityMixin):
         """
         if kind == "file":
             return None
-        path = self._resolve_media_path(media_url)
+        path = await self._resolve_media_path(media_url)
         if path is None or not await aiofiles.os.path.isfile(path):
             log.debug(
                 "dm-media-sync: preview source missing for %s",
@@ -258,7 +258,7 @@ class DmMediaSyncService(VisibilityMixin):
         envelope with the follow-up bytes. Saves a uuid round-trip
         and one fewer column on the wire.
         """
-        path = self._resolve_media_path(media_url)
+        path = await self._resolve_media_path(media_url)
         if path is None:
             log.warning(
                 "dm-media-sync: cannot enqueue, media_url %s "
@@ -528,7 +528,10 @@ class DmMediaSyncService(VisibilityMixin):
             last_error=last_error[:500],
         )
 
-    def _resolve_media_path(self, media_url: str | None) -> pathlib.Path | None:
+    async def _resolve_media_path(
+        self,
+        media_url: str | None,
+    ) -> pathlib.Path | None:
         """Map a stored ``media_url`` (``api/media/<name>``) to disk.
 
         Returns ``None`` when ``media_url`` doesn't fit the expected
@@ -547,12 +550,13 @@ class DmMediaSyncService(VisibilityMixin):
         if not url.startswith(prefix):
             return None
         name = url[len(prefix) :]
-        # No traversal. ``Path`` resolves ``..`` lazily — we
-        # explicitly check the resolved path stays under
-        # ``media_dir``.
-        candidate = (self._media_dir / name).resolve()
+        # No traversal. ``Path.resolve()`` is a sync syscall (stat
+        # walk) — wrap in ``asyncio.to_thread`` so this method stays
+        # await-safe even when the media dir lives on a slow disk.
+        candidate = await asyncio.to_thread((self._media_dir / name).resolve)
         try:
-            candidate.relative_to(self._media_dir.resolve())
+            media_root = await asyncio.to_thread(self._media_dir.resolve)
+            candidate.relative_to(media_root)
         except ValueError:
             return None
         return candidate

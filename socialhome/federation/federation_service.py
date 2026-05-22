@@ -324,8 +324,66 @@ class FederationService:
     # ─── Wiring helpers ──────────────────────────────────────────────────
 
     def attach_sync_manager(self, sync_manager) -> None:
-        """Attach a :class:`SyncSessionManager` after construction."""
+        """Attach a :class:`SyncSessionManager` after construction.
+
+        Also wires the manager's outbound-ICE emitter so each
+        ``SyncRtcSession``'s locally-gathered ICE candidates are
+        trickled to the peer via :class:`FederationEventType.SPACE_SYNC_ICE`.
+        Without this hook, sync RTC handshakes could only succeed when
+        the host candidates inlined in the SDP were reachable
+        (same-LAN); cross-NAT sessions hit the 15 s connectivity
+        timeout.
+        """
         self._sync_manager = sync_manager
+        sync_manager._on_local_ice = self._send_outbound_sync_ice
+
+    async def _send_outbound_sync_ice(
+        self,
+        sync_id: str,
+        candidate: str,
+        sdp_mid: str,
+    ) -> None:
+        """Forward a locally-gathered ICE candidate to the peer.
+
+        Looks up the session by ``sync_id`` to figure out who the
+        peer is (provider sends to requester, requester to provider).
+        Skips when the session has gone away (close raced the
+        callback). All inputs are already validated by libdatachannel
+        before the candidate enters the iterator.
+        """
+        if self._sync_manager is None:
+            return
+        record = self._sync_manager.get_session(sync_id)
+        if record is None:
+            return
+        # Provider sends to the requester; requester sends to the
+        # provider. ``provider_instance_id`` is empty on a
+        # requester-side record that was opened by ``apply_offer``
+        # before a peer was known; in that case the offer's
+        # ``from_instance`` was the provider — but the only way the
+        # session got into _sessions on the requester side is via
+        # ``apply_offer`` which doesn't record the provider id. The
+        # easier path: drop the outbound when the target is unknown
+        # — the inline candidates in the SDP still carry the host
+        # set, and the peer will trickle their own to us regardless.
+        if record.rtc is None or record.rtc.role is None:
+            return
+        if record.rtc.role == "provider":
+            target = record.requester_instance_id
+        else:
+            target = record.provider_instance_id
+        if not target:
+            return
+        await self.send_event(
+            to_instance_id=target,
+            event_type=FederationEventType.SPACE_SYNC_ICE,
+            payload={
+                "sync_id": sync_id,
+                "candidate": candidate,
+                "sdp_mid": sdp_mid,
+            },
+            space_id=record.space_id,
+        )
 
     def attach_user_repo(self, user_repo) -> None:
         """Attach an :class:`AbstractUserRepo` after construction.
@@ -1293,7 +1351,16 @@ class FederationService:
         candidate = payload.get("candidate") or ""
         if not sync_id or not candidate:
             return
-        await self._sync_manager.apply_ice(sync_id=sync_id, candidate=candidate)
+        # ``sdp_mid`` is optional — peers prior to the outbound-trickle
+        # work omitted it and the manager defaulted to "0". Forward
+        # whatever the sender chose; the manager / RTC session
+        # consume the same default if missing.
+        sdp_mid = str(payload.get("sdp_mid") or "0")
+        await self._sync_manager.apply_ice(
+            sync_id=sync_id,
+            candidate=candidate,
+            sdp_mid=sdp_mid,
+        )
 
     async def _handle_space_sync_direct_ready(self, event) -> None:
         """DataChannel open → provider starts streaming content (§25.6)."""

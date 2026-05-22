@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -119,6 +120,7 @@ class SyncRtcSession:
         "_ice_candidates",
         "_loop",
         "_closed",
+        "_on_local_ice",
     )
 
     def __init__(
@@ -132,6 +134,7 @@ class SyncRtcSession:
         role: str = "provider",
         ice_servers: list[dict] | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
+        on_local_ice: Callable[[str, str, str], Awaitable[None]] | None = None,
     ) -> None:
         if sync_mode not in ("initial", "incremental", "full"):
             raise ValueError(f"Invalid sync_mode: {sync_mode!r}")
@@ -153,6 +156,14 @@ class SyncRtcSession:
         self._ice_candidates: list[str] = []
         self._loop = loop
         self._closed = False
+        # Optional callback fired for every LOCAL ICE candidate the
+        # PeerConnection gathers. The federation service wires this
+        # up to forward each candidate to the peer via
+        # ``SPACE_SYNC_ICE``. Without the callback, locally-gathered
+        # candidates are silently dropped — same-LAN handshakes still
+        # work (host candidates are inline in the SDP) but cross-NAT
+        # connections hit the 15 s connectivity timeout.
+        self._on_local_ice = on_local_ice
 
         self._init_real_pc()
 
@@ -179,6 +190,45 @@ class SyncRtcSession:
             self._pc.spawn_task(self._watch_channel(self._channel))
         else:
             self._pc.spawn_task(self._watch_incoming())
+        # Always start draining LOCAL ICE candidates the moment we have
+        # a PC; the callback (if any) forwards them to the peer via
+        # ``SPACE_SYNC_ICE``. Same shape both roles.
+        if self._on_local_ice is not None:
+            self._pc.spawn_task(self._drain_local_ice())
+
+    async def _drain_local_ice(self) -> None:
+        """Forward each locally-gathered ICE candidate to the peer.
+
+        Before this loop existed, ``SyncRtcSession`` used
+        ``set_local_description`` (the trickle variant) but never
+        iterated ``pc.ice_candidates()`` — locally-gathered candidates
+        were silently dropped. Same-LAN handshakes worked because the
+        host candidates are inline in the SDP; cross-NAT handshakes
+        hit the 15 s connectivity timeout in :meth:`wait_ready` because
+        neither side ever learned the other's reflexive / relayed
+        candidates.
+        """
+        on_ice = self._on_local_ice
+        if on_ice is None:
+            return
+        try:
+            async for cand in self._pc.ice_candidates():
+                try:
+                    await on_ice(self.sync_id, cand.candidate, cand.mid)
+                except Exception as exc:  # noqa: BLE001 — defensive
+                    log.warning(
+                        "SyncRtcSession[%s]: local ICE forward failed: %s",
+                        self.sync_id,
+                        exc,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
+            log.debug(
+                "SyncRtcSession[%s]: local ICE drain ended: %s",
+                self.sync_id,
+                exc,
+            )
 
     async def _watch_incoming(self) -> None:
         try:
