@@ -569,3 +569,156 @@ async def test_redeem_deny_with_no_reason_uses_default():
     with pytest.raises(SpacePermissionError) as exc:
         fut.result()
     assert str(exc.value)  # non-empty
+
+
+# ── Edge-case coverage tests for late ACK / DENY paths + storage errors ──
+
+
+async def test_redeem_deny_missing_nonce_is_silent_noop():
+    """A DENY envelope missing ``redeem_nonce`` is dropped silently —
+    can't resolve a Future without an id to look up. Belt-and-suspenders
+    for malformed inbound traffic."""
+    coord = _make_coordinator()
+    ev = FederationEvent(
+        msg_id="m-no-nonce",
+        event_type=FederationEventType.SPACE_INVITE_TOKEN_REDEEM_DENY,
+        from_instance="issuer-1",
+        to_instance="me",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={"reason": "no nonce attached"},
+    )
+    # Should not raise.
+    await coord._on_redeem_deny(ev)
+
+
+async def test_redeem_deny_with_no_matching_future_is_silent_noop():
+    """A late DENY (after the receiver's Future already timed out and
+    was purged) is dropped silently — there's nobody waiting."""
+    coord = _make_coordinator()
+    # No future registered for nonce 'gone'.
+    ev = FederationEvent(
+        msg_id="m-late-deny",
+        event_type=FederationEventType.SPACE_INVITE_TOKEN_REDEEM_DENY,
+        from_instance="issuer-1",
+        to_instance="me",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={"redeem_nonce": "gone", "reason": "too late"},
+    )
+    await coord._on_redeem_deny(ev)
+
+
+async def test_redeem_ack_missing_nonce_is_silent_noop():
+    """ACK without a nonce can't resolve any Future. Silent drop."""
+    coord = _make_coordinator()
+    ev = FederationEvent(
+        msg_id="m-ack-no-nonce",
+        event_type=FederationEventType.SPACE_INVITE_TOKEN_REDEEM_ACK,
+        from_instance="issuer-1",
+        to_instance="me",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={"space_id": "s-x"},
+    )
+    await coord._on_redeem_ack(ev)
+
+
+async def test_issuer_is_banned_raises_sends_deny():
+    """``is_banned`` raising on the issuer side ships a DENY back to
+    the receiver rather than swallowing the error silently — the
+    receiver's HTTP request would otherwise hang until timeout."""
+    fed = _FakeFederationService()
+    space_repo = _FakeSpaceRepo()
+    space_repo.tokens["tok-banned"] = {
+        "space_id": "s-banned",
+        "created_by": "u-issuer",
+        "uses_remaining": 1,
+    }
+
+    class _ExplodingIsBanned(_FakeSpaceRepo):
+        async def is_banned(self, space_id, user_id):
+            raise RuntimeError("storage down")
+
+    repo = _ExplodingIsBanned()
+    repo.tokens["tok-banned"] = {
+        "space_id": "s-banned",
+        "created_by": "u-issuer",
+        "uses_remaining": 1,
+    }
+    coord = _make_coordinator(federation=fed, space_repo=repo)
+    ev = FederationEvent(
+        msg_id="m-redeem-banned",
+        event_type=FederationEventType.SPACE_INVITE_TOKEN_REDEEM,
+        from_instance="receiver-1",
+        to_instance="me",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={
+            "redeem_nonce": "n-banned",
+            "invite_token": "tok-banned",
+            "redeemer_user_id": "u-x",
+        },
+    )
+    await coord._on_redeem(ev)
+    sent = [
+        s
+        for s in fed.sent
+        if s["event_type"] == FederationEventType.SPACE_INVITE_TOKEN_REDEEM_DENY
+    ]
+    assert len(sent) == 1
+    assert "storage error" in sent[0]["payload"]["reason"]
+
+
+async def test_issuer_seat_failure_sends_deny():
+    """A storage error during ``add_remote_member`` / ``add_space_instance``
+    ships a DENY rather than half-committing state. Mirrors the
+    is_banned-raises path."""
+    fed = _FakeFederationService()
+    space_repo = _FakeSpaceRepo()
+    space_repo.tokens["tok-seat-fail"] = {
+        "space_id": "s-seat",
+        "created_by": "u-issuer",
+        "uses_remaining": 1,
+    }
+
+    class _ExplodingMembers(_FakeRemoteMemberRepo):
+        async def add(self, **kwargs):
+            raise RuntimeError("FK violation")
+
+    coord = _make_coordinator(
+        federation=fed,
+        space_repo=space_repo,
+        remote_members=_ExplodingMembers(),
+    )
+    ev = FederationEvent(
+        msg_id="m-redeem-seat",
+        event_type=FederationEventType.SPACE_INVITE_TOKEN_REDEEM,
+        from_instance="receiver-1",
+        to_instance="me",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={
+            "redeem_nonce": "n-seat",
+            "invite_token": "tok-seat-fail",
+            "redeemer_user_id": "u-y",
+        },
+    )
+    await coord._on_redeem(ev)
+    deny = [
+        s
+        for s in fed.sent
+        if s["event_type"] == FederationEventType.SPACE_INVITE_TOKEN_REDEEM_DENY
+    ]
+    assert len(deny) == 1
+    assert "member seat" in deny[0]["payload"]["reason"]
+
+
+async def test_send_deny_swallows_transport_errors():
+    """A failed DENY ship-back is logged but doesn't propagate — the
+    receiver's timeout is the same observable outcome and a raise here
+    would leave the issuer's task crashing on every malformed inbound.
+    """
+
+    class _ExplodingFed(_FakeFederationService):
+        async def send_event(self, **kwargs):
+            raise RuntimeError("transport down")
+
+    coord = _make_coordinator(federation=_ExplodingFed())
+    # Should not raise.
+    await coord._send_deny("issuer-1", "n-explode", "test reason")
