@@ -1919,7 +1919,11 @@ def create_app(config: Config | None = None) -> web.Application:
             target_eph_lookup=route_discovery.lookup_target_eph_priv,
         )
         routed_handler.attach_to(federation_service)
-        real_space_service.attach_mesh(
+        # Mesh lives on the federation service so every outbound that
+        # goes through ``send_with_mesh_fallback`` (private invites,
+        # space-content broadcasts, future per-peer fanouts) sees the
+        # same direct-then-mesh logic without each service rewiring.
+        federation_service.attach_mesh(
             route_service=route_discovery,
             routed_handler=routed_handler,
         )

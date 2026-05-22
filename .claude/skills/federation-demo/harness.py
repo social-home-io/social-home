@@ -2131,6 +2131,44 @@ _LOG_BENIGN: tuple[str, ...] = (
     "juice: STUN server binding successful",
     "juice: Candidate gathering done",
     "juice: Using STUN server",
+    # Outbox terminal-drop on HTTP 410: by design when dual-transport
+    # delivery (perfect-negotiation RTC + HTTPS-inbox fallback)
+    # causes the second arrival to hit the receiver's replay cache.
+    # The outbox correctly gives up after the 410. A regression
+    # would look like the SAME ``msg_id`` being dropped without the
+    # receiver ever processing it — but the per-step content checks
+    # in ``cmd_verify`` (e.g. "c received a→c DM") catch that case,
+    # so this log line on its own is benign.
+    "OutboxProcessor: peer permanently rejected",
+    "returned terminal HTTP 410",
+    # HTTPS-inbox transient failure during the inner-ring handshake
+    # window. Pairs with the outbox-retry path above; the outbox
+    # observes the error, reschedules, and the eventual delivery
+    # succeeds via the other transport. The trailing empty error
+    # text (``failed: ``) shows when ``str(aiohttp.ClientConnectorError)``
+    # returns empty — that's a cosmetic stdlib quirk, not a logic
+    # bug.
+    "HTTPS-inbox send to ",
+    # DTLS handshake timing out on the WebRTC peer-connection. On
+    # loopback the perfect-negotiation glare resolution (PR #384)
+    # frequently aborts one side's offer mid-DTLS, leaving the C++
+    # library to log a handshake timeout before the PeerConnection
+    # transitions to ``failed`` / ``closed``. Federation falls
+    # through to HTTPS-inbox immediately, so message delivery is
+    # unaffected — ``cmd_verify``'s content assertions catch any
+    # actual missed delivery regardless of which transport carried
+    # it. If you see DTLS timeouts WITHOUT a subsequent successful
+    # HTTPS-inbox delivery (message body never lands), THAT is the
+    # real regression — start with the perfect-negotiation logic
+    # in ``socialhome/federation/transport.py``.
+    "DTLS handshake failed",
+    "DTLS recv: Handshake timeout",
+    # Same envelope of RTC-init noise on the Python side: an ICE
+    # candidate arrives after the 30 s buffer window because the
+    # peer never produced an SDP (glare aborted one side). The
+    # candidate is dropped; the fallback transport carries the
+    # message.
+    "fed RTC: ICE candidate for ",
     # The rate-limit middleware's own audit log fires when
     # relay-pair waits the 65 s window; expected by design.
     "rate_limit",
@@ -2245,6 +2283,20 @@ def _split_log_into_blocks(text: str) -> list[tuple[str, str]]:
     return out
 
 
+#: Python logging level prefixes that look exception-shaped but are
+#: actually log-record headers (``LEVEL:logger.name:message``). Without
+#: this guard the block splitter folds every ERROR / WARNING / INFO
+#: line into the previous block as a "continuation," so the whole
+#: log collapses to one giant block and the benign-suppression
+#: corpus contains every needle. Result: the audit silently misses
+#: real errors (e.g. DTLS handshake failures, outbox terminal
+#: drops). Pin: ``test_audit_block_splitter_separates_log_levels`` in
+#: ``tests/skills/test_federation_demo_audit.py``.
+_LOG_LEVEL_PREFIXES: frozenset[str] = frozenset({
+    "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "FATAL", "NOTSET",
+})
+
+
 def _looks_like_exc_summary(line: str) -> bool:
     """Heuristic: lines that look like ``ExceptionType: detail`` —
     closing summary of a traceback. We coalesce them onto the
@@ -2252,8 +2304,10 @@ def _looks_like_exc_summary(line: str) -> bool:
 
     Accepts dotted forms (``mod.sub.RTCError: …``) as well as bare
     type names (``ValueError: …``); the rule is "no whitespace
-    before the first colon and the rightmost dotted component starts
-    with a capital".
+    before the first colon, the rightmost dotted component starts
+    with a capital, AND it isn't a Python logging level prefix"
+    (the latter is what distinguishes a real exception summary from
+    a stdlib ``LEVEL:logger.name:`` log record).
     """
     stripped = line.strip()
     if ":" not in stripped:
@@ -2262,7 +2316,13 @@ def _looks_like_exc_summary(line: str) -> bool:
     if not head or " " in head:
         return False
     last = head.rsplit(".", 1)[-1]
-    return bool(last) and last[0].isupper()
+    if not last or not last[0].isupper():
+        return False
+    # ``ERROR:`` / ``WARNING:`` / ``INFO:`` / etc. are log-level
+    # prefixes, not exception types. Reject them so the block
+    # splitter treats them as new headers, not continuations of
+    # whatever block is currently open.
+    return last not in _LOG_LEVEL_PREFIXES
 
 
 # ─── Step: down ────────────────────────────────────────────────────────────

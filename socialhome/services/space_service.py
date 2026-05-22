@@ -124,8 +124,6 @@ class SpaceService:
         "_federation",
         "_remote_members",
         "_redeem_coordinator",
-        "_route_service",
-        "_routed_handler",
     )
 
     def __init__(
@@ -150,8 +148,6 @@ class SpaceService:
         self._federation = None
         self._remote_members = None
         self._redeem_coordinator = None
-        self._route_service: RouteDiscoveryService | None = None
-        self._routed_handler: SpaceRoutedHandler | None = None
 
     def attach_child_protection(self, child_protection_service) -> None:
         """Wire §CP.F1 enforcement into add_member."""
@@ -212,16 +208,26 @@ class SpaceService:
     ) -> None:
         """Wire the §D2-PR2 federation-mesh routing pair.
 
-        When attached, :meth:`invite_remote_user`,
-        :meth:`accept_remote_invite`, :meth:`decline_remote_invite`,
-        and :meth:`remove_remote_member` will fall back to mesh
-        routing (SPACE_ROUTED) when the destination household is not
-        a directly CONFIRMED peer. Without it, those methods still
-        run direct-only and raise :class:`SpacePermissionError` for
-        unpaired peers.
+        Thin delegation to :meth:`FederationService.attach_mesh` —
+        mesh state lives on the federation service so every space-
+        content fanout (not just the private-invite family) benefits
+        from per-peer mesh fallback. Kept here so existing wiring
+        sites don't have to change their call site, but the source
+        of truth is the federation service itself.
+
+        Raises ``RuntimeError`` if :meth:`attach_federation` hasn't
+        run yet — there's nowhere to hang the mesh refs without a
+        live :class:`FederationService`.
         """
-        self._route_service = route_service
-        self._routed_handler = routed_handler
+        if self._federation is None:
+            raise RuntimeError(
+                "space_service.attach_mesh: federation not attached; "
+                "call attach_federation first",
+            )
+        self._federation.attach_mesh(
+            route_service=route_service,
+            routed_handler=routed_handler,
+        )
 
     async def _on_remote_join_request_approved_bus(
         self,
@@ -954,37 +960,21 @@ class SpaceService:
     ) -> None:
         """Ship a private-invite-family envelope to a remote instance.
 
-        Tries direct delivery first when the peer is CONFIRMED. Falls
-        back to mesh routing (SPACE_ROUTED) when the peer is unconfirmed
-        or unreachable AND the mesh is wired up. Raises
-        :class:`SpacePermissionError` if neither path is available.
+        Delegates to :meth:`FederationService.send_with_mesh_fallback`
+        — direct delivery for CONFIRMED peers, SPACE_ROUTED multi-hop
+        for unpaired / unreachable ones, failure otherwise. Raises
+        :class:`SpacePermissionError` when neither path is available
+        so the route handler returns 4xx instead of 200.
         """
         if self._federation is None or self._federation_repo is None:
             raise RuntimeError("federation not attached")
-        peer = await self._federation_repo.get_instance(to_instance_id)
-        direct_peer = peer is not None and peer.status is PairingStatus.CONFIRMED
-        if direct_peer:
-            await self._federation.send_event(
-                to_instance_id=to_instance_id,
-                event_type=event_type,
-                payload=payload,
-            )
-            return
-        if self._route_service is not None and self._routed_handler is not None:
-            discovery_result = await self._route_service.discover_route(
-                to_instance_id,
-            )
-            if discovery_result is not None:
-                route_path, target_eph_pk = discovery_result
-                if len(route_path) >= 2:
-                    await self._routed_handler.send_routed(
-                        path=route_path,
-                        target_eph_pk_b64=target_eph_pk,
-                        inner_event_type=event_type,
-                        inner_payload=payload,
-                    )
-                    return
-        raise SpacePermissionError("no path to invitee household")
+        result = await self._federation.send_with_mesh_fallback(
+            to_instance_id=to_instance_id,
+            event_type=event_type,
+            payload=payload,
+        )
+        if not result.ok:
+            raise SpacePermissionError("no path to invitee household")
 
     async def invite_remote_user(
         self,
