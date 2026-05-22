@@ -6,9 +6,16 @@ import {
 vi.mock('@/api', () => ({
   api: { get: vi.fn(), post: vi.fn() },
 }))
+vi.mock('@/store/auth', () => ({
+  currentUser: { value: { user_id: 'uid-pascal', display_name: 'Pascal' } },
+}))
+vi.mock('./Toast', () => ({ showToast: vi.fn() }))
 
 const { api } = await import('@/api') as unknown as {
   api: { get: ReturnType<typeof vi.fn>; post: ReturnType<typeof vi.fn> }
+}
+const { showToast } = await import('./Toast') as unknown as {
+  showToast: ReturnType<typeof vi.fn>
 }
 const { RemoteInviteDialog, openRemoteInviteDialog } = await import('./RemoteInviteDialog')
 
@@ -17,7 +24,11 @@ const FRIENDS_PAYLOAD = {
     instance_id: 'self-instance',
     display_name: 'Alpha House',
     members: [
-      { user_id: 'uid-alice', display_name: 'Alice (Alpha)', last_seen_at: null },
+      // The viewer (uid-pascal) — must be filtered out of the picker.
+      { user_id: 'uid-pascal', display_name: 'Pascal (Alpha)', last_seen_at: null },
+      // Wife — present on the same instance; pre-fix she was silently
+      // dropped because the dialog only flattened ``households[]``.
+      { user_id: 'uid-anna', display_name: 'Anna (Alpha)', last_seen_at: null },
     ],
   },
   households: [
@@ -75,6 +86,7 @@ const FRIENDS_PAYLOAD = {
 beforeEach(() => {
   api.get.mockReset()
   api.post.mockReset()
+  showToast.mockReset()
 })
 
 afterEach(() => {
@@ -93,16 +105,21 @@ async function renderAndOpen() {
 }
 
 describe('RemoteInviteDialog', () => {
-  it('flattens /api/friends households[].members[] into the picker', async () => {
+  it('flattens both local + remote members, viewer themselves filtered', async () => {
     const { container } = await renderAndOpen()
     expect(api.get).toHaveBeenCalledWith('/api/friends')
-    // Three confirmed members across two households; the pending
-    // household's user must NOT appear.
+    // 1 local (Anna; the viewer Pascal is filtered out) + 3 confirmed
+    // remote members across two households; the pending household's
+    // user must NOT appear.
     const rows = container.querySelectorAll('.sh-remote-invite-row')
-    expect(rows.length).toBe(3)
+    expect(rows.length).toBe(4)
     const names = [...rows].map(r =>
       r.querySelector('.sh-remote-invite-row__name')?.textContent)
-    expect(names).toEqual(['Bob (Beta)', 'Carol (Beta)', 'Dave (Gamma)'])
+    // Local first (most common pick), then remote in source order.
+    expect(names).toEqual([
+      'Anna (Alpha)',
+      'Bob (Beta)', 'Carol (Beta)', 'Dave (Gamma)',
+    ])
   })
 
   it('filters the list by name and by household', async () => {
@@ -118,9 +135,14 @@ describe('RemoteInviteDialog', () => {
       fireEvent.input(search, { target: { value: 'gamma' } })
     })
     expect(container.querySelectorAll('.sh-remote-invite-row').length).toBe(1)
+    // Local-household members surface under the household name too.
+    await act(async () => {
+      fireEvent.input(search, { target: { value: 'anna' } })
+    })
+    expect(container.querySelectorAll('.sh-remote-invite-row').length).toBe(1)
   })
 
-  it('POSTs the picked row\'s instance_id + user_id on submit', async () => {
+  it('REMOTE pick → /remote-invites + "Send invite" button', async () => {
     api.post.mockResolvedValueOnce({})
     const { container, getByText } = await renderAndOpen()
     const bobRow = container.querySelector(
@@ -135,6 +157,33 @@ describe('RemoteInviteDialog', () => {
           invitee_instance_id: 'beta-instance',
           invitee_user_id: 'uid-bob',
         },
+      )
+      expect(showToast).toHaveBeenCalledWith(
+        expect.stringContaining('Invite sent'), 'success',
+      )
+    })
+  })
+
+  it('LOCAL pick → /members add + "Add" button', async () => {
+    // Regression for Pascal's bug: picking a same-household member
+    // (his wife) must seat her immediately via /members, not queue a
+    // cross-household federated invite.
+    api.post.mockResolvedValueOnce({})
+    const { container, getByText } = await renderAndOpen()
+    const annaRow = container.querySelector(
+      '[data-testid="remote-invite-row-uid-anna"]',
+    ) as HTMLButtonElement
+    expect(annaRow).not.toBeNull()
+    await act(async () => { fireEvent.click(annaRow) })
+    // Button label flips to "Add" when the pick is local.
+    await act(async () => { fireEvent.click(getByText('Add')) })
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith(
+        '/api/spaces/space-uuid-1/members',
+        { user_id: 'uid-anna' },
+      )
+      expect(showToast).toHaveBeenCalledWith(
+        expect.stringContaining('Added Anna'), 'success',
       )
     })
   })
@@ -153,16 +202,23 @@ describe('RemoteInviteDialog', () => {
     expect(carolMeta).toContain('never seen')
   })
 
-  it('renders the no-paired-households empty state', async () => {
+  it('renders the no-people empty state when there is nobody to add', async () => {
     api.get.mockResolvedValueOnce({
-      instance: FRIENDS_PAYLOAD.instance,
+      instance: {
+        instance_id: 'self-instance',
+        display_name: 'Alpha House',
+        // Only the viewer is here — they get filtered → empty list.
+        members: [
+          { user_id: 'uid-pascal', display_name: 'Pascal (Alpha)', last_seen_at: null },
+        ],
+      },
       households: [],
     })
     const result = render(<RemoteInviteDialog />)
     await act(async () => { openRemoteInviteDialog('space-uuid-empty') })
     await waitFor(() => {
       expect(result.container.textContent)
-        .toContain('paired household with visible members')
+        .toContain('nobody else to add yet')
     })
   })
 })

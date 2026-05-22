@@ -22,6 +22,7 @@ import { decodeInviteCode } from '@/lib/spaceInviteCode'
 import { Button } from '@/components/Button'
 import { Modal } from '@/components/Modal'
 import { QrScanner } from '@/components/QrScanner'
+import { showToast } from '@/components/Toast'
 import { t } from '@/i18n/i18n'
 
 type InviteMethod = 'paste' | 'qr'
@@ -97,7 +98,15 @@ export function SpaceJoinByCodeDialog() {
       }
       open.value = false
       draft.value = ''
-      loc.route(addBase(`/spaces/${r.space_id}`))
+      // The cross-instance redeem path queues a federated join; the
+      // local space row may not exist on the receiver's instance yet,
+      // so navigating into ``/spaces/{id}`` would land on an empty
+      // shell. Fall back to ``/spaces`` and let the WS upsert place
+      // the new card. Same-instance redeems return a row that's
+      // visible immediately, so the deep-link is safe there.
+      const dest = issuer ? addBase('/spaces') : addBase(`/spaces/${r.space_id}`)
+      showToast("You're in! 🎉", 'success')
+      loc.route(dest)
     } catch (e) {
       if (e instanceof ApiError && (e.status === 404 || e.status === 410)) {
         errorMsg.value = (
