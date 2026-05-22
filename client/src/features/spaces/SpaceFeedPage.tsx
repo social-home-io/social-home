@@ -508,7 +508,14 @@ export default function SpaceFeedPage() {
       )}
 
       {activeTab.value === 'map' && s?.features?.location && (
-        <SpaceLocationCard spaceId={spaceId} />
+        // Passing ``currentUserId`` lights up the "Share my location"
+        // chip + button at the top of the map. Without it the share
+        // surface stays hidden (the card otherwise renders the map
+        // read-only for spectators).
+        <SpaceLocationCard
+          spaceId={spaceId}
+          currentUserId={currentUser.value?.user_id}
+        />
       )}
 
       {activeTab.value === 'moderation' && canAdmin && (
