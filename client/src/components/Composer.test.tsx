@@ -53,4 +53,56 @@ describe('Composer', () => {
     fireEvent.click(getByLabelText('Text post'))
     expect(queryByPlaceholderText(/What's on your mind/)).toBeTruthy()
   })
+
+  it('enables the Post button once an image upload lands in the images slot', async () => {
+    // Regression for the bug Pascal saw as "I can select a photo but
+    // nothing happens afterwards" — the Post-button disabled gate
+    // used to look only at the single-file ``mediaUrl`` slot used
+    // by video / file posts. Image posts populate the multi-file
+    // ``images`` array instead, so the gate stayed disabled even
+    // after a successful upload. The fix accepts either source as
+    // "post has media".
+    commonMocks()
+    vi.doMock('./UploadProgress', () => ({
+      uploadWithProgress: vi.fn(async (file: File) => ({
+        url: `/api/media/${file.name}`,
+        signed_url: `/api/media/${file.name}?sig=stub`,
+        filename: file.name,
+      })),
+      UploadProgressBar: () => null,
+    }))
+    const { Composer } = await import('./Composer')
+    const { getByLabelText, container } = render(
+      <Composer onSubmit={vi.fn()} />,
+    )
+    fireEvent.click(getByLabelText('Image post'))
+    // Pre-fix the Post button is disabled because ``images`` is
+    // empty + ``mediaUrl`` is null; we'll re-check it post-upload.
+    const postButton = (): HTMLButtonElement | null => {
+      return Array.from(container.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'Post',
+      ) as HTMLButtonElement | null
+    }
+    expect(postButton()?.disabled).toBe(true)
+
+    // Synthesize a file and fire it at the hidden input the dropzone
+    // mounts. The composer's ``acceptFiles`` handler awaits the
+    // upload promise (stubbed above) and then drops a row into the
+    // images list — which is the state we want the Post button to
+    // react to.
+    const fileInput = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement
+    const file = new File([new Uint8Array(8)], 'photo.png', {
+      type: 'image/png',
+    })
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: [file],
+    })
+    fireEvent.change(fileInput)
+    // Wait for the upload promise + setState to settle.
+    await new Promise((r) => setTimeout(r, 30))
+    expect(postButton()?.disabled).toBe(false)
+  })
 })

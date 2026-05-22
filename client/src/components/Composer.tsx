@@ -629,7 +629,16 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
             if (overLimit) return true
             if (typeUsesBuilder(postType.value)) return false  // opens modal or posts
             if (typeAcceptsMedia(postType.value)) {
-              return !mediaUrl && !content.value.trim()
+              // Image posts use the multi-file ``images`` array; video
+              // and file posts use the single ``mediaUrl`` slot. Before
+              // this fix the gate only looked at ``mediaUrl``, so an
+              // image upload that landed in ``images`` left the Post
+              // button disabled — symptom Pascal saw as "selected a
+              // photo but nothing happens afterwards".
+              const hasMedia = postType.value === 'image'
+                ? images.length > 0
+                : !!mediaUrl
+              return !hasMedia && !content.value.trim()
             }
             return !content.value.trim()
           })()}>
