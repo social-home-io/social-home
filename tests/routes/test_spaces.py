@@ -257,6 +257,41 @@ async def test_add_and_list_members(client):
         assert "is_online" in member
         assert "is_idle" in member
         assert "last_seen_at" in member
+        # §23.8.8 — the per-space location-share opt-in must be on the
+        # member row so the map tab's sharing chip can hydrate on a
+        # cold load. Pre-fix the field was dropped from the serializer,
+        # so the chip rendered as OFF on every re-entry even though
+        # the row was actually enabled — which read as "it reset".
+        assert "location_share_enabled" in member
+        assert isinstance(member["location_share_enabled"], bool)
+
+
+async def test_member_location_share_enabled_round_trips(client):
+    """§23.8.8 — PATCHing /location-sharing flips the bit, and the
+    next GET /members must surface that flip. Regression for the
+    "map tab reset itself but notification settings still showed
+    enabled" UX bug."""
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "LocShareRoundtrip"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    # Admin's own member row — flip the opt-in.
+    patch = await client.patch(
+        f"/api/spaces/{sid}/members/me/location-sharing",
+        json={"enabled": True},
+        headers=_auth(client._admin_token),
+    )
+    assert patch.status == 200
+    # Read it back via the list endpoint the SPA uses on cold load.
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    me = next(m for m in members if m["user_id"] == client._admin_uid)
+    assert me["location_share_enabled"] is True
 
 
 async def test_remove_member(client):
