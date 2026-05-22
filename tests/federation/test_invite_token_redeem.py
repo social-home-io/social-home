@@ -119,9 +119,13 @@ class _FakeRemoteMemberRepo:
 class _FakeFederationService:
     """Captures outbound ``send_event`` calls for assertion."""
 
-    def __init__(self):
+    def __init__(self, *, peer_min_version: int = 99):
         self._event_registry = _FakeRegistry()
         self.sent: list[dict] = []
+        # Tests can lower this to simulate a pre-v_6 issuer; the
+        # coordinator's outbound gate checks ``peer_supports`` before
+        # sending REDEEM, so a v_5 issuer should be 422'd up front.
+        self._peer_min_version = peer_min_version
 
     async def send_event(self, *, to_instance_id, event_type, payload, space_id=None):
         self.sent.append(
@@ -135,6 +139,9 @@ class _FakeFederationService:
         # Returning a SimpleNamespace mimics DeliveryResult enough for
         # the coordinator's needs — it never inspects the return value.
         return SimpleNamespace(ok=True, instance_id=to_instance_id)
+
+    async def peer_supports(self, instance_id, *, min_version):
+        return self._peer_min_version >= min_version
 
 
 class _FakeRegistry:
@@ -722,3 +729,33 @@ async def test_send_deny_swallows_transport_errors():
     coord = _make_coordinator(federation=_ExplodingFed())
     # Should not raise.
     await coord._send_deny("issuer-1", "n-explode", "test reason")
+
+
+async def test_redeem_against_sub_v6_issuer_raises_with_upgrade_hint():
+    """Pre-v_6 issuers can't process SPACE_INVITE_TOKEN_REDEEM. Fail
+    fast with a clear "upgrade" message rather than ship the envelope
+    into a 10 s timeout."""
+    fed = _FakeFederationService(peer_min_version=5)
+    fed_repo = _FakeFederationRepo(
+        {
+            "issuer-1": _FakeInstance("issuer-1", status=PairingStatus.CONFIRMED),
+        }
+    )
+    users = _FakeUserRepo({"u-local": _make_user()})
+    coord = _make_coordinator(
+        federation=fed,
+        federation_repo=fed_repo,
+        user_repo=users,
+    )
+    with pytest.raises(SpacePermissionError) as exc:
+        await coord.request_redeem(
+            "tok",
+            viewer_user_id="u-local",
+            issuer_instance_id="issuer-1",
+        )
+    assert (
+        "older protocol" in str(exc.value).lower()
+        or "upgrade" in str(exc.value).lower()
+    )
+    # No envelope shipped — the gate fired before send_event.
+    assert not fed.sent

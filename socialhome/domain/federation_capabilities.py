@@ -80,7 +80,35 @@ from __future__ import annotations
 #:   PERMANENT failure and drops cleanly — so the safety net is the
 #:   outbox-drop fix from PR #354. No user-visible regression for
 #:   sub-v_5 peers; they just don't get the map update.
-OURS: int = 5
+#: * **v6** — cross-instance space-invite redeem + federation mesh
+#:   routing. Two related additions shipping under the same
+#:   release:
+#:
+#:   * :data:`FederationEventType.SPACE_INVITE_TOKEN_REDEEM` family
+#:     (``_REDEEM`` / ``_REDEEM_ACK`` / ``_REDEEM_DENY``). Receiver-
+#:     initiated cross-instance redeem for ``socialhome://invite#…``
+#:     codes — a paste on the receiver's instance routes to the
+#:     issuer over federation and seats the receiver as a remote
+#:     space member.
+#:   * Generic mesh-routing envelope :data:`FederationEventType
+#:     .SPACE_ROUTED` (PR 2) — wraps any inner event so it can
+#:     traverse a chain of confirmed peers to reach a target the
+#:     origin isn't directly paired with. Same envelope shape works
+#:     for invite redemption, space posts, and any future event
+#:     type without inventing new ``_ROUTED`` variants per case.
+#:   * Route-discovery primitives :data:`FederationEventType
+#:     .SPACE_FIND_ROUTE` + :data:`SPACE_ROUTE_FOUND` (PR 2). Per-
+#:     target probe + response so the origin can pick a hop-count-
+#:     minimal path through the federation network (default
+#:     ``max_hops=3``, configurable per deployment).
+#:
+#:   **No fallback.** Sub-v_6 issuers can't process the redeem;
+#:   the receiver-side coordinator gates the outbound on
+#:   ``peer_supports(min_version=6)`` and 422s the SPA with a clear
+#:   "issuer needs to upgrade" message rather than wasting the 10 s
+#:   timeout window. Same gate applies to the mesh-routing
+#:   envelopes once PR 2 lands.
+OURS: int = 6
 
 
 class FederationCapability:
@@ -114,6 +142,15 @@ class FederationCapability:
     #: silently (they'll learn the coords on next re-pair or via the
     #: peer-accept body if the operator unpairs / re-pairs).
     MIN_FOR_HOME_LOCATION_BROADCAST = 5
+
+    #: Minimum proto_version where the issuer knows the
+    #: ``SPACE_INVITE_TOKEN_REDEEM`` family + the multi-hop
+    #: ``_ROUTED`` variants + ``SPACE_FIND_ROUTE`` route discovery.
+    #: No fallback — the coordinator 422s the SPA on sub-v_6 issuers
+    #: rather than waste the 10 s timeout. The receiver-side guard
+    #: also doubles as protection against pasting a code minted by
+    #: an instance that's been downgraded since.
+    MIN_FOR_SPACE_INVITE_REDEEM = 6
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

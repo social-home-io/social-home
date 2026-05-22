@@ -40,6 +40,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEventType, PairingStatus
+from ..domain.federation_capabilities import FederationCapability
 from ..domain.space import SpacePermissionError, SpaceRole
 
 if TYPE_CHECKING:
@@ -140,6 +141,18 @@ class SpaceInviteTokenRedeemCoordinator:
         if instance is None or instance.status is not PairingStatus.CONFIRMED:
             raise SpacePermissionError(
                 "issuer instance is not a confirmed peer — pair first",
+            )
+
+        # Pre-v_6 issuers don't know SPACE_INVITE_TOKEN_REDEEM. Don't
+        # ship the envelope into a 10 s timeout — fail fast with a
+        # message naming the right next step.
+        if not await self._federation.peer_supports(
+            issuer_instance_id,
+            min_version=FederationCapability.MIN_FOR_SPACE_INVITE_REDEEM,
+        ):
+            raise SpacePermissionError(
+                "issuer instance is on an older protocol version — "
+                "ask them to upgrade before redeeming this code",
             )
 
         # Look up the local user so we can ship their identity to the
