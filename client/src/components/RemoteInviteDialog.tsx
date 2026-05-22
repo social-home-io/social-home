@@ -1,20 +1,29 @@
 /**
- * RemoteInviteDialog — "Invite someone from another household" modal
- * for private-space admins (§D1b).
+ * RemoteInviteDialog — unified "Add someone to this space" picker for
+ * private-space admins. Surfaces both the inviter's own household
+ * members AND every confirmed remote household's members in a single
+ * typeahead over ``/api/friends``.
  *
- * Replaces the old "pick a household → type a user_id" form with a
- * single typeahead over confirmed peers' member directories sourced
- * from ``/api/friends``. Peer-user-sync surfaces remote users on the
- * inviter's side, so the admin can now pick a real person by name
- * instead of guessing an opaque user id.
+ * On submit, the dialog dispatches to the right endpoint based on
+ * whether the pick is local or remote:
  *
- * On submit, the dialog derives ``invitee_instance_id`` +
- * ``invitee_user_id`` from the selected row and POSTs the existing
- * ``/api/spaces/{id}/remote-invites`` endpoint — backend unchanged.
+ *  - Local household member → ``POST /api/spaces/{id}/members``
+ *    with ``{user_id}``. Immediate add — no token round-trip — because
+ *    the user is already on this instance and the admin has authority
+ *    to seat them.
+ *  - Remote household member → ``POST /api/spaces/{id}/remote-invites``
+ *    with ``{invitee_instance_id, invitee_user_id}`` (§D1b). The
+ *    target household receives the invite over federation and the
+ *    invitee accepts on their own instance.
+ *
+ * (Bug repro: prior versions only flattened ``data.households[]`` and
+ * silently dropped ``data.instance``, so a household admin literally
+ * could not pick their spouse who lived on the same instance.)
  */
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { currentUser } from '@/store/auth'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { showToast } from './Toast'
@@ -50,6 +59,9 @@ interface PickRow {
   display_name: string
   household_name: string
   last_seen_at: string | null
+  /** ``true`` when the pick lives on the inviter's own instance — drives
+   *  endpoint selection on submit (immediate add vs federated invite). */
+  is_local: boolean
 }
 
 const open = signal<string | null>(null) // holds the space_id being invited to
@@ -87,7 +99,20 @@ export function RemoteInviteDialog() {
     setError(null)
     api.get('/api/friends').then((raw) => {
       const data = raw as FriendsResponse
-      const flat: PickRow[] = (data.households || [])
+      const meId = currentUser.value?.user_id
+      const localRows: PickRow[] = (data.instance?.members || [])
+        // Hide the inviter themselves — they're already in the space
+        // by virtue of being its admin / creator.
+        .filter((m) => m.user_id !== meId)
+        .map((m) => ({
+          user_id: m.user_id,
+          instance_id: data.instance.instance_id,
+          display_name: m.display_name,
+          household_name: data.instance.display_name,
+          last_seen_at: m.last_seen_at ?? null,
+          is_local: true,
+        }))
+      const remoteRows: PickRow[] = (data.households || [])
         .filter((h) => h.status === 'confirmed' || h.status === 'active')
         .flatMap((h) => h.members.map((m) => ({
           user_id: m.user_id,
@@ -97,8 +122,10 @@ export function RemoteInviteDialog() {
           display_name: m.display_name,
           household_name: h.display_name,
           last_seen_at: m.last_seen_at ?? null,
+          is_local: false,
         })))
-      setRows(flat)
+      // Local first — household-mates are the most common pick.
+      setRows([...localRows, ...remoteRows])
     }).catch(() => {
       setRows([])
     }).finally(() => setLoading(false))
@@ -133,11 +160,18 @@ export function RemoteInviteDialog() {
     }
     setSubmitting(true); setError(null)
     try {
-      await api.post(`/api/spaces/${spaceId}/remote-invites`, {
-        invitee_instance_id: picked.instance_id,
-        invitee_user_id: picked.user_id,
-      })
-      showToast(`Invite sent to ${picked.display_name}`, 'success')
+      if (picked.is_local) {
+        await api.post(`/api/spaces/${spaceId}/members`, {
+          user_id: picked.user_id,
+        })
+        showToast(`Added ${picked.display_name} to the space`, 'success')
+      } else {
+        await api.post(`/api/spaces/${spaceId}/remote-invites`, {
+          invitee_instance_id: picked.instance_id,
+          invitee_user_id: picked.user_id,
+        })
+        showToast(`Invite sent to ${picked.display_name}`, 'success')
+      }
       close()
     } catch (exc) {
       setError((exc as Error).message || 'Failed to send')
@@ -147,13 +181,14 @@ export function RemoteInviteDialog() {
   }
 
   return (
-    <Modal open={true} onClose={close} title="Invite from another household">
+    <Modal open={true} onClose={close} title="Add someone to this space">
       {loading ? (
-        <p class="sh-muted">Loading paired households…</p>
+        <p class="sh-muted">Loading people…</p>
       ) : rows.length === 0 ? (
         <p class="sh-muted">
-          You need at least one paired household with visible members
-          before you can send a cross-household invite.
+          There's nobody else to add yet. Add household members in
+          Settings, or pair with another household to invite their
+          people too.
         </p>
       ) : (
         <>
@@ -169,7 +204,7 @@ export function RemoteInviteDialog() {
             />
           </label>
           <div class="sh-remote-invite-picker" role="listbox"
-               aria-label="Paired-household members">
+               aria-label="People you can add">
             {matches.length === 0 ? (
               <p class="sh-muted sh-remote-invite-picker__empty">
                 No matches. Try a different name.
@@ -215,7 +250,10 @@ export function RemoteInviteDialog() {
               loading={submitting}
               disabled={!pickedId}
             >
-              Send invite
+              {(() => {
+                const picked = rows.find((r) => rowKey(r) === pickedId)
+                return picked && !picked.is_local ? 'Send invite' : 'Add'
+              })()}
             </Button>
           </div>
         </>

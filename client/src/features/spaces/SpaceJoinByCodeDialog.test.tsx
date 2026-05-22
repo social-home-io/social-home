@@ -23,6 +23,7 @@ vi.mock('@/baseUrl', () => ({
 vi.mock('qrcode', () => ({
   default: { toDataURL: vi.fn(async () => 'data:fake') },
 }))
+vi.mock('@/components/Toast', () => ({ showToast: vi.fn() }))
 
 const OUR_INSTANCE_ID = 'aaaabbbbccccddddeeeeffff00001111'
 vi.mock('@/store/instance', () => ({
@@ -51,6 +52,9 @@ const { api, ApiError } = await import('@/api') as unknown as {
   api: { post: ReturnType<typeof vi.fn> }
   ApiError: new (status: number, msg?: string) => Error & { status: number }
 }
+const { showToast } = await import('@/components/Toast') as unknown as {
+  showToast: ReturnType<typeof vi.fn>
+}
 const {
   SpaceJoinByCodeDialog, openSpaceJoinByCode,
 } = await import('./SpaceJoinByCodeDialog')
@@ -59,6 +63,7 @@ const { buildInviteCode } = await import('@/lib/spaceInviteCode')
 beforeEach(() => {
   api.post.mockReset()
   routeSpy.mockReset()
+  showToast.mockReset()
 })
 
 afterEach(() => {
@@ -113,6 +118,13 @@ describe('SpaceJoinByCodeDialog', () => {
         token: 'a1b2c3d4e5f60718',
       })
       expect(routeSpy).toHaveBeenCalledWith('/spaces/space-uuid-xyz')
+      // The success toast is what the receiver sees on a same-instance
+      // redeem — before this we just navigated silently and the space
+      // page (often initially empty) read as "nothing happened".
+      expect(showToast).toHaveBeenCalledWith(
+        expect.stringContaining("You're in"),
+        'success',
+      )
     })
   })
 
@@ -136,6 +148,14 @@ describe('SpaceJoinByCodeDialog', () => {
         token: 'a1b2c3d4e5f60718',
         issuer_instance_id: 'ffffeeeeddddccccbbbb111122223333',
       })
+      // Cross-instance redeems queue a federated join; the local row
+      // is not seatable yet, so the receiver lands on ``/spaces``
+      // (the WS upsert places the new card when the redeem returns).
+      expect(routeSpy).toHaveBeenCalledWith('/spaces')
+      expect(showToast).toHaveBeenCalledWith(
+        expect.stringContaining("You're in"),
+        'success',
+      )
     })
   })
 
