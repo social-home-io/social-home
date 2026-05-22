@@ -15,6 +15,7 @@ import pytest
 from socialhome.crypto import derive_instance_id, generate_identity_keypair
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.federation import (
+    FederationEventType,
     InstanceSource,
     PairingStatus,
     RemoteInstance,
@@ -407,3 +408,200 @@ async def test_approve_unknown_request_raises(stack):
             "missing-rid",
             actor_username="alicehost",
         )
+
+
+# ── mesh routing for the private-invite family ─────────────────────
+
+
+def _unconfirmed_peer() -> RemoteInstance:
+    return RemoteInstance(
+        id="peer",
+        display_name="Peer",
+        remote_identity_pk="ab" * 32,
+        key_self_to_remote="k",
+        key_remote_to_self="k",
+        remote_inbox_url="https://peer",
+        local_inbox_id="l",
+        status=PairingStatus.PENDING_SENT,
+        source=InstanceSource.MANUAL,
+    )
+
+
+def _attach_mesh(
+    svc, *, route: tuple[list[str], str] | None
+) -> tuple[AsyncMock, AsyncMock]:
+    """Attach fake mesh primitives onto ``svc`` and return the two mocks."""
+    discover_route = AsyncMock(return_value=route)
+    send_routed = AsyncMock(return_value="route-id-fake")
+    route_service = MagicMock()
+    route_service.discover_route = discover_route
+    routed_handler = MagicMock()
+    routed_handler.send_routed = send_routed
+    svc.attach_mesh(
+        route_service=route_service,
+        routed_handler=routed_handler,
+    )
+    return discover_route, send_routed
+
+
+async def test_invite_remote_user_routes_via_mesh_when_peer_not_confirmed(stack):
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="Private",
+        space_type=SpaceType.PRIVATE,
+    )
+    stack.fed_repo.get_instance.return_value = _unconfirmed_peer()
+    _, send_routed = _attach_mesh(
+        stack.svc,
+        route=(["self", "hop-1", "hop-2", "peer"], "eph-pk-b64"),
+    )
+    token = await stack.svc.invite_remote_user(
+        space.id,
+        actor_username="alicehost",
+        invitee_instance_id="peer",
+        invitee_user_id="bob",
+    )
+    assert token
+    stack.fed_svc.send_event.assert_not_awaited()
+    send_routed.assert_awaited_once()
+    call = send_routed.call_args
+
+    assert call.kwargs["inner_event_type"] == FederationEventType.SPACE_PRIVATE_INVITE
+    assert call.kwargs["target_eph_pk_b64"] == "eph-pk-b64"
+    assert call.kwargs["path"] == ["self", "hop-1", "hop-2", "peer"]
+    assert call.kwargs["inner_payload"]["invitee_user_id"] == "bob"
+    assert call.kwargs["inner_payload"]["invite_token"] == token
+
+
+async def test_accept_remote_invite_routes_via_mesh_when_peer_not_confirmed(stack):
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="S",
+    )
+    await stack.space_repo.save_remote_invitation(
+        space_id=space.id,
+        invited_by="alicehost-id",
+        remote_instance_id="peer",
+        remote_user_id="bob",
+        invite_token="tok-accept-mesh",
+        space_display_hint="S",
+    )
+    stack.fed_repo.get_instance.return_value = _unconfirmed_peer()
+    _, send_routed = _attach_mesh(
+        stack.svc,
+        route=(["self", "hop-1", "peer"], "eph-pk-b64"),
+    )
+    await stack.svc.accept_remote_invite(
+        token="tok-accept-mesh",
+        user_id="bob",
+    )
+    stack.fed_svc.send_event.assert_not_awaited()
+    send_routed.assert_awaited_once()
+
+    assert (
+        send_routed.call_args.kwargs["inner_event_type"]
+        == FederationEventType.SPACE_PRIVATE_INVITE_ACCEPT
+    )
+
+
+async def test_decline_remote_invite_routes_via_mesh_when_peer_not_confirmed(stack):
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="S",
+    )
+    await stack.space_repo.save_remote_invitation(
+        space_id=space.id,
+        invited_by="alicehost-id",
+        remote_instance_id="peer",
+        remote_user_id="bob",
+        invite_token="tok-decline-mesh",
+        space_display_hint="S",
+    )
+    stack.fed_repo.get_instance.return_value = _unconfirmed_peer()
+    _, send_routed = _attach_mesh(
+        stack.svc,
+        route=(["self", "hop-1", "peer"], "eph-pk-b64"),
+    )
+    await stack.svc.decline_remote_invite(
+        token="tok-decline-mesh",
+        user_id="bob",
+    )
+    stack.fed_svc.send_event.assert_not_awaited()
+    send_routed.assert_awaited_once()
+
+    assert (
+        send_routed.call_args.kwargs["inner_event_type"]
+        == FederationEventType.SPACE_PRIVATE_INVITE_DECLINE
+    )
+
+
+async def test_remove_remote_member_routes_via_mesh_when_peer_not_confirmed(stack):
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="S",
+    )
+    stack.fed_repo.get_instance.return_value = _unconfirmed_peer()
+    _, send_routed = _attach_mesh(
+        stack.svc,
+        route=(["self", "hop-1", "peer"], "eph-pk-b64"),
+    )
+    await stack.svc.remove_remote_member(
+        space.id,
+        actor_username="alicehost",
+        instance_id="peer",
+        user_id="bob",
+    )
+    stack.fed_svc.send_event.assert_not_awaited()
+    send_routed.assert_awaited_once()
+
+    assert (
+        send_routed.call_args.kwargs["inner_event_type"]
+        == FederationEventType.SPACE_REMOTE_MEMBER_REMOVED
+    )
+
+
+async def test_invite_remote_user_raises_when_no_route(stack):
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="Private",
+        space_type=SpaceType.PRIVATE,
+    )
+    stack.fed_repo.get_instance.return_value = _unconfirmed_peer()
+    discover_route, send_routed = _attach_mesh(stack.svc, route=None)
+    with pytest.raises(SpacePermissionError):
+        await stack.svc.invite_remote_user(
+            space.id,
+            actor_username="alicehost",
+            invitee_instance_id="peer",
+            invitee_user_id="bob",
+        )
+    discover_route.assert_awaited_once_with("peer")
+    send_routed.assert_not_awaited()
+    stack.fed_svc.send_event.assert_not_awaited()
+
+
+async def test_invite_remote_user_raises_when_mesh_not_attached(stack):
+    """Backward-compat: without attach_mesh, an unconfirmed peer still
+    raises SpacePermissionError so legacy wiring stays correct.
+    """
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="Private",
+        space_type=SpaceType.PRIVATE,
+    )
+    stack.fed_repo.get_instance.return_value = _unconfirmed_peer()
+    # attach_mesh deliberately NOT called.
+    with pytest.raises(SpacePermissionError):
+        await stack.svc.invite_remote_user(
+            space.id,
+            actor_username="alicehost",
+            invitee_instance_id="peer",
+            invitee_user_id="bob",
+        )
+    stack.fed_svc.send_event.assert_not_awaited()

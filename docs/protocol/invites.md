@@ -80,6 +80,30 @@ sequenceDiagram
     end
 ```
 
+### Private invite over the federation mesh (v_6+)
+
+When the invitee's household is **not** directly paired with the
+admin, `SpaceService` falls back to mesh routing transparently —
+the four private-invite envelopes (`SPACE_PRIVATE_INVITE`,
+`_ACCEPT`, `_DECLINE`, `SPACE_REMOTE_MEMBER_REMOVED`) ride
+`SPACE_ROUTED` along a chain of confirmed v_6+ peers discovered
+via `SPACE_FIND_ROUTE` / `SPACE_ROUTE_FOUND`. Each direction is
+its own forward leg with a fresh discovery (the admin / invitee
+may take arbitrary time between actions, so we don't try to keep
+the reply-leg ephemerals warm). See [`spaces.md` → "Mesh routing
+(SPACE_ROUTED)"](spaces.md#mesh-routing-space_routed) for the
+envelope shape; the inner event payload is unchanged.
+
+If neither a direct pair nor a discovered mesh route reaches the
+invitee, `invite_remote_user` raises `SpacePermissionError("no
+path to invitee household")` — operators see the same 422
+response they'd get today for an unconfirmed peer. SPA picker
+extensions to surface mesh-only invitees are an explicit
+follow-up; today the picker still lists confirmed-pair members
+only. Indirect invites use the receiver-initiated
+[`socialhome://invite#…` token-redeem flow](#token-based-invite-redeem-receiver-initiated-no-admin-approval--the-token-is-the-approval)
+instead.
+
 ## Flow — join request via GFS relay
 
 Used when a user wants to join a public space hosted on an HFS they

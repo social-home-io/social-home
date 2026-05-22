@@ -29,8 +29,13 @@ import unicodedata
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from ..crypto import generate_identity_keypair
+
+if TYPE_CHECKING:
+    from ..federation.route_discovery import RouteDiscoveryService
+    from ..federation.routed_envelope import SpaceRoutedHandler
 from ..domain.events import (
     CommentAdded,
     CommentDeleted,
@@ -119,6 +124,8 @@ class SpaceService:
         "_federation",
         "_remote_members",
         "_redeem_coordinator",
+        "_route_service",
+        "_routed_handler",
     )
 
     def __init__(
@@ -143,6 +150,8 @@ class SpaceService:
         self._federation = None
         self._remote_members = None
         self._redeem_coordinator = None
+        self._route_service: RouteDiscoveryService | None = None
+        self._routed_handler: SpaceRoutedHandler | None = None
 
     def attach_child_protection(self, child_protection_service) -> None:
         """Wire §CP.F1 enforcement into add_member."""
@@ -194,6 +203,25 @@ class SpaceService:
         ``issuer_instance_id`` requests.
         """
         self._redeem_coordinator = coordinator
+
+    def attach_mesh(
+        self,
+        *,
+        route_service: RouteDiscoveryService,
+        routed_handler: SpaceRoutedHandler,
+    ) -> None:
+        """Wire the §D2-PR2 federation-mesh routing pair.
+
+        When attached, :meth:`invite_remote_user`,
+        :meth:`accept_remote_invite`, :meth:`decline_remote_invite`,
+        and :meth:`remove_remote_member` will fall back to mesh
+        routing (SPACE_ROUTED) when the destination household is not
+        a directly CONFIRMED peer. Without it, those methods still
+        run direct-only and raise :class:`SpacePermissionError` for
+        unpaired peers.
+        """
+        self._route_service = route_service
+        self._routed_handler = routed_handler
 
     async def _on_remote_join_request_approved_bus(
         self,
@@ -917,6 +945,47 @@ class SpaceService:
             expires_at=expires_at,
         )
 
+    async def _send_invite_envelope(
+        self,
+        *,
+        to_instance_id: str,
+        event_type: FederationEventType,
+        payload: dict,
+    ) -> None:
+        """Ship a private-invite-family envelope to a remote instance.
+
+        Tries direct delivery first when the peer is CONFIRMED. Falls
+        back to mesh routing (SPACE_ROUTED) when the peer is unconfirmed
+        or unreachable AND the mesh is wired up. Raises
+        :class:`SpacePermissionError` if neither path is available.
+        """
+        if self._federation is None or self._federation_repo is None:
+            raise RuntimeError("federation not attached")
+        peer = await self._federation_repo.get_instance(to_instance_id)
+        direct_peer = peer is not None and peer.status is PairingStatus.CONFIRMED
+        if direct_peer:
+            await self._federation.send_event(
+                to_instance_id=to_instance_id,
+                event_type=event_type,
+                payload=payload,
+            )
+            return
+        if self._route_service is not None and self._routed_handler is not None:
+            discovery_result = await self._route_service.discover_route(
+                to_instance_id,
+            )
+            if discovery_result is not None:
+                route_path, target_eph_pk = discovery_result
+                if len(route_path) >= 2:
+                    await self._routed_handler.send_routed(
+                        path=route_path,
+                        target_eph_pk_b64=target_eph_pk,
+                        inner_event_type=event_type,
+                        inner_payload=payload,
+                    )
+                    return
+        raise SpacePermissionError("no path to invitee household")
+
     async def invite_remote_user(
         self,
         space_id: str,
@@ -944,12 +1013,6 @@ class SpaceService:
         actor = await self._users.get(actor_username)
         assert actor is not None
 
-        peer = await self._federation_repo.get_instance(invitee_instance_id)
-        if peer is None or peer.status is not PairingStatus.CONFIRMED:
-            raise SpacePermissionError(
-                "invitee household is not a CONFIRMED peer",
-            )
-
         # Short-TTL (5 min) single-use token minted by create_invite_token;
         # reusable with the existing POST /api/spaces/join path once the
         # invitee accepts.
@@ -975,7 +1038,7 @@ class SpaceService:
         # fan the invite out to the right local user — without it,
         # :meth:`PrivateSpaceInviteHandler._on_invite` early-returns
         # and ``GET /api/remote_invites`` stays empty on the recipient.
-        await self._federation.send_event(
+        await self._send_invite_envelope(
             to_instance_id=invitee_instance_id,
             event_type=FederationEventType.SPACE_PRIVATE_INVITE,
             payload={
@@ -1015,7 +1078,7 @@ class SpaceService:
             if user is not None:
                 display = user.display_name or user.username
                 user_pk = getattr(user, "public_key", None)
-        await self._federation.send_event(
+        await self._send_invite_envelope(
             to_instance_id=host_instance,
             event_type=FederationEventType.SPACE_PRIVATE_INVITE_ACCEPT,
             payload={
@@ -1053,7 +1116,7 @@ class SpaceService:
         host_instance = invite.get("remote_instance_id")
         if not host_instance:
             raise ValueError("not a cross-household invite")
-        await self._federation.send_event(
+        await self._send_invite_envelope(
             to_instance_id=host_instance,
             event_type=FederationEventType.SPACE_PRIVATE_INVITE_DECLINE,
             payload={
@@ -1080,7 +1143,7 @@ class SpaceService:
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
         await self._remote_members.remove(space_id, instance_id, user_id)
-        await self._federation.send_event(
+        await self._send_invite_envelope(
             to_instance_id=instance_id,
             event_type=FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
             payload={"space_id": space_id, "user_id": user_id},

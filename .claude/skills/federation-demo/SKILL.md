@@ -221,7 +221,33 @@ That single command runs the full sequence:
    ``SPACE_ROUTED`` but **not** ``SPACE_INVITE_TOKEN_REDEEM``
    (encryption invariant — relays never see the inner event_type).
 
-8. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
+8. ``remote-invite-routed`` (PR 3, v_6 mesh-private-invite) — c
+   (admin) invites dave on d through the unpaired path c↔b↔d.
+   Backend ``SpaceService.invite_remote_user`` runs route discovery
+   and ships ``SPACE_PRIVATE_INVITE`` via ``SPACE_ROUTED(forward)``;
+   b forwards the opaque blob without decrypting. d's inbox surfaces
+   the invite via ``GET /api/remote_invites``; d accepts;
+   ``SpaceService.accept_remote_invite`` runs a *fresh* discovery
+   (the original reply-leg ephemerals have expired in the user-time
+   gap) and ships ``SPACE_PRIVATE_INVITE_ACCEPT`` as a new
+   ``SPACE_ROUTED(forward)`` leg back through b. Asserts: invite
+   POST returns 201 (mesh send succeeded), d's inbox surfaces the
+   row, accept returns 200/204, ``c.space_remote_members`` shows
+   dave, AND b's log contains ``SPACE_ROUTED`` but **not**
+   ``SPACE_PRIVATE_INVITE_ACCEPT`` (encryption invariant — relays
+   cannot read the admin-initiated flow either).
+
+9. ``remote-invite-decline`` (PR 3, decline-path coverage) — c
+   invites alice (direct pair), alice declines via
+   ``POST /api/remote_invites/{token}/decline``,
+   ``SPACE_PRIVATE_INVITE_DECLINE`` round-trips to c. Asserts the
+   ``space_invitations`` row on c moves to ``status='declined'``
+   AND alice is NOT seated in ``c.space_remote_members``
+   (defensive: a decline must not accidentally seat the user).
+   Complements the accept-only path that
+   ``cmd_traffic`` + ``cmd_calendar`` exercise today.
+
+10. ``replay`` — outbox redelivery resilience. Kills **c**, has **a**
    post one ``audience_kind=all_paired`` highlight while **c** is
    offline, restarts **c**, waits across the second outbox-backoff
    slot (~35 s), and asserts the queued highlight lands. Validates
@@ -232,14 +258,16 @@ That single command runs the full sequence:
 
 The canonical ``all`` sequence runs ``up → pair → traffic →
 calendar → verify → relay-pair → visibility → invite-redeem →
-invite-redeem-routed → replay`` in that order. ``gfs-up`` /
+invite-redeem-routed → remote-invite-routed →
+remote-invite-decline → replay`` in that order. ``gfs-up`` /
 ``gfs-pair`` / ``gfs-down`` stay opt-in (they spin up a separate
 GFS process and aren't required to validate the HFS↔HFS surface).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
 / ``relay-pair`` / ``visibility`` / ``invite-redeem`` /
-``invite-redeem-routed`` / ``replay``); state is persisted to
+``invite-redeem-routed`` / ``remote-invite-routed`` /
+``remote-invite-decline`` / ``replay``); state is persisted to
 ``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands
