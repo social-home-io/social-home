@@ -1,10 +1,10 @@
 """§D1b zero-leak security test for SPACE_PRIVATE_INVITE.
 
 Asserts that :meth:`SpaceService.invite_remote_user` never puts space
-metadata in the plaintext envelope: ``send_event`` is called with
-``space_id`` NOT set on the envelope (no plaintext ``space_id`` field)
-and everything sensitive — space_id, invite_token, inviter info,
-display hint — lives inside the encrypted payload only.
+metadata in the plaintext envelope: the federation helper is called
+with ``space_id`` NOT set on the envelope (no plaintext ``space_id``
+field) and everything sensitive — space_id, invite_token, inviter
+info, display hint — lives inside the encrypted payload only.
 
 If a new plaintext field sneaks in here, this test fails. Any new
 allow-listed plaintext field must be added to
@@ -21,6 +21,7 @@ import pytest
 from socialhome.crypto import derive_instance_id, generate_identity_keypair
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.federation import (
+    DeliveryResult,
     InstanceSource,
     PairingStatus,
     RemoteInstance,
@@ -37,7 +38,7 @@ from socialhome.services.space_service import SpaceService
 from socialhome.services.user_service import UserService
 
 
-# The only kwargs permitted on the send_event call for
+# The only kwargs permitted on the federation-helper call for
 # ``SPACE_PRIVATE_INVITE`` outbound. ``space_id`` is NOT in the list on
 # purpose — for private invites it rides inside the encrypted payload.
 _PLAINTEXT_ALLOW_LIST = frozenset(
@@ -98,6 +99,12 @@ async def space_stack(tmp_dir):
         federation_repo.get_instance = AsyncMock(return_value=peer)
         federation_service = MagicMock()
         federation_service.send_event = AsyncMock()
+        # Private-invite outbound delegates to the federation mesh
+        # helper. Default to a successful direct ship so the
+        # SpaceService treats the invite as delivered.
+        federation_service.send_with_mesh_fallback = AsyncMock(
+            return_value=DeliveryResult(instance_id="peer-instance-id", ok=True),
+        )
         svc.attach_federation(
             federation_service=federation_service,
             federation_repo=federation_repo,
@@ -118,12 +125,12 @@ async def test_private_invite_envelope_has_no_space_id_in_plaintext(space_stack)
     )
     assert token
 
-    fed.send_event.assert_awaited_once()
-    kwargs = fed.send_event.await_args.kwargs
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    kwargs = fed.send_with_mesh_fallback.await_args.kwargs
 
     # The zero-leak rule: no `space_id` on the envelope plaintext.
     assert "space_id" not in kwargs, (
-        "space_id must not appear in send_event plaintext kwargs — "
+        "space_id must not appear in helper plaintext kwargs — "
         "§25.8.21 requires it to ride inside the encrypted payload."
     )
     for key in kwargs:
@@ -142,6 +149,14 @@ async def test_private_invite_envelope_has_no_space_id_in_plaintext(space_stack)
 async def test_private_invite_refuses_unpaired_peer(space_stack):
     svc, fed, repo, space = space_stack
     repo.get_instance = AsyncMock(return_value=None)
+    # Federation helper surfaces "no path" → invite must raise.
+    fed.send_with_mesh_fallback = AsyncMock(
+        return_value=DeliveryResult(
+            instance_id="unknown",
+            ok=False,
+            error="not_confirmed",
+        ),
+    )
     with pytest.raises(Exception):
         await svc.invite_remote_user(
             space.id,

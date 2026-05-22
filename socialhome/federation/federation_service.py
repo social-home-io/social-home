@@ -18,10 +18,15 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import aiohttp
 import asyncio
 import orjson as _orjson
+
+if TYPE_CHECKING:
+    from .route_discovery import RouteDiscoveryService
+    from .routed_envelope import SpaceRoutedHandler
 
 from ..crypto import (
     ReplayCache,
@@ -153,6 +158,8 @@ class FederationService:
         "_event_registry",
         "_gfs_connection_service",
         "_user_repo",
+        "_route_service",
+        "_routed_handler",
     )
 
     def __init__(
@@ -204,6 +211,13 @@ class FederationService:
         # legacy boot path / unit-test fixture without a user repo still
         # functions, just without the visibility backstop.
         self._user_repo = None
+        # §D2 PR2 mesh-routing primitives — set via :meth:`attach_mesh`.
+        # When wired, :meth:`send_with_mesh_fallback` discovers a path
+        # through the federation graph and ships SPACE_ROUTED when a
+        # peer isn't directly CONFIRMED. Without them, the helper just
+        # surfaces a failed DeliveryResult for non-CONFIRMED peers.
+        self._route_service: RouteDiscoveryService | None = None
+        self._routed_handler: SpaceRoutedHandler | None = None
         # Envelope crypto delegate (encrypt/decrypt/sign/verify). Keeps the
         # AES-256-GCM + Ed25519 surface unit-testable in isolation. When
         # the hybrid suite is configured the PQ signer is attached so
@@ -386,6 +400,23 @@ class FederationService:
         so direct-peer chunk streaming works when a DataChannel opens."""
         self._space_sync_service = service
         self._space_sync_receiver = receiver
+
+    def attach_mesh(
+        self,
+        *,
+        route_service: RouteDiscoveryService,
+        routed_handler: SpaceRoutedHandler,
+    ) -> None:
+        """Wire the §D2-PR2 federation-mesh routing pair.
+
+        Once attached, :meth:`send_with_mesh_fallback` falls back to
+        SPACE_ROUTED multi-hop delivery when a peer is not directly
+        CONFIRMED. Without it, the helper surfaces a failed
+        :class:`DeliveryResult` for unconfirmed peers so the caller
+        can decide whether to fail-hard or skip.
+        """
+        self._route_service = route_service
+        self._routed_handler = routed_handler
 
     def attach_gfs_connection_service(self, gfs_connection_service) -> None:
         """Attach :class:`GfsConnectionService` so spec §24.10.7 works.
@@ -656,6 +687,81 @@ class FederationService:
             error="delivery_failed",
         )
 
+    async def send_with_mesh_fallback(
+        self,
+        *,
+        to_instance_id: str,
+        event_type: FederationEventType,
+        payload: dict,
+        space_id: str | None = None,
+    ) -> DeliveryResult:
+        """Deliver to ``to_instance_id`` direct when CONFIRMED, else via mesh.
+
+        Behaviour:
+
+        * Peer is :data:`PairingStatus.CONFIRMED`: delegate to
+          :meth:`send_event`. Same shape and side effects as a normal
+          outbound.
+        * Peer row is missing or non-CONFIRMED AND a mesh pair is attached
+          via :meth:`attach_mesh`: discover a path via
+          :class:`RouteDiscoveryService` and ship SPACE_ROUTED via
+          :class:`SpaceRoutedHandler`. Returns ``DeliveryResult(ok=True)``
+          on success; ``error="no_route"`` if discovery found nothing.
+        * Peer non-CONFIRMED and mesh not attached: returns
+          ``DeliveryResult(ok=False, error="not_confirmed")`` — the caller
+          decides whether to surface this as a hard error.
+
+        Does NOT raise on transport failure — callers branch on
+        ``result.ok``.
+        """
+        instance = await self._federation_repo.get_instance(to_instance_id)
+        if instance is not None and instance.status is PairingStatus.CONFIRMED:
+            return await self.send_event(
+                to_instance_id=to_instance_id,
+                event_type=event_type,
+                payload=payload,
+                space_id=space_id,
+            )
+        if self._route_service is None or self._routed_handler is None:
+            return DeliveryResult(
+                instance_id=to_instance_id,
+                ok=False,
+                error="not_confirmed",
+            )
+        discovery = await self._route_service.discover_route(to_instance_id)
+        if discovery is None:
+            return DeliveryResult(
+                instance_id=to_instance_id,
+                ok=False,
+                error="no_route",
+            )
+        path, target_eph_pk = discovery
+        if len(path) < 2:
+            return DeliveryResult(
+                instance_id=to_instance_id,
+                ok=False,
+                error="no_route",
+            )
+        try:
+            await self._routed_handler.send_routed(
+                path=path,
+                target_eph_pk_b64=target_eph_pk,
+                inner_event_type=event_type,
+                inner_payload=payload,
+            )
+        except Exception as exc:
+            log.warning(
+                "send_with_mesh_fallback: routed ship to %s failed: %s",
+                to_instance_id,
+                exc,
+            )
+            return DeliveryResult(
+                instance_id=to_instance_id,
+                ok=False,
+                error="routed_send_failed",
+            )
+        return DeliveryResult(instance_id=to_instance_id, ok=True)
+
     async def broadcast_to_peers(
         self,
         *,
@@ -664,9 +770,13 @@ class FederationService:
         instance_ids: list[str] | None = None,
         space_id: str | None = None,
     ) -> BroadcastResult:
-        """Send to multiple peers.
+        """Send to multiple peers (direct-only).
 
         If ``instance_ids`` is ``None``, sends to all confirmed peers.
+        Mesh fallback is deliberately NOT used here — capability /
+        directory broadcasts target direct peers by construction.
+        Space-content fanout uses :meth:`broadcast_to_space_members`
+        which honours mesh routing per-peer.
         """
         if instance_ids is None:
             instances = await self._federation_repo.list_instances(
@@ -698,17 +808,34 @@ class FederationService:
         event_type: FederationEventType,
         payload: dict,
     ) -> BroadcastResult:
-        """Send to every confirmed peer that is a member of ``space_id``
-        and not instance-banned from it. Filtering happens in the repo
-        via a single JOIN — no Python-side scan over every confirmed
-        peer.
+        """Fan out to every member household of ``space_id``.
+
+        Each per-peer ship goes through :meth:`send_with_mesh_fallback`
+        so a member whose household isn't currently a direct CONFIRMED
+        peer (post-pairing churn, transient unpair) still receives the
+        envelope via SPACE_ROUTED when the mesh is wired.
+
+        Currently :meth:`list_instances_in_space` only returns CONFIRMED
+        members so the mesh-fallback branch is inert in practice; the
+        architectural change lets future widenings of the member-query
+        light up mesh delivery without further wiring.
         """
         instances = await self._federation_repo.list_instances_in_space(space_id)
-        return await self.broadcast_to_peers(
-            event_type=event_type,
-            payload=payload,
-            instance_ids=[inst.id for inst in instances],
-            space_id=space_id,
+        results: list[DeliveryResult] = []
+        for inst in instances:
+            result = await self.send_with_mesh_fallback(
+                to_instance_id=inst.id,
+                event_type=event_type,
+                payload=payload,
+                space_id=space_id,
+            )
+            results.append(result)
+        succeeded = sum(1 for r in results if r.ok)
+        return BroadcastResult(
+            attempted=len(results),
+            succeeded=succeeded,
+            failed=len(results) - succeeded,
+            results=tuple(results),
         )
 
     # ─── Inbound ──────────────────────────────────────────────────────────

@@ -1087,6 +1087,237 @@ async def test_broadcast_to_space_members_skips_banned():
     assert result.succeeded == 1
 
 
+# ─── send_with_mesh_fallback ──────────────────────────────────────────────
+
+
+def _make_mesh_pair(
+    *,
+    route: tuple[list[str], str] | None = None,
+) -> tuple[MagicMock, MagicMock, AsyncMock, AsyncMock]:
+    """Build (route_service, routed_handler, discover_route, send_routed) mocks."""
+    discover_route = AsyncMock(return_value=route)
+    send_routed = AsyncMock(return_value="route-id-mock")
+    route_service = MagicMock()
+    route_service.discover_route = discover_route
+    routed_handler = MagicMock()
+    routed_handler.send_routed = send_routed
+    return route_service, routed_handler, discover_route, send_routed
+
+
+@pytest.mark.asyncio
+async def test_send_with_mesh_fallback_uses_direct_for_confirmed_peer():
+    """A CONFIRMED peer ships via :meth:`send_event` — mesh untouched."""
+    km = _make_kek_manager()
+    fed_repo = InMemoryFederationRepo()
+    outbox_repo = InMemoryOutboxRepo()
+    inst, _ = _make_remote_instance(km)
+    await fed_repo.save_instance(inst)
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_http = MagicMock()
+    mock_http.post = MagicMock(return_value=mock_resp)
+
+    svc, _ = _make_service(
+        federation_repo=fed_repo,
+        outbox_repo=outbox_repo,
+        key_manager=km,
+        http_client=mock_http,
+    )
+    route_service, routed_handler, discover_route, send_routed = _make_mesh_pair(
+        route=(["self", inst.id], "eph-pk"),
+    )
+    svc.attach_mesh(route_service=route_service, routed_handler=routed_handler)
+
+    result = await svc.send_with_mesh_fallback(
+        to_instance_id=inst.id,
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload={"post_id": "p1"},
+    )
+
+    assert result.ok is True
+    assert result.instance_id == inst.id
+    # Direct path → HTTP POST hit, mesh untouched.
+    assert mock_http.post.call_count == 1
+    discover_route.assert_not_awaited()
+    send_routed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_with_mesh_fallback_routes_via_mesh_for_unconfirmed_peer():
+    """A non-CONFIRMED peer triggers route discovery + SPACE_ROUTED."""
+    km = _make_kek_manager()
+    fed_repo = InMemoryFederationRepo()
+    outbox_repo = InMemoryOutboxRepo()
+    inst, _ = _make_remote_instance(km)
+    # Flip to a non-confirmed state.
+    inst = dataclasses.replace(inst, status=PairingStatus.PENDING_SENT)
+    await fed_repo.save_instance(inst)
+
+    svc, _ = _make_service(
+        federation_repo=fed_repo,
+        outbox_repo=outbox_repo,
+        key_manager=km,
+    )
+    path = [svc.own_instance_id, "hop", inst.id]
+    route_service, routed_handler, discover_route, send_routed = _make_mesh_pair(
+        route=(path, "eph-pk-b64"),
+    )
+    svc.attach_mesh(route_service=route_service, routed_handler=routed_handler)
+
+    payload = {"space_id": "sp-1", "post_id": "p1"}
+    result = await svc.send_with_mesh_fallback(
+        to_instance_id=inst.id,
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload=payload,
+    )
+
+    assert result.ok is True
+    assert result.instance_id == inst.id
+    discover_route.assert_awaited_once_with(inst.id)
+    send_routed.assert_awaited_once()
+    call = send_routed.call_args
+    assert call.kwargs["path"] == path
+    assert call.kwargs["target_eph_pk_b64"] == "eph-pk-b64"
+    assert call.kwargs["inner_event_type"] == FederationEventType.SPACE_POST_CREATED
+    assert call.kwargs["inner_payload"] == payload
+
+
+@pytest.mark.asyncio
+async def test_send_with_mesh_fallback_returns_failure_when_no_route_found():
+    """Discovery returning ``None`` yields ``ok=False, error='no_route'``."""
+    km = _make_kek_manager()
+    fed_repo = InMemoryFederationRepo()
+    outbox_repo = InMemoryOutboxRepo()
+    inst, _ = _make_remote_instance(km)
+    inst = dataclasses.replace(inst, status=PairingStatus.PENDING_SENT)
+    await fed_repo.save_instance(inst)
+
+    svc, _ = _make_service(
+        federation_repo=fed_repo,
+        outbox_repo=outbox_repo,
+        key_manager=km,
+    )
+    route_service, routed_handler, _, send_routed = _make_mesh_pair(route=None)
+    svc.attach_mesh(route_service=route_service, routed_handler=routed_handler)
+
+    result = await svc.send_with_mesh_fallback(
+        to_instance_id=inst.id,
+        event_type=FederationEventType.SPACE_PRIVATE_INVITE,
+        payload={"x": 1},
+    )
+
+    assert result.ok is False
+    assert result.error == "no_route"
+    send_routed.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_with_mesh_fallback_returns_failure_when_mesh_not_attached():
+    """No ``attach_mesh`` call → ``ok=False, error='not_confirmed'``."""
+    km = _make_kek_manager()
+    fed_repo = InMemoryFederationRepo()
+    outbox_repo = InMemoryOutboxRepo()
+    inst, _ = _make_remote_instance(km)
+    inst = dataclasses.replace(inst, status=PairingStatus.PENDING_SENT)
+    await fed_repo.save_instance(inst)
+
+    svc, _ = _make_service(
+        federation_repo=fed_repo,
+        outbox_repo=outbox_repo,
+        key_manager=km,
+    )
+    # Deliberately do NOT call attach_mesh.
+
+    result = await svc.send_with_mesh_fallback(
+        to_instance_id=inst.id,
+        event_type=FederationEventType.SPACE_PRIVATE_INVITE,
+        payload={"x": 1},
+    )
+
+    assert result.ok is False
+    assert result.error == "not_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_to_space_members_uses_mesh_fallback(monkeypatch):
+    """Every per-peer ship in ``broadcast_to_space_members`` routes
+    through :meth:`send_with_mesh_fallback` — so a future widening of
+    ``list_instances_in_space`` to include non-CONFIRMED members will
+    light up mesh delivery without further wiring. The test seeds two
+    members (one CONFIRMED, one PENDING) and asserts each lands on
+    the right transport.
+    """
+    km = _make_kek_manager()
+    fed_repo = InMemoryFederationRepo()
+    outbox_repo = InMemoryOutboxRepo()
+    import os
+
+    confirmed_kp = generate_identity_keypair()
+    pending_kp = generate_identity_keypair()
+    confirmed_inst, _ = _make_remote_instance(
+        km,
+        peer_kp=confirmed_kp,
+        session_key=os.urandom(32),
+    )
+    pending_inst, _ = _make_remote_instance(
+        km,
+        peer_kp=pending_kp,
+        session_key=os.urandom(32),
+    )
+    pending_inst = dataclasses.replace(
+        pending_inst,
+        status=PairingStatus.PENDING_SENT,
+    )
+    await fed_repo.save_instance(confirmed_inst)
+    await fed_repo.save_instance(pending_inst)
+    space_id = "space-mesh"
+    fed_repo.add_space_member(space_id, confirmed_inst.id)
+    fed_repo.add_space_member(space_id, pending_inst.id)
+
+    # The production ``list_instances_in_space`` filters to CONFIRMED;
+    # for this test we want to prove the per-peer broadcast loop calls
+    # the mesh-aware helper for *every* member regardless of status, so
+    # widen the listing here to include both.
+    async def _list_all(space):
+        return [confirmed_inst, pending_inst]
+
+    monkeypatch.setattr(fed_repo, "list_instances_in_space", _list_all)
+
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+    mock_http = MagicMock()
+    mock_http.post = MagicMock(return_value=mock_resp)
+
+    svc, _ = _make_service(
+        federation_repo=fed_repo,
+        outbox_repo=outbox_repo,
+        key_manager=km,
+        http_client=mock_http,
+    )
+    route_service, routed_handler, discover_route, send_routed = _make_mesh_pair(
+        route=([svc.own_instance_id, "hop", pending_inst.id], "eph-pk-b64"),
+    )
+    svc.attach_mesh(route_service=route_service, routed_handler=routed_handler)
+
+    result = await svc.broadcast_to_space_members(
+        space_id=space_id,
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload={"post_id": "p1"},
+    )
+
+    assert result.attempted == 2
+    assert result.succeeded == 2
+    # CONFIRMED member shipped via HTTP, PENDING member via mesh.
+    assert mock_http.post.call_count == 1
+    send_routed.assert_awaited_once()
+    discover_route.assert_awaited_once_with(pending_inst.id)
+
+
 # ─── Dispatch event match arms ────────────────────────────────────────────
 
 

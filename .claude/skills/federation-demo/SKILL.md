@@ -169,13 +169,39 @@ That single command runs the full sequence:
      Then checks Bob's preferences via his own token and asserts
      ``hide_highlights`` is still false — no cross-talk between users.
      Alice's preference is restored to false before the step exits.
-   - **Log audit**: every backend's ``log.txt`` is scanned for
-     ``Traceback`` / ``ERROR:`` / ``WARNING:`` / ``Exception:``
-     lines. Anything that doesn't match the benign-noise allow-list
-     (``_LOG_BENIGN`` in the harness — STUN / outbox-retry /
-     libdatachannel info chatter that's expected on loopback) is a
-     verify failure. New unexpected logs surface in the next run as
-     "log audit — …" so they get either fixed or explicitly excused.
+   - **Log audit**: every backend's ``log.txt`` is split into
+     per-record blocks (one block per non-indented line plus its
+     indented traceback frames), then scanned for ``Traceback`` /
+     ``ERROR:`` / ``WARNING:`` / ``Exception:`` markers. A block
+     stays suppressed only when its full text matches at least one
+     substring in ``_LOG_BENIGN`` (the harness's allow-list, which
+     is comment-heavy so a future contributor can see why each
+     pattern is intentional). New unexpected logs surface in the
+     next run as ``<inst>: log audit — …`` and become verify
+     failures — either fix the root cause OR add an allow-list
+     entry with a comment explaining why it's benign.
+
+     The block splitter explicitly distinguishes Python logging
+     records (``LEVEL:logger:msg``) from exception summaries
+     (``ValueError: …``) so consecutive ``ERROR:`` /
+     ``WARNING:`` lines each become their own block. Without that
+     guard the whole log collapses to one block and the audit
+     misses real per-line errors — pinned by
+     ``tests/skills/test_federation_demo_audit.py`` so a future
+     refactor can't silently regress the splitter again.
+
+     What the audit currently accepts as benign (each with an
+     in-source comment): STUN-server status chatter, outbox-retry
+     on briefly-unreachable peers, outbox terminal drops on HTTP
+     410 (dual-transport replay-cache hit), HTTPS-inbox transient
+     failures during the inner-ring settle window, DTLS handshake
+     timeouts on loopback (perfect-negotiation glare aborts one
+     side mid-handshake, federation falls through to HTTPS-inbox),
+     ICE candidate drops after the 30 s buffer window, and the
+     rate-limit middleware's own announcement when ``relay-pair``
+     waits the 65 s window. If any of these patterns START coming
+     with a per-step content-check failure, that's the real bug
+     — the log line on its own is just the symptom.
 
 5. ``visibility`` — per-pair user-visibility filter. Provisions a
    second local user on **a** (``ada``), confirms **b** mirrors her
