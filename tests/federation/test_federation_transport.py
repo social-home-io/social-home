@@ -844,14 +844,16 @@ async def test_no_glare_baseline():
 
     # A starts an offer.
     await peer_a.start_offer()
-    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._pc.signaling_state == rtc.SignalingState.HAVE_LOCAL_OFFER  # type: ignore[union-attr]
     assert peer_a._making_offer is True
 
     # B receives A's offer and replies.
     offer_sdp = _STUB_SDP
     await peer_b.accept_offer(sdp=offer_sdp, from_instance="aaaa")
     assert peer_b._pc is not None
-    assert peer_b._pc.signaling_state in ("have-local-answer", "stable")
+    # The lib (and the stub) collapses "have-local-answer" straight
+    # into STABLE the moment the answer is set locally.
+    assert peer_b._pc.signaling_state == rtc.SignalingState.STABLE
 
     # Verify no rollback log: peer_b sent an ANSWER, not just silence.
     answer_events = [
@@ -880,14 +882,14 @@ async def test_glare_impolite_ignores_incoming_offer():
     # A starts its own offer.
     await peer_a.start_offer()
     assert peer_a._making_offer is True
-    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._pc.signaling_state == rtc.SignalingState.HAVE_LOCAL_OFFER  # type: ignore[union-attr]
 
     # B's OFFER arrives — impolite A should ignore it.
     await peer_a.accept_offer(sdp=_STUB_SDP, from_instance="bbbb")
 
     # A's PC must still be the original one (in have-local-offer state).
     assert peer_a._pc is not None
-    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._pc.signaling_state == rtc.SignalingState.HAVE_LOCAL_OFFER  # type: ignore[union-attr]
     assert peer_a._making_offer is True  # still in "making offer" window
 
     # A must NOT have sent an ANSWER.
@@ -915,7 +917,7 @@ async def test_glare_polite_side_rolls_back_and_accepts():
     await peer_b.start_offer()
     original_pc = peer_b._pc
     assert peer_b._making_offer is True
-    assert original_pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert original_pc.signaling_state == rtc.SignalingState.HAVE_LOCAL_OFFER  # type: ignore[union-attr]
 
     # A's OFFER arrives while B is making an offer → polite rollback.
     await peer_b.accept_offer(sdp=_STUB_SDP, from_instance="aaaa")
@@ -978,7 +980,7 @@ async def test_full_glare_resolution_end_to_end():
 
     # A's PC must still be the original offerer (have-local-offer).
     assert peer_a._pc is not None
-    assert peer_a._pc.signaling_state == "have-local-offer"  # type: ignore[union-attr]
+    assert peer_a._pc.signaling_state == rtc.SignalingState.HAVE_LOCAL_OFFER  # type: ignore[union-attr]
     assert peer_a._making_offer is True
 
     # B must have sent exactly one ANSWER.
