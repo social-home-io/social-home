@@ -84,6 +84,113 @@ async def crypto_env(tmp_dir):
     await db.shutdown()
 
 
+async def test_export_current_key_returns_unwrapped_bytes_and_epoch(crypto_env):
+    """§D1b #117 — the host hands a brand-new remote member the
+    space content key inside the (already-encrypted) invite envelope
+    so they can decrypt subsequent SPACE_POST_CREATED events. The
+    returned bytes are the *unwrapped* AES-256 key — the federation
+    layer is responsible for the secrecy of the envelope they go in."""
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    result = await crypto.export_current_key("sp-1")
+    assert result is not None
+    epoch, raw = result
+    assert epoch == 0
+    assert isinstance(raw, bytes)
+    assert len(raw) == 32  # AES-256
+
+
+async def test_export_current_key_returns_none_when_uninitialised(crypto_env):
+    """A space with no epoch key yet exports ``None`` — caller
+    skips shipping the field rather than synthesising garbage."""
+    crypto, _ = crypto_env
+    # sp-1 exists as a parent row from the fixture but has no
+    # epoch key until ``initialise_for_space`` runs.
+    assert await crypto.export_current_key("sp-1") is None
+
+
+async def test_import_key_then_decrypt_smoke(crypto_env):
+    """End-to-end of the §D1b key handoff: encrypt → export the
+    raw key → import (simulating receiver-side persistence) →
+    decrypt under the imported key. The at-rest KEK wrap is
+    re-applied on import so the row matches the local invariant."""
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    epoch, ct = await crypto.encrypt("sp-1", b"hello space")
+    exported = await crypto.export_current_key("sp-1")
+    assert exported is not None
+    _epoch, raw_key = exported
+    # ``import_key`` upserts under the same (space_id, epoch), so
+    # we can re-decrypt — proves the same bytes decrypt after the
+    # round-trip through unwrap → re-wrap.
+    await crypto.import_key("sp-1", epoch, raw_key)
+    plaintext = await crypto.decrypt("sp-1", epoch, ct)
+    assert plaintext == b"hello space"
+
+
+async def test_import_key_rejects_wrong_length(crypto_env):
+    crypto, _ = crypto_env
+    with pytest.raises(ValueError):
+        await crypto.import_key("sp-1", 0, b"too short")
+
+
+async def test_apply_space_content_key_rejects_unknown_suite(crypto_env):
+    """Forward-compat — receivers MUST reject suites they don't know
+    rather than fall back to a default. Mirrors the kem_suite
+    rejection in routed_crypto.py so the wire shape is safe to grow
+    without breaking older receivers (#117)."""
+    from socialhome.services.space_crypto_service import UnsupportedKeySuite
+    from socialhome.services.space_service import (
+        apply_space_content_key_from_metadata,
+    )
+
+    crypto, _ = crypto_env
+    bad_meta = {
+        "space_content_key": {
+            "epoch": 0,
+            "key_suite": "x25519+mlkem768-prophet-2030",
+            "key_base64": "AAAA",
+        },
+    }
+    with pytest.raises(UnsupportedKeySuite):
+        await apply_space_content_key_from_metadata(
+            "sp-1",
+            meta=bad_meta,
+            space_crypto_service=crypto,
+        )
+
+
+async def test_apply_space_content_key_accepts_default_suite_when_missing(
+    crypto_env,
+):
+    """Older sender that doesn't include ``key_suite`` (first
+    revision of this protocol) defaults to ``aesgcm-256`` — the
+    only suite supported today — so the key still lands."""
+    import base64
+
+    from socialhome.services.space_service import (
+        apply_space_content_key_from_metadata,
+    )
+
+    crypto, _ = crypto_env
+    raw = b"x" * 32
+    meta = {
+        "space_content_key": {
+            "epoch": 7,
+            # No ``key_suite`` — older sender.
+            "key_base64": base64.b64encode(raw).decode("ascii"),
+        },
+    }
+    await apply_space_content_key_from_metadata(
+        "sp-1",
+        meta=meta,
+        space_crypto_service=crypto,
+    )
+    exported = await crypto.export_current_key("sp-1")
+    assert exported is not None
+    assert exported == (7, raw)
+
+
 async def test_initialise_for_space_creates_epoch_zero(crypto_env):
     crypto, _ = crypto_env
     epoch = await crypto.initialise_for_space("sp-1")

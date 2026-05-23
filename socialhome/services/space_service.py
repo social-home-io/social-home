@@ -94,6 +94,11 @@ from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.user_repo import AbstractUserRepo
 from ..domain.media_constraints import SPACE_COVER_MAX_DIMENSION
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
+from .space_crypto_service import (
+    KEY_SUITE_AESGCM_256,
+    SUPPORTED_KEY_SUITES,
+    UnsupportedKeySuite,
+)
 
 
 log = logging.getLogger(__name__)
@@ -129,6 +134,7 @@ class SpaceService:
         "_federation",
         "_remote_members",
         "_redeem_coordinator",
+        "_space_crypto",
     )
 
     def __init__(
@@ -153,6 +159,7 @@ class SpaceService:
         self._federation = None
         self._remote_members = None
         self._redeem_coordinator = None
+        self._space_crypto = None
 
     def attach_child_protection(self, child_protection_service) -> None:
         """Wire §CP.F1 enforcement into add_member."""
@@ -165,6 +172,15 @@ class SpaceService:
     def attach_cover_repo(self, repo) -> None:
         """Wire the space-cover blob store (§23 customization)."""
         self._covers = repo
+
+    def attach_space_crypto_service(self, space_crypto) -> None:
+        """Wire SpaceContentEncryption so §D1b invite/redeem envelopes
+        can ship the current epoch's space content key — the symmetric
+        AES-256 secret that decrypts every event in the space. Required
+        for cross-household members to read content; without it, the
+        receiver's local ``space_keys`` row stays empty and every
+        ``decrypt`` call against an inbound event raises."""
+        self._space_crypto = space_crypto
 
     def attach_gfs_connection_service(self, gfs_service) -> None:
         """Wire outbound GFS publish so ``space_type=global`` spaces
@@ -1059,6 +1075,7 @@ class SpaceService:
                     user_repo=self._users,
                     own_instance_id=self._own_instance_id,
                     cover_repo=self._covers,
+                    space_crypto_service=self._space_crypto,
                 ),
             },
         )
@@ -2207,6 +2224,7 @@ async def build_space_snapshot_for_federation(
     user_repo,
     own_instance_id: str,
     cover_repo=None,
+    space_crypto_service=None,
 ) -> dict:
     """:func:`_space_metadata_for_federation` + a roster of every
     member of this space.
@@ -2265,6 +2283,31 @@ async def build_space_snapshot_for_federation(
         if cover is not None:
             bytes_webp, _hash = cover
             meta["cover_webp_base64"] = base64.b64encode(bytes_webp).decode("ascii")
+    # §D1b content-key handoff (#117) — the space content key is the
+    # symmetric AES-256 secret that decrypts every event in this
+    # space. Ship it inside the (already-encrypted to the invitee
+    # instance) envelope so the new member can read posts, comments,
+    # reactions etc. without us having to bolt on per-user
+    # asymmetric key delivery. The envelope-level encryption is the
+    # security contract here: §D1b promises GFS sees only routing,
+    # and an attacker who can already read the envelope payload is
+    # the host on either end and already has the key. NEVER ship
+    # this dict outside an encrypted federation envelope.
+    if space_crypto_service is not None:
+        key_info = await space_crypto_service.export_current_key(space.id)
+        if key_info is not None:
+            epoch, raw_key = key_info
+            # ``key_suite`` is the forward-compat lever — see
+            # :data:`KEY_SUITE_AESGCM_256` in space_crypto_service.
+            # Mirrors the ``kem_suite`` convention in
+            # ``routed_crypto.py`` so a future PQ-protected variant
+            # is a wire-additive change; older receivers reject
+            # unknown suites rather than silently fall back.
+            meta["space_content_key"] = {
+                "epoch": epoch,
+                "key_suite": KEY_SUITE_AESGCM_256,
+                "key_base64": base64.b64encode(raw_key).decode("ascii"),
+            }
     return meta
 
 
@@ -2301,6 +2344,79 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "cover_hash": space.cover_hash,
         "about_markdown": space.about_markdown,
     }
+
+
+async def apply_space_content_key_from_metadata(
+    space_id: str,
+    *,
+    meta: dict,
+    space_crypto_service,
+) -> None:
+    """Persist the §D1b shipped space content key on the receiver side.
+
+    The envelope carrying ``meta`` is itself encrypted to this
+    instance (§D1b zero-leak), so by the time we read
+    ``meta["space_content_key"]`` it's plaintext only inside this
+    process. We immediately re-wrap with the local KEK via
+    :meth:`SpaceContentEncryption.import_key` so it lands in
+    ``space_keys`` with the same at-rest shape every locally-minted
+    key has — the at-rest invariant is "wrapped by THIS instance's
+    KEK", and the import path preserves it.
+
+    No-op when the receiver doesn't have a SpaceContentEncryption
+    service wired (e.g. test stacks with no KEK), when the host
+    didn't ship a key (legacy sender, or pre-key-init space), or
+    when the payload is malformed (defensive — we'd rather keep
+    the user able to *see* the stub than crash the accept handler).
+    """
+    if space_crypto_service is None:
+        return
+    payload = meta.get("space_content_key")
+    if not isinstance(payload, dict):
+        return
+    # Forward-compat lever — receivers reject unknown suites rather
+    # than fall back to a default. Senders that don't include
+    # ``key_suite`` (this build's first revision) default to the
+    # single value we support today.
+    suite = payload.get("key_suite", KEY_SUITE_AESGCM_256)
+    if suite not in SUPPORTED_KEY_SUITES:
+        log.warning(
+            "apply_space_content_key_from_metadata: unsupported key_suite "
+            "%r for %s; receiver will stay unable to decrypt until "
+            "upgraded.",
+            suite,
+            space_id,
+        )
+        raise UnsupportedKeySuite(
+            f"space content key advertises unsupported key_suite={suite!r}; "
+            f"this build supports {sorted(SUPPORTED_KEY_SUITES)!r}",
+        )
+    epoch = payload.get("epoch")
+    key_b64 = payload.get("key_base64")
+    if not isinstance(key_b64, str) or epoch is None:
+        return
+    try:
+        raw = base64.b64decode(key_b64)
+    except Exception:  # pragma: no cover — defensive
+        log.warning(
+            "apply_space_content_key_from_metadata: invalid base64 for %s",
+            space_id,
+        )
+        return
+    if len(raw) != 32:
+        log.warning(
+            "apply_space_content_key_from_metadata: wrong key length %d for %s",
+            len(raw),
+            space_id,
+        )
+        return
+    try:
+        await space_crypto_service.import_key(space_id, int(epoch), raw)
+    except Exception:  # pragma: no cover — defensive
+        log.exception(
+            "apply_space_content_key_from_metadata: import_key raised for %s",
+            space_id,
+        )
 
 
 async def apply_space_cover_from_metadata(

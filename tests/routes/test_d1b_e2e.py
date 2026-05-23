@@ -292,6 +292,51 @@ async def test_invite_without_meta_falls_back_gracefully(client):
     assert all(s["id"] != space_id for s in spaces)
 
 
+async def test_invite_carries_space_content_key_for_decrypt(client):
+    """§D1b #117 — the host ships the current epoch's space content
+    key inside ``space_meta``; the receiver's local space_keys row
+    must then be present so subsequent SPACE_POST_CREATED inbound
+    events can decrypt. Without this, the joiner's stub renders
+    but every post-decrypt attempt raises ``no key for space ...``."""
+    import base64
+
+    from socialhome.app_keys import space_crypto_service_key
+
+    app = client.app
+    space_id = "sp-encrypted"
+    invite_token = "invite-enc-token"
+    space_crypto = app[space_crypto_service_key]
+    # Mint a fixed epoch key on the test app — this is the
+    # "host's side" of the federation; we'll round-trip it through
+    # ``space_meta`` exactly as the real outbound path would.
+    fake_key = b"0" * 32
+    meta = _meta_for_host_space(with_cover=False, with_roster=False)
+    meta["space_content_key"] = {
+        "epoch": 0,
+        "key_base64": base64.b64encode(fake_key).decode("ascii"),
+    }
+    await _dispatch_event(
+        app,
+        event_type=FederationEventType.SPACE_PRIVATE_INVITE,
+        from_instance="peer-1",
+        payload={
+            "space_id": space_id,
+            "invite_token": invite_token,
+            "invitee_user_id": client._anna_uid,
+            "inviter_user_id": "uid-pascal",
+            "space_meta": meta,
+        },
+    )
+    # The receiver's space_keys row exists now. Verify by exporting
+    # it back through the service — round-trip proves persistence
+    # without us reaching into the SQLite layer directly.
+    exported = await space_crypto.export_current_key(space_id)
+    assert exported is not None
+    epoch, raw = exported
+    assert epoch == 0
+    assert raw == fake_key
+
+
 async def test_kick_loop_marks_stub_dissolved(client):
     """Pascal kicks Anna → her stub stops listing in /api/spaces.
     Locally-owned spaces are not affected by remote kicks."""

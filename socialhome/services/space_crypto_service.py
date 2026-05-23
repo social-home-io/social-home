@@ -55,6 +55,30 @@ _AES_KEY_BYTES = 32
 _GCM_NONCE_BYTES = 12
 
 
+#: Symmetric content-key suite identifier shipped alongside the key
+#: bytes on the §D1b handoff. Mirrors the ``kem_suite`` convention in
+#: :mod:`socialhome.federation.routed_crypto` so the wire shape grows
+#: forward-compatibly. When we ever introduce a parallel scheme
+#: (e.g. ChaCha20-Poly1305 for low-power receivers, or a PQ-protected
+#: variant once Phase-2 of ``docs/crypto.md`` lands), this constant
+#: gains a sibling and receivers reject anything they don't know.
+#:
+#: The AES-256 key itself is already PQ-symmetric-resilient — Grover's
+#: algorithm halves effective security to 128 bits, which is still
+#: above the 112-bit floor. PQ migration in this codebase is therefore
+#: about the *delivery channel* (the §D1b envelope around this
+#: payload, see ``docs/crypto.md`` Phase-2), not the AEAD primitive.
+KEY_SUITE_AESGCM_256: str = "aesgcm-256"
+SUPPORTED_KEY_SUITES: frozenset[str] = frozenset({KEY_SUITE_AESGCM_256})
+
+
+class UnsupportedKeySuite(ValueError):
+    """Raised when an inbound space-content-key payload advertises a
+    suite this build doesn't know. Receivers MUST reject rather than
+    fall back to a default — otherwise a downgrade attack becomes
+    possible once a Phase-2 hybrid scheme lands."""
+
+
 class SpaceContentEncryption:
     """Encrypt/decrypt space content under per-epoch AES-256-GCM keys.
 
@@ -106,6 +130,65 @@ class SpaceContentEncryption:
     async def get_current_epoch(self, space_id: str) -> int | None:
         latest = await self._repo.get_latest(space_id)
         return latest.epoch if latest is not None else None
+
+    # ─── Cross-instance handoff (#117) ────────────────────────────────────
+
+    async def export_current_key(self, space_id: str) -> tuple[int, bytes] | None:
+        """Return ``(epoch, raw_aes_key)`` for the §D1b invite envelope.
+
+        Unwraps from KEK so the caller can hand the bytes to the
+        federation layer. The envelope is itself encrypted to the
+        invitee instance (§D1b zero-leak), so the key never leaves
+        this process in plaintext anywhere — but it IS the canonical
+        secret that decrypts every event in the space, so callers
+        MUST ONLY use this return value inline within an encrypted
+        envelope payload. Never persist, never log.
+
+        Returns ``None`` when the space has no keys yet — the
+        receiver then falls back to its own ``initialise_for_space``
+        on first decrypt attempt (which will fail until the key
+        actually federates later, but that's an explicit failure
+        rather than a silent decrypt-with-zeros).
+        """
+        latest = await self._repo.get_latest(space_id)
+        if latest is None:
+            return None
+        raw = self._kek.decrypt(
+            latest.content_key_hex,
+            associated_data=space_id.encode("utf-8"),
+        )
+        return latest.epoch, raw
+
+    async def import_key(
+        self,
+        space_id: str,
+        epoch: int,
+        raw_key: bytes,
+    ) -> None:
+        """Persist a key received from a federated peer.
+
+        KEK-wraps with the *receiver's* key manager so the local
+        ``space_keys`` row matches the at-rest invariant. Idempotent —
+        a repeated import for the same ``(space_id, epoch)`` upserts.
+        """
+        if len(raw_key) != 32:
+            raise ValueError("space content key must be 32 bytes")
+        wrapped = self._kek.encrypt(
+            raw_key,
+            associated_data=space_id.encode("utf-8"),
+        )
+        await self._repo.save(
+            SpaceKey(
+                space_id=space_id,
+                epoch=epoch,
+                content_key_hex=wrapped,
+            )
+        )
+        log.info(
+            "space_crypto: imported epoch %d for %s from peer",
+            epoch,
+            space_id,
+        )
 
     # ─── Encrypt / decrypt ────────────────────────────────────────────────
 

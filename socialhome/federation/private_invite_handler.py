@@ -31,6 +31,7 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..services.space_service import (
+    apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
     stub_space_from_metadata,
 )
@@ -50,7 +51,13 @@ log = logging.getLogger(__name__)
 class PrivateSpaceInviteHandler:
     """Inbound dispatcher for the :data:`SPACE_PRIVATE_INVITE*` family."""
 
-    __slots__ = ("_bus", "_space_repo", "_remote_members", "_cover_repo")
+    __slots__ = (
+        "_bus",
+        "_space_repo",
+        "_remote_members",
+        "_cover_repo",
+        "_space_crypto",
+    )
 
     def __init__(
         self,
@@ -59,6 +66,7 @@ class PrivateSpaceInviteHandler:
         space_repo: "AbstractSpaceRepo",
         remote_member_repo: "AbstractSpaceRemoteMemberRepo",
         cover_repo: "AbstractSpaceCoverRepo | None" = None,
+        space_crypto_service=None,
     ) -> None:
         self._bus = bus
         self._space_repo = space_repo
@@ -67,6 +75,11 @@ class PrivateSpaceInviteHandler:
         #: cover bytes from ``space_meta.cover_webp_base64`` (§D1b
         #: #116) so the stub's card renders the real image.
         self._cover_repo = cover_repo
+        #: Optional — when wired, the joiner imports the host's
+        #: space content key from ``space_meta.space_content_key``
+        #: so subsequent SPACE_POST_CREATED decrypts succeed
+        #: (§D1b #117).
+        self._space_crypto = space_crypto_service
 
     def attach_to(self, federation_service: "FederationService") -> None:
         registry = federation_service._event_registry  # noqa: SLF001
@@ -137,6 +150,16 @@ class PrivateSpaceInviteHandler:
                 space_id,
                 meta=meta,
                 cover_repo=self._cover_repo,
+            )
+            # §D1b space content key (#117) — persist receiver's
+            # local epoch key so this invitee can actually decrypt
+            # space events once she accepts. Without this the stub
+            # is just metadata; SPACE_POST_CREATED inbound would
+            # raise on decrypt and the user would see nothing.
+            await apply_space_content_key_from_metadata(
+                space_id,
+                meta=meta,
+                space_crypto_service=self._space_crypto,
             )
             # §D1b member-list mirror (#115) — the meta now carries a
             # ``roster`` of everyone in the space. Seat each entry as
