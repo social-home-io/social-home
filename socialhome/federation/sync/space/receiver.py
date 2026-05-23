@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from ....repositories.space_zone_repo import AbstractSpaceZoneRepo
     from ....repositories.sticky_repo import AbstractStickyRepo
     from ....repositories.task_repo import AbstractSpaceTaskRepo
+    from ....services.pending_decrypts_cache import PendingDecryptsCache
     from ....services.space_crypto_service import SpaceContentEncryption
     from ...encoder import FederationEncoder
 
@@ -81,6 +82,7 @@ class SpaceSyncReceiver:
         "_space_calendar_repo",
         "_gallery_repo",
         "_zone_repo",
+        "_pending_decrypts",
     )
 
     def __init__(
@@ -98,6 +100,7 @@ class SpaceSyncReceiver:
         space_calendar_repo: "AbstractSpaceCalendarRepo",
         gallery_repo: "AbstractGalleryRepo",
         zone_repo: "AbstractSpaceZoneRepo | None" = None,
+        pending_decrypts: "PendingDecryptsCache | None" = None,
     ) -> None:
         self._bus = bus
         self._encoder = encoder
@@ -111,6 +114,12 @@ class SpaceSyncReceiver:
         self._space_calendar_repo = space_calendar_repo
         self._gallery_repo = gallery_repo
         self._zone_repo = zone_repo
+        #: Optional — when wired, ``decrypt_chunk`` failures that
+        #: look like "missing epoch key" stash the chunk for replay
+        #: once :class:`SpaceContentKeyImported` fires on the same
+        #: ``(space_id, epoch)`` (#122). Without it, missing-key
+        #: chunks log + drop (legacy behaviour).
+        self._pending_decrypts = pending_decrypts
 
     async def on_chunk(
         self,
@@ -187,6 +196,32 @@ class SpaceSyncReceiver:
                 ciphertext=ciphertext,
             )
         except Exception as exc:
+            # ``decrypt_chunk`` raises ``RuntimeError`` with
+            # ``"missing epoch"`` in the message when the receiver
+            # hasn't imported this epoch's key yet (#122). When a
+            # pending-decrypts cache is wired, stash the chunk so it
+            # replays the moment :class:`SpaceContentKeyImported`
+            # fires for the matching ``(space_id, epoch)`` — covers
+            # the §D1b race where a sync chunk lands on the wire
+            # before its ``apply_space_content_key_from_metadata``
+            # finishes on this end. Any other decrypt failure (wrong
+            # AAD, tampered ciphertext, malformed wire) drops as
+            # before — those are not race-recoverable.
+            if self._pending_decrypts is not None and "missing epoch" in str(exc):
+                log.info(
+                    "sync chunk decrypt missing key for space=%s epoch=%d "
+                    "— stashing for replay (sync_id=%s resource=%s)",
+                    space_id,
+                    epoch,
+                    sync_id,
+                    resource,
+                )
+
+                async def _redeliver() -> None:
+                    await self.on_chunk(raw, from_instance=from_instance)
+
+                self._pending_decrypts.stash(space_id, epoch, _redeliver)
+                return
             log.warning(
                 "sync chunk decrypt failed (sync_id=%s resource=%s): %s",
                 sync_id,

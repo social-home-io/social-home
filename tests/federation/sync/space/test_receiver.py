@@ -287,3 +287,148 @@ async def test_on_chunk_unknown_resource_drops(receiver, peer_setup):
     envelope = await _sign_as_peer(kp, envelope)
     # Should log + return, not raise.
     await r.on_chunk(serialise_chunk(envelope), from_instance="peer-a")
+
+
+# ─── Pending-decrypts cache (#122, PR #433) ────────────────────────────
+
+
+class _MissingKeyCrypto:
+    """Crypto stub that raises 'missing epoch' on first decrypt, then
+    succeeds on the second call — simulates a key import in-between."""
+
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def encrypt_chunk(self, *, space_id, sync_id, plaintext):
+        import base64
+
+        return 5, base64.urlsafe_b64encode(plaintext).decode("ascii")
+
+    async def decrypt_chunk(self, *, space_id, epoch, sync_id, ciphertext):
+        import base64
+
+        self.attempts += 1
+        if self.attempts == 1:
+            raise RuntimeError(
+                f"SpaceContentEncryption: missing epoch {epoch} for space {space_id!r}",
+            )
+        return base64.urlsafe_b64decode(ciphertext)
+
+
+async def test_decrypt_missing_epoch_stashes_in_cache_and_replays(
+    bus,
+    peer_setup,
+):
+    """The first chunk arrives before the key — decrypt raises with
+    'missing epoch', the receiver stashes the redeliver in the cache,
+    and the matching SpaceContentKeyImported event triggers a replay
+    that succeeds. End state: row was persisted on the second try."""
+    from socialhome.domain.events import SpaceContentKeyImported
+    from socialhome.services.pending_decrypts_cache import PendingDecryptsCache
+
+    peer, kp = peer_setup
+    kp_self = generate_identity_keypair()
+    encoder = FederationEncoder(kp_self.private_key)
+    crypto = _MissingKeyCrypto()
+    cache = PendingDecryptsCache(bus=bus)
+    space_repo = _FakeSpaceRepo()
+    r = SpaceSyncReceiver(
+        bus=bus,
+        encoder=encoder,
+        crypto=crypto,
+        federation_repo=_FakeFedRepo(peer),
+        space_repo=space_repo,
+        space_post_repo=_FakeSpacePostRepo(),
+        space_task_repo=_Stub(),
+        page_repo=_Stub(),
+        sticky_repo=_Stub(),
+        space_calendar_repo=_Stub(),
+        gallery_repo=_Stub(),
+        pending_decrypts=cache,
+    )
+    plaintext = orjson.dumps(
+        {
+            "records": [
+                {
+                    "user_id": "u-late",
+                    "role": "member",
+                    "joined_at": "2026-05-23T00:00:00+00:00",
+                }
+            ],
+        }
+    )
+    import base64
+
+    ciphertext = base64.urlsafe_b64encode(plaintext).decode("ascii")
+    envelope = {
+        "sync_id": "sync-late",
+        "resource": "members",
+        "space_id": "sp-late",
+        "epoch": 5,
+        "seq_start": 0,
+        "seq_end": 1,
+        "is_last": False,
+        "encrypted_payload": ciphertext,
+    }
+    envelope = await _sign_as_peer(kp, envelope)
+
+    # First arrival — key missing, gets stashed.
+    await r.on_chunk(serialise_chunk(envelope), from_instance="peer-a")
+    assert space_repo.members == []
+    assert len(cache) == 1
+
+    # Key arrives — cache drains, second on_chunk succeeds.
+    await bus.publish(SpaceContentKeyImported(space_id="sp-late", epoch=5))
+    assert len(cache) == 0
+    assert len(space_repo.members) == 1
+    assert space_repo.members[0].user_id == "u-late"
+    assert crypto.attempts == 2
+
+
+async def test_decrypt_failure_other_than_missing_key_still_drops(
+    bus,
+    peer_setup,
+):
+    """A tampered ciphertext (decrypt raises but NOT with 'missing
+    epoch' in the message) MUST NOT stash — those failures are not
+    race-recoverable and stashing them would be a leak."""
+    from socialhome.services.pending_decrypts_cache import PendingDecryptsCache
+
+    class _BadCrypto:
+        async def encrypt_chunk(self, *, space_id, sync_id, plaintext):
+            return 0, "x:y"
+
+        async def decrypt_chunk(self, **kw):
+            raise RuntimeError("InvalidTag: tampered ciphertext")
+
+    peer, kp = peer_setup
+    kp_self = generate_identity_keypair()
+    cache = PendingDecryptsCache(bus=bus)
+    r = SpaceSyncReceiver(
+        bus=bus,
+        encoder=FederationEncoder(kp_self.private_key),
+        crypto=_BadCrypto(),
+        federation_repo=_FakeFedRepo(peer),
+        space_repo=_FakeSpaceRepo(),
+        space_post_repo=_FakeSpacePostRepo(),
+        space_task_repo=_Stub(),
+        page_repo=_Stub(),
+        sticky_repo=_Stub(),
+        space_calendar_repo=_Stub(),
+        gallery_repo=_Stub(),
+        pending_decrypts=cache,
+    )
+    envelope = {
+        "sync_id": "sync-tamper",
+        "resource": "members",
+        "space_id": "sp",
+        "epoch": 0,
+        "seq_start": 0,
+        "seq_end": 0,
+        "is_last": False,
+        "encrypted_payload": "x:y",
+    }
+    envelope = await _sign_as_peer(kp, envelope)
+    await r.on_chunk(serialise_chunk(envelope), from_instance="peer-a")
+    # Not stashed (the failure is permanent, not race-recoverable).
+    assert len(cache) == 0

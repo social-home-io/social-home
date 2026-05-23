@@ -91,6 +91,36 @@ sequenceDiagram
     Note over K: K's old key cannot<br/>decrypt epoch N+1 content
 ```
 
+## Out-of-order key arrival
+
+`PendingDecryptsCache` (#122, PR #433) handles the race where a
+federation payload that needs the space content key lands before the
+key has been imported. The classic case is §25.6 sync chunks arriving
+during a §D1b accept handshake — the host starts shipping content
+immediately after the invite envelope is accepted, but the receiver's
+`apply_space_content_key_from_metadata` may not yet have committed
+the new `space_keys` row.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as HFS (host)
+    participant N as HFS (new member)
+    H->>N: SPACE_PRIVATE_INVITE (carries space_content_key)
+    Note over N: applying key to space_keys...
+    H->>N: §25.6 sync chunk for epoch=N
+    Note over N: decrypt_chunk raises<br/>"missing epoch" — stash
+    Note over N: SpaceContentKeyImported(epoch=N) fires
+    Note over N: cache replays the stashed chunk<br/>decrypt succeeds, record persists
+```
+
+The cache is process-local and bounded (`DEFAULT_MAX_ENTRIES = 256`).
+Restart wipes everything — the §25.6 sync handshake on the next
+reconnect re-pulls anything that hadn't drained. Decrypt failures
+that are NOT "missing epoch" (tampered ciphertext, wrong AAD,
+malformed wire) drop as before — those are not race-recoverable and
+stashing them would mask a real attack.
+
 ## Admin key share
 
 `SPACE_ADMIN_KEY_SHARE` lets two admins hand each other the space's
