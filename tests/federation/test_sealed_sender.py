@@ -105,10 +105,17 @@ def test_tampered_sender_ct_fails_decrypt():
         payload_json="{}",
         space_content_key=key,
     )
+    # Pick a replacement that's guaranteed to differ from the original
+    # final two chars. The previous form used a fixed ``"AA"`` which is
+    # a 1-in-4096 flake on base64-encoded data — when the auth tag
+    # happened to end in ``AA`` the "tamper" was a no-op and decrypt
+    # silently succeeded.
+    last_two = env.encrypted_sender[-2:]
+    replacement = "BB" if last_two != "BB" else "CC"
     bad = SealedEnvelope(
         space_id=env.space_id,
         epoch=env.epoch,
-        encrypted_sender=env.encrypted_sender[:-2] + "AA",
+        encrypted_sender=env.encrypted_sender[:-2] + replacement,
         encrypted_payload=env.encrypted_payload,
     )
     with pytest.raises(Exception):
