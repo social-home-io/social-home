@@ -226,7 +226,7 @@ class PageDetailView(BaseView):
         if p is None:
             return error_response(404, "NOT_FOUND", "Page not found.")
         await repo.delete(page_id)
-        await bus.publish(PageDeleted(page_id=page_id))
+        await bus.publish(PageDeleted(page_id=page_id, space_id=p.space_id))
         return web.json_response({"ok": True})
 
 
@@ -438,7 +438,7 @@ class PageDeleteApproveView(BaseView):
             )
         await repo.approve_delete(page_id, ctx.user_id)
         await repo.delete(page_id)
-        await bus.publish(PageDeleted(page_id=page_id))
+        await bus.publish(PageDeleted(page_id=page_id, space_id=p.space_id))
         return web.json_response({"ok": True, "deleted": True})
 
 

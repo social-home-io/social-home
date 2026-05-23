@@ -1,0 +1,128 @@
+"""PageFederationOutbound — mesh-routed SPACE_PAGE_* fan-out (F3).
+
+Before this PR pages had an inbound handler in
+``federation_inbound/space_content.py`` but no matching outbound,
+so wiki edits stayed purely local until the next §25.6 catch-up.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from socialhome.domain.events import PageCreated, PageDeleted, PageUpdated
+from socialhome.domain.federation import FederationEventType
+from socialhome.infrastructure.event_bus import EventBus
+from socialhome.services.page_federation_outbound import (
+    PageFederationOutbound,
+)
+
+
+class _FakeFed:
+    def __init__(self, *, raise_on_broadcast: bool = False) -> None:
+        self.broadcasts: list[tuple[str, FederationEventType, dict]] = []
+        self._raise = raise_on_broadcast
+
+    async def broadcast_to_space_members(
+        self,
+        space_id,
+        event_type,
+        payload,
+        **kwargs,
+    ):
+        if self._raise:
+            raise RuntimeError("simulated transport failure")
+        self.broadcasts.append((space_id, event_type, payload))
+
+
+@pytest.fixture
+def env():
+    bus = EventBus()
+    fed = _FakeFed()
+    out = PageFederationOutbound(bus=bus, federation_service=fed)
+    out.wire()
+    return bus, fed
+
+
+async def test_household_page_is_not_federated(env):
+    bus, fed = env
+    await bus.publish(
+        PageCreated(
+            page_id="p1",
+            space_id=None,
+            title="Notes",
+            content="body",
+        ),
+    )
+    assert fed.broadcasts == []
+
+
+async def test_page_created_broadcasts(env):
+    bus, fed = env
+    await bus.publish(
+        PageCreated(
+            page_id="p1",
+            space_id="sp-A",
+            title="Notes",
+            content="body",
+        ),
+    )
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, payload = fed.broadcasts[0]
+    assert space_id == "sp-A"
+    assert event_type is FederationEventType.SPACE_PAGE_CREATED
+    assert payload["id"] == "p1"
+    assert payload["page_id"] == "p1"
+    assert payload["title"] == "Notes"
+    assert payload["content"] == "body"
+
+
+async def test_page_updated_broadcasts(env):
+    bus, fed = env
+    await bus.publish(
+        PageUpdated(
+            page_id="p1",
+            space_id="sp-A",
+            title="Notes v2",
+            content="new body",
+        ),
+    )
+    assert len(fed.broadcasts) == 1
+    _, event_type, payload = fed.broadcasts[0]
+    assert event_type is FederationEventType.SPACE_PAGE_UPDATED
+    assert payload["title"] == "Notes v2"
+
+
+async def test_page_deleted_with_space_id_broadcasts(env):
+    bus, fed = env
+    await bus.publish(PageDeleted(page_id="p1", space_id="sp-A"))
+    assert len(fed.broadcasts) == 1
+    _, event_type, payload = fed.broadcasts[0]
+    assert event_type is FederationEventType.SPACE_PAGE_DELETED
+    assert payload == {
+        "id": "p1",
+        "page_id": "p1",
+        "space_id": "sp-A",
+    }
+
+
+async def test_page_deleted_without_space_id_is_not_federated(env):
+    """Household-scoped page deletion (space_id None) stays local."""
+    bus, fed = env
+    await bus.publish(PageDeleted(page_id="p1", space_id=None))
+    assert fed.broadcasts == []
+
+
+async def test_broadcast_failure_is_swallowed():
+    bus = EventBus()
+    fed = _FakeFed(raise_on_broadcast=True)
+    PageFederationOutbound(bus=bus, federation_service=fed).wire()
+    # Must not raise.
+    await bus.publish(
+        PageCreated(
+            page_id="p1",
+            space_id="sp-A",
+            title="t",
+            content="b",
+        ),
+    )
+    assert fed.broadcasts == []
