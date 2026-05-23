@@ -67,6 +67,7 @@ NEVER_DROP: frozenset[FederationEventType] = frozenset(
         FederationEventType.SPACE_MEMBER_BANNED,
         FederationEventType.SPACE_MEMBER_UNBANNED,
         FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
+        FederationEventType.SPACE_REMOTE_ADMIN_KICK,
         FederationEventType.SPACE_KEY_EXCHANGE,
         FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
         FederationEventType.SPACE_ADMIN_KEY_SHARE,

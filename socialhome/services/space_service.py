@@ -652,6 +652,16 @@ class SpaceService:
     ) -> None:
         """Remove a member. Admin/owner can remove anyone; a member can
         remove themselves.
+
+        Cross-household admin actions (#114 phase 2): when this space
+        is hosted on another household (``space.owner_instance_id !=
+        self.own_instance_id``) AND the actor is *not* removing
+        themselves, route through ``SPACE_REMOTE_ADMIN_KICK`` to the
+        host. The host validates the actor's role in
+        ``space_remote_members.role`` and dispatches the actual kick.
+        Self-leave on a remote space still works locally — the user is
+        dropping their stub membership; the host learns via
+        ``SPACE_MEMBER_LEFT`` outbound below.
         """
         space = await self._require_space(space_id)
         actor = await self._users.get(actor_username)
@@ -660,6 +670,29 @@ class SpaceService:
         is_self = actor.user_id == user_id
         if not is_self:
             await self._require_admin_or_owner(space, actor_username)
+        # Cross-household admin kick — forward to the host.
+        if (
+            not is_self
+            and self._own_instance_id is not None
+            and space.owner_instance_id
+            and space.owner_instance_id != self._own_instance_id
+        ):
+            if self._federation is None:
+                raise RuntimeError(
+                    "remote-admin kick requires federation to be attached",
+                )
+            await self._federation.send_with_mesh_fallback(
+                to_instance_id=space.owner_instance_id,
+                event_type=FederationEventType.SPACE_REMOTE_ADMIN_KICK,
+                payload={
+                    "space_id": space_id,
+                    "actor_user_id": actor.user_id,
+                    "actor_instance_id": self._own_instance_id,
+                    "target_user_id": user_id,
+                },
+                space_id=space_id,
+            )
+            return
         target = await self._spaces.get_member(space_id, user_id)
         if target is None:
             return
@@ -715,6 +748,108 @@ class SpaceService:
                 payload={"user_id": user_id, "role": role},
                 sequence=sequence,
             )
+        )
+
+    async def apply_remote_admin_kick(
+        self,
+        space_id: str,
+        *,
+        actor_instance_id: str,
+        actor_user_id: str,
+        target_user_id: str,
+    ) -> None:
+        """Host-side dispatch for ``SPACE_REMOTE_ADMIN_KICK`` (#114 phase 2).
+
+        The §24.11 pipeline already verified the envelope's
+        signature; this method validates the actor's *role* in
+        ``space_remote_members.role`` and then dispatches to the
+        appropriate local kick path. Three branches:
+
+        * Actor's row is ``admin`` and target is a LOCAL user — call
+          :meth:`_remove_local_member_unchecked` (we've already
+          validated authority).
+        * Actor's row is ``admin`` and target is a REMOTE user (on
+          some peer household) — call :meth:`remove_remote_member`'s
+          internal path which scrubs ``space_remote_members`` +
+          broadcasts ``SPACE_REMOTE_MEMBER_REMOVED`` + rotates.
+        * Actor not found / not admin — silently drop. The host
+          should not leak permission state via differential errors;
+          a stale promotion that's since been revoked is the most
+          likely cause and just doing nothing is safe.
+
+        Owner can NOT be kicked through this path — same invariant
+        as :meth:`remove_member`.
+        """
+        if self._remote_members is None:
+            log.warning(
+                "apply_remote_admin_kick: federation not attached; dropping",
+            )
+            return
+        space = await self._spaces.get(space_id)
+        if space is None:
+            log.debug(
+                "apply_remote_admin_kick: unknown space=%s — dropping",
+                space_id,
+            )
+            return
+        if (
+            self._own_instance_id is None
+            or space.owner_instance_id != self._own_instance_id
+        ):
+            log.debug(
+                "apply_remote_admin_kick: space=%s not hosted here — dropping",
+                space_id,
+            )
+            return
+        actor = await self._remote_members.get(
+            space_id,
+            actor_instance_id,
+            actor_user_id,
+        )
+        if actor is None or actor.role != SpaceRole.ADMIN:
+            log.info(
+                "apply_remote_admin_kick: actor %s@%s not an admin "
+                "of space=%s — dropping",
+                actor_user_id,
+                actor_instance_id,
+                space_id,
+            )
+            return
+        # Look up the target — could be a local user or a remote member.
+        local_target = await self._spaces.get_member(space_id, target_user_id)
+        if local_target is not None:
+            if local_target.role == SpaceRole.OWNER:
+                log.info(
+                    "apply_remote_admin_kick: owner of space=%s cannot "
+                    "be kicked through this path — dropping",
+                    space_id,
+                )
+                return
+            owner_username = space.owner_username
+            await self.remove_member(
+                space_id,
+                actor_username=owner_username,
+                user_id=target_user_id,
+            )
+            return
+        # Remote target — search all remote-member rows for the user_id.
+        remote_rows = await self._remote_members.list_for_space(space_id)
+        match = next(
+            (r for r in remote_rows if r.user_id == target_user_id),
+            None,
+        )
+        if match is None:
+            log.info(
+                "apply_remote_admin_kick: target %s not in space=%s — dropping",
+                target_user_id,
+                space_id,
+            )
+            return
+        await self.remove_remote_member(
+            space_id,
+            actor_username=space.owner_username,
+            instance_id=match.instance_id,
+            user_id=target_user_id,
         )
 
     async def set_remote_member_role(

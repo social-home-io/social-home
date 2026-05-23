@@ -3569,6 +3569,92 @@ def cmd_space_post_routed() -> None:
     print("space-post-routed: ok")
 
 
+def cmd_admin_promote_kick() -> None:
+    """Cross-household admin promotion (#114 phase 1, v_8+).
+
+    Builds on ``cmd_remote_invite_routed`` which left dave (on d)
+    seated as a remote member of c's mesh-private space. Exercises:
+
+    1. **c promotes dave** via
+       ``PATCH /api/spaces/{id}/remote-members/{instance}/{user}``
+       with body ``{"role":"admin"}``. The backend updates
+       ``space_remote_members.role`` on c AND broadcasts
+       ``SPACE_MEMBER_ROLE_CHANGED`` to every member household.
+    2. **d receives** the role change. The local stub's
+       ``space_members.role`` for dave flips to ``'admin'``.
+
+    Assertions:
+
+    - c's PATCH returns 200 with the new role.
+    - After settle, d's ``space_members`` row for dave shows
+      role='admin'.
+
+    The kick exercise (dave kicking someone via
+    ``SPACE_REMOTE_ADMIN_KICK``) lives in
+    ``tests/services/test_space_service_federation_coverage.py`` —
+    end-to-end via the demo would require seating a *second* remote
+    member specifically to be the kick target, which would
+    duplicate the unit coverage without adding signal beyond the
+    role-propagation assertion above.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    space_id = state.get("remote_invite_routed_space_id")
+    if not space_id:
+        raise SystemExit(
+            "admin-promote-kick: run 'remote-invite-routed' first to seat dave",
+        )
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+
+    # 1. c promotes dave to admin.
+    s, body = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}"
+        f"/remote-members/{d['instance_id']}/{d['user_id']}",
+        token=c["token"],
+        method="PATCH",
+        body={"role": "admin"},
+    )
+    _must("c promotes dave to admin", s, body, ok=(200,))
+    if body.get("role") != "admin":
+        raise SystemExit(
+            f"admin-promote-kick: PATCH returned unexpected role: {body!r}",
+        )
+    print("  c promoted dave to admin ✓")
+
+    # 2. Wait for SPACE_MEMBER_ROLE_CHANGED to settle.
+    time.sleep(6)
+
+    # 3. d's space_members for dave should now read 'admin'.
+    import sqlite3
+
+    db_path = _instance_dir("d") / "socialhome.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = list(conn.execute(
+            "SELECT role FROM space_members WHERE space_id=? AND user_id=?",
+            (space_id, d["user_id"]),
+        ))
+    finally:
+        conn.close()
+    if not rows:
+        raise SystemExit(
+            f"admin-promote-kick: dave's space_members row missing on d "
+            f"(space={space_id})",
+        )
+    if rows[0][0] != "admin":
+        raise SystemExit(
+            f"admin-promote-kick: dave's role on d is {rows[0][0]!r}, "
+            f"expected 'admin' — SPACE_MEMBER_ROLE_CHANGED didn't apply",
+        )
+    print("  d's space_members.role for dave = 'admin' ✓")
+
+    state["admin_promote_kick_ran"] = True
+    _save(state)
+    print("admin-promote-kick: ok")
+
+
 def cmd_down() -> None:
     state = _load()
     gfs = state.get("gfs")
@@ -3665,6 +3751,14 @@ def main() -> None:
         # encrypted. Asserts d.space_posts contains the post AND
         # b's log never decrypted the inner event.
         cmd_space_post_routed()
+        # ``admin-promote-kick`` exercises the cross-household admin
+        # promotion path (#114, v_8+): c promotes dave to admin via
+        # the new PATCH /api/spaces/{id}/remote-members/{instance}/
+        # {user} endpoint, and after settle d's local stub reflects
+        # the new role. The kick half (SPACE_REMOTE_ADMIN_KICK, v_9+)
+        # is covered by unit tests; the demo focuses on the wire-level
+        # round-trip.
+        cmd_admin_promote_kick()
         # ``remote-invite-decline`` covers the DECLINE leg that the
         # earlier accept-only flows never hit — c invites alice
         # (direct pair), alice declines, c's invitation row is

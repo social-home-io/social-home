@@ -695,13 +695,15 @@ def _wire_federation_stack(
         space_repo=space_repo,
     ).attach_to(federation_service)
     PeerDirectoryHandler(peer_space_directory_repo).attach_to(federation_service)
-    PrivateSpaceInviteHandler(
+    private_invite_handler = PrivateSpaceInviteHandler(
         bus=bus,
         space_repo=space_repo,
         remote_member_repo=space_remote_member_repo,
         cover_repo=space_cover_repo,
         space_crypto_service=space_crypto,
-    ).attach_to(federation_service)
+    )
+    private_invite_handler.attach_to(federation_service)
+    app[K.private_invite_handler_key] = private_invite_handler
     SpaceContentInboundHandlers(
         bus=bus,
         page_repo=page_repo,
@@ -1928,6 +1930,13 @@ def create_app(config: Config | None = None) -> web.Application:
             federation_service=federation_service,
             federation_repo=federation_repo,
             remote_member_repo=repos.space_remote_member,
+        )
+        # #114 phase 2 — the SPACE_REMOTE_ADMIN_KICK inbound handler
+        # was constructed inside ``_wire_federation_stack`` before
+        # ``real_space_service`` existed; wire it now so the host
+        # can actually dispatch the validated kick into the service.
+        app[K.private_invite_handler_key].attach_space_service(
+            real_space_service,
         )
         # §D2 PR 2 — federation-mesh routing primitives. The discovery
         # service runs BFS-flooded probes to find a chain of confirmed
