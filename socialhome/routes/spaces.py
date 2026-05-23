@@ -327,12 +327,13 @@ def _remote_member_to_dict(rm) -> dict:
 
     Differences from a local row:
 
-    - ``role`` is always ``"member"`` — remote members can't be
-      promoted to admin (admin actions require local DB access on
-      this instance, and the user lives elsewhere).
+    - ``role`` reads ``rm.role`` from ``space_remote_members.role``,
+      which can be ``'admin'`` after a cross-household promotion
+      (PR #434). Earlier this was hardcoded to ``"member"``, which
+      hid promotions in the rendered roster.
     - ``instance_id`` is set so the UI can render a "from {household}"
-      affordance and disable admin gestures the inviter shouldn't
-      have over a federated peer.
+      affordance and route role / kick PATCH+DELETE to the
+      ``/remote-members/{instance}/{user}`` endpoint.
     - ``picture_url`` is null — picture sync over federation isn't
       part of §D1b. (The SPA falls back to the initials avatar.)
     - presence fields default to ``false`` / ``null`` — we have no
@@ -340,7 +341,7 @@ def _remote_member_to_dict(rm) -> dict:
     """
     return {
         "user_id": rm.user_id,
-        "role": "member",
+        "role": rm.role or "member",
         "joined_at": rm.joined_at or "",
         "display_name": rm.display_name,
         "space_display_name": None,
