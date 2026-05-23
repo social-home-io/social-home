@@ -11,6 +11,13 @@ dependencies = [
     "cryptography>=41",
     "aiofiles>=23",
     "pillow>=10",
+    # HEIC support — registers an ``Image.open`` handler for HEIC/HEIF
+    # bytes so iPhone + modern-Android (Samsung One UI 6+, Pixel
+    # HEIF-on) camera photos can be uploaded. Without this, the magic-
+    # byte check accepts ``image/heic`` (it's in :data:`IMAGE_ACCEPTED_MIMES`)
+    # but the ``Image.open`` call inside :class:`ImageProcessor` raises
+    # ``cannot identify image file`` and the upload 422s.
+    "pillow-heif>=0.18",
     "av>=13",
     "python-multipart>=0.0.9",
     "jinja2>=3.1",

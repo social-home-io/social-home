@@ -101,3 +101,40 @@ async def test_thumbnail_uses_lower_quality_than_main_image():
     thumb_buf = io.BytesIO()
     img.save(thumb_buf, format="WEBP", quality=THUMBNAIL_WEBP_QUALITY)
     assert len(thumb_buf.getvalue()) < len(main_buf.getvalue())
+
+
+# ─── HEIC support (#523 — Android Companion App upload regression) ─────
+
+
+async def test_heic_image_processes_to_webp():
+    """Modern Android cameras (Samsung One UI 6+, Pixel HEIF-on) and
+    iPhones default to HEIC. Without ``pillow_heif`` registered,
+    Pillow's ``Image.open`` raises ``cannot identify image file`` for
+    HEIC bytes and the upload 422s with "Cannot open image" — which
+    is what Pascal hit on the HA Android Companion App. This test
+    proves the opener registration in
+    ``socialhome/media/image_processor.py`` is loaded eagerly at
+    module import time (not lazily) so the path works on first
+    upload, not just after some warmup."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    from socialhome.media.image_processor import ImageProcessor
+
+    # Build a real HEIF byte stream — only possible because the
+    # ImageProcessor module already ran ``pillow_heif.register_heif_opener``
+    # on import. If a future contributor moves the registration to be
+    # lazy, this test fails on the ``img.save(..., format='HEIF')`` line.
+    img = Image.new("RGB", (200, 200), color=(255, 0, 128))
+    buf = BytesIO()
+    img.save(buf, format="HEIF")
+    heif_bytes = buf.getvalue()
+    assert heif_bytes[:12].startswith(b"\x00\x00\x00")
+    assert b"ftypheic" in heif_bytes[:64] or b"ftypmif1" in heif_bytes[:64]
+
+    processor = ImageProcessor()
+    webp_bytes, new_name = await processor.process(heif_bytes, "phone-photo.heic")
+    assert webp_bytes.startswith(b"RIFF")
+    assert b"WEBP" in webp_bytes[:16]
+    assert new_name.endswith(".webp")
