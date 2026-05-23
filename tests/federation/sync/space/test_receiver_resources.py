@@ -52,6 +52,7 @@ class _FakeRepos:
         self.gallery_albums = []
         self.gallery_items = []
         self.zones = []
+        self.bazaar_listings = []
 
     # space_repo
     async def save_member(self, member):
@@ -165,6 +166,17 @@ class _ZoneRepoStub:
         return zone
 
 
+class _BazaarRepoStub:
+    """Minimal AbstractBazaarRepo slice for receiver tests (F4)."""
+
+    def __init__(self, collector):
+        self._c = collector
+
+    async def save_listing(self, listing):
+        self._c.bazaar_listings.append(listing)
+        return listing
+
+
 class _SpaceRepoStub:
     def __init__(self, collector):
         self._c = collector
@@ -221,6 +233,7 @@ def setup(bus, peer):
         space_calendar_repo=_CalendarRepoStub(collector),
         gallery_repo=_GalleryRepoStub(collector),
         zone_repo=_ZoneRepoStub(collector),
+        bazaar_repo=_BazaarRepoStub(collector),
     )
     return r, collector, peer_kp
 
@@ -631,3 +644,129 @@ async def test_space_zones_skipped_when_repo_not_wired(bus, peer):
 
 def c_zones_count(collector) -> int:
     return len(collector.zones)
+
+
+async def test_bazaar_listings(setup):
+    """F4: bazaar listings ride the chunked sync so a new joiner sees
+    the full listing card (mode / price / photos / status) — not just
+    the wrapper post's caption."""
+    r, c, kp = setup
+    await _send(
+        r,
+        kp,
+        "bazaar",
+        [
+            {
+                "post_id": "bzr-1",
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "fixed",
+                "title": "Vintage chair",
+                "description": "A nice chair",
+                "image_urls": ["api/media/chair.webp"],
+                "end_time": "2026-06-01T00:00:00+00:00",
+                "currency": "USD",
+                "status": "active",
+                "price": 4500,
+                "created_at": "2026-05-23T10:00:00+00:00",
+            },
+        ],
+    )
+    assert len(c.bazaar_listings) == 1
+    listing = c.bazaar_listings[0]
+    assert listing.post_id == "bzr-1"
+    assert listing.mode.value == "fixed"
+    assert listing.status.value == "active"
+    assert listing.price == 4500
+    assert listing.image_urls == ("api/media/chair.webp",)
+
+
+async def test_bazaar_listings_malformed_record_dropped(setup):
+    """Lenient receiver: a record missing required fields is dropped,
+    others in the same chunk still apply."""
+    r, c, kp = setup
+    await _send(
+        r,
+        kp,
+        "bazaar",
+        [
+            {"post_id": "bzr-bad"},  # missing seller, mode, title
+            {
+                "post_id": "bzr-ok",
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "fixed",
+                "title": "OK",
+                "end_time": "2026-06-01T00:00:00+00:00",
+                "currency": "USD",
+                "status": "active",
+                "created_at": "2026-05-23T10:00:00+00:00",
+            },
+        ],
+    )
+    assert [lst.post_id for lst in c.bazaar_listings] == ["bzr-ok"]
+
+
+async def test_bazaar_listings_unknown_mode_dropped(setup):
+    """Forward-compat: a record with a future ``mode`` value is dropped."""
+    r, c, kp = setup
+    await _send(
+        r,
+        kp,
+        "bazaar",
+        [
+            {
+                "post_id": "bzr-1",
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "future_mode",  # unknown
+                "title": "x",
+                "end_time": "2026-06-01T00:00:00+00:00",
+                "currency": "USD",
+                "status": "active",
+                "created_at": "2026-05-23T10:00:00+00:00",
+            },
+        ],
+    )
+    assert c.bazaar_listings == []
+
+
+async def test_bazaar_listings_skipped_when_repo_not_wired(bus, peer):
+    """An older deployment without a bazaar repo wired silently skips
+    inbound bazaar chunks rather than erroring."""
+    peer_inst, peer_kp = peer
+    collector = _FakeRepos()
+    self_kp = generate_identity_keypair()
+    r = SpaceSyncReceiver(
+        bus=bus,
+        encoder=FederationEncoder(self_kp.private_key),
+        crypto=_FakeCrypto(),
+        federation_repo=_FakeFedRepo(peer_inst),
+        space_repo=_SpaceRepoStub(collector),
+        space_post_repo=_PostRepoStub(collector),
+        space_task_repo=_TaskRepoStub(collector),
+        page_repo=_PageRepoStub(collector),
+        sticky_repo=_StickyRepoStub(collector),
+        space_calendar_repo=_CalendarRepoStub(collector),
+        gallery_repo=_GalleryRepoStub(collector),
+        # bazaar_repo deliberately omitted
+    )
+    await _send(
+        r,
+        peer_kp,
+        "bazaar",
+        [
+            {
+                "post_id": "bzr-1",
+                "space_id": "sp-1",
+                "seller_user_id": "u",
+                "mode": "fixed",
+                "title": "x",
+                "end_time": "2026-06-01T00:00:00+00:00",
+                "currency": "USD",
+                "status": "active",
+                "created_at": "2026-05-23T10:00:00+00:00",
+            },
+        ],
+    )
+    assert collector.bazaar_listings == []

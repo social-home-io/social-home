@@ -11,6 +11,7 @@ resource id to :data:`RESOURCE_ORDER` in the exporter framework.
 """
 
 from .bans import BansExporter
+from .bazaar import BazaarExporter
 from .calendar import CalendarExporter
 from .comments import CommentsExporter
 from .gallery import GalleryExporter
@@ -25,6 +26,7 @@ from .zones import ZonesExporter
 
 __all__ = [
     "BansExporter",
+    "BazaarExporter",
     "CalendarExporter",
     "CommentsExporter",
     "GalleryExporter",
