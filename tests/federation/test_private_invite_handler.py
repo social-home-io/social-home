@@ -167,6 +167,59 @@ async def test_member_removed_happy_path(handler):
     assert any(isinstance(e, RemoteSpaceMemberRemoved) for e in handler.bus.events)
 
 
+async def test_invite_with_roster_seats_remote_members_for_each_peer(handler):
+    """#115 — the ``space_meta`` blob carries a ``roster`` of every
+    member already in the space. The joiner's instance writes each
+    of them into ``space_remote_members`` so her local Members tab
+    shows the full household-spanning roster (not just herself).
+    The invitee's *own* user_id is skipped — that comes via
+    ``space_members`` when she accepts."""
+    handler.remote_members.add = AsyncMock()
+    ev = _event(
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp-remote",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-pascal",
+            "space_meta": {
+                "name": "Family",
+                "owner_instance_id": "peer-1",
+                "owner_username": "pascal",
+                "identity_public_key": "abc",
+                "roster": [
+                    {
+                        "user_id": "u-pascal",
+                        "instance_id": "peer-1",
+                        "display_name": "Pascal",
+                        "role": "owner",
+                    },
+                    {
+                        "user_id": "u-anna",
+                        "instance_id": "peer-1",
+                        "display_name": "Anna",
+                        "role": "member",
+                    },
+                    {
+                        "user_id": "u-self",
+                        "instance_id": "peer-2",
+                        "display_name": "Me",
+                        "role": "member",
+                    },
+                ],
+            },
+        },
+    )
+    await handler.h._on_invite(ev)
+    # Two roster entries (Pascal + Anna) get seated as remote
+    # members; the invitee's own row is skipped.
+    assert handler.remote_members.add.await_count == 2
+    seated_ids = {
+        call.kwargs["user_id"] for call in handler.remote_members.add.await_args_list
+    }
+    assert seated_ids == {"u-pascal", "u-anna"}
+
+
 async def test_invite_with_space_meta_seats_local_stub(handler):
     """B2: inbound SPACE_PRIVATE_INVITE carrying ``space_meta`` seats a
     local stub row so accept can immediately insert the joiner's

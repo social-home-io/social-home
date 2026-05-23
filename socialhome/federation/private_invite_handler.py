@@ -121,6 +121,36 @@ class PrivateSpaceInviteHandler:
                 meta=meta,
             )
             await self._space_repo.save(stub)
+            # §D1b member-list mirror (#115) — the meta now carries a
+            # ``roster`` of everyone in the space. Seat each entry as
+            # a ``SpaceRemoteMember`` row so the joiner's local
+            # ``GET /api/spaces/{id}/members`` (which merges
+            # ``space_remote_members`` per PR #424) shows the full
+            # household-spanning member list rather than just her
+            # own row. We skip the invitee's *own* user_id — that
+            # comes in via ``space_members`` when she accepts.
+            roster = meta.get("roster")
+            if isinstance(roster, list):
+                for entry in roster:
+                    if not isinstance(entry, dict):
+                        continue
+                    user_id = str(entry.get("user_id") or "")
+                    inst_id = str(entry.get("instance_id") or "")
+                    if not user_id or not inst_id or user_id == invitee_user_id:
+                        continue
+                    await self._remote_members.add(
+                        space_id=space_id,
+                        instance_id=inst_id,
+                        user_id=user_id,
+                        user_pk=(
+                            str(entry["user_pk"]) if entry.get("user_pk") else None
+                        ),
+                        display_name=(
+                            str(entry["display_name"])
+                            if entry.get("display_name")
+                            else None
+                        ),
+                    )
         await self._bus.publish(
             RemoteSpaceInviteReceived(
                 space_id=space_id,

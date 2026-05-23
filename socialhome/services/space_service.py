@@ -1051,7 +1051,13 @@ class SpaceService:
                 # shape under one ``space_meta`` key so older receivers
                 # ignore it cleanly via dict-get semantics — no version
                 # bump needed.
-                "space_meta": _space_metadata_for_federation(space),
+                "space_meta": await build_space_snapshot_for_federation(
+                    space,
+                    space_repo=self._spaces,
+                    remote_member_repo=self._remote_members,
+                    user_repo=self._users,
+                    own_instance_id=self._own_instance_id,
+                ),
             },
         )
         return token
@@ -2189,6 +2195,63 @@ class SpaceService:
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
+
+
+async def build_space_snapshot_for_federation(
+    space: Space,
+    *,
+    space_repo,
+    remote_member_repo,
+    user_repo,
+    own_instance_id: str,
+) -> dict:
+    """:func:`_space_metadata_for_federation` + a roster of every
+    member of this space.
+
+    The roster lets a §D1b joiner mirror the full member list
+    locally — without it the joiner's Members tab on a stub of
+    Pascal's space shows only herself. Each row carries
+    ``(user_id, instance_id, display_name, role, joined_at)`` —
+    the minimum the receiver needs to write a
+    :class:`SpaceRemoteMember` row that the route handler then
+    merges into ``GET /api/spaces/{id}/members``.
+
+    The host's own local users ship with ``instance_id`` set to
+    *our* instance, because from the joiner's perspective every
+    member of this space lives somewhere else.
+    """
+    meta = _space_metadata_for_federation(space)
+    local_members = await space_repo.list_members(space.id)
+    local_users = await user_repo.list_by_ids({m.user_id for m in local_members})
+    name_by_id = {u.user_id: u.display_name for u in local_users}
+    roster: list[dict] = []
+    for m in local_members:
+        roster.append(
+            {
+                "user_id": m.user_id,
+                "instance_id": own_instance_id,
+                "display_name": name_by_id.get(m.user_id, ""),
+                "role": m.role,
+                "joined_at": m.joined_at,
+            }
+        )
+    if remote_member_repo is not None:
+        for r in await remote_member_repo.list_for_space(space.id):
+            roster.append(
+                {
+                    "user_id": r.user_id,
+                    "instance_id": r.instance_id,
+                    "display_name": r.display_name or "",
+                    "role": "member",
+                    "joined_at": r.joined_at or "",
+                    # Federated peers carry a public_key on the host
+                    # side; ship it so the joiner can record it too
+                    # and later verify signed events from this user.
+                    "user_pk": r.user_pk,
+                }
+            )
+    meta["roster"] = roster
+    return meta
 
 
 def _space_metadata_for_federation(space: Space) -> dict:
