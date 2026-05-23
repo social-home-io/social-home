@@ -934,3 +934,145 @@ async def test_bazaar_handlers_not_registered_without_repo(bus, repos):
     h.attach_to(fed)
     types = {t for t, _ in fed._event_registry.registered}
     assert FederationEventType.BAZAAR_LISTING_CREATED not in types
+
+
+# ─── Bazaar status updates (F8) ──────────────────────────────────────
+
+
+class _FakeBazaarRepoWithStatus:
+    """Stub matching the AbstractBazaarRepo slice the F8 handler uses."""
+
+    def __init__(self) -> None:
+        self.sold: list[tuple[str, str, int]] = []
+        self.expired: list[str] = []
+        self.cancelled: list[str] = []
+        self.fail = False
+
+    async def save_listing(self, listing):
+        return listing
+
+    async def mark_sold(self, post_id, *, winner_user_id, winning_price):
+        if self.fail:
+            raise ValueError("not active")
+        self.sold.append((post_id, winner_user_id, int(winning_price)))
+
+    async def mark_expired(self, post_id):
+        if self.fail:
+            raise ValueError("not active")
+        self.expired.append(post_id)
+
+    async def mark_cancelled(self, post_id):
+        if self.fail:
+            raise ValueError("not active")
+        self.cancelled.append(post_id)
+
+
+@pytest.fixture
+def bazaar_status_handlers(bus, repos):
+    bazaar = _FakeBazaarRepoWithStatus()
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+        bazaar_repo=bazaar,
+    )
+    h.attach_to(_FakeFederationService())
+    return h, bazaar
+
+
+async def test_bazaar_listing_updated_sold_routes_to_mark_sold(
+    bazaar_status_handlers,
+):
+    handlers, bazaar = bazaar_status_handlers
+    await handlers._on_bazaar_listing_updated(
+        _event(
+            FederationEventType.BAZAAR_LISTING_UPDATED,
+            {
+                "post_id": "bzr-1",
+                "space_id": "sp-1",
+                "status": "sold",
+                "winner_user_id": "u-bidder",
+                "winning_price": 4200,
+            },
+        ),
+    )
+    assert bazaar.sold == [("bzr-1", "u-bidder", 4200)]
+    assert bazaar.expired == []
+    assert bazaar.cancelled == []
+
+
+async def test_bazaar_listing_updated_expired_routes_to_mark_expired(
+    bazaar_status_handlers,
+):
+    handlers, bazaar = bazaar_status_handlers
+    await handlers._on_bazaar_listing_updated(
+        _event(
+            FederationEventType.BAZAAR_LISTING_UPDATED,
+            {"post_id": "bzr-1", "space_id": "sp-1", "status": "expired"},
+        ),
+    )
+    assert bazaar.expired == ["bzr-1"]
+
+
+async def test_bazaar_listing_updated_cancelled_routes_to_mark_cancelled(
+    bazaar_status_handlers,
+):
+    handlers, bazaar = bazaar_status_handlers
+    await handlers._on_bazaar_listing_updated(
+        _event(
+            FederationEventType.BAZAAR_LISTING_UPDATED,
+            {"post_id": "bzr-1", "space_id": "sp-1", "status": "cancelled"},
+        ),
+    )
+    assert bazaar.cancelled == ["bzr-1"]
+
+
+async def test_bazaar_listing_updated_sold_missing_winner_drops(
+    bazaar_status_handlers,
+):
+    """A sold update without winner/price is malformed — drop it."""
+    handlers, bazaar = bazaar_status_handlers
+    await handlers._on_bazaar_listing_updated(
+        _event(
+            FederationEventType.BAZAAR_LISTING_UPDATED,
+            {"post_id": "bzr-1", "space_id": "sp-1", "status": "sold"},
+        ),
+    )
+    assert bazaar.sold == []
+
+
+async def test_bazaar_listing_updated_replay_against_terminal_state_is_silent(
+    bazaar_status_handlers,
+):
+    """``mark_*`` raises when the row is already in a terminal state
+    (gated on ``status='active'``). The handler swallows so an
+    out-of-order replay doesn't error."""
+    handlers, bazaar = bazaar_status_handlers
+    bazaar.fail = True
+    await handlers._on_bazaar_listing_updated(
+        _event(
+            FederationEventType.BAZAAR_LISTING_UPDATED,
+            {"post_id": "bzr-1", "space_id": "sp-1", "status": "cancelled"},
+        ),
+    )
+    # No exception bubbled; cancelled list stayed empty.
+    assert bazaar.cancelled == []
+
+
+async def test_bazaar_listing_updated_handler_not_registered_without_repo(
+    bus,
+    repos,
+):
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+    )
+    fed = _FakeFederationService()
+    h.attach_to(fed)
+    types = {t for t, _ in fed._event_registry.registered}
+    assert FederationEventType.BAZAAR_LISTING_UPDATED not in types

@@ -156,7 +156,13 @@ from __future__ import annotations
 #:   ("🛍 Title") but nothing else (today's behaviour). Operators
 #:   who want bazaar visibility should upgrade member households
 #:   together with the seller's.
-OURS: int = 10
+#: * **v11** — :data:`FederationEventType.BAZAAR_LISTING_UPDATED` ships
+#:   status-only mutations on an existing listing (SOLD / EXPIRED /
+#:   CANCELLED). Without it, a remote member sees a stale "active"
+#:   listing until the next §25.6 catch-up sync runs (or the seller
+#:   re-publishes via ``BAZAAR_LISTING_CREATED``). **Best effort.**
+#:   Sub-v_11 peers silently drop; same upgrade story as v_10.
+OURS: int = 11
 
 
 class FederationCapability:
@@ -231,6 +237,13 @@ class FederationCapability:
     #: peers so they never see broken-looking partial data; they just
     #: see the post like today.
     MIN_FOR_BAZAAR_LISTING = 10
+
+    #: Minimum proto_version where the receiver knows
+    #: :data:`FederationEventType.BAZAAR_LISTING_UPDATED`. Sub-v_11
+    #: peers silently drop status updates; their UI keeps showing
+    #: "active" for a listing the seller marked sold/expired/cancelled
+    #: until the next §25.6 catch-up sync repairs it. Best-effort.
+    MIN_FOR_BAZAAR_STATUS = 11
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

@@ -27,7 +27,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..domain.events import BazaarListingCreated
+from ..domain.events import (
+    BazaarListingCancelled,
+    BazaarListingCreated,
+    BazaarListingExpired,
+)
 from ..domain.federation import FederationEventType
 from ..domain.federation_capabilities import FederationCapability
 from ..infrastructure.event_bus import EventBus
@@ -66,6 +70,8 @@ class BazaarOutbound:
         self._media_sync = media_sync
         self._federation_repo = federation_repo
         self._bus.subscribe(BazaarListingCreated, self._on_listing_created)
+        self._bus.subscribe(BazaarListingExpired, self._on_listing_expired)
+        self._bus.subscribe(BazaarListingCancelled, self._on_listing_cancelled)
 
     async def _on_listing_created(self, event: BazaarListingCreated) -> None:
         """Fan ``BAZAAR_LISTING_CREATED`` to every member household.
@@ -146,3 +152,63 @@ class BazaarOutbound:
                         listing.space_id,
                         listing.post_id,
                     )
+
+    async def _on_listing_expired(self, event: BazaarListingExpired) -> None:
+        """Fan ``BAZAAR_LISTING_UPDATED`` for sold + expired terminal
+        states (F8).
+
+        ``BazaarListingExpired`` covers BOTH the auction-ended-with-winner
+        case (``final_status='sold'``) and the auction-ended-no-winner
+        case (``final_status='expired'``). Receivers update their local
+        ``bazaar_listings`` row's ``status`` (+ ``winner_user_id`` /
+        ``winning_price`` / ``sold_at`` if applicable) by post_id.
+        """
+        await self._fan_status_update(event.listing_post_id)
+
+    async def _on_listing_cancelled(
+        self,
+        event: BazaarListingCancelled,
+    ) -> None:
+        """Fan ``BAZAAR_LISTING_UPDATED`` for ``status='cancelled'``
+        — seller pulled the listing before any terminal resolution."""
+        await self._fan_status_update(event.listing_post_id)
+
+    async def _fan_status_update(self, post_id: str) -> None:
+        """Lookup the post-mutation row and broadcast the new status.
+
+        The row state is the source of truth — by the time the bus
+        event arrives the seller's instance has already updated the
+        ``status`` column (and ``winner_user_id`` etc. for sold).
+        We re-read the row and broadcast just the status-bearing
+        fields, not the full listing payload, so receivers' UPDATE
+        WHERE post_id=? is a small write.
+        """
+        listing = await self._bazaar_repo.get_listing(post_id)
+        if listing is None:
+            log.warning(
+                "BAZAAR_LISTING_UPDATED: listing %s vanished before "
+                "broadcast — skipping",
+                post_id,
+            )
+            return
+        payload: dict = {
+            "post_id": listing.post_id,
+            "space_id": listing.space_id,
+            "status": listing.status.value,
+            "winner_user_id": listing.winner_user_id,
+            "winning_price": listing.winning_price,
+            "sold_at": listing.sold_at,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                listing.space_id,
+                FederationEventType.BAZAAR_LISTING_UPDATED,
+                payload,
+                min_proto_version=FederationCapability.MIN_FOR_BAZAAR_STATUS,
+            )
+        except Exception:
+            log.exception(
+                "BAZAAR_LISTING_UPDATED broadcast failed for space=%s listing=%s",
+                listing.space_id,
+                listing.post_id,
+            )

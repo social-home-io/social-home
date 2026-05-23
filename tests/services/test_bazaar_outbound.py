@@ -233,3 +233,112 @@ async def test_listing_vanished_before_broadcast_is_logged(
     assert any("vanished before broadcast" in r.getMessage() for r in caplog.records)
     federation_service.broadcast_to_space_members.assert_not_awaited()
     media_sync.enqueue_for_blob.assert_not_awaited()
+
+
+# ─── F8: Status updates (SOLD / EXPIRED / CANCELLED) ─────────────────
+
+
+async def test_listing_expired_broadcasts_status_update(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """``BazaarListingExpired`` fires on auction-end (sold OR expired);
+    the row's ``status`` column is the source of truth so the outbound
+    re-reads it and broadcasts the actual terminal status."""
+    from socialhome.domain.events import BazaarListingExpired
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    sold_listing = _make_listing(
+        status=BazaarStatus.SOLD,
+        winner_user_id="u-bidder",
+        winning_price=4200,
+        sold_at="2026-05-23T18:00:00+00:00",
+    )
+    bazaar_repo.get_listing = AsyncMock(return_value=sold_listing)
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarListingExpired(
+            listing_post_id="bzr-1",
+            seller_user_id="u-seller",
+            final_status="sold",
+        ),
+    )
+    federation_service.broadcast_to_space_members.assert_awaited_once()
+    call = federation_service.broadcast_to_space_members.await_args
+    assert call.args[1] == FederationEventType.BAZAAR_LISTING_UPDATED
+    payload = call.args[2]
+    assert payload["post_id"] == "bzr-1"
+    assert payload["status"] == "sold"
+    assert payload["winner_user_id"] == "u-bidder"
+    assert payload["winning_price"] == 4200
+    # Gates on v_11 so sub-v_11 peers don't get the partial update.
+    assert (
+        call.kwargs["min_proto_version"] == FederationCapability.MIN_FOR_BAZAAR_STATUS
+    )
+
+
+async def test_listing_cancelled_broadcasts_status_update(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """``BazaarListingCancelled`` fires when the seller pulls the listing
+    pre-resolution. The outbound re-reads the row and broadcasts
+    ``status='cancelled'``."""
+    from socialhome.domain.events import BazaarListingCancelled
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    cancelled = _make_listing(status=BazaarStatus.CANCELLED)
+    bazaar_repo.get_listing = AsyncMock(return_value=cancelled)
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarListingCancelled(
+            listing_post_id="bzr-1",
+            seller_user_id="u-seller",
+        ),
+    )
+    federation_service.broadcast_to_space_members.assert_awaited_once()
+    payload = federation_service.broadcast_to_space_members.await_args.args[2]
+    assert payload["status"] == "cancelled"
+    # No winner/price for a cancelled listing.
+    assert payload["winner_user_id"] is None
+    assert payload["winning_price"] is None
+
+
+async def test_status_update_skips_when_listing_gone(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """If the row vanished before the bus event arrived, log + skip."""
+    from socialhome.domain.events import BazaarListingCancelled
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    bazaar_repo.get_listing = AsyncMock(return_value=None)
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarListingCancelled(listing_post_id="bzr-gone", seller_user_id="u"),
+    )
+    federation_service.broadcast_to_space_members.assert_not_awaited()
