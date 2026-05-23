@@ -50,6 +50,36 @@ async def test_space_post_created_broadcasts_to_space_members():
     # doesn't need to gate; it just publishes.
 
 
+async def test_inbound_replay_does_not_loop_back_via_outbound():
+    """When ``federation_inbound_service`` receives a SPACE_POST_CREATED
+    from peer P and re-publishes ``SpacePostCreated`` to the local
+    bus (so realtime / search / HA bridge see the new row), the
+    outbound bridge MUST NOT re-broadcast — otherwise we get a
+    federation loop. The ``origin_instance_id`` field on the bus
+    event is the gate: ``None`` = local origination, set =
+    inbound replay → skip."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    post = Post(
+        id="p-from-peer",
+        author="uid-pascal",
+        type=PostType.TEXT,
+        content="hi",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(
+        SpacePostCreated(
+            post=post,
+            space_id="sp-1",
+            origin_instance_id="peer-pascal-instance",
+        )
+    )
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
 async def test_household_post_does_not_federate_via_space_bridge():
     """SpacePostCreated CAN fire with empty space_id for some legacy
     paths; the bridge must skip those to avoid mis-routing a

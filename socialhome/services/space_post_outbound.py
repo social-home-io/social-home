@@ -30,6 +30,9 @@ import logging
 from typing import TYPE_CHECKING
 
 from ..domain.events import (
+    CommentAdded,
+    CommentDeleted,
+    CommentUpdated,
     PostDeleted,
     PostEdited,
     SpacePostCreated,
@@ -59,6 +62,13 @@ class SpacePostOutbound:
         self._bus.subscribe(SpacePostCreated, self._on_space_post_created)
         self._bus.subscribe(PostEdited, self._on_post_edited)
         self._bus.subscribe(PostDeleted, self._on_post_deleted)
+        # #117 followup — same gap on comments. ``CommentAdded`` /
+        # ``CommentUpdated`` / ``CommentDeleted`` already carry
+        # ``space_id`` (unlike the post-level events), so we can
+        # gate-and-federate cleanly here.
+        self._bus.subscribe(CommentAdded, self._on_comment_added)
+        self._bus.subscribe(CommentUpdated, self._on_comment_updated)
+        self._bus.subscribe(CommentDeleted, self._on_comment_deleted)
 
     async def _on_space_post_created(self, event: SpacePostCreated) -> None:
         """Fan ``SPACE_POST_CREATED`` to every member household.
@@ -73,6 +83,14 @@ class SpacePostOutbound:
         # feed posts (no space_id) AND space posts. Federation here is
         # only for space-scoped rows.
         if not event.space_id:
+            return
+        # ``origin_instance_id`` is None when the bus event came from
+        # a local POST (the SPA's ``/api/spaces/{id}/posts``);
+        # populated when ``federation_inbound_service`` re-published
+        # after receiving SPACE_POST_CREATED. Re-broadcasting an
+        # inbound-driven event would create a federation loop:
+        # peer → us → peer → us → … Skip the publish.
+        if event.origin_instance_id is not None:
             return
         payload: dict = {
             "id": post.id,
@@ -121,3 +139,86 @@ class SpacePostOutbound:
     async def _on_post_deleted(self, event: PostDeleted) -> None:
         # Same caveat as edit — needs space_id resolution.
         return
+
+    # ── Comments ─────────────────────────────────────────────────────────
+
+    async def _on_comment_added(self, event: CommentAdded) -> None:
+        if not event.space_id:
+            return
+        if event.origin_instance_id is not None:
+            return
+        c = event.comment
+        payload: dict = {
+            "id": c.id,
+            "comment_id": c.id,
+            "post_id": event.post_id,
+            "space_id": event.space_id,
+            "author": c.author,
+            "type": c.type.value,
+            "content": c.content,
+            "media_url": c.media_url,
+            "parent_id": c.parent_id,
+            "occurred_at": c.created_at.isoformat() if c.created_at else None,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.SPACE_COMMENT_CREATED,
+                payload,
+            )
+        except Exception:
+            log.exception(
+                "SPACE_COMMENT_CREATED broadcast failed for space=%s comment=%s",
+                event.space_id,
+                c.id,
+            )
+
+    async def _on_comment_updated(self, event: CommentUpdated) -> None:
+        if not event.space_id:
+            return
+        if event.origin_instance_id is not None:
+            return
+        c = event.comment
+        payload: dict = {
+            "id": c.id,
+            "comment_id": c.id,
+            "post_id": event.post_id,
+            "space_id": event.space_id,
+            "content": c.content,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.SPACE_COMMENT_UPDATED,
+                payload,
+            )
+        except Exception:
+            log.exception(
+                "SPACE_COMMENT_UPDATED broadcast failed for space=%s comment=%s",
+                event.space_id,
+                c.id,
+            )
+
+    async def _on_comment_deleted(self, event: CommentDeleted) -> None:
+        if not event.space_id:
+            return
+        if event.origin_instance_id is not None:
+            return
+        payload = {
+            "comment_id": event.comment_id,
+            "id": event.comment_id,
+            "post_id": event.post_id,
+            "space_id": event.space_id,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.SPACE_COMMENT_DELETED,
+                payload,
+            )
+        except Exception:
+            log.exception(
+                "SPACE_COMMENT_DELETED broadcast failed for space=%s comment=%s",
+                event.space_id,
+                event.comment_id,
+            )
