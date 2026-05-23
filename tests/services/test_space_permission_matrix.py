@@ -58,6 +58,7 @@ GATED_METHODS: frozenset[str] = frozenset(
         "add_member",
         "remove_member",
         "set_role",
+        "set_remote_member_role",
         "update_member_profile",
         "set_member_picture",
         "clear_member_picture",
