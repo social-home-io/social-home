@@ -23,7 +23,6 @@ from ..infrastructure.event_bus import EventBus
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
-    from ..repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
 
@@ -31,18 +30,16 @@ log = logging.getLogger(__name__)
 class SpaceZoneOutbound:
     """Publish per-space zone mutations to remote member instances."""
 
-    __slots__ = ("_bus", "_federation", "_spaces")
+    __slots__ = ("_bus", "_federation")
 
     def __init__(
         self,
         *,
         bus: EventBus,
         federation_service: "FederationService",
-        space_repo: "AbstractSpaceRepo",
     ) -> None:
         self._bus = bus
         self._federation = federation_service
-        self._spaces = space_repo
 
     def wire(self) -> None:
         self._bus.subscribe(SpaceZoneUpserted, self._on_upserted)
@@ -83,24 +80,14 @@ class SpaceZoneOutbound:
         payload: dict,
     ) -> None:
         try:
-            peers = await self._spaces.list_member_instances(space_id)
+            await self._federation.broadcast_to_space_members(
+                space_id,
+                event_type,
+                payload,
+            )
         except Exception as exc:  # pragma: no cover — defensive
-            log.debug("zone-outbound: list peers failed: %s", exc)
-            return
-        own = getattr(self._federation, "_own_instance_id", "")
-        for instance_id in peers:
-            if not instance_id or instance_id == own:
-                continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=instance_id,
-                    event_type=event_type,
-                    payload=payload,
-                    space_id=space_id,
-                )
-            except Exception as exc:  # pragma: no cover — defensive
-                log.debug(
-                    "zone-outbound: send to %s failed: %s",
-                    instance_id,
-                    exc,
-                )
+            log.debug(
+                "zone-outbound: broadcast failed for space=%s: %s",
+                space_id,
+                exc,
+            )

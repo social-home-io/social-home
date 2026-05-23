@@ -16,20 +16,25 @@ from socialhome.services.task_federation_outbound import (
 
 
 class _FakeFed:
-    def __init__(self, own: str = "own-inst") -> None:
-        self._own_instance_id = own
-        self.sent: list[tuple[str, FederationEventType, dict]] = []
+    """Records `broadcast_to_space_members` calls.
 
-    async def send_event(self, *, to_instance_id, event_type, payload, space_id=None):
-        self.sent.append((to_instance_id, event_type, payload))
+    F2a switched task outbound from per-peer `send_event` to mesh-
+    routed broadcast so members behind a relay receive task mutations
+    too. The broadcast helper handles the member-list lookup + the
+    per-peer `send_with_mesh_fallback` internally.
+    """
 
+    def __init__(self) -> None:
+        self.broadcasts: list[tuple[str, FederationEventType, dict]] = []
 
-class _FakeSpaceRepo:
-    def __init__(self, members: dict[str, list[str]]) -> None:
-        self._m = members
-
-    async def list_member_instances(self, space_id):
-        return list(self._m.get(space_id, []))
+    async def broadcast_to_space_members(
+        self,
+        space_id,
+        event_type,
+        payload,
+        **kwargs,
+    ):
+        self.broadcasts.append((space_id, event_type, payload))
 
 
 def _task(tid: str) -> Task:
@@ -50,17 +55,7 @@ def _task(tid: str) -> Task:
 def env():
     bus = EventBus()
     fed = _FakeFed()
-    repo = _FakeSpaceRepo(
-        {
-            "sp-A": ["own-inst", "peer-1", "peer-2"],
-            "sp-B": ["peer-3"],
-        }
-    )
-    out = TaskFederationOutbound(
-        bus=bus,
-        federation_service=fed,
-        space_repo=repo,
-    )
+    out = TaskFederationOutbound(bus=bus, federation_service=fed)
     out.wire()
     return bus, fed
 
@@ -68,16 +63,16 @@ def env():
 async def test_household_task_is_not_federated(env):
     bus, fed = env
     await bus.publish(TaskCreated(task=_task("t1"), space_id=None))
-    assert fed.sent == []
+    assert fed.broadcasts == []
 
 
-async def test_space_task_created_fanouts_to_peers_excluding_self(env):
+async def test_space_task_created_broadcasts_with_payload(env):
     bus, fed = env
     await bus.publish(TaskCreated(task=_task("t1"), space_id="sp-A"))
-    recipients = [r[0] for r in fed.sent]
-    assert recipients == ["peer-1", "peer-2"]
-    assert {r[1] for r in fed.sent} == {FederationEventType.SPACE_TASK_CREATED}
-    payload = fed.sent[0][2]
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, payload = fed.broadcasts[0]
+    assert space_id == "sp-A"
+    assert event_type is FederationEventType.SPACE_TASK_CREATED
     assert payload["id"] == "t1"
     assert payload["space_id"] == "sp-A"
     assert payload["status"] == "todo"
@@ -86,20 +81,19 @@ async def test_space_task_created_fanouts_to_peers_excluding_self(env):
 async def test_space_task_deleted_minimal_payload(env):
     bus, fed = env
     await bus.publish(
-        TaskDeleted(
-            task_id="t1",
-            list_id="L",
-            space_id="sp-A",
-        )
+        TaskDeleted(task_id="t1", list_id="L", space_id="sp-A"),
     )
-    assert len(fed.sent) == 2
-    for _to, event_type, payload in fed.sent:
-        assert event_type is FederationEventType.SPACE_TASK_DELETED
-        assert payload == {"id": "t1", "list_id": "L", "space_id": "sp-A"}
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, payload = fed.broadcasts[0]
+    assert space_id == "sp-A"
+    assert event_type is FederationEventType.SPACE_TASK_DELETED
+    assert payload == {"id": "t1", "list_id": "L", "space_id": "sp-A"}
 
 
 async def test_space_task_updated_event_type(env):
     bus, fed = env
     await bus.publish(TaskUpdated(task=_task("t1"), space_id="sp-B"))
-    assert [r[1] for r in fed.sent] == [FederationEventType.SPACE_TASK_UPDATED]
-    assert fed.sent[0][0] == "peer-3"
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, _payload = fed.broadcasts[0]
+    assert space_id == "sp-B"
+    assert event_type is FederationEventType.SPACE_TASK_UPDATED
