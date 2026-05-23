@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from socialhome.db.database import AsyncDatabase
-from socialhome.domain.federation import FederationEventType
+from socialhome.domain.federation import DeliveryResult, FederationEventType
 from socialhome.repositories.space_media_outbox_repo import (
     SqliteSpaceMediaOutboxRepo,
 )
@@ -17,6 +17,13 @@ from socialhome.services.space_media_sync_service import (
     SINGLE_CHUNK_BYTES_THRESHOLD,
     SpaceMediaSyncService,
 )
+
+
+#: Successful-delivery shape the scheduler treats as a green ship.
+#: Mirrors the real return of
+#: :meth:`FederationService.send_with_mesh_fallback` so the test
+#: doesn't drift from production shape.
+_OK = DeliveryResult(instance_id="peer-x", ok=True)
 
 
 async def _seed_space_post(db, *, post_id="p-1", space_id="sp-1"):
@@ -88,7 +95,7 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     body = b"WEBP-small-bytes-" * 8  # < 1 MiB
     (tmp_path / "small.webp").write_bytes(body)
     fed = AsyncMock()
-    fed.send_event = AsyncMock()
+    fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=fed,
@@ -101,8 +108,8 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     )
     shipped = await svc.flush_once()
     assert shipped == 1
-    fed.send_event.assert_awaited_once()
-    call = fed.send_event.call_args
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    call = fed.send_with_mesh_fallback.call_args
     assert call.kwargs["to_instance_id"] == "peer-x"
     assert call.kwargs["event_type"] is FederationEventType.SPACE_MEDIA_BLOB
     payload = call.kwargs["payload"]
@@ -128,7 +135,7 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
     body = body[:size]
     (tmp_path / "big.webm").write_bytes(body)
     fed = AsyncMock()
-    fed.send_event = AsyncMock()
+    fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=fed,
@@ -142,8 +149,8 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
     shipped = await svc.flush_once()
     assert shipped == 1
     # Expected chunk count = ceil(size / MAX_BLOB_CHUNK_BYTES) = 6.
-    assert fed.send_event.await_count == 6
-    payloads = [c.kwargs["payload"] for c in fed.send_event.call_args_list]
+    assert fed.send_with_mesh_fallback.await_count == 6
+    payloads = [c.kwargs["payload"] for c in fed.send_with_mesh_fallback.call_args_list]
     assert [p["chunk_index"] for p in payloads] == [0, 1, 2, 3, 4, 5]
     assert all(p["chunk_count"] == 6 for p in payloads)
     assert [p["final"] for p in payloads] == [
@@ -182,7 +189,7 @@ async def test_flush_once_missing_file_reschedules(db, outbox, tmp_path):
     reschedules with backoff rather than crashing."""
     await _seed_space_post(db)
     fed = AsyncMock()
-    fed.send_event = AsyncMock()
+    fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=fed,
@@ -195,7 +202,7 @@ async def test_flush_once_missing_file_reschedules(db, outbox, tmp_path):
     )
     shipped = await svc.flush_once()
     assert shipped == 0
-    fed.send_event.assert_not_awaited()
+    fed.send_with_mesh_fallback.assert_not_awaited()
     # Row remains for next attempt.
     rows = await outbox.list_for_post("p-1")
     assert len(rows) == 1

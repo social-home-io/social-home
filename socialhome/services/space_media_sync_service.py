@@ -214,17 +214,24 @@ class SpaceMediaSyncService:
                 )
                 await self._reschedule_or_fail(entry, str(exc))
                 continue
+            # Use mesh fallback so a member household that isn't a
+            # CONFIRMED direct peer (joined via §D1b on a mesh path
+            # like c↔b↔d) still receives the bytes — the chunks
+            # ride SPACE_ROUTED end-to-end-sealed through the
+            # relays. A direct-peer path uses ``send_event``
+            # internally so the per-chunk overhead matches the DM
+            # case for the common LAN-paired scenario.
             send_failed = False
             for payload in payloads:
                 try:
-                    await self._federation.send_event(
+                    result = await self._federation.send_with_mesh_fallback(
                         to_instance_id=entry.target_instance_id,
                         event_type=FederationEventType.SPACE_MEDIA_BLOB,
                         payload=payload,
                     )
                 except Exception as exc:
                     log.warning(
-                        "space-media-sync: send chunk %d/%d failed for %s → %s: %s",
+                        "space-media-sync: send chunk %d/%d raised for %s → %s: %s",
                         payload.get("chunk_index", 0),
                         payload.get("chunk_count", 1),
                         entry.blob_id,
@@ -232,6 +239,26 @@ class SpaceMediaSyncService:
                         exc,
                     )
                     await self._reschedule_or_fail(entry, str(exc))
+                    send_failed = True
+                    break
+                # ``send_with_mesh_fallback`` doesn't raise on
+                # delivery failure — it returns ``DeliveryResult``
+                # with ``ok=False`` (no_route / not_confirmed /
+                # transport blip). Treat those the same as a raise
+                # so the scheduler retries.
+                if not result.ok:
+                    log.warning(
+                        "space-media-sync: chunk %d/%d delivery failed for %s → %s: %s",
+                        payload.get("chunk_index", 0),
+                        payload.get("chunk_count", 1),
+                        entry.blob_id,
+                        entry.target_instance_id,
+                        result.error or "delivery_failed",
+                    )
+                    await self._reschedule_or_fail(
+                        entry,
+                        result.error or "delivery_failed",
+                    )
                     send_failed = True
                     break
             if send_failed:

@@ -3602,6 +3602,16 @@ def cmd_space_media_blob() -> None:
     c = state["instances"]["c"]
     d = state["instances"]["d"]
 
+    # Truncate b's log so the post-run scan is bounded to this
+    # step. b is the mesh relay between c and d; the encryption
+    # invariant says b sees ``SPACE_ROUTED`` envelopes but NEVER
+    # the inner ``SPACE_MEDIA_BLOB`` payload — same as
+    # ``space-post-routed`` checks for SPACE_POST_CREATED.
+    b_log_path = _instance_dir("b") / "log.txt"
+    b_log_before_size = (
+        b_log_path.stat().st_size if b_log_path.exists() else 0
+    )
+
     # 1. Build a real WebP byte stream — the upload endpoint runs
     #    every image through ImageProcessor, so we have to ship
     #    something Pillow can decode.
@@ -3675,6 +3685,26 @@ def cmd_space_media_blob() -> None:
         )
     print(f"  d.media has {filename} ({len(d_bytes)} bytes) ✓")
     print(f"  bytes match between c and d ✓")
+
+    # 6. The mesh relay (b) MUST never have dispatched the inner
+    #    SPACE_MEDIA_BLOB — same encryption invariant the
+    #    space-post-routed step asserts. SPACE_ROUTED envelopes
+    #    are fine; the inner event type leaking through would
+    #    mean the relay decrypted the bytes.
+    if b_log_path.exists():
+        b_log_after = b_log_path.read_text(errors="replace")[b_log_before_size:]
+        if "SPACE_MEDIA_BLOB" in b_log_after:
+            raise SystemExit(
+                "space-media-blob: relay b dispatched inner "
+                "SPACE_MEDIA_BLOB — encryption invariant broken.",
+            )
+        if "SPACE_ROUTED" not in b_log_after:
+            print(
+                "  WARN: no SPACE_ROUTED entries in b's log; the mesh "
+                "path may have skipped b (alt route via a).",
+            )
+        else:
+            print("  b relayed SPACE_ROUTED without unsealing ✓")
 
     state["space_media_blob_ran"] = True
     _save(state)
