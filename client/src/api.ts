@@ -15,6 +15,32 @@ import { showToast } from '@/components/Toast'
 const _rel = (p: string): string => p.replace(/^\/+/, '')
 
 /**
+ * Read a fetch ``Response`` body as JSON when there is one, ``null``
+ * otherwise. Specifically: 204 (No Content) and empty-body 200s.
+ *
+ * Why the gymnastics: ``res.json()`` on an empty body throws. Chrome
+ * says ``"Unexpected end of JSON input"`` and we'd swallow that in
+ * a generic ``catch`` upstream. Safari (mobile + desktop, both
+ * WebKit) throws ``"The string did not match the expected pattern."``
+ * — a stringly-typed error from ``JSON.parse('')`` that has no
+ * obvious referent. That's the error a real user saw when clicking
+ * Accept on a pending cross-household invite, because the
+ * ``/api/remote_invites/{token}/accept`` endpoint returns 204 by
+ * design (no payload to return; the accept just records state and
+ * fans a federation event).
+ *
+ * Branch on ``status === 204`` first, then on ``content-length: 0``,
+ * because Safari throws even before sniffing the body shape — we
+ * have to *avoid* calling ``json()``, not catch its rejection.
+ */
+async function _parseJsonOrNull<T>(res: Response): Promise<T> {
+  if (res.status === 204) return null as T
+  const len = res.headers.get('content-length')
+  if (len === '0') return null as T
+  return res.json() as Promise<T>
+}
+
+/**
  * Error thrown by ``ApiClient`` for non-2xx responses.
  *
  * Carries the HTTP status code (``e.status === 501`` to detect a
@@ -134,7 +160,7 @@ class ApiClient {
       }),
       path,
     )
-    return res.json()
+    return _parseJsonOrNull<T>(res)
   }
 
   async put<T = any>(path: string, body?: unknown): Promise<T> {
@@ -145,7 +171,7 @@ class ApiClient {
       }),
       path,
     )
-    return res.json()
+    return _parseJsonOrNull<T>(res)
   }
 
   async patch<T = any>(path: string, body?: unknown): Promise<T> {
@@ -156,7 +182,7 @@ class ApiClient {
       }),
       path,
     )
-    return res.json()
+    return _parseJsonOrNull<T>(res)
   }
 
   async delete(path: string): Promise<void> {

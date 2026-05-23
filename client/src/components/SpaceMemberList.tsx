@@ -61,6 +61,11 @@ interface Member {
   is_online?: boolean
   is_idle?: boolean
   last_seen_at?: string | null
+  /** §D1b — set when this row represents a federated peer who joined
+   *  via the cross-household invite flow. Drives the "from another
+   *  household" badge + suppresses admin-only gestures (kebab menu,
+   *  rename) that don't apply over federation. */
+  instance_id?: string | null
 }
 
 interface Ban {
@@ -251,6 +256,14 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
                   </span>
                 )}
                 {roleBadge(m.role)}
+                {m.instance_id && (
+                  <span
+                    class="sh-member-remote-chip"
+                    title="Joined from another household via federation"
+                  >
+                    🏘 Other household
+                  </span>
+                )}
                 {isMe && (
                   <span class="sh-muted sh-member-me-chip">you</span>
                 )}
@@ -258,7 +271,7 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
               <time class="sh-muted" dateTime={m.joined_at} title={new Date(m.joined_at).toLocaleString()}>
                 joined {formatRelativeJoined(m.joined_at)}
               </time>
-              {!isMe && (
+              {!isMe && !m.instance_id && (
                 <button
                   class="sh-member-rename-btn"
                   type="button"
