@@ -128,6 +128,37 @@ current key material — used when ownership is transferred or a
 co-admin is added so the new admin can decrypt pre-existing content
 without a full resync.
 
+## Cross-household admin promotion
+
+`SPACE_MEMBER_ROLE_CHANGED` (#114, PR #434, v_8+) propagates a role
+change for a remote member to every member household. The host emits
+this on every `PATCH /api/spaces/{id}/remote-members/{instance}/{user}`
+that flips between `'member'` and `'admin'`. Owner is intentionally
+not assignable to a remote member — ownership carries local-only
+privileges (dissolve, ownership transfer) that can't sensibly cross
+households.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as HFS H (host)
+    participant A as HFS A (promoted member)
+    participant W as HFS W (witness member)
+    H->>H: PATCH /api/spaces/{id}/remote-members/...<br/>{role: admin}
+    H->>H: space_remote_members.set_role(...)
+    H->>A: SPACE_MEMBER_ROLE_CHANGED
+    H->>W: SPACE_MEMBER_ROLE_CHANGED
+    Note over A: update space_members.role on local stub<br/>+ space_remote_members.role for witnesses
+    Note over W: update space_remote_members.role<br/>so the rendered member list shows the new badge
+```
+
+The flow only propagates the role *assignment*. Cross-household
+admin *actions* (kick from a non-host instance, config-change from a
+remote admin) ride a future event family — Phase 2 of this work.
+The current PR's scope ends at the role propagation; the SPA on the
+promoted member's side can already use the updated
+`space_members.role` value to gate local admin controls.
+
 ## Age gate
 
 `SPACE_AGE_GATE_UPDATED` propagates changes to a space's minimum-age

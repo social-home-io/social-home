@@ -173,6 +173,7 @@ events these routes fire.
 | GET | `/api/spaces/{id}/join-requests` | Pending requests. |
 | POST | `/api/spaces/{id}/join-requests/{req_id}/{approve\|reject}` | Decide. |
 | POST | `/api/spaces/{id}/remote-invites` | Invite a user on another HFS. |
+| PATCH | `/api/spaces/{id}/remote-members/{instance_id}/{user_id}` | Owner-only: promote/demote a remote member (`{"role":"admin"\|"member"}`). Federates as `SPACE_MEMBER_ROLE_CHANGED`. |
 | GET | `/api/remote_invites` | Remote invites pending for this household. |
 | POST | `/api/remote_invites/{token}/{accept\|decline}` | Respond. |
 | POST | `/api/spaces/{id}/ban` | Ban a user from a space. |

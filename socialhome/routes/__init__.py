@@ -239,6 +239,7 @@ from .spaces import (
     SpaceJoinRequestDetailView,
     SpaceJoinView,
     SpaceRemoteInviteView,
+    SpaceRemoteMemberRoleView,
     SpaceMemberDetailView,
     SpaceMemberMePictureView,
     SpaceMemberMeProfileView,
@@ -478,6 +479,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/spaces/{id}/remote-invites",
         SpaceRemoteInviteView,
+    )
+    app.router.add_view(
+        "/api/spaces/{id}/remote-members/{instance_id}/{user_id}",
+        SpaceRemoteMemberRoleView,
     )
     app.router.add_view("/api/remote_invites", RemoteInviteCollectionView)
     app.router.add_view(

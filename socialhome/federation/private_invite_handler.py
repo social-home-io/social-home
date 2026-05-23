@@ -103,6 +103,10 @@ class PrivateSpaceInviteHandler:
             FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
             self._on_key_exchange_rekey,
         )
+        registry.register(
+            FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
+            self._on_role_changed,
+        )
 
     # ── Receive ─────────────────────────────────────────────────────────
 
@@ -312,6 +316,60 @@ class PrivateSpaceInviteHandler:
                 instance_id=event.from_instance,
                 user_id=user_id,
             )
+        )
+
+    async def _on_role_changed(self, event: "FederationEvent") -> None:
+        """Host promoted / demoted a member (#114).
+
+        Three sides see this event:
+
+        * The promoted user's own household — updates the local
+          ``space_members.role`` row so the SPA gates admin controls
+          on the new role.
+        * Other member households (witnesses) — updates the local
+          ``space_remote_members.role`` so the rendered member list
+          shows the new badge.
+        * The host's own broadcast loops back to the host's
+          ``broadcast_to_space_members`` set, but the host's own
+          instance isn't included by construction (see
+          :meth:`AbstractFederationRepo.list_member_instance_ids`).
+
+        Idempotent — the repo set ops upsert. Cross-household admin
+        commands (kick from a non-host instance) are not implemented
+        yet; this event only propagates the role assignment so the
+        UI can surface controls. Actual remote admin operations
+        ride a separate event family in a future PR.
+        """
+        p = event.payload
+        space_id = str(p.get("space_id") or "") or (event.space_id or "")
+        user_id = str(p.get("user_id") or "")
+        member_instance = str(p.get("instance_id") or "")
+        role = str(p.get("role") or "")
+        if not space_id or not user_id or not member_instance or not role:
+            log.debug(
+                "SPACE_MEMBER_ROLE_CHANGED from %s missing required fields",
+                event.from_instance,
+            )
+            return
+        if role not in ("admin", "member"):
+            log.debug(
+                "SPACE_MEMBER_ROLE_CHANGED unknown role %r — skipping",
+                role,
+            )
+            return
+        # We may be the affected member's own household OR a witness.
+        # The local stub for this space uses ``space_members`` for our
+        # own users and ``space_remote_members`` for everyone else;
+        # both paths are upserts so we can update without first knowing
+        # which side we're on.
+        local = await self._space_repo.get_member(space_id, user_id)
+        if local is not None:
+            await self._space_repo.set_role(space_id, user_id, role)
+        await self._remote_members.set_role(
+            space_id,
+            member_instance,
+            user_id,
+            role,
         )
 
     async def _on_key_exchange_rekey(self, event: "FederationEvent") -> None:

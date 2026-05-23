@@ -540,3 +540,128 @@ async def test_invite_remote_user_raises_when_fed_returns_no_route(stack):
             invitee_user_id="bob",
         )
     stack.fed_svc.send_with_mesh_fallback.assert_awaited_once()
+
+
+# ── set_remote_member_role (#114) ───────────────────────────────────
+
+
+async def test_set_remote_member_role_promotes_and_broadcasts(stack):
+    """Owner promotes a remote member to admin → SQL row flips +
+    SPACE_MEMBER_ROLE_CHANGED federates to every member household."""
+    stack.fed_svc.broadcast_to_space_members = AsyncMock()
+    _alice = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    # Seat a remote member directly via the repo.
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="peer-bob",
+        user_id="bob",
+        user_pk=None,
+        display_name="Bob",
+    )
+
+    await stack.svc.set_remote_member_role(
+        space.id,
+        actor_username="alicehost",
+        instance_id="peer-bob",
+        user_id="bob",
+        role="admin",
+    )
+
+    member = await stack.svc._remote_members.get(space.id, "peer-bob", "bob")
+    assert member is not None
+    assert member.role == "admin"
+    stack.fed_svc.broadcast_to_space_members.assert_awaited_once()
+    args = stack.fed_svc.broadcast_to_space_members.call_args
+    assert args.args[0] == space.id
+    assert args.args[1] is FederationEventType.SPACE_MEMBER_ROLE_CHANGED
+    assert args.args[2]["role"] == "admin"
+    assert args.args[2]["instance_id"] == "peer-bob"
+    assert args.args[2]["user_id"] == "bob"
+
+
+async def test_set_remote_member_role_rejects_owner_role(stack):
+    _a = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="peer",
+        user_id="u",
+        user_pk=None,
+        display_name=None,
+    )
+    with pytest.raises(ValueError):
+        await stack.svc.set_remote_member_role(
+            space.id,
+            actor_username="alicehost",
+            instance_id="peer",
+            user_id="u",
+            role="owner",
+        )
+
+
+async def test_set_remote_member_role_requires_owner(stack):
+    """Non-owners get a permission error — same as the local
+    set_role path."""
+    _a = await _user(stack, "alicehost")
+    bob = await _user(stack, "bobhost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    # Promote bob to admin to verify even admin can't make this call.
+    await stack.svc.add_member(
+        space.id,
+        actor_username="alicehost",
+        user_id=bob.user_id,
+        role="admin",
+    )
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="peer",
+        user_id="u",
+        user_pk=None,
+        display_name=None,
+    )
+    with pytest.raises(SpacePermissionError):
+        await stack.svc.set_remote_member_role(
+            space.id,
+            actor_username="bobhost",
+            instance_id="peer",
+            user_id="u",
+            role="admin",
+        )
+
+
+async def test_set_remote_member_role_idempotent_skips_broadcast(stack):
+    """Setting the role to its current value is a no-op — no
+    broadcast, no config-sequence bump."""
+    stack.fed_svc.broadcast_to_space_members = AsyncMock()
+    _a = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="peer",
+        user_id="u",
+        user_pk=None,
+        display_name=None,
+    )
+    # Default role is 'member'; setting again to 'member' is a no-op.
+    await stack.svc.set_remote_member_role(
+        space.id,
+        actor_username="alicehost",
+        instance_id="peer",
+        user_id="u",
+        role="member",
+    )
+    stack.fed_svc.broadcast_to_space_members.assert_not_awaited()
+
+
+async def test_set_remote_member_role_missing_member_raises(stack):
+    _a = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    with pytest.raises(KeyError):
+        await stack.svc.set_remote_member_role(
+            space.id,
+            actor_username="alicehost",
+            instance_id="ghost",
+            user_id="nobody",
+            role="admin",
+        )
