@@ -204,6 +204,13 @@ class FederationEventType(str, enum.Enum):
     # title. Image bytes ship through the same media outbox the
     # post + gallery paths use (correlation_id = listing.post_id).
     BAZAAR_LISTING_CREATED = "bazaar_listing_created"
+    #: Status-only mutation on an existing listing (SOLD / EXPIRED /
+    #: CANCELLED). The receiver looks up by ``post_id`` and updates
+    #: ``status`` + ``winner_user_id`` + ``winning_price`` + ``sold_at``.
+    #: Without this, a remote member sees a listing that the seller
+    #: marked sold yesterday still rendered "active" until the next
+    #: §25.6 catch-up sync.
+    BAZAAR_LISTING_UPDATED = "bazaar_listing_updated"
 
     # ── Space encryption key exchange ──
     SPACE_KEY_EXCHANGE = "space_key_exchange"

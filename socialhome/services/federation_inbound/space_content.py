@@ -194,6 +194,10 @@ class SpaceContentInboundHandlers:
                 FederationEventType.BAZAAR_LISTING_CREATED,
                 self._on_bazaar_listing_created,
             )
+            registry.register(
+                FederationEventType.BAZAAR_LISTING_UPDATED,
+                self._on_bazaar_listing_updated,
+            )
 
     # ─── Tasks ───────────────────────────────────────────────────────────
 
@@ -724,6 +728,59 @@ class SpaceContentInboundHandlers:
             # picks this up again.
             log.debug(
                 "BAZAAR_LISTING_CREATED apply failed listing=%s: %s",
+                post_id,
+                exc,
+            )
+
+    async def _on_bazaar_listing_updated(self, event: "FederationEvent") -> None:
+        """Apply a status-only mutation (SOLD / EXPIRED / CANCELLED) to an
+        existing ``bazaar_listings`` row.
+
+        Routes by ``status``:
+
+        * ``sold``      → :meth:`AbstractBazaarRepo.mark_sold` with
+          winner_user_id + winning_price from the payload.
+        * ``expired``   → :meth:`mark_expired`.
+        * ``cancelled`` → :meth:`mark_cancelled`.
+
+        All three repo methods are gated on the row's CURRENT status
+        being ``active`` — replayed events or out-of-order deliveries
+        for a row already in a terminal state are silent no-ops.
+        """
+        if self._bazaar_repo is None:
+            return
+        p = event.payload
+        post_id = str(p.get("post_id") or "")
+        status_raw = str(p.get("status") or "")
+        if not post_id or not status_raw:
+            log.debug("BAZAAR_LISTING_UPDATED missing required field: %s", p)
+            return
+        try:
+            if status_raw == "sold":
+                winner = str(p.get("winner_user_id") or "")
+                price_raw = p.get("winning_price")
+                if not winner or price_raw is None:
+                    log.debug("BAZAAR_LISTING_UPDATED sold missing winner/price: %s", p)
+                    return
+                await self._bazaar_repo.mark_sold(
+                    post_id,
+                    winner_user_id=winner,
+                    winning_price=int(price_raw),
+                )
+            elif status_raw == "expired":
+                await self._bazaar_repo.mark_expired(post_id)
+            elif status_raw == "cancelled":
+                await self._bazaar_repo.mark_cancelled(post_id)
+            else:
+                log.debug(
+                    "BAZAAR_LISTING_UPDATED unknown status %r — skipping",
+                    status_raw,
+                )
+        except Exception as exc:
+            # ``mark_sold`` raises ValueError when the listing isn't
+            # in the active state (replay / out-of-order); log + drop.
+            log.debug(
+                "BAZAAR_LISTING_UPDATED apply failed listing=%s: %s",
                 post_id,
                 exc,
             )
