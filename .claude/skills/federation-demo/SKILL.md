@@ -285,7 +285,8 @@ That single command runs the full sequence:
 The canonical ``all`` sequence runs ``up → pair → traffic →
 calendar → verify → relay-pair → visibility → invite-redeem →
 invite-redeem-routed → remote-invite-routed → space-post-routed →
-space-media-blob → space-gallery-media-blob → admin-promote-kick →
+space-media-blob → space-gallery-media-blob →
+space-sync-catchup-media → admin-promote-kick →
 remote-invite-decline → replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
 stay opt-in (they spin up a separate GFS process and aren't
 required to validate the HFS↔HFS surface).
@@ -302,6 +303,11 @@ Phases added after the initial publish are documented inline in
 * ``space-gallery-media-blob`` — same as above, exercised through
   the gallery upload path. Thumbnail + full bytes both land on
   the remote member's media path via the shared media outbox.
+* ``space-sync-catchup-media`` — newcomer joining a long-running
+  space gets the historical post + gallery bytes too, not just
+  the metadata rows. Catch-up enqueues happen after the §25.6
+  metadata sentinel; assertion proves both surfaces land on the
+  joiner's media path.
 * ``admin-promote-kick`` — cross-household role promotion lands on
   the affected member's household via SPACE_MEMBER_ROLE_CHANGED.
 
@@ -310,6 +316,7 @@ harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
 / ``relay-pair`` / ``visibility`` / ``invite-redeem`` /
 ``invite-redeem-routed`` / ``remote-invite-routed`` /
 ``space-post-routed`` / ``space-media-blob`` /
+``space-gallery-media-blob`` / ``space-sync-catchup-media`` /
 ``admin-promote-kick`` / ``remote-invite-decline`` / ``replay``);
 state is persisted to ``/tmp/sh-demo/state.json`` between calls.
 
