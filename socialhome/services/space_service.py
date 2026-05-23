@@ -717,6 +717,72 @@ class SpaceService:
             )
         )
 
+    async def set_remote_member_role(
+        self,
+        space_id: str,
+        *,
+        actor_username: str,
+        instance_id: str,
+        user_id: str,
+        role: str,
+    ) -> None:
+        """Cross-household admin promotion (#114, PR #434).
+
+        Only the owner can promote/demote admins (mirrors
+        :meth:`set_role` for local members). Updates the host's
+        ``space_remote_members.role`` and broadcasts
+        ``SPACE_MEMBER_ROLE_CHANGED`` to every member household so
+        each household's local view of the roster stays in sync.
+
+        Owner role is not assignable to a remote member — ownership
+        carries local-only privileges (dissolve, ownership transfer)
+        that can't sensibly cross households.
+        """
+        if self._federation is None or self._remote_members is None:
+            raise RuntimeError("federation not attached")
+        if role not in (SpaceRole.ADMIN, SpaceRole.MEMBER):
+            raise ValueError(
+                f"remote member role must be 'admin' or 'member', got {role!r}",
+            )
+        space = await self._require_space(space_id)
+        await self._require_owner(space, actor_username)
+        target = await self._remote_members.get(space_id, instance_id, user_id)
+        if target is None:
+            raise KeyError(
+                f"remote member {user_id!r}@{instance_id!r} not found in {space_id!r}",
+            )
+        if target.role == role:
+            return
+        await self._remote_members.set_role(space_id, instance_id, user_id, role)
+        sequence = await self._spaces.increment_config_sequence(space_id)
+        evt = (
+            SpaceConfigEventType.ADMIN_GRANTED
+            if role == SpaceRole.ADMIN
+            else SpaceConfigEventType.ADMIN_REVOKED
+        )
+        await self._bus.publish(
+            SpaceConfigChanged(
+                space_id=space_id,
+                event_type=evt.value,
+                payload={
+                    "user_id": user_id,
+                    "instance_id": instance_id,
+                    "role": role,
+                },
+                sequence=sequence,
+            )
+        )
+        await self._federation.broadcast_to_space_members(
+            space_id,
+            FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
+            {
+                "space_id": space_id,
+                "user_id": user_id,
+                "instance_id": instance_id,
+                "role": role,
+            },
+        )
+
     # ── Per-space profile (§4.1.6) ─────────────────────────────────────
 
     async def update_member_profile(

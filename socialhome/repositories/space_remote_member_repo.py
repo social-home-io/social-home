@@ -26,6 +26,12 @@ class SpaceRemoteMember:
     user_pk: str | None = None
     display_name: str | None = None
     joined_at: str | None = None
+    #: Per-space role. The on-disk authority is the
+    #: ``space_remote_members.role`` CHECK constraint (member|admin);
+    #: in-code authority is :class:`SpaceRole`.MEMBER / .ADMIN.
+    #: Owner is intentionally not allowed here — see the migration
+    #: 0009 docstring for the rationale.
+    role: str = "member"
 
 
 @runtime_checkable
@@ -54,6 +60,21 @@ class AbstractSpaceRemoteMemberRepo(Protocol):
         instance_id: str,
         user_id: str,
     ) -> list[SpaceRemoteMember]: ...
+
+    async def set_role(
+        self,
+        space_id: str,
+        instance_id: str,
+        user_id: str,
+        role: str,
+    ) -> None: ...
+
+    async def get(
+        self,
+        space_id: str,
+        instance_id: str,
+        user_id: str,
+    ) -> SpaceRemoteMember | None: ...
 
 
 class SqliteSpaceRemoteMemberRepo:
@@ -115,6 +136,35 @@ class SqliteSpaceRemoteMemberRepo:
         )
         return [_row(r) for r in rows_to_dicts(rows)]
 
+    async def set_role(
+        self,
+        space_id: str,
+        instance_id: str,
+        user_id: str,
+        role: str,
+    ) -> None:
+        await self._db.enqueue(
+            """
+            UPDATE space_remote_members SET role=?
+            WHERE space_id=? AND instance_id=? AND user_id=?
+            """,
+            (role, space_id, instance_id, user_id),
+        )
+
+    async def get(
+        self,
+        space_id: str,
+        instance_id: str,
+        user_id: str,
+    ) -> SpaceRemoteMember | None:
+        rows = await self._db.fetchall(
+            "SELECT * FROM space_remote_members "
+            "WHERE space_id=? AND instance_id=? AND user_id=? LIMIT 1",
+            (space_id, instance_id, user_id),
+        )
+        dicts = rows_to_dicts(rows)
+        return _row(dicts[0]) if dicts else None
+
 
 def _row(row: dict) -> SpaceRemoteMember:
     return SpaceRemoteMember(
@@ -124,4 +174,5 @@ def _row(row: dict) -> SpaceRemoteMember:
         user_pk=row.get("user_pk"),
         display_name=row.get("display_name"),
         joined_at=row.get("joined_at"),
+        role=row.get("role") or "member",
     )

@@ -844,6 +844,39 @@ class SpaceRemoteInviteView(BaseView):
         return web.json_response({"token": token}, status=201)
 
 
+class SpaceRemoteMemberRoleView(BaseView):
+    """``PATCH /api/spaces/{id}/remote-members/{instance_id}/{user_id}``
+    — set a remote member's role (#114). Body ``{"role": "admin"|"member"}``.
+    Owner-only; the change federates to every member household via
+    ``SPACE_MEMBER_ROLE_CHANGED``.
+    """
+
+    async def patch(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        space_id = self.match("id")
+        instance_id = self.match("instance_id")
+        user_id = self.match("user_id")
+        body = await self.body()
+        role = str(body.get("role") or "").strip()
+        if role not in ("admin", "member"):
+            return error_response(
+                422,
+                "UNPROCESSABLE",
+                "role must be 'admin' or 'member'",
+            )
+        await svc.set_remote_member_role(
+            space_id,
+            actor_username=ctx.username,
+            instance_id=instance_id,
+            user_id=user_id,
+            role=role,
+        )
+        return web.json_response(
+            {"instance_id": instance_id, "user_id": user_id, "role": role}
+        )
+
+
 class RemoteInviteCollectionView(BaseView):
     """``GET /api/remote_invites`` — inbound cross-household private-space
     invites pending for the caller (§D1b). Allows the UI to render an

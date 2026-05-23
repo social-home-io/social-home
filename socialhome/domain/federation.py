@@ -77,6 +77,10 @@ class FederationEventType(str, enum.Enum):
     SPACE_MEMBER_LEFT = "space_member_left"
     SPACE_MEMBER_BANNED = "space_member_banned"
     SPACE_MEMBER_UNBANNED = "space_member_unbanned"
+    #: Host promoted / demoted a member's role (#114). Broadcasts to
+    #: every member household so every household's view of the
+    #: roster stays in sync. v_8+.
+    SPACE_MEMBER_ROLE_CHANGED = "space_member_role_changed"
 
     # ── Space invitations / join requests ──
     SPACE_INVITE = "space_invite"
@@ -345,6 +349,7 @@ STRUCTURAL_EVENTS: frozenset[FederationEventType] = frozenset(
         FederationEventType.SPACE_MEMBER_LEFT,
         FederationEventType.SPACE_MEMBER_BANNED,
         FederationEventType.SPACE_MEMBER_UNBANNED,
+        FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
         FederationEventType.SPACE_KEY_EXCHANGE,
         FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
         FederationEventType.SPACE_ADMIN_KEY_SHARE,

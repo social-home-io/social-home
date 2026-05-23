@@ -108,6 +108,16 @@ from __future__ import annotations
 #:   "issuer needs to upgrade" message rather than wasting the 10 s
 #:   timeout window. Same gate applies to the mesh-routing
 #:   envelopes once PR 2 lands.
+#: * **v8** — :data:`FederationEventType.SPACE_MEMBER_ROLE_CHANGED`
+#:   shipped (#114, PR #434). Host emits this every time an owner
+#:   promotes / demotes a remote member's role; receivers update
+#:   their local view of the roster (``space_members.role`` for the
+#:   affected user's own household, ``space_remote_members.role``
+#:   on witnesses). Sub-v_8 peers silently drop the event — their
+#:   member-list SPA stays at the pre-change role until the user
+#:   re-runs §25.6 sync or accepts a fresh invite. **Best effort.**
+#:   Forward-compatible because the SPA never depends on a role
+#:   it didn't see propagate; the worst-case is a stale badge.
 #: * **v7** — :data:`FederationEventType.SPACE_KEY_EXCHANGE_REKEY`
 #:   is now actually shipped (#121, PR #432). Every member-removal
 #:   path on the host — local kick, ban, §D1b cross-household kick —
@@ -125,7 +135,7 @@ from __future__ import annotations
 #:   forward-secrecy violation, so we'd rather fail loud. Operators
 #:   should expect to upgrade member households together with the
 #:   host.
-OURS: int = 7
+OURS: int = 8
 
 
 class FederationCapability:
@@ -177,6 +187,13 @@ class FederationCapability:
     #: — gating on this constant would silently revert forward
     #: secrecy.
     MIN_FOR_SPACE_KEY_REKEY = 7
+
+    #: Minimum proto_version where the receiver knows
+    #: :data:`FederationEventType.SPACE_MEMBER_ROLE_CHANGED`. Sub-v_8
+    #: peers silently drop the event and keep showing the
+    #: pre-change role until a §25.6 sync refresh. Best-effort —
+    #: a stale role badge is benign.
+    MIN_FOR_REMOTE_MEMBER_ROLE = 8
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

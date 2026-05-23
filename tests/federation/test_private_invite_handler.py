@@ -381,6 +381,93 @@ async def test_member_removed_keeps_locally_owned_space(handler):
     handler.space_repo.mark_dissolved.assert_not_awaited()
 
 
+async def test_role_changed_updates_local_and_remote_member_rows():
+    """Receiver writes the new role to both ``space_members`` (if a
+    local row exists — the affected user's own household) AND
+    ``space_remote_members`` (always — witnesses)."""
+    bus = _RecordingBus()
+    space_repo = AsyncMock()
+    space_repo.get_member = AsyncMock(return_value=object())
+    space_repo.set_role = AsyncMock()
+    remote_members = AsyncMock()
+    remote_members.set_role = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=bus,  # type: ignore[arg-type]
+        space_repo=space_repo,
+        remote_member_repo=remote_members,
+    )
+    ev = _event(
+        "SPACE_MEMBER_ROLE_CHANGED",
+        {
+            "space_id": "sp-roles",
+            "user_id": "u-bob",
+            "instance_id": "peer-bob",
+            "role": "admin",
+        },
+    )
+    await h._on_role_changed(ev)
+    space_repo.set_role.assert_awaited_once_with("sp-roles", "u-bob", "admin")
+    remote_members.set_role.assert_awaited_once_with(
+        "sp-roles", "peer-bob", "u-bob", "admin"
+    )
+
+
+async def test_role_changed_skips_local_when_not_my_user():
+    """A witness household (no local row for the affected user) only
+    updates ``space_remote_members``."""
+    bus = _RecordingBus()
+    space_repo = AsyncMock()
+    space_repo.get_member = AsyncMock(return_value=None)
+    space_repo.set_role = AsyncMock()
+    remote_members = AsyncMock()
+    remote_members.set_role = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=bus,  # type: ignore[arg-type]
+        space_repo=space_repo,
+        remote_member_repo=remote_members,
+    )
+    ev = _event(
+        "SPACE_MEMBER_ROLE_CHANGED",
+        {
+            "space_id": "sp-w",
+            "user_id": "u-someone-else",
+            "instance_id": "peer-x",
+            "role": "admin",
+        },
+    )
+    await h._on_role_changed(ev)
+    space_repo.set_role.assert_not_awaited()
+    remote_members.set_role.assert_awaited_once()
+
+
+async def test_role_changed_missing_fields_skipped():
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+    )
+    ev = _event("SPACE_MEMBER_ROLE_CHANGED", {"space_id": "sp"})
+    await h._on_role_changed(ev)
+
+
+async def test_role_changed_unknown_role_skipped():
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+    )
+    ev = _event(
+        "SPACE_MEMBER_ROLE_CHANGED",
+        {
+            "space_id": "sp",
+            "user_id": "u",
+            "instance_id": "p",
+            "role": "owner",  # not allowed for remote members
+        },
+    )
+    await h._on_role_changed(ev)
+
+
 async def test_key_exchange_rekey_imports_new_epoch_key():
     """Host rotates the space epoch on a member kick and ships the
     new key via SPACE_KEY_EXCHANGE_REKEY (#121). Receiver must
@@ -466,4 +553,5 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_PRIVATE_INVITE_DECLINE,
         FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
         FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
+        FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
     }
