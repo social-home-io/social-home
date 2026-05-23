@@ -920,7 +920,13 @@ class FederationInboundService:
         if post is None:
             return
         await self._space_post_repo.save(space_id, post)
-        await self._bus.publish(SpacePostCreated(post=post, space_id=space_id))
+        await self._bus.publish(
+            SpacePostCreated(
+                post=post,
+                space_id=space_id,
+                origin_instance_id=event.from_instance,
+            )
+        )
 
     async def _on_space_post_updated(self, event: "FederationEvent") -> None:
         p = event.payload
@@ -970,6 +976,7 @@ class FederationInboundService:
                 post_id=post_id,
                 comment=comment,
                 space_id=str(p.get("space_id") or event.space_id or "") or None,
+                origin_instance_id=event.from_instance,
             ),
         )
 
@@ -988,6 +995,7 @@ class FederationInboundService:
                 post_id=refreshed.post_id,
                 comment=refreshed,
                 space_id=str(p.get("space_id") or event.space_id or "") or None,
+                origin_instance_id=event.from_instance,
             ),
         )
 
@@ -1004,6 +1012,7 @@ class FederationInboundService:
                 post_id=post_id,
                 comment_id=comment_id,
                 space_id=str(p.get("space_id") or event.space_id or "") or None,
+                origin_instance_id=event.from_instance,
             ),
         )
 

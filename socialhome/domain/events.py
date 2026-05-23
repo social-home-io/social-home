@@ -74,6 +74,9 @@ class CommentAdded(DomainEvent):
     comment: "Comment"
     space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
+    #: ``None`` when local-origination; set on inbound replay — see
+    #: :class:`SpacePostCreated` for the loop-prevention rationale.
+    origin_instance_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,6 +87,7 @@ class CommentUpdated(DomainEvent):
     comment: "Comment"
     space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
+    origin_instance_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -94,6 +98,7 @@ class CommentDeleted(DomainEvent):
     comment_id: str
     space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
+    origin_instance_id: str | None = None
 
 
 # ─── Spaces ───────────────────────────────────────────────────────────────
@@ -106,6 +111,14 @@ class SpacePostCreated(DomainEvent):
     mentions: tuple["Mention", ...] = ()
     approved_by: str | None = None
     occurred_at: datetime = field(default_factory=_now)
+    #: ``None`` when the post was created locally (via the SPA's
+    #: ``POST /api/spaces/{id}/posts``). Set to the originating
+    #: peer's instance_id when the post arrived via federation —
+    #: outbound federation bridges check this so an inbound-driven
+    #: publish doesn't fan back out as a loop. Existing local
+    #: subscribers (realtime WS, search index, HA bridge) ignore
+    #: this field and broadcast for every event regardless.
+    origin_instance_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
