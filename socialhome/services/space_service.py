@@ -94,6 +94,11 @@ from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.user_repo import AbstractUserRepo
 from ..domain.media_constraints import SPACE_COVER_MAX_DIMENSION
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
+from .space_crypto_service import (
+    KEY_SUITE_AESGCM_256,
+    SUPPORTED_KEY_SUITES,
+    UnsupportedKeySuite,
+)
 
 
 log = logging.getLogger(__name__)
@@ -2292,8 +2297,15 @@ async def build_space_snapshot_for_federation(
         key_info = await space_crypto_service.export_current_key(space.id)
         if key_info is not None:
             epoch, raw_key = key_info
+            # ``key_suite`` is the forward-compat lever — see
+            # :data:`KEY_SUITE_AESGCM_256` in space_crypto_service.
+            # Mirrors the ``kem_suite`` convention in
+            # ``routed_crypto.py`` so a future PQ-protected variant
+            # is a wire-additive change; older receivers reject
+            # unknown suites rather than silently fall back.
             meta["space_content_key"] = {
                 "epoch": epoch,
+                "key_suite": KEY_SUITE_AESGCM_256,
                 "key_base64": base64.b64encode(raw_key).decode("ascii"),
             }
     return meta
@@ -2362,6 +2374,23 @@ async def apply_space_content_key_from_metadata(
     payload = meta.get("space_content_key")
     if not isinstance(payload, dict):
         return
+    # Forward-compat lever — receivers reject unknown suites rather
+    # than fall back to a default. Senders that don't include
+    # ``key_suite`` (this build's first revision) default to the
+    # single value we support today.
+    suite = payload.get("key_suite", KEY_SUITE_AESGCM_256)
+    if suite not in SUPPORTED_KEY_SUITES:
+        log.warning(
+            "apply_space_content_key_from_metadata: unsupported key_suite "
+            "%r for %s; receiver will stay unable to decrypt until "
+            "upgraded.",
+            suite,
+            space_id,
+        )
+        raise UnsupportedKeySuite(
+            f"space content key advertises unsupported key_suite={suite!r}; "
+            f"this build supports {sorted(SUPPORTED_KEY_SUITES)!r}",
+        )
     epoch = payload.get("epoch")
     key_b64 = payload.get("key_base64")
     if not isinstance(key_b64, str) or epoch is None:

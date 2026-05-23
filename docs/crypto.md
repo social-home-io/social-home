@@ -135,6 +135,26 @@ future hybrid (`x25519+mlkem768`, Phase 2) is a suite-bump rather
 than a wire-format break — see [`protocol/spaces.md` → "Mesh
 routing"](protocol/spaces.md#mesh-routing-space_routed).
 
+**Space content key delivery** (`services/space_crypto_service.py`)
+ships the per-space AES-256-GCM key to a new remote member via the
+§D1b invite/redeem envelope. The payload wears a `key_suite` field
+(today only `"aesgcm-256"`) so future variants (e.g. ChaCha20-Poly1305
+for low-power receivers, or a PQ-protected wrapping when Phase 2
+lands a hybrid asymmetric channel for it) are wire-additive. AES-256
+is Grover-resistant on the symmetric side, so the PQ migration here
+is about strengthening the *delivery channel*, not the AEAD primitive.
+Receivers reject unknown `key_suite` values rather than fall back —
+see `apply_space_content_key_from_metadata` for the validator.
+
+**Suite-tag retrofit audit** — `sealed_sender.py`'s `SealedEnvelope`
+ships AES-256-GCM with no suite tag on the wire (the algorithm is
+hardcoded in encrypt + decrypt). Other surfaces already tag (`Encoder`'s
+`sig_suite`, mesh routing's `kem_suite`, the new content-key
+`key_suite`). The remaining gap should be closed in a follow-up that
+adds an `aead_suite` field to the sealed envelope so a future
+ChaCha20-Poly1305 or PQ-protected variant can land additively. Until
+then the AEAD primitive is fixed by convention.
+
 **WebRTC SDP signing** (`federation/sdp_signing.py`) — Ed25519
 signature over `<sdp_type>:<sdp>` so a MITM can't swap DTLS endpoints.
 

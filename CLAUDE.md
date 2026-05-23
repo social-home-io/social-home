@@ -463,6 +463,97 @@ roster events) check both delivery paths. If the new event could ever
 reach a non-member household, either route it through `space_instances`
 or wrap with `SPACE_ROUTED` end-to-end.
 
+### Crypto wire shapes carry a `*_suite` tag (PQ-forward by default)
+
+Every cryptographic wire shape — signature, KEM, symmetric AEAD, key
+delivery — MUST include a suite identifier so the algorithm can be
+swapped without breaking older receivers. Receivers MUST reject
+unknown suites; never fall back to a default.
+
+Reference implementations:
+
+- **Signatures:** `Encoder.sig_suite` on every envelope
+  (`socialhome/federation/encoder.py`). Today `"ed25519"`. Phase-2
+  PQ migration introduces `"ed25519+mldsa65"`: both signatures are
+  produced + verified in parallel.
+- **KEM (mesh routing):** `KEM_SUITE_X25519` in
+  `socialhome/federation/routed_crypto.py`. Phase-2 introduces
+  `"x25519+mlkem768"`: the pubkey field carries the concatenated
+  X25519 + ML-KEM material.
+- **Symmetric content key delivery:** `KEY_SUITE_AESGCM_256` in
+  `socialhome/services/space_crypto_service.py`. AES-256 is
+  Grover-resistant (effective ~128-bit security post-quantum); a
+  PQ-protected delivery channel is the migration lever, not the
+  symmetric primitive.
+- **Pairing crypto:** `socialhome/federation/crypto_suite.py`
+  drives the negotiate / parse / validate helpers — same pattern.
+
+**When you add a new crypto wire format**:
+
+1. Define a module-level `<NAME>_SUITE_<VARIANT>` constant and a
+   `SUPPORTED_<NAME>_SUITES` frozenset that includes it.
+2. Define an `Unsupported<Name>Suite(ValueError)` exception.
+3. Ship the suite identifier on the wire (every dict the receiver
+   parses; never positional / unlabelled).
+4. Receivers MUST validate against `SUPPORTED_<NAME>_SUITES` and
+   raise on unknown values rather than fall back to a default.
+5. When the migration lands, the constant gets a sibling, the
+   frozenset grows, and the new variant ships its additional
+   material (concatenated pubkeys, parallel signatures, …) — the
+   wire shape itself doesn't change, only its content does.
+
+Senders that don't ship a suite field on a first-revision payload
+are tolerated by defaulting to the single supported value (see
+`apply_space_content_key_from_metadata` for the pattern). Once the
+field is universally shipped, the default-on-missing branch
+becomes the migration tripwire.
+
+See `docs/crypto.md` for the full Phase-1 → Phase-2 PQ migration
+plan and which surfaces still need suite tags retrofitted (an
+audit task — `sealed_sender.py`'s `SealedEnvelope` is the
+prominent remaining gap).
+
+### Before adding a SQL migration, audit the code path
+
+A migration extends the on-disk shape — it's a one-way ratchet
+(rollback is operator-painful) and every deployment runs it on
+startup. Before you write `socialhome/migrations/00NN_*.sql`,
+prove three things to yourself in the PR description:
+
+1. **You've audited every code path that already touches this
+   data.** Grep for the existing tables/columns and read the
+   handlers — particularly federation inbound, sync, and the
+   migration that originally defined the column. Migrations
+   often reveal that the existing shape was already trying to
+   express what you need, or that a different layer (a
+   federation event, a service-level cache, a derived value)
+   is the right home.
+2. **A non-migration alternative was considered and rejected.**
+   Spell out what it would look like: reusing an existing column,
+   computing a derived value at read time, storing the new state
+   in a federation event instead of the table, decomposing the
+   field into one that already exists. Migrations are the right
+   answer often enough, but never the *first* answer — the path
+   from "I need a new field" to "I'll add a column" should pass
+   through "should this even be in the database".
+3. **The migration is the smallest possible change.** Additive
+   over destructive — `ADD COLUMN` over `RENAME TABLE`, NULL
+   default over data backfill, INDEX over partial-table rewrite.
+   The bar for changing existing rows is much higher than the
+   bar for adding a NULL-defaulted column.
+
+The reviewer should push back on any migration PR whose description
+doesn't visibly address all three. "We extended `space_meta` instead
+of adding a column" is a successful audit outcome; "we added a column
+because that's where this data conceptually lives" is also valid as
+long as the alternatives were genuinely considered.
+
+This rule exists because the `socialhome/migrations/` directory is
+the project's longest-running commitment to a data shape — every row
+in production now and forever will pass through every migration here,
+in order, on startup. Changing the shape later means *another*
+migration, not an edit. Cheap to add, expensive to take back.
+
 ### Federation protocol versioning
 
 Every confirmed peer carries a monotonic `proto_version: int` on its

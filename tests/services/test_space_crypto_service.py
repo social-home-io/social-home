@@ -134,6 +134,63 @@ async def test_import_key_rejects_wrong_length(crypto_env):
         await crypto.import_key("sp-1", 0, b"too short")
 
 
+async def test_apply_space_content_key_rejects_unknown_suite(crypto_env):
+    """Forward-compat — receivers MUST reject suites they don't know
+    rather than fall back to a default. Mirrors the kem_suite
+    rejection in routed_crypto.py so the wire shape is safe to grow
+    without breaking older receivers (#117)."""
+    from socialhome.services.space_crypto_service import UnsupportedKeySuite
+    from socialhome.services.space_service import (
+        apply_space_content_key_from_metadata,
+    )
+
+    crypto, _ = crypto_env
+    bad_meta = {
+        "space_content_key": {
+            "epoch": 0,
+            "key_suite": "x25519+mlkem768-prophet-2030",
+            "key_base64": "AAAA",
+        },
+    }
+    with pytest.raises(UnsupportedKeySuite):
+        await apply_space_content_key_from_metadata(
+            "sp-1",
+            meta=bad_meta,
+            space_crypto_service=crypto,
+        )
+
+
+async def test_apply_space_content_key_accepts_default_suite_when_missing(
+    crypto_env,
+):
+    """Older sender that doesn't include ``key_suite`` (first
+    revision of this protocol) defaults to ``aesgcm-256`` — the
+    only suite supported today — so the key still lands."""
+    import base64
+
+    from socialhome.services.space_service import (
+        apply_space_content_key_from_metadata,
+    )
+
+    crypto, _ = crypto_env
+    raw = b"x" * 32
+    meta = {
+        "space_content_key": {
+            "epoch": 7,
+            # No ``key_suite`` — older sender.
+            "key_base64": base64.b64encode(raw).decode("ascii"),
+        },
+    }
+    await apply_space_content_key_from_metadata(
+        "sp-1",
+        meta=meta,
+        space_crypto_service=crypto,
+    )
+    exported = await crypto.export_current_key("sp-1")
+    assert exported is not None
+    assert exported == (7, raw)
+
+
 async def test_initialise_for_space_creates_epoch_zero(crypto_env):
     crypto, _ = crypto_env
     epoch = await crypto.initialise_for_space("sp-1")

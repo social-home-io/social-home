@@ -55,6 +55,30 @@ _AES_KEY_BYTES = 32
 _GCM_NONCE_BYTES = 12
 
 
+#: Symmetric content-key suite identifier shipped alongside the key
+#: bytes on the §D1b handoff. Mirrors the ``kem_suite`` convention in
+#: :mod:`socialhome.federation.routed_crypto` so the wire shape grows
+#: forward-compatibly. When we ever introduce a parallel scheme
+#: (e.g. ChaCha20-Poly1305 for low-power receivers, or a PQ-protected
+#: variant once Phase-2 of ``docs/crypto.md`` lands), this constant
+#: gains a sibling and receivers reject anything they don't know.
+#:
+#: The AES-256 key itself is already PQ-symmetric-resilient — Grover's
+#: algorithm halves effective security to 128 bits, which is still
+#: above the 112-bit floor. PQ migration in this codebase is therefore
+#: about the *delivery channel* (the §D1b envelope around this
+#: payload, see ``docs/crypto.md`` Phase-2), not the AEAD primitive.
+KEY_SUITE_AESGCM_256: str = "aesgcm-256"
+SUPPORTED_KEY_SUITES: frozenset[str] = frozenset({KEY_SUITE_AESGCM_256})
+
+
+class UnsupportedKeySuite(ValueError):
+    """Raised when an inbound space-content-key payload advertises a
+    suite this build doesn't know. Receivers MUST reject rather than
+    fall back to a default — otherwise a downgrade attack becomes
+    possible once a Phase-2 hybrid scheme lands."""
+
+
 class SpaceContentEncryption:
     """Encrypt/decrypt space content under per-epoch AES-256-GCM keys.
 
