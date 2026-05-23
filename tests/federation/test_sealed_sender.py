@@ -7,7 +7,9 @@ import os
 import pytest
 
 from socialhome.federation.sealed_sender import (
+    AEAD_SUITE_AESGCM_256,
     SealedEnvelope,
+    UnsupportedAeadSuite,
     seal_envelope,
     unseal_envelope,
 )
@@ -221,3 +223,57 @@ def test_unseal_rejects_malformed_wire():
     )
     with pytest.raises(ValueError):
         unseal_envelope(bad, space_content_key=os.urandom(32))
+
+
+# ─── PQ-forward suite tag (#117 follow-up) ─────────────────────────────
+
+
+def test_to_dict_includes_aead_suite():
+    """Senders MUST ship the suite identifier so receivers can pick the
+    primitive instead of guessing — Phase-2 forward-compat (see
+    CLAUDE.md "Crypto wire shapes carry a `*_suite` tag")."""
+    key = os.urandom(32)
+    env = seal_envelope(
+        space_id="sp-1",
+        epoch=0,
+        sender_instance_id="x",
+        payload_json="{}",
+        space_content_key=key,
+    )
+    d = env.to_dict()
+    assert d["aead_suite"] == AEAD_SUITE_AESGCM_256
+
+
+def test_from_dict_rejects_unknown_aead_suite():
+    """Receivers MUST reject unknown suites — silent fallback would
+    open a downgrade attack once a Phase-2 hybrid lands."""
+    key = os.urandom(32)
+    env = seal_envelope(
+        space_id="sp-1",
+        epoch=0,
+        sender_instance_id="x",
+        payload_json="{}",
+        space_content_key=key,
+    )
+    d = env.to_dict()
+    d["aead_suite"] = "future-pq-suite-not-yet-supported"
+    with pytest.raises(UnsupportedAeadSuite):
+        SealedEnvelope.from_dict(d)
+
+
+def test_from_dict_accepts_missing_aead_suite_as_default():
+    """First-revision senders that don't ship the field default to
+    AES-256-GCM. Once every deployment ships it, the default-on-
+    missing branch becomes the migration tripwire."""
+    key = os.urandom(32)
+    env = seal_envelope(
+        space_id="sp-1",
+        epoch=0,
+        sender_instance_id="x",
+        payload_json="{}",
+        space_content_key=key,
+    )
+    d = env.to_dict()
+    del d["aead_suite"]
+    reconstructed = SealedEnvelope.from_dict(d)
+    assert reconstructed.aead_suite == AEAD_SUITE_AESGCM_256

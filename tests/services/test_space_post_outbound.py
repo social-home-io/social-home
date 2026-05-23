@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from socialhome.domain.events import SpacePostCreated
+from socialhome.domain.events import (
+    PostDeleted,
+    PostEdited,
+    SpacePostCreated,
+)
 from socialhome.domain.federation import FederationEventType
 from socialhome.domain.post import Post, PostType
 from socialhome.infrastructure.event_bus import EventBus
@@ -121,6 +125,136 @@ async def test_broadcast_failure_logged_but_swallowed():
     # Should not raise.
     await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
     federation.broadcast_to_space_members.assert_awaited_once()
+
+
+# ─── PostEdited / PostDeleted federation (PR #431) ─────────────────────
+
+
+async def test_post_edited_in_space_broadcasts_update():
+    """When a local user edits a space post, the bus event must
+    federate via ``SPACE_POST_UPDATED`` so remote members see the new
+    body. PR #431 plumbed ``space_id`` onto :class:`PostEdited` for
+    exactly this — the outbound bridge gates on it."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    post = Post(
+        id="post-edit-1",
+        author="uid-alice",
+        type=PostType.TEXT,
+        content="updated body",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(PostEdited(post=post, space_id="sp-1"))
+    federation.broadcast_to_space_members.assert_awaited_once()
+    call = federation.broadcast_to_space_members.call_args
+    assert call.args[0] == "sp-1"
+    assert call.args[1] is FederationEventType.SPACE_POST_UPDATED
+    payload = call.args[2]
+    assert payload["post_id"] == "post-edit-1"
+    assert payload["content"] == "updated body"
+
+
+async def test_post_edited_household_only_skipped():
+    """``PostEdited`` with no space_id is a household-feed edit — must
+    not federate as a space update."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    post = Post(
+        id="p",
+        author="u",
+        type=PostType.TEXT,
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(PostEdited(post=post))
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
+async def test_post_edited_inbound_replay_does_not_loop():
+    """Symmetric to the create case — an inbound SPACE_POST_UPDATED
+    replays as ``PostEdited`` with ``origin_instance_id`` set; the
+    outbound MUST NOT re-broadcast."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    post = Post(
+        id="p",
+        author="u",
+        type=PostType.TEXT,
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(
+        PostEdited(post=post, space_id="sp-1", origin_instance_id="peer-x"),
+    )
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
+async def test_post_edited_broadcast_failure_swallowed():
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock(
+        side_effect=RuntimeError("transport down"),
+    )
+    SpacePostOutbound(bus=bus, federation_service=federation)
+    post = Post(
+        id="p",
+        author="u",
+        type=PostType.TEXT,
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(PostEdited(post=post, space_id="sp-1"))
+
+
+async def test_post_deleted_in_space_broadcasts_delete():
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    await bus.publish(PostDeleted(post_id="post-del-1", space_id="sp-1"))
+    federation.broadcast_to_space_members.assert_awaited_once()
+    call = federation.broadcast_to_space_members.call_args
+    assert call.args[1] is FederationEventType.SPACE_POST_DELETED
+    payload = call.args[2]
+    assert payload["post_id"] == "post-del-1"
+    assert payload["space_id"] == "sp-1"
+
+
+async def test_post_deleted_household_only_skipped():
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+    await bus.publish(PostDeleted(post_id="p"))
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
+async def test_post_deleted_inbound_replay_does_not_loop():
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+    await bus.publish(
+        PostDeleted(post_id="p", space_id="sp-1", origin_instance_id="peer-x"),
+    )
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
+async def test_post_deleted_broadcast_failure_swallowed():
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock(
+        side_effect=RuntimeError("transport down"),
+    )
+    SpacePostOutbound(bus=bus, federation_service=federation)
+    await bus.publish(PostDeleted(post_id="p", space_id="sp-1"))
 
 
 @pytest.mark.parametrize(
