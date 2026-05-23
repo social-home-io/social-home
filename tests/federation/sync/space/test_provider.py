@@ -129,8 +129,15 @@ async def test_stream_initial_enqueues_catchup_media(encoder):
                 _Post(id="post-2", media_url="api/media/v.webm"),
             ]
 
+    @dataclass
+    class _GalleryAlbum:
+        id: str
+
     class _GalleryRepo:
-        async def list_items_for_space(self, space_id):
+        async def list_albums(self, space_id, *, limit=200):
+            return [_GalleryAlbum(id="album-1")]
+
+        async def list_items(self, album_id, *, limit=500):
             return [
                 _GalleryItem(
                     id="g-1",

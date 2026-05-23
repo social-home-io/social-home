@@ -154,32 +154,23 @@ class SpaceSyncService:
                         "sync-catchup-media: enqueue failed for post=%s",
                         post.id,
                     )
-        # Gallery items
+        # Gallery items — enumerate every album in the space, then every
+        # item per album. The repo API is per-album (no list_items_for_space
+        # shortcut); we walk both levels so a space with multiple albums
+        # catches up cleanly.
         if self._gallery_repo is not None:
+            items: list = []
             try:
-                items = await self._gallery_repo.list_items_for_space(
+                albums = await self._gallery_repo.list_albums(
                     space_id,
+                    limit=200,
                 )
-            except AttributeError:
-                # Older repo without the helper — best-effort fallback
-                # via list_albums + list_items_for_album.
-                items = []
-                try:
-                    albums = await self._gallery_repo.list_albums(
-                        space_id=space_id,
-                        viewer_user_id="",
+                for album in albums:
+                    page = await self._gallery_repo.list_items(
+                        album.id,
+                        limit=500,
                     )
-                    for album in albums:
-                        page = await self._gallery_repo.list_items_for_album(
-                            album.id,
-                            limit=1000,
-                        )
-                        items.extend(page)
-                except Exception:  # pragma: no cover — defensive
-                    log.exception(
-                        "sync-catchup-media: list gallery items failed for space=%s",
-                        space_id,
-                    )
+                    items.extend(page)
             except Exception:  # pragma: no cover — defensive
                 log.exception(
                     "sync-catchup-media: list gallery items failed for space=%s",
