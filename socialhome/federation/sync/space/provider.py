@@ -16,6 +16,7 @@ can cancel mid-stream if the peer gives up.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from typing import Any, TYPE_CHECKING
 
 from .exporter import ChunkBuilder, RESOURCE_ORDER, serialise_chunk
@@ -117,10 +118,15 @@ class SpaceSyncService:
     ) -> None:
         """Enqueue media bytes for every post + gallery item in ``space_id``.
 
-        Best-effort — if any lookup fails, the metadata sync already
-        succeeded; the receiver's images will just render broken until
-        the next real-time upload trigger or a re-sync. Same dedup
-        semantics as the realtime enqueue: the ``(blob_id,
+        Repo reads catch :class:`sqlite3.Error` only — a renamed /
+        missing repo method raises ``AttributeError`` (a logic bug),
+        which propagates up to ``stream_initial``'s outer handler so
+        it surfaces in logs as a single visible failure rather than
+        being silently swallowed per-call. The original wide
+        ``except Exception`` here masked exactly this kind of bug
+        (see #443 — ``list_items_for_space`` never existed; tests
+        mocked whatever was called so the gap never showed up). Same
+        dedup semantics as the realtime enqueue: the ``(blob_id,
         target_instance_id)`` primary key drops duplicates.
         """
         if self._media_sync is None or target_instance_id == "":
@@ -132,7 +138,7 @@ class SpaceSyncService:
                     space_id,
                     limit=1000,
                 )
-            except Exception:  # pragma: no cover — defensive
+            except sqlite3.Error:
                 log.exception(
                     "sync-catchup-media: list posts failed for space=%s",
                     space_id,
@@ -149,7 +155,10 @@ class SpaceSyncService:
                         target_instance_ids=[target_instance_id],
                         media_urls=urls,
                     )
-                except Exception:  # pragma: no cover — defensive
+                except sqlite3.Error:
+                    # One outbox-insert hitting a transient SQLite
+                    # error (lock, disk full) shouldn't kill the whole
+                    # loop — the next sync will re-enqueue.
                     log.exception(
                         "sync-catchup-media: enqueue failed for post=%s",
                         post.id,
@@ -171,7 +180,7 @@ class SpaceSyncService:
                         limit=500,
                     )
                     items.extend(page)
-            except Exception:  # pragma: no cover — defensive
+            except sqlite3.Error:
                 log.exception(
                     "sync-catchup-media: list gallery items failed for space=%s",
                     space_id,
@@ -192,7 +201,7 @@ class SpaceSyncService:
                         target_instance_ids=[target_instance_id],
                         media_urls=gallery_urls,
                     )
-                except Exception:  # pragma: no cover — defensive
+                except sqlite3.Error:
                     log.exception(
                         "sync-catchup-media: enqueue failed for gallery item=%s",
                         item.id,

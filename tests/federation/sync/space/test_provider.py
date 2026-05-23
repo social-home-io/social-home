@@ -190,3 +190,153 @@ async def test_stream_initial_no_media_sync_wired_is_noop(encoder):
     # Sentinel still landed.
     parsed = orjson.loads(session.rtc.sent[-1])
     assert parsed["resource"] == SENTINEL_RESOURCE
+
+
+# ─── Integration: real Sqlite repos (#PR444) ──────────────────────────
+#
+# Mock-shaped unit tests caught the wire shape but missed that
+# ``list_items_for_space`` / ``list_items_for_album`` were never
+# actual gallery-repo methods (the test fakes happily defined them).
+# This integration test wires ``SpaceSyncService`` to the REAL
+# Sqlite repos so a future API rename surfaces as a test failure
+# rather than a silent runtime skip.
+
+
+async def test_stream_initial_catchup_real_repos(tmp_dir, encoder):
+    """Catch-up walks the real Sqlite post + gallery repos and enqueues
+    bytes for every referenced media URL."""
+    from datetime import UTC, datetime
+    from unittest.mock import AsyncMock
+
+    from socialhome.db.database import AsyncDatabase
+    from socialhome.domain.gallery import GalleryAlbum, GalleryItem
+    from socialhome.domain.post import Post, PostType
+    from socialhome.repositories.gallery_repo import SqliteGalleryRepo
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+
+    db = AsyncDatabase(tmp_dir / "catchup.db", batch_timeout_ms=10)
+    await db.startup()
+    try:
+        # Seed a user + space so FKs on gallery_items.uploaded_by AND
+        # space_posts.space_id resolve.
+        await db.enqueue(
+            "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
+            ("host", "u-host", "Host"),
+        )
+        await db.enqueue(
+            "INSERT INTO spaces(id, name, owner_instance_id, "
+            "owner_username, identity_public_key) VALUES(?,?,?,?,?)",
+            ("sp-int", "Int Space", "inst-host", "host", "00" * 32),
+        )
+        post_repo = SqliteSpacePostRepo(db)
+        gallery_repo = SqliteGalleryRepo(db)
+
+        # Post with image_urls — what a feed photo upload produces.
+        p1 = Post(
+            id="p-int-1",
+            author="u-host",
+            type=PostType.IMAGE,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            image_urls=("api/media/integration.webp",),
+        )
+        await post_repo.save("sp-int", p1)
+
+        # Gallery album + one item. ``owner_user_id`` is NULL — the
+        # users FK would need a real row otherwise and this test only
+        # exercises the sync path, not user provisioning.
+        album = GalleryAlbum(
+            id="alb-int",
+            space_id="sp-int",
+            owner_user_id=None,
+            name="Integration",
+        )
+        await gallery_repo.create_album(album)
+        item = GalleryItem(
+            id="g-int-1",
+            album_id="alb-int",
+            uploaded_by="u-host",
+            item_type="photo",
+            url="api/media/integration-full.webp",
+            thumbnail_url="api/media/integration-thumb.webp",
+            width=32,
+            height=32,
+        )
+        await gallery_repo.create_item(item)
+
+        media_sync = AsyncMock()
+        media_sync.enqueue_for_blob = AsyncMock()
+        builder = ChunkBuilder(encoder=encoder, crypto=_FakeCrypto())
+        svc = SpaceSyncService(
+            builder=builder,
+            exporters={},
+            sig_suite="ed25519",
+            media_sync=media_sync,
+            space_post_repo=post_repo,
+            gallery_repo=gallery_repo,
+        )
+        session = _FakeSession(space_id="sp-int", requester="peer-int")
+        await svc.stream_initial(session)
+
+        # Post enqueue: image_urls flow through with id as correlation_id.
+        calls = media_sync.enqueue_for_blob.call_args_list
+        by_correlation = {c.kwargs["correlation_id"]: c.kwargs for c in calls}
+        assert "p-int-1" in by_correlation, (
+            f"post catch-up didn't fire — calls: {calls}"
+        )
+        assert by_correlation["p-int-1"]["media_urls"] == [
+            "api/media/integration.webp",
+        ]
+        # Gallery enqueue: thumb + full both shipped under item id.
+        assert "g-int-1" in by_correlation, (
+            f"gallery catch-up didn't fire (the bug #443 fixed) — calls: {calls}"
+        )
+        assert set(by_correlation["g-int-1"]["media_urls"]) == {
+            "api/media/integration-thumb.webp",
+            "api/media/integration-full.webp",
+        }
+        # All targeted at the requester only.
+        for c in calls:
+            assert c.kwargs["target_instance_ids"] == ["peer-int"]
+    finally:
+        await db.shutdown()
+
+
+async def test_stream_initial_catchup_logic_bug_propagates(encoder, caplog):
+    """A renamed / missing repo method is a programming bug, not an
+    operational one. The narrowed ``except sqlite3.Error`` in the
+    catch-up path lets ``AttributeError`` propagate to ``stream_initial``'s
+    outer handler — the failure surfaces as a single visible log entry
+    instead of being silently swallowed per-call (which is how the
+    #443 bug landed in main).
+    """
+    import logging
+    from unittest.mock import AsyncMock
+
+    class _BrokenPostRepo:
+        # No ``list_feed`` — simulates the API drift the #443 bug exhibited.
+        pass
+
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_blob = AsyncMock()
+    builder = ChunkBuilder(encoder=encoder, crypto=_FakeCrypto())
+    svc = SpaceSyncService(
+        builder=builder,
+        exporters={},
+        sig_suite="ed25519",
+        media_sync=media_sync,
+        space_post_repo=_BrokenPostRepo(),
+    )
+    session = _FakeSession(requester="peer-x")
+    with caplog.at_level(logging.ERROR):
+        # The outer ``except Exception`` in stream_initial still logs +
+        # swallows so a buggy catch-up never tears down the whole sync,
+        # but the message comes from the OUTER handler (single visible
+        # entry per session) rather than the per-call masks that hid
+        # the bug in #443.
+        await svc.stream_initial(session)
+    assert any("stream_initial failed" in r.getMessage() for r in caplog.records), (
+        f"outer handler didn't log the propagated AttributeError: {caplog.records}"
+    )
+    # And — critically — no enqueue happened, because the bug short-
+    # circuited before any successful walk.
+    assert media_sync.enqueue_for_blob.await_count == 0
