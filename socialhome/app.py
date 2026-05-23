@@ -184,7 +184,6 @@ from .services.space_calendar_reminder_scheduler import (
     SpaceCalendarReminderScheduler,
 )
 from .services.schedule_federation_outbound import ScheduleFederationOutbound
-from .services.comment_federation_outbound import CommentFederationOutbound
 from .services.corner_service import CornerService
 from .federation.peer_directory_handler import PeerDirectoryHandler
 from .federation.invite_token_redeem import SpaceInviteTokenRedeemCoordinator
@@ -852,13 +851,6 @@ def _wire_federation_stack(
         space_repo=space_repo,
     )
     poll_federation_outbound.wire()
-
-    comment_federation_outbound = CommentFederationOutbound(
-        bus=bus,
-        federation_service=federation_service,
-        space_repo=space_repo,
-    )
-    comment_federation_outbound.wire()
 
     profile_federation_outbound = ProfileFederationOutbound(
         bus=bus,
