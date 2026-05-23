@@ -207,6 +207,7 @@ from .services.highlight_federation_outbound import HighlightFederationOutbound
 from .services.space_location_outbound import SpaceLocationOutbound
 from .services.space_zone_outbound import SpaceZoneOutbound
 from .services.space_zone_service import SpaceZoneService
+from .services.page_federation_outbound import PageFederationOutbound
 from .services.task_federation_outbound import TaskFederationOutbound
 from .services.federation_inbound import (
     PairingInboundHandlers,
@@ -816,6 +817,15 @@ def _wire_federation_stack(
         space_repo=space_repo,
     )
     task_federation_outbound.wire()
+
+    # F3 — broadcasts SPACE_PAGE_* mutations to member households so
+    # wiki edits federate in realtime (matching the inbound side already
+    # wired in federation_inbound.space_content).
+    page_federation_outbound = PageFederationOutbound(
+        bus=bus,
+        federation_service=federation_service,
+    )
+    page_federation_outbound.wire()
 
     # §23.8.6 — fan a household PresenceUpdated out to opted-in spaces
     # as a GPS-only WS frame + sealed federation event. ``zone_name`` is

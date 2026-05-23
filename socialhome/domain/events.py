@@ -1293,6 +1293,7 @@ class PageUpdated(DomainEvent):
 @dataclass(slots=True, frozen=True)
 class PageDeleted(DomainEvent):
     page_id: str
+    space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 
