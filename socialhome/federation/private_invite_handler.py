@@ -30,6 +30,7 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from ..repositories.space_remote_location_repo import SpaceRemoteLocation
 from ..services.space_service import (
     apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
@@ -58,6 +59,7 @@ class PrivateSpaceInviteHandler:
         "_cover_repo",
         "_space_crypto",
         "_space_service",
+        "_remote_locations",
     )
 
     def __init__(
@@ -69,6 +71,7 @@ class PrivateSpaceInviteHandler:
         cover_repo: "AbstractSpaceCoverRepo | None" = None,
         space_crypto_service=None,
         space_service=None,
+        remote_location_repo=None,
     ) -> None:
         self._bus = bus
         self._space_repo = space_repo
@@ -87,6 +90,11 @@ class PrivateSpaceInviteHandler:
         #: path (rotation, role-check, broadcast). Tests that don't
         #: exercise admin actions can omit it.
         self._space_service = space_service
+        #: Optional — when wired, inbound ``SPACE_LOCATION_UPDATED``
+        #: events from member households are persisted here so the
+        #: space map endpoint surfaces remote members' pins alongside
+        #: local presence.
+        self._remote_locations = remote_location_repo
 
     def attach_space_service(self, space_service) -> None:
         """Wire :class:`SpaceService` post-construction (#114 phase 2).
@@ -127,6 +135,10 @@ class PrivateSpaceInviteHandler:
         registry.register(
             FederationEventType.SPACE_REMOTE_ADMIN_KICK,
             self._on_remote_admin_kick,
+        )
+        registry.register(
+            FederationEventType.SPACE_LOCATION_UPDATED,
+            self._on_space_location_updated,
         )
 
     # ── Receive ─────────────────────────────────────────────────────────
@@ -313,6 +325,16 @@ class PrivateSpaceInviteHandler:
             event.from_instance,
             user_id,
         )
+        # Drop any stored location pin too — without this, the kicked
+        # member's last pin stays on the map until next reload OR a
+        # future SPACE_LOCATION_UPDATED arrives (which the kick should
+        # have already prevented at the sender side).
+        if self._remote_locations is not None:
+            await self._remote_locations.delete_for_member(
+                space_id,
+                event.from_instance,
+                user_id,
+            )
         # §D1b — clean up the joiner-side stub. If we have a local
         # ``space_members`` row for the kicked user, drop it. If the
         # stub's only member was that user, mark the stub dissolved
@@ -392,6 +414,83 @@ class PrivateSpaceInviteHandler:
             user_id,
             role,
         )
+
+    async def _on_space_location_updated(
+        self,
+        event: "FederationEvent",
+    ) -> None:
+        """Remote member's pin for the space map.
+
+        The remote household's :class:`SpaceLocationOutbound` already
+        applied the privacy-tier (gps vs zone_only) on the sender
+        side; we just persist what we're told. The
+        :class:`SpacePresenceView` route merges this with local
+        presence so the map renders both. Without this handler the
+        envelope arrived, the dispatch registry had no handler, and
+        the pin silently dropped — Pascal's symptom of "space map
+        only says 1 user, that's me".
+
+        ``space_id`` must reference an existing space row (FK on
+        :data:`space_remote_member_locations`); we skip silently if
+        the space is unknown locally (a remote household racing the
+        invite cleanup).
+        """
+        if self._remote_locations is None:
+            log.debug(
+                "SPACE_LOCATION_UPDATED: no remote_location_repo wired",
+            )
+            return
+        p = event.payload
+        space_id = str(p.get("space_id") or "") or getattr(
+            event,
+            "space_id",
+            "",
+        )
+        user_id = str(p.get("user_id") or "")
+        mode = str(p.get("mode") or "")
+        if not space_id or not user_id or mode not in ("gps", "zone_only"):
+            log.debug(
+                "SPACE_LOCATION_UPDATED from %s missing required fields",
+                event.from_instance,
+            )
+            return
+        # Only persist if the sender is in fact a remote member of
+        # this space — drop spoofed events from non-members.
+        match = await self._remote_members.get(
+            space_id,
+            event.from_instance,
+            user_id,
+        )
+        if match is None:
+            log.debug(
+                "SPACE_LOCATION_UPDATED: %s@%s is not a remote member of %s",
+                user_id,
+                event.from_instance,
+                space_id,
+            )
+            return
+        try:
+            await self._remote_locations.upsert(
+                SpaceRemoteLocation(
+                    space_id=space_id,
+                    instance_id=event.from_instance,
+                    user_id=user_id,
+                    mode=mode,
+                    latitude=p.get("lat"),
+                    longitude=p.get("lon"),
+                    accuracy_m=p.get("accuracy_m"),
+                    zone_id=p.get("zone_id"),
+                    zone_name=p.get("zone_name"),
+                    updated_at=p.get("updated_at"),
+                )
+            )
+        except Exception:
+            log.exception(
+                "SPACE_LOCATION_UPDATED: upsert failed for %s@%s in %s",
+                user_id,
+                event.from_instance,
+                space_id,
+            )
 
     async def _on_remote_admin_kick(self, event: "FederationEvent") -> None:
         """Cross-household admin kick command (#114 phase 2).

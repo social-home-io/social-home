@@ -274,3 +274,128 @@ async def test_zone_only_mode_skips_members_outside_every_zone(client):
     body = await r.json()
     assert body["location_mode"] == "zone_only"
     assert body["entries"] == []
+
+
+# ─── Remote member pins (§D1b cross-household location sharing) ────────
+
+
+async def _seed_remote_member(
+    client,
+    space_id,
+    *,
+    instance_id,
+    user_id,
+    display_name=None,
+):
+    """Seat a §D1b remote member + a remote_instance row to satisfy
+    FK constraints on remote_users (used by display-name freshness)."""
+    await client._db.enqueue(
+        "INSERT OR IGNORE INTO remote_instances"
+        "(id, display_name, remote_identity_pk, key_self_to_remote,"
+        " key_remote_to_self, remote_inbox_url, local_inbox_id, status,"
+        " source) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            instance_id,
+            "Peer",
+            "00" * 32,
+            "k1",
+            "k2",
+            "https://peer/wh",
+            f"wh-{instance_id}",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await client._db.enqueue(
+        "INSERT INTO space_remote_members"
+        "(space_id, instance_id, user_id, display_name)"
+        " VALUES(?,?,?,?)",
+        (space_id, instance_id, user_id, display_name),
+    )
+
+
+async def _seed_remote_pin(
+    client,
+    space_id,
+    *,
+    instance_id,
+    user_id,
+    lat,
+    lon,
+):
+    """Insert a row as if SPACE_LOCATION_UPDATED had landed."""
+    await client._db.enqueue(
+        "INSERT INTO space_remote_member_locations"
+        "(space_id, instance_id, user_id, mode, latitude, longitude,"
+        " accuracy_m) VALUES(?,?,?,?,?,?,?)",
+        (space_id, instance_id, user_id, "gps", lat, lon, 12.0),
+    )
+
+
+async def test_presence_includes_remote_member_pins(client):
+    """Cross-household location sharing: a remote member who opted
+    in on their own household and federated a SPACE_LOCATION_UPDATED
+    must surface on the space map. Pascal's repro: "I can't see her on
+    the space map and the map only says 1 user sharing location"."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    await _set_member_opt_in(client, space_id, client._uid, enabled=True)
+    await _seed_presence(
+        client,
+        username="admin",
+        user_id=client._uid,
+        lat=52.5200,
+        lon=13.4050,
+    )
+    await _seed_remote_member(
+        client,
+        space_id,
+        instance_id="peer-jacqueline",
+        user_id="uid-jacqueline",
+        display_name="Jacqueline",
+    )
+    await _seed_remote_pin(
+        client,
+        space_id,
+        instance_id="peer-jacqueline",
+        user_id="uid-jacqueline",
+        lat=48.1351,
+        lon=11.5820,
+    )
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    assert r.status == 200
+    assert body["location_mode"] == "gps"
+    assert len(body["entries"]) == 2
+    jacqueline = next(e for e in body["entries"] if e["user_id"] == "uid-jacqueline")
+    assert jacqueline["display_name"] == "Jacqueline"
+    assert jacqueline["latitude"] == 48.1351
+    assert jacqueline["longitude"] == 11.5820
+    assert jacqueline["instance_id"] == "peer-jacqueline"
+
+
+async def test_presence_skips_remote_pin_without_member_row(client):
+    """If the SPACE_REMOTE_MEMBER_REMOVED cleanup raced ahead but
+    a stale location row survived, we must NOT render a ghost pin."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    # No membership row — only a stranded location row.
+    await _seed_remote_pin(
+        client,
+        space_id,
+        instance_id="peer-stale",
+        user_id="uid-ghost",
+        lat=52.5,
+        lon=13.4,
+    )
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    # Admin is opted out by default — no local entries. Stale remote
+    # pin is dropped.
+    assert body["entries"] == []

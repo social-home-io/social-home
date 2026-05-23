@@ -464,6 +464,93 @@ async def test_attach_space_service_wires_post_construction():
     assert h._space_service is sentinel
 
 
+async def test_space_location_updated_upserts_when_sender_is_a_member():
+    """Inbound SPACE_LOCATION_UPDATED from a confirmed remote member
+    persists into ``space_remote_member_locations`` so the space map
+    surfaces the pin."""
+    from socialhome.repositories.space_remote_member_repo import SpaceRemoteMember
+
+    locations = AsyncMock()
+    locations.upsert = AsyncMock()
+    remote_members = AsyncMock()
+    remote_members.get = AsyncMock(
+        return_value=SpaceRemoteMember(
+            space_id="sp-map",
+            instance_id="peer-jq",
+            user_id="uid-jacqueline",
+        ),
+    )
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=remote_members,
+        remote_location_repo=locations,
+    )
+    ev = _event(
+        "SPACE_LOCATION_UPDATED",
+        {
+            "space_id": "sp-map",
+            "user_id": "uid-jacqueline",
+            "mode": "gps",
+            "lat": 48.1351,
+            "lon": 11.5820,
+            "accuracy_m": 12.0,
+        },
+        from_instance="peer-jq",
+    )
+    await h._on_space_location_updated(ev)
+    locations.upsert.assert_awaited_once()
+    loc = locations.upsert.call_args.args[0]
+    assert loc.space_id == "sp-map"
+    assert loc.instance_id == "peer-jq"
+    assert loc.user_id == "uid-jacqueline"
+    assert loc.mode == "gps"
+    assert loc.latitude == 48.1351
+    assert loc.longitude == 11.5820
+
+
+async def test_space_location_updated_drops_when_sender_not_a_member():
+    """A spoofed SPACE_LOCATION_UPDATED from a household whose user
+    isn't in ``space_remote_members`` MUST NOT persist."""
+    locations = AsyncMock()
+    locations.upsert = AsyncMock()
+    remote_members = AsyncMock()
+    remote_members.get = AsyncMock(return_value=None)  # not a member
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=remote_members,
+        remote_location_repo=locations,
+    )
+    ev = _event(
+        "SPACE_LOCATION_UPDATED",
+        {
+            "space_id": "sp",
+            "user_id": "uid-stranger",
+            "mode": "gps",
+            "lat": 0,
+            "lon": 0,
+        },
+        from_instance="peer-rogue",
+    )
+    await h._on_space_location_updated(ev)
+    locations.upsert.assert_not_awaited()
+
+
+async def test_space_location_updated_skips_invalid_mode():
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        remote_location_repo=AsyncMock(),
+    )
+    ev = _event(
+        "SPACE_LOCATION_UPDATED",
+        {"space_id": "sp", "user_id": "u", "mode": "garbage"},
+    )
+    await h._on_space_location_updated(ev)
+
+
 async def test_role_changed_updates_local_and_remote_member_rows():
     """Receiver writes the new role to both ``space_members`` (if a
     local row exists — the affected user's own household) AND
@@ -638,4 +725,5 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
         FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
         FederationEventType.SPACE_REMOTE_ADMIN_KICK,
+        FederationEventType.SPACE_LOCATION_UPDATED,
     }

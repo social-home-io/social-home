@@ -21,6 +21,7 @@ from ..app_keys import (
     profile_picture_repo_key,
     space_bot_repo_key,
     space_cover_repo_key,
+    space_remote_location_repo_key,
     space_remote_member_repo_key,
     space_repo_key,
     space_service_key,
@@ -320,7 +321,14 @@ def _member_to_dict(
     }
 
 
-def _remote_member_to_dict(rm, *, display_name_override: str | None = None) -> dict:
+def _remote_member_to_dict(
+    rm,
+    *,
+    display_name_override: str | None = None,
+    is_online: bool = False,
+    is_idle: bool = False,
+    last_seen_at: str | None = None,
+) -> dict:
     """Serialize a :class:`SpaceRemoteMember` (§D1b) into the same row
     shape ``SpaceMembersView`` returns for local members, so the SPA's
     ``SpaceMemberList`` can render both in one list without branching.
@@ -358,9 +366,9 @@ def _remote_member_to_dict(rm, *, display_name_override: str | None = None) -> d
         "personal_alias": None,
         "picture_hash": None,
         "picture_url": None,
-        "is_online": False,
-        "is_idle": False,
-        "last_seen_at": None,
+        "is_online": is_online,
+        "is_idle": is_idle,
+        "last_seen_at": last_seen_at,
         "location_share_enabled": False,
         # New field — the SPA branches on this to render the
         # "from another household" badge + suppress local-only
@@ -457,13 +465,16 @@ class SpaceMembersView(BaseView):
             )
             for m in members
         ]
-        # Per-row freshness for the remote roster — if the household
-        # paired with the remote member's household has received a
-        # ``USER_UPDATED`` since the §D1b accept (the user renamed
-        # themselves on their own side), prefer that name over the
-        # invite-time snapshot in ``space_remote_members.display_name``.
-        # Without this, a user's rename only propagates through a
-        # kick + re-invite cycle.
+        # Per-row freshness for the remote roster:
+        # - display_name comes from ``remote_users`` (kept fresh by
+        #   USER_UPDATED) with the §D1b accept-time snapshot as
+        #   fallback.
+        # - is_online / is_idle / last_seen come from the SAME
+        #   ``online_status_service`` set the local-member loop uses:
+        #   :meth:`OnlineStatusService.online_user_ids` already
+        #   merges local sessions AND the ``_remote`` cache fed by
+        #   inbound USER_ONLINE / USER_OFFLINE federation events, so
+        #   the lookup just works without an extra repo call.
         remote_rows = []
         for rm in remote_members:
             remote_user = await user_repo.get_remote(rm.user_id)
@@ -472,8 +483,20 @@ class SpaceMembersView(BaseView):
                 if remote_user is not None and remote_user.display_name
                 else None
             )
+            is_online = rm.user_id in online_ids
+            is_idle = rm.user_id in idle_ids
+            last_seen_at: str | None = None
+            if online_svc is not None:
+                ls = online_svc.last_seen(rm.user_id)
+                last_seen_at = ls.isoformat() if ls is not None else None
             remote_rows.append(
-                _remote_member_to_dict(rm, display_name_override=override),
+                _remote_member_to_dict(
+                    rm,
+                    display_name_override=override,
+                    is_online=is_online,
+                    is_idle=is_idle,
+                    last_seen_at=last_seen_at,
+                ),
             )
         return web.json_response(local_rows + remote_rows)
 
@@ -1278,6 +1301,71 @@ def _bot_view(
     }
 
 
+async def _remote_member_pin_entries(
+    request: web.Request,
+    space_id: str,
+    *,
+    mode_filter: str = "gps",
+) -> list[dict]:
+    """Return location entries for remote members of a space.
+
+    Reads the ``space_remote_member_locations`` table populated by
+    :class:`PrivateSpaceInviteHandler._on_space_location_updated` and
+    enriches each row with the member's display name from
+    ``space_remote_members`` (with a fallback to ``remote_users`` if a
+    rename arrived since the §D1b accept). ``mode_filter`` picks which
+    rows to surface — the host's space privacy tier (gps / zone_only)
+    is the authority; rows whose stored mode disagrees are dropped so
+    the response matches the host's chosen tier.
+    """
+    repo = request.app.get(space_remote_location_repo_key)
+    member_repo = request.app.get(space_remote_member_repo_key)
+    if repo is None or member_repo is None:
+        return []
+    locs = await repo.list_for_space(space_id)
+    if not locs:
+        return []
+    members = {
+        (m.instance_id, m.user_id): m
+        for m in await member_repo.list_for_space(space_id)
+    }
+    user_repo = request.app[user_repo_key]
+    out: list[dict] = []
+    for loc in locs:
+        if loc.mode != mode_filter:
+            continue
+        rm = members.get((loc.instance_id, loc.user_id))
+        if rm is None:
+            # Location row outlived the member row — skip it. A
+            # SPACE_REMOTE_MEMBER_REMOVED should have cascaded the
+            # delete; this is defence-in-depth.
+            continue
+        # Display name: prefer the fresh ``users``/``remote_users`` row
+        # over the §D1b accept-time snapshot. Same rule the members
+        # endpoint uses.
+        display_name = rm.display_name
+        remote_user = await user_repo.get_remote(loc.user_id)
+        if remote_user is not None and remote_user.display_name:
+            display_name = remote_user.display_name
+        entry: dict = {
+            "user_id": loc.user_id,
+            "username": None,
+            "display_name": display_name,
+            "state": "home",
+            "picture_url": None,
+            "instance_id": loc.instance_id,
+        }
+        if mode_filter == "gps":
+            entry["latitude"] = loc.latitude
+            entry["longitude"] = loc.longitude
+            entry["gps_accuracy_m"] = loc.accuracy_m
+        else:  # zone_only
+            entry["zone_id"] = loc.zone_id
+            entry["zone_name"] = loc.zone_name
+        out.append(entry)
+    return out
+
+
 class SpacePresenceView(BaseView):
     """``GET /api/spaces/{id}/presence`` — §23.80 space-scoped presence.
 
@@ -1350,6 +1438,17 @@ class SpacePresenceView(BaseView):
                         "picture_url": p.picture_url,
                     },
                 )
+            # Remote member pins are added as ``zone_only`` entries
+            # only — the sender already applied the zone-only filter
+            # before federating, so we trust the ``mode`` field on
+            # the stored row.
+            response_entries.extend(
+                await _remote_member_pin_entries(
+                    self.request,
+                    space_id,
+                    mode_filter="zone_only",
+                )
+            )
             return web.json_response(
                 {
                     "feature_enabled": True,
@@ -1359,23 +1458,25 @@ class SpacePresenceView(BaseView):
             )
 
         # gps mode (default)
+        local_entries = [
+            {
+                "user_id": p.user_id,
+                "username": p.username,
+                "display_name": p.display_name,
+                "state": p.state,
+                "latitude": p.latitude,
+                "longitude": p.longitude,
+                "gps_accuracy_m": p.gps_accuracy_m,
+                "picture_url": p.picture_url,
+            }
+            for p in entries
+        ]
+        remote_entries = await _remote_member_pin_entries(self.request, space_id)
         return web.json_response(
             {
                 "feature_enabled": True,
                 "location_mode": "gps",
-                "entries": [
-                    {
-                        "user_id": p.user_id,
-                        "username": p.username,
-                        "display_name": p.display_name,
-                        "state": p.state,
-                        "latitude": p.latitude,
-                        "longitude": p.longitude,
-                        "gps_accuracy_m": p.gps_accuracy_m,
-                        "picture_url": p.picture_url,
-                    }
-                    for p in entries
-                ],
+                "entries": local_entries + remote_entries,
             }
         )
 
