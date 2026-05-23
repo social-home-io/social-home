@@ -196,6 +196,14 @@ class FederationEventType(str, enum.Enum):
     # ride on the chunked sync only — they're rare and structural.
     SPACE_GALLERY_ITEM_CREATED = "space_gallery_item_created"
     SPACE_GALLERY_ITEM_DELETED = "space_gallery_item_deleted"
+    # ── Bazaar (§5.6) — per-space marketplace listings. The wrapper
+    # ``PostType.BAZAAR`` post federates via ``SPACE_POST_CREATED``
+    # with just the caption; this event carries the full
+    # :class:`BazaarListing` payload (mode, price, photos, status, …)
+    # so remote members see what's actually for sale, not just the
+    # title. Image bytes ship through the same media outbox the
+    # post + gallery paths use (correlation_id = listing.post_id).
+    BAZAAR_LISTING_CREATED = "bazaar_listing_created"
 
     # ── Space encryption key exchange ──
     SPACE_KEY_EXCHANGE = "space_key_exchange"

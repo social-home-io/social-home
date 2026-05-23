@@ -59,6 +59,9 @@ class AbstractBazaarRepo(Protocol):
     async def list_active_in_spaces(
         self, space_ids: tuple[str, ...]
     ) -> list[BazaarListing]: ...
+    async def list_in_space(
+        self, space_id: str, *, limit: int = 500
+    ) -> list[BazaarListing]: ...
     async def list_by_seller(self, seller_user_id: str) -> list[BazaarListing]: ...
     async def list_expired(
         self, *, now_iso: str | None = None
@@ -220,6 +223,28 @@ class SqliteBazaarRepo:
             f" WHERE status='active' AND space_id IN ({placeholders}) "
             f" ORDER BY created_at DESC",
             tuple(space_ids),
+        )
+        return [lst for lst in (_row_to_listing(d) for d in rows_to_dicts(rows)) if lst]
+
+    async def list_in_space(
+        self,
+        space_id: str,
+        *,
+        limit: int = 500,
+    ) -> list[BazaarListing]:
+        """Return every listing for ``space_id`` regardless of status.
+
+        Used by the §25.6 catch-up enqueue (provider.py): a remote
+        joiner needs the listing rows AND their image bytes for every
+        listing in the space, not just the active ones — a sold or
+        expired listing still has a wrapper post the receiver lands
+        from ``SPACE_POST_CREATED``, and a missing BazaarListing row
+        would render that post as a placeholder.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM bazaar_listings WHERE space_id=? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (space_id, max(1, min(int(limit), 2000))),
         )
         return [lst for lst in (_row_to_listing(d) for d in rows_to_dicts(rows)) if lst]
 

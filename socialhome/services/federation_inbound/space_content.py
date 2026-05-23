@@ -23,6 +23,7 @@ from ...domain.events import (
 from ...domain.federation import FederationEventType
 from ...domain.gallery import GalleryItem
 from ...domain.page import Page
+from ...domain.post import BazaarListing, BazaarMode, BazaarStatus
 from ...domain.space import SpaceZone
 from ...domain.sticky import Sticky
 from ...domain.task import Task, TaskStatus
@@ -32,6 +33,7 @@ from ...utils.datetime import parse_iso8601_lenient, parse_iso8601_optional
 if TYPE_CHECKING:
     from ...domain.federation import FederationEvent
     from ...federation.federation_service import FederationService
+    from ...repositories.bazaar_repo import AbstractBazaarRepo
     from ...repositories.calendar_repo import AbstractSpaceCalendarRepo
     from ...repositories.gallery_repo import AbstractGalleryRepo
     from ...repositories.page_repo import AbstractPageRepo
@@ -55,6 +57,7 @@ class SpaceContentInboundHandlers:
         "_poll_repo",
         "_gallery_repo",
         "_zone_repo",
+        "_bazaar_repo",
     )
 
     def __init__(
@@ -68,6 +71,7 @@ class SpaceContentInboundHandlers:
         poll_repo: "AbstractPollRepo | None" = None,
         gallery_repo: "AbstractGalleryRepo | None" = None,
         zone_repo: "AbstractSpaceZoneRepo | None" = None,
+        bazaar_repo: "AbstractBazaarRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._page_repo = page_repo
@@ -77,6 +81,7 @@ class SpaceContentInboundHandlers:
         self._poll_repo = poll_repo
         self._gallery_repo = gallery_repo
         self._zone_repo = zone_repo
+        self._bazaar_repo = bazaar_repo
 
     def attach_to(self, federation_service: "FederationService") -> None:
         registry = federation_service._event_registry
@@ -176,6 +181,18 @@ class SpaceContentInboundHandlers:
             registry.register(
                 FederationEventType.SPACE_ZONE_DELETED,
                 self._on_zone_deleted,
+            )
+
+        # Bazaar listings. Only registered when a bazaar_repo is wired
+        # so deployments without the bazaar feature don't choke on
+        # inbound BAZAAR_LISTING_CREATED from a peer that does have it.
+        # The wrapper post lands via SPACE_POST_CREATED first; this
+        # handler fills in the BazaarListing row keyed on the same
+        # ``post_id``.
+        if self._bazaar_repo is not None:
+            registry.register(
+                FederationEventType.BAZAAR_LISTING_CREATED,
+                self._on_bazaar_listing_created,
             )
 
     # ─── Tasks ───────────────────────────────────────────────────────────
@@ -634,3 +651,79 @@ class SpaceContentInboundHandlers:
         if not zone_id:
             return
         await self._zone_repo.delete(zone_id)
+
+    # ─── Bazaar listings ─────────────────────────────────────────────────
+
+    async def _on_bazaar_listing_created(self, event: "FederationEvent") -> None:
+        """Mirror a remote bazaar listing into the local ``bazaar_listings``
+        table.
+
+        The wrapper ``PostType.BAZAAR`` post must already exist on the
+        receiver — ``SPACE_POST_CREATED`` ships before this event in
+        the federation outbox queue. If the post hasn't landed yet
+        (out-of-order delivery or chunked-sync race), the FK to
+        ``space_posts.id`` fails and we log + drop; a subsequent
+        catch-up sync will retry the enqueue.
+
+        Idempotent: a repeat delivery for the same listing simply
+        overwrites the row via the repo's UPSERT path. Reactions /
+        comments are stored separately so no data is lost on replay.
+        """
+        if self._bazaar_repo is None:
+            return
+        p = event.payload
+        post_id = str(p.get("post_id") or "")
+        space_id = event.space_id or str(p.get("space_id") or "")
+        seller_user_id = str(p.get("seller_user_id") or "")
+        mode_raw = str(p.get("mode") or "")
+        status_raw = str(p.get("status") or "active")
+        title = str(p.get("title") or "")
+        if not post_id or not space_id or not seller_user_id or not mode_raw:
+            log.debug(
+                "BAZAAR_LISTING_CREATED missing required field: %s",
+                p,
+            )
+            return
+        try:
+            mode = BazaarMode(mode_raw)
+            status = BazaarStatus(status_raw)
+        except ValueError:
+            log.debug(
+                "BAZAAR_LISTING_CREATED unknown mode/status: mode=%r status=%r",
+                mode_raw,
+                status_raw,
+            )
+            return
+        listing = BazaarListing(
+            post_id=post_id,
+            space_id=space_id,
+            seller_user_id=seller_user_id,
+            mode=mode,
+            title=title,
+            end_time=str(p.get("end_time") or ""),
+            currency=str(p.get("currency") or "USD"),
+            status=status,
+            created_at=str(
+                p.get("created_at") or p.get("occurred_at") or "",
+            ),
+            description=p.get("description"),
+            image_urls=tuple(p.get("image_urls") or ()),
+            price=p.get("price"),
+            start_price=p.get("start_price"),
+            step_price=p.get("step_price"),
+            winner_user_id=p.get("winner_user_id"),
+            winning_price=p.get("winning_price"),
+            sold_at=p.get("sold_at"),
+        )
+        try:
+            await self._bazaar_repo.save_listing(listing)
+        except Exception as exc:
+            # FK failure (post not landed yet), CHECK failure (unknown
+            # mode/status from a future peer), or any other repo error.
+            # Log + drop — the catch-up enqueue at the next §25.6 sync
+            # picks this up again.
+            log.debug(
+                "BAZAAR_LISTING_CREATED apply failed listing=%s: %s",
+                post_id,
+                exc,
+            )
