@@ -24,6 +24,7 @@ from ...domain.space import (
     SpaceType,
 )
 from ...infrastructure.event_bus import EventBus
+from ..space_service import _space_metadata_for_federation
 
 if TYPE_CHECKING:
     from ...domain.federation import FederationEvent
@@ -213,6 +214,12 @@ class SpaceMembershipInboundHandlers:
         if self._federation is None:
             log.debug("config catch-up requested but federation not wired")
             return
+        # Ship both the flat fields (the existing catch-up shape, kept
+        # for back-compat with peers that read them directly) AND a
+        # ``space_meta`` blob — the same shape the §D1b inbound stub
+        # writer consumes everywhere else. The latter is what lets
+        # a remote-stub holder apply a rename without us having to
+        # teach the consumer about the legacy flat layout.
         payload = {
             "space_id": space.id,
             "sequence": space.config_sequence,
@@ -224,6 +231,7 @@ class SpaceMembershipInboundHandlers:
             "space_type": space.space_type.value,
             "features": space.features.to_wire_dict(),
             "retention_days": space.retention_days,
+            "space_meta": _space_metadata_for_federation(space),
         }
         try:
             await self._federation.send_event(

@@ -14418,6 +14418,24 @@ a.sh-welcome-card:hover {
   white-space: nowrap;
 }
 
+/* §D1b — informational chip on a space card when the space lives on
+ * another household. Muted treatment because it's not a status the
+ * user should act on; it just answers "why does my admin gear not
+ * show on this card?" */
+.sh-space-remote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--sh-radius-pill);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 500;
+  background: var(--sh-bg-tertiary);
+  color: var(--sh-text-muted);
+  border: 1px solid var(--sh-border);
+  white-space: nowrap;
+}
+
 /* SpaceListPage — "Your spaces" / "Subscribed" sections. Only
    rendered when both groups are non-empty; with just one group the
    list renders flat as before to keep the familiar layout. */

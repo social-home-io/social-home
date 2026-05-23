@@ -41,11 +41,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
-from ..domain.space import SpacePermissionError, SpaceRole
+from ..domain.space import SpaceMember, SpacePermissionError, SpaceRole
+from ..services.space_service import (
+    _space_metadata_for_federation,
+    stub_space_from_metadata,
+)
 
 if TYPE_CHECKING:
     from ..domain.federation import FederationEvent
@@ -268,14 +273,37 @@ class SpaceInviteTokenRedeemCoordinator:
         # mapping locally so subsequent space-scoped fan-outs include
         # the issuer's household.
         space_id = str(result.get("space_id") or "")
+        role_str = str(result.get("role") or SpaceRole.MEMBER.value)
         if space_id:
             await self._spaces.add_space_instance(
                 space_id,
                 issuer_instance_id,
             )
+            # §D1b — seat a local stub + membership so the redeemer's
+            # /api/spaces actually shows the joined space. The ACK
+            # carries the host's metadata snapshot; older issuers that
+            # don't ship it fall through to today's mapping-only
+            # behaviour. SpaceMember is keyed on (space_id, user_id)
+            # so a repeat redeem is a no-op via INSERT OR REPLACE.
+            meta = result.get("space_meta")
+            if isinstance(meta, dict):
+                stub = stub_space_from_metadata(
+                    space_id,
+                    host_instance_id=issuer_instance_id,
+                    meta=meta,
+                )
+                await self._spaces.save(stub)
+                await self._spaces.save_member(
+                    SpaceMember(
+                        space_id=space_id,
+                        user_id=viewer_user_id,
+                        role=role_str,
+                        joined_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                )
         return {
             "space_id": space_id,
-            "role": str(result.get("role") or SpaceRole.MEMBER.value),
+            "role": role_str,
         }
 
     # ── Receiver side (the issuer in this exchange) ────────────────────
@@ -416,11 +444,19 @@ class SpaceInviteTokenRedeemCoordinator:
             )
             return
 
-        ack_payload = {
+        # Pull the full space row so we can ship metadata back to the
+        # receiver — see ``_space_metadata_for_federation``. Without
+        # this the receiver could record the redeem succeeded but
+        # have no name / emoji / features for the stub it's about to
+        # create, leaving its /spaces card blank.
+        space = await self._spaces.get(space_id)
+        ack_payload: dict = {
             "redeem_nonce": nonce,
             "space_id": space_id,
             "role": SpaceRole.MEMBER.value,
         }
+        if space is not None:
+            ack_payload["space_meta"] = _space_metadata_for_federation(space)
         if routed_route_id is not None and self._routed_handler is not None:
             await self._routed_handler.send_routed_reply(
                 route_id=routed_route_id,

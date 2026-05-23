@@ -25,11 +25,12 @@ of them.
 
 from __future__ import annotations
 
+import logging
 import unicodedata
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from ..crypto import generate_identity_keypair
 
@@ -92,6 +93,9 @@ from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.user_repo import AbstractUserRepo
 from ..domain.media_constraints import SPACE_COVER_MAX_DIMENSION
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
+
+
+log = logging.getLogger(__name__)
 
 
 #: Sentinel for ``update_member_profile`` partial-patch kwargs.
@@ -1039,6 +1043,15 @@ class SpaceService:
                 "inviter_display_name": (actor.display_name or actor.username),
                 "space_display_hint": space.name,
                 "expires_at": expires,
+                # §D1b — the receiver needs enough metadata to seat a
+                # local *stub* of this space (so it shows up in their
+                # /spaces list after accept), without us shipping any
+                # data the joiner couldn't already read from the host's
+                # SPACE_CONFIG_CHANGED stream after pairing. Keep the
+                # shape under one ``space_meta`` key so older receivers
+                # ignore it cleanly via dict-get semantics — no version
+                # bump needed.
+                "space_meta": _space_metadata_for_federation(space),
             },
         )
         return token
@@ -1091,6 +1104,33 @@ class SpaceService:
             invite["space_id"],
             host_instance,
         )
+        # §D1b — seat the local membership row pointing at the stub
+        # spaces row that was created when SPACE_PRIVATE_INVITE
+        # arrived (see ``PrivateSpaceInviteHandler._on_invite``).
+        # ``list_for_user`` JOINs on ``space_members``, so this is
+        # what actually surfaces the space in the invitee's
+        # ``/api/spaces``. If the stub doesn't exist (older sender,
+        # no metadata shipped), the FK constraint will trip and we
+        # log+skip — the invitee can still accept, just won't see
+        # the space until upstream upgrades.
+        stub = await self._spaces.get(invite["space_id"])
+        if stub is not None:
+            await self._spaces.save_member(
+                SpaceMember(
+                    space_id=invite["space_id"],
+                    user_id=user_id,
+                    role=SpaceRole.MEMBER.value,
+                    joined_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+        else:
+            log.warning(
+                "accept_remote_invite: stub space row missing for"
+                " space_id=%s — invitee will see the invite as accepted"
+                " but the space won't show up locally until SPACE_CONFIG"
+                "_CHANGED upserts the stub. Sender on older protocol?",
+                invite["space_id"],
+            )
 
     async def decline_remote_invite(
         self,
@@ -2149,6 +2189,96 @@ class SpaceService:
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _space_metadata_for_federation(space: Space) -> dict:
+    """Snapshot the space's user-visible config for federation envelopes.
+
+    Used by the §D1b invite + redeem-ACK paths so the joiner's
+    instance has enough material to seat a local stub row in
+    ``spaces`` (name, owner identity, feature toggles, etc.). Mirrors
+    the columns ``Space`` already exposes — we deliberately don't
+    include host-private state (admins list, ban list, cover bytes;
+    those federate over their own dedicated events).
+    """
+    return {
+        "name": space.name,
+        "emoji": space.emoji,
+        "description": space.description,
+        "owner_instance_id": space.owner_instance_id,
+        "owner_username": space.owner_username,
+        "identity_public_key": space.identity_public_key,
+        "config_sequence": space.config_sequence,
+        "space_type": space.space_type.value,
+        "join_mode": space.join_mode.value,
+        "features": {
+            "pages": space.features.pages,
+            "calendar": space.features.calendar,
+            "todo": space.features.todo,
+            "location": space.features.location,
+            "location_mode": space.features.location_mode,
+            "stickies": space.features.stickies,
+            "gallery": space.features.gallery,
+        },
+        "tz": space.tz,
+        "cover_hash": space.cover_hash,
+        "about_markdown": space.about_markdown,
+    }
+
+
+def stub_space_from_metadata(
+    space_id: str,
+    *,
+    host_instance_id: str,
+    meta: dict,
+) -> Space:
+    """Build a :class:`Space` from a federation metadata payload (the
+    counterpart to :func:`_space_metadata_for_federation`).
+
+    Used by the §D1b inbound paths — ``PrivateSpaceInviteHandler``
+    on receipt of ``SPACE_PRIVATE_INVITE`` and the receiver side of
+    ``SpaceInviteTokenRedeemCoordinator`` on receipt of the ACK —
+    to seat a local **stub** row in ``spaces``. The joiner doesn't
+    own the space, but having the row locally is what makes the
+    space show up in their ``/api/spaces`` once they accept and a
+    matching ``space_members`` row is inserted.
+
+    ``host_instance_id`` is the envelope's ``from_instance`` and
+    falls back into ``owner_instance_id`` if the payload doesn't
+    carry it (older senders).  Either way, the resulting Space's
+    ``owner_instance_id != my_instance`` is the runtime signal for
+    "this is a remote space" downstream.
+    """
+    feats_in = meta.get("features") or {}
+    raw_mode = feats_in.get("location_mode")
+    location_mode: "Literal['gps', 'zone_only']" = (
+        "zone_only" if raw_mode == "zone_only" else "gps"
+    )
+    features = SpaceFeatures(
+        calendar=bool(feats_in.get("calendar", True)),
+        todo=bool(feats_in.get("todo", True)),
+        location=bool(feats_in.get("location", False)),
+        location_mode=location_mode,
+        stickies=bool(feats_in.get("stickies", True)),
+        pages=bool(feats_in.get("pages", True)),
+        gallery=bool(feats_in.get("gallery", True)),
+    )
+    return Space(
+        id=space_id,
+        name=str(meta.get("name") or "Untitled space"),
+        emoji=meta.get("emoji"),
+        description=meta.get("description"),
+        owner_instance_id=str(meta.get("owner_instance_id") or host_instance_id),
+        owner_username=str(meta.get("owner_username") or ""),
+        identity_public_key=str(meta.get("identity_public_key") or ""),
+        config_sequence=int(meta.get("config_sequence") or 0),
+        features=features,
+        space_type=_coerce_space_type(meta.get("space_type") or "private"),
+        join_mode=_coerce_join_mode(meta.get("join_mode") or "invite_only"),
+        tz=str(meta.get("tz") or "UTC"),
+        cover_hash=meta.get("cover_hash"),
+        about_markdown=meta.get("about_markdown"),
+    )
 
 
 def _coerce_space_type(value: SpaceType | str) -> SpaceType:

@@ -65,6 +65,7 @@ from ..infrastructure.event_bus import EventBus
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
+from .space_service import stub_space_from_metadata
 from ..utils.datetime import parse_iso8601_lenient
 
 if TYPE_CHECKING:
@@ -263,6 +264,10 @@ class FederationInboundService:
             FET.SPACE_MEMBER_PROFILE_UPDATED,
             self._on_space_member_profile_updated,
         )
+        # §D1b — apply config changes (rename, emoji, feature toggles)
+        # from the host to our local stub of a remote space so the
+        # card the joiner sees in /spaces stays in sync.
+        registry.register(FET.SPACE_CONFIG_CHANGED, self._on_space_config_changed)
 
         registry.register(FET.USERS_SYNC, self._on_users_sync)
         registry.register(FET.USER_UPDATED, self._on_user_updated)
@@ -1031,6 +1036,69 @@ class FederationInboundService:
         if not space_id or not user_id:
             return
         await self._space_repo.delete_member(space_id, user_id)
+
+    async def _on_space_config_changed(
+        self,
+        event: "FederationEvent",
+    ) -> None:
+        """§D1b — host renamed / re-emoji'd / toggled features. Apply
+        to our local stub (if we have one) so the card stays
+        accurate. Idempotent — ``save`` upserts.
+
+        We only touch a row whose ``owner_instance_id`` matches the
+        envelope's ``from_instance``. That guards against a peer's
+        config-change event accidentally clobbering a row we own
+        ourselves (impossible under correct usage, but defence in
+        depth is cheap).
+        """
+        space_id = event.space_id or str(event.payload.get("space_id") or "")
+        if not space_id:
+            return
+        # New senders (B2+) wrap the metadata under one ``space_meta``
+        # key — the same shape ``stub_space_from_metadata`` consumes
+        # everywhere else. Older catch-up pushes ship the metadata
+        # flat at the top of the payload (``name``, ``emoji``, …);
+        # accept both so renames keep landing while a deployment
+        # rolls out.
+        meta = event.payload.get("space_meta")
+        if not isinstance(meta, dict):
+            meta = {
+                k: event.payload.get(k)
+                for k in (
+                    "name",
+                    "emoji",
+                    "description",
+                    "owner_instance_id",
+                    "owner_username",
+                    "identity_public_key",
+                    "config_sequence",
+                    "space_type",
+                    "join_mode",
+                    "tz",
+                    "cover_hash",
+                    "about_markdown",
+                )
+                if event.payload.get(k) is not None
+            }
+            feats = event.payload.get("features")
+            if isinstance(feats, dict):
+                meta["features"] = feats
+        if not meta:
+            return
+        existing = await self._space_repo.get(space_id)
+        if existing is None:
+            # No stub yet — config-changed alone doesn't seat us as a
+            # member, so creating one here would surface a card the
+            # user never joined. Bail.
+            return
+        if existing.owner_instance_id != event.from_instance:
+            return
+        refreshed = stub_space_from_metadata(
+            space_id,
+            host_instance_id=event.from_instance,
+            meta=meta,
+        )
+        await self._space_repo.save(refreshed)
 
     async def _on_space_member_profile_updated(
         self,
