@@ -15,6 +15,7 @@ from ..domain.events import (
     PollClosed,
     PollCreated,
     PollVoted,
+    SchedulePollCreated,
     SchedulePollFinalized,
     SchedulePollResponded,
 )
@@ -287,6 +288,16 @@ class PollService:
             deadline=deadline,
             slots=minted,
         )
+        if self._bus is not None:
+            await self._bus.publish(
+                SchedulePollCreated(
+                    post_id=post_id,
+                    title=title,
+                    deadline=deadline,
+                    slots=tuple(minted),
+                    space_id=space_id,
+                ),
+            )
         return await self.schedule_summary(post_id, space_id=space_id)
 
     async def respond_schedule(

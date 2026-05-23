@@ -88,3 +88,53 @@ async def test_schedule_finalized_broadcasts(env):
     _, event_type, payload = fed.broadcasts[0]
     assert event_type is FederationEventType.SPACE_SCHEDULE_FINALIZED
     assert payload["title"] == "Picnic"
+
+
+# ─── F5: SCHEDULE_CREATED ──────────────────────────────────────────────
+
+
+async def test_schedule_created_broadcasts(env):
+    from socialhome.domain.events import SchedulePollCreated
+
+    bus, fed = env
+    await bus.publish(
+        SchedulePollCreated(
+            post_id="p1",
+            title="Picnic?",
+            deadline=None,
+            slots=(
+                {
+                    "id": "s1",
+                    "slot_date": "2026-07-01",
+                    "start_time": "14:00",
+                    "end_time": None,
+                    "position": 0,
+                },
+            ),
+            space_id="sp-A",
+        ),
+    )
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, payload = fed.broadcasts[0]
+    assert space_id == "sp-A"
+    assert event_type is FederationEventType.SPACE_SCHEDULE_CREATED
+    assert payload["post_id"] == "p1"
+    assert payload["title"] == "Picnic?"
+    assert len(payload["slots"]) == 1
+    assert payload["slots"][0]["id"] == "s1"
+
+
+async def test_household_schedule_created_not_federated(env):
+    from socialhome.domain.events import SchedulePollCreated
+
+    bus, fed = env
+    await bus.publish(
+        SchedulePollCreated(
+            post_id="p1",
+            title="Local",
+            deadline=None,
+            slots=({"id": "s1", "slot_date": "2026-07-01"},),
+            space_id=None,
+        ),
+    )
+    assert fed.broadcasts == []

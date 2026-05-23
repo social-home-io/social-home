@@ -54,6 +54,9 @@ RESOURCE_ORDER: tuple[str, ...] = (
     "calendar",
     "gallery",
     "polls",
+    # Schedules ship AFTER posts because ``space_schedule_poll_meta``
+    # has an FK to ``space_posts(id)``. (F5)
+    "schedules",
     "space_zones",
     # Bazaar listings ship AFTER posts because the BazaarListing row
     # has an FK to space_posts(id) — the wrapper post must already be

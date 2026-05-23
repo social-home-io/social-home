@@ -12,7 +12,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..domain.events import SchedulePollFinalized, SchedulePollResponded
+from ..domain.events import (
+    SchedulePollCreated,
+    SchedulePollFinalized,
+    SchedulePollResponded,
+)
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 
@@ -37,8 +41,26 @@ class ScheduleFederationOutbound:
         self._federation = federation_service
 
     def wire(self) -> None:
+        self._bus.subscribe(SchedulePollCreated, self._on_created)
         self._bus.subscribe(SchedulePollResponded, self._on_responded)
         self._bus.subscribe(SchedulePollFinalized, self._on_finalized)
+
+    async def _on_created(self, event: SchedulePollCreated) -> None:
+        """F5: broadcast slot defs + title + deadline so a remote
+        member can render the slot picker on arrival."""
+        if event.space_id is None:
+            return
+        await self._fan_out(
+            event.space_id,
+            FederationEventType.SPACE_SCHEDULE_CREATED,
+            {
+                "post_id": event.post_id,
+                "space_id": event.space_id,
+                "title": event.title,
+                "deadline": event.deadline,
+                "slots": list(event.slots),
+            },
+        )
 
     async def _on_responded(self, event: SchedulePollResponded) -> None:
         if event.space_id is None:
