@@ -15,6 +15,7 @@ event dispatch registry never raises, so silent drops are observable.
 from __future__ import annotations
 
 import base64
+import binascii
 import logging
 import pathlib
 from datetime import datetime, timezone
@@ -266,6 +267,7 @@ class FederationInboundService:
         registry.register(FET.SPACE_POST_CREATED, self._on_space_post_created)
         registry.register(FET.SPACE_POST_UPDATED, self._on_space_post_updated)
         registry.register(FET.SPACE_POST_DELETED, self._on_space_post_deleted)
+        registry.register(FET.SPACE_MEDIA_BLOB, self._on_space_media_blob)
         registry.register(FET.SPACE_COMMENT_CREATED, self._on_space_comment_added)
         registry.register(FET.SPACE_COMMENT_UPDATED, self._on_space_comment_updated)
         registry.register(FET.SPACE_COMMENT_DELETED, self._on_space_comment_deleted)
@@ -927,6 +929,145 @@ class FederationInboundService:
                 space_id=space_id,
                 origin_instance_id=event.from_instance,
             )
+        )
+
+    async def _on_space_media_blob(self, event: "FederationEvent") -> None:
+        """Persist a chunked space-post media blob to local media path.
+
+        Mirrors :meth:`_on_dm_media_blob`. The sender's
+        :class:`SpaceMediaSyncService` ships one or more chunks (each
+        carrying ``chunk_index`` / ``chunk_count`` / ``final``); the
+        receiver writes each chunk to a part file
+        ``<media_dir>/.partial/<transfer_id>/<chunk_index>`` and
+        finalises by concatenating into the target filename when the
+        ``final`` chunk arrives.
+
+        Without this handler the post lands but the picture is broken
+        because the URL points at the receiver's media path with no
+        backing file.
+
+        Safety:
+
+        * Filename rejected on path-traversal markers (``/``, ``\\``,
+          leading ``.``) — same allowlist as :class:`MediaServeView`.
+        * Each chunk is bounded at the federation envelope's size
+          cap; multi-chunk files are bounded by the sender's
+          single-chunk threshold logic (1 MiB).
+        * Part files live in a sub-directory of the media root so
+          concurrent finalises don't see half-written content via
+          ``MediaServeView`` (which only scans the media root).
+        """
+        if self._media_dir is None:
+            return
+        p = event.payload
+        filename = str(p.get("filename") or "")
+        b64 = p.get("bytes_b64") or p.get("bytes_base64")
+        transfer_id = str(p.get("transfer_id") or "")
+        chunk_index = int(p.get("chunk_index") or 0)
+        chunk_count = int(p.get("chunk_count") or 1)
+        final = bool(p.get("final"))
+        if not filename or not isinstance(b64, str):
+            return
+        if "/" in filename or "\\" in filename or filename.startswith("."):
+            log.warning(
+                "SPACE_MEDIA_BLOB: rejecting filename %r from %s (path traversal)",
+                filename,
+                event.from_instance,
+            )
+            return
+        if not transfer_id:
+            # First-revision senders that didn't include transfer_id
+            # fall back to a per-blob assembly directory keyed on the
+            # filename. Same-filename concurrent transfers would
+            # collide, but the chunk_index writes are idempotent so
+            # the final concat still produces a consistent file.
+            transfer_id = filename
+        if "/" in transfer_id or "\\" in transfer_id or transfer_id.startswith("."):
+            return
+        try:
+            data = base64.b64decode(b64)
+        except (binascii.Error, ValueError) as exc:
+            log.warning(
+                "SPACE_MEDIA_BLOB: bad base64 from %s: %s",
+                event.from_instance,
+                exc,
+            )
+            return
+        # Single-chunk fast path: write straight to the final filename.
+        target = self._media_dir / filename
+        if chunk_count == 1:
+            try:
+                await aiofiles.os.makedirs(self._media_dir, exist_ok=True)
+                async with aiofiles.open(target, "wb") as fh:
+                    await fh.write(data)
+            except OSError as exc:
+                log.warning(
+                    "SPACE_MEDIA_BLOB: write failed for %s: %s",
+                    target,
+                    exc,
+                )
+                return
+            log.info(
+                "SPACE_MEDIA_BLOB: stored %s (%d bytes) for post=%s",
+                filename,
+                len(data),
+                p.get("post_id"),
+            )
+            return
+        # Multi-chunk: write to a part file under a per-transfer dir.
+        partial_root = self._media_dir / ".partial" / transfer_id
+        try:
+            await aiofiles.os.makedirs(partial_root, exist_ok=True)
+            part_path = partial_root / f"{chunk_index:06d}"
+            async with aiofiles.open(part_path, "wb") as fh:
+                await fh.write(data)
+        except OSError as exc:
+            log.warning(
+                "SPACE_MEDIA_BLOB: part write failed for %s chunk %d: %s",
+                filename,
+                chunk_index,
+                exc,
+            )
+            return
+        if not final:
+            return
+        # Final chunk landed — assemble the parts in index order.
+        try:
+            parts = sorted(
+                [p.name for p in pathlib.Path(partial_root).iterdir() if p.is_file()]
+            )
+            if len(parts) < chunk_count:
+                log.warning(
+                    "SPACE_MEDIA_BLOB: %d/%d chunks present at finalise "
+                    "for %s — leaving partials for next attempt",
+                    len(parts),
+                    chunk_count,
+                    filename,
+                )
+                return
+            async with aiofiles.open(target, "wb") as out:
+                for name in parts:
+                    async with aiofiles.open(partial_root / name, "rb") as inp:
+                        await out.write(await inp.read())
+        except OSError as exc:
+            log.warning(
+                "SPACE_MEDIA_BLOB: finalise failed for %s: %s",
+                filename,
+                exc,
+            )
+            return
+        # Clean up part files.
+        try:
+            for name in parts:
+                await aiofiles.os.remove(partial_root / name)
+            await aiofiles.os.rmdir(partial_root)
+        except OSError:
+            pass
+        log.info(
+            "SPACE_MEDIA_BLOB: assembled %s from %d chunk(s) for post=%s",
+            filename,
+            chunk_count,
+            p.get("post_id"),
         )
 
     async def _on_space_post_updated(self, event: "FederationEvent") -> None:

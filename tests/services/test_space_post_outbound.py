@@ -287,3 +287,95 @@ async def test_payload_carries_media_fields(type_, extra):
         assert payload["image_urls"] == list(extra["image_urls"])
     if "media_url" in extra:
         assert payload["media_url"] == extra["media_url"]
+
+
+# ─── SPACE_MEDIA_BLOB — outbox-driven bytes federation ────────────────
+
+
+async def test_space_post_created_enqueues_outbox_per_peer_per_blob():
+    """After SPACE_POST_CREATED broadcasts, the outbound enqueues one
+    media-outbox row per (peer, blob) tuple. The scheduler reads
+    these lazily, chunks the file, and ships SPACE_MEDIA_BLOB events
+    over the federation outbox. Without this, the receiver's
+    ``<img src>`` 404s because the bytes never federate."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    federation._own_instance_id = "self-id"
+    federation_repo = AsyncMock()
+    federation_repo.list_member_instance_ids = AsyncMock(
+        return_value=["peer-a", "peer-b", "self-id"],  # self filtered out
+    )
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_post = AsyncMock()
+    SpacePostOutbound(
+        bus=bus,
+        federation_service=federation,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    post = Post(
+        id="p-mediated",
+        author="u",
+        type=PostType.IMAGE,
+        image_urls=("api/media/img-a.webp", "api/media/img-b.webp"),
+        media_url="api/media/cover.webp",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
+
+    media_sync.enqueue_for_post.assert_awaited_once()
+    call = media_sync.enqueue_for_post.call_args
+    assert call.kwargs["post_id"] == "p-mediated"
+    # Self instance dropped from the target list.
+    assert set(call.kwargs["target_instance_ids"]) == {"peer-a", "peer-b"}
+    # All referenced media URLs enqueued.
+    assert set(call.kwargs["media_urls"]) == {
+        "api/media/img-a.webp",
+        "api/media/img-b.webp",
+        "api/media/cover.webp",
+    }
+
+
+async def test_space_post_created_no_media_skips_enqueue():
+    """Text-only post — no media URLs → no media-outbox enqueue."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    federation._own_instance_id = "self-id"
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_post = AsyncMock()
+    SpacePostOutbound(
+        bus=bus,
+        federation_service=federation,
+        media_sync=media_sync,
+        federation_repo=AsyncMock(),
+    )
+    post = Post(
+        id="p-text",
+        author="u",
+        type=PostType.TEXT,
+        content="hi",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
+    media_sync.enqueue_for_post.assert_not_awaited()
+
+
+async def test_space_post_created_no_media_sync_wired_is_noop():
+    """SpacePostOutbound without ``media_sync`` (test stacks) doesn't
+    crash on media posts — just skips the bytes federation."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    # NO media_sync / federation_repo.
+    SpacePostOutbound(bus=bus, federation_service=federation)
+    post = Post(
+        id="p",
+        author="u",
+        type=PostType.IMAGE,
+        image_urls=("api/media/whatever.webp",),
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    # Should not raise.
+    await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))

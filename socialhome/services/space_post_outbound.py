@@ -42,6 +42,7 @@ from ..infrastructure.event_bus import EventBus
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
+    from .space_media_sync_service import SpaceMediaSyncService
 
 log = logging.getLogger(__name__)
 
@@ -49,16 +50,29 @@ log = logging.getLogger(__name__)
 class SpacePostOutbound:
     """Bus-event → federation broadcaster for space posts."""
 
-    __slots__ = ("_bus", "_federation")
+    __slots__ = ("_bus", "_federation", "_media_sync", "_federation_repo")
 
     def __init__(
         self,
         *,
         bus: EventBus,
         federation_service: "FederationService",
+        media_sync: "SpaceMediaSyncService | None" = None,
+        federation_repo=None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
+        #: Optional — when wired, ``SPACE_POST_CREATED`` broadcasts
+        #: are followed by per-peer outbox enqueues for every
+        #: referenced media URL. The sync service's scheduler reads
+        #: rows lazily, chunks files > 1 MiB, retries with
+        #: exponential backoff. Without it the receiver's
+        #: ``<img src>`` 404s because only the URL string federates.
+        self._media_sync = media_sync
+        #: Needed to enumerate the broadcast set (every member
+        #: household) for the media outbox. Optional — when ``None``
+        #: the media fan-out is a no-op.
+        self._federation_repo = federation_repo
         self._bus.subscribe(SpacePostCreated, self._on_space_post_created)
         self._bus.subscribe(PostEdited, self._on_post_edited)
         self._bus.subscribe(PostDeleted, self._on_post_deleted)
@@ -127,6 +141,47 @@ class SpacePostOutbound:
                 event.space_id,
                 post.id,
             )
+        # Hand off the bytes-federation to SpaceMediaSyncService.
+        # SPACE_POST_CREATED carries only the URL strings; without
+        # the outbox-driven SPACE_MEDIA_BLOB stream the receiver's
+        # ``<img src>`` 404s because the file only lives on the
+        # sender's media path. Outbox enqueues happen post-broadcast
+        # so the receiver always gets the post metadata first.
+        if self._media_sync is not None and self._federation_repo is not None:
+            media_urls: list[str] = []
+            if post.media_url:
+                media_urls.append(post.media_url)
+            media_urls.extend(post.image_urls or ())
+            if post.file_meta is not None and post.file_meta.url:
+                media_urls.append(post.file_meta.url)
+            if media_urls:
+                try:
+                    targets = await self._federation_repo.list_member_instance_ids(
+                        event.space_id,
+                    )
+                except Exception:
+                    log.exception(
+                        "SPACE_MEDIA_BLOB enqueue: list peers failed for "
+                        "space=%s post=%s",
+                        event.space_id,
+                        post.id,
+                    )
+                    return
+                own = getattr(self._federation, "_own_instance_id", "") or ""
+                targets = [t for t in targets if t and t != own]
+                if targets:
+                    try:
+                        await self._media_sync.enqueue_for_post(
+                            post_id=post.id,
+                            target_instance_ids=targets,
+                            media_urls=media_urls,
+                        )
+                    except Exception:
+                        log.exception(
+                            "SPACE_MEDIA_BLOB enqueue failed for space=%s post=%s",
+                            event.space_id,
+                            post.id,
+                        )
 
     async def _on_post_edited(self, event: PostEdited) -> None:
         # ``space_id`` is set by the space-edit path in space_service;

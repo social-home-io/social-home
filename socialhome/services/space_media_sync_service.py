@@ -1,0 +1,328 @@
+"""Federation media-blob sync for space posts.
+
+Mirrors :class:`DmMediaSyncService` for the space case: when
+``SpacePostOutbound`` broadcasts ``SPACE_POST_CREATED`` to peer
+households, the post payload carries only the URL strings — the
+bytes only live on the sender's media path. This service ships the
+actual bytes via ``SPACE_MEDIA_BLOB`` events, one per peer per
+referenced media file, with chunking for large videos.
+
+Lifecycle:
+
+* ``enqueue_for_post`` — called by :class:`SpacePostOutbound` after a
+  successful ``SPACE_POST_CREATED`` broadcast. Inserts one row per
+  ``(blob_id, target_instance_id)`` tuple. Idempotent.
+* ``start`` / ``stop`` — :class:`asyncio.Event`-driven background loop
+  that polls the outbox table.
+* ``flush_once`` — one tick: pick due rows, build chunks, send.
+  Exposed for tests + the federation-demo harness so callers can
+  drive a flush without waiting on the periodic tick.
+
+The DM equivalent and this service are deliberately separate (rather
+than a shared MediaSyncService) so the schedulers can backoff
+independently. A stuck DM peer doesn't starve space sends and
+vice-versa.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+import pathlib
+import random
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
+
+import aiofiles
+import aiofiles.os
+
+from ..domain.federation import FederationEventType
+from ..repositories.space_media_outbox_repo import (
+    AbstractSpaceMediaOutboxRepo,
+    SpaceMediaOutboxEntry,
+)
+
+if TYPE_CHECKING:
+    from ..federation.federation_service import FederationService
+
+log = logging.getLogger(__name__)
+
+
+#: Files ≤ this threshold ship as one chunk; above this they're
+#: split into :data:`MAX_BLOB_CHUNK_BYTES` chunks. Same value as
+#: :data:`socialhome.services.dm_media_sync_service.SINGLE_CHUNK_BYTES_THRESHOLD`
+#: — keeps the wire shape comparable.
+SINGLE_CHUNK_BYTES_THRESHOLD: int = 1024 * 1024
+#: 256 KiB chunks keep the federation envelope well under the
+#: per-event size cap (post sig + base64 expansion).
+MAX_BLOB_CHUNK_BYTES: int = 256 * 1024
+#: Cap on retry attempts before a row is moved to ``status='failed'``.
+#: Same as the DM curve so behaviour matches.
+MAX_ATTEMPTS: int = 6
+BACKOFF_BASE_SECONDS: float = 30.0
+BACKOFF_CAP_SECONDS: float = 30 * 60.0
+
+
+class SpaceMediaSyncService:
+    """Build + dispatch ``SPACE_MEDIA_BLOB`` rows."""
+
+    __slots__ = (
+        "_outbox",
+        "_federation",
+        "_media_dir",
+        "_interval",
+        "_task",
+        "_stop",
+    )
+
+    def __init__(
+        self,
+        *,
+        outbox: AbstractSpaceMediaOutboxRepo,
+        federation: "FederationService | None",
+        media_dir: pathlib.Path,
+        interval_seconds: float = 5.0,
+    ) -> None:
+        self._outbox = outbox
+        self._federation = federation
+        self._media_dir = media_dir
+        self._interval = interval_seconds
+        self._task: asyncio.Task | None = None
+        self._stop = asyncio.Event()
+
+    def attach_federation(self, federation: "FederationService") -> None:
+        """Wire federation after construction (breaks the boot cycle).
+
+        :class:`FederationService` is built later than this service
+        in :func:`create_app`. Stash the handle here once it exists.
+        """
+        self._federation = federation
+
+    # ── Enqueue ──────────────────────────────────────────────────────────
+
+    async def enqueue_for_post(
+        self,
+        *,
+        post_id: str,
+        target_instance_ids: list[str],
+        media_urls: list[str],
+    ) -> None:
+        """One outbox row per (media_url, peer) tuple.
+
+        Called by :class:`SpacePostOutbound` after the
+        ``SPACE_POST_CREATED`` broadcast lands. The federation envelope
+        for the post itself rides the general outbox; bytes ride
+        through this dedicated outbox so a stuck peer's bytes don't
+        block other federation traffic.
+
+        ``blob_id`` is derived from the filename so the same file
+        referenced by multiple posts dedups at the
+        ``(blob_id, target_instance_id)`` primary key — a re-shared
+        image doesn't ship twice.
+        """
+        for url in media_urls:
+            filename = url.rsplit("/", 1)[-1].split("?", 1)[0]
+            if not filename:
+                continue
+            path = self._media_dir / filename
+            blob_id = filename
+            for target in target_instance_ids:
+                if not target:
+                    continue
+                await self._outbox.enqueue(
+                    blob_id=blob_id,
+                    post_id=post_id,
+                    target_instance_id=target,
+                    bytes_path=str(path),
+                )
+
+    # ── Scheduler loop ────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Start the background flush loop. Idempotent.
+
+        Reclaims any ``in_flight`` rows left orphaned by a previous
+        sender crash before the loop's first tick.
+        """
+        if self._task is not None and not self._task.done():
+            return
+        try:
+            stuck = await self._outbox.reclaim_in_flight()
+            if stuck:
+                log.info(
+                    "space-media-sync: reclaimed %d stuck in_flight row(s)",
+                    stuck,
+                )
+        except Exception as exc:  # pragma: no cover
+            log.warning("space-media-sync: reclaim_in_flight failed: %s", exc)
+        self._stop.clear()
+        self._task = asyncio.create_task(self._loop())
+
+    async def stop(self) -> None:
+        """Stop the loop and wait for the task to exit."""
+        self._stop.set()
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(self._task, timeout=5.0)
+            except asyncio.TimeoutError, asyncio.CancelledError:
+                self._task.cancel()
+            self._task = None
+
+    async def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                shipped = await self.flush_once()
+                if shipped:
+                    log.debug(
+                        "space-media-sync: dispatched %d blob(s)",
+                        shipped,
+                    )
+            except Exception as exc:  # pragma: no cover
+                log.warning("space-media-sync flush failed: %s", exc)
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(),
+                    timeout=self._interval,
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    async def flush_once(self, *, limit: int = 25) -> int:
+        """Run one flush pass — pick due rows and dispatch each.
+
+        Returns the number of rows that shipped successfully.
+        """
+        if self._federation is None:
+            return 0
+        due = await self._outbox.list_due(limit=limit)
+        shipped = 0
+        for entry in due:
+            await self._outbox.mark_in_flight(
+                blob_id=entry.blob_id,
+                target_instance_id=entry.target_instance_id,
+            )
+            try:
+                payloads = await self._build_blob_payloads(entry)
+            except Exception as exc:
+                log.warning(
+                    "space-media-sync: build failed for %s → %s: %s",
+                    entry.blob_id,
+                    entry.target_instance_id,
+                    exc,
+                )
+                await self._reschedule_or_fail(entry, str(exc))
+                continue
+            send_failed = False
+            for payload in payloads:
+                try:
+                    await self._federation.send_event(
+                        to_instance_id=entry.target_instance_id,
+                        event_type=FederationEventType.SPACE_MEDIA_BLOB,
+                        payload=payload,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "space-media-sync: send chunk %d/%d failed for %s → %s: %s",
+                        payload.get("chunk_index", 0),
+                        payload.get("chunk_count", 1),
+                        entry.blob_id,
+                        entry.target_instance_id,
+                        exc,
+                    )
+                    await self._reschedule_or_fail(entry, str(exc))
+                    send_failed = True
+                    break
+            if send_failed:
+                continue
+            await self._outbox.delete(
+                blob_id=entry.blob_id,
+                target_instance_id=entry.target_instance_id,
+            )
+            shipped += 1
+        return shipped
+
+    # ── Internals ─────────────────────────────────────────────────────
+
+    async def _build_blob_payloads(
+        self,
+        entry: SpaceMediaOutboxEntry,
+    ) -> list[dict]:
+        """Build one or more ``SPACE_MEDIA_BLOB`` payloads from a row.
+
+        Single-chunk for files ≤ :data:`SINGLE_CHUNK_BYTES_THRESHOLD`;
+        multi-chunk otherwise. Each chunk carries ``chunk_index`` +
+        ``chunk_count`` + ``final`` so the receiver can assemble.
+        """
+        path = pathlib.Path(entry.bytes_path)
+        if not await aiofiles.os.path.isfile(path):
+            raise FileNotFoundError(f"blob source missing: {path}")
+        async with aiofiles.open(path, "rb") as f:
+            data = await f.read()
+        size = len(data)
+        # Stable transfer id per (blob, peer) so retries assemble into
+        # the SAME part files on the receiver rather than starting fresh.
+        transfer_id = f"{entry.blob_id}:{entry.target_instance_id}"
+        common: dict = {
+            "post_id": entry.post_id,
+            "blob_id": entry.blob_id,
+            "transfer_id": transfer_id,
+            "filename": entry.blob_id,
+            "file_size_bytes": size,
+        }
+        if size <= SINGLE_CHUNK_BYTES_THRESHOLD:
+            return [
+                {
+                    **common,
+                    "bytes_b64": base64.b64encode(data).decode("ascii"),
+                    "chunk_index": 0,
+                    "chunk_count": 1,
+                    "final": True,
+                }
+            ]
+        chunks: list[dict] = []
+        total = (size + MAX_BLOB_CHUNK_BYTES - 1) // MAX_BLOB_CHUNK_BYTES
+        for i in range(total):
+            start = i * MAX_BLOB_CHUNK_BYTES
+            end = min(start + MAX_BLOB_CHUNK_BYTES, size)
+            chunks.append(
+                {
+                    **common,
+                    "bytes_b64": base64.b64encode(data[start:end]).decode("ascii"),
+                    "chunk_index": i,
+                    "chunk_count": total,
+                    "final": i == total - 1,
+                }
+            )
+        return chunks
+
+    async def _reschedule_or_fail(
+        self,
+        entry: SpaceMediaOutboxEntry,
+        last_error: str,
+    ) -> None:
+        """Exponential backoff with full jitter; ``status='failed'`` at cap."""
+        attempts = entry.attempts + 1
+        if attempts >= MAX_ATTEMPTS:
+            await self._outbox.mark_failed(
+                blob_id=entry.blob_id,
+                target_instance_id=entry.target_instance_id,
+                last_error=last_error[:500],
+            )
+            return
+        base = BACKOFF_BASE_SECONDS * (2 ** (attempts - 1))
+        delay = min(base, BACKOFF_CAP_SECONDS)
+        delay = random.uniform(0, delay)
+        next_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        await self._outbox.reschedule(
+            blob_id=entry.blob_id,
+            target_instance_id=entry.target_instance_id,
+            attempts=attempts,
+            next_attempt_at=next_at.strftime("%Y-%m-%d %H:%M:%S"),
+            last_error=last_error[:500],
+        )
+
+
+# uuid is imported for future use (transfer IDs that aren't filename-derived).
+_ = uuid

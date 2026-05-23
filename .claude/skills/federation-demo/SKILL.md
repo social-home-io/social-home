@@ -284,17 +284,31 @@ That single command runs the full sequence:
 
 The canonical ``all`` sequence runs ``up → pair → traffic →
 calendar → verify → relay-pair → visibility → invite-redeem →
-invite-redeem-routed → remote-invite-routed →
-remote-invite-decline → replay`` in that order. ``gfs-up`` /
-``gfs-pair`` / ``gfs-down`` stay opt-in (they spin up a separate
-GFS process and aren't required to validate the HFS↔HFS surface).
+invite-redeem-routed → remote-invite-routed → space-post-routed →
+space-media-blob → admin-promote-kick → remote-invite-decline →
+replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
+stay opt-in (they spin up a separate GFS process and aren't
+required to validate the HFS↔HFS surface).
+
+Phases added after the initial publish are documented inline in
+``harness.py`` (each ``cmd_*`` has its own docstring):
+
+* ``space-post-routed`` — mesh-routed SPACE_POST_CREATED via
+  SPACE_ROUTED through a relay that never decrypts the inner
+  payload.
+* ``space-media-blob`` — bytes for a posted image actually reach
+  the remote member's media path (the SpaceMediaSyncService
+  outbox + chunked SPACE_MEDIA_BLOB stream).
+* ``admin-promote-kick`` — cross-household role promotion lands on
+  the affected member's household via SPACE_MEMBER_ROLE_CHANGED.
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
 / ``relay-pair`` / ``visibility`` / ``invite-redeem`` /
 ``invite-redeem-routed`` / ``remote-invite-routed`` /
-``remote-invite-decline`` / ``replay``); state is persisted to
-``/tmp/sh-demo/state.json`` between calls.
+``space-post-routed`` / ``space-media-blob`` /
+``admin-promote-kick`` / ``remote-invite-decline`` / ``replay``);
+state is persisted to ``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands
 

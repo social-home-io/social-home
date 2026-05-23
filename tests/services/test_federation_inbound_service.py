@@ -1170,3 +1170,135 @@ async def test_users_sync_upserts_remote_users(db, inbound):
     assert [r["user_id"] for r in rows] == ["u-r1", "u-r2"]
     assert rows[0]["instance_id"] == "peer-a"
     assert rows[0]["remote_username"] == "alice"
+
+
+# ─── SPACE_MEDIA_BLOB — write the bytes the sender shipped ─────────
+
+
+async def test_space_media_blob_writes_bytes_to_local_media_dir(
+    db,
+    bus,
+    tmp_path,
+):
+    """The inbound receiver writes the bytes under the SAME filename
+    the sender used so the relative ``<img src>`` on the post row
+    resolves on this household. Without this handler the post lands
+    but the picture is broken."""
+    import base64
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        media_dir=tmp_path,
+    )
+    body = b"WEBP-bytes-from-the-sender"
+    await service._on_space_media_blob(
+        _event(
+            FederationEventType.SPACE_MEDIA_BLOB,
+            {
+                "post_id": "post-mediated",
+                "space_id": "sp-mediated",
+                "filename": "abc123.webp",
+                "mime_type": "image/webp",
+                "bytes_base64": base64.b64encode(body).decode("ascii"),
+            },
+        )
+    )
+    assert (tmp_path / "abc123.webp").read_bytes() == body
+
+
+async def test_space_media_blob_rejects_path_traversal(db, bus, tmp_path):
+    """A malicious sender could ship ``filename: '../../etc/passwd'``;
+    same allowlist as ``MediaServeView`` rejects ``/``, ``\\``, or
+    leading ``.``."""
+    import base64
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        media_dir=tmp_path,
+    )
+    body = b"injection-attempt"
+    for bad in ("../escape.webp", "sub/dir.webp", ".hidden.webp"):
+        await service._on_space_media_blob(
+            _event(
+                FederationEventType.SPACE_MEDIA_BLOB,
+                {
+                    "post_id": "p",
+                    "filename": bad,
+                    "bytes_base64": base64.b64encode(body).decode("ascii"),
+                },
+            )
+        )
+    # Nothing was written outside the media dir.
+    contents = list(tmp_path.iterdir())
+    assert contents == [] or all(
+        c.name not in ("escape.webp", "dir.webp", "hidden.webp") for c in contents
+    )
+
+
+async def test_space_media_blob_no_media_dir_drops(db, bus):
+    """Receiver without ``media_dir`` (test stack) silently no-ops
+    rather than crashing."""
+    import base64
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    # Should not raise.
+    await service._on_space_media_blob(
+        _event(
+            FederationEventType.SPACE_MEDIA_BLOB,
+            {
+                "filename": "x.webp",
+                "bytes_base64": base64.b64encode(b"x").decode("ascii"),
+            },
+        )
+    )
+
+
+async def test_space_media_blob_assembles_chunked_transfer(db, bus, tmp_path):
+    """Multi-chunk transfer: each chunk lands in a per-transfer
+    partial dir; the final chunk triggers concat into the target
+    filename. Mirrors :class:`SpaceMediaSyncService`'s sender shape."""
+    import base64
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        media_dir=tmp_path,
+    )
+    full = b"".join(bytes([i]) * 256 for i in range(8))  # 2 KiB
+    # Split into 4 chunks of 512 bytes each.
+    chunks = [full[i * 512 : (i + 1) * 512] for i in range(4)]
+    for idx, chunk in enumerate(chunks):
+        await service._on_space_media_blob(
+            _event(
+                FederationEventType.SPACE_MEDIA_BLOB,
+                {
+                    "post_id": "p",
+                    "transfer_id": "tx-1",
+                    "filename": "big.webm",
+                    "chunk_index": idx,
+                    "chunk_count": 4,
+                    "final": idx == 3,
+                    "bytes_b64": base64.b64encode(chunk).decode("ascii"),
+                },
+            )
+        )
+    assert (tmp_path / "big.webm").read_bytes() == full
+    # Partial directory cleaned up.
+    assert not (tmp_path / ".partial" / "tx-1").exists()

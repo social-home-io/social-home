@@ -139,6 +139,13 @@ class FederationEventType(str, enum.Enum):
     SPACE_POST_CREATED = "space_post_created"
     SPACE_POST_UPDATED = "space_post_updated"
     SPACE_POST_DELETED = "space_post_deleted"
+    #: Inline-ship the WebP / WebM / file bytes that ``SPACE_POST_CREATED``
+    #: referenced by URL. Without this companion event, a remote
+    #: member's SPA renders ``<img src="api/media/foo.webp">`` against
+    #: their OWN base href, which has no file → broken image. The
+    #: receiver persists the bytes to their local ``media_path``
+    #: under the same filename so the existing relative URL resolves.
+    SPACE_MEDIA_BLOB = "space_media_blob"
     SPACE_COMMENT_CREATED = "space_comment_created"
     SPACE_COMMENT_UPDATED = "space_comment_updated"
     SPACE_COMMENT_DELETED = "space_comment_deleted"
