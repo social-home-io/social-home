@@ -343,6 +343,9 @@ class BazaarService:
                 bidder_user_id=bidder_user_id,
                 amount=int(amount),
                 new_end_time=refreshed.end_time if refreshed else listing.end_time,
+                bid_id=bid.id,
+                space_id=listing.space_id,
+                message=message,
             )
         )
         return bid
@@ -370,6 +373,8 @@ class BazaarService:
                 seller_user_id=listing.seller_user_id,
                 buyer_user_id=bid.bidder_user_id,
                 price=bid.amount,
+                bid_id=bid_id,
+                space_id=listing.space_id,
             )
         )
 

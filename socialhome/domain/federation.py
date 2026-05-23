@@ -204,13 +204,20 @@ class FederationEventType(str, enum.Enum):
     # title. Image bytes ship through the same media outbox the
     # post + gallery paths use (correlation_id = listing.post_id).
     BAZAAR_LISTING_CREATED = "bazaar_listing_created"
-    #: Status-only mutation on an existing listing (SOLD / EXPIRED /
-    #: CANCELLED). The receiver looks up by ``post_id`` and updates
-    #: ``status`` + ``winner_user_id`` + ``winning_price`` + ``sold_at``.
-    #: Without this, a remote member sees a listing that the seller
-    #: marked sold yesterday still rendered "active" until the next
-    #: §25.6 catch-up sync.
+    #: Status-only update on an existing listing (F8) — SOLD / EXPIRED /
+    #: CANCELLED. Receivers update their local row's status.
     BAZAAR_LISTING_UPDATED = "bazaar_listing_updated"
+    #: F7 — a remote bidder placed a bid (or offer). Receivers
+    #: persist into ``bazaar_bids`` so the seller's host (and every
+    #: other member's local view) see the same canonical bid id +
+    #: amount. Required because the bid endpoint on a non-seller's
+    #: instance can't reach the seller's DB directly.
+    BAZAAR_BID_PLACED = "bazaar_bid_placed"
+    #: F7 — seller marked an offer as accepted (and the listing as
+    #: sold). Receivers flip the bid row's ``accepted=true`` and apply
+    #: the matching ``mark_sold`` so winner_user_id / winning_price
+    #: stay consistent.
+    BAZAAR_OFFER_ACCEPTED = "bazaar_offer_accepted"
 
     # ── Space encryption key exchange ──
     SPACE_KEY_EXCHANGE = "space_key_exchange"

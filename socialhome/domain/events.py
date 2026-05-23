@@ -653,6 +653,11 @@ class BazaarBidPlaced(DomainEvent):
     bidder_user_id: str
     amount: int
     new_end_time: str
+    #: Bid row id — minted by the bidder's instance and federated as-is
+    #: so all members converge on a single canonical id per bid (F7).
+    bid_id: str = ""
+    space_id: str | None = None
+    message: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 
@@ -664,6 +669,10 @@ class BazaarOfferAccepted(DomainEvent):
     seller_user_id: str
     buyer_user_id: str
     price: int
+    #: Bid row id that was accepted (F7) — receivers mirror the same
+    #: accepted=True flag onto their local row.
+    bid_id: str = ""
+    space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 

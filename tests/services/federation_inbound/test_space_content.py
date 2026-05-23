@@ -1076,3 +1076,139 @@ async def test_bazaar_listing_updated_handler_not_registered_without_repo(
     h.attach_to(fed)
     types = {t for t, _ in fed._event_registry.registered}
     assert FederationEventType.BAZAAR_LISTING_UPDATED not in types
+
+
+# ─── Bazaar bids + offer acceptance (F7) ──────────────────────────────
+
+
+class _FakeBazaarRepoWithBids:
+    """Adds bid-handling methods to the F8 stub for F7 coverage."""
+
+    def __init__(self) -> None:
+        self.placed: list = []
+        self.accepted: list[str] = []
+        self.existing_bids: dict[str, object] = {}
+        self.fail_place = False
+
+    async def save_listing(self, listing):
+        return listing
+
+    async def get_bid(self, bid_id):
+        return self.existing_bids.get(bid_id)
+
+    async def place_bid(self, bid):
+        if self.fail_place:
+            raise ValueError("listing not active")
+        self.placed.append(bid)
+        self.existing_bids[bid.id] = bid
+        return bid
+
+    async def accept_offer(self, bid_id):
+        self.accepted.append(bid_id)
+
+
+@pytest.fixture
+def bazaar_bids_handlers(bus, repos):
+    bazaar = _FakeBazaarRepoWithBids()
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+        bazaar_repo=bazaar,
+    )
+    h.attach_to(_FakeFederationService())
+    return h, bazaar
+
+
+async def test_bazaar_bid_placed_persists_bid(bazaar_bids_handlers):
+    handlers, bazaar = bazaar_bids_handlers
+    await handlers._on_bazaar_bid_placed(
+        _event(
+            FederationEventType.BAZAAR_BID_PLACED,
+            {
+                "bid_id": "bid-1",
+                "listing_post_id": "bzr-1",
+                "bidder_user_id": "u-bidder",
+                "amount": 4200,
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "new_end_time": "2026-06-01T00:00:00+00:00",
+                "message": "my offer",
+            },
+        ),
+    )
+    assert len(bazaar.placed) == 1
+    bid = bazaar.placed[0]
+    assert bid.id == "bid-1"
+    assert bid.amount == 4200
+    assert bid.message == "my offer"
+
+
+async def test_bazaar_bid_placed_idempotent_on_replay(bazaar_bids_handlers):
+    """Replay or out-of-order delivery — drop silently if bid_id already
+    landed."""
+    handlers, bazaar = bazaar_bids_handlers
+    # Seed an existing bid.
+    bazaar.existing_bids["bid-1"] = object()
+    await handlers._on_bazaar_bid_placed(
+        _event(
+            FederationEventType.BAZAAR_BID_PLACED,
+            {
+                "bid_id": "bid-1",
+                "listing_post_id": "bzr-1",
+                "bidder_user_id": "u-bidder",
+                "amount": 4200,
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "new_end_time": "2026-06-01T00:00:00+00:00",
+            },
+        ),
+    )
+    assert bazaar.placed == []
+
+
+async def test_bazaar_bid_placed_missing_required_drops(bazaar_bids_handlers):
+    handlers, bazaar = bazaar_bids_handlers
+    await handlers._on_bazaar_bid_placed(
+        _event(
+            FederationEventType.BAZAAR_BID_PLACED,
+            {"bid_id": "bid-1"},  # missing listing_post_id, bidder, amount
+        ),
+    )
+    assert bazaar.placed == []
+
+
+async def test_bazaar_offer_accepted_routes_to_accept_offer(
+    bazaar_bids_handlers,
+):
+    handlers, bazaar = bazaar_bids_handlers
+    await handlers._on_bazaar_offer_accepted(
+        _event(
+            FederationEventType.BAZAAR_OFFER_ACCEPTED,
+            {
+                "bid_id": "bid-winning",
+                "listing_post_id": "bzr-1",
+                "space_id": "sp-1",
+                "buyer_user_id": "u-bidder",
+                "price": 4500,
+            },
+        ),
+    )
+    assert bazaar.accepted == ["bid-winning"]
+
+
+async def test_bazaar_bid_handlers_not_registered_without_repo(bus, repos):
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+    )
+    fed = _FakeFederationService()
+    h.attach_to(fed)
+    types = {t for t, _ in fed._event_registry.registered}
+    assert FederationEventType.BAZAAR_BID_PLACED not in types
+    assert FederationEventType.BAZAAR_OFFER_ACCEPTED not in types

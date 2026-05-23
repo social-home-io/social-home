@@ -342,3 +342,113 @@ async def test_status_update_skips_when_listing_gone(
         BazaarListingCancelled(listing_post_id="bzr-gone", seller_user_id="u"),
     )
     federation_service.broadcast_to_space_members.assert_not_awaited()
+
+
+# ─── F7: Cross-household bids + offer acceptance ─────────────────────
+
+
+async def test_bid_placed_broadcasts(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    from socialhome.domain.events import BazaarBidPlaced
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()  # outbound doesn't read for bid events
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarBidPlaced(
+            listing_post_id="bzr-1",
+            seller_user_id="u-seller",
+            bidder_user_id="u-bidder",
+            amount=4200,
+            new_end_time="2026-06-01T00:00:00+00:00",
+            bid_id="bid-1",
+            space_id="sp-1",
+            message="my best offer",
+        ),
+    )
+    federation_service.broadcast_to_space_members.assert_awaited_once()
+    call = federation_service.broadcast_to_space_members.await_args
+    assert call.args[0] == "sp-1"
+    assert call.args[1] == FederationEventType.BAZAAR_BID_PLACED
+    payload = call.args[2]
+    assert payload["bid_id"] == "bid-1"
+    assert payload["listing_post_id"] == "bzr-1"
+    assert payload["bidder_user_id"] == "u-bidder"
+    assert payload["amount"] == 4200
+    assert payload["message"] == "my best offer"
+    assert call.kwargs["min_proto_version"] == FederationCapability.MIN_FOR_BAZAAR_BIDS
+
+
+async def test_offer_accepted_broadcasts(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    from socialhome.domain.events import BazaarOfferAccepted
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarOfferAccepted(
+            listing_post_id="bzr-1",
+            seller_user_id="u-seller",
+            buyer_user_id="u-buyer",
+            price=4500,
+            bid_id="bid-1",
+            space_id="sp-1",
+        ),
+    )
+    federation_service.broadcast_to_space_members.assert_awaited_once()
+    call = federation_service.broadcast_to_space_members.await_args
+    assert call.args[1] == FederationEventType.BAZAAR_OFFER_ACCEPTED
+    payload = call.args[2]
+    assert payload["bid_id"] == "bid-1"
+    assert payload["price"] == 4500
+
+
+async def test_bid_placed_without_space_id_skips_broadcast(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """A bid event without space_id (pre-v_12 publisher or household
+    listing) → silent skip; nothing to broadcast to."""
+    from socialhome.domain.events import BazaarBidPlaced
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarBidPlaced(
+            listing_post_id="bzr-1",
+            seller_user_id="u-seller",
+            bidder_user_id="u-bidder",
+            amount=100,
+            new_end_time="2026-06-01T00:00:00+00:00",
+            bid_id="bid-1",
+            space_id=None,
+        ),
+    )
+    federation_service.broadcast_to_space_members.assert_not_awaited()
