@@ -52,6 +52,18 @@ class PostCreated(DomainEvent):
 class PostEdited(DomainEvent):
     post: "Post"
     occurred_at: datetime = field(default_factory=_now)
+    #: ``None`` when the post lives in the household feed; the
+    #: containing ``space_id`` when it's a space post. The outbound
+    #: federation bridge in :mod:`socialhome.services.space_post_outbound`
+    #: gates broadcast on this field — without it we couldn't tell
+    #: whether to fan SPACE_POST_UPDATED to space members or do
+    #: nothing (household-only edits stay local).
+    space_id: str | None = None
+    #: ``None`` on local origination; set to the originating peer's
+    #: instance_id when ``federation_inbound_service`` re-publishes
+    #: after receiving SPACE_POST_UPDATED. See ``SpacePostCreated``
+    #: for the loop-prevention rationale.
+    origin_instance_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -60,12 +72,18 @@ class PostDeleted(DomainEvent):
 
     post_id: str
     occurred_at: datetime = field(default_factory=_now)
+    #: ``None`` for household-feed deletes, ``space_id`` for space
+    #: post deletes — same gate as :class:`PostEdited`.
+    space_id: str | None = None
+    origin_instance_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
 class PostReactionChanged(DomainEvent):
     post: "Post"
     occurred_at: datetime = field(default_factory=_now)
+    space_id: str | None = None
+    origin_instance_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

@@ -509,9 +509,10 @@ field is universally shipped, the default-on-missing branch
 becomes the migration tripwire.
 
 See `docs/crypto.md` for the full Phase-1 → Phase-2 PQ migration
-plan and which surfaces still need suite tags retrofitted (an
-audit task — `sealed_sender.py`'s `SealedEnvelope` is the
-prominent remaining gap).
+plan. Every federation crypto wire shape now ships a suite tag —
+the prior gap on `SealedEnvelope` is closed (`aead_suite` field
+shipped). New cryptographic surfaces must add a sibling pattern
+on the same model.
 
 ### Before adding a SQL migration, audit the code path
 

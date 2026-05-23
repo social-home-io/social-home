@@ -146,14 +146,14 @@ is about strengthening the *delivery channel*, not the AEAD primitive.
 Receivers reject unknown `key_suite` values rather than fall back —
 see `apply_space_content_key_from_metadata` for the validator.
 
-**Suite-tag retrofit audit** — `sealed_sender.py`'s `SealedEnvelope`
-ships AES-256-GCM with no suite tag on the wire (the algorithm is
-hardcoded in encrypt + decrypt). Other surfaces already tag (`Encoder`'s
-`sig_suite`, mesh routing's `kem_suite`, the new content-key
-`key_suite`). The remaining gap should be closed in a follow-up that
-adds an `aead_suite` field to the sealed envelope so a future
-ChaCha20-Poly1305 or PQ-protected variant can land additively. Until
-then the AEAD primitive is fixed by convention.
+**Sealed-sender envelope** (`federation/sealed_sender.py`) wears the
+``aead_suite`` field (today only ``"aesgcm-256"``) on its wire shape;
+receivers reject unknown values via ``UnsupportedAeadSuite``. The
+suite-tag retrofit promised in earlier revisions of this doc is now
+shipped — every cryptographic wire format in the federation surface
+carries a ``*_suite`` identifier (signatures, mesh KEM, content-key
+delivery, sealed-sender AEAD). A future ChaCha20-Poly1305 or
+PQ-protected variant is a wire-additive change.
 
 **WebRTC SDP signing** (`federation/sdp_signing.py`) — Ed25519
 signature over `<sdp_type>:<sdp>` so a MITM can't swap DTLS endpoints.

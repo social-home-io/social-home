@@ -129,16 +129,54 @@ class SpacePostOutbound:
             )
 
     async def _on_post_edited(self, event: PostEdited) -> None:
-        # ``PostEdited`` is fired for both household and space posts;
-        # the bus event doesn't currently carry a space_id, so we
-        # can't safely federate this without re-looking-up the post.
-        # Out of scope for the first cut — household-only edits stay
-        # local, space-edit federation lands in a followup.
-        return
+        # ``space_id`` is set by the space-edit path in space_service;
+        # household-feed edits leave it ``None`` and stay local.
+        if not event.space_id:
+            return
+        if event.origin_instance_id is not None:
+            return
+        post = event.post
+        payload = {
+            "id": post.id,
+            "post_id": post.id,
+            "space_id": event.space_id,
+            "content": post.content,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.SPACE_POST_UPDATED,
+                payload,
+            )
+        except Exception:
+            log.exception(
+                "SPACE_POST_UPDATED broadcast failed for space=%s post=%s",
+                event.space_id,
+                post.id,
+            )
 
     async def _on_post_deleted(self, event: PostDeleted) -> None:
-        # Same caveat as edit — needs space_id resolution.
-        return
+        if not event.space_id:
+            return
+        if event.origin_instance_id is not None:
+            return
+        payload = {
+            "id": event.post_id,
+            "post_id": event.post_id,
+            "space_id": event.space_id,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.SPACE_POST_DELETED,
+                payload,
+            )
+        except Exception:
+            log.exception(
+                "SPACE_POST_DELETED broadcast failed for space=%s post=%s",
+                event.space_id,
+                event.post_id,
+            )
 
     # ── Comments ─────────────────────────────────────────────────────────
 
