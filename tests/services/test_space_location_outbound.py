@@ -61,7 +61,13 @@ class _FakeWS:
 
 
 class _FakeFederation:
-    """Captures every send_event for assertion.
+    """Captures every ``broadcast_to_space_members`` for assertion.
+
+    F2c switched the outbound from per-peer ``send_event`` to mesh-
+    routed broadcast so members behind a relay receive location
+    updates too. The fake records one call per broadcast (not one
+    per member); tests that previously inspected per-recipient
+    targeting now assert "broadcast happened with payload X."
 
     When ``encoder`` + ``session_key`` are wired the fake also
     encrypts the JSON payload with the real :class:`FederationEncoder`
@@ -81,13 +87,12 @@ class _FakeFederation:
         self._encoder = encoder
         self._session_key = session_key
 
-    async def send_event(
+    async def broadcast_to_space_members(
         self,
-        *,
-        to_instance_id: str,
+        space_id: str,
         event_type: FederationEventType,
         payload: dict,
-        space_id: str | None = None,
+        **kwargs: Any,
     ) -> None:
         encrypted: str | None = None
         if self._encoder is not None and self._session_key is not None:
@@ -97,7 +102,6 @@ class _FakeFederation:
             )
         self.calls.append(
             {
-                "to_instance_id": to_instance_id,
                 "event_type": event_type,
                 "payload": payload,
                 "encrypted_payload": encrypted,
@@ -268,7 +272,9 @@ async def test_no_zone_name_in_federation_payload(env):
     [call] = env.federation.calls
     assert call["event_type"] == FederationEventType.SPACE_LOCATION_UPDATED
     assert call["space_id"] == sp.id
-    assert call["to_instance_id"] == "remote_instance_a"
+    # F2c: broadcast_to_space_members handles per-peer iteration
+    # internally; the outbound now fires ONE broadcast call per
+    # PresenceUpdated, not one send_event per member.
     assert call["payload"]["mode"] == "gps"
     assert call["payload"]["lat"] == 47.3769
     assert call["payload"]["lon"] == 8.5417
@@ -359,7 +365,11 @@ async def test_skipped_when_lat_lon_none(env):
     assert env.federation.calls == []
 
 
-async def test_skips_own_instance_in_federation(env):
+async def test_broadcast_fires_once_per_space(env):
+    """F2c: broadcast_to_space_members is called once per space; the
+    helper handles own-instance filtering internally (the prior
+    per-peer send_event loop did the filtering at the outbound
+    layer)."""
     sp = await env.make_space("sp_office")
     await env.space_repo.save_member(
         SpaceMember(
@@ -370,7 +380,6 @@ async def test_skips_own_instance_in_federation(env):
             location_share_enabled=True,
         ),
     )
-    # Record both our own instance and a remote one as space members.
     await env.space_repo.add_space_instance(
         sp.id,
         env.federation._own_instance_id,
@@ -387,7 +396,8 @@ async def test_skips_own_instance_in_federation(env):
         ),
     )
     [call] = env.federation.calls
-    assert call["to_instance_id"] == "remote_instance_b"
+    assert call["space_id"] == sp.id
+    assert call["event_type"] == FederationEventType.SPACE_LOCATION_UPDATED
 
 
 async def test_no_zone_name_in_decrypted_federation_envelope(env, tmp_dir):
