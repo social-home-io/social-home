@@ -35,7 +35,11 @@ class SpaceMediaOutboxEntry:
     """
 
     blob_id: str
-    post_id: str
+    #: Soft backref to whatever spawned this row — a ``post_id`` for
+    #: space-feed posts, a ``gallery_item_id`` for gallery items.
+    #: The scheduler never reads it; the SPA's debug surface uses it.
+    correlation_id: str
+    space_id: str
     target_instance_id: str
     bytes_path: str
     status: str
@@ -51,7 +55,8 @@ class AbstractSpaceMediaOutboxRepo(Protocol):
         self,
         *,
         blob_id: str,
-        post_id: str,
+        space_id: str,
+        correlation_id: str,
         target_instance_id: str,
         bytes_path: str,
     ) -> None: ...
@@ -82,7 +87,9 @@ class AbstractSpaceMediaOutboxRepo(Protocol):
         last_error: str | None,
     ) -> None: ...
 
-    async def list_for_post(self, post_id: str) -> list[SpaceMediaOutboxEntry]: ...
+    async def list_for_correlation(
+        self, correlation_id: str
+    ) -> list[SpaceMediaOutboxEntry]: ...
 
     async def reclaim_in_flight(self) -> int: ...
 
@@ -97,18 +104,25 @@ class SqliteSpaceMediaOutboxRepo:
         self,
         *,
         blob_id: str,
-        post_id: str,
+        space_id: str,
+        correlation_id: str,
         target_instance_id: str,
         bytes_path: str,
     ) -> None:
         await self._db.enqueue(
             """
             INSERT INTO space_media_outbox(
-                blob_id, post_id, target_instance_id, bytes_path
-            ) VALUES(?,?,?,?)
+                blob_id, space_id, correlation_id, target_instance_id, bytes_path
+            ) VALUES(?,?,?,?,?)
             ON CONFLICT(blob_id, target_instance_id) DO NOTHING
             """,
-            (blob_id, post_id, target_instance_id, bytes_path),
+            (
+                blob_id,
+                space_id,
+                correlation_id,
+                target_instance_id,
+                bytes_path,
+            ),
         )
 
     async def list_due(self, *, limit: int = 25) -> list[SpaceMediaOutboxEntry]:
@@ -181,10 +195,12 @@ class SqliteSpaceMediaOutboxRepo:
             (last_error, blob_id, target_instance_id),
         )
 
-    async def list_for_post(self, post_id: str) -> list[SpaceMediaOutboxEntry]:
+    async def list_for_correlation(
+        self, correlation_id: str
+    ) -> list[SpaceMediaOutboxEntry]:
         rows = await self._db.fetchall(
-            "SELECT * FROM space_media_outbox WHERE post_id=?",
-            (post_id,),
+            "SELECT * FROM space_media_outbox WHERE correlation_id=?",
+            (correlation_id,),
         )
         return [_row_to_entry(d) for d in rows_to_dicts(rows)]
 
@@ -211,7 +227,8 @@ class SqliteSpaceMediaOutboxRepo:
 def _row_to_entry(row: dict) -> SpaceMediaOutboxEntry:
     return SpaceMediaOutboxEntry(
         blob_id=row["blob_id"],
-        post_id=row["post_id"],
+        correlation_id=row["correlation_id"],
+        space_id=row["space_id"],
         target_instance_id=row["target_instance_id"],
         bytes_path=row["bytes_path"],
         status=row["status"],

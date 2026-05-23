@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from socialhome.domain.events import GalleryItemDeleted, GalleryItemUploaded
@@ -19,7 +21,23 @@ class _FakeFederationService:
         self.sent: list[tuple] = []
 
     async def send_event(self, *, to_instance_id, event_type, payload, space_id=None):
+        # Kept for back-compat — older tests still call this path.
         self.sent.append((to_instance_id, event_type, payload, space_id))
+
+    async def send_with_mesh_fallback(
+        self,
+        *,
+        to_instance_id,
+        event_type,
+        payload,
+        space_id=None,
+    ):
+        # Gallery outbound now uses mesh-fallback so members joined
+        # via §D1b mesh path receive the event too.
+        from socialhome.domain.federation import DeliveryResult
+
+        self.sent.append((to_instance_id, event_type, payload, space_id))
+        return DeliveryResult(instance_id=to_instance_id, ok=True)
 
 
 class _FakeSpaceRepo:
@@ -177,3 +195,60 @@ async def test_uploaded_event_for_missing_item_skipped(env):
         ),
     )
     assert fed.sent == []
+
+
+async def test_uploaded_event_enqueues_media_blob_for_peers():
+    """Gallery item upload enqueues both thumbnail + full URLs in
+    the space-media outbox so the receiver renders the thumbnail
+    AND can zoom to full. Without this the SPA shows a broken
+    image because the URLs point at the receiver's own (empty)
+    media path."""
+    from socialhome.services.gallery_federation_outbound import (
+        GalleryFederationOutbound,
+    )
+
+    bus = EventBus()
+    fed = _FakeFederationService(own_instance_id="self-id")
+    item = GalleryItem(
+        id="it-mediated",
+        album_id="alb-space",
+        uploaded_by="alice",
+        item_type="photo",
+        url="api/media/full.webp",
+        thumbnail_url="api/media/thumb.webp",
+        width=1024,
+        height=768,
+    )
+    gallery = _FakeGalleryRepo(
+        albums={"alb-space": _album("alb-space", space_id="sp-mediated")},
+        items={"it-mediated": item},
+    )
+    space_repo = _FakeSpaceRepo({"sp-mediated": ["peer-a", "peer-b", "self-id"]})
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_blob = AsyncMock()
+    GalleryFederationOutbound(
+        bus=bus,
+        federation_service=fed,
+        gallery_repo=gallery,
+        space_repo=space_repo,
+        media_sync=media_sync,
+    ).wire()
+    await bus.publish(
+        GalleryItemUploaded(
+            item_id="it-mediated",
+            album_id="alb-space",
+            item_type="photo",
+            uploader="alice",
+        ),
+    )
+    media_sync.enqueue_for_blob.assert_awaited_once()
+    call = media_sync.enqueue_for_blob.call_args
+    assert call.kwargs["space_id"] == "sp-mediated"
+    assert call.kwargs["correlation_id"] == "it-mediated"
+    # Self instance is filtered out.
+    assert set(call.kwargs["target_instance_ids"]) == {"peer-a", "peer-b"}
+    # Thumbnail AND full URLs enqueued; dedup on identical URLs.
+    assert set(call.kwargs["media_urls"]) == {
+        "api/media/thumb.webp",
+        "api/media/full.webp",
+    }
