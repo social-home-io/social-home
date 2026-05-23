@@ -129,6 +129,9 @@ from .repositories.highlight_repo import SqliteHighlightRepo
 from .repositories.presence_repo import SqlitePresenceRepo
 from .repositories.peer_space_directory_repo import SqlitePeerSpaceDirectoryRepo
 from .repositories.public_space_repo import SqlitePublicSpaceRepo
+from .repositories.space_remote_location_repo import (
+    SqliteSpaceRemoteLocationRepo,
+)
 from .repositories.space_remote_member_repo import SqliteSpaceRemoteMemberRepo
 from .repositories.report_repo import SqliteReportRepo
 from .repositories.search_repo import SqliteSearchRepo
@@ -452,6 +455,7 @@ def _build_repos(db: AsyncDatabase):
         public_space=SqlitePublicSpaceRepo(db),
         peer_space_directory=SqlitePeerSpaceDirectoryRepo(db),
         space_remote_member=SqliteSpaceRemoteMemberRepo(db),
+        space_remote_location=SqliteSpaceRemoteLocationRepo(db),
         storage_stats=SqliteStorageStatsRepo(db),
         poll=SqlitePollRepo(db),
         space_poll=SqliteSpacePollRepo(db),
@@ -485,6 +489,7 @@ def _wire_federation_stack(
     space_repo,
     peer_space_directory_repo,
     space_remote_member_repo,
+    space_remote_location_repo,
     space_cover_repo,
     user_repo,
     profile_picture_repo,
@@ -701,6 +706,7 @@ def _wire_federation_stack(
         remote_member_repo=space_remote_member_repo,
         cover_repo=space_cover_repo,
         space_crypto_service=space_crypto,
+        remote_location_repo=space_remote_location_repo,
     )
     private_invite_handler.attach_to(federation_service)
     app[K.private_invite_handler_key] = private_invite_handler
@@ -1688,6 +1694,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.post_repo_key] = post_repo
     app[K.space_repo_key] = space_repo
     app[K.space_remote_member_repo_key] = repos.space_remote_member
+    app[K.space_remote_location_repo_key] = repos.space_remote_location
     app[K.notification_repo_key] = notification_repo
     app[K.conversation_repo_key] = conversation_repo
     app[K.outbox_repo_key] = outbox_repo
@@ -1888,6 +1895,7 @@ def create_app(config: Config | None = None) -> web.Application:
             space_repo=space_repo,
             peer_space_directory_repo=repos.peer_space_directory,
             space_remote_member_repo=repos.space_remote_member,
+            space_remote_location_repo=repos.space_remote_location,
             space_cover_repo=space_cover_repo,
             user_repo=user_repo,
             profile_picture_repo=profile_picture_repo,
