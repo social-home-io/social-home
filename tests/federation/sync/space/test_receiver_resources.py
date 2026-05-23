@@ -770,3 +770,134 @@ async def test_bazaar_listings_skipped_when_repo_not_wired(bus, peer):
         ],
     )
     assert collector.bazaar_listings == []
+
+
+# ─── Schedules catch-up (F5) ──────────────────────────────────────────
+
+
+class _FakePollRepo:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+
+    async def create_schedule_poll(
+        self,
+        *,
+        post_id,
+        title,
+        deadline,
+        slots,
+    ):
+        self.created.append(
+            {
+                "post_id": post_id,
+                "title": title,
+                "deadline": deadline,
+                "slots": list(slots),
+            },
+        )
+
+
+@pytest.fixture
+def setup_with_poll_repo(bus, peer):
+    peer_inst, peer_kp = peer
+    collector = _FakeRepos()
+    poll = _FakePollRepo()
+    self_kp = generate_identity_keypair()
+    r = SpaceSyncReceiver(
+        bus=bus,
+        encoder=FederationEncoder(self_kp.private_key),
+        crypto=_FakeCrypto(),
+        federation_repo=_FakeFedRepo(peer_inst),
+        space_repo=_SpaceRepoStub(collector),
+        space_post_repo=_PostRepoStub(collector),
+        space_task_repo=_TaskRepoStub(collector),
+        page_repo=_PageRepoStub(collector),
+        sticky_repo=_StickyRepoStub(collector),
+        space_calendar_repo=_CalendarRepoStub(collector),
+        gallery_repo=_GalleryRepoStub(collector),
+        poll_repo=poll,
+    )
+    return r, poll, peer_kp
+
+
+async def test_schedules_persists_meta_and_slots(setup_with_poll_repo):
+    """F5: schedule chunked sync routes through poll_repo.create_schedule_poll."""
+    r, poll, kp = setup_with_poll_repo
+    await _send(
+        r,
+        kp,
+        "schedules",
+        [
+            {
+                "post_id": "p-sched",
+                "title": "Picnic?",
+                "deadline": "2026-08-01",
+                "slots": [
+                    {
+                        "id": "s1",
+                        "slot_date": "2026-07-01",
+                        "start_time": "14:00",
+                        "end_time": "16:00",
+                        "position": 0,
+                    },
+                ],
+            },
+        ],
+    )
+    assert len(poll.created) == 1
+    rec = poll.created[0]
+    assert rec["post_id"] == "p-sched"
+    assert rec["title"] == "Picnic?"
+    assert rec["slots"][0]["id"] == "s1"
+
+
+async def test_schedules_malformed_record_dropped(setup_with_poll_repo):
+    r, poll, kp = setup_with_poll_repo
+    await _send(
+        r,
+        kp,
+        "schedules",
+        [
+            {"post_id": "bad"},  # missing title + slots
+            {"title": "no-post-id"},  # missing post_id
+            {  # missing slots
+                "post_id": "p-ok",
+                "title": "OK",
+                "slots": [],
+            },
+        ],
+    )
+    assert poll.created == []
+
+
+async def test_schedules_skipped_when_no_poll_repo_wired(bus, peer):
+    peer_inst, peer_kp = peer
+    collector = _FakeRepos()
+    self_kp = generate_identity_keypair()
+    r = SpaceSyncReceiver(
+        bus=bus,
+        encoder=FederationEncoder(self_kp.private_key),
+        crypto=_FakeCrypto(),
+        federation_repo=_FakeFedRepo(peer_inst),
+        space_repo=_SpaceRepoStub(collector),
+        space_post_repo=_PostRepoStub(collector),
+        space_task_repo=_TaskRepoStub(collector),
+        page_repo=_PageRepoStub(collector),
+        sticky_repo=_StickyRepoStub(collector),
+        space_calendar_repo=_CalendarRepoStub(collector),
+        gallery_repo=_GalleryRepoStub(collector),
+        # poll_repo deliberately omitted
+    )
+    # Must not raise; receiver branch silently logs + returns.
+    await _send(
+        r,
+        peer_kp,
+        "schedules",
+        [
+            {
+                "post_id": "p-sched",
+                "title": "Picnic?",
+                "slots": [{"id": "s1", "slot_date": "2026-07-01"}],
+            },
+        ],
+    )

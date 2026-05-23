@@ -136,6 +136,8 @@ class _FakePollRepo:
         self.cleared: list[tuple[str, str]] = []
         self.inserted: list[tuple[str, str]] = []
         self.closed: list[str] = []
+        self.scheduled: list[dict] = []
+        self.fail_create_schedule = False
 
     async def option_belongs_to_post(self, *, option_id, post_id):
         return (post_id, option_id) in self.valid_options
@@ -148,6 +150,18 @@ class _FakePollRepo:
 
     async def close(self, post_id):
         self.closed.append(post_id)
+
+    async def create_schedule_poll(self, *, post_id, title, deadline, slots):
+        if self.fail_create_schedule:
+            raise RuntimeError("FK violation simulated")
+        self.scheduled.append(
+            {
+                "post_id": post_id,
+                "title": title,
+                "deadline": deadline,
+                "slots": list(slots),
+            },
+        )
 
 
 def _event(event_type, payload, *, from_instance="peer-a", space_id=None):
@@ -1212,3 +1226,90 @@ async def test_bazaar_bid_handlers_not_registered_without_repo(bus, repos):
     types = {t for t, _ in fed._event_registry.registered}
     assert FederationEventType.BAZAAR_BID_PLACED not in types
     assert FederationEventType.BAZAAR_OFFER_ACCEPTED not in types
+
+
+# ─── Schedule poll create (F5) ───────────────────────────────────────
+
+
+@pytest.fixture
+def schedule_handlers(bus, repos):
+    poll = _FakePollRepo()
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+        poll_repo=poll,
+    )
+    h.attach_to(_FakeFederationService())
+    return h, poll
+
+
+async def test_schedule_created_persists_meta_and_slots(schedule_handlers):
+    handlers, poll = schedule_handlers
+    await handlers._on_schedule_created(
+        _event(
+            FederationEventType.SPACE_SCHEDULE_CREATED,
+            {
+                "post_id": "p-sched",
+                "title": "Picnic?",
+                "deadline": "2026-08-01",
+                "space_id": "sp-1",
+                "slots": [
+                    {
+                        "id": "s1",
+                        "slot_date": "2026-07-01",
+                        "start_time": "14:00",
+                        "end_time": "16:00",
+                        "position": 0,
+                    },
+                ],
+            },
+        ),
+    )
+    assert len(poll.scheduled) == 1
+    assert poll.scheduled[0]["post_id"] == "p-sched"
+    assert poll.scheduled[0]["title"] == "Picnic?"
+
+
+async def test_schedule_created_missing_field_drops(schedule_handlers):
+    handlers, poll = schedule_handlers
+    await handlers._on_schedule_created(
+        _event(
+            FederationEventType.SPACE_SCHEDULE_CREATED,
+            {"post_id": "p-sched", "title": "Picnic?"},  # missing slots
+        ),
+    )
+    assert poll.scheduled == []
+
+
+async def test_schedule_created_repo_failure_swallowed(schedule_handlers):
+    """FK race (wrapper post not yet landed) — log + drop."""
+    handlers, poll = schedule_handlers
+    poll.fail_create_schedule = True
+    await handlers._on_schedule_created(
+        _event(
+            FederationEventType.SPACE_SCHEDULE_CREATED,
+            {
+                "post_id": "p-orphan",
+                "title": "X",
+                "slots": [{"id": "s1", "slot_date": "2026-07-01"}],
+            },
+        ),
+    )
+    assert poll.scheduled == []
+
+
+async def test_schedule_created_not_registered_without_poll_repo(bus, repos):
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+    )
+    fed = _FakeFederationService()
+    h.attach_to(fed)
+    types = {t for t, _ in fed._event_registry.registered}
+    assert FederationEventType.SPACE_SCHEDULE_CREATED not in types
