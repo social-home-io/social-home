@@ -61,8 +61,9 @@ def _validate_base(raw: str) -> str | None:
     return base
 
 
-def _validate_ice_servers(raw) -> list[dict] | None:
-    """Validate a pushed ICE-server list and return a normalized copy.
+def _validate_ice_servers(raw) -> tuple[list[dict] | None, str | None]:
+    """Validate a pushed ICE-server list and return ``(cleaned, None)``
+    on success or ``(None, reason)`` on failure.
 
     Accepted shape — Chrome / aiolibdatachannel-compatible::
 
@@ -75,48 +76,80 @@ def _validate_ice_servers(raw) -> list[dict] | None:
             },
         ]
 
-    Return ``None`` for any malformed input. Length / count limits are
-    bounded so the integration cannot push a payload that bloats every
+    Some older clients (incl. the HA core ``webrtc_models`` library
+    used by the integration) serialise the ``urls`` field in the
+    singular as ``"url"``. We accept that as a fallback so the
+    integration doesn't have to know about the dialect difference.
+
+    The ``reason`` string is short, operator-readable, and gets
+    echoed in the 422 response + logged so a misconfigured ICE
+    payload doesn't fail silently. Length / count limits are bounded
+    so the integration cannot push a payload that bloats every
     outbound ``ice_servers`` echo (§24.10.7) or peer config.
     """
     if not isinstance(raw, list):
-        return None
+        return None, "payload is not a list"
     if len(raw) > _ICE_MAX_SERVERS:
-        return None
+        return None, f"too many servers (max {_ICE_MAX_SERVERS})"
     out: list[dict] = []
-    for entry in raw:
+    for idx, entry in enumerate(raw):
         if not isinstance(entry, dict):
-            return None
+            return None, f"entry {idx} is not a dict"
+        # ``urls`` is the canonical Chrome / WebRTC spec field. Some
+        # libraries (notably the HA core's ``webrtc_models``) still
+        # emit the singular ``url`` form — accept it as a fallback
+        # rather than 422'ing the entire payload over a field-name
+        # typo.
         urls = entry.get("urls")
-        # Chrome-compatible: "urls" can be either a string or a list of
-        # strings. Normalize to list[str] so downstream code (the
-        # transport layer flattens it again) sees a single shape.
+        if urls is None and "url" in entry:
+            urls = entry.get("url")
         if isinstance(urls, str):
             urls = [urls]
         if not isinstance(urls, list) or not urls:
-            return None
+            return (
+                None,
+                f"entry {idx} missing 'urls' (or singular 'url') string/list",
+            )
         if len(urls) > _ICE_MAX_URLS_PER_SERVER:
-            return None
+            return (
+                None,
+                f"entry {idx} has {len(urls)} URLs (max "
+                f"{_ICE_MAX_URLS_PER_SERVER} per server)",
+            )
         cleaned_urls: list[str] = []
         for url in urls:
             if not isinstance(url, str):
-                return None
+                return None, f"entry {idx} URL is not a string"
             url = url.strip()
-            if not url or len(url) > _ICE_MAX_FIELD_LEN:
-                return None
+            if not url:
+                return None, f"entry {idx} has an empty URL"
+            if len(url) > _ICE_MAX_FIELD_LEN:
+                return (
+                    None,
+                    f"entry {idx} URL exceeds {_ICE_MAX_FIELD_LEN} chars",
+                )
             if not url.lower().startswith(_ALLOWED_ICE_SCHEMES):
-                return None
+                return (
+                    None,
+                    f"entry {idx} URL {url!r} doesn't start with one of "
+                    f"{_ALLOWED_ICE_SCHEMES}",
+                )
             cleaned_urls.append(url)
         normalized: dict = {"urls": cleaned_urls}
         for opt in ("username", "credential"):
             val = entry.get(opt)
             if val is None:
                 continue
-            if not isinstance(val, str) or len(val) > _ICE_MAX_FIELD_LEN:
-                return None
+            if not isinstance(val, str):
+                return None, f"entry {idx} {opt!r} is not a string"
+            if len(val) > _ICE_MAX_FIELD_LEN:
+                return (
+                    None,
+                    f"entry {idx} {opt!r} exceeds {_ICE_MAX_FIELD_LEN} chars",
+                )
             normalized[opt] = val
         out.append(normalized)
-    return out
+    return out, None
 
 
 class HaIntegrationFederationBaseView(BaseView):
@@ -203,9 +236,12 @@ def _load_ice_servers(raw_value: str | None) -> list[dict]:
     except TypeError, ValueError:
         log.warning("ha_integration: persisted ice_servers JSON is malformed")
         return []
-    cleaned = _validate_ice_servers(parsed)
+    cleaned, reason = _validate_ice_servers(parsed)
     if cleaned is None:
-        log.warning("ha_integration: persisted ice_servers failed re-validation")
+        log.warning(
+            "ha_integration: persisted ice_servers failed re-validation: %s",
+            reason,
+        )
         return []
     return cleaned
 
@@ -259,12 +295,22 @@ class HaIntegrationIceServersView(BaseView):
         if not ctx.is_admin:
             return error_response(403, "FORBIDDEN", "Admin only.")
         body = await self.body()
-        cleaned = _validate_ice_servers(body.get("ice_servers"))
+        cleaned, reason = _validate_ice_servers(body.get("ice_servers"))
         if cleaned is None:
+            # Log the offending payload so an operator can match what
+            # the HA integration actually sent against what the
+            # validator expected. The 422 body carries the same
+            # ``reason`` string so the integration's UI can surface it.
+            log.warning(
+                "ha_integration: PUT /ice-servers rejected — %s; payload=%r",
+                reason,
+                body.get("ice_servers"),
+            )
             return error_response(
                 422,
                 "UNPROCESSABLE",
-                "ice_servers must be a list of "
+                f"ice_servers rejected: {reason}. "
+                "Expected a list of "
                 "{urls: [stun|turn|stuns|turns:...], username?, credential?}.",
             )
 

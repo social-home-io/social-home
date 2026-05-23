@@ -246,6 +246,79 @@ async def test_put_ice_servers_accepts_string_urls_and_normalizes(client):
     assert body["ice_servers"] == [{"urls": ["stun:stun.example.org:3478"]}]
 
 
+async def test_put_ice_servers_accepts_singular_url_field(client):
+    """REGRESSION: HA core's ``webrtc_models`` library serialises the
+    field name in the SINGULAR as ``url`` (pre-2017 Chrome dialect).
+    Accepting both shapes prevents the integration's TURN push from
+    failing 422 because of a field-name typo the operator has no
+    way to fix from their side."""
+    r = await client.put(
+        "/api/ha/integration/ice-servers",
+        json={
+            "ice_servers": [
+                {"url": "stun:stun.example.org:3478"},
+                {
+                    "url": "turn:turn.example.org:3478",
+                    "username": "u",
+                    "credential": "c",
+                },
+            ],
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    # Normalized back to the canonical ``urls`` list shape on storage.
+    assert body["ice_servers"] == [
+        {"urls": ["stun:stun.example.org:3478"]},
+        {
+            "urls": ["turn:turn.example.org:3478"],
+            "username": "u",
+            "credential": "c",
+        },
+    ]
+
+
+async def test_put_ice_servers_422_echoes_specific_reason(client):
+    """An operator pushing a malformed payload gets a 422 body
+    explaining WHICH entry failed and HOW — not just a generic
+    "ice_servers must be a list of …". Pre-fix the integration's UI
+    couldn't surface the actual error so an operator just saw the
+    push fail silently."""
+    r = await client.put(
+        "/api/ha/integration/ice-servers",
+        json={
+            "ice_servers": [
+                {"urls": ["http://not-a-stun-or-turn.example/"]},
+            ],
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+    body = await r.json()
+    # New diagnostic message: names the entry index + the offending URL.
+    assert "entry 0" in body["error"]["detail"]
+    assert "http://not-a-stun-or-turn.example/" in body["error"]["detail"]
+
+
+async def test_put_ice_servers_422_for_too_many_servers(client):
+    """Bound-check error message should report the cap so an
+    operator can see they're hitting the per-PUT limit."""
+    r = await client.put(
+        "/api/ha/integration/ice-servers",
+        json={
+            "ice_servers": [
+                {"urls": [f"stun:stun.example.org:{3000 + i}"]}
+                for i in range(20)  # well over the 8-server cap
+            ],
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+    body = await r.json()
+    assert "too many servers" in body["error"]["detail"]
+
+
 async def test_put_ice_servers_clears_to_empty_list(client):
     """Operator can clear the override by pushing ``[]``."""
     await client.put(
