@@ -253,30 +253,17 @@ class SpaceLocationOutbound:
         payload: dict,
     ) -> None:
         try:
-            peers = await self._spaces.list_member_instances(space_id)
+            await self._federation.broadcast_to_space_members(
+                space_id,
+                FederationEventType.SPACE_LOCATION_UPDATED,
+                payload,
+            )
         except Exception as exc:  # pragma: no cover — defensive
             log.debug(
-                "space-location-outbound: list peers failed: %s",
+                "space-location-outbound: broadcast failed for space=%s: %s",
+                space_id,
                 exc,
             )
-            return
-        own = getattr(self._federation, "_own_instance_id", "")
-        for instance_id in peers:
-            if not instance_id or instance_id == own:
-                continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=instance_id,
-                    event_type=FederationEventType.SPACE_LOCATION_UPDATED,
-                    payload=payload,
-                    space_id=space_id,
-                )
-            except Exception as exc:  # pragma: no cover — defensive
-                log.debug(
-                    "space-location-outbound: send to %s failed: %s",
-                    instance_id,
-                    exc,
-                )
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
