@@ -15,6 +15,7 @@ from .bazaar import BazaarExporter
 from .calendar import CalendarExporter
 from .comments import CommentsExporter
 from .gallery import GalleryExporter
+from .member_pictures import MemberPicturesExporter
 from .members import MembersExporter
 from .pages import PagesExporter
 from .polls import PollsExporter
@@ -30,6 +31,7 @@ __all__ = [
     "CalendarExporter",
     "CommentsExporter",
     "GalleryExporter",
+    "MemberPicturesExporter",
     "MembersExporter",
     "PagesExporter",
     "PollsExporter",

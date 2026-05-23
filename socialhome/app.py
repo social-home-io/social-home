@@ -222,6 +222,7 @@ from .federation.sync import (
     ChunkBuilder,
     CommentsExporter,
     GalleryExporter,
+    MemberPicturesExporter,
     MembersExporter,
     PagesExporter,
     PollsExporter,
@@ -739,6 +740,10 @@ def _wire_federation_stack(
     exporters: dict = {
         "bans": BansExporter(space_repo),
         "members": MembersExporter(space_repo),
+        "member_pictures": MemberPicturesExporter(
+            space_repo,
+            profile_picture_repo,
+        ),
         "posts": PostsExporter(space_post_repo),
         "comments": CommentsExporter(space_post_repo),
         "tasks": TasksExporter(space_task_repo),
@@ -782,6 +787,7 @@ def _wire_federation_stack(
         gallery_repo=gallery_repo,
         zone_repo=space_zone_repo,
         bazaar_repo=bazaar_repo,
+        profile_picture_repo=profile_picture_repo,
         pending_decrypts=app[K.pending_decrypts_cache_key],
     )
     federation_service.attach_space_sync(

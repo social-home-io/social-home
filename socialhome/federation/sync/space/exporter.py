@@ -39,6 +39,12 @@ log = logging.getLogger(__name__)
 RESOURCE_ORDER: tuple[str, ...] = (
     "bans",
     "members",
+    # F6: avatar bytes ship right after members so the receiver has the
+    # ``space_member_profile_pictures`` row populated by the time the SPA
+    # renders the members list. Without it ``picture_hash`` resolves to
+    # a 404 on the joiner's own host (the bytes lived only on the
+    # originating user's instance).
+    "member_pictures",
     "posts",
     "comments",
     "tasks",
