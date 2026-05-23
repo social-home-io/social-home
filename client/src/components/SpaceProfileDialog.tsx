@@ -142,7 +142,7 @@ export function SpaceProfileDialog() {
               📷 Upload
             </span>
             <input ref={fileRef} type="file" accept="image/*"
-                   onChange={uploadPicture} hidden />
+                   onChange={uploadPicture} class="sr-only" />
           </label>
           <div class="sh-profile-card-meta">
             <div class="sh-profile-identity">

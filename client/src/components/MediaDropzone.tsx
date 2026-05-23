@@ -97,13 +97,24 @@ export function MediaDropzone({
       >
         {pickLabel}
       </button>
+      {/*
+        The input MUST stay in the layout tree — the Android System
+        WebView used by the HA Companion App does not fire the
+        ``onChange`` callback when the input is ``display: none``
+        (or ``hidden``). The user picks a file, the picker closes,
+        ``input.files`` stays empty, and the composer silently shows
+        nothing. ``.sr-only`` keeps the element 1×1 px offscreen so
+        the picker callback fires correctly while staying invisible
+        to the eye. Same fix applied at every other file-input site
+        in the SPA — see git blame for the full list.
+      */}
       <input
         ref={inputRef}
         type="file"
         multiple={multiple}
         accept={accept}
         disabled={disabled}
-        style={{ display: 'none' }}
+        class="sr-only"
         onChange={onPicked}
       />
     </div>

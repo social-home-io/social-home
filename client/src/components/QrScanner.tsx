@@ -229,7 +229,7 @@ export function QrScanner({ onPayload, onError, onCancel }: QrScannerProps) {
         <input
           type="file"
           accept="image/*"
-          hidden
+          class="sr-only"
           onChange={handleFile}
           disabled={decoding}
         />

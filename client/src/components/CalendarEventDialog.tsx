@@ -870,7 +870,7 @@ function CoverPicker() {
             type="file"
             accept="image/*"
             onChange={onPick}
-            hidden
+            class="sr-only"
           />
           <span>
             {coverUploading.value

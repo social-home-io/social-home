@@ -237,7 +237,7 @@ export function BazaarCreateDialog({ onCreated }: { onCreated?: () => void }) {
                 </button>
               )}
               <input ref={fileRef} type="file" accept="image/*" multiple
-                     style={{ display: 'none' }}
+                     class="sr-only"
                      onChange={onFilesPicked} />
             </div>
             <UploadProgressBar />
