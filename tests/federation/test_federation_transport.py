@@ -78,6 +78,112 @@ class _FakeSignaler:
 # ─── Facade: primary + fallback + handshake ───────────────────────────────
 
 
+async def test_evict_suppresses_rtc_rebuild_for_24h():
+    """REGRESSION: after a peer's PC enters FAILED and _evict_peer
+    fires, subsequent ``send()`` calls must NOT re-build the
+    handshake — that would hammer the failing path on every send.
+    The 24 h suppression keeps the cost down to one attempt/day.
+    """
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+    )
+    inst = _fake_instance("peer-1")
+
+    # Stage 1: simulate a PC FAILED event by calling _evict_peer
+    # directly (the inbound state-change handler does this in
+    # production). The peer must be in _peers first.
+    from socialhome.federation.transport import _RtcPeer
+
+    t._peers[inst.id] = _RtcPeer(
+        instance_id=inst.id,
+        ice_servers=None,
+        signaling=t._signaling_factory(inst.id),
+        inbound=t._inbound_factory(inst.id),
+    )
+    await t._evict_peer(inst.id)
+    # The peer is gone, but suppression is recorded.
+    assert inst.id not in t._peers
+    assert t._rtc_suppressed(inst.id) is True
+
+    # Stage 2: a follow-up send() should go straight to HTTPS and
+    # NOT rebuild the handshake. We assert by counting outbound
+    # SDP-offer envelopes — _ensure_handshake calls
+    # signaling_send(SDP) when it builds a new peer; with
+    # suppression the signal must not fire.
+    signal.events.clear()
+    result = await t.send(instance=inst, envelope_dict={"msg_id": "1"})
+    assert result.via == "https"
+    # No SDP offer was emitted — _ensure_handshake was skipped.
+    offer_calls = [ev for ev in signal.events if ev[1].value == "federation_rtc_offer"]
+    assert offer_calls == []
+
+
+async def test_set_ice_servers_clears_suppression():
+    """REGRESSION: an operator who pushes a fresh ICE-server list
+    (typically because they just deployed TURN to rescue stuck
+    peers) is signalling "I changed something, try again". The
+    24 h suppression must clear so the next ``send()`` rebuilds
+    the handshake immediately instead of waiting out the timer.
+    """
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+    )
+    # Seed suppression for two peers.
+    import time as _time
+
+    expiry = _time.monotonic() + 9999
+    t._rtc_suppressed_until = {"peer-a": expiry, "peer-b": expiry}
+
+    t.set_ice_servers(
+        [
+            {"urls": ["turn:turn.example:3478"], "username": "u", "credential": "c"},
+        ]
+    )
+
+    assert t._rtc_suppressed_until == {}
+    assert t._rtc_suppressed("peer-a") is False
+    assert t._rtc_suppressed("peer-b") is False
+
+
+async def test_suppression_expires_after_backoff_window():
+    """The suppression is time-bounded — once ``rtc_retry_backoff_s``
+    has elapsed, the next ``send()`` is allowed to rebuild the
+    handshake again. Verified by injecting a tiny backoff window
+    so the test doesn't have to wait 24 h."""
+    https_inbox = _RecordingHttpsInbox()
+    signal = _FakeSignaler()
+    t = FederationTransport(
+        own_instance_id="self-iid",
+        https_inbox=https_inbox,
+        signaling_send=signal,
+        rtc_retry_backoff_s=0.0,  # immediate retry window
+    )
+    inst = _fake_instance("peer-x")
+    from socialhome.federation.transport import _RtcPeer
+
+    t._peers[inst.id] = _RtcPeer(
+        instance_id=inst.id,
+        ice_servers=None,
+        signaling=t._signaling_factory(inst.id),
+        inbound=t._inbound_factory(inst.id),
+    )
+    await t._evict_peer(inst.id)
+
+    # With backoff=0 the suppression window is already past — the
+    # check method should report not-suppressed AND prune the
+    # entry.
+    assert t._rtc_suppressed(inst.id) is False
+    assert inst.id not in t._rtc_suppressed_until
+
+
 async def test_send_uses_rtc_when_peer_is_ready():
     """A peer whose DataChannel is already open takes the RTC path."""
     https_inbox = _RecordingHttpsInbox()

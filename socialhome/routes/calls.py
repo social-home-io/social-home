@@ -19,9 +19,6 @@ they are not part of (spec §26.8 / §23.83 security note).
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import logging
 import time
 
@@ -33,33 +30,10 @@ from ..services.call_service import (
     CallConversationError,
     CallNotFoundError,
 )
+from ..webrtc_ice import make_turn_credential as _make_turn_credential
 from .base import BaseView
 
 log = logging.getLogger(__name__)
-
-
-def _make_turn_credential(
-    secret: str,
-    user_id: str,
-    *,
-    ttl_seconds: int = 3600,
-) -> tuple[str, str]:
-    """coturn-style time-limited TURN credential (section 26.7).
-
-    Returns ``(username, password)`` where ``username = "<expiry>:<user>"``
-    and ``password = base64(HMAC-SHA1(secret, username))``. The TURN
-    server validates by recomputing the HMAC and checking ``expiry``
-    is in the future.
-    """
-    expiry = int(time.time()) + max(60, int(ttl_seconds))
-    username = f"{expiry}:{user_id}"
-    digest = hmac.new(
-        secret.encode("utf-8"),
-        username.encode("utf-8"),
-        hashlib.sha1,
-    ).digest()
-    credential = base64.b64encode(digest).decode("ascii")
-    return username, credential
 
 
 async def _require_call_participant(view, call_id: str) -> web.Response | None:

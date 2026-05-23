@@ -28,6 +28,10 @@ Reference material for running and understanding Social Home.
 - **[claude-plugins.md](./claude-plugins.md)** — The Claude Code
   plugin stack this repo ships in `.claude/settings.json`, and what
   each plugin contributes to the development workflow.
+- **[operations/turn.md](./operations/turn.md)** — Operator recipe
+  for deploying a TURN server (coturn) so two households behind
+  symmetric NAT / strict firewalls can establish the federation
+  WebRTC channel instead of staying on HTTPS-inbox fallback.
 
 ## Glossary
 

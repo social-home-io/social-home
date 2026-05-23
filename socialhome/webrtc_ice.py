@@ -1,0 +1,131 @@
+"""Shared ICE-server / TURN-credential helpers.
+
+The same coturn HMAC-credential scheme (REST API spec §6) is needed by
+both the SPA's ``/api/calls/ice-servers`` endpoint (per-user
+credentials, short TTL) and the server-to-server federation transport
+(per-instance credentials, also short TTL). Extracted here so the two
+call sites stay consistent and a future refactor — e.g. swapping
+HMAC-SHA1 for SHA-256 — happens in one place.
+
+This module is also the place to put any future ICE-server heuristics
+(``iceTransportPolicy=relay`` toggle, dynamic STUN-server probing,
+diagnostic "no TURN configured" warnings) so the wiring stays close
+to its docs.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import logging
+import time
+
+log = logging.getLogger(__name__)
+
+
+def make_turn_credential(
+    secret: str,
+    user_id: str,
+    *,
+    ttl_seconds: int = 3600,
+) -> tuple[str, str]:
+    """Return ``(username, password)`` for coturn's time-limited TURN
+    credential scheme (TURN REST API spec §6, also see coturn's
+    ``--use-auth-secret``).
+
+    ``username = "<expiry>:<user_id>"`` where ``expiry`` is a unix
+    timestamp in the future. ``password`` is the base64 of an
+    HMAC-SHA1 of ``username`` keyed by ``secret``. The TURN server
+    recomputes the HMAC at allocation time and checks the expiry —
+    so a credential leak is bounded by ``ttl_seconds``.
+
+    Used by:
+
+    * :class:`socialhome.routes.calls.IceServersView` — per-user
+      credentials for the SPA's calls / live-highlight WebRTC.
+    * :func:`socialhome.app._default_ice_servers` — per-instance
+      credentials for the federation transport (server-to-server
+      WebRTC). ``user_id`` is the local ``instance_id`` there.
+    """
+    expiry = int(time.time()) + max(60, int(ttl_seconds))
+    username = f"{expiry}:{user_id}"
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        username.encode("utf-8"),
+        hashlib.sha1,
+    ).digest()
+    credential = base64.b64encode(digest).decode("ascii")
+    return username, credential
+
+
+def build_ice_servers(
+    *,
+    stun_url: str | None,
+    turn_url: str | None,
+    turn_user: str | None,
+    turn_cred: str | None,
+    turn_secret: str | None,
+    turn_ttl_seconds: int,
+    hmac_user_id: str | None,
+) -> list[dict]:
+    """Compose the ``ice_servers`` list passed to libdatachannel /
+    RTCPeerConnection. Returns the Chrome-style list shape:
+
+    ``[{"urls": [...]}, {"urls": [...], "username": ..., "credential": ...}]``
+
+    The ``turn_secret`` + ``hmac_user_id`` combination wins over the
+    static ``turn_user`` / ``turn_cred`` pair when both are
+    configured — HMAC credentials expire, static ones don't. When
+    only the static creds are set, those are used as-is.
+
+    When **neither** TURN nor a TURN secret is configured, the
+    return list contains only the STUN entry — and the caller
+    (federation transport) should log a hint if WebRTC fails to
+    establish (the typical real-world failure mode is symmetric NAT
+    or strict firewalls where STUN-only deployments can never
+    complete ICE pair-checks; only TURN as a relay rescues them).
+    """
+    servers: list[dict] = []
+    if stun_url:
+        servers.append({"urls": [stun_url]})
+    if turn_url:
+        entry: dict = {"urls": [turn_url]}
+        if turn_secret and hmac_user_id:
+            username, credential = make_turn_credential(
+                turn_secret,
+                hmac_user_id,
+                ttl_seconds=turn_ttl_seconds,
+            )
+            entry["username"] = username
+            entry["credential"] = credential
+        else:
+            if turn_user:
+                entry["username"] = turn_user
+            if turn_cred:
+                entry["credential"] = turn_cred
+        servers.append(entry)
+    return servers
+
+
+def warn_if_no_turn(ice_servers: list[dict]) -> None:
+    """Log a one-shot operator hint when the ICE list contains no
+    TURN entry. Two households that can't NAT-traverse each other
+    directly need a TURN relay; without one the WebRTC handshake
+    will fail at ICE pair-checks ("Connectivity timer expired" in
+    libjuice logs). See ``docs/operations/turn.md`` for setup.
+    """
+    has_turn = any(
+        any(u.startswith(("turn:", "turns:")) for u in srv.get("urls", []))
+        for srv in ice_servers
+    )
+    if not has_turn:
+        log.warning(
+            "WebRTC: no TURN server configured. STUN alone can't traverse "
+            "symmetric NAT or strict firewalls; if federation peers fail "
+            "to establish RTC (transport stays on 'https' indefinitely), "
+            "deploy a TURN server (coturn is easy; see "
+            "docs/operations/turn.md) and set webrtc_turn_url + "
+            "webrtc_turn_secret (or webrtc_turn_user/cred) in "
+            "socialhome.toml.",
+        )
