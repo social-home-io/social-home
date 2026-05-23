@@ -487,3 +487,55 @@ async def test_member_pictures_exporter_skips_when_picture_missing():
         "sp-1",
     )
     assert recs == []
+
+
+async def test_schedules_exporter_emits_slot_defs():
+    """F5: schedule polls catch up via the ``schedules`` resource so a
+    remote member's slot picker isn't empty after §25.6 sync."""
+    from datetime import datetime, timezone
+    from socialhome.domain.post import Post, PostType
+    from socialhome.federation.sync.space.exporters import SchedulesExporter
+
+    post = Post(
+        id="p-sched",
+        author="u",
+        type=PostType.SCHEDULE,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    class _PostRepo:
+        async def list_feed(self, space_id, limit=1000):
+            return [post]
+
+    class _PollRepo:
+        async def get_schedule_meta(self, post_id):
+            if post_id == "p-sched":
+                return {"title": "Picnic?", "deadline": None}
+            return None
+
+        async def list_schedule_slots(self, post_id):
+            return [
+                {
+                    "id": "s1",
+                    "slot_date": "2026-07-01",
+                    "start_time": "14:00",
+                    "end_time": "16:00",
+                    "position": 0,
+                },
+                {
+                    "id": "s2",
+                    "slot_date": "2026-07-02",
+                    "start_time": None,
+                    "end_time": None,
+                    "position": 1,
+                },
+            ]
+
+    recs = await SchedulesExporter(_PollRepo(), _PostRepo()).list_records("sp-1")
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["post_id"] == "p-sched"
+    assert r["title"] == "Picnic?"
+    assert len(r["slots"]) == 2
+    assert r["slots"][0]["id"] == "s1"
+    assert r["slots"][1]["start_time"] is None

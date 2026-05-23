@@ -180,6 +180,13 @@ class FederationEventType(str, enum.Enum):
     PERSONAL_CALENDAR_EVENT_DELETED = "personal_calendar_event_deleted"
     PERSONAL_CALENDAR_RSVP_UPDATED = "personal_calendar_rsvp_updated"
     PERSONAL_CALENDAR_RSVP_DELETED = "personal_calendar_rsvp_deleted"
+    #: Schedule-poll bootstrap. Carries slot definitions + title +
+    #: deadline so a remote member can render the slot picker. Without
+    #: this, only ``SPACE_SCHEDULE_RESPONSE_UPDATED`` / ``_FINALIZED``
+    #: federated and remote members saw an empty schedule poll until
+    #: §25.6 catch-up sync ran (and catch-up didn't cover slot defs
+    #: either, F5 fixes both layers).
+    SPACE_SCHEDULE_CREATED = "space_schedule_created"
     SPACE_SCHEDULE_RESPONSE_UPDATED = "space_schedule_response_updated"
     SPACE_SCHEDULE_FINALIZED = "space_schedule_finalized"
     SPACE_LOCATION_UPDATED = "space_location_updated"

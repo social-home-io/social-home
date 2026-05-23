@@ -148,6 +148,10 @@ class SpaceContentInboundHandlers:
             # Schedule polls piggy-back on the poll repo — the
             # response / finalized rows live in the same SQLite module.
             registry.register(
+                FederationEventType.SPACE_SCHEDULE_CREATED,
+                self._on_schedule_created,
+            )
+            registry.register(
                 FederationEventType.SPACE_SCHEDULE_RESPONSE_UPDATED,
                 self._on_schedule_response_updated,
             )
@@ -495,6 +499,44 @@ class SpaceContentInboundHandlers:
         if not post_id:
             return
         await self._poll_repo.close(post_id)
+
+    async def _on_schedule_created(
+        self,
+        event: "FederationEvent",
+    ) -> None:
+        """F5: persist a peer's schedule-poll slot defs locally so the
+        remote member's SPA renders the slot picker.
+
+        The wrapper ``PostType.SCHEDULE`` post arrived first via
+        ``SPACE_POST_CREATED``; this fills in the
+        ``space_schedule_poll_meta`` row + ``space_schedule_slots``
+        children keyed on the same ``post_id``. Idempotent — repeat
+        deliveries from a chunked-sync replay UPSERT cleanly.
+        """
+        if self._poll_repo is None:
+            return
+        p = event.payload
+        post_id = str(p.get("post_id") or "")
+        title = str(p.get("title") or "")
+        slots_raw = p.get("slots") or []
+        if not post_id or not title or not slots_raw:
+            log.debug("SPACE_SCHEDULE_CREATED missing required field: %s", p)
+            return
+        try:
+            await self._poll_repo.create_schedule_poll(
+                post_id=post_id,
+                title=title,
+                deadline=p.get("deadline"),
+                slots=list(slots_raw),
+            )
+        except Exception as exc:
+            # FK failure (wrapper post not yet persisted), malformed
+            # slot row, etc. — log + drop; catch-up retries.
+            log.debug(
+                "SPACE_SCHEDULE_CREATED apply failed for post=%s: %s",
+                post_id,
+                exc,
+            )
 
     async def _on_schedule_response_updated(
         self,
