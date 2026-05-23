@@ -306,7 +306,9 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
                   class="sh-post-overflow"
                   type="button"
                   aria-label={`Manage ${r.name}`}
-                  onClick={() => openMemberActions(spaceId, m.user_id, m.role)}
+                  onClick={() => openMemberActions(
+                    spaceId, m.user_id, m.role, m.instance_id ?? null,
+                  )}
                 >
                   ···
                 </button>

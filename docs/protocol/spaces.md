@@ -152,12 +152,43 @@ sequenceDiagram
     Note over W: update space_remote_members.role<br/>so the rendered member list shows the new badge
 ```
 
-The flow only propagates the role *assignment*. Cross-household
-admin *actions* (kick from a non-host instance, config-change from a
-remote admin) ride a future event family — Phase 2 of this work.
-The current PR's scope ends at the role propagation; the SPA on the
-promoted member's side can already use the updated
-`space_members.role` value to gate local admin controls.
+The role assignment is the foundation. The actual cross-household
+admin *action* (kick) rides `SPACE_REMOTE_ADMIN_KICK` documented
+below.
+
+### Cross-household kick (phase 2, v_9+)
+
+`SPACE_REMOTE_ADMIN_KICK` (PR #435, #114 phase 2) lets a promoted
+remote admin actually kick a member. `SpaceService.remove_member`
+detects when the space is hosted elsewhere
+(`space.owner_instance_id != self.own_instance_id`) and federates
+the kick command instead of mutating the local stub. The host
+validates the actor's role from `space_remote_members.role` before
+dispatching into its own local kick path — which already rotates
+the epoch + broadcasts the new key via `SPACE_KEY_EXCHANGE_REKEY`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as HFS A (remote admin)
+    participant H as HFS H (host)
+    participant V as HFS V (victim)
+    participant W as HFS W (witness)
+    A->>A: DELETE /api/spaces/{id}/members/u-victim
+    Note over A: remove_member sees<br/>owner_instance_id != self
+    A->>H: SPACE_REMOTE_ADMIN_KICK<br/>{actor=A.user, target=u-victim}
+    Note over H: lookup actor.role in<br/>space_remote_members<br/>(must be 'admin')
+    H->>H: remove_remote_member(target)
+    H->>H: rotate_epoch → epoch=N+1
+    H->>V: SPACE_REMOTE_MEMBER_REMOVED
+    H->>W: SPACE_KEY_EXCHANGE_REKEY (epoch=N+1)
+    H->>A: SPACE_KEY_EXCHANGE_REKEY (epoch=N+1)
+```
+
+Owner cannot be kicked through this path — same invariant as
+`remove_member`. Self-leaves on a remote space still run the local
+path (the user is dropping their own stub membership; the host
+learns via the existing `SPACE_MEMBER_LEFT` outbound).
 
 ## Age gate
 

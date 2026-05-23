@@ -845,10 +845,17 @@ class SpaceRemoteInviteView(BaseView):
 
 
 class SpaceRemoteMemberRoleView(BaseView):
-    """``PATCH /api/spaces/{id}/remote-members/{instance_id}/{user_id}``
-    — set a remote member's role (#114). Body ``{"role": "admin"|"member"}``.
-    Owner-only; the change federates to every member household via
+    """``PATCH`` / ``DELETE /api/spaces/{id}/remote-members/{instance_id}/{user_id}``
+    — set a remote member's role (#114) or kick them (#114 phase 2).
+
+    ``PATCH`` body ``{"role": "admin"|"member"}`` — owner-only;
+    the change federates to every member household via
     ``SPACE_MEMBER_ROLE_CHANGED``.
+
+    ``DELETE`` — admin/owner only; routes through
+    :meth:`SpaceService.remove_remote_member` which broadcasts
+    ``SPACE_REMOTE_MEMBER_REMOVED`` to the kicked household and
+    rotates the space epoch.
     """
 
     async def patch(self) -> web.Response:
@@ -875,6 +882,20 @@ class SpaceRemoteMemberRoleView(BaseView):
         return web.json_response(
             {"instance_id": instance_id, "user_id": user_id, "role": role}
         )
+
+    async def delete(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        space_id = self.match("id")
+        instance_id = self.match("instance_id")
+        user_id = self.match("user_id")
+        await svc.remove_remote_member(
+            space_id,
+            actor_username=ctx.username,
+            instance_id=instance_id,
+            user_id=user_id,
+        )
+        return web.json_response({"ok": True})
 
 
 class RemoteInviteCollectionView(BaseView):

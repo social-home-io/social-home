@@ -108,6 +108,10 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         "unsubscribe_from_space",  # own subscription only
         # Federation inbound hooks — validated by the §24.11 inbound pipeline.
         "on_remote_join_request_approved",
+        # Federation inbound hook — the actor's role is validated inside
+        # the method itself by looking up ``space_remote_members.role``;
+        # there is no actor-username to thread through ``_require_admin``.
+        "apply_remote_admin_kick",
         # Personal sidebar state — keyed on the calling user_id, no
         # space-permission shape.
         "pin",

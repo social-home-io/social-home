@@ -57,6 +57,7 @@ class PrivateSpaceInviteHandler:
         "_remote_members",
         "_cover_repo",
         "_space_crypto",
+        "_space_service",
     )
 
     def __init__(
@@ -67,6 +68,7 @@ class PrivateSpaceInviteHandler:
         remote_member_repo: "AbstractSpaceRemoteMemberRepo",
         cover_repo: "AbstractSpaceCoverRepo | None" = None,
         space_crypto_service=None,
+        space_service=None,
     ) -> None:
         self._bus = bus
         self._space_repo = space_repo
@@ -80,6 +82,21 @@ class PrivateSpaceInviteHandler:
         #: so subsequent SPACE_POST_CREATED decrypts succeed
         #: (§D1b #117).
         self._space_crypto = space_crypto_service
+        #: Optional — when wired, used to dispatch validated
+        #: ``SPACE_REMOTE_ADMIN_KICK`` events through the full kick
+        #: path (rotation, role-check, broadcast). Tests that don't
+        #: exercise admin actions can omit it.
+        self._space_service = space_service
+
+    def attach_space_service(self, space_service) -> None:
+        """Wire :class:`SpaceService` post-construction (#114 phase 2).
+
+        :class:`SpaceService` is built downstream of this handler, so
+        the kick dispatch path needs an after-the-fact handle. Without
+        it the inbound ``SPACE_REMOTE_ADMIN_KICK`` is logged + dropped
+        — degrading to a no-op rather than crashing the receiver.
+        """
+        self._space_service = space_service
 
     def attach_to(self, federation_service: "FederationService") -> None:
         registry = federation_service._event_registry  # noqa: SLF001
@@ -106,6 +123,10 @@ class PrivateSpaceInviteHandler:
         registry.register(
             FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
             self._on_role_changed,
+        )
+        registry.register(
+            FederationEventType.SPACE_REMOTE_ADMIN_KICK,
+            self._on_remote_admin_kick,
         )
 
     # ── Receive ─────────────────────────────────────────────────────────
@@ -370,6 +391,40 @@ class PrivateSpaceInviteHandler:
             member_instance,
             user_id,
             role,
+        )
+
+    async def _on_remote_admin_kick(self, event: "FederationEvent") -> None:
+        """Cross-household admin kick command (#114 phase 2).
+
+        Receiver is the host of the space; sender is the household
+        of a remote admin who wants someone removed. The handler
+        delegates to :meth:`SpaceService.apply_remote_admin_kick`
+        which validates the actor's role from
+        ``space_remote_members.role`` before dispatching the actual
+        kick. The §24.11 pipeline has already verified the
+        envelope's signature; the role-check is the second gate.
+        """
+        if self._space_service is None:
+            log.warning(
+                "SPACE_REMOTE_ADMIN_KICK: no space_service wired — dropping",
+            )
+            return
+        p = event.payload
+        space_id = str(p.get("space_id") or "") or (event.space_id or "")
+        actor_user_id = str(p.get("actor_user_id") or "")
+        actor_instance_id = str(p.get("actor_instance_id") or event.from_instance)
+        target_user_id = str(p.get("target_user_id") or "")
+        if not space_id or not actor_user_id or not target_user_id:
+            log.debug(
+                "SPACE_REMOTE_ADMIN_KICK from %s missing required fields",
+                event.from_instance,
+            )
+            return
+        await self._space_service.apply_remote_admin_kick(
+            space_id,
+            actor_instance_id=actor_instance_id,
+            actor_user_id=actor_user_id,
+            target_user_id=target_user_id,
         )
 
     async def _on_key_exchange_rekey(self, event: "FederationEvent") -> None:

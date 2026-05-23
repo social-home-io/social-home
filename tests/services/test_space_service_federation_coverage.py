@@ -665,3 +665,210 @@ async def test_set_remote_member_role_missing_member_raises(stack):
             user_id="nobody",
             role="admin",
         )
+
+
+# ── apply_remote_admin_kick + remote-space kick routing (#114 phase 2) ──
+
+
+async def _seat_remote_stub(stack, *, space_id, user_id, role):
+    """Build a stub space hosted on someone else + seat our local
+    user with the given role."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceMember,
+        SpaceType,
+    )
+
+    stub = Space(
+        id=space_id,
+        name="Hosted Elsewhere",
+        owner_instance_id="instance-remote-host",
+        owner_username="bob@remotehost",
+        identity_public_key="",
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        emoji="🏠",
+        description="",
+    )
+    await stack.space_repo.save(stub)
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=space_id,
+            user_id=user_id,
+            role=role,
+            joined_at="2026-05-23T00:00:00+00:00",
+        )
+    )
+    return stub
+
+
+async def test_remove_member_on_remote_space_routes_to_host(stack):
+    """When the local user kicks someone in a space hosted on another
+    household, the kick MUST forward to the host as
+    SPACE_REMOTE_ADMIN_KICK instead of mutating the local stub."""
+    alice = await _user(stack, "alicehost")
+    await _seat_remote_stub(
+        stack,
+        space_id="sp-remote",
+        user_id=alice.user_id,
+        role="admin",
+    )
+
+    await stack.svc.remove_member(
+        "sp-remote",
+        actor_username="alicehost",
+        user_id="u-victim",
+    )
+
+    stack.fed_svc.send_with_mesh_fallback.assert_awaited_once()
+    call = stack.fed_svc.send_with_mesh_fallback.call_args
+    assert call.kwargs["to_instance_id"] == "instance-remote-host"
+    assert call.kwargs["event_type"] is FederationEventType.SPACE_REMOTE_ADMIN_KICK
+    assert call.kwargs["payload"]["actor_user_id"] == alice.user_id
+    assert call.kwargs["payload"]["target_user_id"] == "u-victim"
+    assert call.kwargs["payload"]["actor_instance_id"] == stack.svc._own_instance_id
+
+
+async def test_remove_member_self_on_remote_space_stays_local(stack):
+    """Self-leave on a remote space still runs the local path —
+    user is dropping their own stub membership, not asking the host
+    to kick anyone."""
+    alice = await _user(stack, "alicehost")
+    await _seat_remote_stub(
+        stack,
+        space_id="sp-remote-2",
+        user_id=alice.user_id,
+        role="member",
+    )
+
+    await stack.svc.remove_member(
+        "sp-remote-2",
+        actor_username="alicehost",
+        user_id=alice.user_id,
+    )
+    sent_types = [
+        c.kwargs.get("event_type")
+        for c in stack.fed_svc.send_with_mesh_fallback.call_args_list
+    ]
+    assert FederationEventType.SPACE_REMOTE_ADMIN_KICK not in sent_types
+
+
+async def test_apply_remote_admin_kick_admin_dispatches_remote_member_remove(stack):
+    """Host receives SPACE_REMOTE_ADMIN_KICK from a legitimate admin
+    → dispatches to remove_remote_member (target was on a different
+    household than the actor)."""
+    _alice = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+
+    # Seat two remote members. Actor is admin on instance-A; target
+    # is a regular member on instance-C.
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-A",
+        user_id="u-admin-on-A",
+        user_pk=None,
+        display_name=None,
+    )
+    await stack.svc._remote_members.set_role(
+        space.id,
+        "instance-A",
+        "u-admin-on-A",
+        "admin",
+    )
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-C",
+        user_id="u-victim",
+        user_pk=None,
+        display_name=None,
+    )
+
+    stack.fed_svc.broadcast_to_space_members = AsyncMock()
+
+    await stack.svc.apply_remote_admin_kick(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin-on-A",
+        target_user_id="u-victim",
+    )
+    # Victim's row is gone.
+    assert (
+        await stack.svc._remote_members.get(space.id, "instance-C", "u-victim")
+    ) is None
+
+
+async def test_apply_remote_admin_kick_non_admin_silently_drops(stack):
+    """Actor with role='member' (not admin) → dropped. No mutation,
+    no exception."""
+    _a = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-A",
+        user_id="u-not-an-admin",
+        user_pk=None,
+        display_name=None,
+    )
+    # Add a victim so we can detect if the kick mistakenly ran.
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-C",
+        user_id="u-victim",
+        user_pk=None,
+        display_name=None,
+    )
+
+    await stack.svc.apply_remote_admin_kick(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-not-an-admin",
+        target_user_id="u-victim",
+    )
+    # Victim is still there.
+    assert (
+        await stack.svc._remote_members.get(space.id, "instance-C", "u-victim")
+    ) is not None
+
+
+async def test_apply_remote_admin_kick_target_owner_rejected(stack):
+    """Owner cannot be kicked through this path — same invariant
+    as remove_member."""
+    alice = await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-A",
+        user_id="u-admin",
+        user_pk=None,
+        display_name=None,
+    )
+    await stack.svc._remote_members.set_role(
+        space.id,
+        "instance-A",
+        "u-admin",
+        "admin",
+    )
+
+    await stack.svc.apply_remote_admin_kick(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        target_user_id=alice.user_id,
+    )
+    # Owner row still present.
+    assert (await stack.space_repo.get_member(space.id, alice.user_id)) is not None
+
+
+async def test_apply_remote_admin_kick_unknown_space_drops(stack):
+    """A kick for an unknown space drops silently — common after
+    SPACE_DISSOLVED races with a stale outbox."""
+    await stack.svc.apply_remote_admin_kick(
+        "sp-nonexistent",
+        actor_instance_id="instance-A",
+        actor_user_id="u",
+        target_user_id="t",
+    )  # Should not raise.

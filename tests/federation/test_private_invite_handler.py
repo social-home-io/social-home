@@ -381,6 +381,89 @@ async def test_member_removed_keeps_locally_owned_space(handler):
     handler.space_repo.mark_dissolved.assert_not_awaited()
 
 
+async def test_remote_admin_kick_dispatches_to_space_service():
+    """Cross-household admin kick (#114 phase 2): handler decodes the
+    payload and forwards to ``SpaceService.apply_remote_admin_kick``.
+    The actual role check + dispatch lives in the service so this
+    test only verifies the plumbing."""
+    bus = _RecordingBus()
+    space_repo = AsyncMock()
+    remote_members = AsyncMock()
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_kick = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=bus,  # type: ignore[arg-type]
+        space_repo=space_repo,
+        remote_member_repo=remote_members,
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_KICK",
+        {
+            "space_id": "sp-kick",
+            "actor_user_id": "u-admin-on-A",
+            "actor_instance_id": "instance-A",
+            "target_user_id": "u-target",
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_kick(ev)
+    space_service.apply_remote_admin_kick.assert_awaited_once_with(
+        "sp-kick",
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin-on-A",
+        target_user_id="u-target",
+    )
+
+
+async def test_remote_admin_kick_without_space_service_drops():
+    """If no SpaceService is wired (test stacks, early boot), the
+    handler logs a warning and drops the event rather than crashing."""
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_KICK",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "actor_instance_id": "i",
+            "target_user_id": "t",
+        },
+    )
+    # Should not raise.
+    await h._on_remote_admin_kick(ev)
+
+
+async def test_remote_admin_kick_missing_fields_skipped():
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_kick = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event("SPACE_REMOTE_ADMIN_KICK", {"space_id": "sp"})
+    await h._on_remote_admin_kick(ev)
+    space_service.apply_remote_admin_kick.assert_not_awaited()
+
+
+async def test_attach_space_service_wires_post_construction():
+    """The wiring helper sets the slot used by the kick handler."""
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+    )
+    assert h._space_service is None
+    sentinel = object()
+    h.attach_space_service(sentinel)
+    assert h._space_service is sentinel
+
+
 async def test_role_changed_updates_local_and_remote_member_rows():
     """Receiver writes the new role to both ``space_members`` (if a
     local row exists — the affected user's own household) AND
@@ -554,4 +637,5 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
         FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
         FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
+        FederationEventType.SPACE_REMOTE_ADMIN_KICK,
     }

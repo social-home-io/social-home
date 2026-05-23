@@ -108,6 +108,15 @@ from __future__ import annotations
 #:   "issuer needs to upgrade" message rather than wasting the 10 s
 #:   timeout window. Same gate applies to the mesh-routing
 #:   envelopes once PR 2 lands.
+#: * **v9** — :data:`FederationEventType.SPACE_REMOTE_ADMIN_KICK`
+#:   shipped (#114 phase 2, PR #435). A remote admin can now actually
+#:   kick a member of a space hosted elsewhere — host validates the
+#:   actor's role from ``space_remote_members.role`` before
+#:   dispatching the kick. **Force-upgrade.** Sub-v_9 hosts silently
+#:   drop the command (no handler registered), so the kick appears
+#:   to succeed on the actor's side but the host never applies it —
+#:   the admin's intent is lost. Operators must upgrade hosts before
+#:   members try cross-household admin actions.
 #: * **v8** — :data:`FederationEventType.SPACE_MEMBER_ROLE_CHANGED`
 #:   shipped (#114, PR #434). Host emits this every time an owner
 #:   promotes / demotes a remote member's role; receivers update
@@ -135,7 +144,7 @@ from __future__ import annotations
 #:   forward-secrecy violation, so we'd rather fail loud. Operators
 #:   should expect to upgrade member households together with the
 #:   host.
-OURS: int = 8
+OURS: int = 9
 
 
 class FederationCapability:
@@ -194,6 +203,13 @@ class FederationCapability:
     #: pre-change role until a §25.6 sync refresh. Best-effort —
     #: a stale role badge is benign.
     MIN_FOR_REMOTE_MEMBER_ROLE = 8
+
+    #: Minimum proto_version where the host knows
+    #: :data:`FederationEventType.SPACE_REMOTE_ADMIN_KICK`. Sub-v_9
+    #: hosts silently drop the kick command; the actor sees their UI
+    #: succeed but the host never applies the change. Operators must
+    #: upgrade hosts together with members.
+    MIN_FOR_REMOTE_ADMIN_KICK = 9
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

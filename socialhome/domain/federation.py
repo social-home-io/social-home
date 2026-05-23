@@ -81,6 +81,11 @@ class FederationEventType(str, enum.Enum):
     #: every member household so every household's view of the
     #: roster stays in sync. v_8+.
     SPACE_MEMBER_ROLE_CHANGED = "space_member_role_changed"
+    #: Cross-household admin command — remote admin on household A
+    #: requests the host to kick a member (#114 phase 2, v_9+). The
+    #: host validates the actor's role in ``space_remote_members.role``
+    #: before dispatching. Payload carries actor identity + target.
+    SPACE_REMOTE_ADMIN_KICK = "space_remote_admin_kick"
 
     # ── Space invitations / join requests ──
     SPACE_INVITE = "space_invite"
