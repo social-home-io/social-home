@@ -151,6 +151,7 @@ from .services.highlight_publication_service import HighlightPublicationService
 from .services.moment_public_service import MomentPublicService
 from .services.profile_sync_service import ProfileSyncService
 from .services.moment_public_outbound import MomentPublicOutbound
+from .services.space_post_outbound import SpacePostOutbound
 from .services.moment_public_inbound import MomentPublicInbound
 from .repositories.moment_public_repo import (
     SqliteMomentPublicFollowRepo,
@@ -1969,6 +1970,12 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         invite_redeem_coordinator.attach_to(federation_service)
         real_space_service.attach_redeem_coordinator(invite_redeem_coordinator)
+        # #117 followup — federate SPACE_POST_CREATED outbound so
+        # remote members on other households actually receive posts
+        # in spaces they belong to. The inbound side was already
+        # wired in federation_inbound_service; this is the missing
+        # producer.
+        SpacePostOutbound(bus=bus, federation_service=federation_service)
         # Wire RSVP propagation onto the calendar service. Done after
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).

@@ -2203,6 +2203,14 @@ _LOG_BENIGN: tuple[str, ...] = (
     # The rate-limit middleware's own audit log fires when
     # relay-pair waits the 65 s window; expected by design.
     "rate_limit",
+    # TURN-server advisory fires on every cold start when no
+    # ``webrtc_turn_url`` is configured. The demo runs all four
+    # households on loopback where STUN alone is sufficient, so
+    # this is pure operator-facing advice for production
+    # deployments — keep at WARN level there but suppress in the
+    # harness audit. A different webrtc_ice WARNING (e.g. ICE
+    # gathering failure, bad TURN credentials) would still surface.
+    "WebRTC: no TURN server configured",
     # Earlier entries removed because the underlying conditions
     # were fixed upstream (instead of permanently allowlisted):
     # * ``FederationEventType.FEDERATION_RTC_ICE`` /
@@ -3503,14 +3511,16 @@ def cmd_space_post_routed() -> None:
         b_log_path.stat().st_size if b_log_path.exists() else 0
     )
 
+    # POST to the SPACE endpoint, not the household-feed endpoint —
+    # the latter ignores ``space_id`` in the body and lands the row
+    # as a household post that never federates to space members.
     s, post = _request(
-        f"http://127.0.0.1:{c['port']}/api/feed/posts",
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/posts",
         token=c["token"],
         method="POST",
         body={
             "type": "text",
             "content": "Hello mesh — c posting to d via b",
-            "space_id": space_id,
         },
     )
     _must("c posts in mesh space", s, post, ok=(201,))
