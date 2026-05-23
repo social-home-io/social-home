@@ -5,6 +5,7 @@ import { api } from '@/api'
 import { addBase } from '@/baseUrl'
 import { ws } from '@/ws'
 import { currentUser } from '@/store/auth'
+import { instanceConfig } from '@/store/instance'
 import { loadHouseholdUsers } from '@/store/householdUsers'
 import { loadSpaceMembers } from '@/store/spaceMembers'
 import { useTitle } from '@/store/pageTitle'
@@ -50,6 +51,10 @@ interface SpaceDetail {
     gallery?: boolean
     location?: boolean
   }
+  /** §D1b — the originating instance. When it differs from
+   *  ``instanceConfig.value.instance_id``, this is a stub of a
+   *  remote-hosted space and local admin gestures are suppressed. */
+  owner_instance_id?: string
 }
 
 const posts = signal<FeedPost[]>([])
@@ -223,7 +228,20 @@ export default function SpaceFeedPage() {
 
   if (loading.value) return <Spinner />
 
-  const canAdmin = viewerRole.value === 'owner' || viewerRole.value === 'admin'
+  // §D1b — a stub of a remote-hosted space looks like a normal row
+  // locally, but the admin gestures (Settings, ban, role-change…)
+  // mutate state owned by the host instance and would silently
+  // diverge from the canonical copy. Suppress those affordances
+  // when ``owner_instance_id`` doesn't match our own — the viewer
+  // can still post and read; they just can't pretend to be the
+  // host's admin from here.
+  const isRemoteSpace = !!(
+    spaceDetail.value?.owner_instance_id
+    && instanceConfig.value?.instance_id
+    && spaceDetail.value.owner_instance_id !== instanceConfig.value.instance_id
+  )
+  const canAdmin = !isRemoteSpace
+    && (viewerRole.value === 'owner' || viewerRole.value === 'admin')
   const s = spaceDetail.value
 
   // Per-space feature toggles (set by an admin in SpaceSettings) hide

@@ -167,6 +167,105 @@ async def test_member_removed_happy_path(handler):
     assert any(isinstance(e, RemoteSpaceMemberRemoved) for e in handler.bus.events)
 
 
+async def test_invite_with_space_meta_seats_local_stub(handler):
+    """B2: inbound SPACE_PRIVATE_INVITE carrying ``space_meta`` seats a
+    local stub row so accept can immediately insert the joiner's
+    ``space_members`` row pointing at it."""
+    ev = _event(
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp-remote",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-pascal",
+            "space_display_hint": "Family",
+            "space_meta": {
+                "name": "Family",
+                "emoji": "🏡",
+                "owner_instance_id": "peer-1",
+                "owner_username": "pascal",
+                "identity_public_key": "abc123",
+                "config_sequence": 1,
+                "space_type": "private",
+                "join_mode": "invite_only",
+                "features": {"calendar": True, "gallery": True},
+                "tz": "Europe/Berlin",
+            },
+        },
+    )
+    await handler.h._on_invite(ev)
+    handler.space_repo.save.assert_awaited_once()
+    saved = handler.space_repo.save.call_args.args[0]
+    assert saved.id == "sp-remote"
+    assert saved.name == "Family"
+    assert saved.emoji == "🏡"
+    assert saved.owner_instance_id == "peer-1"
+    assert saved.owner_username == "pascal"
+    assert saved.features.calendar is True
+    assert saved.features.gallery is True
+
+
+async def test_invite_without_space_meta_skips_stub_creation(handler):
+    """Pre-B2 senders ship no ``space_meta``; we MUST stay quiet
+    rather than synthesise garbage into the stub. The receiver still
+    sees the invitation banner — only the local-stub seat is skipped
+    until the issuer upgrades."""
+    ev = _event(
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp1",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-pascal",
+            "space_display_hint": "Family",
+        },
+    )
+    await handler.h._on_invite(ev)
+    handler.space_repo.save.assert_not_awaited()
+
+
+async def test_member_removed_clears_local_stub_when_last_member_leaves(handler):
+    """B2: when the host kicks the joiner from a remote space and
+    they were the only local ``space_members`` row, we mark the stub
+    dissolved so the SPA stops listing it. Locally-owned spaces
+    (different owner_instance_id) are NEVER dissolved on a remote
+    SPACE_REMOTE_MEMBER_REMOVED."""
+    handler.space_repo.delete_member = AsyncMock()
+    handler.space_repo.list_members = AsyncMock(return_value=[])
+    stub_space = SimpleNamespace(owner_instance_id="peer-1")
+    handler.space_repo.get = AsyncMock(return_value=stub_space)
+    handler.space_repo.mark_dissolved = AsyncMock()
+    ev = _event(
+        "SPACE_REMOTE_MEMBER_REMOVED",
+        {"space_id": "sp-remote", "user_id": "u-self"},
+    )
+    await handler.h._on_member_removed(ev)
+    handler.space_repo.delete_member.assert_awaited_once_with(
+        "sp-remote",
+        "u-self",
+    )
+    handler.space_repo.mark_dissolved.assert_awaited_once_with("sp-remote")
+
+
+async def test_member_removed_keeps_locally_owned_space(handler):
+    """If the row we keep for this space_id is *ours* (owner_instance_id
+    matches our own), the SPACE_REMOTE_MEMBER_REMOVED event is for one
+    of OUR remote members on someone else's instance. We must NOT
+    dissolve our own space row in that case."""
+    handler.space_repo.delete_member = AsyncMock()
+    handler.space_repo.list_members = AsyncMock(return_value=[])
+    own_space = SimpleNamespace(owner_instance_id="us")
+    handler.space_repo.get = AsyncMock(return_value=own_space)
+    handler.space_repo.mark_dissolved = AsyncMock()
+    ev = _event(
+        "SPACE_REMOTE_MEMBER_REMOVED",
+        {"space_id": "sp-ours", "user_id": "u-they"},
+        from_instance="peer-1",
+    )
+    await handler.h._on_member_removed(ev)
+    handler.space_repo.mark_dissolved.assert_not_awaited()
+
+
 async def test_attach_to_registers_four_handlers():
     """`attach_to` wires the four event-type → handler bindings."""
     bus = EventBus()

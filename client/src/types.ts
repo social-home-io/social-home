@@ -266,6 +266,12 @@ export interface Space {
   /** When true, HA automations may post into this space via the
    *  bot-bridge. Required before any SpaceBot is registered. */
   bot_enabled?: boolean
+  /** §D1b — the instance that originally created this space. When
+   *  this differs from the caller's own instance, the local row is a
+   *  *stub* mirroring a space hosted on another household. The SPA
+   *  gates settings + admin gestures on this field so a remote
+   *  member never tries to mutate state the host owns. */
+  owner_instance_id?: string
 }
 
 export interface SpaceFeatures {

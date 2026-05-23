@@ -78,6 +78,14 @@ class _FakeSpaceRepo:
         self.bans: set[tuple[str, str]] = set()
         # Allow tests to force an exception out of consume_invite_token.
         self.consume_should_raise: Exception | None = None
+        # §D1b stub bookkeeping — the coordinator now seats a local
+        # stub + membership row after a successful redeem. Tests can
+        # assert on these dicts.
+        self.spaces: dict = {}
+        self.members: list = []
+        # Pre-seed ``get`` returns; tests that drive the issuer-side
+        # _on_redeem should populate this so the ACK can carry meta.
+        self.space_rows_for_get: dict = {}
 
     async def consume_invite_token(self, token):
         if self.consume_should_raise is not None:
@@ -102,6 +110,16 @@ class _FakeSpaceRepo:
 
     async def is_banned(self, space_id, user_id):
         return (space_id, user_id) in self.bans
+
+    async def get(self, space_id):
+        return self.space_rows_for_get.get(space_id)
+
+    async def save(self, space):
+        self.spaces[space.id] = space
+        return space
+
+    async def save_member(self, member):
+        self.members.append(member)
 
 
 class _FakeRemoteMemberRepo:

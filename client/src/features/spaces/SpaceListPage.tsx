@@ -8,6 +8,7 @@ import type { Space } from '@/types'
 import { SpaceListSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { showToast } from '@/components/Toast'
+import { instanceConfig } from '@/store/instance'
 import { openSpaceCreate } from '@/components/SpaceCreateDialog'
 import { RemoteInviteInboxBanner } from '@/components/RemoteInviteInboxBanner'
 import { openSpaceJoinByCode } from './SpaceJoinByCodeDialog'
@@ -68,6 +69,20 @@ function SpaceRow({
               🔔 Subscribed
             </span>
           )}
+          {space.owner_instance_id
+            && instanceConfig.value?.instance_id
+            && space.owner_instance_id !== instanceConfig.value.instance_id && (
+              <span
+                class="sh-space-remote-chip"
+                title={
+                  "This space is hosted on another household's server. "
+                  + "You can read and write through your own home, but "
+                  + "the canonical roster + admins live on the host."
+                }
+              >
+                🏘 Other household
+              </span>
+            )}
         </div>
       </div>
       {subscribed && onUnsubscribe && (

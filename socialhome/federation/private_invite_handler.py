@@ -30,6 +30,7 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from ..services.space_service import stub_space_from_metadata
 
 if TYPE_CHECKING:
     from ..domain.federation import FederationEvent
@@ -103,6 +104,23 @@ class PrivateSpaceInviteHandler:
             invite_token=invite_token,
             space_display_hint=(str(display_hint) if display_hint else None),
         )
+        # §D1b — seat a *local stub* of the host's space so accept can
+        # immediately insert a ``space_members`` row pointing at it.
+        # The stub is invisible to the user's /api/spaces list (which
+        # joins on ``space_members``) until they accept; declining
+        # leaves it dust-but-harmless. ``space.save`` is upsert so a
+        # repeat invite, or a refresh after SPACE_CONFIG_CHANGED, is
+        # idempotent. Older senders that don't ship ``space_meta`` get
+        # the legacy behaviour — no stub, joiner sees the invite banner
+        # but can't see the space until upstream upgrades.
+        meta = p.get("space_meta")
+        if isinstance(meta, dict):
+            stub = stub_space_from_metadata(
+                space_id,
+                host_instance_id=event.from_instance,
+                meta=meta,
+            )
+            await self._space_repo.save(stub)
         await self._bus.publish(
             RemoteSpaceInviteReceived(
                 space_id=space_id,
@@ -179,8 +197,13 @@ class PrivateSpaceInviteHandler:
         )
 
     async def _on_member_removed(self, event: "FederationEvent") -> None:
-        """The host removed us from a private space. Stop expecting new
-        frames for that ``(space_id, user_id)`` pair."""
+        """The host removed us (or one of our users) from a private
+        space. Cleans up both possible local representations: the
+        host-side ``space_remote_members`` row (no-op on the kicked
+        user's own instance) AND the local stub ``spaces`` row + the
+        kicked user's ``space_members`` row (no-op on the host's
+        instance). One handler does both because the same event lands
+        on both sides; each side recognises only its own data."""
         p = event.payload
         space_id = str(p.get("space_id") or "")
         user_id = str(p.get("user_id") or "")
@@ -191,6 +214,24 @@ class PrivateSpaceInviteHandler:
             event.from_instance,
             user_id,
         )
+        # §D1b — clean up the joiner-side stub. If we have a local
+        # ``space_members`` row for the kicked user, drop it. If the
+        # stub's only member was that user, mark the stub dissolved
+        # so the space stops appearing in surfaces that join on
+        # ``space_members`` AND filter on ``dissolved=0`` (which is
+        # every list-for-user query in the repo). Mark-dissolved
+        # mirrors what happens to locally-owned spaces when their
+        # last member leaves — the row stays as audit trail; the UI
+        # treats it as gone.
+        await self._space_repo.delete_member(space_id, user_id)
+        remaining = await self._space_repo.list_members(space_id)
+        if not remaining:
+            local_space = await self._space_repo.get(space_id)
+            # Only dissolve a stub — never our own locally-owned space.
+            if local_space is not None and (
+                local_space.owner_instance_id == event.from_instance
+            ):
+                await self._space_repo.mark_dissolved(space_id)
         await self._bus.publish(
             RemoteSpaceMemberRemoved(
                 space_id=space_id,

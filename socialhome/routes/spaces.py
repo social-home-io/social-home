@@ -154,6 +154,12 @@ class SpaceCollectionView(BaseView):
                         "description": s.description,
                         "space_type": s.space_type.value,
                         "join_mode": s.join_mode.value,
+                        # §D1b — the creator's instance. When it
+                        # differs from our own, the row is a remote
+                        # stub: the SPA gates the Settings link + any
+                        # admin gestures on this field so a member
+                        # never tries to mutate state the host owns.
+                        "owner_instance_id": s.owner_instance_id,
                     }
                 )
                 for s in spaces
@@ -215,6 +221,11 @@ class SpaceDetailView(BaseView):
                 "cover_hash": space.cover_hash,
                 "cover_url": cover_url,
                 "bot_enabled": space.bot_enabled,
+                # §D1b — see ``SpaceCollectionView.get`` for the
+                # complement; the SPA reads this on the SpaceFeedPage
+                # to suppress local-only admin gestures on a remote
+                # stub.
+                "owner_instance_id": space.owner_instance_id,
             }
         )
         signer = self.request.app.get(media_signer_key)
