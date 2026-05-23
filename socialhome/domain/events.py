@@ -1405,6 +1405,25 @@ class SpaceMemberLeft(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SpaceContentKeyImported(DomainEvent):
+    """A new space content key landed in ``space_keys`` (#122).
+
+    Fires from :meth:`SpaceContentEncryption.import_key` so the
+    :class:`PendingDecryptsCache` can drain any sync chunks /
+    SEALED-sender envelopes that arrived ahead of their key. The
+    classic case is a §25.6 sync chunk that landed while the §D1b
+    accept was still in flight — the chunk's epoch isn't known yet,
+    decrypt fails, the chunk gets stashed; this event fires when
+    the matching ``apply_space_content_key_from_metadata`` runs and
+    the stashed chunk is replayed.
+    """
+
+    space_id: str
+    epoch: int
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class SpaceJoinRequested(DomainEvent):
     """A user submitted a request to join a ``join_mode='request'`` space."""
 

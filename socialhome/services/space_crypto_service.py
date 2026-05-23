@@ -42,6 +42,8 @@ from ..crypto import (
     sign_ed25519,
     verify_ed25519,
 )
+from ..domain.events import SpaceContentKeyImported
+from ..infrastructure.event_bus import EventBus
 from ..infrastructure.key_manager import KeyManager
 from ..repositories.space_key_repo import (
     AbstractSpaceKeyRepo,
@@ -90,15 +92,22 @@ class SpaceContentEncryption:
         KEK used to wrap epoch keys before persistence.
     """
 
-    __slots__ = ("_repo", "_kek")
+    __slots__ = ("_repo", "_kek", "_bus")
 
     def __init__(
         self,
         space_key_repo: AbstractSpaceKeyRepo,
         key_manager: KeyManager,
+        *,
+        bus: EventBus | None = None,
     ) -> None:
         self._repo = space_key_repo
         self._kek = key_manager
+        #: Optional — when wired, ``import_key`` publishes
+        #: :class:`SpaceContentKeyImported` so :class:`PendingDecryptsCache`
+        #: can drain any sync chunks that arrived before this epoch's
+        #: key was available (#122, out-of-order key arrival).
+        self._bus = bus
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -189,6 +198,10 @@ class SpaceContentEncryption:
             epoch,
             space_id,
         )
+        if self._bus is not None:
+            await self._bus.publish(
+                SpaceContentKeyImported(space_id=space_id, epoch=epoch),
+            )
 
     # ─── Encrypt / decrypt ────────────────────────────────────────────────
 

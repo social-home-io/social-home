@@ -250,6 +250,7 @@ from .services.realtime_service import RealtimeService
 from .services.search_service import SearchService
 from .services.shopping_service import ShoppingService
 from .services.peer_home_sharing_service import PeerHomeSharingService
+from .services.pending_decrypts_cache import PendingDecryptsCache
 from .services.space_crypto_service import SpaceContentEncryption
 from .services.storage_quota_service import StorageQuotaService
 from .services.setup_service import SetupService
@@ -754,6 +755,7 @@ def _wire_federation_stack(
         space_calendar_repo=space_calendar_repo,
         gallery_repo=gallery_repo,
         zone_repo=space_zone_repo,
+        pending_decrypts=app[K.pending_decrypts_cache_key],
     )
     federation_service.attach_space_sync(
         service=space_sync_service,
@@ -1850,8 +1852,17 @@ def create_app(config: Config | None = None) -> web.Application:
         app[K.space_service_key] = real_space_service
 
         # 5a. SpaceContentEncryption — per-space epoch keys, KEK-protected.
-        space_crypto = SpaceContentEncryption(space_key_repo, key_manager)
+        # Wires the bus so ``import_key`` publishes
+        # :class:`SpaceContentKeyImported` for the
+        # :class:`PendingDecryptsCache` to drain stashed sync chunks (#122).
+        space_crypto = SpaceContentEncryption(
+            space_key_repo,
+            key_manager,
+            bus=bus,
+        )
         app[K.space_crypto_service_key] = space_crypto
+        pending_decrypts_cache = PendingDecryptsCache(bus=bus)
+        app[K.pending_decrypts_cache_key] = pending_decrypts_cache
         # #117 — wire content-key export/import into the §D1b paths
         # so new remote members can actually decrypt the events they
         # receive. Without this, the joiner's local space_keys is
