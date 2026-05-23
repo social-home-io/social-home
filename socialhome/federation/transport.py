@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
@@ -159,6 +160,18 @@ def _build_rtc_config(ice_servers: list[dict]) -> rtc.RTCConfiguration:
                 rtc.IceServer(url=url, username=username, credential=credential),
             )
     return rtc.RTCConfiguration(ice_servers=servers)
+
+
+#: How long to wait between RTC handshake rebuild attempts for a peer
+#: whose previous PeerConnection entered FAILED. The default 24 h keeps
+#: the cost down to one attempt per day after a peer is shown to be
+#: unreachable over WebRTC (e.g. both sides behind symmetric NAT with
+#: no TURN) while still recovering automatically when the operator
+#: deploys a fix. Pushing a fresh ICE-server list via
+#: :meth:`FederationTransport.set_ice_servers` clears all current
+#: suppressions — the operator's "I changed something, try again"
+#: signal.
+RTC_RETRY_BACKOFF_S: float = 24 * 60 * 60.0
 
 
 #: How long an ICE candidate may sit in the buffer before being dropped.
@@ -779,6 +792,8 @@ class FederationTransport:
         "_lock",
         "_inbound_handler",
         "_bus",
+        "_rtc_suppressed_until",
+        "_rtc_retry_backoff_s",
     )
 
     def __init__(
@@ -792,6 +807,7 @@ class FederationTransport:
         ice_servers: list[dict] | None = None,
         inbound_handler: Callable[[str, bytes], Awaitable[dict]] | None = None,
         bus: "EventBus | None" = None,
+        rtc_retry_backoff_s: float = RTC_RETRY_BACKOFF_S,
     ) -> None:
         self._own_instance_id = own_instance_id
         self._https_inbox = https_inbox
@@ -804,6 +820,19 @@ class FederationTransport:
         # Attached by FederationService after construction.
         self._inbound_handler = inbound_handler
         self._bus = bus
+        #: ``instance_id`` → monotonic-time UNTIL we'll attempt
+        #: another RTC handshake to that peer. Set when a peer's
+        #: PeerConnection transitions to FAILED (e.g. ICE pair-checks
+        #: never succeed — typical real-world failure when neither
+        #: side has TURN and they're both behind symmetric NAT).
+        #: Without this, every ``send()`` would rebuild the handshake
+        #: immediately after the failed one was evicted, hammering
+        #: the failing path on every outbound envelope. Backoff of
+        #: 24 h keeps the cost down to one attempt/day while still
+        #: recovering automatically if the operator deploys TURN or
+        #: their NAT geometry shifts.
+        self._rtc_suppressed_until: dict[str, float] = {}
+        self._rtc_retry_backoff_s = rtc_retry_backoff_s
 
     def set_ice_servers(self, servers: list[dict]) -> None:
         """Update the ICE-server list used for *future* peer handshakes.
@@ -811,8 +840,22 @@ class FederationTransport:
         Existing peers keep their original config — renegotiating live
         DataChannels is out of scope. New ``_ensure_handshake`` calls
         pick up the updated list.
+
+        Clears all current ``_rtc_suppressed_until`` entries — pushing
+        a fresh ICE-server list is the operator's "I changed
+        something, try again" signal (e.g. they just deployed a TURN
+        server). Without this, peers previously marked FAILED would
+        stay on HTTPS for up to 24 h despite the operator having
+        actually fixed the underlying problem.
         """
         self._ice_servers = list(servers or [])
+        if self._rtc_suppressed_until:
+            log.info(
+                "fed RTC: clearing %d suppressed peer(s) after ICE-server "
+                "list update — next send will retry the handshake",
+                len(self._rtc_suppressed_until),
+            )
+            self._rtc_suppressed_until.clear()
 
     # ─── Outbound ─────────────────────────────────────────────────────────
 
@@ -846,7 +889,12 @@ class FederationTransport:
             )
 
         # Kick off (or re-kick) the handshake lazily on first use.
-        if peer is None:
+        # The ``_rtc_suppressed_until`` gate skips the rebuild for up
+        # to ``rtc_retry_backoff_s`` after a FAILED PC — see
+        # :meth:`_evict_peer`. Without it, every outbound envelope
+        # rebuilds the handshake and re-fails, hammering the failing
+        # path indefinitely.
+        if peer is None and not self._rtc_suppressed(instance.id):
             await self._ensure_handshake(instance)
 
         ok, status = await self._https_inbox.send(
@@ -1010,7 +1058,12 @@ class FederationTransport:
         Without this hook a failed PC stayed in ``_peers`` forever and
         every subsequent ``send()`` short-circuited to HTTPS fallback
         without trying to rebuild the channel. Removing the entry lets
-        the next outbound envelope call ``_ensure_handshake`` again.
+        the next outbound envelope retry — but ALSO records a
+        suppression timestamp so the rebuild is throttled to once
+        per ``_rtc_retry_backoff_s`` (24 h default). Otherwise every
+        outbound envelope to a peer behind symmetric NAT would
+        rebuild the handshake and re-fail, hammering the failing
+        path on every send.
 
         Bound to ``_RtcPeer(on_failed=...)`` at instantiation.
         """
@@ -1018,15 +1071,33 @@ class FederationTransport:
             peer = self._peers.pop(instance_id, None)
         if peer is None:
             return
+        retry_at = time.monotonic() + self._rtc_retry_backoff_s
+        self._rtc_suppressed_until[instance_id] = retry_at
         log.info(
-            "fed RTC peer %s evicted after FAILED state; next send will "
-            "rebuild the handshake",
+            "fed RTC peer %s evicted after FAILED state; suppressing "
+            "rebuild for ~%.0f h (push fresh ICE servers to override)",
             instance_id,
+            self._rtc_retry_backoff_s / 3600,
         )
         try:
             peer.close()
         except Exception as exc:  # noqa: BLE001 — defensive on shutdown path
             log.debug("fed RTC peer %s close after evict: %s", instance_id, exc)
+
+    def _rtc_suppressed(self, instance_id: str) -> bool:
+        """Whether the RTC rebuild for ``instance_id`` is currently
+        suppressed after a FAILED PC. Side effect: prunes the entry
+        from the dict once its TTL has elapsed so the next call
+        runs the normal handshake path. Operator can clear
+        suppressions in bulk via :meth:`set_ice_servers`.
+        """
+        until = self._rtc_suppressed_until.get(instance_id)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            self._rtc_suppressed_until.pop(instance_id, None)
+            return False
+        return True
 
     # ─── Inspection + shutdown ───────────────────────────────────────────
 
