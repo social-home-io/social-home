@@ -1198,6 +1198,20 @@ class SpaceService:
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
         await self._remote_members.remove(space_id, instance_id, user_id)
+        # Audit-fix (HIGH from PR #429 review): if that was the
+        # last remote member from this peer instance, also drop the
+        # ``space_instances`` row so subsequent broadcasts via
+        # ``broadcast_to_space_members`` stop trying to deliver
+        # content to the kicked household. Without this, future
+        # space posts / comments / reactions keep getting shipped
+        # to a household that no longer has anyone in the space —
+        # transport-rule-compliant (the envelope is encrypted) but
+        # wasteful, and could leak metadata about the space's
+        # activity to the no-longer-member relay.
+        rows = await self._remote_members.list_for_space(space_id)
+        still_present = any(r.instance_id == instance_id for r in rows)
+        if not still_present:
+            await self._spaces.remove_space_instance(space_id, instance_id)
         await self._send_invite_envelope(
             to_instance_id=instance_id,
             event_type=FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
