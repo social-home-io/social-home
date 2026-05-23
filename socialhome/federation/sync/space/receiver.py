@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from ....repositories.federation_repo import AbstractFederationRepo
     from ....repositories.gallery_repo import AbstractGalleryRepo
     from ....repositories.page_repo import AbstractPageRepo
+    from ....repositories.poll_repo import AbstractPollRepo
     from ....repositories.space_post_repo import AbstractSpacePostRepo
     from ....repositories.space_repo import AbstractSpaceRepo
     from ....repositories.space_zone_repo import AbstractSpaceZoneRepo
@@ -82,6 +83,7 @@ class SpaceSyncReceiver:
         "_space_calendar_repo",
         "_gallery_repo",
         "_zone_repo",
+        "_poll_repo",
         "_pending_decrypts",
     )
 
@@ -100,6 +102,7 @@ class SpaceSyncReceiver:
         space_calendar_repo: "AbstractSpaceCalendarRepo",
         gallery_repo: "AbstractGalleryRepo",
         zone_repo: "AbstractSpaceZoneRepo | None" = None,
+        poll_repo: "AbstractPollRepo | None" = None,
         pending_decrypts: "PendingDecryptsCache | None" = None,
     ) -> None:
         self._bus = bus
@@ -114,6 +117,7 @@ class SpaceSyncReceiver:
         self._space_calendar_repo = space_calendar_repo
         self._gallery_repo = gallery_repo
         self._zone_repo = zone_repo
+        self._poll_repo = poll_repo
         #: Optional — when wired, ``decrypt_chunk`` failures that
         #: look like "missing epoch key" stash the chunk for replay
         #: once :class:`SpaceContentKeyImported` fires on the same
@@ -323,6 +327,38 @@ class SpaceSyncReceiver:
             log.debug(
                 "received %d poll records — skipped (see Post.poll)", len(records)
             )
+        elif resource == "schedules":
+            # F5: schedule-poll meta + slot defs catch up so a remote
+            # member's slot picker isn't empty after a §25.6 sync. The
+            # wrapper post (PostType.SCHEDULE) was already persisted
+            # above by the ``posts`` exporter, so the FK to
+            # ``space_posts(id)`` is satisfied.
+            if self._poll_repo is None:
+                log.debug(
+                    "received %d schedule records — no poll_repo wired, skipping",
+                    len(records),
+                )
+                return
+            for r in records:
+                post_id = str(r.get("post_id") or "")
+                title = str(r.get("title") or "")
+                slots = r.get("slots") or []
+                if not post_id or not title or not slots:
+                    log.debug("schedule record missing required field: %r", r)
+                    continue
+                try:
+                    await self._poll_repo.create_schedule_poll(
+                        post_id=post_id,
+                        title=title,
+                        deadline=r.get("deadline"),
+                        slots=list(slots),
+                    )
+                except Exception as exc:  # pragma: no cover
+                    log.debug(
+                        "schedule catch-up create failed for post=%s: %s",
+                        post_id,
+                        exc,
+                    )
         elif resource == "space_zones":
             # §23.8.7: per-space zone catalogue. Receiver may be
             # configured without a zone repo (older deployments) — in

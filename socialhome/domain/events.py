@@ -356,6 +356,28 @@ class TaskListDeleted(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SchedulePollCreated(DomainEvent):
+    """A schedule poll (slot definitions + title + deadline) was just
+    persisted alongside its wrapper :class:`PostType.SCHEDULE` post.
+
+    Picked up by :class:`ScheduleFederationOutbound` (F5) so the slot
+    definitions reach remote member households — without this the
+    wrapper post federates as text-only and the remote SPA renders
+    an empty slot picker.
+    """
+
+    post_id: str
+    title: str
+    deadline: str | None
+    #: Frozen tuple of slot dicts ``{"id", "slot_date", "start_time",
+    #: "end_time", "position"}`` — same shape the repo's
+    #: ``create_schedule_poll`` accepts.
+    slots: tuple[dict, ...]
+    space_id: str | None = None
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class SchedulePollResponded(DomainEvent):
     """A member voted / changed / retracted their availability.
 

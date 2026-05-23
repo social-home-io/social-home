@@ -225,6 +225,7 @@ from .federation.sync import (
     PagesExporter,
     PollsExporter,
     PostsExporter,
+    SchedulesExporter,
     SpaceSyncReceiver,
     SpaceSyncScheduler,
     SpaceSyncService,
@@ -747,6 +748,7 @@ def _wire_federation_stack(
         "calendar": CalendarExporter(space_calendar_repo),
         "gallery": GalleryExporter(gallery_repo),
         "polls": PollsExporter(space_poll_repo, space_post_repo),
+        "schedules": SchedulesExporter(space_poll_repo, space_post_repo),
         "space_zones": ZonesExporter(space_zone_repo),
     }
     chunk_builder = ChunkBuilder(
@@ -779,6 +781,7 @@ def _wire_federation_stack(
         space_calendar_repo=space_calendar_repo,
         gallery_repo=gallery_repo,
         zone_repo=space_zone_repo,
+        poll_repo=space_poll_repo,
         pending_decrypts=app[K.pending_decrypts_cache_key],
     )
     federation_service.attach_space_sync(
