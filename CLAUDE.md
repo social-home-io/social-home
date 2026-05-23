@@ -428,6 +428,41 @@ When adding a new federation event:
 - Never add a `"payload": plaintext_fallback` pattern
 - If `SpaceContentEncryption` is not configured, raise `RuntimeError` — never degrade silently
 
+**Hard rule — non-member households MUST NOT see space content.** A
+household that isn't a member of a space, but happens to be on the
+federation mesh between the host and a remote member, is acting as a
+routing relay. It MUST NOT be able to read any space content (posts,
+comments, reactions, calendar events, location pins, …). This means:
+
+- **Direct delivery: target members only.** Use
+  `broadcast_to_space_members` for every space-content fan-out —
+  it targets `space_instances` (households with at least one member),
+  not arbitrary paired peers. Sending a `SPACE_*` event to a non-member
+  household is a bug, not an optimization.
+- **Mesh-routed delivery: end-to-end sealed.** When a path crosses a
+  non-member relay, wrap with `SPACE_ROUTED` so the relay sees only
+  opaque ciphertext sealed under the target's ephemeral X25519 pub
+  (see `socialhome/federation/routed_crypto.py`). The relay can't
+  derive the shared secret because it doesn't hold either ephemeral
+  private half. Same idea applies to GFS-relayed public/global
+  space content via `seal_for_gfs`.
+- **Content key access is membership-gated.** The per-space AES-256
+  content key (used by `SpaceContentEncryption` / sealed-sender) is
+  delivered to a new member via the §D1b key handoff
+  (`apply_space_content_key_from_metadata`) — never to a routing
+  relay. Removed members lose access on the next epoch rotation
+  (forward secrecy).
+- **The rule is about *transport*.** Once a member receives content
+  with the matching key, they decrypt and store it in their local
+  database the same way every other local row is stored
+  (plaintext-at-rest, under the local KEK for sensitive bytes).
+  Re-encrypting at rest for receiving members is out of scope.
+
+When adding new federation surfaces (space content, space-state mutations,
+roster events) check both delivery paths. If the new event could ever
+reach a non-member household, either route it through `space_instances`
+or wrap with `SPACE_ROUTED` end-to-end.
+
 ### Federation protocol versioning
 
 Every confirmed peer carries a monotonic `proto_version: int` on its

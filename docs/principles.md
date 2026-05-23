@@ -50,6 +50,31 @@ local DB stores plaintext like every other surface, but federation
 envelopes carrying DMs are encrypted such that no relay or GFS can
 read them.
 
+The same rule applies to **space content**. A household that isn't a
+member of a space — but happens to be on the federation mesh between
+the host and a remote member — is acting as a routing relay. It MUST
+NOT be able to read any space content (posts, comments, reactions,
+calendar events, location pins, …). Two layers enforce this:
+
+1. **Direct delivery never reaches non-members.**
+   `broadcast_to_space_members` targets `space_instances` (households
+   with at least one member of the space), never arbitrary paired
+   peers. Sending a `SPACE_*` event to a non-member household is a
+   bug, not an optimization.
+2. **Mesh-routed delivery seals end-to-end.** When a path between
+   members crosses a non-member relay, the inner payload is wrapped
+   with `SPACE_ROUTED` and sealed under the target's ephemeral
+   X25519 public key (see `socialhome/federation/routed_crypto.py`).
+   The relay sees the routing metadata but can't derive the shared
+   secret — it holds neither ephemeral private half.
+
+The per-space content key the recipient uses to decrypt is itself
+delivered through the §D1b invite/redeem envelope (encrypted between
+the host and the joining instance) — never to a routing relay.
+Removed members lose access on the next epoch rotation (forward
+secrecy). Once a member receives content, they store it plaintext
+locally, same shape as every other surface.
+
 ## Spec is the source of truth, code wins on disagreement
 
 `spec_work.md` is the canonical specification. When code and spec

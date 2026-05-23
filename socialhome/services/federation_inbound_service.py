@@ -189,6 +189,8 @@ class FederationInboundService:
         "_relay_policy",
         "_media_dir",
         "_realtime",
+        "_space_remote_member_repo",
+        "_federation_service",
     )
 
     def __init__(
@@ -208,6 +210,7 @@ class FederationInboundService:
         relay_policy: "RelayPolicy | None" = None,
         media_dir: "pathlib.Path | None" = None,
         realtime: "object | None" = None,
+        space_remote_member_repo=None,
     ) -> None:
         self._bus = bus
         self._conversation_repo = conversation_repo
@@ -229,6 +232,11 @@ class FederationInboundService:
         self._report_service = report_service
         self._dm_routing_repo = dm_routing_repo
         self._relay_policy = relay_policy
+        # #117 — needed to route SPACE_MEMBER_JOINED writes to the
+        # right table. Optional so legacy test stacks that don't
+        # exercise the cross-household path can omit it.
+        self._space_remote_member_repo = space_remote_member_repo
+        self._federation_service = None
 
     def attach_realtime(self, realtime: "object") -> None:
         """Wire the realtime broadcaster after construction.
@@ -245,6 +253,9 @@ class FederationInboundService:
         """Register inbound handlers on the federation event registry."""
         from ..domain.federation import FederationEventType as FET
 
+        # Stash so _on_space_member_joined can read own_instance_id
+        # without us having to thread it through every handler call.
+        self._federation_service = federation_service
         registry = federation_service._event_registry
         registry.register(FET.DM_MESSAGE, self._on_dm_message)
         registry.register(FET.DM_MEDIA_BLOB, self._on_dm_media_blob)
@@ -1022,6 +1033,45 @@ class FederationInboundService:
             return
         role = str(event.payload.get("role") or "member")
         joined_at = event.payload.get("occurred_at") or _now_iso()
+        # #117 — route the write to the right table. The new member's
+        # home instance arrives in the payload (B2-style remote-stub
+        # tracking); when missing, fall back to the envelope's
+        # ``from_instance`` since the joiner's own instance is the
+        # canonical sender of a SPACE_MEMBER_JOINED for their own user.
+        member_instance = str(event.payload.get("instance_id") or "") or (
+            event.from_instance
+        )
+        own = (
+            self._federation_service.own_instance_id
+            if self._federation_service is not None
+            else None
+        )
+        if own is not None and member_instance and member_instance != own:
+            # Remote member — write into space_remote_members so the
+            # host-side member-list merge from PR #424 picks them up
+            # without polluting the local ``space_members`` table.
+            if self._space_remote_member_repo is None:
+                return
+            await self._space_remote_member_repo.add(
+                space_id=space_id,
+                instance_id=member_instance,
+                user_id=user_id,
+                user_pk=(
+                    str(event.payload["user_pk"])
+                    if event.payload.get("user_pk")
+                    else None
+                ),
+                display_name=(
+                    str(event.payload["display_name"])
+                    if event.payload.get("display_name")
+                    else None
+                ),
+            )
+            return
+        # Local-to-us join (rare on this path; the legacy code wrote
+        # here unconditionally). Kept for back-compat with any handler
+        # that legitimately echoes a local SPACE_MEMBER_JOINED back to
+        # itself — ``save_member`` is upsert so re-entry is a no-op.
         member = SpaceMember(
             space_id=space_id,
             user_id=user_id,
@@ -1034,6 +1084,26 @@ class FederationInboundService:
         space_id = event.space_id or str(event.payload.get("space_id") or "")
         user_id = str(event.payload.get("user_id") or "")
         if not space_id or not user_id:
+            return
+        # #117 — symmetric to ``_on_space_member_joined``: route the
+        # delete to the right table.
+        member_instance = str(event.payload.get("instance_id") or "") or (
+            event.from_instance
+        )
+        own = (
+            self._federation_service.own_instance_id
+            if self._federation_service is not None
+            else None
+        )
+        if (
+            own is not None
+            and member_instance
+            and member_instance != own
+            and self._space_remote_member_repo is not None
+        ):
+            await self._space_remote_member_repo.remove(
+                space_id, member_instance, user_id
+            )
             return
         await self._space_repo.delete_member(space_id, user_id)
 

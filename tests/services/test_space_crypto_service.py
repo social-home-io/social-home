@@ -84,6 +84,56 @@ async def crypto_env(tmp_dir):
     await db.shutdown()
 
 
+async def test_export_current_key_returns_unwrapped_bytes_and_epoch(crypto_env):
+    """§D1b #117 — the host hands a brand-new remote member the
+    space content key inside the (already-encrypted) invite envelope
+    so they can decrypt subsequent SPACE_POST_CREATED events. The
+    returned bytes are the *unwrapped* AES-256 key — the federation
+    layer is responsible for the secrecy of the envelope they go in."""
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    result = await crypto.export_current_key("sp-1")
+    assert result is not None
+    epoch, raw = result
+    assert epoch == 0
+    assert isinstance(raw, bytes)
+    assert len(raw) == 32  # AES-256
+
+
+async def test_export_current_key_returns_none_when_uninitialised(crypto_env):
+    """A space with no epoch key yet exports ``None`` — caller
+    skips shipping the field rather than synthesising garbage."""
+    crypto, _ = crypto_env
+    # sp-1 exists as a parent row from the fixture but has no
+    # epoch key until ``initialise_for_space`` runs.
+    assert await crypto.export_current_key("sp-1") is None
+
+
+async def test_import_key_then_decrypt_smoke(crypto_env):
+    """End-to-end of the §D1b key handoff: encrypt → export the
+    raw key → import (simulating receiver-side persistence) →
+    decrypt under the imported key. The at-rest KEK wrap is
+    re-applied on import so the row matches the local invariant."""
+    crypto, _ = crypto_env
+    await crypto.initialise_for_space("sp-1")
+    epoch, ct = await crypto.encrypt("sp-1", b"hello space")
+    exported = await crypto.export_current_key("sp-1")
+    assert exported is not None
+    _epoch, raw_key = exported
+    # ``import_key`` upserts under the same (space_id, epoch), so
+    # we can re-decrypt — proves the same bytes decrypt after the
+    # round-trip through unwrap → re-wrap.
+    await crypto.import_key("sp-1", epoch, raw_key)
+    plaintext = await crypto.decrypt("sp-1", epoch, ct)
+    assert plaintext == b"hello space"
+
+
+async def test_import_key_rejects_wrong_length(crypto_env):
+    crypto, _ = crypto_env
+    with pytest.raises(ValueError):
+        await crypto.import_key("sp-1", 0, b"too short")
+
+
 async def test_initialise_for_space_creates_epoch_zero(crypto_env):
     crypto, _ = crypto_env
     epoch = await crypto.initialise_for_space("sp-1")

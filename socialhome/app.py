@@ -698,6 +698,7 @@ def _wire_federation_stack(
         space_repo=space_repo,
         remote_member_repo=space_remote_member_repo,
         cover_repo=space_cover_repo,
+        space_crypto_service=space_crypto,
     ).attach_to(federation_service)
     SpaceContentInboundHandlers(
         bus=bus,
@@ -1850,6 +1851,11 @@ def create_app(config: Config | None = None) -> web.Application:
         # 5a. SpaceContentEncryption — per-space epoch keys, KEK-protected.
         space_crypto = SpaceContentEncryption(space_key_repo, key_manager)
         app[K.space_crypto_service_key] = space_crypto
+        # #117 — wire content-key export/import into the §D1b paths
+        # so new remote members can actually decrypt the events they
+        # receive. Without this, the joiner's local space_keys is
+        # empty and every SPACE_POST_CREATED inbound raises.
+        real_space_service.attach_space_crypto_service(space_crypto)
 
         # 5. Federation stack — FederationService + sync manager + typing/dm/
         #    presence attach + inbound bridge + pairing-relay queue.
@@ -1959,6 +1965,7 @@ def create_app(config: Config | None = None) -> web.Application:
             route_service=route_discovery,
             routed_handler=routed_handler,
             cover_repo=space_cover_repo,
+            space_crypto_service=space_crypto,
         )
         invite_redeem_coordinator.attach_to(federation_service)
         real_space_service.attach_redeem_coordinator(invite_redeem_coordinator)

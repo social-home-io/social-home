@@ -107,6 +107,65 @@ class SpaceContentEncryption:
         latest = await self._repo.get_latest(space_id)
         return latest.epoch if latest is not None else None
 
+    # ─── Cross-instance handoff (#117) ────────────────────────────────────
+
+    async def export_current_key(self, space_id: str) -> tuple[int, bytes] | None:
+        """Return ``(epoch, raw_aes_key)`` for the §D1b invite envelope.
+
+        Unwraps from KEK so the caller can hand the bytes to the
+        federation layer. The envelope is itself encrypted to the
+        invitee instance (§D1b zero-leak), so the key never leaves
+        this process in plaintext anywhere — but it IS the canonical
+        secret that decrypts every event in the space, so callers
+        MUST ONLY use this return value inline within an encrypted
+        envelope payload. Never persist, never log.
+
+        Returns ``None`` when the space has no keys yet — the
+        receiver then falls back to its own ``initialise_for_space``
+        on first decrypt attempt (which will fail until the key
+        actually federates later, but that's an explicit failure
+        rather than a silent decrypt-with-zeros).
+        """
+        latest = await self._repo.get_latest(space_id)
+        if latest is None:
+            return None
+        raw = self._kek.decrypt(
+            latest.content_key_hex,
+            associated_data=space_id.encode("utf-8"),
+        )
+        return latest.epoch, raw
+
+    async def import_key(
+        self,
+        space_id: str,
+        epoch: int,
+        raw_key: bytes,
+    ) -> None:
+        """Persist a key received from a federated peer.
+
+        KEK-wraps with the *receiver's* key manager so the local
+        ``space_keys`` row matches the at-rest invariant. Idempotent —
+        a repeated import for the same ``(space_id, epoch)`` upserts.
+        """
+        if len(raw_key) != 32:
+            raise ValueError("space content key must be 32 bytes")
+        wrapped = self._kek.encrypt(
+            raw_key,
+            associated_data=space_id.encode("utf-8"),
+        )
+        await self._repo.save(
+            SpaceKey(
+                space_id=space_id,
+                epoch=epoch,
+                content_key_hex=wrapped,
+            )
+        )
+        log.info(
+            "space_crypto: imported epoch %d for %s from peer",
+            epoch,
+            space_id,
+        )
+
     # ─── Encrypt / decrypt ────────────────────────────────────────────────
 
     async def encrypt(self, space_id: str, plaintext: bytes) -> tuple[int, str]:
