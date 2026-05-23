@@ -48,7 +48,7 @@ from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 from ..domain.space import SpaceMember, SpacePermissionError, SpaceRole
 from ..services.space_service import (
-    _space_metadata_for_federation,
+    build_space_snapshot_for_federation,
     stub_space_from_metadata,
 )
 
@@ -301,6 +301,35 @@ class SpaceInviteTokenRedeemCoordinator:
                         joined_at=datetime.now(timezone.utc).isoformat(),
                     )
                 )
+                # §D1b member-list mirror (#115) — seat every other
+                # member of this space as a ``SpaceRemoteMember`` so
+                # the Members tab on the receiver's stub shows the
+                # full roster (the host, federated peers, …) rather
+                # than just the redeemer. Skipping ``viewer_user_id``
+                # because that lives in the local ``space_members``
+                # row we just inserted.
+                roster = meta.get("roster")
+                if isinstance(roster, list):
+                    for entry in roster:
+                        if not isinstance(entry, dict):
+                            continue
+                        user_id = str(entry.get("user_id") or "")
+                        inst_id = str(entry.get("instance_id") or "")
+                        if not user_id or not inst_id or user_id == viewer_user_id:
+                            continue
+                        await self._remote_members.add(
+                            space_id=space_id,
+                            instance_id=inst_id,
+                            user_id=user_id,
+                            user_pk=(
+                                str(entry["user_pk"]) if entry.get("user_pk") else None
+                            ),
+                            display_name=(
+                                str(entry["display_name"])
+                                if entry.get("display_name")
+                                else None
+                            ),
+                        )
         return {
             "space_id": space_id,
             "role": role_str,
@@ -444,11 +473,11 @@ class SpaceInviteTokenRedeemCoordinator:
             )
             return
 
-        # Pull the full space row so we can ship metadata back to the
-        # receiver — see ``_space_metadata_for_federation``. Without
-        # this the receiver could record the redeem succeeded but
-        # have no name / emoji / features for the stub it's about to
-        # create, leaving its /spaces card blank.
+        # Pull the full space row so we can ship metadata + the
+        # member roster back to the receiver. Without the meta the
+        # receiver's stub card is blank; without the roster the
+        # receiver's Members tab shows only herself (see PR for
+        # #115).
         space = await self._spaces.get(space_id)
         ack_payload: dict = {
             "redeem_nonce": nonce,
@@ -456,7 +485,13 @@ class SpaceInviteTokenRedeemCoordinator:
             "role": SpaceRole.MEMBER.value,
         }
         if space is not None:
-            ack_payload["space_meta"] = _space_metadata_for_federation(space)
+            ack_payload["space_meta"] = await build_space_snapshot_for_federation(
+                space,
+                space_repo=self._spaces,
+                remote_member_repo=self._remote_members,
+                user_repo=self._users,
+                own_instance_id=self._federation.own_instance_id,
+            )
         if routed_route_id is not None and self._routed_handler is not None:
             await self._routed_handler.send_routed_reply(
                 route_id=routed_route_id,
