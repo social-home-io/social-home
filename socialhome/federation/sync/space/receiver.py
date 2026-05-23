@@ -28,6 +28,9 @@ from ....domain.calendar import CalendarEvent
 from ....domain.events import SpaceSyncComplete
 from ....domain.page import Page
 from ....domain.post import (
+    BazaarListing,
+    BazaarMode,
+    BazaarStatus,
     Comment,
     CommentType,
     FileMeta,
@@ -47,6 +50,7 @@ if TYPE_CHECKING:
     from ....repositories.page_repo import AbstractPageRepo
     from ....repositories.space_post_repo import AbstractSpacePostRepo
     from ....repositories.space_repo import AbstractSpaceRepo
+    from ....repositories.bazaar_repo import AbstractBazaarRepo
     from ....repositories.space_zone_repo import AbstractSpaceZoneRepo
     from ....repositories.sticky_repo import AbstractStickyRepo
     from ....repositories.task_repo import AbstractSpaceTaskRepo
@@ -82,6 +86,7 @@ class SpaceSyncReceiver:
         "_space_calendar_repo",
         "_gallery_repo",
         "_zone_repo",
+        "_bazaar_repo",
         "_pending_decrypts",
     )
 
@@ -100,6 +105,7 @@ class SpaceSyncReceiver:
         space_calendar_repo: "AbstractSpaceCalendarRepo",
         gallery_repo: "AbstractGalleryRepo",
         zone_repo: "AbstractSpaceZoneRepo | None" = None,
+        bazaar_repo: "AbstractBazaarRepo | None" = None,
         pending_decrypts: "PendingDecryptsCache | None" = None,
     ) -> None:
         self._bus = bus
@@ -114,6 +120,7 @@ class SpaceSyncReceiver:
         self._space_calendar_repo = space_calendar_repo
         self._gallery_repo = gallery_repo
         self._zone_repo = zone_repo
+        self._bazaar_repo = bazaar_repo
         #: Optional — when wired, ``decrypt_chunk`` failures that
         #: look like "missing epoch key" stash the chunk for replay
         #: once :class:`SpaceContentKeyImported` fires on the same
@@ -337,6 +344,32 @@ class SpaceSyncReceiver:
                 zone = _zone_from_record(r, space_id)
                 if zone is not None:
                     await self._zone_repo.upsert(zone)
+        elif resource == "bazaar":
+            # F4: catch-up bazaar listings so a new joiner sees the
+            # full listing card (mode / price / photos / status) — not
+            # just the wrapper post's caption. The wrapper post was
+            # already persisted by the ``posts`` resource above, so
+            # the BazaarListing FK to space_posts(id) is satisfied.
+            if self._bazaar_repo is None:
+                log.debug(
+                    "received %d bazaar records — no bazaar_repo wired, skipping",
+                    len(records),
+                )
+                return
+            for r in records:
+                listing = _bazaar_listing_from_record(r, space_id)
+                if listing is not None:
+                    try:
+                        await self._bazaar_repo.save_listing(listing)
+                    except Exception as exc:  # pragma: no cover
+                        # FK / CHECK violation (post not yet persisted,
+                        # unknown mode) — log + drop; matches the
+                        # tolerance of the other resources.
+                        log.debug(
+                            "bazaar catch-up save_listing failed for post_id=%s: %s",
+                            listing.post_id,
+                            exc,
+                        )
 
     async def _persist_album(self, record: dict[str, Any]) -> None:
         from ....domain.gallery import (
@@ -564,4 +597,53 @@ def _calendar_from_record(r: dict[str, Any]) -> CalendarEvent | None:
         # IANA wall-clock anchor — additive field; older peers omit it,
         # in which case the dataclass default ``"UTC"`` kicks in.
         tz=str(r.get("tz") or "UTC"),
+    )
+
+
+def _bazaar_listing_from_record(
+    r: dict[str, Any],
+    space_id: str,
+) -> "BazaarListing | None":
+    """Reconstruct a :class:`BazaarListing` from an exporter chunk record.
+
+    Lenient: missing required fields or unknown mode/status → log + skip
+    the row. The wrapper post must already be persisted (FK to
+    space_posts.id); if it isn't, ``save_listing`` will raise IntegrityError
+    and the caller catches it.
+    """
+    post_id = r.get("post_id")
+    seller = r.get("seller_user_id")
+    mode_raw = r.get("mode")
+    title = r.get("title")
+    if not post_id or not seller or not mode_raw or title is None:
+        log.debug("bazaar record missing required field: %r", r)
+        return None
+    try:
+        mode = BazaarMode(str(mode_raw))
+        status = BazaarStatus(str(r.get("status") or "active"))
+    except ValueError:
+        log.debug(
+            "bazaar record unknown mode/status: mode=%r status=%r",
+            mode_raw,
+            r.get("status"),
+        )
+        return None
+    return BazaarListing(
+        post_id=str(post_id),
+        space_id=str(r.get("space_id") or space_id),
+        seller_user_id=str(seller),
+        mode=mode,
+        title=str(title),
+        end_time=str(r.get("end_time") or ""),
+        currency=str(r.get("currency") or "USD"),
+        status=status,
+        created_at=str(r.get("created_at") or ""),
+        description=r.get("description"),
+        image_urls=tuple(r.get("image_urls") or ()),
+        price=r.get("price"),
+        start_price=r.get("start_price"),
+        step_price=r.get("step_price"),
+        winner_user_id=r.get("winner_user_id"),
+        winning_price=r.get("winning_price"),
+        sold_at=r.get("sold_at"),
     )

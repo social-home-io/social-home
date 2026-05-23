@@ -217,6 +217,7 @@ from .services.federation_inbound import (
 )
 from .federation.sync import (
     BansExporter,
+    BazaarExporter,
     CalendarExporter,
     ChunkBuilder,
     CommentsExporter,
@@ -748,6 +749,7 @@ def _wire_federation_stack(
         "gallery": GalleryExporter(gallery_repo),
         "polls": PollsExporter(space_poll_repo, space_post_repo),
         "space_zones": ZonesExporter(space_zone_repo),
+        "bazaar": BazaarExporter(bazaar_repo),
     }
     chunk_builder = ChunkBuilder(
         encoder=federation_service._encoder,
@@ -779,6 +781,7 @@ def _wire_federation_stack(
         space_calendar_repo=space_calendar_repo,
         gallery_repo=gallery_repo,
         zone_repo=space_zone_repo,
+        bazaar_repo=bazaar_repo,
         pending_decrypts=app[K.pending_decrypts_cache_key],
     )
     federation_service.attach_space_sync(

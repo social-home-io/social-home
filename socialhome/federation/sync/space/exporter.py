@@ -49,6 +49,10 @@ RESOURCE_ORDER: tuple[str, ...] = (
     "gallery",
     "polls",
     "space_zones",
+    # Bazaar listings ship AFTER posts because the BazaarListing row
+    # has an FK to space_posts(id) — the wrapper post must already be
+    # persisted on the receiver side before the listing INSERT lands.
+    "bazaar",
 )
 
 

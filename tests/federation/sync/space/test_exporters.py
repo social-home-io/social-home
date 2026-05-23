@@ -371,3 +371,45 @@ async def test_zones_exporter_serialises_catalogue():
     assert recs[0]["radius_m"] == 150
     # Match the on-the-wire shape the receiver expects.
     assert recs[0]["color"] == "#3b82f6"
+
+
+async def test_bazaar_exporter_serialises_listings():
+    """F4: bazaar listings ship under the ``bazaar`` resource so a
+    catch-up sync rebuilds full listing cards (mode / price / photos /
+    status) on the receiver — not just the wrapper post's caption."""
+    from socialhome.domain.post import BazaarListing, BazaarMode, BazaarStatus
+    from socialhome.federation.sync.space.exporters import BazaarExporter
+
+    listing = BazaarListing(
+        post_id="bzr-1",
+        space_id="sp-1",
+        seller_user_id="u-seller",
+        mode=BazaarMode.FIXED,
+        title="Vintage chair",
+        end_time="2026-06-01T00:00:00+00:00",
+        currency="USD",
+        status=BazaarStatus.ACTIVE,
+        created_at="2026-05-23T10:00:00+00:00",
+        description="A nice chair",
+        image_urls=("api/media/chair-1.webp", "api/media/chair-2.webp"),
+        price=4500,
+    )
+
+    class _Repo:
+        async def list_in_space(self, space_id, *, limit=2000):
+            return [listing]
+
+    recs = await BazaarExporter(_Repo()).list_records("sp-1")
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["post_id"] == "bzr-1"
+    assert r["mode"] == "fixed"  # enum value, not enum instance
+    assert r["status"] == "active"
+    assert r["price"] == 4500
+    assert r["image_urls"] == [
+        "api/media/chair-1.webp",
+        "api/media/chair-2.webp",
+    ]
+    # Auction-specific fields ship as-is (None for non-auction listings).
+    assert r["start_price"] is None
+    assert r["step_price"] is None

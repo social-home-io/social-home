@@ -22,6 +22,7 @@ from .space import (
 )
 from .space.exporters import (
     BansExporter,
+    BazaarExporter,
     CalendarExporter,
     CommentsExporter,
     GalleryExporter,
@@ -37,6 +38,7 @@ from .space.exporters import (
 
 __all__ = [
     "BansExporter",
+    "BazaarExporter",
     "CalendarExporter",
     "ChunkBuilder",
     "CommentsExporter",
