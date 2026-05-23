@@ -285,8 +285,8 @@ That single command runs the full sequence:
 The canonical ``all`` sequence runs ``up → pair → traffic →
 calendar → verify → relay-pair → visibility → invite-redeem →
 invite-redeem-routed → remote-invite-routed → space-post-routed →
-space-media-blob → admin-promote-kick → remote-invite-decline →
-replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
+space-media-blob → space-gallery-media-blob → admin-promote-kick →
+remote-invite-decline → replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
 stay opt-in (they spin up a separate GFS process and aren't
 required to validate the HFS↔HFS surface).
 
@@ -299,6 +299,9 @@ Phases added after the initial publish are documented inline in
 * ``space-media-blob`` — bytes for a posted image actually reach
   the remote member's media path (the SpaceMediaSyncService
   outbox + chunked SPACE_MEDIA_BLOB stream).
+* ``space-gallery-media-blob`` — same as above, exercised through
+  the gallery upload path. Thumbnail + full bytes both land on
+  the remote member's media path via the shared media outbox.
 * ``admin-promote-kick`` — cross-household role promotion lands on
   the affected member's household via SPACE_MEMBER_ROLE_CHANGED.
 

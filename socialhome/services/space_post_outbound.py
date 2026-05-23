@@ -175,6 +175,7 @@ class SpacePostOutbound:
                             post_id=post.id,
                             target_instance_ids=targets,
                             media_urls=media_urls,
+                            space_id=event.space_id,
                         )
                     except Exception:
                         log.exception(

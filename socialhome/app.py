@@ -930,6 +930,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         gallery_repo=gallery_repo,
         space_repo=space_repo,
+        media_sync=space_media_sync_service,
     )
     gallery_federation_outbound.wire()
 

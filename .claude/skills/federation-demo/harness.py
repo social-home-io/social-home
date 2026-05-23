@@ -3711,6 +3711,125 @@ def cmd_space_media_blob() -> None:
     print("space-media-blob: ok")
 
 
+def cmd_space_gallery_media_blob() -> None:
+    """Gallery media bytes federate to remote members (PR #4xx).
+
+    Same shape as ``cmd_space_media_blob`` but exercises the gallery
+    upload path:
+
+    1. c creates a per-space album in the mesh-private space dave joined.
+    2. c uploads an image into that album.
+    3. After settle, d's media path contains the thumbnail + full
+       bytes — same filenames as on c.
+    4. b (the relay) saw ``SPACE_ROUTED`` envelopes but NEVER the
+       inner ``SPACE_GALLERY_ITEM_CREATED`` or ``SPACE_MEDIA_BLOB``.
+
+    Closes the gap Pascal called out: galleries previously federated
+    only the URL strings (``to_thumbnail_dict``); receivers got
+    broken thumbnails because the bytes never crossed the wire.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    space_id = state.get("remote_invite_routed_space_id")
+    if not space_id:
+        raise SystemExit(
+            "space-gallery-media-blob: run 'remote-invite-routed' first",
+        )
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+
+    b_log_path = _instance_dir("b") / "log.txt"
+    b_log_before_size = (
+        b_log_path.stat().st_size if b_log_path.exists() else 0
+    )
+
+    # 1. c creates a per-space album.
+    s, album = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/gallery/albums",
+        token=c["token"],
+        method="POST",
+        body={"name": "Demo Album", "description": "for the demo"},
+    )
+    _must("c creates album", s, album, ok=(201,))
+    album_id = album["id"]
+    print(f"  c created album → {album_id}")
+
+    # 2. c uploads an item into the album.
+    from PIL import Image
+    from io import BytesIO
+
+    img = Image.new("RGB", (32, 32), color=(30, 90, 200))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    boundary = "----sh-demo-gallery-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="gallery.png"\r\n'
+        f"Content-Type: image/png\r\n\r\n"
+    ).encode() + png_bytes + f"\r\n--{boundary}--\r\n".encode()
+    upload_req = urllib.request.Request(
+        f"http://127.0.0.1:{c['port']}/api/gallery/albums/{album_id}/items",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {c['token']}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urllib.request.urlopen(upload_req) as resp:
+        item = json.loads(resp.read())
+    # The route returns the new item including its url + thumbnail_url.
+    item_id = item["id"]
+    item_url = item.get("url") or ""
+    thumb_url = item.get("thumbnail_url") or ""
+    print(f"  c uploaded gallery item {item_id}")
+
+    # 3. Wait for SPACE_GALLERY_ITEM_CREATED + the matching
+    #    SPACE_MEDIA_BLOB chunks to land on d.
+    time.sleep(20)
+
+    # 4. Both filenames should be present on d.
+    for url in {item_url, thumb_url}:
+        if not url:
+            continue
+        filename = url.rsplit("/", 1)[-1].split("?", 1)[0]
+        d_path = _instance_dir("d") / "media" / filename
+        if not d_path.is_file():
+            raise SystemExit(
+                f"space-gallery-media-blob: {filename} missing from d "
+                f"({d_path}) — the SPACE_MEDIA_BLOB for the gallery "
+                f"item didn't land",
+            )
+        c_path = _instance_dir("c") / "media" / filename
+        if c_path.read_bytes() != d_path.read_bytes():
+            raise SystemExit(
+                f"space-gallery-media-blob: bytes mismatch for {filename}",
+            )
+        print(f"  d.media has {filename} ✓")
+
+    # 5. Relay-encryption invariant: b sees SPACE_ROUTED but never
+    #    the inner SPACE_GALLERY_ITEM_CREATED or SPACE_MEDIA_BLOB.
+    if b_log_path.exists():
+        b_log_after = b_log_path.read_text(errors="replace")[b_log_before_size:]
+        for forbidden in (
+            "SPACE_GALLERY_ITEM_CREATED",
+            "SPACE_MEDIA_BLOB",
+        ):
+            if forbidden in b_log_after:
+                raise SystemExit(
+                    f"space-gallery-media-blob: relay b dispatched inner "
+                    f"{forbidden} — encryption invariant broken.",
+                )
+        if "SPACE_ROUTED" in b_log_after:
+            print("  b relayed SPACE_ROUTED without unsealing ✓")
+
+    state["space_gallery_media_blob_ran"] = True
+    _save(state)
+    print("space-gallery-media-blob: ok")
+
+
 def cmd_admin_promote_kick() -> None:
     """Cross-household admin promotion (#114 phase 1, v_8+).
 
@@ -3902,6 +4021,12 @@ def main() -> None:
         # media path must contain the same bytes under the same
         # filename.
         cmd_space_media_blob()
+        # ``space-gallery-media-blob`` covers the same federation gap
+        # for the gallery surface — items uploaded into a per-space
+        # album ship their thumbnail + full bytes to remote members
+        # via the same shared media outbox. Without this the gallery
+        # thumbnails on remote households render as broken images.
+        cmd_space_gallery_media_blob()
         # ``admin-promote-kick`` exercises the cross-household admin
         # promotion path (#114, v_8+): c promotes dave to admin via
         # the new PATCH /api/spaces/{id}/remote-members/{instance}/

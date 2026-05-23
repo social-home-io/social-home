@@ -1,4 +1,4 @@
-"""Tests for the space-post media bytes outbox + scheduler."""
+"""Tests for the space-post + gallery media bytes outbox + scheduler."""
 
 from __future__ import annotations
 
@@ -20,24 +20,16 @@ from socialhome.services.space_media_sync_service import (
 
 
 #: Successful-delivery shape the scheduler treats as a green ship.
-#: Mirrors the real return of
-#: :meth:`FederationService.send_with_mesh_fallback` so the test
-#: doesn't drift from production shape.
 _OK = DeliveryResult(instance_id="peer-x", ok=True)
 
 
-async def _seed_space_post(db, *, post_id="p-1", space_id="sp-1"):
-    """Insert a parent space + space_posts row so FK doesn't trip."""
+async def _seed_space(db, *, space_id="sp-1"):
+    """Insert a parent ``spaces`` row so the outbox FK doesn't trip."""
     await db.enqueue(
         """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
                               identity_public_key, space_type, join_mode)
            VALUES(?,?,?,?,?,?,?)""",
         (space_id, "S", "peer", "owner", "aa" * 32, "household", "invite_only"),
-    )
-    await db.enqueue(
-        """INSERT INTO space_posts(id, space_id, author, type, created_at)
-           VALUES(?,?,?,?,?)""",
-        (post_id, space_id, "u", "image", "2026-05-23T00:00:00+00:00"),
     )
 
 
@@ -54,25 +46,26 @@ async def outbox(db):
     return SqliteSpaceMediaOutboxRepo(db)
 
 
-async def test_enqueue_for_post_writes_one_row_per_peer_per_url(
+async def test_enqueue_for_blob_writes_one_row_per_peer_per_url(
     db,
     outbox,
     tmp_path,
 ):
-    """``enqueue_for_post`` writes a row per (URL, peer) tuple."""
-    await _seed_space_post(db)
+    """One row per (URL, peer) tuple — gallery items and posts both
+    use this surface."""
+    await _seed_space(db)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=None,
         media_dir=tmp_path,
     )
-    await svc.enqueue_for_post(
-        post_id="p-1",
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="p-1",
         target_instance_ids=["peer-a", "peer-b"],
         media_urls=["api/media/img-1.webp", "api/media/img-2.webp"],
     )
-    rows = await outbox.list_for_post("p-1")
-    # 2 urls × 2 peers = 4 rows.
+    rows = await outbox.list_for_correlation("p-1")
     assert len(rows) == 4
     by_pair = {(r.blob_id, r.target_instance_id) for r in rows}
     assert by_pair == {
@@ -81,6 +74,10 @@ async def test_enqueue_for_post_writes_one_row_per_peer_per_url(
         ("img-2.webp", "peer-a"),
         ("img-2.webp", "peer-b"),
     }
+    # Every row carries the space scope so a SPACE_DISSOLVED cascades.
+    assert all(r.space_id == "sp-1" for r in rows)
+    # Every row carries the soft correlation_id.
+    assert all(r.correlation_id == "p-1" for r in rows)
 
 
 async def test_flush_once_ships_small_file_as_single_chunk(
@@ -88,11 +85,9 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     outbox,
     tmp_path,
 ):
-    """A file ≤ ``SINGLE_CHUNK_BYTES_THRESHOLD`` ships in one
-    SPACE_MEDIA_BLOB with ``chunk_count=1, final=True``."""
-    await _seed_space_post(db)
-    # Small WebP under the threshold.
-    body = b"WEBP-small-bytes-" * 8  # < 1 MiB
+    """A file ≤ ``SINGLE_CHUNK_BYTES_THRESHOLD`` ships as one chunk."""
+    await _seed_space(db)
+    body = b"WEBP-small-bytes-" * 8
     (tmp_path / "small.webp").write_bytes(body)
     fed = AsyncMock()
     fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
@@ -101,8 +96,9 @@ async def test_flush_once_ships_small_file_as_single_chunk(
         federation=fed,
         media_dir=tmp_path,
     )
-    await svc.enqueue_for_post(
-        post_id="p-1",
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="p-1",
         target_instance_ids=["peer-x"],
         media_urls=["api/media/small.webp"],
     )
@@ -117,18 +113,16 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     assert payload["chunk_count"] == 1
     assert payload["chunk_index"] == 0
     assert payload["final"] is True
+    assert payload["correlation_id"] == "p-1"
+    assert payload["space_id"] == "sp-1"
     assert base64.b64decode(payload["bytes_b64"]) == body
-    # Row gone after success.
-    assert await outbox.list_for_post("p-1") == []
+    assert await outbox.list_for_correlation("p-1") == []
 
 
 async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
-    """A file > ``SINGLE_CHUNK_BYTES_THRESHOLD`` ships as multiple
-    ``MAX_BLOB_CHUNK_BYTES`` chunks with strictly-increasing index."""
-    await _seed_space_post(db)
-    # Build a file size that exceeds the single-chunk threshold AND
-    # splits cleanly into multiple chunks. Pick 5 chunks worth + a
-    # remainder so the size is firmly above ``SINGLE_CHUNK_BYTES_THRESHOLD``.
+    """Files above ``SINGLE_CHUNK_BYTES_THRESHOLD`` split into
+    ``MAX_BLOB_CHUNK_BYTES`` chunks with strictly increasing index."""
+    await _seed_space(db)
     size = MAX_BLOB_CHUNK_BYTES * 5 + 17
     assert size > SINGLE_CHUNK_BYTES_THRESHOLD
     body = bytes(range(256)) * (size // 256 + 1)
@@ -141,14 +135,14 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
         federation=fed,
         media_dir=tmp_path,
     )
-    await svc.enqueue_for_post(
-        post_id="p-1",
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="p-1",
         target_instance_ids=["peer-x"],
         media_urls=["api/media/big.webm"],
     )
     shipped = await svc.flush_once()
     assert shipped == 1
-    # Expected chunk count = ceil(size / MAX_BLOB_CHUNK_BYTES) = 6.
     assert fed.send_with_mesh_fallback.await_count == 6
     payloads = [c.kwargs["payload"] for c in fed.send_with_mesh_fallback.call_args_list]
     assert [p["chunk_index"] for p in payloads] == [0, 1, 2, 3, 4, 5]
@@ -167,27 +161,26 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
 
 async def test_flush_once_no_federation_returns_zero(db, outbox, tmp_path):
     """Without federation attached, flush is a no-op."""
-    await _seed_space_post(db)
+    await _seed_space(db)
     (tmp_path / "x.webp").write_bytes(b"x")
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=None,
         media_dir=tmp_path,
     )
-    await svc.enqueue_for_post(
-        post_id="p-1",
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="p-1",
         target_instance_ids=["peer-x"],
         media_urls=["api/media/x.webp"],
     )
     assert await svc.flush_once() == 0
-    # Row still pending.
-    assert len(await outbox.list_for_post("p-1")) == 1
+    assert len(await outbox.list_for_correlation("p-1")) == 1
 
 
 async def test_flush_once_missing_file_reschedules(db, outbox, tmp_path):
-    """If the file is gone (user deleted post media), the row
-    reschedules with backoff rather than crashing."""
-    await _seed_space_post(db)
+    """File missing → row reschedules with backoff, not a crash."""
+    await _seed_space(db)
     fed = AsyncMock()
     fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
@@ -195,49 +188,101 @@ async def test_flush_once_missing_file_reschedules(db, outbox, tmp_path):
         federation=fed,
         media_dir=tmp_path,
     )
-    await svc.enqueue_for_post(
-        post_id="p-1",
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="p-1",
         target_instance_ids=["peer-x"],
         media_urls=["api/media/ghost.webp"],
     )
     shipped = await svc.flush_once()
     assert shipped == 0
     fed.send_with_mesh_fallback.assert_not_awaited()
-    # Row remains for next attempt.
-    rows = await outbox.list_for_post("p-1")
+    rows = await outbox.list_for_correlation("p-1")
     assert len(rows) == 1
     assert rows[0].attempts == 1
     assert rows[0].last_error is not None
 
 
-async def test_dedup_same_blob_to_same_peer(db, outbox, tmp_path):
-    """ON CONFLICT DO NOTHING — re-enqueueing the same
-    (blob_id, peer) tuple from a second post that references the
-    same image doesn't create a duplicate row."""
-    await _seed_space_post(db, post_id="p-a")
-    # Second post under SAME space.
-    await db.enqueue(
-        """INSERT INTO space_posts(id, space_id, author, type, created_at)
-           VALUES(?,?,?,?,?)""",
-        ("p-b", "sp-1", "u", "image", "2026-05-23T00:01:00+00:00"),
+async def test_flush_once_reschedules_on_delivery_failure(
+    db,
+    outbox,
+    tmp_path,
+):
+    """``send_with_mesh_fallback`` returns ``ok=False`` (no_route /
+    not_confirmed / transport blip) — the scheduler must reschedule
+    rather than treat that as a success."""
+    await _seed_space(db)
+    (tmp_path / "x.webp").write_bytes(b"x")
+    fed = AsyncMock()
+    fed.send_with_mesh_fallback = AsyncMock(
+        return_value=DeliveryResult(
+            instance_id="peer-x",
+            ok=False,
+            error="no_route",
+        ),
     )
+    svc = SpaceMediaSyncService(
+        outbox=outbox,
+        federation=fed,
+        media_dir=tmp_path,
+    )
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="p-1",
+        target_instance_ids=["peer-x"],
+        media_urls=["api/media/x.webp"],
+    )
+    shipped = await svc.flush_once()
+    assert shipped == 0
+    rows = await outbox.list_for_correlation("p-1")
+    assert len(rows) == 1
+    assert rows[0].attempts == 1
+    assert rows[0].last_error == "no_route"
+
+
+async def test_dedup_same_blob_to_same_peer(db, outbox, tmp_path):
+    """ON CONFLICT(blob_id, target_instance_id) DO NOTHING — same
+    blob referenced by two different correlation ids deduplicates."""
+    await _seed_space(db)
+    svc = SpaceMediaSyncService(
+        outbox=outbox,
+        federation=None,
+        media_dir=tmp_path,
+    )
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="post-a",
+        target_instance_ids=["peer-x"],
+        media_urls=["api/media/shared.webp"],
+    )
+    await svc.enqueue_for_blob(
+        space_id="sp-1",
+        correlation_id="gallery-b",
+        target_instance_ids=["peer-x"],
+        media_urls=["api/media/shared.webp"],
+    )
+    rows_a = await outbox.list_for_correlation("post-a")
+    rows_b = await outbox.list_for_correlation("gallery-b")
+    assert len(rows_a) == 1
+    assert len(rows_b) == 0
+
+
+async def test_enqueue_for_post_back_compat_signature(db, outbox, tmp_path):
+    """The ``enqueue_for_post`` alias kept for PR #440 call sites
+    still works — it's a thin wrapper around ``enqueue_for_blob``."""
+    await _seed_space(db)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=None,
         media_dir=tmp_path,
     )
     await svc.enqueue_for_post(
-        post_id="p-a",
+        post_id="p-back-compat",
         target_instance_ids=["peer-x"],
-        media_urls=["api/media/shared.webp"],
+        media_urls=["api/media/x.webp"],
+        space_id="sp-1",
     )
-    await svc.enqueue_for_post(
-        post_id="p-b",
-        target_instance_ids=["peer-x"],
-        media_urls=["api/media/shared.webp"],
-    )
-    # ON CONFLICT(blob_id, target_instance_id) DO NOTHING.
-    rows_a = await outbox.list_for_post("p-a")
-    rows_b = await outbox.list_for_post("p-b")
-    assert len(rows_a) == 1
-    assert len(rows_b) == 0
+    rows = await outbox.list_for_correlation("p-back-compat")
+    assert len(rows) == 1
+    assert rows[0].correlation_id == "p-back-compat"
+    assert rows[0].space_id == "sp-1"

@@ -102,23 +102,24 @@ class SpaceMediaSyncService:
 
     # ── Enqueue ──────────────────────────────────────────────────────────
 
-    async def enqueue_for_post(
+    async def enqueue_for_blob(
         self,
         *,
-        post_id: str,
+        space_id: str,
+        correlation_id: str,
         target_instance_ids: list[str],
         media_urls: list[str],
     ) -> None:
         """One outbox row per (media_url, peer) tuple.
 
-        Called by :class:`SpacePostOutbound` after the
-        ``SPACE_POST_CREATED`` broadcast lands. The federation envelope
-        for the post itself rides the general outbox; bytes ride
-        through this dedicated outbox so a stuck peer's bytes don't
-        block other federation traffic.
+        Generic enqueue surface — :class:`SpacePostOutbound` and
+        :class:`GalleryFederationOutbound` both call this. The
+        ``correlation_id`` is a soft backref (post_id, gallery item
+        id, etc.) for debug + post-delete cleanup; the scheduler
+        itself never reads it.
 
         ``blob_id`` is derived from the filename so the same file
-        referenced by multiple posts dedups at the
+        referenced by multiple posts / items dedups at the
         ``(blob_id, target_instance_id)`` primary key — a re-shared
         image doesn't ship twice.
         """
@@ -133,10 +134,30 @@ class SpaceMediaSyncService:
                     continue
                 await self._outbox.enqueue(
                     blob_id=blob_id,
-                    post_id=post_id,
+                    space_id=space_id,
+                    correlation_id=correlation_id,
                     target_instance_id=target,
                     bytes_path=str(path),
                 )
+
+    # Back-compat alias for the post-only signature shipped in PR #440.
+    # ``space_id`` defaults to ``""`` for callers that don't have it
+    # to hand — the FK isn't enforced for non-existent space rows on
+    # enqueue, only on delete-cascade.
+    async def enqueue_for_post(
+        self,
+        *,
+        post_id: str,
+        target_instance_ids: list[str],
+        media_urls: list[str],
+        space_id: str = "",
+    ) -> None:
+        await self.enqueue_for_blob(
+            space_id=space_id,
+            correlation_id=post_id,
+            target_instance_ids=target_instance_ids,
+            media_urls=media_urls,
+        )
 
     # ── Scheduler loop ────────────────────────────────────────────────
 
@@ -292,7 +313,12 @@ class SpaceMediaSyncService:
         # the SAME part files on the receiver rather than starting fresh.
         transfer_id = f"{entry.blob_id}:{entry.target_instance_id}"
         common: dict = {
-            "post_id": entry.post_id,
+            # ``post_id`` kept for back-compat with v1 inbound; new
+            # receivers should consult ``correlation_id`` which
+            # carries either a post_id or a gallery_item_id.
+            "post_id": entry.correlation_id,
+            "correlation_id": entry.correlation_id,
+            "space_id": entry.space_id,
             "blob_id": entry.blob_id,
             "transfer_id": transfer_id,
             "filename": entry.blob_id,

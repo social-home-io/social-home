@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
     from ..repositories.gallery_repo import AbstractGalleryRepo
     from ..repositories.space_repo import AbstractSpaceRepo
+    from .space_media_sync_service import SpaceMediaSyncService
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +39,13 @@ log = logging.getLogger(__name__)
 class GalleryFederationOutbound:
     """Publish space-scoped gallery item mutations to paired peers."""
 
-    __slots__ = ("_bus", "_federation", "_gallery_repo", "_space_repo")
+    __slots__ = (
+        "_bus",
+        "_federation",
+        "_gallery_repo",
+        "_space_repo",
+        "_media_sync",
+    )
 
     def __init__(
         self,
@@ -47,11 +54,19 @@ class GalleryFederationOutbound:
         federation_service: "FederationService",
         gallery_repo: "AbstractGalleryRepo",
         space_repo: "AbstractSpaceRepo",
+        media_sync: "SpaceMediaSyncService | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
         self._gallery_repo = gallery_repo
         self._space_repo = space_repo
+        #: Optional — when wired, the gallery item's full + thumbnail
+        #: bytes federate via the shared ``space_media_outbox``. The
+        #: receiver writes them to its own media path so the
+        #: thumbnail_url + url on the rendered item resolves. Without
+        #: this the SPA renders a broken thumbnail (spec §S-9 promises
+        #: an on-demand fetch endpoint that doesn't exist yet).
+        self._media_sync = media_sync
 
     def wire(self) -> None:
         """Subscribe handlers on the bus. Idempotent."""
@@ -79,6 +94,46 @@ class GalleryFederationOutbound:
             FederationEventType.SPACE_GALLERY_ITEM_CREATED,
             payload,
         )
+        # Ship the actual bytes via the shared media outbox so
+        # remote members can render the thumbnail + full image. The
+        # gallery item carries TWO URLs (thumbnail + full); both get
+        # an outbox row per peer. Same pattern post media uses.
+        if self._media_sync is not None:
+            media_urls: list[str] = []
+            if item.thumbnail_url:
+                media_urls.append(item.thumbnail_url)
+            if item.url and item.url != item.thumbnail_url:
+                media_urls.append(item.url)
+            if media_urls:
+                try:
+                    peers = await self._space_repo.list_member_instances(
+                        space_id,
+                    )
+                except Exception:
+                    log.exception(
+                        "gallery-outbound: enqueue list peers failed for "
+                        "space=%s item=%s",
+                        space_id,
+                        item.id,
+                    )
+                    peers = []
+                own = getattr(self._federation, "_own_instance_id", "") or ""
+                targets = [p for p in peers if p and p != own]
+                if targets:
+                    try:
+                        await self._media_sync.enqueue_for_blob(
+                            space_id=space_id,
+                            correlation_id=item.id,
+                            target_instance_ids=targets,
+                            media_urls=media_urls,
+                        )
+                    except Exception:
+                        log.exception(
+                            "gallery-outbound: media-sync enqueue failed "
+                            "for space=%s item=%s",
+                            space_id,
+                            item.id,
+                        )
 
     async def _on_deleted(self, event: GalleryItemDeleted) -> None:
         space_id = await self._space_id_for_album(event.album_id)
@@ -115,8 +170,13 @@ class GalleryFederationOutbound:
         for instance_id in peers:
             if instance_id == own or not instance_id:
                 continue
+            # ``send_with_mesh_fallback`` lets mesh-only members
+            # (joined via §D1b through a relay) receive the event
+            # over ``SPACE_ROUTED`` instead of failing
+            # ``not_confirmed``. Matches the post-content fanout
+            # behaviour.
             try:
-                await self._federation.send_event(
+                await self._federation.send_with_mesh_fallback(
                     to_instance_id=instance_id,
                     event_type=event_type,
                     payload=payload,
