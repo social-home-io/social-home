@@ -317,6 +317,107 @@ async def test_list_members_includes_federated_remote_members(client):
     assert remote["location_share_enabled"] is False
 
 
+async def test_remote_member_display_name_prefers_fresh_users_table_row(client):
+    """When the remote user renames themselves on their household, the
+    USER_UPDATED federation event updates ``remote_users.display_name``
+    on every paired peer. The members endpoint must prefer that fresh
+    value over the §D1b accept-time snapshot in
+    ``space_remote_members.display_name`` — otherwise the rendered
+    roster freezes at the invite-accept name and a rename only
+    propagates through a kick + re-invite cycle."""
+    app = client.app
+    db = app[_db_key]
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "RenameBackfill"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    # Seed BOTH: the §D1b accept-time snapshot AND a newer entry in
+    # remote_users (as USERS_SYNC / USER_UPDATED would populate).
+    # remote_users.instance_id FKs to remote_instances; seed the peer
+    # row first so the insert doesn't trip the constraint.
+    await db.enqueue(
+        "INSERT INTO remote_instances"
+        "(id, display_name, remote_identity_pk, key_self_to_remote,"
+        " key_remote_to_self, remote_inbox_url, local_inbox_id, status,"
+        " source) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            "peer-instance-id",
+            "Peer",
+            "00" * 32,
+            "k1",
+            "k2",
+            "https://peer/wh",
+            "wh-peer",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await db.enqueue(
+        "INSERT INTO space_remote_members"
+        "(space_id, instance_id, user_id, user_pk, display_name)"
+        " VALUES(?,?,?,?,?)",
+        (
+            sid,
+            "peer-instance-id",
+            "uid-jacqueline",
+            "fake-public-key",
+            "Jacqueline (accept-time name)",
+        ),
+    )
+    await db.enqueue(
+        "INSERT INTO remote_users"
+        "(user_id, instance_id, remote_username, display_name,"
+        " synced_at, deprovisioned_at)"
+        " VALUES(?,?,?,?, datetime('now'), NULL)",
+        (
+            "uid-jacqueline",
+            "peer-instance-id",
+            "jacqueline",
+            "Jacqueline Williams",  # renamed since the invite
+        ),
+    )
+
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    remote = next(m for m in members if m.get("instance_id"))
+    # The roster surfaces the fresh name, not the stale snapshot.
+    assert remote["display_name"] == "Jacqueline Williams"
+
+
+async def test_remote_member_falls_back_to_snapshot_when_users_table_missing(client):
+    """When ``remote_users`` has no row for the user (the §D1b accept
+    landed before USERS_SYNC, or the household never paired), the
+    route falls back to the ``space_remote_members.display_name``
+    snapshot rather than the raw ``user_id``."""
+    app = client.app
+    db = app[_db_key]
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "FallbackSnapshot"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    await db.enqueue(
+        "INSERT INTO space_remote_members"
+        "(space_id, instance_id, user_id, display_name)"
+        " VALUES(?,?,?,?)",
+        (sid, "peer-x", "uid-no-remote-row", "Snapshot Name"),
+    )
+    # Deliberately NO remote_users row.
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    remote = next(m for m in members if m.get("instance_id"))
+    assert remote["display_name"] == "Snapshot Name"
+
+
 async def test_member_location_share_enabled_round_trips(client):
     """§23.8.8 — PATCHing /location-sharing flips the bit, and the
     next GET /members must surface that flip. Regression for the
