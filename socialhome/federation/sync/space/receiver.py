@@ -18,6 +18,7 @@ catch-up finished.
 
 from __future__ import annotations
 
+import base64
 import logging
 from datetime import datetime, timezone
 from typing import Any, TYPE_CHECKING
@@ -48,6 +49,9 @@ if TYPE_CHECKING:
     from ....repositories.federation_repo import AbstractFederationRepo
     from ....repositories.gallery_repo import AbstractGalleryRepo
     from ....repositories.page_repo import AbstractPageRepo
+    from ....repositories.profile_picture_repo import (
+        AbstractProfilePictureRepo,
+    )
     from ....repositories.space_post_repo import AbstractSpacePostRepo
     from ....repositories.space_repo import AbstractSpaceRepo
     from ....repositories.bazaar_repo import AbstractBazaarRepo
@@ -87,6 +91,7 @@ class SpaceSyncReceiver:
         "_gallery_repo",
         "_zone_repo",
         "_bazaar_repo",
+        "_profile_picture_repo",
         "_pending_decrypts",
     )
 
@@ -106,6 +111,7 @@ class SpaceSyncReceiver:
         gallery_repo: "AbstractGalleryRepo",
         zone_repo: "AbstractSpaceZoneRepo | None" = None,
         bazaar_repo: "AbstractBazaarRepo | None" = None,
+        profile_picture_repo: "AbstractProfilePictureRepo | None" = None,
         pending_decrypts: "PendingDecryptsCache | None" = None,
     ) -> None:
         self._bus = bus
@@ -121,6 +127,7 @@ class SpaceSyncReceiver:
         self._gallery_repo = gallery_repo
         self._zone_repo = zone_repo
         self._bazaar_repo = bazaar_repo
+        self._profile_picture_repo = profile_picture_repo
         #: Optional — when wired, ``decrypt_chunk`` failures that
         #: look like "missing epoch key" stash the chunk for replay
         #: once :class:`SpaceContentKeyImported` fires on the same
@@ -273,6 +280,51 @@ class SpaceSyncReceiver:
                         space_display_name=r.get("space_display_name"),
                     )
                 )
+        elif resource == "member_pictures":
+            # F6: persist per-member avatar bytes so the SPA stops
+            # rendering broken <img> for every existing member after a
+            # fresh joiner's catch-up. Skip silently if the receiver
+            # was assembled without a profile_picture_repo (older
+            # deployments).
+            if self._profile_picture_repo is None:
+                log.debug(
+                    "received %d member_picture records — no "
+                    "profile_picture_repo wired, skipping",
+                    len(records),
+                )
+                return
+            for r in records:
+                uid = str(r.get("user_id") or "")
+                pic_b64 = r.get("picture_webp_base64")
+                pic_hash = str(r.get("picture_hash") or "")
+                if not uid or not pic_b64 or not pic_hash:
+                    log.debug("member_picture record missing field: %r", r)
+                    continue
+                try:
+                    pic_bytes = base64.b64decode(pic_b64)
+                except Exception:  # pragma: no cover
+                    log.debug(
+                        "member_picture base64 decode failed for %s/%s",
+                        space_id,
+                        uid,
+                    )
+                    continue
+                try:
+                    await self._profile_picture_repo.set_member_picture(
+                        space_id,
+                        uid,
+                        bytes_webp=pic_bytes,
+                        hash=pic_hash,
+                        width=int(r.get("width") or 0),
+                        height=int(r.get("height") or 0),
+                    )
+                except Exception as exc:  # pragma: no cover
+                    log.debug(
+                        "member_picture set_member_picture failed for %s/%s: %s",
+                        space_id,
+                        uid,
+                        exc,
+                    )
         elif resource == "bans":
             for r in records:
                 user_id = str(r.get("user_id") or "")

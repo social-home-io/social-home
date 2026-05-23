@@ -413,3 +413,77 @@ async def test_bazaar_exporter_serialises_listings():
     # Auction-specific fields ship as-is (None for non-auction listings).
     assert r["start_price"] is None
     assert r["step_price"] is None
+
+
+async def test_member_pictures_exporter_inlines_webp_bytes():
+    """F6: per-space avatars catch up so a new joiner sees existing
+    members' faces instead of broken <img>."""
+    from socialhome.domain.space import SpaceMember
+    from socialhome.federation.sync.space.exporters import MemberPicturesExporter
+
+    members = [
+        SpaceMember(
+            space_id="sp-1",
+            user_id="u-alice",
+            role="member",
+            joined_at="2026-01-01",
+            picture_hash="abc123",
+        ),
+        SpaceMember(  # no picture — skipped
+            space_id="sp-1",
+            user_id="u-bob",
+            role="member",
+            joined_at="2026-01-01",
+        ),
+    ]
+
+    class _SpaceRepo:
+        async def list_members(self, space_id):
+            return members
+
+    class _PicRepo:
+        async def get_member_picture(self, space_id, user_id):
+            if user_id == "u-alice":
+                return (b"\x89WEBP-bytes", "abc123")
+            return None
+
+    recs = await MemberPicturesExporter(_SpaceRepo(), _PicRepo()).list_records(
+        "sp-1",
+    )
+    # Only the one with a picture made it.
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["user_id"] == "u-alice"
+    assert r["picture_hash"] == "abc123"
+    # base64 round-trips.
+    import base64
+
+    assert base64.b64decode(r["picture_webp_base64"]) == b"\x89WEBP-bytes"
+
+
+async def test_member_pictures_exporter_skips_when_picture_missing():
+    """Member row has hash but the bytes vanished (race / dropped row)
+    — skip rather than ship a hash with no bytes."""
+    from socialhome.domain.space import SpaceMember
+    from socialhome.federation.sync.space.exporters import MemberPicturesExporter
+
+    class _SpaceRepo:
+        async def list_members(self, space_id):
+            return [
+                SpaceMember(
+                    space_id="sp-1",
+                    user_id="u-alice",
+                    role="member",
+                    joined_at="2026-01-01",
+                    picture_hash="abc",
+                ),
+            ]
+
+    class _PicRepo:
+        async def get_member_picture(self, space_id, user_id):
+            return None  # bytes gone
+
+    recs = await MemberPicturesExporter(_SpaceRepo(), _PicRepo()).list_records(
+        "sp-1",
+    )
+    assert recs == []
