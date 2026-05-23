@@ -483,6 +483,7 @@ def _wire_federation_stack(
     space_repo,
     peer_space_directory_repo,
     space_remote_member_repo,
+    space_cover_repo,
     user_repo,
     profile_picture_repo,
     page_repo,
@@ -696,6 +697,7 @@ def _wire_federation_stack(
         bus=bus,
         space_repo=space_repo,
         remote_member_repo=space_remote_member_repo,
+        cover_repo=space_cover_repo,
     ).attach_to(federation_service)
     SpaceContentInboundHandlers(
         bus=bus,
@@ -1866,6 +1868,7 @@ def create_app(config: Config | None = None) -> web.Application:
             space_repo=space_repo,
             peer_space_directory_repo=repos.peer_space_directory,
             space_remote_member_repo=repos.space_remote_member,
+            space_cover_repo=space_cover_repo,
             user_repo=user_repo,
             profile_picture_repo=profile_picture_repo,
             page_repo=page_repo,
@@ -1955,6 +1958,7 @@ def create_app(config: Config | None = None) -> web.Application:
             federation_repo=federation_repo,
             route_service=route_discovery,
             routed_handler=routed_handler,
+            cover_repo=space_cover_repo,
         )
         invite_redeem_coordinator.attach_to(federation_service)
         real_space_service.attach_redeem_coordinator(invite_redeem_coordinator)

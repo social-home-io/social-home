@@ -50,16 +50,20 @@ def handler():
     remote_members = AsyncMock()
     remote_members.add = AsyncMock()
     remote_members.remove = AsyncMock()
+    cover_repo = AsyncMock()
+    cover_repo.set = AsyncMock()
     h = PrivateSpaceInviteHandler(
         bus=bus,  # type: ignore[arg-type]
         space_repo=space_repo,
         remote_member_repo=remote_members,
+        cover_repo=cover_repo,
     )
     return SimpleNamespace(
         h=h,
         bus=bus,
         space_repo=space_repo,
         remote_members=remote_members,
+        cover_repo=cover_repo,
     )
 
 
@@ -218,6 +222,64 @@ async def test_invite_with_roster_seats_remote_members_for_each_peer(handler):
         call.kwargs["user_id"] for call in handler.remote_members.add.await_args_list
     }
     assert seated_ids == {"u-pascal", "u-anna"}
+
+
+async def test_invite_with_cover_bytes_writes_to_cover_repo(handler):
+    """#116 — when ``space_meta`` carries ``cover_webp_base64`` we
+    persist the bytes via the cover repo so the stub renders the
+    host's real cover image instead of the gradient placeholder.
+    Without ``cover_hash`` the write is skipped (defensive)."""
+    import base64
+
+    fake_webp = b"RIFF\x00\x00\x00\x00WEBPVP8L"
+    ev = _event(
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp-cover",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-pascal",
+            "space_meta": {
+                "name": "Family",
+                "owner_instance_id": "peer-1",
+                "owner_username": "pascal",
+                "identity_public_key": "abc",
+                "cover_hash": "deadbeef",
+                "cover_webp_base64": base64.b64encode(fake_webp).decode("ascii"),
+            },
+        },
+    )
+    await handler.h._on_invite(ev)
+    handler.cover_repo.set.assert_awaited_once()
+    call = handler.cover_repo.set.call_args
+    assert call.args[0] == "sp-cover"
+    assert call.kwargs["bytes_webp"] == fake_webp
+    assert call.kwargs["hash"] == "deadbeef"
+
+
+async def test_invite_skips_cover_write_when_no_bytes(handler):
+    """Older senders that don't ship cover bytes leave the cover
+    repo untouched. The stub still gets seated; the SPA falls back
+    to the gradient placeholder."""
+    ev = _event(
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp-no-cover",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-pascal",
+            "space_meta": {
+                "name": "Family",
+                "owner_instance_id": "peer-1",
+                "owner_username": "pascal",
+                "identity_public_key": "abc",
+                "cover_hash": "deadbeef",
+                # no cover_webp_base64 — cover repo stays untouched.
+            },
+        },
+    )
+    await handler.h._on_invite(ev)
+    handler.cover_repo.set.assert_not_awaited()
 
 
 async def test_invite_with_space_meta_seats_local_stub(handler):

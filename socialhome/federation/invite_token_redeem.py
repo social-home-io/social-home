@@ -48,6 +48,7 @@ from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 from ..domain.space import SpaceMember, SpacePermissionError, SpaceRole
 from ..services.space_service import (
+    apply_space_cover_from_metadata,
     build_space_snapshot_for_federation,
     stub_space_from_metadata,
 )
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
     from ..domain.federation import FederationEvent
     from ..infrastructure.event_bus import EventBus
     from ..repositories.federation_repo import AbstractFederationRepo
+    from ..repositories.space_cover_repo import AbstractSpaceCoverRepo
     from ..repositories.space_remote_member_repo import (
         AbstractSpaceRemoteMemberRepo,
     )
@@ -90,6 +92,7 @@ class SpaceInviteTokenRedeemCoordinator:
         "_remote_members",
         "_users",
         "_federation_repo",
+        "_cover_repo",
         "_pending",
         "_timeout",
         "_route_service",
@@ -108,6 +111,7 @@ class SpaceInviteTokenRedeemCoordinator:
         timeout: float = REDEEM_TIMEOUT_SECONDS,
         route_service: "RouteDiscoveryService | None" = None,
         routed_handler: "SpaceRoutedHandler | None" = None,
+        cover_repo: "AbstractSpaceCoverRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
@@ -115,6 +119,11 @@ class SpaceInviteTokenRedeemCoordinator:
         self._remote_members = space_remote_member_repo
         self._users = user_repo
         self._federation_repo = federation_repo
+        #: Optional — when wired, the issuer ships the host's WebP
+        #: cover bytes alongside ``cover_hash`` in the ACK so the
+        #: receiver's local stub doesn't fall back to the gradient
+        #: placeholder (§D1b #116).
+        self._cover_repo = cover_repo
         #: ``redeem_nonce`` → in-flight Future awaiting the ACK / DENY.
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._timeout = timeout
@@ -293,6 +302,13 @@ class SpaceInviteTokenRedeemCoordinator:
                     meta=meta,
                 )
                 await self._spaces.save(stub)
+                # §D1b cover bytes (#116) — persist host's WebP
+                # when shipped inline so the stub renders properly.
+                await apply_space_cover_from_metadata(
+                    space_id,
+                    meta=meta,
+                    cover_repo=self._cover_repo,
+                )
                 await self._spaces.save_member(
                     SpaceMember(
                         space_id=space_id,
@@ -491,6 +507,7 @@ class SpaceInviteTokenRedeemCoordinator:
                 remote_member_repo=self._remote_members,
                 user_repo=self._users,
                 own_instance_id=self._federation.own_instance_id,
+                cover_repo=self._cover_repo,
             )
         if routed_route_id is not None and self._routed_handler is not None:
             await self._routed_handler.send_routed_reply(
