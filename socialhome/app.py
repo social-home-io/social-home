@@ -111,6 +111,7 @@ from .repositories.cp_repo import SqliteCpRepo
 from .repositories.gfs_connection_repo import SqliteGfsConnectionRepo
 from .repositories.dm_contact_repo import SqliteDmContactRepo
 from .repositories.dm_media_outbox_repo import SqliteDmMediaOutboxRepo
+from .repositories.space_media_outbox_repo import SqliteSpaceMediaOutboxRepo
 from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
@@ -170,6 +171,7 @@ from .services.child_protection_service import ChildProtectionService
 from .services.audio_transcription_service import AudioTranscriptionService
 from .services.data_export_service import DataExportService
 from .services.dm_media_sync_service import DmMediaSyncService
+from .services.space_media_sync_service import SpaceMediaSyncService
 from .services.dm_routing_service import DmRoutingService
 from .services.federation_inbound_service import FederationInboundService
 from .services.relay_policy import RelayPolicy
@@ -450,6 +452,7 @@ def _build_repos(db: AsyncDatabase):
         dm_routing=SqliteDmRoutingRepo(db),
         dm_contact=SqliteDmContactRepo(db),
         dm_media_outbox=SqliteDmMediaOutboxRepo(db),
+        space_media_outbox=SqliteSpaceMediaOutboxRepo(db),
         preferences=SqlitePreferencesRepo(db),
         presence=SqlitePresenceRepo(db),
         public_space=SqlitePublicSpaceRepo(db),
@@ -509,6 +512,7 @@ def _wire_federation_stack(
     typing_service,
     dm_service,
     dm_media_sync_service,
+    space_media_sync_service,
     dm_routing_service,
     dm_routing_repo,
     presence_service,
@@ -596,6 +600,7 @@ def _wire_federation_stack(
     # DM media sync needs federation to dispatch DM_MEDIA_BLOB
     # events; wire it now that the federation service exists.
     dm_media_sync_service.attach_federation(federation_service)
+    space_media_sync_service.attach_federation(federation_service)
     federation_service.attach_dm_routing(dm_routing_service)
     federation_service.attach_presence_service(presence_service)
     # Online status (session presence) — federation hooks both ways:
@@ -1192,6 +1197,14 @@ def create_app(config: Config | None = None) -> web.Application:
         federation=None,  # set by attach_federation below
         media_dir=pathlib.Path(config.media_path),
         visibility_repo=repos.peer_user_visibility,
+    )
+    # Space media sync — same shape as DmMediaSyncService but tied
+    # to space_media_outbox so the two streams backoff
+    # independently. Federation attached post-stack-build like DM.
+    space_media_sync_service = SpaceMediaSyncService(
+        outbox=repos.space_media_outbox,
+        federation=None,
+        media_dir=pathlib.Path(config.media_path),
     )
     # DmService starts without ``audio_transcription`` — the platform
     # adapter is built much later in ``create_app``, so the service is
@@ -1915,6 +1928,7 @@ def create_app(config: Config | None = None) -> web.Application:
             typing_service=typing_service,
             dm_service=dm_service,
             dm_media_sync_service=dm_media_sync_service,
+            space_media_sync_service=space_media_sync_service,
             dm_routing_service=dm_routing_service,
             dm_routing_repo=repos.dm_routing,
             presence_service=presence_service,
@@ -2003,7 +2017,12 @@ def create_app(config: Config | None = None) -> web.Application:
         # in spaces they belong to. The inbound side was already
         # wired in federation_inbound_service; this is the missing
         # producer.
-        SpacePostOutbound(bus=bus, federation_service=federation_service)
+        SpacePostOutbound(
+            bus=bus,
+            federation_service=federation_service,
+            media_sync=space_media_sync_service,
+            federation_repo=repos.federation,
+        )
         # Wire RSVP propagation onto the calendar service. Done after
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).
@@ -2177,6 +2196,8 @@ def create_app(config: Config | None = None) -> web.Application:
         # ``start()`` so a fresh boot picks up rows queued before
         # the previous run was killed.
         await dm_media_sync_service.start()
+        # Same shape for the space-post media outbox scheduler.
+        await space_media_sync_service.start()
 
         # Voice-note receiver-side fallback STT. Runs only when the
         # adapter advertises ``Capability.STT`` — otherwise the
@@ -2354,6 +2375,7 @@ def create_app(config: Config | None = None) -> web.Application:
         # so we don't leave a row marked ``in_flight`` past the
         # restart (the next boot would see it stuck and never retry).
         await dm_media_sync_service.stop()
+        await space_media_sync_service.stop()
         if password_reset_cleanup_scheduler is not None:
             await password_reset_cleanup_scheduler.stop()
         await online_status_service.stop()

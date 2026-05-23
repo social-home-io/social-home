@@ -3569,6 +3569,148 @@ def cmd_space_post_routed() -> None:
     print("space-post-routed: ok")
 
 
+def cmd_space_media_blob() -> None:
+    """Cross-household media bytes federation (PR #4xx, ``SPACE_MEDIA_BLOB``).
+
+    Builds on ``cmd_remote_invite_routed`` which seated dave (on d) as
+    a remote member of c's mesh-private space. A post with an image
+    URL was previously a broken render on the receiver — the
+    metadata federated but the bytes lived only on the sender's
+    media path. ``SpaceMediaSyncService`` closes the gap: after the
+    SPACE_POST_CREATED broadcast, one outbox row per (peer, blob)
+    enqueues; the scheduler ships chunked SPACE_MEDIA_BLOB events
+    that the receiver writes into its own media_path.
+
+    Assertions:
+
+    - c uploads a real WebP via ``POST /api/media/upload`` →
+      filename returned.
+    - c creates a space post referencing that filename.
+    - After settle, d's media_path contains a file with the SAME
+      filename and SAME bytes.
+    - d's ``/api/media/{filename}?exp=&sig=…`` (signed by d) serves
+      the bytes 200 — i.e. the rendered ``<img>`` would land.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    space_id = state.get("remote_invite_routed_space_id")
+    if not space_id:
+        raise SystemExit(
+            "space-media-blob: run 'remote-invite-routed' first to seat dave",
+        )
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+
+    # Truncate b's log so the post-run scan is bounded to this
+    # step. b is the mesh relay between c and d; the encryption
+    # invariant says b sees ``SPACE_ROUTED`` envelopes but NEVER
+    # the inner ``SPACE_MEDIA_BLOB`` payload — same as
+    # ``space-post-routed`` checks for SPACE_POST_CREATED.
+    b_log_path = _instance_dir("b") / "log.txt"
+    b_log_before_size = (
+        b_log_path.stat().st_size if b_log_path.exists() else 0
+    )
+
+    # 1. Build a real WebP byte stream — the upload endpoint runs
+    #    every image through ImageProcessor, so we have to ship
+    #    something Pillow can decode.
+    from PIL import Image
+    from io import BytesIO
+
+    img = Image.new("RGB", (32, 32), color=(180, 90, 30))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    # 2. Upload via c.
+    boundary = "----sh-demo-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="demo.png"\r\n'
+        f"Content-Type: image/png\r\n\r\n"
+    ).encode() + png_bytes + f"\r\n--{boundary}--\r\n".encode()
+    upload_req = urllib.request.Request(
+        f"http://127.0.0.1:{c['port']}/api/media/upload",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {c['token']}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urllib.request.urlopen(upload_req) as resp:
+        upload_json = json.loads(resp.read())
+    filename = upload_json["filename"]
+    media_url = upload_json["url"]  # ``api/media/<hash>.webp``
+    print(f"  c uploaded {filename} → {media_url}")
+
+    # 3. c posts in the mesh-private space, referencing the upload.
+    s, post = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/posts",
+        token=c["token"],
+        method="POST",
+        body={
+            "type": "image",
+            "image_urls": [media_url],
+        },
+    )
+    _must("c posts image in mesh space", s, post, ok=(201,))
+    post_id = post["id"]
+    print(f"  c posted image → post_id={post_id}")
+
+    # 4. Wait for SPACE_POST_CREATED + SPACE_MEDIA_BLOB(s) to land
+    #    on d. The media outbox scheduler ticks every 5s; the
+    #    federation outbox another few seconds — give it some
+    #    headroom.
+    time.sleep(20)
+
+    # 5. Bytes should now exist on d's media path with the same
+    #    filename + same content.
+    d_media_path = _instance_dir("d") / "media" / filename
+    if not d_media_path.is_file():
+        raise SystemExit(
+            f"space-media-blob: {filename} missing from d's media path "
+            f"({d_media_path}) — SPACE_MEDIA_BLOB didn't land",
+        )
+    d_bytes = d_media_path.read_bytes()
+    # ImageProcessor transcoded to WebP — bytes won't match the
+    # uploaded PNG. But they MUST be identical between c and d.
+    c_media_path = _instance_dir("c") / "media" / filename
+    c_bytes = c_media_path.read_bytes()
+    if c_bytes != d_bytes:
+        raise SystemExit(
+            f"space-media-blob: bytes mismatch — c has {len(c_bytes)}B, "
+            f"d has {len(d_bytes)}B",
+        )
+    print(f"  d.media has {filename} ({len(d_bytes)} bytes) ✓")
+    print(f"  bytes match between c and d ✓")
+
+    # 6. The mesh relay (b) MUST never have dispatched the inner
+    #    SPACE_MEDIA_BLOB — same encryption invariant the
+    #    space-post-routed step asserts. SPACE_ROUTED envelopes
+    #    are fine; the inner event type leaking through would
+    #    mean the relay decrypted the bytes.
+    if b_log_path.exists():
+        b_log_after = b_log_path.read_text(errors="replace")[b_log_before_size:]
+        if "SPACE_MEDIA_BLOB" in b_log_after:
+            raise SystemExit(
+                "space-media-blob: relay b dispatched inner "
+                "SPACE_MEDIA_BLOB — encryption invariant broken.",
+            )
+        if "SPACE_ROUTED" not in b_log_after:
+            print(
+                "  WARN: no SPACE_ROUTED entries in b's log; the mesh "
+                "path may have skipped b (alt route via a).",
+            )
+        else:
+            print("  b relayed SPACE_ROUTED without unsealing ✓")
+
+    state["space_media_blob_ran"] = True
+    _save(state)
+    print("space-media-blob: ok")
+
+
 def cmd_admin_promote_kick() -> None:
     """Cross-household admin promotion (#114 phase 1, v_8+).
 
@@ -3751,6 +3893,15 @@ def main() -> None:
         # encrypted. Asserts d.space_posts contains the post AND
         # b's log never decrypted the inner event.
         cmd_space_post_routed()
+        # ``space-media-blob`` validates that picture/video bytes
+        # posted in a space ACTUALLY reach remote member households —
+        # SPACE_POST_CREATED only carries the URL string, so without
+        # the SpaceMediaSyncService outbox the receiver's
+        # ``<img src>`` 404s on the relative URL. c uploads a WebP,
+        # posts it in c's mesh-private space, and after settle d's
+        # media path must contain the same bytes under the same
+        # filename.
+        cmd_space_media_blob()
         # ``admin-promote-kick`` exercises the cross-household admin
         # promotion path (#114, v_8+): c promotes dave to admin via
         # the new PATCH /api/spaces/{id}/remote-members/{instance}/
