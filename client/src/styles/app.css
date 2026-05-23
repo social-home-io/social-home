@@ -6733,29 +6733,106 @@ body.sh-dm-thread-open .sh-messages {
   backdrop-filter: blur(4px);
 }
 
-/* Upload progress bar + drop overlay */
+/* Upload progress card — used by Composer (Home feed + Space feed
+ * via the shared Composer component) and any other surface that
+ * mounts ``<UploadProgressBar />``. Designed to read at a glance on
+ * mobile: a labelled header ("Uploading…" / "Processing…") sits
+ * above a generous progress track so the user always knows *what*
+ * the bar is doing — not just *how full* it is. The track itself is
+ * 8 px tall (was 3 px and unreadable inside the composer's cream
+ * surface) and the fill is the brand gradient so it's the most
+ * confident element on the card while active. */
 .sh-upload-progress {
-  position: relative;
   background: var(--sh-bg-secondary);
   border: 1px solid var(--sh-border);
-  border-radius: var(--sh-radius-full);
-  height: 28px;
-  overflow: hidden;
+  border-radius: var(--sh-radius-md);
+  padding: var(--sh-space-sm) var(--sh-space-md);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--sh-font-size-xs);
-  font-weight: 600;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  font-size: var(--sh-font-size-sm);
   color: var(--sh-text);
 }
-.sh-upload-progress-bar {
+.sh-upload-progress__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  min-width: 0;
+}
+.sh-upload-progress__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--sh-primary);
+  flex-shrink: 0;
+}
+.sh-upload-progress__filename {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-xs);
+}
+.sh-upload-progress__pct {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--sh-text);
+  flex-shrink: 0;
+}
+.sh-upload-progress__track {
+  position: relative;
+  height: 8px;
+  background: var(--sh-bg);
+  border-radius: var(--sh-radius-full);
+  overflow: hidden;
+}
+.sh-upload-progress__fill {
   position: absolute;
   inset: 0 auto 0 0;
   background: linear-gradient(90deg, var(--sh-primary), var(--sh-primary-hover));
-  transition: width 250ms var(--sh-ease-out);
   border-radius: var(--sh-radius-full);
+  transition: width 250ms var(--sh-ease-out);
 }
-.sh-upload-progress span { position: relative; z-index: 1; }
+/* While the server is transcoding (post-upload, pre-response), bytes
+ * are no longer moving — but work *is* still happening. Hold the bar
+ * at 100% and ride a barber-pole stripe over it so the user can tell
+ * "this isn't frozen, just slow". */
+.sh-upload-progress--processing .sh-upload-progress__fill {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--sh-primary)        0,
+      var(--sh-primary)        10px,
+      var(--sh-primary-hover) 10px,
+      var(--sh-primary-hover) 20px
+    );
+  background-size: 28px 8px;
+  animation: sh-upload-stripe 0.9s linear infinite;
+}
+@keyframes sh-upload-stripe {
+  from { background-position:   0 0; }
+  to   { background-position: 28px 0; }
+}
+/* Tiny spinning ring next to "Processing…" so the active state is
+ * obvious even before the eye finds the barber-pole stripe. */
+.sh-upload-progress__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid color-mix(in srgb, var(--sh-primary) 25%, transparent);
+  border-top-color: var(--sh-primary);
+  border-radius: var(--sh-radius-full);
+  animation: sh-upload-spin 0.7s linear infinite;
+}
+@keyframes sh-upload-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sh-upload-progress--processing .sh-upload-progress__fill { animation: none; }
+  .sh-upload-progress__spinner { animation-duration: 2s; }
+}
 .sh-drop-overlay {
   position: absolute;
   inset: 0;
@@ -13329,28 +13406,6 @@ a.sh-welcome-card:hover {
   margin-left: auto;
   font-size: 1.25rem;
   line-height: 1;
-}
-
-/* Upload bar (generic) */
-.sh-upload-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--sh-space-sm);
-  padding: var(--sh-space-sm) var(--sh-space-md);
-  background: var(--sh-bg-secondary);
-  border-radius: var(--sh-radius-md);
-  font-size: var(--sh-font-size-xs);
-}
-.sh-upload-filename { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sh-upload-pct {
-  font-variant-numeric: tabular-nums;
-  color: var(--sh-text-muted);
-}
-.sh-upload-fill {
-  height: 3px;
-  background: var(--sh-primary);
-  border-radius: var(--sh-radius-full);
-  transition: width var(--sh-transition-normal);
 }
 
 /* Switch (on/off) */

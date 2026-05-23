@@ -70,6 +70,10 @@ describe('Composer', () => {
         filename: file.name,
       })),
       UploadProgressBar: () => null,
+      // Composer reads ``uploadProgress.value`` directly to decide
+      // whether to hide the dropzone — stub it as a signal-shaped
+      // object so the gate evaluates to "no upload in flight".
+      uploadProgress: { value: null },
     }))
     const { Composer } = await import('./Composer')
     const { getByLabelText, container } = render(
