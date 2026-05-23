@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { render, cleanup } from '@testing-library/preact'
 import {
   uploadWithProgress,
   uploadProgress,
+  UploadProgressBar,
   type UploadEvent,
 } from './UploadProgress'
 
@@ -124,5 +126,55 @@ describe('uploadWithProgress', () => {
     lastXhr!._networkError()
     await expect(p).rejects.toThrow(/Upload failed/)
     expect(events[events.length - 1].phase).toBe('failed')
+  })
+})
+
+describe('UploadProgressBar', () => {
+  afterEach(() => {
+    uploadProgress.value = null
+    cleanup()
+  })
+
+  it('renders nothing while idle', () => {
+    uploadProgress.value = null
+    const { container } = render(<UploadProgressBar />)
+    expect(container.querySelector('.sh-upload-progress')).toBeNull()
+  })
+
+  it('shows the Uploading label + filename + percent + fill width', () => {
+    uploadProgress.value = { filename: 'photo.jpg', percent: 42, phase: 'uploading' }
+    const { container } = render(<UploadProgressBar />)
+    const root = container.querySelector('.sh-upload-progress') as HTMLElement
+    expect(root).not.toBeNull()
+    expect(root.className).not.toContain('--processing')
+    expect(container.querySelector('.sh-upload-progress__status')?.textContent)
+      .toContain('Uploading')
+    expect(container.querySelector('.sh-upload-progress__filename')?.textContent)
+      .toBe('photo.jpg')
+    expect(container.querySelector('.sh-upload-progress__pct')?.textContent)
+      .toBe('42%')
+    const fill = container.querySelector('.sh-upload-progress__fill') as HTMLElement
+    expect(fill.style.width).toBe('42%')
+    // ARIA: progressbar role + valuenow.
+    expect(root.getAttribute('role')).toBe('progressbar')
+    expect(root.getAttribute('aria-valuenow')).toBe('42')
+    // Spinner only renders during the processing phase.
+    expect(container.querySelector('.sh-upload-progress__spinner')).toBeNull()
+  })
+
+  it('shows the Processing label + spinner + holds at 100% while transcoding', () => {
+    // §23.73 — once the body has fully streamed, the bar swaps the
+    // percent for an animated stripe + spinner so the user can tell
+    // "this isn't frozen, just slow" while the server transcodes.
+    uploadProgress.value = { filename: 'clip.mp4', percent: 100, phase: 'processing' }
+    const { container } = render(<UploadProgressBar />)
+    const root = container.querySelector('.sh-upload-progress') as HTMLElement
+    expect(root.className).toContain('sh-upload-progress--processing')
+    expect(container.querySelector('.sh-upload-progress__status')?.textContent)
+      .toContain('Processing')
+    expect(container.querySelector('.sh-upload-progress__spinner')).not.toBeNull()
+    // The numeric percent disappears once we're processing — the
+    // barber-pole stripe + spinner are the indicator of liveness.
+    expect(container.querySelector('.sh-upload-progress__pct')).toBeNull()
   })
 })

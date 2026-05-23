@@ -27,7 +27,7 @@ import { SttButton } from './SttButton'
 import { hasCapability } from '@/store/instance'
 import { openHighlightPicker } from './HighlightPickerDialog'
 import { showToast } from './Toast'
-import { UploadProgressBar, uploadWithProgress } from './UploadProgress'
+import { UploadProgressBar, uploadProgress, uploadWithProgress } from './UploadProgress'
 import { describeUploadError } from '@/utils/uploadErrors'
 import { currentUser } from '@/store/auth'
 
@@ -532,10 +532,14 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
         </div>
       )}
       {/* Empty-state dropzone: shown when no images yet (image post) or
-          no media yet (video/file post). The dropzone owns its own
-          drag-and-drop visuals; the form-level handlers above keep the
-          ``sh-composer--dragging`` glow for drop-anywhere on the form. */}
+          no media yet (video/file post). Hidden while an upload is in
+          flight — :component:`UploadProgressBar` takes over as the
+          single surface that reads "something is happening". Before
+          this, the dropzone kept inviting "Drag photos here…" while
+          the bar below counted bytes, which on mobile read as two
+          competing affordances stacked in 60 px of vertical space. */}
       {showMediaAttach
+        && uploadProgress.value === null
         && (postType.value === 'image' ? images.length === 0 : !mediaUrl) && (
         <MediaDropzone
           multiple={postType.value === 'image'}

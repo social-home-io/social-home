@@ -112,21 +112,41 @@ export async function uploadWithProgress(
 export function UploadProgressBar() {
   const p = uploadProgress.value
   if (!p) return null
-  const label = p.phase === 'processing' ? 'Processing…' : `${p.percent}%`
+  const processing = p.phase === 'processing'
+  // Title sits above the bar so the filename has room to breathe and
+  // we can show a status word ("Uploading…" / "Processing…") without
+  // fighting the percentage for space. Centred on mobile.
+  const status = processing ? 'Processing…' : 'Uploading…'
   return (
     <div
       class={
         'sh-upload-progress'
-        + (p.phase === 'processing' ? ' sh-upload-progress--processing' : '')
+        + (processing ? ' sh-upload-progress--processing' : '')
       }
       role="progressbar"
       aria-valuenow={p.percent}
       aria-valuemin={0}
       aria-valuemax={100}
+      aria-label={`${status} ${p.filename}`}
     >
-      <span class="sh-upload-filename">{p.filename}</span>
-      <div class="sh-upload-bar"><div class="sh-upload-fill" style={{ width: `${p.percent}%` }} /></div>
-      <span class="sh-upload-pct">{label}</span>
+      <div class="sh-upload-progress__header">
+        <span class="sh-upload-progress__status" aria-hidden="true">
+          {processing ? (
+            <span class="sh-upload-progress__spinner" />
+          ) : null}
+          {status}
+        </span>
+        <span class="sh-upload-progress__filename">{p.filename}</span>
+        {!processing && (
+          <span class="sh-upload-progress__pct">{p.percent}%</span>
+        )}
+      </div>
+      <div class="sh-upload-progress__track">
+        <div
+          class="sh-upload-progress__fill"
+          style={{ width: `${p.percent}%` }}
+        />
+      </div>
     </div>
   )
 }
