@@ -25,6 +25,7 @@ of them.
 
 from __future__ import annotations
 
+import base64
 import logging
 import unicodedata
 import uuid
@@ -1057,6 +1058,7 @@ class SpaceService:
                     remote_member_repo=self._remote_members,
                     user_repo=self._users,
                     own_instance_id=self._own_instance_id,
+                    cover_repo=self._covers,
                 ),
             },
         )
@@ -2204,6 +2206,7 @@ async def build_space_snapshot_for_federation(
     remote_member_repo,
     user_repo,
     own_instance_id: str,
+    cover_repo=None,
 ) -> dict:
     """:func:`_space_metadata_for_federation` + a roster of every
     member of this space.
@@ -2251,6 +2254,17 @@ async def build_space_snapshot_for_federation(
                 }
             )
     meta["roster"] = roster
+    # §D1b cover federation (#116) — ship the actual WebP bytes
+    # alongside ``cover_hash``. Without them, the joiner's stub
+    # renders the gradient fallback even when the host has a
+    # custom cover. Capped at SPACE_COVER_MAX_DIMENSION on the
+    # host side, so the payload stays under ~150 kB even at the
+    # densest end. Base64 because the envelope is JSON.
+    if cover_repo is not None and space.cover_hash:
+        cover = await cover_repo.get(space.id)
+        if cover is not None:
+            bytes_webp, _hash = cover
+            meta["cover_webp_base64"] = base64.b64encode(bytes_webp).decode("ascii")
     return meta
 
 
@@ -2287,6 +2301,50 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "cover_hash": space.cover_hash,
         "about_markdown": space.about_markdown,
     }
+
+
+async def apply_space_cover_from_metadata(
+    space_id: str,
+    *,
+    meta: dict,
+    cover_repo,
+) -> None:
+    """When a §D1b stub-creation event carries the host's WebP cover
+    bytes (``meta['cover_webp_base64']``), decode + persist them via
+    the supplied cover repo so the joiner's ``/api/spaces/{id}/cover``
+    serves the real image instead of the gradient placeholder.
+
+    No-op when ``cover_repo`` isn't wired, when the host didn't ship
+    bytes (older sender), or when base64 decoding fails (the receiver
+    just keeps the gradient fallback rather than crashing).
+    """
+    if cover_repo is None:
+        return
+    b64 = meta.get("cover_webp_base64")
+    if not isinstance(b64, str) or not b64:
+        return
+    try:
+        bytes_webp = base64.b64decode(b64)
+    except Exception:  # pragma: no cover — defensive
+        log.warning(
+            "apply_space_cover_from_metadata: invalid base64 for space %s",
+            space_id,
+        )
+        return
+    cover_hash = str(meta.get("cover_hash") or "")
+    if not cover_hash:
+        return
+    # ``width`` / ``height`` aren't shipped today — the SPA renders
+    # the cover at whatever native dimensions the WebP carries, so
+    # passing 0 here is fine. The repo signature requires the
+    # kwargs; later we can ship dimensions in ``space_meta`` too.
+    await cover_repo.set(
+        space_id,
+        bytes_webp=bytes_webp,
+        hash=cover_hash,
+        width=0,
+        height=0,
+    )
 
 
 def stub_space_from_metadata(
