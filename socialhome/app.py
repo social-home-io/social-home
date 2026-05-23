@@ -754,6 +754,12 @@ def _wire_federation_stack(
         builder=chunk_builder,
         exporters=exporters,
         sig_suite=config.federation_sig_suite,
+        # Catch-up media: after the metadata chunks stream the
+        # requester also gets bytes for every post + gallery item
+        # in the space via the shared SpaceMediaSyncService outbox.
+        media_sync=space_media_sync_service,
+        space_post_repo=space_post_repo,
+        gallery_repo=gallery_repo,
     )
     space_sync_receiver = SpaceSyncReceiver(
         bus=bus,

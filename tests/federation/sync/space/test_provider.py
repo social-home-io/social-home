@@ -41,9 +41,10 @@ class _FakeRtc:
 
 
 class _FakeSession:
-    def __init__(self, sync_id="sync-x", space_id="sp-1"):
+    def __init__(self, sync_id="sync-x", space_id="sp-1", requester="peer-r"):
         self.sync_id = sync_id
         self.space_id = space_id
+        self.requester_instance_id = requester
         self.rtc = _FakeRtc()
 
 
@@ -94,3 +95,91 @@ async def test_stream_request_more_unknown_resource_is_noop(provider):
     session = _FakeSession()
     await provider.stream_request_more(session, {"resource": "not_real"})
     assert session.rtc.sent == []
+
+
+# ─── Catch-up media (#PR442) ──────────────────────────────────────────
+
+
+async def test_stream_initial_enqueues_catchup_media(encoder):
+    """After the metadata sentinel, the provider must also enqueue
+    space_media_outbox rows for every referenced post + gallery
+    media URL, targeted at the requesting peer. Without this a
+    new member sees the post / gallery rows but the images stay
+    broken until someone uploads NEW media."""
+    from unittest.mock import AsyncMock
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Post:
+        id: str
+        media_url: str | None = None
+        image_urls: tuple = ()
+        file_meta: object = None
+
+    @dataclass
+    class _GalleryItem:
+        id: str
+        url: str
+        thumbnail_url: str
+
+    class _PostRepo:
+        async def list_feed(self, space_id, limit=1000):
+            return [
+                _Post(id="post-1", image_urls=("api/media/a.webp",)),
+                _Post(id="post-2", media_url="api/media/v.webm"),
+            ]
+
+    class _GalleryRepo:
+        async def list_items_for_space(self, space_id):
+            return [
+                _GalleryItem(
+                    id="g-1",
+                    url="api/media/full.webp",
+                    thumbnail_url="api/media/thumb.webp",
+                ),
+            ]
+
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_blob = AsyncMock()
+    builder = ChunkBuilder(encoder=encoder, crypto=_FakeCrypto())
+    svc = SpaceSyncService(
+        builder=builder,
+        exporters={},  # the catch-up step doesn't depend on exporters
+        sig_suite="ed25519",
+        media_sync=media_sync,
+        space_post_repo=_PostRepo(),
+        gallery_repo=_GalleryRepo(),
+    )
+    session = _FakeSession(requester="peer-newcomer")
+    await svc.stream_initial(session)
+
+    # One enqueue per post + one per gallery item.
+    assert media_sync.enqueue_for_blob.await_count == 3
+    calls = media_sync.enqueue_for_blob.call_args_list
+    by_correlation = {c.kwargs["correlation_id"]: c.kwargs for c in calls}
+    assert by_correlation["post-1"]["media_urls"] == ["api/media/a.webp"]
+    assert by_correlation["post-2"]["media_urls"] == ["api/media/v.webm"]
+    assert set(by_correlation["g-1"]["media_urls"]) == {
+        "api/media/full.webp",
+        "api/media/thumb.webp",
+    }
+    # All targeted at the newcomer only — not a broadcast.
+    for c in calls:
+        assert c.kwargs["target_instance_ids"] == ["peer-newcomer"]
+
+
+async def test_stream_initial_no_media_sync_wired_is_noop(encoder):
+    """Without ``media_sync`` (test stacks), the catch-up step is a
+    no-op — metadata sync still finishes."""
+    builder = ChunkBuilder(encoder=encoder, crypto=_FakeCrypto())
+    svc = SpaceSyncService(
+        builder=builder,
+        exporters={"posts": _FakeExporter("posts", [])},
+        sig_suite="ed25519",
+        media_sync=None,
+    )
+    session = _FakeSession()
+    await svc.stream_initial(session)
+    # Sentinel still landed.
+    parsed = orjson.loads(session.rtc.sent[-1])
+    assert parsed["resource"] == SENTINEL_RESOURCE
