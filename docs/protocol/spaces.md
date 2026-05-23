@@ -49,21 +49,46 @@ sequenceDiagram
 
 ## Flow — rekey
 
-Triggered when a member leaves or is banned. The admin generates a new
-epoch and re-shares with every remaining member.
+Triggered on every member-removal path (#121, PR #432): local kick,
+ban, and §D1b cross-household kick. The host rotates the space's epoch
+via `SpaceContentEncryption.rotate_epoch`, exports the new 32-byte
+AES-256 key, and fires `SPACE_KEY_EXCHANGE_REKEY` to every remaining
+member household via `broadcast_to_space_members`. The §D1b
+audit-fix on `remove_remote_member` strips the kicked household's
+`space_instances` row before the broadcast set is computed, so the
+former member's household naturally never receives the new key.
+Receivers persist via the same
+`apply_space_content_key_from_metadata` helper the §D1b accept path
+uses (re-wraps under local KEK so the at-rest invariant holds).
+
+The flow is fire-and-forget — no separate ACK event. If a peer misses
+the broadcast (transport blip, household offline), the §25.6 direct-
+space-sync handshake refreshes the key on the next sync cycle. Old
+epoch keys stay on disk so historical content remains decryptable for
+legitimate readers; only future content under the new epoch is gated.
+
+Forward-secrecy bound: at the *transport* level — the kicked
+household never receives the new key — and at the *at-rest* level on
+the kicked household itself, because removing the member also drops
+the local `space_members` row that gated their read access. A
+malicious user with raw DB access still has the old keys (single KEK
+per household), which is the documented at-rest threat model.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as HFS A<br/>(admin)
-    participant B as HFS B
-    participant C as HFS C
-    A->>A: remove member, increment epoch
-    A->>B: SPACE_KEY_EXCHANGE_REKEY (epoch=1)
-    A->>C: SPACE_KEY_EXCHANGE_REKEY (epoch=1)
-    B->>A: SPACE_KEY_EXCHANGE_ACK
-    C->>A: SPACE_KEY_EXCHANGE_ACK
-    A->>A: SPACE_SESSION_CLEANUP<br/>(drop epoch 0 keys after grace)
+    participant K as HFS K<br/>(kicked member)
+    participant A as HFS A<br/>(host)
+    participant B as HFS B<br/>(remaining)
+    participant C as HFS C<br/>(remaining)
+    A->>A: remove member,<br/>scrub space_instances[K]
+    A->>A: rotate_epoch → epoch=N+1
+    A->>B: SPACE_KEY_EXCHANGE_REKEY (epoch=N+1)
+    A->>C: SPACE_KEY_EXCHANGE_REKEY (epoch=N+1)
+    Note over K,C: K's household is NOT<br/>in the broadcast set
+    A->>B: SPACE_POST_CREATED encrypted under epoch=N+1
+    A->>C: SPACE_POST_CREATED encrypted under epoch=N+1
+    Note over K: K's old key cannot<br/>decrypt epoch N+1 content
 ```
 
 ## Admin key share

@@ -381,8 +381,63 @@ async def test_member_removed_keeps_locally_owned_space(handler):
     handler.space_repo.mark_dissolved.assert_not_awaited()
 
 
-async def test_attach_to_registers_four_handlers():
-    """`attach_to` wires the four event-type → handler bindings."""
+async def test_key_exchange_rekey_imports_new_epoch_key():
+    """Host rotates the space epoch on a member kick and ships the
+    new key via SPACE_KEY_EXCHANGE_REKEY (#121). Receiver must
+    persist via the same ``apply_space_content_key_from_metadata``
+    helper the §D1b accept path uses — re-wrap under local KEK so
+    future SPACE_POST_CREATED inbounds decrypt with the new key."""
+    bus = _RecordingBus()
+    space_repo = AsyncMock()
+    remote_members = AsyncMock()
+    space_crypto = AsyncMock()
+    space_crypto.import_key = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=bus,  # type: ignore[arg-type]
+        space_repo=space_repo,
+        remote_member_repo=remote_members,
+        space_crypto_service=space_crypto,
+    )
+    # 32 bytes, base64-encoded — matches what
+    # ``export_current_key`` would have shipped on the host side.
+    import base64
+
+    new_key = bytes(range(32))
+    ev = _event(
+        "SPACE_KEY_EXCHANGE_REKEY",
+        {
+            "space_id": "sp-rekey",
+            "space_content_key": {
+                "epoch": 7,
+                "key_suite": "aesgcm-256",
+                "key_base64": base64.b64encode(new_key).decode("ascii"),
+            },
+        },
+    )
+    await h._on_key_exchange_rekey(ev)
+    space_crypto.import_key.assert_awaited_once_with("sp-rekey", 7, new_key)
+
+
+async def test_key_exchange_rekey_missing_space_id_skipped():
+    space_crypto = AsyncMock()
+    space_crypto.import_key = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_crypto_service=space_crypto,
+    )
+    ev = _event("SPACE_KEY_EXCHANGE_REKEY", {})
+    await h._on_key_exchange_rekey(ev)
+    space_crypto.import_key.assert_not_awaited()
+
+
+async def test_attach_to_registers_handlers():
+    """`attach_to` wires every event-type → handler binding the
+    private-invite family handles. New rekey handler added in #121 for
+    forward-secrecy on member kick."""
+    from socialhome.domain.federation import FederationEventType
+
     bus = EventBus()
     space_repo = AsyncMock()
     remote_members = AsyncMock()
@@ -405,4 +460,10 @@ async def test_attach_to_registers_four_handlers():
 
     fed = _FakeFedSvc()
     h.attach_to(fed)  # type: ignore[arg-type]
-    assert len(fed._event_registry.bindings) == 4
+    assert set(fed._event_registry.bindings.keys()) == {
+        FederationEventType.SPACE_PRIVATE_INVITE,
+        FederationEventType.SPACE_PRIVATE_INVITE_ACCEPT,
+        FederationEventType.SPACE_PRIVATE_INVITE_DECLINE,
+        FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
+        FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
+    }
