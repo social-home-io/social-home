@@ -108,7 +108,24 @@ from __future__ import annotations
 #:   "issuer needs to upgrade" message rather than wasting the 10 s
 #:   timeout window. Same gate applies to the mesh-routing
 #:   envelopes once PR 2 lands.
-OURS: int = 6
+#: * **v7** — :data:`FederationEventType.SPACE_KEY_EXCHANGE_REKEY`
+#:   is now actually shipped (#121, PR #432). Every member-removal
+#:   path on the host — local kick, ban, §D1b cross-household kick —
+#:   rotates the space epoch and ships the new AES-256 content key
+#:   to every remaining member household so a removed member can't
+#:   keep decrypting future content with their cached at-rest key.
+#:   The event_type itself was declared on the enum since v_1, but
+#:   no sender emitted it and no receiver handled it. Sub-v_7
+#:   receivers silently ignore the new outbound (event-type
+#:   dispatch is best-effort — see
+#:   :class:`EventDispatchRegistry.dispatch`); the resulting
+#:   degradation is that they fail to decrypt every subsequent
+#:   ``SPACE_POST_CREATED`` from this host until they upgrade and
+#:   re-sync. **No fallback** — gracefully ignoring the rekey is a
+#:   forward-secrecy violation, so we'd rather fail loud. Operators
+#:   should expect to upgrade member households together with the
+#:   host.
+OURS: int = 7
 
 
 class FederationCapability:
@@ -151,6 +168,15 @@ class FederationCapability:
     #: also doubles as protection against pasting a code minted by
     #: an instance that's been downgraded since.
     MIN_FOR_SPACE_INVITE_REDEEM = 6
+
+    #: Minimum proto_version where the receiver registers a handler
+    #: for :data:`FederationEventType.SPACE_KEY_EXCHANGE_REKEY`. Sub-
+    #: v_7 peers silently drop the new event and stay on their cached
+    #: epoch key, which means they fail-decrypt every subsequent post
+    #: encrypted under the rotated epoch. The host emits unconditionally
+    #: — gating on this constant would silently revert forward
+    #: secrecy.
+    MIN_FOR_SPACE_KEY_REKEY = 7
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

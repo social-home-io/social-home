@@ -1273,3 +1273,129 @@ async def test_update_config_does_not_publish_on_off(stack):
         features=SpaceFeatures(location=False),
     )
     assert len(captured) == 1  # No additional publish
+
+
+# ─── Forward-secrecy rotation (#121, PR #432) ──────────────────────────
+
+
+async def test_remove_member_rotates_and_distributes_key(stack):
+    """When the host removes a local member, the space epoch MUST
+    rotate and the new key MUST federate to every remaining member
+    household via SPACE_KEY_EXCHANGE_REKEY. Without rotation, the
+    kicked member could keep decrypting future content with their
+    cached at-rest key."""
+    from unittest.mock import AsyncMock
+
+    from socialhome.domain.federation import FederationEventType
+
+    _anna = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    space_crypto = AsyncMock()
+    space_crypto.rotate_epoch = AsyncMock(return_value=7)
+    space_crypto.export_current_key = AsyncMock(return_value=(7, bytes(range(32))))
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    stack.space_svc.attach_space_crypto_service(space_crypto)
+    stack.space_svc._federation = federation
+
+    await stack.space_svc.remove_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    space_crypto.rotate_epoch.assert_awaited_once_with(space.id)
+    federation.broadcast_to_space_members.assert_awaited_once()
+    call = federation.broadcast_to_space_members.call_args
+    assert call.args[1] is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+    payload = call.args[2]
+    assert payload["space_id"] == space.id
+    assert payload["space_content_key"]["epoch"] == 7
+    assert payload["space_content_key"]["key_suite"] == "aesgcm-256"
+
+
+async def test_ban_rotates_and_distributes_key(stack):
+    """Ban is also a kick — same forward-secrecy guarantee applies."""
+    from unittest.mock import AsyncMock
+
+    from socialhome.domain.federation import FederationEventType
+
+    _anna = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    space_crypto = AsyncMock()
+    space_crypto.rotate_epoch = AsyncMock(return_value=11)
+    space_crypto.export_current_key = AsyncMock(return_value=(11, bytes(range(32))))
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    stack.space_svc.attach_space_crypto_service(space_crypto)
+    stack.space_svc._federation = federation
+
+    await stack.space_svc.ban(
+        space.id, actor_username="anna", user_id=bob.user_id, reason="spam"
+    )
+
+    space_crypto.rotate_epoch.assert_awaited_once_with(space.id)
+    federation.broadcast_to_space_members.assert_awaited_once()
+    assert (
+        federation.broadcast_to_space_members.call_args.args[1]
+        is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+    )
+
+
+async def test_remove_member_without_crypto_attached_is_noop(stack):
+    """Without ``SpaceContentEncryption`` wired (early boot / unit
+    test stacks), removal still succeeds — the rotation helper just
+    no-ops rather than crashing the kick."""
+    _anna = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    # Default stack has neither crypto nor federation attached.
+    assert stack.space_svc._space_crypto is None
+    assert stack.space_svc._federation is None
+    await stack.space_svc.remove_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    members = await stack.space_repo.list_members(space.id)
+    assert len(members) == 1
+
+
+async def test_rotation_broadcast_failure_does_not_break_kick(stack):
+    """If the federation broadcast fails mid-rotation, the kick MUST
+    still succeed (the local member is gone). The next kick / ban
+    retries rotation; sync handshake catches up missed peers."""
+    from unittest.mock import AsyncMock
+
+    _anna = await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    space_crypto = AsyncMock()
+    space_crypto.rotate_epoch = AsyncMock(return_value=3)
+    space_crypto.export_current_key = AsyncMock(return_value=(3, bytes(range(32))))
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock(
+        side_effect=RuntimeError("transport down")
+    )
+    stack.space_svc.attach_space_crypto_service(space_crypto)
+    stack.space_svc._federation = federation
+
+    # Should not raise.
+    await stack.space_svc.remove_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    members = await stack.space_repo.list_members(space.id)
+    assert len(members) == 1

@@ -99,6 +99,10 @@ class PrivateSpaceInviteHandler:
             FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
             self._on_member_removed,
         )
+        registry.register(
+            FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
+            self._on_key_exchange_rekey,
+        )
 
     # ── Receive ─────────────────────────────────────────────────────────
 
@@ -308,4 +312,31 @@ class PrivateSpaceInviteHandler:
                 instance_id=event.from_instance,
                 user_id=user_id,
             )
+        )
+
+    async def _on_key_exchange_rekey(self, event: "FederationEvent") -> None:
+        """Forward-secrecy rekey from the host (#121).
+
+        Triggered every time the host removes a member (local kick,
+        ban, or §D1b cross-household kick) — the host rotates the
+        space's epoch and ships the fresh AES-256 content key to
+        every remaining member household. We persist via
+        :func:`apply_space_content_key_from_metadata`, which re-wraps
+        the bytes under our own KEK so the new ``space_keys`` row
+        matches the at-rest invariant.
+
+        Idempotent. A repeated REKEY for the same epoch upserts (the
+        bytes will match — both sides derived from the host's
+        original key). If we receive a REKEY whose ``space_id`` we
+        don't own a stub for, the import is a no-op for us; the
+        host's broadcast set is computed off ``space_instances``, so
+        our membership state agrees with theirs.
+        """
+        space_id = str(event.payload.get("space_id") or "")
+        if not space_id:
+            return
+        await apply_space_content_key_from_metadata(
+            space_id,
+            meta=event.payload,
+            space_crypto_service=self._space_crypto,
         )

@@ -681,6 +681,7 @@ class SpaceService:
                 action="removed",
                 actor_id=actor.user_id,
             )
+        await self._rotate_and_distribute_space_key(space_id)
 
     async def set_role(
         self,
@@ -930,6 +931,7 @@ class SpaceService:
                 action="blocked",
                 actor_id=actor.user_id,
             )
+        await self._rotate_and_distribute_space_key(space_id)
 
     async def unban(
         self,
@@ -996,6 +998,80 @@ class SpaceService:
         )
         if not result.ok:
             raise SpacePermissionError("no path to invitee household")
+
+    async def _rotate_and_distribute_space_key(self, space_id: str) -> None:
+        """Forward-secrecy: mint a fresh epoch + ship the new key to
+        remaining members (#121).
+
+        Called after every member-removal path — local removal, ban,
+        and §D1b cross-household kick. Without rotation, a removed
+        member who keeps their old at-rest key bytes would still be
+        able to decrypt every future post in the space; that defeats
+        the entire reason the host kicked them.
+
+        The fan-out targets ``space_instances`` (via
+        ``broadcast_to_space_members``), which the cross-household
+        kick path scrubs of the removed peer right before calling
+        here — so the new key naturally never lands at the kicked
+        household. Local-only kicks broadcast to the remaining mesh
+        of peer households; the kicked local user's own household
+        re-imports the new key in-place (a no-op for them since
+        they're not in ``space_members`` anymore).
+
+        Failures are logged and swallowed — a rotation that can't
+        federate is still better than no rotation, and the kick
+        itself succeeded. A subsequent member action retries
+        rotation; in steady state the §25.6 sync handshake will
+        catch up any peer that missed the rekey.
+        """
+        if self._space_crypto is None or self._federation is None:
+            return
+        try:
+            new_epoch = await self._space_crypto.rotate_epoch(space_id)
+        except Exception:
+            log.exception(
+                "rotate_and_distribute_space_key: rotate_epoch failed for %s",
+                space_id,
+            )
+            return
+        try:
+            exported = await self._space_crypto.export_current_key(space_id)
+        except Exception:
+            log.exception(
+                "rotate_and_distribute_space_key: export_current_key failed for %s",
+                space_id,
+            )
+            return
+        if exported is None:
+            return
+        epoch, raw_key = exported
+        if epoch != new_epoch:
+            log.warning(
+                "rotate_and_distribute_space_key: epoch drift for %s "
+                "(rotated=%d, exported=%d)",
+                space_id,
+                new_epoch,
+                epoch,
+            )
+        payload = {
+            "space_id": space_id,
+            "space_content_key": {
+                "epoch": epoch,
+                "key_suite": KEY_SUITE_AESGCM_256,
+                "key_base64": base64.b64encode(raw_key).decode("ascii"),
+            },
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                space_id,
+                FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
+                payload,
+            )
+        except Exception:
+            log.exception(
+                "rotate_and_distribute_space_key: rekey broadcast failed for %s",
+                space_id,
+            )
 
     async def invite_remote_user(
         self,
@@ -1217,6 +1293,7 @@ class SpaceService:
             event_type=FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
             payload={"space_id": space_id, "user_id": user_id},
         )
+        await self._rotate_and_distribute_space_key(space_id)
 
     async def redeem_invite_token(
         self,
