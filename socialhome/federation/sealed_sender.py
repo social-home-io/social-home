@@ -48,6 +48,26 @@ from ..crypto import b64url_decode, b64url_encode
 _NONCE_BYTES = 12
 
 
+#: Symmetric AEAD suite identifier shipped on the wire next to the
+#: ciphertext. Mirrors the ``kem_suite`` / ``key_suite`` conventions
+#: in ``routed_crypto.py`` / ``space_crypto_service.py`` — same
+#: contract: receivers reject unknown values rather than fall back
+#: to a default, so when a Phase-2 variant (ChaCha20-Poly1305 for
+#: low-power receivers, or a PQ-protected wrapping) lands it's a
+#: wire-additive change without breaking older receivers. See
+#: CLAUDE.md "Crypto wire shapes carry a `*_suite` tag" for the
+#: full rule.
+AEAD_SUITE_AESGCM_256: str = "aesgcm-256"
+SUPPORTED_AEAD_SUITES: frozenset[str] = frozenset({AEAD_SUITE_AESGCM_256})
+
+
+class UnsupportedAeadSuite(ValueError):
+    """Raised when a sealed envelope advertises an AEAD suite this
+    build doesn't know. Receivers MUST reject rather than fall back
+    to a default — otherwise a downgrade attack becomes possible
+    once a Phase-2 hybrid scheme lands."""
+
+
 @dataclass(slots=True, frozen=True)
 class SealedEnvelope:
     """The structure produced by :func:`seal_envelope`."""
@@ -56,6 +76,10 @@ class SealedEnvelope:
     epoch: int
     encrypted_sender: str
     encrypted_payload: str
+    #: AEAD primitive identifier — see :data:`AEAD_SUITE_AESGCM_256`.
+    #: Defaults to today's only supported value so legacy in-memory
+    #: instances (constructed without the field) stay valid.
+    aead_suite: str = AEAD_SUITE_AESGCM_256
 
     def to_dict(self) -> dict:
         return {
@@ -64,18 +88,31 @@ class SealedEnvelope:
             "epoch": self.epoch,
             "encrypted_sender": self.encrypted_sender,
             "encrypted_payload": self.encrypted_payload,
+            "aead_suite": self.aead_suite,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "SealedEnvelope":
         if not data.get("sealed"):
             raise ValueError("Envelope is not sealed")
+        # First-revision senders that don't ship ``aead_suite`` default
+        # to ``aesgcm-256`` — the only value this build knows. Once
+        # every deployment ships the field, the default-on-missing
+        # branch becomes the migration tripwire (older senders need
+        # an upgrade).
+        suite = str(data.get("aead_suite") or AEAD_SUITE_AESGCM_256)
+        if suite not in SUPPORTED_AEAD_SUITES:
+            raise UnsupportedAeadSuite(
+                f"sealed envelope advertises unsupported aead_suite={suite!r}; "
+                f"this build supports {sorted(SUPPORTED_AEAD_SUITES)!r}",
+            )
         try:
             return cls(
                 space_id=str(data["space_id"]),
                 epoch=int(data["epoch"]),
                 encrypted_sender=str(data["encrypted_sender"]),
                 encrypted_payload=str(data["encrypted_payload"]),
+                aead_suite=suite,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"Malformed sealed envelope: {exc}") from exc

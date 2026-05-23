@@ -42,6 +42,7 @@ from ..domain.events import (
     MomentDeleted,
     MomentReactionChanged,
     PostDeleted,
+    PostEdited,
     SpaceMemberProfileUpdated,
     SpacePostCreated,
     HighlightFrameAdded,
@@ -935,17 +936,40 @@ class FederationInboundService:
         if not post_id:
             return
         await self._space_post_repo.edit(post_id, new_content)
+        refreshed = await self._space_post_repo.get(post_id)
+        if refreshed is None:
+            return
+        space_id, post = refreshed
+        await self._bus.publish(
+            PostEdited(
+                post=post,
+                space_id=space_id,
+                origin_instance_id=event.from_instance,
+            )
+        )
 
     async def _on_space_post_deleted(self, event: "FederationEvent") -> None:
         post_id = str(event.payload.get("post_id") or event.payload.get("id") or "")
         if not post_id:
             return
         moderated_by = event.payload.get("moderated_by")
+        # Resolve space_id before the soft-delete so we can include it
+        # on the bus event — the row still exists either way (soft-
+        # delete just blanks content), but reading first is cheaper
+        # than a second fetch downstream.
+        got = await self._space_post_repo.get(post_id)
         await self._space_post_repo.soft_delete(
             post_id,
             moderated_by=str(moderated_by) if moderated_by else None,
         )
-        await self._bus.publish(PostDeleted(post_id=post_id))
+        space_id = got[0] if got is not None else None
+        await self._bus.publish(
+            PostDeleted(
+                post_id=post_id,
+                space_id=space_id,
+                origin_instance_id=event.from_instance,
+            )
+        )
 
     async def _on_space_comment_added(self, event: "FederationEvent") -> None:
         p = event.payload

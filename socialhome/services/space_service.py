@@ -1756,8 +1756,10 @@ class SpaceService:
         refreshed = await self._posts.get(post_id)
         assert refreshed is not None  # just edited — must exist
         # Bus fan-out so subscribers (system-album bridge, search index,
-        # …) can react. Mirrors ``feed_service.edit_post``.
-        await self._bus.publish(PostEdited(post=refreshed[1]))
+        # SPACE_POST_UPDATED federation outbound) can react. ``space_id``
+        # gates the federation broadcast so we don't accidentally fan
+        # a household-feed edit out to space members.
+        await self._bus.publish(PostEdited(post=refreshed[1], space_id=space_id))
         return refreshed[1]
 
     async def delete_post(
@@ -1793,8 +1795,9 @@ class SpaceService:
         # Generic post-deleted event — fires on both author + moderation
         # paths so cross-cutting subscribers (system-album bridge, search
         # index, federation outbound for SPACE_POST_DELETED) have a single
-        # hook regardless of who deleted the row.
-        await self._bus.publish(PostDeleted(post_id=post_id))
+        # hook regardless of who deleted the row. ``space_id`` gates the
+        # outbound broadcast so household-feed deletes stay local.
+        await self._bus.publish(PostDeleted(post_id=post_id, space_id=space_id))
 
     async def add_reaction(
         self,

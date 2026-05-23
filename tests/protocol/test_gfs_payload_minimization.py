@@ -32,6 +32,14 @@ _ALLOWED_GFS_VISIBLE_FIELDS: frozenset[str] = frozenset(
         "epoch",
         "encrypted_sender",
         "encrypted_payload",
+        # PQ-forward suite identifier — see ``aead_suite`` on
+        # ``SealedEnvelope``. The receiver needs it in the clear to
+        # pick the right AEAD primitive (same status as ``epoch``,
+        # which selects the key); the GFS doesn't gain payload
+        # content from it. Adding it does NOT relax the
+        # minimization invariant — it's metadata about the cipher,
+        # not metadata about the message.
+        "aead_suite",
     }
 )
 
