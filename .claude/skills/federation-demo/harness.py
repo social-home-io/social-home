@@ -3830,6 +3830,247 @@ def cmd_space_gallery_media_blob() -> None:
     print("space-gallery-media-blob: ok")
 
 
+def cmd_space_sync_catchup_media() -> None:
+    """§25.6 sync catch-up ships HISTORICAL media bytes to a new joiner.
+
+    The realtime path (``cmd_space_media_blob`` /
+    ``cmd_space_gallery_media_blob``) only fires when a post or gallery
+    item is created AFTER the peer is a member. A newcomer joining a
+    long-running space saw post/gallery rows but rendered broken
+    ``<img src>`` tags because the bytes never crossed the wire.
+
+    This phase covers the catch-up path. Sequence:
+
+    1. **c creates a fresh mesh-private space** (separate from the
+       one in ``remote-invite-routed`` — that's the realtime case).
+    2. **c populates** the space *before* inviting anyone:
+       - upload an image, create a post referencing it
+       - create a gallery album and upload an item into it
+    3. **c invites dave** via mesh (b relay).
+    4. **d accepts** — the §25.6 sync runs ``stream_initial`` against
+       d's session. Post the metadata sentinel, the provider enumerates
+       posts + gallery items + their media URLs and enqueues
+       ``space_media_outbox`` rows targeting d.
+    5. **After settle**, d's media path has BOTH the post image AND the
+       gallery item files (thumbnail + full).
+    6. **Relay invariant**: b sees ``SPACE_ROUTED`` envelopes but
+       never the inner ``SPACE_MEDIA_BLOB`` — the per-target
+       ephemeral X25519 seal keeps the relay opaque.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+
+    # 1. c creates a fresh private space (independent of the one
+    #    remote-invite-routed seated dave in).
+    s, space = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces",
+        token=c["token"],
+        method="POST",
+        body={
+            "name": "Carol's archive (catchup)",
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "emoji": "📼",
+        },
+    )
+    _must("create space(c, catchup)", s, space, ok=(201,))
+    space_id = space["id"]
+    print(f"  c created space (catchup test): {space_id}")
+
+    # 2a. c uploads an image and posts it — BEFORE inviting anyone, so
+    #     the realtime fan-out has zero recipients. Only the catch-up
+    #     path will deliver this to dave.
+    from PIL import Image
+    from io import BytesIO
+
+    img = Image.new("RGB", (32, 32), color=(100, 150, 200))
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+    boundary = "----sh-demo-catchup-post"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="catchup-post.png"\r\n'
+        f"Content-Type: image/png\r\n\r\n"
+    ).encode() + png_bytes + f"\r\n--{boundary}--\r\n".encode()
+    upload_req = urllib.request.Request(
+        f"http://127.0.0.1:{c['port']}/api/media/upload",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {c['token']}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    with urllib.request.urlopen(upload_req) as resp:
+        post_upload = json.loads(resp.read())
+    post_filename = post_upload["filename"]
+    post_media_url = post_upload["url"]
+    print(f"  c uploaded post image → {post_filename}")
+
+    s, post = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/posts",
+        token=c["token"],
+        method="POST",
+        body={
+            "type": "image",
+            "image_urls": [post_media_url],
+        },
+    )
+    _must("c posts image (pre-invite)", s, post, ok=(201,))
+    post_id = post["id"]
+    print(f"  c posted image (pre-invite) → post_id={post_id}")
+
+    # 2b. c creates a gallery album + uploads an item — also pre-invite.
+    s, album = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/gallery/albums",
+        token=c["token"],
+        method="POST",
+        body={"name": "Catchup Album", "description": "pre-invite"},
+    )
+    _must("c creates album (pre-invite)", s, album, ok=(201,))
+    album_id = album["id"]
+    print(f"  c created album (pre-invite) → {album_id}")
+
+    img2 = Image.new("RGB", (32, 32), color=(220, 50, 80))
+    buf2 = BytesIO()
+    img2.save(buf2, format="PNG")
+    gallery_png_bytes = buf2.getvalue()
+    boundary2 = "----sh-demo-catchup-gallery"
+    body2 = (
+        f"--{boundary2}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="catchup-gallery.png"\r\n'
+        f"Content-Type: image/png\r\n\r\n"
+    ).encode() + gallery_png_bytes + f"\r\n--{boundary2}--\r\n".encode()
+    upload_req2 = urllib.request.Request(
+        f"http://127.0.0.1:{c['port']}/api/gallery/albums/{album_id}/items",
+        data=body2,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {c['token']}",
+            "Content-Type": f"multipart/form-data; boundary={boundary2}",
+        },
+    )
+    with urllib.request.urlopen(upload_req2) as resp:
+        gallery_item = json.loads(resp.read())
+    gallery_url = gallery_item.get("url") or ""
+    gallery_thumb_url = gallery_item.get("thumbnail_url") or ""
+    print(f"  c uploaded gallery item (pre-invite) → {gallery_item['id']}")
+
+    # 3. Truncate b's log so the relay-invariant scan is bounded.
+    b_log_path = _instance_dir("b") / "log.txt"
+    b_log_before_size = (
+        b_log_path.stat().st_size if b_log_path.exists() else 0
+    )
+
+    # 4. c invites dave via mesh — c is NOT directly paired with d.
+    s, inv = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/remote-invites",
+        token=c["token"],
+        method="POST",
+        body={
+            "invitee_instance_id": d["instance_id"],
+            "invitee_user_id": d["user_id"],
+        },
+    )
+    _must("c → d remote-invite(catchup)", s, inv, ok=(201,))
+    print("  c → d: invite issued via mesh (post-population)")
+
+    # 5. Wait for invite to round-trip + d to surface it in inbox.
+    time.sleep(10)
+    s, invites = _request(
+        f"http://127.0.0.1:{d['port']}/api/remote_invites",
+        token=d["token"],
+    )
+    _must("d.remote_invites(catchup)", s, invites)
+    dave_token = None
+    invites_list = invites if isinstance(invites, list) else invites.get("invites", [])
+    for row in invites_list:
+        if row.get("space_id") == space_id:
+            dave_token = row.get("invite_token") or row.get("token")
+            break
+    if dave_token is None:
+        raise SystemExit(
+            f"space-sync-catchup-media: d's inbox did not receive the "
+            f"invite for space {space_id}; got {invites_list!r}",
+        )
+
+    # 6. d accepts → §25.6 sync fires → catch-up enqueues happen.
+    s, accepted = _request(
+        f"http://127.0.0.1:{d['port']}/api/remote_invites/{dave_token}/accept",
+        token=d["token"],
+        method="POST",
+        body={},
+    )
+    _must("d accepts invite(catchup)", s, accepted, ok=(200, 204))
+    print("  d accepted; §25.6 sync drains historical metadata + bytes")
+
+    # 7. Wait for sync + outbox scheduler ticks to deliver the bytes.
+    #    The media outbox scheduler runs every 5s; each chunk plus the
+    #    federation outbox add a few seconds. Be generous.
+    time.sleep(30)
+
+    # 8. Bytes for the pre-invite post image MUST land on d.
+    d_post_path = _instance_dir("d") / "media" / post_filename
+    if not d_post_path.is_file():
+        raise SystemExit(
+            f"space-sync-catchup-media: post image {post_filename} "
+            f"missing from d ({d_post_path}) — catch-up didn't deliver "
+            f"the post's bytes",
+        )
+    c_post_path = _instance_dir("c") / "media" / post_filename
+    if c_post_path.read_bytes() != d_post_path.read_bytes():
+        raise SystemExit(
+            f"space-sync-catchup-media: post bytes mismatch for "
+            f"{post_filename}",
+        )
+    print(f"  d.media has post image {post_filename} ✓ (catch-up)")
+
+    # 9. Bytes for the pre-invite gallery item (thumb + full) MUST land.
+    for url in {gallery_url, gallery_thumb_url}:
+        if not url:
+            continue
+        filename = url.rsplit("/", 1)[-1].split("?", 1)[0]
+        d_path = _instance_dir("d") / "media" / filename
+        if not d_path.is_file():
+            raise SystemExit(
+                f"space-sync-catchup-media: gallery file {filename} "
+                f"missing from d ({d_path}) — catch-up didn't deliver "
+                f"the gallery bytes",
+            )
+        c_path = _instance_dir("c") / "media" / filename
+        if c_path.read_bytes() != d_path.read_bytes():
+            raise SystemExit(
+                f"space-sync-catchup-media: gallery bytes mismatch for "
+                f"{filename}",
+            )
+        print(f"  d.media has gallery file {filename} ✓ (catch-up)")
+
+    # 10. Relay invariant: b never dispatched the inner SPACE_MEDIA_BLOB.
+    if b_log_path.exists():
+        b_log_after = b_log_path.read_text(errors="replace")[b_log_before_size:]
+        for forbidden in (
+            "SPACE_MEDIA_BLOB",
+            "SPACE_POST_CREATED",
+            "SPACE_GALLERY_ITEM_CREATED",
+        ):
+            if forbidden in b_log_after:
+                raise SystemExit(
+                    f"space-sync-catchup-media: relay b dispatched inner "
+                    f"{forbidden} — encryption invariant broken.",
+                )
+        if "SPACE_ROUTED" in b_log_after:
+            print("  b relayed SPACE_ROUTED without unsealing ✓")
+
+    state["space_sync_catchup_media_ran"] = True
+    state["space_sync_catchup_media_space_id"] = space_id
+    _save(state)
+    print("space-sync-catchup-media: ok")
+
+
 def cmd_admin_promote_kick() -> None:
     """Cross-household admin promotion (#114 phase 1, v_8+).
 
@@ -4027,6 +4268,14 @@ def main() -> None:
         # via the same shared media outbox. Without this the gallery
         # thumbnails on remote households render as broken images.
         cmd_space_gallery_media_blob()
+        # ``space-sync-catchup-media`` proves the §25.6 catch-up path:
+        # c populates a fresh mesh-private space with a post + gallery
+        # item BEFORE inviting dave, dave joins, and dave's first
+        # ``stream_initial`` ships the historical media bytes via the
+        # same outbox the realtime path uses. Without this, a newcomer
+        # joining a long-running space sees post/gallery rows but
+        # broken ``<img src>`` tags.
+        cmd_space_sync_catchup_media()
         # ``admin-promote-kick`` exercises the cross-household admin
         # promotion path (#114, v_8+): c promotes dave to admin via
         # the new PATCH /api/spaces/{id}/remote-members/{instance}/
