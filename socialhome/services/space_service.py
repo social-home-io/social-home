@@ -1375,14 +1375,20 @@ class SpaceService:
         host_instance = invite.get("remote_instance_id")
         if not host_instance:
             raise ValueError("not a cross-household invite")
+        # Look up the accepting user so the ACCEPT envelope can carry
+        # their human-readable name to the host. The protocol method is
+        # ``get_by_user_id``; an earlier draft of this code looked up
+        # ``get_by_id`` (which doesn't exist on the repo), so the
+        # ``hasattr`` guard was always False → ``display`` stayed None
+        # → the host's member roster showed the raw ``user_id`` instead
+        # of the user's display name. Symptom Pascal hit when
+        # Jacqueline accepted his invite.
         display = None
         user_pk = None
-        users_repo = self._users
-        if hasattr(users_repo, "get_by_id"):
-            user = await users_repo.get_by_id(user_id)
-            if user is not None:
-                display = user.display_name or user.username
-                user_pk = getattr(user, "public_key", None)
+        user = await self._users.get_by_user_id(user_id)
+        if user is not None:
+            display = user.display_name or user.username
+            user_pk = getattr(user, "public_key", None)
         await self._send_invite_envelope(
             to_instance_id=host_instance,
             event_type=FederationEventType.SPACE_PRIVATE_INVITE_ACCEPT,

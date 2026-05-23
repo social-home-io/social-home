@@ -320,19 +320,30 @@ def _member_to_dict(
     }
 
 
-def _remote_member_to_dict(rm) -> dict:
+def _remote_member_to_dict(rm, *, display_name_override: str | None = None) -> dict:
     """Serialize a :class:`SpaceRemoteMember` (§D1b) into the same row
     shape ``SpaceMembersView`` returns for local members, so the SPA's
     ``SpaceMemberList`` can render both in one list without branching.
 
+    ``display_name_override`` — when provided, replaces
+    ``rm.display_name`` on the rendered row. The route passes the
+    freshest value it found in ``users`` / ``remote_users`` (kept up
+    to date by ``USER_UPDATED`` fan-out), so a rename on the remote
+    household propagates here without re-inviting. ``rm.display_name``
+    stays as the §D1b accept-time snapshot in the row and is used as
+    the fallback if the user-table lookup misses (the user has been
+    deprovisioned, the row was seeded before USERS_SYNC arrived,
+    etc.).
+
     Differences from a local row:
 
-    - ``role`` is always ``"member"`` — remote members can't be
-      promoted to admin (admin actions require local DB access on
-      this instance, and the user lives elsewhere).
+    - ``role`` reads ``rm.role`` from ``space_remote_members.role``,
+      which can be ``'admin'`` after a cross-household promotion
+      (PR #434). Earlier this was hardcoded to ``"member"``, which
+      hid promotions in the rendered roster.
     - ``instance_id`` is set so the UI can render a "from {household}"
-      affordance and disable admin gestures the inviter shouldn't
-      have over a federated peer.
+      affordance and route role / kick PATCH+DELETE to the
+      ``/remote-members/{instance}/{user}`` endpoint.
     - ``picture_url`` is null — picture sync over federation isn't
       part of §D1b. (The SPA falls back to the initials avatar.)
     - presence fields default to ``false`` / ``null`` — we have no
@@ -340,9 +351,9 @@ def _remote_member_to_dict(rm) -> dict:
     """
     return {
         "user_id": rm.user_id,
-        "role": "member",
+        "role": rm.role or "member",
         "joined_at": rm.joined_at or "",
-        "display_name": rm.display_name,
+        "display_name": display_name_override or rm.display_name,
         "space_display_name": None,
         "personal_alias": None,
         "picture_hash": None,
@@ -446,7 +457,24 @@ class SpaceMembersView(BaseView):
             )
             for m in members
         ]
-        remote_rows = [_remote_member_to_dict(rm) for rm in remote_members]
+        # Per-row freshness for the remote roster — if the household
+        # paired with the remote member's household has received a
+        # ``USER_UPDATED`` since the §D1b accept (the user renamed
+        # themselves on their own side), prefer that name over the
+        # invite-time snapshot in ``space_remote_members.display_name``.
+        # Without this, a user's rename only propagates through a
+        # kick + re-invite cycle.
+        remote_rows = []
+        for rm in remote_members:
+            remote_user = await user_repo.get_remote(rm.user_id)
+            override = (
+                remote_user.display_name
+                if remote_user is not None and remote_user.display_name
+                else None
+            )
+            remote_rows.append(
+                _remote_member_to_dict(rm, display_name_override=override),
+            )
         return web.json_response(local_rows + remote_rows)
 
     async def post(self) -> web.Response:

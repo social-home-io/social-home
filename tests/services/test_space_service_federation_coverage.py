@@ -207,28 +207,57 @@ async def test_accept_remote_invite_not_cross_household_raises(stack):
 
 
 async def test_accept_remote_invite_happy(stack):
-    await _user(stack, "alicehost")
-    space = await stack.svc.create_space(
-        owner_username="alicehost",
-        name="S",
-    )
-    # Seed a remote invitation row.
+    bob = await _user(stack, "bobhost")
+    # Pre-existing space on the OTHER household — seed a remote-invite
+    # row pointing at bob.
     await stack.space_repo.save_remote_invitation(
-        space_id=space.id,
+        space_id="sp-on-the-other-side",
         invited_by="alicehost-id",
         remote_instance_id="peer",
-        remote_user_id="bob",
+        remote_user_id=bob.user_id,
         invite_token="tok-xyz",
         space_display_hint="S",
     )
-    # accept_remote_invite requires user_repo.get_by_id to return a user
-    # — the SqliteUserRepo does not expose get_by_id (it's optional),
-    # so the code path hits the hasattr(False) branch.
+    # Seed the local stub so the membership row insert succeeds.
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+
+    stub = Space(
+        id="sp-on-the-other-side",
+        name="Remote space",
+        owner_instance_id="peer",
+        owner_username="alicehost",
+        identity_public_key="",
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        emoji="🏠",
+        description="",
+    )
+    await stack.space_repo.save(stub)
+
     await stack.svc.accept_remote_invite(
         token="tok-xyz",
-        user_id="bob",
+        user_id=bob.user_id,
     )
+
     stack.fed_svc.send_with_mesh_fallback.assert_awaited()
+    # Regression guard for "host sees raw user_id instead of display
+    # name" — the accept envelope MUST carry the invitee's display name
+    # so the host's roster renders the human-readable label rather than
+    # the bare ``uid-...`` hash. Earlier, the code looked up
+    # ``users_repo.get_by_id`` which doesn't exist on the protocol;
+    # ``hasattr`` returned False every time and ``invitee_display_name``
+    # was always ``None``.
+    call = stack.fed_svc.send_with_mesh_fallback.call_args
+    payload = call.kwargs["payload"]
+    assert payload["invitee_display_name"] == bob.display_name
+    assert payload["invitee_user_id"] == bob.user_id
 
 
 async def test_decline_remote_invite_unknown_token(stack):
