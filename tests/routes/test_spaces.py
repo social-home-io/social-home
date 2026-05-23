@@ -266,6 +266,57 @@ async def test_add_and_list_members(client):
         assert isinstance(member["location_share_enabled"], bool)
 
 
+async def test_list_members_includes_federated_remote_members(client):
+    """§D1b — a peer who joined via the cross-household invite flow is
+    seated in ``space_remote_members`` on the inviter's instance, not
+    ``space_members``. ``GET /api/spaces/{id}/members`` must surface
+    both so the inviter actually sees the person they just invited.
+    """
+    app = client.app
+    db = app[_db_key]
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "RemoteRoster"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    # Drop in a remote_members row directly — the inbound federation
+    # event handler that normally writes this is exercised in its own
+    # tests; here we want to assert the route surface, not the inbound
+    # pipeline.
+    await db.enqueue(
+        "INSERT INTO space_remote_members"
+        "(space_id, instance_id, user_id, user_pk, display_name)"
+        " VALUES(?,?,?,?,?)",
+        (
+            sid,
+            "peer-instance-id",
+            "uid-friend-of-pascal",
+            "fake-public-key",
+            "Anna (other household)",
+        ),
+    )
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    # 1 local (admin/owner) + 1 remote (the federated friend) = 2.
+    assert len(members) == 2
+    remote_rows = [m for m in members if m.get("instance_id")]
+    assert len(remote_rows) == 1
+    remote = remote_rows[0]
+    assert remote["user_id"] == "uid-friend-of-pascal"
+    assert remote["display_name"] == "Anna (other household)"
+    assert remote["instance_id"] == "peer-instance-id"
+    # Remote members can't be promoted; role pinned to member.
+    assert remote["role"] == "member"
+    # No local picture / presence / location-share to surface.
+    assert remote["picture_url"] is None
+    assert remote["is_online"] is False
+    assert remote["location_share_enabled"] is False
+
+
 async def test_member_location_share_enabled_round_trips(client):
     """§23.8.8 — PATCHing /location-sharing flips the bit, and the
     next GET /members must surface that flip. Regression for the

@@ -1668,6 +1668,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.space_cover_repo_key] = space_cover_repo
     app[K.post_repo_key] = post_repo
     app[K.space_repo_key] = space_repo
+    app[K.space_remote_member_repo_key] = repos.space_remote_member
     app[K.notification_repo_key] = notification_repo
     app[K.conversation_repo_key] = conversation_repo
     app[K.outbox_repo_key] = outbox_repo

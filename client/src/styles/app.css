@@ -8951,6 +8951,23 @@ hr {
   font-size: var(--sh-font-size-xs);
   color: var(--sh-muted);
 }
+/* Federated-peer marker (§D1b) — distinguishes remote members from
+ * local ones in the roster so the admin who invited them knows
+ * "yes, they're here, they're just on the other household's
+ * server". Muted treatment because it's an informational badge,
+ * not a status they should act on. */
+.sh-member-remote-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--sh-font-size-xs);
+  padding: 1px 8px;
+  background: var(--sh-bg-tertiary);
+  color: var(--sh-text-muted);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-full);
+  font-weight: 500;
+}
 
 .sh-alias-dialog { display: flex; flex-direction: column; gap: var(--sh-space-md); }
 .sh-alias-dialog-lead {

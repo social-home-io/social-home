@@ -97,3 +97,59 @@ describe('ApiError — friendly-detail unwrap', () => {
     }
   })
 })
+
+describe('ApiClient — empty / 204 responses', () => {
+  // Regression for "The string did not match the expected pattern."
+  // Safari (mobile + desktop WebKit) raises that error message from
+  // ``JSON.parse('')``, which ``Response.json()`` calls under the
+  // hood for an empty body. POST/PUT/PATCH need to recognize 204
+  // and empty-body responses BEFORE invoking ``json()`` — both the
+  // ``/api/remote_invites/{token}/accept`` flow Pascal's friend hit
+  // and any other 204-returning endpoint.
+  function stubEmptyResponse(opts: {
+    status: number
+    contentLength?: string | null
+  }) {
+    const json = vi.fn().mockImplementation(() => {
+      throw new SyntaxError('The string did not match the expected pattern.')
+    })
+    const res = {
+      ok: opts.status >= 200 && opts.status < 300,
+      status: opts.status,
+      headers: {
+        get: (k: string) =>
+          k.toLowerCase() === 'content-length'
+            ? (opts.contentLength ?? null)
+            : null,
+      },
+      json,
+    } as unknown as Response
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(res))
+    return { json }
+  }
+
+  beforeEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('POST: returns null on a 204 without invoking res.json()', async () => {
+    const { json } = stubEmptyResponse({ status: 204 })
+    const result = await api.post('/api/remote_invites/abc/accept', {})
+    expect(result).toBeNull()
+    expect(json).not.toHaveBeenCalled()
+  })
+
+  it('POST: returns null on a 200 with Content-Length: 0', async () => {
+    const { json } = stubEmptyResponse({ status: 200, contentLength: '0' })
+    const result = await api.post('/api/some/empty-ok', {})
+    expect(result).toBeNull()
+    expect(json).not.toHaveBeenCalled()
+  })
+
+  it('PATCH/PUT: same 204 fast-path', async () => {
+    stubEmptyResponse({ status: 204 })
+    expect(await api.patch('/api/x', {})).toBeNull()
+    stubEmptyResponse({ status: 204 })
+    expect(await api.put('/api/x', {})).toBeNull()
+  })
+})

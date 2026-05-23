@@ -21,6 +21,7 @@ from ..app_keys import (
     profile_picture_repo_key,
     space_bot_repo_key,
     space_cover_repo_key,
+    space_remote_member_repo_key,
     space_repo_key,
     space_service_key,
     space_sync_scheduler_key,
@@ -308,6 +309,44 @@ def _member_to_dict(
     }
 
 
+def _remote_member_to_dict(rm) -> dict:
+    """Serialize a :class:`SpaceRemoteMember` (§D1b) into the same row
+    shape ``SpaceMembersView`` returns for local members, so the SPA's
+    ``SpaceMemberList`` can render both in one list without branching.
+
+    Differences from a local row:
+
+    - ``role`` is always ``"member"`` — remote members can't be
+      promoted to admin (admin actions require local DB access on
+      this instance, and the user lives elsewhere).
+    - ``instance_id`` is set so the UI can render a "from {household}"
+      affordance and disable admin gestures the inviter shouldn't
+      have over a federated peer.
+    - ``picture_url`` is null — picture sync over federation isn't
+      part of §D1b. (The SPA falls back to the initials avatar.)
+    - presence fields default to ``false`` / ``null`` — we have no
+      session presence signal from the peer's instance.
+    """
+    return {
+        "user_id": rm.user_id,
+        "role": "member",
+        "joined_at": rm.joined_at or "",
+        "display_name": rm.display_name,
+        "space_display_name": None,
+        "personal_alias": None,
+        "picture_hash": None,
+        "picture_url": None,
+        "is_online": False,
+        "is_idle": False,
+        "last_seen_at": None,
+        "location_share_enabled": False,
+        # New field — the SPA branches on this to render the
+        # "from another household" badge + suppress local-only
+        # admin gestures.
+        "instance_id": rm.instance_id,
+    }
+
+
 def _member_to_dict_signed(
     request: web.Request,
     m,
@@ -341,6 +380,15 @@ class SpaceMembersView(BaseView):
     async def get(self) -> web.Response:
         space_id = self.match("id")
         members = await self.svc(space_repo_key).list_members(space_id)
+        # §D1b — federated peers who accepted a cross-household invite
+        # are seated in ``space_remote_members``, NOT ``space_members``.
+        # Merge them in here or the admin who invited them will look at
+        # their member list and not see the person they just invited
+        # (the friend joined "into thin air" from Pascal's perspective).
+        remote_repo = self.request.app.get(space_remote_member_repo_key)
+        remote_members = (
+            await remote_repo.list_for_space(space_id) if remote_repo else []
+        )
         # Resolve global display_name + viewer's personal alias for each
         # member in two bulk calls (no N+1).
         user_repo = self.svc(user_repo_key)
@@ -368,27 +416,27 @@ class SpaceMembersView(BaseView):
         online_svc = self.request.app.get(online_status_service_key)
         online_ids = online_svc.online_user_ids() if online_svc else set()
         idle_ids = online_svc.idle_user_ids() if online_svc else set()
-        return web.json_response(
-            [
-                _member_to_dict_signed(
-                    self.request,
-                    m,
-                    space_id,
-                    display_name=display_names.get(m.user_id),
-                    personal_alias=aliases.get(m.user_id),
-                    is_online=m.user_id in online_ids,
-                    is_idle=m.user_id in idle_ids,
-                    last_seen_at=(
-                        online_svc.last_seen(m.user_id).isoformat()
-                        if online_svc
-                        and m.user_id in online_ids
-                        and online_svc.last_seen(m.user_id) is not None
-                        else last_seen_persisted.get(m.user_id)
-                    ),
-                )
-                for m in members
-            ],
-        )
+        local_rows = [
+            _member_to_dict_signed(
+                self.request,
+                m,
+                space_id,
+                display_name=display_names.get(m.user_id),
+                personal_alias=aliases.get(m.user_id),
+                is_online=m.user_id in online_ids,
+                is_idle=m.user_id in idle_ids,
+                last_seen_at=(
+                    online_svc.last_seen(m.user_id).isoformat()
+                    if online_svc
+                    and m.user_id in online_ids
+                    and online_svc.last_seen(m.user_id) is not None
+                    else last_seen_persisted.get(m.user_id)
+                ),
+            )
+            for m in members
+        ]
+        remote_rows = [_remote_member_to_dict(rm) for rm in remote_members]
+        return web.json_response(local_rows + remote_rows)
 
     async def post(self) -> web.Response:
         ctx = self.user
