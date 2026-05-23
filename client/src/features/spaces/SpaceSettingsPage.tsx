@@ -266,7 +266,7 @@ function AboutTab({
           <label class="sh-btn sh-btn--secondary">
             {coverUrl ? 'Change cover' : 'Upload cover'}
             <input ref={fileRef} type="file" accept="image/*"
-                   hidden onChange={uploadCover} />
+                   class="sr-only" onChange={uploadCover} />
           </label>
           {uploadingCover && <span class="sh-muted">Uploading…</span>}
           {coverUrl && (

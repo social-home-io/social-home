@@ -238,7 +238,7 @@ function ProfileTab() {
             📷 Change
           </span>
           <input type="file" accept="image/*"
-                 onChange={handleAvatarUpload} hidden />
+                 onChange={handleAvatarUpload} class="sr-only" />
         </label>
         <div class="sh-profile-card-meta">
           <div class="sh-profile-identity">

@@ -303,7 +303,7 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
                 void handleFiles((e.target as HTMLInputElement).files)
                 ;(e.target as HTMLInputElement).value = ''
               }}
-              hidden
+              class="sr-only"
             />
           </div>
         )}

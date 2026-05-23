@@ -883,7 +883,7 @@ function BackupTab() {
           <input
             type="file"
             accept=".tar.gz,.tgz,application/gzip"
-            style="display:none"
+            class="sr-only"
             disabled={importing}
             onChange={(e) => {
               const file = (e.target as HTMLInputElement).files?.[0]

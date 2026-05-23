@@ -561,7 +561,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       {postType.value === 'image' && images.length > 0
         && images.length < MAX_IMAGES && (
         <input ref={fileInputRef} type="file" multiple accept="image/*"
-               style={{ display: 'none' }}
+               class="sr-only"
                onChange={onFilePicked} />
       )}
       <UploadProgressBar />
