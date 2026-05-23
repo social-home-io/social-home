@@ -20,7 +20,6 @@ from ..infrastructure.event_bus import EventBus
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
-    from ..repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
 
@@ -28,18 +27,16 @@ log = logging.getLogger(__name__)
 class PollFederationOutbound:
     """Publish reply-poll mutations to paired peer instances."""
 
-    __slots__ = ("_bus", "_federation", "_space_repo")
+    __slots__ = ("_bus", "_federation")
 
     def __init__(
         self,
         *,
         bus: EventBus,
         federation_service: "FederationService",
-        space_repo: "AbstractSpaceRepo",
     ) -> None:
         self._bus = bus
         self._federation = federation_service
-        self._space_repo = space_repo
 
     def wire(self) -> None:
         self._bus.subscribe(PollCreated, self._on_created)
@@ -90,24 +87,14 @@ class PollFederationOutbound:
         payload: dict,
     ) -> None:
         try:
-            peers = await self._space_repo.list_member_instances(space_id)
+            await self._federation.broadcast_to_space_members(
+                space_id,
+                event_type,
+                payload,
+            )
         except Exception as exc:  # pragma: no cover — defensive
-            log.debug("poll-outbound: list peers failed: %s", exc)
-            return
-        own = getattr(self._federation, "_own_instance_id", "")
-        for instance_id in peers:
-            if instance_id == own or not instance_id:
-                continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=instance_id,
-                    event_type=event_type,
-                    payload=payload,
-                    space_id=space_id,
-                )
-            except Exception as exc:  # pragma: no cover — defensive
-                log.debug(
-                    "poll-outbound: send to %s failed: %s",
-                    instance_id,
-                    exc,
-                )
+            log.debug(
+                "poll-outbound: broadcast failed for space=%s: %s",
+                space_id,
+                exc,
+            )

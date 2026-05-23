@@ -838,14 +838,12 @@ def _wire_federation_stack(
     schedule_federation_outbound = ScheduleFederationOutbound(
         bus=bus,
         federation_service=federation_service,
-        space_repo=space_repo,
     )
     schedule_federation_outbound.wire()
 
     poll_federation_outbound = PollFederationOutbound(
         bus=bus,
         federation_service=federation_service,
-        space_repo=space_repo,
     )
     poll_federation_outbound.wire()
 
