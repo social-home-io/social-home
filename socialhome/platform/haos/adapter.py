@@ -36,6 +36,7 @@ from ..adapter import (
 )
 from ..ha_home_location import persist_home_location_from_ha
 from ..ha.client import HaClient, build_ha_client
+from ..ha.ice_servers_sync import HaIceServerSync
 from ..ha.providers import (
     HaAIProvider,
     HaEventSink,
@@ -117,6 +118,7 @@ class HaosAdapter(PlatformAdapter):
         "_ha_client",
         "_supervisor_client",
         "_ha_bridge",
+        "_ice_sync",
         "_db",
         "auth",
         "users",
@@ -143,6 +145,7 @@ class HaosAdapter(PlatformAdapter):
         self._ha_client: HaClient | None = ha_client
         self._supervisor_client: SupervisorClient | None = supervisor_client
         self._ha_bridge: HaBridgeService | None = None
+        self._ice_sync: HaIceServerSync | None = None
         self._db: Any | None = None
 
         # HAOS-specific auth — ingress header trust, no bearer fallback.
@@ -303,6 +306,26 @@ class HaosAdapter(PlatformAdapter):
             latitude=instance_cfg.latitude,
             longitude=instance_cfg.longitude,
         )
+        # WebRTC ICE-server sync — pull HA's ``web_rtc/ice_servers`` list
+        # over the HA Core WS and push to FederationService. Replaces
+        # the old HA-integration push endpoint (which only fired on
+        # ``EVENT_CORE_CONFIG_UPDATE``, missing Nabu Casa Cloud's
+        # runtime registrations). One initial fetch + daily refresh —
+        # cadence matches the Nabu Casa Cloud TURN credential TTL.
+        federation_service = app.get(K.federation_service_key)
+        if federation_service is not None:
+
+            async def _apply(servers: list[dict]) -> None:
+                # ``set_ice_servers`` is sync (just rebinds an attribute
+                # + clears suppression); wrap in an async shim so
+                # HaIceServerSync's apply_callback contract holds.
+                federation_service.set_ice_servers(servers)
+
+            self._ice_sync = HaIceServerSync(
+                client=self._ha_client,
+                apply_callback=_apply,
+            )
+            await self._ice_sync.start()
 
     async def _sync_admin_picture_from_ha(
         self,
@@ -332,8 +355,13 @@ class HaosAdapter(PlatformAdapter):
             return
         await user_service.set_picture(local.user_id, bytes_)
 
-    async def on_cleanup(self, app: "web.Application") -> None:  # noqa: RUF029
-        """No-op."""
+    async def on_cleanup(self, app: "web.Application") -> None:  # noqa: ARG002
+        """Stop the daily ICE-server sync. The HaClient session is
+        owned by the app's shared aiohttp ClientSession and torn
+        down by its own cleanup hook."""
+        if self._ice_sync is not None:
+            await self._ice_sync.stop()
+            self._ice_sync = None
 
     def get_extra_services(self) -> dict:
         if self._ha_bridge is not None:

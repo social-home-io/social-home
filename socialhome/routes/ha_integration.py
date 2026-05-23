@@ -19,21 +19,24 @@ Routes registered here:
   changed.
 * ``GET /api/ha/integration/federation-base`` — read-only mirror so
   the integration can verify current state on re-bind.
-* ``PUT /api/ha/integration/ice-servers`` — upsert the WebRTC
-  ICE-server list (operator-managed STUN/TURN, typically Nabu Casa's
-  managed TURN). Propagates immediately to the live
-  :class:`FederationService` so future peer handshakes pick it up.
-* ``GET /api/ha/integration/ice-servers`` — read-only mirror.
+
+The previous ``PUT /api/ha/integration/ice-servers`` push endpoint
+was removed: SH's HA platform adapter now pulls ``web_rtc/ice_servers``
+over the HA Core WebSocket directly (see
+:mod:`socialhome.platform.ha.ice_servers_sync`). One initial fetch at
+boot, daily refresh thereafter. Removing the push collapsed three
+moving parts (integration listener, SH endpoint, instance_config
+persistence) into one — and lets Nabu Casa Cloud's runtime TURN
+registration land on SH without a YAML reload.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 
 from aiohttp import web
 
-from ..app_keys import db_key, federation_service_key, url_update_outbound_key
+from ..app_keys import db_key, url_update_outbound_key
 from ..security import error_response
 from .base import BaseView
 
@@ -41,12 +44,6 @@ log = logging.getLogger(__name__)
 
 
 _INSTANCE_CONFIG_KEY = "ha_federation_base"
-_INSTANCE_CONFIG_KEY_ICE = "ha_ice_servers"
-
-_ALLOWED_ICE_SCHEMES = ("stun:", "stuns:", "turn:", "turns:")
-_ICE_MAX_SERVERS = 8
-_ICE_MAX_URLS_PER_SERVER = 4
-_ICE_MAX_FIELD_LEN = 512
 
 
 def _validate_base(raw: str) -> str | None:
@@ -59,97 +56,6 @@ def _validate_base(raw: str) -> str | None:
     if not (base.startswith("http://") or base.startswith("https://")):
         return None
     return base
-
-
-def _validate_ice_servers(raw) -> tuple[list[dict] | None, str | None]:
-    """Validate a pushed ICE-server list and return ``(cleaned, None)``
-    on success or ``(None, reason)`` on failure.
-
-    Accepted shape — Chrome / aiolibdatachannel-compatible::
-
-        [
-            {"urls": ["stun:stun.example:3478"]},
-            {
-                "urls": ["turn:turn.example:3478", "turns:turn.example:5349"],
-                "username": "u",
-                "credential": "p",
-            },
-        ]
-
-    Some older clients (incl. the HA core ``webrtc_models`` library
-    used by the integration) serialise the ``urls`` field in the
-    singular as ``"url"``. We accept that as a fallback so the
-    integration doesn't have to know about the dialect difference.
-
-    The ``reason`` string is short, operator-readable, and gets
-    echoed in the 422 response + logged so a misconfigured ICE
-    payload doesn't fail silently. Length / count limits are bounded
-    so the integration cannot push a payload that bloats every
-    outbound ``ice_servers`` echo (§24.10.7) or peer config.
-    """
-    if not isinstance(raw, list):
-        return None, "payload is not a list"
-    if len(raw) > _ICE_MAX_SERVERS:
-        return None, f"too many servers (max {_ICE_MAX_SERVERS})"
-    out: list[dict] = []
-    for idx, entry in enumerate(raw):
-        if not isinstance(entry, dict):
-            return None, f"entry {idx} is not a dict"
-        # ``urls`` is the canonical Chrome / WebRTC spec field. Some
-        # libraries (notably the HA core's ``webrtc_models``) still
-        # emit the singular ``url`` form — accept it as a fallback
-        # rather than 422'ing the entire payload over a field-name
-        # typo.
-        urls = entry.get("urls")
-        if urls is None and "url" in entry:
-            urls = entry.get("url")
-        if isinstance(urls, str):
-            urls = [urls]
-        if not isinstance(urls, list) or not urls:
-            return (
-                None,
-                f"entry {idx} missing 'urls' (or singular 'url') string/list",
-            )
-        if len(urls) > _ICE_MAX_URLS_PER_SERVER:
-            return (
-                None,
-                f"entry {idx} has {len(urls)} URLs (max "
-                f"{_ICE_MAX_URLS_PER_SERVER} per server)",
-            )
-        cleaned_urls: list[str] = []
-        for url in urls:
-            if not isinstance(url, str):
-                return None, f"entry {idx} URL is not a string"
-            url = url.strip()
-            if not url:
-                return None, f"entry {idx} has an empty URL"
-            if len(url) > _ICE_MAX_FIELD_LEN:
-                return (
-                    None,
-                    f"entry {idx} URL exceeds {_ICE_MAX_FIELD_LEN} chars",
-                )
-            if not url.lower().startswith(_ALLOWED_ICE_SCHEMES):
-                return (
-                    None,
-                    f"entry {idx} URL {url!r} doesn't start with one of "
-                    f"{_ALLOWED_ICE_SCHEMES}",
-                )
-            cleaned_urls.append(url)
-        normalized: dict = {"urls": cleaned_urls}
-        for opt in ("username", "credential"):
-            val = entry.get(opt)
-            if val is None:
-                continue
-            if not isinstance(val, str):
-                return None, f"entry {idx} {opt!r} is not a string"
-            if len(val) > _ICE_MAX_FIELD_LEN:
-                return (
-                    None,
-                    f"entry {idx} {opt!r} exceeds {_ICE_MAX_FIELD_LEN} chars",
-                )
-            normalized[opt] = val
-        out.append(normalized)
-    return out, None
 
 
 class HaIntegrationFederationBaseView(BaseView):
@@ -217,124 +123,5 @@ class HaIntegrationFederationBaseView(BaseView):
                 "base": cleaned,
                 "changed": previous != cleaned,
                 "peers_notified": notified,
-            }
-        )
-
-
-def _load_ice_servers(raw_value: str | None) -> list[dict]:
-    """Decode the persisted JSON blob, defending against bad rows.
-
-    Bad JSON or a value that no longer matches the validator (schema
-    drift, hand-edited DB) returns ``[]`` rather than raising — the
-    instance keeps booting with no ICE servers, and the operator gets
-    a chance to re-push from the integration.
-    """
-    if not raw_value:
-        return []
-    try:
-        parsed = json.loads(raw_value)
-    except TypeError, ValueError:
-        log.warning("ha_integration: persisted ice_servers JSON is malformed")
-        return []
-    cleaned, reason = _validate_ice_servers(parsed)
-    if cleaned is None:
-        log.warning(
-            "ha_integration: persisted ice_servers failed re-validation: %s",
-            reason,
-        )
-        return []
-    return cleaned
-
-
-async def load_persisted_ice_servers(db) -> list[dict]:
-    """Read the operator-pushed ICE-server list from ``instance_config``.
-
-    Called by ``app._on_startup`` after the DB is open so the live
-    :class:`FederationService` and its transport see the persisted
-    list before the first peer handshake.
-    """
-    row = await db.fetchone(
-        "SELECT value FROM instance_config WHERE key=?",
-        (_INSTANCE_CONFIG_KEY_ICE,),
-    )
-    return _load_ice_servers(str(row["value"]) if row is not None else None)
-
-
-class HaIntegrationIceServersView(BaseView):
-    """``GET / PUT /api/ha/integration/ice-servers``.
-
-    The HA integration POSTs ``{"ice_servers": [...]}`` after the
-    operator picks a STUN/TURN provider in the integration config flow
-    (typically a Nabu Casa managed TURN credential). We:
-
-    1. Validate the payload (Chrome-compatible shape, scheme allow-list).
-    2. Persist as JSON in ``instance_config`` so the next boot replays
-       the same list before any peer handshake fires.
-    3. Hand the list to :meth:`FederationService.set_ice_servers`,
-       which propagates to the attached :class:`FederationTransport` —
-       new DataChannel handshakes pick up the operator's TURN config
-       immediately. Existing peers keep their previous config (live
-       renegotiation is out of scope; reconnects pick up the new list).
-
-    No federation event is emitted: ICE servers are local config, not
-    something we tell remote peers about. Peers learn each operator's
-    chosen STUN/TURN through the §24.10.7 ``ice_servers`` echo on their
-    own connection, not by us pushing it to them.
-    """
-
-    async def get(self) -> web.Response:
-        ctx = self.user
-        if not ctx.is_admin:
-            return error_response(403, "FORBIDDEN", "Admin only.")
-        db = self.svc(db_key)
-        servers = await load_persisted_ice_servers(db)
-        return web.json_response({"ice_servers": servers})
-
-    async def put(self) -> web.Response:
-        ctx = self.user
-        if not ctx.is_admin:
-            return error_response(403, "FORBIDDEN", "Admin only.")
-        body = await self.body()
-        cleaned, reason = _validate_ice_servers(body.get("ice_servers"))
-        if cleaned is None:
-            # Log the offending payload so an operator can match what
-            # the HA integration actually sent against what the
-            # validator expected. The 422 body carries the same
-            # ``reason`` string so the integration's UI can surface it.
-            log.warning(
-                "ha_integration: PUT /ice-servers rejected — %s; payload=%r",
-                reason,
-                body.get("ice_servers"),
-            )
-            return error_response(
-                422,
-                "UNPROCESSABLE",
-                f"ice_servers rejected: {reason}. "
-                "Expected a list of "
-                "{urls: [stun|turn|stuns|turns:...], username?, credential?}.",
-            )
-
-        db = self.svc(db_key)
-        encoded = json.dumps(cleaned, separators=(",", ":"))
-        previous_row = await db.fetchone(
-            "SELECT value FROM instance_config WHERE key=?",
-            (_INSTANCE_CONFIG_KEY_ICE,),
-        )
-        previous = str(previous_row["value"]) if previous_row is not None else None
-
-        await db.enqueue(
-            "INSERT INTO instance_config(key, value) VALUES(?,?)"
-            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (_INSTANCE_CONFIG_KEY_ICE, encoded),
-        )
-
-        federation = self.svc(federation_service_key)
-        federation.set_ice_servers(cleaned)
-
-        return web.json_response(
-            {
-                "ok": True,
-                "ice_servers": cleaned,
-                "changed": previous != encoded,
             }
         )

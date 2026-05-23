@@ -32,6 +32,7 @@ from ..local_credentials import (
 )
 from ..ha_home_location import persist_home_location_from_ha
 from .client import HaClient, build_ha_client
+from .ice_servers_sync import HaIceServerSync
 from .providers import (
     HaAIProvider,
     HaAuthProvider,
@@ -72,6 +73,7 @@ class HaAdapter(PlatformAdapter):
         "_options",
         "_ha_client",
         "_ha_bridge",
+        "_ice_sync",
         "_db",
         "_credentials",
         "auth",
@@ -97,6 +99,7 @@ class HaAdapter(PlatformAdapter):
         self._options: Mapping[str, Any] = options or MappingProxyType({})
         self._ha_client: HaClient | None = ha_client
         self._ha_bridge: HaBridgeService | None = None
+        self._ice_sync: HaIceServerSync | None = None
         self._db: Any | None = None
         self._credentials: LocalCredentialStore | None = None
 
@@ -298,9 +301,26 @@ class HaAdapter(PlatformAdapter):
             latitude=instance_cfg.latitude,
             longitude=instance_cfg.longitude,
         )
+        # WebRTC ICE-server sync — pull HA's ``web_rtc/ice_servers`` list
+        # over the HA Core WS and push to FederationService. Replaces
+        # the old HA-integration push endpoint.
+        federation_service = app.get(K.federation_service_key)
+        if federation_service is not None:
 
-    async def on_cleanup(self, app: "web.Application") -> None:  # noqa: RUF029
-        """No-op."""
+            async def _apply(servers: list[dict]) -> None:
+                federation_service.set_ice_servers(servers)
+
+            self._ice_sync = HaIceServerSync(
+                client=self._ha_client,
+                apply_callback=_apply,
+            )
+            await self._ice_sync.start()
+
+    async def on_cleanup(self, app: "web.Application") -> None:  # noqa: ARG002
+        """Stop the ICE-server sync loop."""
+        if self._ice_sync is not None:
+            await self._ice_sync.stop()
+            self._ice_sync = None
 
     def get_extra_services(self) -> dict:
         if self._ha_bridge is not None:

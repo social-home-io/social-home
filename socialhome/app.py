@@ -136,7 +136,6 @@ from .repositories.space_key_repo import SqliteSpaceKeyRepo
 from .repositories.storage_stats_repo import SqliteStorageStatsRepo
 from .repositories.theme_repo import SqliteThemeRepo
 from .routes import setup_routes
-from .routes.ha_integration import load_persisted_ice_servers
 from .services.auto_pair_inbox import AutoPairInbox
 from .services import (
     DmService,
@@ -2021,14 +2020,14 @@ def create_app(config: Config | None = None) -> web.Application:
         federation_service.attach_transport(fed_transport)
         app[K.federation_transport_key] = fed_transport
 
-        # Replay any operator-pushed STUN/TURN list (PUT /api/ha/integration/
-        # ice-servers) so the live FederationService + transport see the
-        # operator's TURN config before the first peer handshake. The
-        # ``_default_ice_servers(config)`` list above is just the
-        # ``Config``-level fallback used on a fresh DB.
-        persisted_ice = await load_persisted_ice_servers(db)
-        if persisted_ice:
-            federation_service.set_ice_servers(persisted_ice)
+        # SH's HA platform adapter (HaAdapter / HaosAdapter) pulls HA
+        # Core's ``web_rtc/ice_servers`` list over the HA WebSocket on
+        # startup and refreshes daily — see
+        # :mod:`socialhome.platform.ha.ice_servers_sync`. Until that
+        # first fetch lands the federation transport uses the
+        # ``_default_ice_servers(config)`` list (Config-level
+        # ``webrtc_*`` fields). Standalone mode never pulls; the Config
+        # defaults are the steady state there.
 
         app[K.federation_service_key] = federation_service
         app[K.sync_session_manager_key] = sync_manager

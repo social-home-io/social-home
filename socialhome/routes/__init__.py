@@ -95,10 +95,7 @@ from .conversations import (
     ConversationUnreadView,
 )
 from .federation import FederationInboxView
-from .ha_integration import (
-    HaIntegrationFederationBaseView,
-    HaIntegrationIceServersView,
-)
+from .ha_integration import HaIntegrationFederationBaseView
 from .feed import (
     FeedCollectionView,
     FeedReadWatermarkView,
@@ -886,10 +883,12 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         "/api/ha/integration/federation-base",
         HaIntegrationFederationBaseView,
     )
-    app.router.add_view(
-        "/api/ha/integration/ice-servers",
-        HaIntegrationIceServersView,
-    )
+    # ``PUT /api/ha/integration/ice-servers`` was removed in favor of
+    # SH pulling the list from HA Core over WS directly (see
+    # :mod:`socialhome.platform.ha.ice_servers_sync`). HA-integration
+    # version ≤ 2026.5.18 still pushes here; the 404 is harmless —
+    # the integration logs at WARN and stops trying after the
+    # version that drops the push.
 
     # ── Pairing / connections ───────────────────────────────────────────
     app.router.add_view("/api/pairing/initiate", PairingInitiateView)
