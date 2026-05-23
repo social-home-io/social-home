@@ -17,45 +17,34 @@ from socialhome.services.sticky_federation_outbound import (
 
 
 class _FakeFederationService:
-    def __init__(self, own_instance_id: str = "own-inst") -> None:
-        self._own_instance_id = own_instance_id
-        self.sent: list[tuple[str, FederationEventType, dict, str | None]] = []
+    """Stub that records `broadcast_to_space_members` calls.
 
-    async def send_event(
+    Switched from per-peer `send_event` to mesh-routed broadcast in the
+    F2a refactor — the broadcast helper iterates members internally and
+    uses `send_with_mesh_fallback`, so mesh-only members get the event
+    too. The test assertion is on the broadcast call, not on individual
+    per-peer sends.
+    """
+
+    def __init__(self) -> None:
+        self.broadcasts: list[tuple[str, FederationEventType, dict]] = []
+
+    async def broadcast_to_space_members(
         self,
-        *,
-        to_instance_id,
+        space_id,
         event_type,
         payload,
-        space_id=None,
+        **kwargs,
     ):
-        self.sent.append((to_instance_id, event_type, payload, space_id))
+        self.broadcasts.append((space_id, event_type, payload))
         return None
-
-
-class _FakeSpaceRepo:
-    def __init__(self, members: dict[str, list[str]]) -> None:
-        self._members = members
-
-    async def list_member_instances(self, space_id: str) -> list[str]:
-        return list(self._members.get(space_id, []))
 
 
 @pytest.fixture
 def env():
     bus = EventBus()
     fed = _FakeFederationService()
-    repo = _FakeSpaceRepo(
-        {
-            "sp-A": ["own-inst", "peer-1", "peer-2"],
-            "sp-B": ["peer-3"],
-        }
-    )
-    out = StickyFederationOutbound(
-        bus=bus,
-        federation_service=fed,
-        space_repo=repo,
-    )
+    out = StickyFederationOutbound(bus=bus, federation_service=fed)
     out.wire()
     return bus, fed
 
@@ -73,10 +62,10 @@ async def test_household_sticky_is_not_federated(env):
             position_y=0,
         )
     )
-    assert fed.sent == []
+    assert fed.broadcasts == []
 
 
-async def test_space_sticky_fanouts_to_peers_excluding_self(env):
+async def test_space_sticky_broadcasts_with_payload(env):
     bus, fed = env
     await bus.publish(
         StickyCreated(
@@ -89,13 +78,11 @@ async def test_space_sticky_fanouts_to_peers_excluding_self(env):
             position_y=20,
         )
     )
-    # Fan-out to every peer that isn't us.
-    recipients = [r[0] for r in fed.sent]
-    assert recipients == ["peer-1", "peer-2"]
-    # All carry the SPACE_STICKY_CREATED type.
-    assert {r[1] for r in fed.sent} == {FederationEventType.SPACE_STICKY_CREATED}
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, payload = fed.broadcasts[0]
+    assert space_id == "sp-A"
+    assert event_type is FederationEventType.SPACE_STICKY_CREATED
     # Payload shape: id replaces sticky_id, occurred_at stripped.
-    payload = fed.sent[0][2]
     assert payload["id"] == "s1"
     assert "sticky_id" not in payload
     assert "occurred_at" not in payload
@@ -115,15 +102,17 @@ async def test_sticky_updated_uses_update_event_type(env):
             position_y=5,
         )
     )
-    assert [r[1] for r in fed.sent] == [FederationEventType.SPACE_STICKY_UPDATED]
-    assert fed.sent[0][0] == "peer-3"
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, _payload = fed.broadcasts[0]
+    assert space_id == "sp-B"
+    assert event_type is FederationEventType.SPACE_STICKY_UPDATED
 
 
 async def test_sticky_deleted_payload_minimal(env):
     bus, fed = env
     await bus.publish(StickyDeleted(sticky_id="s1", space_id="sp-A"))
-    assert len(fed.sent) == 2
-    for _to, event_type, payload, space_id in fed.sent:
-        assert event_type is FederationEventType.SPACE_STICKY_DELETED
-        assert payload == {"id": "s1", "space_id": "sp-A"}
-        assert space_id == "sp-A"
+    assert len(fed.broadcasts) == 1
+    space_id, event_type, payload = fed.broadcasts[0]
+    assert event_type is FederationEventType.SPACE_STICKY_DELETED
+    assert space_id == "sp-A"
+    assert payload == {"id": "s1", "space_id": "sp-A"}

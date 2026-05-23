@@ -805,14 +805,12 @@ def _wire_federation_stack(
     sticky_federation_outbound = StickyFederationOutbound(
         bus=bus,
         federation_service=federation_service,
-        space_repo=space_repo,
     )
     sticky_federation_outbound.wire()
 
     task_federation_outbound = TaskFederationOutbound(
         bus=bus,
         federation_service=federation_service,
-        space_repo=space_repo,
     )
     task_federation_outbound.wire()
 
@@ -834,7 +832,6 @@ def _wire_federation_stack(
     space_zone_outbound = SpaceZoneOutbound(
         bus=bus,
         federation_service=federation_service,
-        space_repo=space_repo,
     )
     space_zone_outbound.wire()
 
