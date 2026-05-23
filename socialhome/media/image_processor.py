@@ -12,6 +12,7 @@ import io
 import logging
 import uuid
 
+import pillow_heif  # type: ignore[import-untyped]
 from PIL import Image, ImageOps
 from PIL.Image import Resampling
 
@@ -22,6 +23,16 @@ from ..domain.media_constraints import (
     THUMBNAIL_PX,
     THUMBNAIL_WEBP_QUALITY,
 )
+
+# Modern Android camera (Samsung 2024+, Pixel HEIF-on) and iOS default
+# to HEIC. Pillow alone can't decode HEIC bytes; pillow_heif registers a
+# Pillow image opener so ``Image.open(heic_bytes)`` works the same way
+# JPEG/PNG/WebP do. Without this the magic-byte check passes (we
+# advertise ``image/heic`` in :data:`IMAGE_ACCEPTED_MIMES`) but
+# ``Image.open`` raises ``cannot identify image file`` and the upload
+# 422s with "Cannot open image" — the symptom Pascal hit on the HA
+# Android Companion App.
+pillow_heif.register_heif_opener()
 
 log = logging.getLogger(__name__)
 
