@@ -162,7 +162,16 @@ from __future__ import annotations
 #:   listing until the next §25.6 catch-up sync runs (or the seller
 #:   re-publishes via ``BAZAAR_LISTING_CREATED``). **Best effort.**
 #:   Sub-v_11 peers silently drop; same upgrade story as v_10.
-OURS: int = 11
+#: * **v12** — F7: cross-household bazaar bids + offer acceptance.
+#:   :data:`BAZAAR_BID_PLACED` lets a remote bidder's instance push
+#:   bids to the seller's host (and every other member's view);
+#:   :data:`BAZAAR_OFFER_ACCEPTED` propagates the seller's acceptance
+#:   back to the bidder + every other member. **Best effort.**
+#:   Sub-v_12 peers see local bids only — remote bids never reach
+#:   the seller's DB and the seller can't accept them. Operators
+#:   wanting cross-household bazaar transactions should upgrade
+#:   member households alongside sellers.
+OURS: int = 12
 
 
 class FederationCapability:
@@ -244,6 +253,14 @@ class FederationCapability:
     #: "active" for a listing the seller marked sold/expired/cancelled
     #: until the next §25.6 catch-up sync repairs it. Best-effort.
     MIN_FOR_BAZAAR_STATUS = 11
+
+    #: Minimum proto_version where the receiver knows
+    #: :data:`FederationEventType.BAZAAR_BID_PLACED` /
+    #: :data:`BAZAAR_OFFER_ACCEPTED`. Sub-v_12 peers don't see
+    #: cross-household bids — a remote bidder's local UI shows their
+    #: own bid, but the seller's host never receives it so the seller
+    #: can't accept / mark sold. Best-effort gating.
+    MIN_FOR_BAZAAR_BIDS = 12
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

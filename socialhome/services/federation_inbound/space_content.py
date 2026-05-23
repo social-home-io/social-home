@@ -23,7 +23,7 @@ from ...domain.events import (
 from ...domain.federation import FederationEventType
 from ...domain.gallery import GalleryItem
 from ...domain.page import Page
-from ...domain.post import BazaarListing, BazaarMode, BazaarStatus
+from ...domain.post import BazaarBid, BazaarListing, BazaarMode, BazaarStatus
 from ...domain.space import SpaceZone
 from ...domain.sticky import Sticky
 from ...domain.task import Task, TaskStatus
@@ -197,6 +197,15 @@ class SpaceContentInboundHandlers:
             registry.register(
                 FederationEventType.BAZAAR_LISTING_UPDATED,
                 self._on_bazaar_listing_updated,
+            )
+            # F7: cross-household bids + offer acceptance.
+            registry.register(
+                FederationEventType.BAZAAR_BID_PLACED,
+                self._on_bazaar_bid_placed,
+            )
+            registry.register(
+                FederationEventType.BAZAAR_OFFER_ACCEPTED,
+                self._on_bazaar_offer_accepted,
             )
 
     # ─── Tasks ───────────────────────────────────────────────────────────
@@ -782,5 +791,80 @@ class SpaceContentInboundHandlers:
             log.debug(
                 "BAZAAR_LISTING_UPDATED apply failed listing=%s: %s",
                 post_id,
+                exc,
+            )
+
+    async def _on_bazaar_bid_placed(self, event: "FederationEvent") -> None:
+        """F7: persist a bid placed on a remote bidder's instance.
+
+        The bid lives canonically on the seller's host but every member
+        household mirrors the row so the SPA can render "current high
+        bid" consistently. Idempotent — a replay matching an existing
+        bid_id is dropped.
+        """
+        if self._bazaar_repo is None:
+            return
+        p = event.payload
+        bid_id = str(p.get("bid_id") or "")
+        listing_post_id = str(p.get("listing_post_id") or "")
+        bidder = str(p.get("bidder_user_id") or "")
+        amount_raw = p.get("amount")
+        if not bid_id or not listing_post_id or not bidder or amount_raw is None:
+            log.debug("BAZAAR_BID_PLACED missing required field: %s", p)
+            return
+        # Already-present? Drop silently.
+        try:
+            existing = await self._bazaar_repo.get_bid(bid_id)
+        except Exception:
+            existing = None
+        if existing is not None:
+            return
+        try:
+            await self._bazaar_repo.place_bid(
+                BazaarBid(
+                    id=bid_id,
+                    listing_post_id=listing_post_id,
+                    bidder_user_id=bidder,
+                    amount=int(amount_raw),
+                    created_at="",  # repo defaults via datetime('now')
+                    message=p.get("message"),
+                ),
+            )
+        except Exception as exc:
+            # Listing not yet persisted (race against F4 catch-up) or
+            # the listing is no longer active — drop; the seller's
+            # state of truth wins. The catch-up enqueue will eventually
+            # re-converge if a sync runs.
+            log.debug(
+                "BAZAAR_BID_PLACED apply failed bid=%s listing=%s: %s",
+                bid_id,
+                listing_post_id,
+                exc,
+            )
+
+    async def _on_bazaar_offer_accepted(
+        self,
+        event: "FederationEvent",
+    ) -> None:
+        """F7: mirror an offer acceptance on the bidder + every other
+        member's local row.
+
+        ``accept_offer`` flips ``accepted=1`` for the row; the matching
+        F8 BAZAAR_LISTING_UPDATED handler will fire separately and
+        mark the listing sold via ``mark_sold``. Both are idempotent
+        so the order doesn't matter.
+        """
+        if self._bazaar_repo is None:
+            return
+        bid_id = str(event.payload.get("bid_id") or "")
+        if not bid_id:
+            log.debug("BAZAAR_OFFER_ACCEPTED missing bid_id: %s", event.payload)
+            return
+        try:
+            await self._bazaar_repo.accept_offer(bid_id)
+        except Exception as exc:
+            log.debug(
+                "BAZAAR_OFFER_ACCEPTED apply failed bid=%s: %s",
+                bid_id,
                 exc,
             )

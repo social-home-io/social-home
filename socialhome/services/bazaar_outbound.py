@@ -28,9 +28,11 @@ import logging
 from typing import TYPE_CHECKING
 
 from ..domain.events import (
+    BazaarBidPlaced,
     BazaarListingCancelled,
     BazaarListingCreated,
     BazaarListingExpired,
+    BazaarOfferAccepted,
 )
 from ..domain.federation import FederationEventType
 from ..domain.federation_capabilities import FederationCapability
@@ -72,6 +74,9 @@ class BazaarOutbound:
         self._bus.subscribe(BazaarListingCreated, self._on_listing_created)
         self._bus.subscribe(BazaarListingExpired, self._on_listing_expired)
         self._bus.subscribe(BazaarListingCancelled, self._on_listing_cancelled)
+        # F7 — cross-household bid + offer flow.
+        self._bus.subscribe(BazaarBidPlaced, self._on_bid_placed)
+        self._bus.subscribe(BazaarOfferAccepted, self._on_offer_accepted)
 
     async def _on_listing_created(self, event: BazaarListingCreated) -> None:
         """Fan ``BAZAAR_LISTING_CREATED`` to every member household.
@@ -211,4 +216,78 @@ class BazaarOutbound:
                 "BAZAAR_LISTING_UPDATED broadcast failed for space=%s listing=%s",
                 listing.space_id,
                 listing.post_id,
+            )
+
+    async def _on_bid_placed(self, event: BazaarBidPlaced) -> None:
+        """F7: ship a bid to the seller's host + every other space
+        member so they all see the same canonical bid_id + amount.
+
+        The bidder's local instance has ALREADY written to its own
+        ``bazaar_bids`` via the regular ``place_bid`` path; this
+        broadcast lets every other instance mirror that row.
+
+        ``space_id`` is required for membership-gated broadcast — it
+        ships on the bus event since v_12.
+        """
+        if not event.space_id:
+            return  # household-only listing or pre-v_12 bus payload
+        payload: dict = {
+            "bid_id": event.bid_id,
+            "listing_post_id": event.listing_post_id,
+            "space_id": event.space_id,
+            "seller_user_id": event.seller_user_id,
+            "bidder_user_id": event.bidder_user_id,
+            "amount": event.amount,
+            "new_end_time": event.new_end_time,
+            "message": event.message,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.BAZAAR_BID_PLACED,
+                payload,
+                min_proto_version=FederationCapability.MIN_FOR_BAZAAR_BIDS,
+            )
+        except Exception:
+            log.exception(
+                "BAZAAR_BID_PLACED broadcast failed for space=%s listing=%s bid=%s",
+                event.space_id,
+                event.listing_post_id,
+                event.bid_id,
+            )
+
+    async def _on_offer_accepted(self, event: BazaarOfferAccepted) -> None:
+        """F7: notify the bidder + every other member that the seller
+        accepted this offer (or that the auction closed with a winner).
+
+        Receivers flip the bid row's ``accepted`` flag and update the
+        listing's status via ``mark_sold`` so winner_user_id /
+        winning_price stay consistent. The matching F8
+        ``BAZAAR_LISTING_UPDATED`` will also fire and route through
+        ``mark_sold`` — duplicate writes are idempotent (gated on
+        ``status='active'``).
+        """
+        if not event.space_id:
+            return
+        payload: dict = {
+            "bid_id": event.bid_id,
+            "listing_post_id": event.listing_post_id,
+            "space_id": event.space_id,
+            "seller_user_id": event.seller_user_id,
+            "buyer_user_id": event.buyer_user_id,
+            "price": event.price,
+        }
+        try:
+            await self._federation.broadcast_to_space_members(
+                event.space_id,
+                FederationEventType.BAZAAR_OFFER_ACCEPTED,
+                payload,
+                min_proto_version=FederationCapability.MIN_FOR_BAZAAR_BIDS,
+            )
+        except Exception:
+            log.exception(
+                "BAZAAR_OFFER_ACCEPTED broadcast failed for space=%s listing=%s bid=%s",
+                event.space_id,
+                event.listing_post_id,
+                event.bid_id,
             )
