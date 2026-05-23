@@ -865,6 +865,8 @@ class FederationService:
         space_id: str,
         event_type: FederationEventType,
         payload: dict,
+        *,
+        min_proto_version: int | None = None,
     ) -> BroadcastResult:
         """Fan out to every member household of ``space_id``.
 
@@ -879,12 +881,26 @@ class FederationService:
         in the broadcast set; the per-peer ``send_with_mesh_fallback``
         decides direct vs mesh based on the actual pairing state at
         send time.
+
+        When ``min_proto_version`` is set, peers whose advertised
+        ``proto_version`` is below the threshold are skipped silently —
+        the outbox never queues, the receiver never sees an unknown
+        event_type. Use this for best-effort additions where older
+        peers should simply not get the new payload (vs forward-secrecy
+        events that MUST always ship and degrade noisily on older
+        peers).
         """
         instance_ids = await self._federation_repo.list_member_instance_ids(
             space_id,
         )
         results: list[DeliveryResult] = []
         for iid in instance_ids:
+            if min_proto_version is not None and not await self.peer_supports(
+                iid,
+                min_version=min_proto_version,
+            ):
+                # Below threshold — silently skip. Best-effort path.
+                continue
             result = await self.send_with_mesh_fallback(
                 to_instance_id=iid,
                 event_type=event_type,

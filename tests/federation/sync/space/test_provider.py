@@ -190,3 +190,77 @@ async def test_stream_initial_no_media_sync_wired_is_noop(encoder):
     # Sentinel still landed.
     parsed = orjson.loads(session.rtc.sent[-1])
     assert parsed["resource"] == SENTINEL_RESOURCE
+
+
+# ─── Bazaar catch-up (#PR445) ─────────────────────────────────────────
+
+
+async def test_stream_initial_enqueues_bazaar_catchup_media(encoder):
+    """Catch-up enumerates bazaar listings and ships their image bytes
+    too — the wrapper Post's ``image_urls`` is always empty for
+    ``PostType.BAZAAR``, the photos live on ``BazaarListing.image_urls``.
+    """
+    from unittest.mock import AsyncMock
+    from dataclasses import dataclass
+
+    @dataclass
+    class _Listing:
+        post_id: str
+        image_urls: tuple
+
+    class _BazaarRepo:
+        async def list_in_space(self, space_id, *, limit=500):
+            return [
+                _Listing(
+                    post_id="bzr-1",
+                    image_urls=("api/media/chair-1.webp", "api/media/chair-2.webp"),
+                ),
+                _Listing(  # No photos — skipped silently.
+                    post_id="bzr-2",
+                    image_urls=(),
+                ),
+            ]
+
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_blob = AsyncMock()
+    builder = ChunkBuilder(encoder=encoder, crypto=_FakeCrypto())
+    svc = SpaceSyncService(
+        builder=builder,
+        exporters={},
+        sig_suite="ed25519",
+        media_sync=media_sync,
+        bazaar_repo=_BazaarRepo(),
+    )
+    session = _FakeSession(requester="peer-bzr")
+    await svc.stream_initial(session)
+
+    # Only the photo-bearing listing got an enqueue.
+    media_sync.enqueue_for_blob.assert_awaited_once()
+    kw = media_sync.enqueue_for_blob.await_args.kwargs
+    assert kw["correlation_id"] == "bzr-1"
+    assert kw["target_instance_ids"] == ["peer-bzr"]
+    assert list(kw["media_urls"]) == [
+        "api/media/chair-1.webp",
+        "api/media/chair-2.webp",
+    ]
+
+
+async def test_stream_initial_no_bazaar_repo_is_noop(encoder):
+    """Without a ``bazaar_repo`` (e.g. older deployments), the catch-up
+    skips the bazaar walk — post + gallery still flow."""
+    from unittest.mock import AsyncMock
+
+    media_sync = AsyncMock()
+    media_sync.enqueue_for_blob = AsyncMock()
+    builder = ChunkBuilder(encoder=encoder, crypto=_FakeCrypto())
+    svc = SpaceSyncService(
+        builder=builder,
+        exporters={},
+        sig_suite="ed25519",
+        media_sync=media_sync,
+        bazaar_repo=None,
+    )
+    session = _FakeSession()
+    await svc.stream_initial(session)
+    # No bazaar enqueues — no other repos wired either.
+    media_sync.enqueue_for_blob.assert_not_awaited()

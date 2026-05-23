@@ -144,7 +144,19 @@ from __future__ import annotations
 #:   forward-secrecy violation, so we'd rather fail loud. Operators
 #:   should expect to upgrade member households together with the
 #:   host.
-OURS: int = 9
+#: * **v10** — :data:`FederationEventType.BAZAAR_LISTING_CREATED` ships
+#:   the full :class:`BazaarListing` payload (mode, price, photos,
+#:   status, …) so remote household members see what's actually for
+#:   sale, not just the caption on the wrapper
+#:   ``PostType.BAZAAR`` post that already federated as
+#:   ``SPACE_POST_CREATED``. Image bytes ride the existing space
+#:   media outbox (correlation_id = listing.post_id). **Best
+#:   effort.** Sub-v_10 peers silently drop the event — the wrapper
+#:   post still federates, so the recipient sees the caption
+#:   ("🛍 Title") but nothing else (today's behaviour). Operators
+#:   who want bazaar visibility should upgrade member households
+#:   together with the seller's.
+OURS: int = 10
 
 
 class FederationCapability:
@@ -210,6 +222,15 @@ class FederationCapability:
     #: succeed but the host never applies the change. Operators must
     #: upgrade hosts together with members.
     MIN_FOR_REMOTE_ADMIN_KICK = 9
+
+    #: Minimum proto_version where the receiver knows
+    #: :data:`FederationEventType.BAZAAR_LISTING_CREATED`. Sub-v_10
+    #: peers silently drop the event and only see the wrapper post's
+    #: caption — the listing details (price, photos, mode, status)
+    #: never reach them. Best-effort: gating skips the send to older
+    #: peers so they never see broken-looking partial data; they just
+    #: see the post like today.
+    MIN_FOR_BAZAAR_LISTING = 10
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

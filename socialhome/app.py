@@ -199,6 +199,7 @@ from .services.url_update_outbound import UrlUpdateOutbound
 from .services.space_member_profile_federation_outbound import (
     SpaceMemberProfileFederationOutbound,
 )
+from .services.bazaar_outbound import BazaarOutbound
 from .services.gallery_federation_outbound import GalleryFederationOutbound
 from .services.sticky_federation_outbound import StickyFederationOutbound
 from .services.moment_federation_outbound import MomentFederationOutbound
@@ -506,6 +507,7 @@ def _wire_federation_stack(
     dm_contact_repo,
     space_poll_repo,
     gallery_repo,
+    bazaar_repo,
     space_crypto,
     reconnect_queue,
     idempotency_cache,
@@ -724,6 +726,7 @@ def _wire_federation_stack(
         poll_repo=space_poll_repo,
         gallery_repo=gallery_repo,
         zone_repo=space_zone_repo,
+        bazaar_repo=bazaar_repo,
     ).attach_to(federation_service)
     PersonalCalendarInboundHandlers(
         bus=bus,
@@ -755,11 +758,13 @@ def _wire_federation_stack(
         exporters=exporters,
         sig_suite=config.federation_sig_suite,
         # Catch-up media: after the metadata chunks stream the
-        # requester also gets bytes for every post + gallery item
-        # in the space via the shared SpaceMediaSyncService outbox.
+        # requester also gets bytes for every post + gallery item +
+        # bazaar listing in the space via the shared
+        # SpaceMediaSyncService outbox.
         media_sync=space_media_sync_service,
         space_post_repo=space_post_repo,
         gallery_repo=gallery_repo,
+        bazaar_repo=bazaar_repo,
     )
     space_sync_receiver = SpaceSyncReceiver(
         bus=bus,
@@ -939,6 +944,19 @@ def _wire_federation_stack(
         media_sync=space_media_sync_service,
     )
     gallery_federation_outbound.wire()
+
+    # Bazaar listing federation — the wrapper PostType.BAZAAR post
+    # federates via SpacePostOutbound with just the caption; this
+    # service ships the full BazaarListing payload + image bytes so
+    # remote members see price / mode / photos / status, not just the
+    # caption. See ``socialhome/services/bazaar_outbound.py``.
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=space_media_sync_service,
+        federation_repo=federation_repo,
+    )
 
     # DM history sync: reconcile missed messages when a peer reconnects.
     dm_history_provider = DmHistoryProvider(
@@ -1929,6 +1947,7 @@ def create_app(config: Config | None = None) -> web.Application:
             dm_contact_repo=dm_contact_repo,
             space_poll_repo=repos.space_poll,
             gallery_repo=repos.gallery,
+            bazaar_repo=bazaar_repo,
             space_crypto=space_crypto,
             reconnect_queue=reconnect_queue,
             idempotency_cache=idempotency_cache,

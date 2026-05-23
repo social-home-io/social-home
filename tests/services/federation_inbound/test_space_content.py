@@ -800,3 +800,137 @@ async def test_gallery_handlers_not_registered_without_repo(bus, repos):
     types = {t for t, _ in fed._event_registry.registered}
     assert FederationEventType.SPACE_GALLERY_ITEM_CREATED not in types
     assert FederationEventType.SPACE_GALLERY_ITEM_DELETED not in types
+
+
+# ─── Bazaar listings (#PR445) ─────────────────────────────────────────
+
+
+class _FakeBazaarRepo:
+    """Stub matching the slice of ``AbstractBazaarRepo`` the handler uses."""
+
+    def __init__(self) -> None:
+        self.saved: list = []
+        self.fail = False
+
+    async def save_listing(self, listing):
+        if self.fail:
+            raise RuntimeError("fk-violation simulated")
+        self.saved.append(listing)
+        return listing
+
+
+@pytest.fixture
+def bazaar_handlers(bus, repos):
+    bazaar = _FakeBazaarRepo()
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+        bazaar_repo=bazaar,
+    )
+    h.attach_to(_FakeFederationService())
+    return h, bazaar
+
+
+async def test_bazaar_listing_created_happy_path(bazaar_handlers):
+    handlers, bazaar = bazaar_handlers
+    await handlers._on_bazaar_listing_created(
+        _event(
+            FederationEventType.BAZAAR_LISTING_CREATED,
+            {
+                "post_id": "bzr-1",
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "fixed",
+                "title": "Vintage chair",
+                "description": "Nice.",
+                "image_urls": ["api/media/chair-1.webp"],
+                "end_time": "2026-06-01T00:00:00+00:00",
+                "currency": "USD",
+                "status": "active",
+                "price": 4500,
+                "created_at": "2026-05-23T10:00:00+00:00",
+            },
+        ),
+    )
+    assert len(bazaar.saved) == 1
+    listing = bazaar.saved[0]
+    assert listing.post_id == "bzr-1"
+    assert listing.title == "Vintage chair"
+    assert listing.mode.value == "fixed"
+    assert listing.status.value == "active"
+    assert listing.price == 4500
+    assert listing.image_urls == ("api/media/chair-1.webp",)
+
+
+async def test_bazaar_listing_created_missing_required_drops(bazaar_handlers):
+    """Missing post_id / seller / mode means the payload is unusable — log + drop."""
+    handlers, bazaar = bazaar_handlers
+    await handlers._on_bazaar_listing_created(
+        _event(
+            FederationEventType.BAZAAR_LISTING_CREATED,
+            {
+                # post_id missing
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "fixed",
+                "title": "X",
+            },
+        ),
+    )
+    assert bazaar.saved == []
+
+
+async def test_bazaar_listing_created_unknown_mode_drops(bazaar_handlers):
+    """Unknown mode/status from a forward-compatible peer → log + drop."""
+    handlers, bazaar = bazaar_handlers
+    await handlers._on_bazaar_listing_created(
+        _event(
+            FederationEventType.BAZAAR_LISTING_CREATED,
+            {
+                "post_id": "bzr-2",
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "future_mode_unknown",
+                "title": "T",
+            },
+        ),
+    )
+    assert bazaar.saved == []
+
+
+async def test_bazaar_listing_created_fk_violation_drops(bazaar_handlers):
+    """FK violation (post hasn't landed yet) → log + drop; catch-up
+    retries on the next §25.6 sync."""
+    handlers, bazaar = bazaar_handlers
+    bazaar.fail = True
+    await handlers._on_bazaar_listing_created(
+        _event(
+            FederationEventType.BAZAAR_LISTING_CREATED,
+            {
+                "post_id": "bzr-3",
+                "space_id": "sp-1",
+                "seller_user_id": "u-seller",
+                "mode": "fixed",
+                "title": "T",
+            },
+        ),
+    )
+    assert bazaar.saved == []
+
+
+async def test_bazaar_handlers_not_registered_without_repo(bus, repos):
+    """No bazaar_repo → BAZAAR_LISTING_CREATED not registered."""
+    h = SpaceContentInboundHandlers(
+        bus=bus,
+        page_repo=repos["page"],
+        sticky_repo=repos["sticky"],
+        task_repo=repos["task"],
+        calendar_repo=repos["calendar"],
+    )
+    fed = _FakeFederationService()
+    h.attach_to(fed)
+    types = {t for t, _ in fed._event_registry.registered}
+    assert FederationEventType.BAZAAR_LISTING_CREATED not in types

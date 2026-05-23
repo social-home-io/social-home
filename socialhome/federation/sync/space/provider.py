@@ -37,6 +37,7 @@ class SpaceSyncService:
         "_media_sync",
         "_space_post_repo",
         "_gallery_repo",
+        "_bazaar_repo",
     )
 
     def __init__(
@@ -48,18 +49,20 @@ class SpaceSyncService:
         media_sync=None,
         space_post_repo=None,
         gallery_repo=None,
+        bazaar_repo=None,
     ) -> None:
         self._builder = builder
         self._exporters = exporters
         self._sig_suite = sig_suite
         #: Optional — when wired, the provider enqueues bytes for
-        #: every post / gallery media URL after the metadata chunks
-        #: stream, so a catch-up sync ALSO ships the historical
+        #: every post / gallery / bazaar media URL after the metadata
+        #: chunks stream, so a catch-up sync ALSO ships the historical
         #: images (not just the rows). Without it the receiver gets
         #: post + gallery metadata but renders broken thumbnails.
         self._media_sync = media_sync
         self._space_post_repo = space_post_repo
         self._gallery_repo = gallery_repo
+        self._bazaar_repo = bazaar_repo
 
     async def stream_initial(self, session: "SyncSessionRecord") -> None:
         """Send every resource for ``session.space_id`` over the channel
@@ -196,6 +199,41 @@ class SpaceSyncService:
                     log.exception(
                         "sync-catchup-media: enqueue failed for gallery item=%s",
                         item.id,
+                    )
+        # Bazaar listings — each listing's photos live on
+        # ``BazaarListing.image_urls`` (NOT on the wrapper Post). Without
+        # this walk a remote member sees the wrapper ``PostType.BAZAAR``
+        # post via ``SPACE_POST_CREATED`` catch-up but the listing
+        # row stays empty and the photos render broken. Same dedup +
+        # correlation_id semantics as posts; ``listing.post_id`` is
+        # used as the correlation so the realtime + catch-up enqueues
+        # collide cleanly at the outbox PK.
+        if self._bazaar_repo is not None:
+            try:
+                listings = await self._bazaar_repo.list_in_space(
+                    space_id,
+                    limit=500,
+                )
+            except Exception:  # pragma: no cover — defensive
+                log.exception(
+                    "sync-catchup-media: list bazaar listings failed for space=%s",
+                    space_id,
+                )
+                listings = []
+            for listing in listings:
+                if not listing.image_urls:
+                    continue
+                try:
+                    await self._media_sync.enqueue_for_blob(
+                        space_id=space_id,
+                        correlation_id=listing.post_id,
+                        target_instance_ids=[target_instance_id],
+                        media_urls=list(listing.image_urls),
+                    )
+                except Exception:  # pragma: no cover — defensive
+                    log.exception(
+                        "sync-catchup-media: enqueue failed for bazaar listing=%s",
+                        listing.post_id,
                     )
 
     @staticmethod

@@ -1,0 +1,235 @@
+"""Unit tests for :class:`BazaarOutbound`.
+
+The wrapper ``PostType.BAZAAR`` post federates via :class:`SpacePostOutbound`
+with just the caption; this service ships the full listing payload + image
+bytes so remote members see what's actually for sale. These tests cover the
+bus subscription, payload shape, and media outbox enqueue.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from socialhome.domain.events import BazaarListingCreated
+from socialhome.domain.federation import FederationEventType
+from socialhome.domain.federation_capabilities import FederationCapability
+from socialhome.domain.post import BazaarListing, BazaarMode, BazaarStatus
+from socialhome.infrastructure.event_bus import EventBus
+from socialhome.services.bazaar_outbound import BazaarOutbound
+
+
+def _make_listing(**overrides) -> BazaarListing:
+    defaults = dict(
+        post_id="bzr-1",
+        space_id="sp-1",
+        seller_user_id="u-seller",
+        mode=BazaarMode.FIXED,
+        title="Vintage chair",
+        end_time="2026-06-01T00:00:00+00:00",
+        currency="USD",
+        status=BazaarStatus.ACTIVE,
+        created_at="2026-05-23T10:00:00+00:00",
+        description="A nice chair",
+        image_urls=("api/media/chair-1.webp", "api/media/chair-2.webp"),
+        price=4500,
+    )
+    defaults.update(overrides)
+    return BazaarListing(**defaults)
+
+
+@pytest.fixture
+def federation_service():
+    svc = MagicMock()
+    svc.broadcast_to_space_members = AsyncMock()
+    svc.peer_supports = AsyncMock(return_value=True)
+    svc._own_instance_id = "inst-self"
+    return svc
+
+
+@pytest.fixture
+def media_sync():
+    m = MagicMock()
+    m.enqueue_for_blob = AsyncMock()
+    return m
+
+
+@pytest.fixture
+def federation_repo():
+    r = MagicMock()
+    r.list_member_instance_ids = AsyncMock(
+        return_value=["inst-self", "inst-peer-a", "inst-peer-b"],
+    )
+    return r
+
+
+async def test_listing_created_broadcasts_full_payload(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """The bus event only has IDs — the outbound fetches the row and
+    ships the COMPLETE :class:`BazaarListing` payload. Sub-v_10 peers
+    are skipped via the ``min_proto_version`` gate."""
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    listing = _make_listing()
+    bazaar_repo.get_listing = AsyncMock(return_value=listing)
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarListingCreated(
+            listing_post_id="bzr-1",
+            space_id="sp-1",
+            seller_user_id="u-seller",
+            mode="fixed",
+            title="Vintage chair",
+            occurred_at=datetime.fromisoformat(
+                "2026-05-23T10:00:00+00:00",
+            ),
+        ),
+    )
+
+    # Broadcast called with the right event type + payload + version gate.
+    federation_service.broadcast_to_space_members.assert_awaited_once()
+    call = federation_service.broadcast_to_space_members.await_args
+    assert call.args[0] == "sp-1"
+    assert call.args[1] == FederationEventType.BAZAAR_LISTING_CREATED
+    payload = call.args[2]
+    assert payload["post_id"] == "bzr-1"
+    assert payload["title"] == "Vintage chair"
+    assert payload["mode"] == "fixed"
+    assert payload["status"] == "active"
+    assert payload["price"] == 4500
+    assert payload["image_urls"] == [
+        "api/media/chair-1.webp",
+        "api/media/chair-2.webp",
+    ]
+    # Sender gates on v_10 — sub-v_10 peers don't see partial data.
+    assert (
+        call.kwargs["min_proto_version"] == FederationCapability.MIN_FOR_BAZAAR_LISTING
+    )
+
+
+async def test_listing_created_enqueues_image_bytes(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """The metadata broadcast is followed by per-peer outbox enqueues so
+    the receiver actually has the photo bytes — not just URLs that
+    resolve to nothing on their host."""
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    listing = _make_listing()
+    bazaar_repo.get_listing = AsyncMock(return_value=listing)
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarListingCreated(
+            listing_post_id="bzr-1",
+            space_id="sp-1",
+            seller_user_id="u-seller",
+            mode="fixed",
+            title="Vintage chair",
+            occurred_at=datetime.fromisoformat(
+                "2026-05-23T10:00:00+00:00",
+            ),
+        ),
+    )
+
+    media_sync.enqueue_for_blob.assert_awaited_once()
+    kwargs = media_sync.enqueue_for_blob.await_args.kwargs
+    assert kwargs["space_id"] == "sp-1"
+    # correlation_id is listing.post_id — same as the wrapper post's id,
+    # so the outbox PK dedups correctly against any later catch-up.
+    assert kwargs["correlation_id"] == "bzr-1"
+    # Own instance filtered out, remote peers targeted.
+    assert set(kwargs["target_instance_ids"]) == {"inst-peer-a", "inst-peer-b"}
+    assert kwargs["media_urls"] == [
+        "api/media/chair-1.webp",
+        "api/media/chair-2.webp",
+    ]
+
+
+async def test_listing_created_no_images_skips_media_enqueue(
+    federation_service,
+    media_sync,
+    federation_repo,
+):
+    """A listing without photos still broadcasts the metadata but
+    skips the media outbox — no point enqueueing an empty URL list."""
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    bazaar_repo.get_listing = AsyncMock(return_value=_make_listing(image_urls=()))
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    await bus.publish(
+        BazaarListingCreated(
+            listing_post_id="bzr-1",
+            space_id="sp-1",
+            seller_user_id="u-seller",
+            mode="fixed",
+            title="No-photo listing",
+            occurred_at=datetime.fromisoformat(
+                "2026-05-23T10:00:00+00:00",
+            ),
+        ),
+    )
+    federation_service.broadcast_to_space_members.assert_awaited_once()
+    media_sync.enqueue_for_blob.assert_not_awaited()
+
+
+async def test_listing_vanished_before_broadcast_is_logged(
+    federation_service,
+    media_sync,
+    federation_repo,
+    caplog,
+):
+    """If the listing got deleted between the bus event firing and our
+    repo lookup, log + skip — don't broadcast a half-built row."""
+    import logging
+
+    bus = EventBus()
+    bazaar_repo = MagicMock()
+    bazaar_repo.get_listing = AsyncMock(return_value=None)
+    BazaarOutbound(
+        bus=bus,
+        federation_service=federation_service,
+        bazaar_repo=bazaar_repo,
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    with caplog.at_level(logging.WARNING):
+        await bus.publish(
+            BazaarListingCreated(
+                listing_post_id="bzr-gone",
+                space_id="sp-1",
+                seller_user_id="u-seller",
+                mode="fixed",
+                title="Gone",
+                occurred_at=datetime.fromisoformat(
+                    "2026-05-23T10:00:00+00:00",
+                ),
+            ),
+        )
+    assert any("vanished before broadcast" in r.getMessage() for r in caplog.records)
+    federation_service.broadcast_to_space_members.assert_not_awaited()
+    media_sync.enqueue_for_blob.assert_not_awaited()
