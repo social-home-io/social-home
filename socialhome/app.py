@@ -85,6 +85,7 @@ from .infrastructure.highlight_retention_scheduler import HighlightRetentionSche
 from .platform import build_platform_adapter
 from .platform.adapter import Capability
 from .rate_limiter import RateLimiter, build_rate_limit_middleware
+from .webrtc_ice import build_ice_servers, warn_if_no_turn
 from .repositories import (
     SqliteBazaarRepo,
     SqliteCalendarRepo,
@@ -372,25 +373,36 @@ async def _redeliver_envelope(
         return DeliveryOutcome.TRANSIENT
 
 
-def _default_ice_servers(config: Config) -> list[dict]:
+def _default_ice_servers(
+    config: Config,
+    *,
+    hmac_user_id: str | None = None,
+) -> list[dict]:
     """Build the WebRTC ICE-server list from :class:`Config`.
 
-    The STUN URL is always included; TURN credentials are added only
-    when the operator has configured them (TURN typically requires a
-    paid relay). Returned in the form expected by both
+    When ``hmac_user_id`` is provided AND ``webrtc_turn_secret`` is
+    set, the TURN credentials are derived via coturn's TURN-REST
+    HMAC scheme (time-limited, no static secret on the wire) — this
+    is the production-recommended setup. Falls back to the static
+    ``webrtc_turn_user`` / ``webrtc_turn_cred`` pair when those are
+    configured instead. Returned in the form expected by both
     ``RTCPeerConnection`` and ``aiolibdatachannel``.
+
+    For the federation transport (server-to-server WebRTC) pass the
+    local ``instance_id`` as ``hmac_user_id`` — that's a
+    reasonable per-instance identity that's already stable + known
+    to the operator. The SPA's ``/api/calls/ice-servers`` builds the
+    same list per-user via the same helper.
     """
-    servers: list[dict] = []
-    if config.webrtc_stun_url:
-        servers.append({"urls": [config.webrtc_stun_url]})
-    if config.webrtc_turn_url:
-        entry: dict = {"urls": [config.webrtc_turn_url]}
-        if config.webrtc_turn_user:
-            entry["username"] = config.webrtc_turn_user
-        if config.webrtc_turn_cred:
-            entry["credential"] = config.webrtc_turn_cred
-        servers.append(entry)
-    return servers
+    return build_ice_servers(
+        stun_url=config.webrtc_stun_url,
+        turn_url=config.webrtc_turn_url,
+        turn_user=config.webrtc_turn_user,
+        turn_cred=config.webrtc_turn_cred,
+        turn_secret=config.webrtc_turn_secret,
+        turn_ttl_seconds=config.webrtc_turn_ttl_seconds,
+        hmac_user_id=hmac_user_id,
+    )
 
 
 def _aiohttp_timeout(seconds: float):
@@ -1985,13 +1997,24 @@ def create_app(config: Config | None = None) -> web.Application:
                 payload=payload,
             )
 
+        # Pass the local ``instance_id`` as the HMAC-TURN user so a
+        # coturn-style REST credential (when ``webrtc_turn_secret`` is
+        # set) is bound to this instance. Without it the federation
+        # transport would silently drop down to static TURN creds —
+        # which a security-conscious operator running coturn with
+        # ``--use-auth-secret`` would refuse to accept.
+        fed_ice_servers = _default_ice_servers(
+            config,
+            hmac_user_id=real_instance_id,
+        )
+        warn_if_no_turn(fed_ice_servers)
         fed_transport = FederationTransport(
             own_instance_id=real_instance_id,
             https_inbox=HttpsInboxTransport(
                 client_factory=federation_service._get_http_client,
             ),
             signaling_send=_signaling_send,
-            ice_servers=_default_ice_servers(config),
+            ice_servers=fed_ice_servers,
             inbound_handler=federation_service.handle_inbound_rtc,
             bus=bus,
         )
