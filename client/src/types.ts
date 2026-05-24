@@ -551,6 +551,15 @@ export interface RemoteInvite {
   created_at: string
 }
 
+export interface LocalInvite {
+  invitation_id: string
+  space_id: string
+  /** Inviter's local ``user_id`` (a same-household admin). */
+  invited_by: string | null
+  expires_at: string | null
+  created_at: string
+}
+
 export interface GfsConnection {
   id: string
   gfs_instance_id: string

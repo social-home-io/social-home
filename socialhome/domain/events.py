@@ -1148,6 +1148,22 @@ class RemoteSpaceInviteReceived(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class LocalSpaceInviteCreated(DomainEvent):
+    """An admin invited a same-household user to a space — they have
+    to accept before they're seated. Pascal asked for parity with the
+    cross-household flow ("they should receive a join request like
+    all others"); this is the bus signal :class:`RealtimeService`
+    listens on to push a ``space.local_invite_received`` WS frame to
+    the invitee's session so the inbox banner appears immediately."""
+
+    space_id: str
+    invitation_id: str
+    invited_user_id: str
+    invited_by: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class RemoteSpaceJoinRequestReceived(DomainEvent):
     space_id: str
     requester_user_id: str

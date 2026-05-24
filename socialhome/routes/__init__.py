@@ -227,6 +227,8 @@ from .spaces import (
     SpaceCoverView,
     SpaceFeedView,
     SpaceSubscribeView,
+    LocalInviteCollectionView,
+    LocalInviteDecisionView,
     RemoteInviteCollectionView,
     RemoteInviteDecisionView,
     SpaceInviteTokenView,
@@ -489,6 +491,11 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/remote_invites/{token}/{decision}",
         RemoteInviteDecisionView,
+    )
+    app.router.add_view("/api/local_invites", LocalInviteCollectionView)
+    app.router.add_view(
+        "/api/local_invites/{id}/{decision}",
+        LocalInviteDecisionView,
     )
     app.router.add_view("/api/spaces/{id}/feed", SpaceFeedView)
     app.router.add_view("/api/spaces/{id}/cover", SpaceCoverView)

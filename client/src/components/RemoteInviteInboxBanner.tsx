@@ -30,9 +30,14 @@
  */
 import { useEffect, useState } from 'preact/hooks'
 import { api } from '@/api'
+import { ws } from '@/ws'
 import { Button } from './Button'
 import { showToast } from './Toast'
-import type { RemoteInvite } from '@/types'
+import {
+  householdDisplayName,
+  loadHouseholdUsers,
+} from '@/store/householdUsers'
+import type { LocalInvite, RemoteInvite } from '@/types'
 
 interface HouseholdRow {
   instance_id: string
@@ -52,6 +57,7 @@ const CONFIRM_RESET_MS = 4000
 
 export function RemoteInviteInboxBanner() {
   const [invites, setInvites] = useState<RemoteInvite[]>([])
+  const [localInvites, setLocalInvites] = useState<LocalInvite[]>([])
   const [households, setHouseholds] = useState<Map<string, HouseholdRow>>(
     () => new Map(),
   )
@@ -59,10 +65,11 @@ export function RemoteInviteInboxBanner() {
   const [confirming, setConfirming] = useState<ConfirmState>({})
 
   const load = async () => {
-    // Run the two lookups in parallel — they share no data and the
-    // banner needs both before it can render a meaningful row.
-    const [invitesRes, friendsRes] = await Promise.allSettled([
+    // Run the lookups in parallel — they share no data and the
+    // banner needs them all before it can render a meaningful row.
+    const [invitesRes, localRes, friendsRes] = await Promise.allSettled([
       api.get('/api/remote_invites'),
+      api.get('/api/local_invites'),
       api.get('/api/friends'),
     ])
 
@@ -70,6 +77,11 @@ export function RemoteInviteInboxBanner() {
       setInvites(invitesRes.value as RemoteInvite[])
     } else {
       setInvites([])
+    }
+    if (localRes.status === 'fulfilled') {
+      setLocalInvites(localRes.value as LocalInvite[])
+    } else {
+      setLocalInvites([])
     }
     if (friendsRes.status === 'fulfilled') {
       const hs = (friendsRes.value as FriendsResponse).households || []
@@ -79,13 +91,21 @@ export function RemoteInviteInboxBanner() {
       }
       setHouseholds(map)
     }
+    // Local invites attribute by ``invited_by`` user_id — the helper
+    // resolves it to a display name via the cached household users.
+    void loadHouseholdUsers()
   }
 
   useEffect(() => {
     void load()
+    // ``space.local_invite_received`` (Pascal's local-invite flow)
+    // fires the moment the admin clicks Invite, so we refresh
+    // without waiting on the next navigation.
+    const off = ws.on('space.local_invite_received', () => void load())
+    return () => off()
   }, [])
 
-  if (invites.length === 0) return null
+  if (invites.length === 0 && localInvites.length === 0) return null
 
   const householdLabel = (instance_id: string): string => {
     const row = households.get(instance_id)
@@ -125,6 +145,39 @@ export function RemoteInviteInboxBanner() {
     }
   }
 
+  const decideLocal = async (
+    invite: LocalInvite,
+    decision: 'accept' | 'decline',
+  ) => {
+    setInFlight((prev) => ({ ...prev, [invite.invitation_id]: decision }))
+    try {
+      await api.post(
+        `/api/local_invites/${invite.invitation_id}/${decision}`, {},
+      )
+      showToast(
+        decision === 'accept' ? 'Invite accepted' : 'Invite declined',
+        decision === 'accept' ? 'success' : 'info',
+      )
+      await load()
+    } catch (exc) {
+      showToast((exc as Error).message, 'error')
+    } finally {
+      setInFlight((prev) => ({ ...prev, [invite.invitation_id]: null }))
+      setConfirming((prev) => ({ ...prev, [invite.invitation_id]: false }))
+    }
+  }
+
+  const handleDeclineLocal = (invite: LocalInvite) => {
+    if (confirming[invite.invitation_id]) {
+      void decideLocal(invite, 'decline')
+      return
+    }
+    setConfirming((prev) => ({ ...prev, [invite.invitation_id]: true }))
+    setTimeout(() => {
+      setConfirming((prev) => ({ ...prev, [invite.invitation_id]: false }))
+    }, CONFIRM_RESET_MS)
+  }
+
   const handleDecline = (invite: RemoteInvite) => {
     if (confirming[invite.invite_token]) {
       void decide(invite, 'decline')
@@ -141,7 +194,54 @@ export function RemoteInviteInboxBanner() {
 
   return (
     <aside class="sh-remote-invite-banner">
-      <h2>📬 Pending invites from other households</h2>
+      {localInvites.length > 0 && (
+        <>
+          <h2>📬 Pending invites from your household</h2>
+          {localInvites.map((inv) => {
+            const busy = inFlight[inv.invitation_id] != null
+            const declineConfirming = confirming[inv.invitation_id] === true
+            const inviter = inv.invited_by
+              ? householdDisplayName(inv.invited_by)
+              : 'an admin'
+            return (
+              <div
+                key={inv.invitation_id}
+                class="sh-remote-invite-banner__row"
+              >
+                <div>
+                  <strong>{inv.space_id}</strong>
+                  <span class="sh-muted">
+                    {' '}from <strong>{inviter}</strong>
+                  </span>
+                </div>
+                <div class="sh-remote-invite-banner__actions">
+                  <Button
+                    variant="secondary"
+                    onClick={() => handleDeclineLocal(inv)}
+                    disabled={busy}
+                    loading={inFlight[inv.invitation_id] === 'decline'}
+                    data-testid="local-invite-decline"
+                  >
+                    {declineConfirming ? 'Confirm decline' : 'Decline'}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => void decideLocal(inv, 'accept')}
+                    disabled={busy}
+                    loading={inFlight[inv.invitation_id] === 'accept'}
+                    data-testid="local-invite-accept"
+                  >
+                    Accept
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
+      {invites.length > 0 && (
+        <h2>📬 Pending invites from other households</h2>
+      )}
       {invites.map((inv) => {
         const busy = inFlight[inv.invite_token] != null
         const declineConfirming = confirming[inv.invite_token] === true
