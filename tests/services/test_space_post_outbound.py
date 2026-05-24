@@ -84,6 +84,35 @@ async def test_inbound_replay_does_not_loop_back_via_outbound():
     federation.broadcast_to_space_members.assert_not_awaited()
 
 
+async def test_calendar_event_post_not_re_federated_via_space_bridge():
+    """``CalendarFeedBridge`` mints one PostType.EVENT row per
+    federated calendar event on every household — the calendar event
+    itself federates via ``SPACE_CALENDAR_EVENT_CREATED``. If the
+    outbound bridge here ALSO federated those bridge-published
+    ``SpacePostCreated`` events, every peer would receive two posts
+    for one event: the bridge's deterministic mint, plus the
+    peer-side inbound save (which lacks ``linked_event_id`` because
+    the wire payload doesn't carry it). The bridge's update / delete
+    paths would then re-federate the peer's row back to the
+    originator, multiplying further. Gate is on
+    ``post.linked_event_id is not None``."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    bridge_post = Post(
+        id="p-from-bridge",
+        author="uid-pascal",
+        type=PostType.EVENT,
+        content="Summary",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+        linked_event_id="cal-event-1",
+    )
+    await bus.publish(SpacePostCreated(post=bridge_post, space_id="sp-1"))
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
 async def test_household_post_does_not_federate_via_space_bridge():
     """SpacePostCreated CAN fire with empty space_id for some legacy
     paths; the bridge must skip those to avoid mis-routing a
@@ -193,6 +222,29 @@ async def test_post_edited_inbound_replay_does_not_loop():
     await bus.publish(
         PostEdited(post=post, space_id="sp-1", origin_instance_id="peer-x"),
     )
+    federation.broadcast_to_space_members.assert_not_awaited()
+
+
+async def test_post_edited_calendar_post_not_re_federated():
+    """``CalendarFeedBridge._on_updated`` rewrites the event post's
+    body when ``CalendarEventUpdated`` fires on every peer — that
+    event arrives via federated ``SPACE_CALENDAR_EVENT_UPDATED``,
+    so a parallel ``SPACE_POST_UPDATED`` would race the bridge. Gate
+    on ``linked_event_id`` here too."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    SpacePostOutbound(bus=bus, federation_service=federation)
+
+    bridge_post = Post(
+        id="p-bridge",
+        author="uid-pascal",
+        type=PostType.EVENT,
+        content="New summary",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+        linked_event_id="cal-event-2",
+    )
+    await bus.publish(PostEdited(post=bridge_post, space_id="sp-1"))
     federation.broadcast_to_space_members.assert_not_awaited()
 
 

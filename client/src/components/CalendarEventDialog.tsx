@@ -160,10 +160,18 @@ const eventTz = signal<string>(detectBrowserTz())
 /** Open the dialog in edit mode — pre-populate every field from
  *  ``ev`` and PATCH instead of POST on submit. The same "For:" picker
  *  appears so the user can move the event to another member's
- *  calendar at edit time. */
+ *  calendar at edit time.
+ *
+ *  ``inSpaceId`` selects the space-event submit path: when set, the
+ *  dialog hides household-only chrome (invitees, "For:" picker) and
+ *  the submit handler PATCHes
+ *  ``/api/spaces/{id}/calendar/events/{eid}`` instead of the
+ *  household route. Same field set on both — host wall clock,
+ *  cover, location, capacity all round-trip identically. */
 export function openEditEventDialog(
   ev: EditableEvent,
   available: DialogCalendarSummary[] = [],
+  inSpaceId: string | null = null,
 ) {
   reset()
   editingEventId.value = ev.id
@@ -172,7 +180,7 @@ export function openEditEventDialog(
   // the multi-create path on submit.
   targetCalendarIds.value = new Set()
   householdCalendars.value = available
-  spaceId.value = null
+  spaceId.value = inSpaceId
   summary.value = ev.summary
   description.value = ev.description ?? ''
   location.value = ev.location ?? ''
@@ -321,6 +329,18 @@ export function CalendarEventDialog({ onCreated }: {
       if (editingEventId.value && !isSpace) {
         await api.patch(
           `/api/calendars/events/${editingEventId.value}`,
+          body,
+        )
+        showToast('Event updated', 'success')
+      } else if (isSpace && editingEventId.value) {
+        // Space-event edit: PATCH the space-scoped route so the
+        // ``SpaceCalendarService.update_event`` path runs (membership
+        // gate, ``feat_calendar`` check, ``SPACE_CALENDAR_EVENT_UPDATED``
+        // federation). Without this branch the dialog used to POST a
+        // duplicate event whenever the user tapped Save on a space
+        // event — visible as Pascal's "no option to edit" report.
+        await api.patch(
+          `/api/spaces/${spaceId.value}/calendar/events/${editingEventId.value}`,
           body,
         )
         showToast('Event updated', 'success')

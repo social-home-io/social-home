@@ -27,6 +27,7 @@ import { Button } from '@/components/Button'
 import { CapacityStrip } from '@/components/CapacityStrip'
 import { EventOverflowMenu } from '@/components/EventOverflowMenu'
 import { LocationLink } from '@/components/LocationLink'
+import { openEditEventDialog } from '@/components/CalendarEventDialog'
 import { showToast } from '@/components/Toast'
 import { t } from '@/i18n/i18n'
 import { currentUser } from '@/store/auth'
@@ -170,7 +171,24 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
             mine={myStatus}
           />
         ))}
-        <EventOverflowMenu eventId={event.id} />
+        <EventOverflowMenu eventId={event.id}>
+          {isCreator && (
+            <button
+              type="button"
+              role="menuitem"
+              class="sh-post-menu-item"
+              onClick={() => {
+                // ``calendar_id`` on a space event is the space id (see
+                // ``SpaceCalendarService.create_event``), so pass it as
+                // the ``inSpaceId`` argument so the dialog PATCHes the
+                // space-scoped route instead of the household route.
+                openEditEventDialog(event, [], event.calendar_id)
+              }}
+            >
+              {t('event.edit')}
+            </button>
+          )}
+        </EventOverflowMenu>
       </div>
 
       {isCapped && isCreator && (

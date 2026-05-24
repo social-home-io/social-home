@@ -106,6 +106,18 @@ class SpacePostOutbound:
         # peer → us → peer → us → … Skip the publish.
         if event.origin_instance_id is not None:
             return
+        # Calendar-event posts are derived locally on every household by
+        # :class:`CalendarFeedBridge` from the federated
+        # ``SPACE_CALENDAR_EVENT_CREATED`` envelope. Federating the
+        # bridge's ``SpacePostCreated`` would deliver a *second* post id
+        # to peers (their bridge already minted one with the
+        # deterministic ``linked_event_id`` and the peer's outbound
+        # then re-federates that one back to us), so the originator
+        # ends up with two feed cards for one calendar event. Skip the
+        # broadcast — the calendar event is the source of truth on the
+        # wire and the bridge is the source of truth in each peer's DB.
+        if post.linked_event_id is not None:
+            return
         payload: dict = {
             "id": post.id,
             "space_id": event.space_id,
@@ -190,6 +202,14 @@ class SpacePostOutbound:
         if not event.space_id:
             return
         if event.origin_instance_id is not None:
+            return
+        # Same source-of-truth rule as ``_on_space_post_created``:
+        # calendar-derived posts are edited locally on every peer by
+        # the :class:`CalendarFeedBridge` consuming
+        # ``CalendarEventUpdated``; the bridge bumps the post body off
+        # the federated calendar event, so a parallel
+        # ``SPACE_POST_UPDATED`` would race / loop.
+        if event.post.linked_event_id is not None:
             return
         post = event.post
         payload = {
