@@ -1481,6 +1481,64 @@ class SpacePresenceView(BaseView):
         )
 
 
+class SpacePostItemView(BaseView):
+    """PATCH/DELETE /api/spaces/{id}/posts/{post_id} — edit or delete a
+    single space post.
+
+    The household-feed twin lives at ``/api/feed/posts/{id}`` and
+    routes through ``feed_service``; this view delegates to
+    ``space_service`` so the soft-delete + ``SpacePostDeleted``
+    federation broadcast fire (the household feed_service can't reach
+    the ``space_posts`` table).
+
+    Without this view, the SPA's ``api.delete('/api/spaces/.../posts/...')``
+    hit aiohttp's routing-layer 404 (no handler invoked, no server log),
+    and ``handleDelete``'s async-fn rejection was silently swallowed.
+    """
+
+    async def patch(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        post_id = self.match("post_id")
+        body = await self.body()
+        new_content = body.get("content")
+        if new_content is None:
+            return error_response(
+                422,
+                "VALIDATION_ERROR",
+                "content is required.",
+            )
+        try:
+            post = await svc.edit_post(
+                post_id,
+                editor_user_id=ctx.user_id,
+                new_content=new_content,
+            )
+        except KeyError:
+            return error_response(404, "NOT_FOUND", "Post not found.")
+        except PermissionError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
+        return web.json_response(
+            {
+                "id": post.id,
+                "content": post.content,
+                "edited_at": (post.edited_at.isoformat() if post.edited_at else None),
+            },
+        )
+
+    async def delete(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        post_id = self.match("post_id")
+        try:
+            await svc.delete_post(post_id, actor_user_id=ctx.user_id)
+        except KeyError:
+            return error_response(404, "NOT_FOUND", "Post not found.")
+        except PermissionError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
+        return web.Response(status=204)
+
+
 class SpacePostCollectionView(BaseView):
     """POST /api/spaces/{id}/posts — create a post in a space."""
 
