@@ -808,3 +808,111 @@ async def test_mode_changed_skipped_when_feature_off(env):
 
     assert env.ws.calls == []
     assert env.federation.calls == []
+
+
+# ─── Opt-in refire (#PR141) ───────────────────────────────────────────
+
+
+async def test_opt_in_refires_current_presence_for_space(env):
+    """A fresh ``SpaceMemberLocationOptedIn`` bus event refires the
+    member's current presence for that one space so the pin appears
+    immediately on toggle — no need to wait for the next HA push."""
+    from socialhome.domain.events import SpaceMemberLocationOptedIn
+    from socialhome.domain.space import SpaceMember
+
+    sp = await env.make_space("sp_optin")
+    # Member is already opted in at the DB level — the toggle route
+    # writes the column then publishes the bus event in that order.
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-05-24T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    # Seed alice's local presence — the row HA has been pushing all
+    # along while sharing was off.
+    presence_repo = SqlitePresenceRepo(env.db)
+    await presence_repo.upsert_local(
+        username="alice",
+        entity_id="alice",
+        state="home",
+        zone_name="Office",  # household-only, MUST NOT leak to space
+        latitude=47.3769,
+        longitude=8.5417,
+        gps_accuracy_m=10.0,
+        updated_at="2026-05-24T12:00:00+00:00",
+    )
+
+    await env.bus.publish(
+        SpaceMemberLocationOptedIn(space_id=sp.id, user_id=env.alice_uid),
+    )
+
+    # Local WS + federation broadcast both fired immediately.
+    assert len(env.ws.calls) == 1
+    user_ids, frame = env.ws.calls[0]
+    assert env.alice_uid in user_ids
+    assert frame["data"]["lat"] == 47.3769
+    assert "zone_name" not in frame["data"]
+
+    assert len(env.federation.calls) == 1
+
+
+async def test_opt_in_no_presence_yet_is_silent(env):
+    """Member toggled sharing on but HA hasn't pushed any presence
+    yet — silent skip (no payload to send), no error."""
+    from socialhome.domain.events import SpaceMemberLocationOptedIn
+    from socialhome.domain.space import SpaceMember
+
+    sp = await env.make_space("sp_optin")
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-05-24T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    # No presence row.
+    await env.bus.publish(
+        SpaceMemberLocationOptedIn(space_id=sp.id, user_id=env.alice_uid),
+    )
+    assert env.ws.calls == []
+    assert env.federation.calls == []
+
+
+async def test_opt_in_skipped_when_feature_location_off(env):
+    """Even if the member opted in, the admin gate (feature_location)
+    being off means the space refuses to surface pins. Silent skip."""
+    from socialhome.domain.events import SpaceMemberLocationOptedIn
+    from socialhome.domain.space import SpaceMember
+
+    sp = await env.make_space("sp_optin_off", feature_location=False)
+    await env.space_repo.save_member(
+        SpaceMember(
+            space_id=sp.id,
+            user_id=env.alice_uid,
+            role="member",
+            joined_at="2026-05-24T00:00:00+00:00",
+            location_share_enabled=True,
+        ),
+    )
+    presence_repo = SqlitePresenceRepo(env.db)
+    await presence_repo.upsert_local(
+        username="alice",
+        entity_id="alice",
+        state="home",
+        zone_name=None,
+        latitude=47.3769,
+        longitude=8.5417,
+        gps_accuracy_m=10.0,
+        updated_at="2026-05-24T12:00:00+00:00",
+    )
+    await env.bus.publish(
+        SpaceMemberLocationOptedIn(space_id=sp.id, user_id=env.alice_uid),
+    )
+    assert env.ws.calls == []
+    assert env.federation.calls == []

@@ -13,6 +13,7 @@ import math
 
 from ..app_keys import (
     alias_resolver_key,
+    event_bus_key,
     federation_repo_key,
     media_signer_key,
     notification_repo_key,
@@ -29,6 +30,7 @@ from ..app_keys import (
     space_zone_repo_key,
     user_repo_key,
 )
+from ..domain.events import SpaceMemberLocationOptedIn
 from ..domain.post import LocationData
 from ..domain.space import (
     SpaceFeatureAccess,
@@ -631,6 +633,18 @@ class SpaceMemberLocationSharingView(BaseView):
                 404,
                 "NOT_FOUND",
                 "You are not a member of this space.",
+            )
+        # On opt-in, fire a bus event so SpaceLocationOutbound can
+        # refire the member's current presence for this one space —
+        # the user sees their pin appear immediately instead of
+        # waiting for the next HA push (could be minutes).
+        if body["enabled"]:
+            bus = self.svc(event_bus_key)
+            await bus.publish(
+                SpaceMemberLocationOptedIn(
+                    space_id=space_id,
+                    user_id=ctx.user_id,
+                ),
             )
         return web.json_response(
             {"location_share_enabled": body["enabled"]},
@@ -1405,6 +1419,8 @@ class SpacePresenceView(BaseView):
                 {
                     "feature_enabled": False,
                     "entries": [],
+                    "total_members": 0,
+                    "sharing_count": 0,
                 }
             )
         members = await repo.list_members(space_id)
@@ -1412,6 +1428,29 @@ class SpacePresenceView(BaseView):
         presence_svc = self.svc(presence_service_key)
         entries = await presence_svc.list_presence_for_members(opted_in)
         mode = space.features.location_mode
+        # SPA header reads "X sharing / Y members" — Y is the full
+        # space roster including remote members from other households
+        # (federated via #426 member-list mirror + chunked sync), not
+        # just the locals or the active-GPS subset.
+        remote_member_repo = self.request.app.get(space_remote_member_repo_key)
+        remote_member_count = 0
+        if remote_member_repo is not None:
+            remote_member_count = len(
+                await remote_member_repo.list_for_space(space_id),
+            )
+        total_members = len(members) + remote_member_count
+        # X is the number of members who have OPTED IN to sharing. For
+        # locals that's ``location_share_enabled=1`` on their row. For
+        # remotes we count anyone with a current pin row (the existence
+        # of the row is the cross-household proxy for "opted in to share
+        # with this space" — the row only lands when their outbound
+        # actually fired with sharing on).
+        remote_loc_repo = self.request.app.get(space_remote_location_repo_key)
+        remote_sharing = 0
+        if remote_loc_repo is not None:
+            remote_locs = await remote_loc_repo.list_for_space(space_id)
+            remote_sharing = sum(1 for loc in remote_locs if loc.mode == mode)
+        sharing_count = len(opted_in) + remote_sharing
 
         if mode == "zone_only":
             # Match each opted-in member's GPS to a space zone server-side
@@ -1454,6 +1493,8 @@ class SpacePresenceView(BaseView):
                     "feature_enabled": True,
                     "location_mode": "zone_only",
                     "entries": response_entries,
+                    "total_members": total_members,
+                    "sharing_count": sharing_count,
                 },
             )
 
@@ -1477,6 +1518,8 @@ class SpacePresenceView(BaseView):
                 "feature_enabled": True,
                 "location_mode": "gps",
                 "entries": local_entries + remote_entries,
+                "total_members": total_members,
+                "sharing_count": sharing_count,
             }
         )
 

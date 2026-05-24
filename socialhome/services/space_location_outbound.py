@@ -31,7 +31,11 @@ import math
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from ..domain.events import PresenceUpdated, SpaceLocationModeChanged
+from ..domain.events import (
+    PresenceUpdated,
+    SpaceLocationModeChanged,
+    SpaceMemberLocationOptedIn,
+)
 from ..domain.federation import FederationEventType
 from ..domain.space import Space, SpaceZone
 from ..infrastructure.event_bus import EventBus
@@ -91,6 +95,10 @@ class SpaceLocationOutbound:
             SpaceLocationModeChanged,
             self._on_mode_changed,
         )
+        self._bus.subscribe(
+            SpaceMemberLocationOptedIn,
+            self._on_member_opted_in,
+        )
 
     async def _on_presence_updated(self, event: PresenceUpdated) -> None:
         # Skip when the accuracy gate dropped coordinates — there is
@@ -124,6 +132,52 @@ class SpaceLocationOutbound:
                 continue
             await self._broadcast_local(space.id, payload)
             await self._fan_out_federation(space.id, payload)
+
+    async def _on_member_opted_in(
+        self,
+        event: SpaceMemberLocationOptedIn,
+    ) -> None:
+        """Refire the member's current presence for this one space on
+        opt-in, so a fresh "Share my location" tap produces an
+        immediate pin instead of waiting for the next HA push (could
+        be minutes).
+
+        Bounded to one (space, user) pair — no cross-space fan-out.
+        Silent skip if the space lacks ``feature_location``, the
+        member's local presence row has no GPS yet, or zone_only +
+        outside every zone.
+        """
+        space = await self._spaces.get(event.space_id)
+        if space is None or not space.features.location:
+            return
+        try:
+            presences = await self._presence.list_active()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.debug(
+                "space-location-outbound: list_active failed: %s",
+                exc,
+            )
+            return
+        match = next(
+            (p for p in presences if p.user_id == event.user_id),
+            None,
+        )
+        if match is None or match.latitude is None or match.longitude is None:
+            # No active GPS to share yet — the next ``PresenceUpdated``
+            # via HA will be the one that produces the pin.
+            return
+        payload = await self._payload_for_space(
+            space=space,
+            user_id=event.user_id,
+            latitude=match.latitude,
+            longitude=match.longitude,
+            accuracy_m=match.gps_accuracy_m,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        if payload is None:
+            return
+        await self._broadcast_local(space.id, payload)
+        await self._fan_out_federation(space.id, payload)
 
     async def _on_mode_changed(self, event: SpaceLocationModeChanged) -> None:
         """Refire latest presence for every opted-in member of *this

@@ -201,6 +201,21 @@ class SpaceConfigChanged(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SpaceMemberLocationOptedIn(DomainEvent):
+    """A member just enabled location_share_enabled for a space.
+
+    :class:`SpaceLocationOutbound` subscribes and re-fires the
+    member's current household presence for this one space so a
+    fresh opt-in produces an immediate pin instead of waiting for
+    the next HA push (could be minutes).
+    """
+
+    space_id: str
+    user_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class SpaceLocationModeChanged(DomainEvent):
     """Admin flipped a space's ``features.location_mode`` (§23.8.6).
 

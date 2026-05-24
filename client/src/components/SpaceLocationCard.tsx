@@ -76,6 +76,14 @@ interface SpacePresenceResponse {
    *  off; otherwise either ``"gps"`` (default) or ``"zone_only"``. */
   location_mode?: 'gps' | 'zone_only'
   entries: SpacePresenceEntry[]
+  /** Full space roster size — locals from ``space_members`` plus
+   *  remotes from ``space_remote_members``. Drives the
+   *  "X / Y sharing" denominator. Optional on older backends. */
+  total_members?: number
+  /** Count of members who opted in to share with this space (locals
+   *  via ``location_share_enabled=1`` + remotes via the existence of
+   *  a current pin row). Optional on older backends. */
+  sharing_count?: number
 }
 
 interface SpaceZonesResponse {
@@ -255,10 +263,18 @@ export function SpaceLocationCard({
           state: p.state,
         }))
 
-  const sharing = isZoneOnly
-    ? data.entries.filter((p) => p.zone_id != null).length
-    : markers.length
-  const total = data.entries.length
+  // "X sharing / Y members" — Y is the full space roster (locals +
+  // remote members from other households), not just the active-GPS
+  // subset. Pre-server-side-count fallback: if the API didn't ship
+  // total_members / sharing_count (older backend), derive from
+  // entries — keeps mixed-version deployments sane during rollout.
+  const sharing = data.sharing_count
+    ?? (
+      isZoneOnly
+        ? data.entries.filter((p) => p.zone_id != null).length
+        : markers.length
+    )
+  const total = data.total_members ?? data.entries.length
 
   return (
     <div class="sh-space-location">
