@@ -1040,6 +1040,10 @@ class FederationService:
             self._handle_space_sync_request_more,
         )
         self._event_registry.register(
+            FederationEventType.SPACE_SYNC_CHUNK,
+            self._handle_space_sync_chunk,
+        )
+        self._event_registry.register(
             FederationEventType.SPACE_SYNC_COMPLETE,
             self._handle_space_sync_complete,
         )
@@ -1285,6 +1289,30 @@ class FederationService:
             )
             return
 
+        if decision.accepted and not bool(payload.get("prefer_direct")):
+            # Relay-mode sync (Part C). ``prefer_direct=False`` arrives
+            # either because the requester hit a 15 s ICE timeout and
+            # called ``trigger_relay_sync``, or because they know
+            # WebRTC won't work for them (carrier-grade NAT, no STUN
+            # reachable, …). Stream chunks straight over signed
+            # ``SPACE_SYNC_CHUNK`` federation events — the provider
+            # doesn't bother with an SDP offer / answer dance.
+            record = self._sync_manager.get_session(sync_id)
+            if record is not None:
+                record.transport_mode = "https"
+                if record.rtc is not None:
+                    # No RTC needed for HTTPS-mode delivery; tear it
+                    # down so the PeerConnection doesn't sit around
+                    # for the 15 s ICE timeout that would never fire.
+                    record.rtc.close()
+                    record.rtc = None
+                if self._space_sync_service is not None:
+                    asyncio.create_task(
+                        self._space_sync_service.stream_initial(record),
+                        name=f"space-sync-https-initial-{sync_id}",
+                    )
+            return
+
         if decision.accepted and bool(payload.get("prefer_direct")):
             # Build SDP offer, send SPACE_SYNC_OFFER back over relay.
             record = self._sync_manager.get_session(sync_id)
@@ -1320,7 +1348,17 @@ class FederationService:
                 )
 
     async def _handle_space_sync_offer(self, event) -> None:
-        """Requester receives SPACE_SYNC_OFFER — generate + send answer."""
+        """Requester receives SPACE_SYNC_OFFER — generate + send answer.
+
+        After dispatching the answer this also spawns the DataChannel
+        readiness watcher (Part A) that emits
+        ``SPACE_SYNC_DIRECT_READY`` once the channel opens (so the
+        provider can begin streaming) or ``SPACE_SYNC_DIRECT_FAILED``
+        on a 15 s ICE timeout (so the existing relay-fallback hook
+        re-issues the BEGIN with ``prefer_direct=False``). Before this
+        fix the channel-open watcher set a local ``_ready`` event that
+        nothing waited on — the happy path produced no useful state.
+        """
         if self._sync_manager is None:
             return
         payload = event.payload
@@ -1342,6 +1380,107 @@ class FederationService:
             payload={"sync_id": sync_id, "sdp_answer": sdp_answer},
             space_id=space_id,
         )
+        record = self._sync_manager.get_session(sync_id)
+        if record is not None and record.rtc is not None:
+            record.rtc_watcher = asyncio.create_task(
+                self._watch_requester_rtc(record, event.from_instance),
+                name=f"space-sync-watch-{sync_id}",
+            )
+
+    async def _watch_requester_rtc(
+        self,
+        record,
+        provider_instance_id: str,
+    ) -> None:
+        """Requester-side: wait for the DataChannel to open, emit
+        DIRECT_READY/FAILED, and drain incoming chunks into the
+        receiver.
+
+        Owned by :meth:`_handle_space_sync_offer`. Cancelled when the
+        session is closed.
+        """
+        rtc_session = record.rtc
+        if rtc_session is None:
+            return
+        try:
+            ready = await rtc_session.wait_ready()
+        except Exception:
+            log.exception(
+                "sync %s: wait_ready raised",
+                record.sync_id,
+            )
+            ready = False
+        if not ready:
+            log.info(
+                "sync %s: DataChannel not ready in 15 s — sending DIRECT_FAILED",
+                record.sync_id,
+            )
+            try:
+                await self.send_event(
+                    to_instance_id=provider_instance_id,
+                    event_type=FederationEventType.SPACE_SYNC_DIRECT_FAILED,
+                    payload={
+                        "sync_id": record.sync_id,
+                        "reason": "ice_timeout",
+                    },
+                    space_id=record.space_id,
+                )
+            except Exception:
+                log.exception(
+                    "sync %s: failed to send DIRECT_FAILED",
+                    record.sync_id,
+                )
+            # Locally drive the relay retry — the requester owns the
+            # BEGIN dispatch direction. Provider only gates the retry
+            # on its v_13 capability (older providers can't accept
+            # ``prefer_direct=False``); the manager-level guard
+            # (Tier 3 abort) still applies inside
+            # ``trigger_relay_sync``.
+            if self._sync_manager is None:
+                return
+            await self._maybe_trigger_relay_retry(
+                record.sync_id,
+                provider_instance_id,
+            )
+            return
+        # Channel open — tell the provider and start consuming chunks.
+        try:
+            await self.send_event(
+                to_instance_id=provider_instance_id,
+                event_type=FederationEventType.SPACE_SYNC_DIRECT_READY,
+                payload={"sync_id": record.sync_id},
+                space_id=record.space_id,
+            )
+        except Exception:
+            log.exception(
+                "sync %s: failed to send DIRECT_READY",
+                record.sync_id,
+            )
+            return
+        if self._space_sync_receiver is None:
+            return
+        while True:
+            try:
+                raw = await rtc_session.recv_chunk()
+            except ConnectionError:
+                # Channel closed — normal end of stream or peer hung up.
+                return
+            except Exception:
+                log.exception(
+                    "sync %s: recv_chunk raised",
+                    record.sync_id,
+                )
+                return
+            try:
+                await self._space_sync_receiver.on_chunk(
+                    raw,
+                    from_instance=provider_instance_id,
+                )
+            except Exception:
+                log.exception(
+                    "sync %s: receiver.on_chunk raised",
+                    record.sync_id,
+                )
 
     async def _handle_space_sync_answer(self, event) -> None:
         """Provider receives SPACE_SYNC_ANSWER — applies S-14 origin guard."""
@@ -1404,7 +1543,21 @@ class FederationService:
         )
 
     async def _handle_space_sync_direct_failed(self, event) -> None:
-        """Direct path failed — fall back to relay sync (S-15)."""
+        """Direct path failed — fall back to relay sync (S-15).
+
+        The originating direction of DIRECT_FAILED determines who
+        owns the retry. If the local instance is the **requester** for
+        this sync_id (the typical case: provider was rate-limited and
+        sent DIRECT_FAILED back), this side calls
+        :meth:`trigger_relay_sync` and re-issues the BEGIN with
+        ``prefer_direct=False``. If the local instance is the
+        **provider** (Part A path: requester's 15 s ICE watcher
+        observed the timeout and emitted DIRECT_FAILED so we'd
+        release our session + signaling node), we MUST NOT re-issue
+        the BEGIN — the requester drives the retry from their side
+        and a bounced BEGIN here would land back at the requester
+        as a federation event they don't expect.
+        """
         if self._sync_manager is None:
             return
         sync_id = event.payload.get("sync_id") or ""
@@ -1413,6 +1566,12 @@ class FederationService:
         session = self._sync_manager.get_session(sync_id)
         if session is not None:
             await self._release_signaling_node(session)
+            if session.provider_instance_id == self._own_instance_id:
+                # Provider-side cleanup only — close the session, drop
+                # the RTC handle. The requester will mint a fresh BEGIN
+                # against us with ``prefer_direct=False``.
+                self._sync_manager.close_session(sync_id)
+                return
         decision = await self._sync_manager.trigger_relay_sync(sync_id)
         if decision.next_event is not None:
             await self.send_event(
@@ -1420,6 +1579,54 @@ class FederationService:
                 event_type=decision.next_event,
                 payload=decision.next_payload or {},
                 space_id=event.space_id,
+            )
+
+    async def _maybe_trigger_relay_retry(
+        self,
+        sync_id: str,
+        provider_instance_id: str,
+    ) -> None:
+        """Requester-side: turn an ICE timeout into a fresh BEGIN with
+        ``prefer_direct=False``, gated on the provider supporting v_13+.
+
+        Sub-v_13 providers don't know how to handle the relay branch
+        of ``_handle_space_sync_begin``; sending the retry would leave
+        the requester waiting on a session the provider will never
+        start streaming. Skip the retry there and log loud — the
+        operator-visible diagnosis is "WebRTC isn't reaching this peer
+        AND they're too old for the HTTPS rescue; upgrade or fix
+        TURN".
+        """
+        if self._sync_manager is None:
+            return
+        supports = await self.peer_supports(
+            provider_instance_id,
+            min_version=FederationCapability.MIN_FOR_SYNC_HTTPS_FALLBACK,
+        )
+        if not supports:
+            log.warning(
+                "sync %s: provider %s does not advertise v_%d — HTTPS "
+                "fallback unavailable, sync will not complete",
+                sync_id,
+                provider_instance_id,
+                FederationCapability.MIN_FOR_SYNC_HTTPS_FALLBACK,
+            )
+            self._sync_manager.close_session(sync_id)
+            return
+        decision = await self._sync_manager.trigger_relay_sync(sync_id)
+        if decision.next_event is None:
+            return
+        try:
+            await self.send_event(
+                to_instance_id=provider_instance_id,
+                event_type=decision.next_event,
+                payload=decision.next_payload or {},
+                space_id=(decision.next_payload or {}).get("space_id") or "",
+            )
+        except Exception:
+            log.exception(
+                "sync %s: failed to send relay-fallback BEGIN",
+                sync_id,
             )
 
     async def _release_signaling_node(self, session) -> None:
@@ -1442,6 +1649,64 @@ class FederationService:
             from_instance=self._own_instance_id,
             signing_key=self._own_identity_seed,
         )
+
+    async def _handle_space_sync_chunk(self, event) -> None:
+        """Inbound ``SPACE_SYNC_CHUNK`` — HTTPS-fallback chunk delivery.
+
+        WebRTC is the primary transport (``_send`` → ``rtc.send_chunk``
+        when the session has an open DataChannel). When the channel
+        never opens — carrier-grade NAT, no reachable STUN, hostile
+        firewall — the provider streams chunks over signed federation
+        events instead. This handler validates the from_instance
+        matches the session's provider and forwards the inner chunk
+        body to the receiver, which runs the same signature +
+        decryption pipeline RTC frames go through.
+
+        The chunk payload itself is already a fully signed envelope
+        produced by the encoder — we don't strip / re-wrap anything
+        here. The HTTPS hop just ferries opaque bytes the way the
+        DataChannel does.
+        """
+        if self._sync_manager is None or self._space_sync_receiver is None:
+            return
+        payload = event.payload or {}
+        sync_id = str(payload.get("sync_id") or "")
+        raw = payload.get("chunk")
+        if not sync_id or not raw:
+            return
+        record = self._sync_manager.get_session(sync_id)
+        if record is None:
+            log.debug(
+                "SPACE_SYNC_CHUNK for unknown sync_id=%s from %s",
+                sync_id,
+                event.from_instance,
+            )
+            return
+        # The provider on the originating side IS the from_instance for
+        # an HTTPS-mode session. The receiver re-checks the per-chunk
+        # signature against the peer's identity key, so this is a
+        # belt-and-braces guard, not the authoritative check.
+        if (
+            record.provider_instance_id
+            and record.provider_instance_id != event.from_instance
+        ):
+            log.warning(
+                "SPACE_SYNC_CHUNK sync_id=%s from %s != expected provider %s",
+                sync_id,
+                event.from_instance,
+                record.provider_instance_id,
+            )
+            return
+        try:
+            await self._space_sync_receiver.on_chunk(
+                raw,
+                from_instance=event.from_instance,
+            )
+        except Exception:
+            log.exception(
+                "sync %s: HTTPS receiver.on_chunk raised",
+                sync_id,
+            )
 
     async def _handle_space_sync_request_more(self, event) -> None:
         """Requester asks for an older slice (S-12 bounds check)."""

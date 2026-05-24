@@ -171,7 +171,19 @@ from __future__ import annotations
 #:   the seller's DB and the seller can't accept them. Operators
 #:   wanting cross-household bazaar transactions should upgrade
 #:   member households alongside sellers.
-OURS: int = 12
+#: * **v_13** (2026-05-25) — :data:`FederationEventType.SPACE_SYNC_CHUNK`
+#:   federation transport for §25.6 chunked sync. Adds the HTTPS chunk
+#:   path that fires when the WebRTC handshake never completes (Pascal
+#:   saw ``SPACE_SYNC_DIRECT_FAILED`` between two paired instances after
+#:   restart; root cause was the requester never emitting
+#:   ``SPACE_SYNC_DIRECT_READY`` AND the relay-fallback BEGIN being
+#:   silently ignored by the provider). Sub-v_13 providers don't know
+#:   how to handle ``prefer_direct=False`` — the requester gates the
+#:   relay retry on the peer's advertised version so older peers stick
+#:   to direct-only (which still works on the local LAN and behind
+#:   modest NATs; cross-NAT fail-soft for older peers becomes "no
+#:   sync" rather than silently broken).
+OURS: int = 13
 
 
 class FederationCapability:
@@ -261,6 +273,17 @@ class FederationCapability:
     #: own bid, but the seller's host never receives it so the seller
     #: can't accept / mark sold. Best-effort gating.
     MIN_FOR_BAZAAR_BIDS = 12
+
+    #: Minimum proto_version where the provider knows how to handle
+    #: ``SPACE_SYNC_BEGIN {prefer_direct: false}`` (Part C HTTPS
+    #: fallback). Sub-v_13 providers accept the BEGIN but never start
+    #: streaming because their ``_handle_space_sync_begin`` only acted
+    #: on ``prefer_direct=True``. The requester-side
+    #: ``_handle_space_sync_direct_failed`` gates the relay retry on
+    #: this so an older peer just doesn't get the fallback — direct
+    #: works against them as before (still useful on same-LAN +
+    #: modest-NAT pairs), cross-NAT pairs require both sides on v_13+.
+    MIN_FOR_SYNC_HTTPS_FALLBACK = 13
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

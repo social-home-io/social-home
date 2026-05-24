@@ -19,6 +19,7 @@ import logging
 import sqlite3
 from typing import Any, TYPE_CHECKING
 
+from ....domain.federation import FederationEventType
 from .exporter import ChunkBuilder, RESOURCE_ORDER, serialise_chunk
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ class SpaceSyncService:
         "_space_post_repo",
         "_gallery_repo",
         "_bazaar_repo",
+        "_federation",
     )
 
     def __init__(
@@ -64,6 +66,17 @@ class SpaceSyncService:
         self._space_post_repo = space_post_repo
         self._gallery_repo = gallery_repo
         self._bazaar_repo = bazaar_repo
+        #: Set by :meth:`attach_federation` after the federation
+        #: service is constructed (resolves the chicken/egg between
+        #: ``FederationService`` and ``SpaceSyncService``). Required
+        #: for HTTPS-mode chunk delivery (``session.transport_mode ==
+        #: "https"``); ``_send`` falls back to RTC when ``None``.
+        self._federation = None
+
+    def attach_federation(self, federation_service) -> None:
+        """Wire the federation service so HTTPS-mode sessions can
+        stream chunks via ``SPACE_SYNC_CHUNK`` events."""
+        self._federation = federation_service
 
     async def stream_initial(self, session: "SyncSessionRecord") -> None:
         """Send every resource for ``session.space_id`` over the channel
@@ -87,13 +100,13 @@ class SpaceSyncService:
                     sync_id=sync_id,
                     sig_suite=self._sig_suite,
                 ):
-                    await _send(session, envelope)
+                    await self._send(session, envelope)
             sentinel = await self._builder.build_sentinel(
                 space_id=space_id,
                 sync_id=sync_id,
                 sig_suite=self._sig_suite,
             )
-            await _send(session, sentinel)
+            await self._send(session, sentinel)
             # Catch-up media: enumerate every post + gallery item in
             # the space, collect their media URLs, and enqueue
             # ``space_media_outbox`` rows so the requesting peer
@@ -282,7 +295,7 @@ class SpaceSyncService:
                 sync_id=session.sync_id,
                 sig_suite=self._sig_suite,
             ):
-                await _send(session, envelope)
+                await self._send(session, envelope)
         except Exception:  # pragma: no cover
             log.exception(
                 "stream_request_more failed for sync_id=%s resource=%s",
@@ -290,12 +303,47 @@ class SpaceSyncService:
                 resource,
             )
 
+    async def _send(self, session, envelope: dict[str, Any]) -> None:
+        """Serialise and dispatch one envelope to the requester.
 
-async def _send(session, envelope: dict[str, Any]) -> None:
-    """Serialise and dispatch one envelope over the DataChannel."""
-    rtc = getattr(session, "rtc", None)
-    if rtc is None:
-        raise RuntimeError(
-            f"SyncSessionRecord {session.sync_id} has no rtc handle",
+        Picks the transport based on ``session.transport_mode``:
+
+        * ``"rtc"`` — write the chunk to the open DataChannel.
+        * ``"https"`` — wrap the serialised chunk in a signed
+          ``SPACE_SYNC_CHUNK`` federation event and let the inbox
+          path carry it. This is what Part C (Pascal's
+          "fallback to https and federation/inbox for sync") wires up:
+          when the WebRTC handshake never finished — carrier-grade
+          NAT, missing STUN reachability — the requester re-issued
+          the BEGIN with ``prefer_direct=False`` and the provider
+          marked the session ``"https"`` accordingly. ``_send``
+          honours that without the rest of the streaming logic
+          having to know which path it took.
+        """
+        mode = getattr(session, "transport_mode", "rtc")
+        if mode == "rtc":
+            rtc_session = getattr(session, "rtc", None)
+            if rtc_session is None:
+                raise RuntimeError(
+                    f"SyncSessionRecord {session.sync_id} has no rtc handle",
+                )
+            await rtc_session.send_chunk(serialise_chunk(envelope))
+            return
+        if mode == "https":
+            if self._federation is None:
+                raise RuntimeError(
+                    "HTTPS-mode SpaceSyncService requires attach_federation",
+                )
+            await self._federation.send_event(
+                to_instance_id=session.requester_instance_id,
+                event_type=FederationEventType.SPACE_SYNC_CHUNK,
+                payload={
+                    "sync_id": session.sync_id,
+                    "chunk": serialise_chunk(envelope),
+                },
+                space_id=session.space_id,
+            )
+            return
+        raise ValueError(
+            f"Unknown transport_mode {mode!r} on session {session.sync_id}",
         )
-    await rtc.send_chunk(serialise_chunk(envelope))

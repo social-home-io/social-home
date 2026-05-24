@@ -239,6 +239,40 @@ async def test_begin_session_blocks_at_concurrent_cap_s6():
     assert blocked.reason == "too_many_sessions"
 
 
+async def test_begin_session_threads_ice_servers_with_turn():
+    """The same ``ice_servers`` list the federation transport uses
+    (built via :func:`socialhome.webrtc_ice.build_ice_servers` →
+    STUN entry + optional TURN entry) MUST also flow into the
+    ``SyncRtcSession`` for §25.6 syncs. Pascal asked: "is sync
+    also using TURN as STUN fallback". Yes — provided the operator
+    has ``webrtc_turn_url`` set in config, the sync layer picks it
+    up automatically because it shares the federation service's
+    ``_ice_servers`` slot."""
+    mgr = SyncSessionManager(_FakeFedRepo())
+    turn_servers = [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {
+            "urls": ["turn:turn.example.com:3478"],
+            "username": "u",
+            "credential": "c",
+        },
+    ]
+    d = await mgr.begin_session(
+        sync_id="s-turn",
+        space_id="sp-1",
+        requester_instance_id="alice",
+        provider_instance_id="me",
+        ice_servers=turn_servers,
+    )
+    assert d.accepted is True
+    record = mgr.get_session("s-turn")
+    assert record is not None
+    assert record.rtc is not None
+    # ``SyncRtcSession`` stores the list verbatim and feeds it into
+    # ``_build_rtc_config`` — no filtering, so a TURN entry survives.
+    assert record.rtc._ice_servers == turn_servers
+
+
 async def test_begin_session_silently_drops_non_member_s1():
     """S-1: a non-member's request is silently dropped (no response event)."""
 

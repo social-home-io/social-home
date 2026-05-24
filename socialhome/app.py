@@ -798,6 +798,11 @@ def _wire_federation_stack(
         service=space_sync_service,
         receiver=space_sync_receiver,
     )
+    # HTTPS-mode (Part C) needs to send SPACE_SYNC_CHUNK federation
+    # events when a session can't open a DataChannel. Wire after
+    # attach_space_sync so the chicken/egg between the two services
+    # is resolved without a constructor cycle.
+    space_sync_service.attach_federation(federation_service)
     app[K.space_sync_service_key] = space_sync_service
     app[K.space_sync_receiver_key] = space_sync_receiver
 

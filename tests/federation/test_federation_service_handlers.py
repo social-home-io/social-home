@@ -8,6 +8,7 @@ fields, etc.) is exercised.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -48,6 +49,7 @@ def svc():
     s._call_signaling = None
     s._sync_manager = None
     s._space_sync_service = None
+    s._space_sync_receiver = None
     s._gfs_connection_service = None
     s._own_instance_id = "self-iid"
     s._own_identity_seed = b"\x00" * 32
@@ -216,7 +218,18 @@ async def test_handle_space_sync_begin_missing_fields(svc):
 
 
 async def test_handle_space_sync_begin_accepted_no_prefer_direct(svc):
-    """Accepted with prefer_direct=False doesn't load the RTC session."""
+    """Accepted with ``prefer_direct=False`` flips the session into
+    HTTPS-mode (Part C) and immediately schedules ``stream_initial``
+    — the chunks ride ``SPACE_SYNC_CHUNK`` federation events instead
+    of waiting on an SDP / ICE handshake. Without this path the
+    relay-fallback ``trigger_relay_sync`` returned a BEGIN that the
+    provider accepted and then ignored, so a peer that couldn't
+    open a DataChannel got stuck."""
+    record = SimpleNamespace(
+        sync_id="s",
+        rtc=None,
+        transport_mode="rtc",
+    )
     svc._sync_manager = MagicMock()
     svc._sync_manager.begin_session = AsyncMock(
         return_value=SimpleNamespace(
@@ -225,7 +238,9 @@ async def test_handle_space_sync_begin_accepted_no_prefer_direct(svc):
             next_payload=None,
         ),
     )
-    svc._sync_manager.get_session = MagicMock(return_value=None)
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._space_sync_service = MagicMock()
+    svc._space_sync_service.stream_initial = AsyncMock()
     await svc._handle_space_sync_begin(
         _event(
             "SPACE_SYNC_BEGIN",
@@ -233,8 +248,10 @@ async def test_handle_space_sync_begin_accepted_no_prefer_direct(svc):
             space_id="sp",
         )
     )
-    # Session lookup only happens on prefer_direct=True; confirms no path was taken.
-    svc._sync_manager.get_session.assert_not_called()
+    # Yield once so the create_task body runs.
+    await asyncio.sleep(0)
+    assert record.transport_mode == "https"
+    svc._space_sync_service.stream_initial.assert_awaited_once_with(record)
 
 
 async def test_handle_space_sync_begin_offer_includes_signaling_node(svc):
@@ -382,6 +399,248 @@ async def test_handle_space_sync_offer_apply_offer_called(svc):
         # only cover the apply_offer branch here.
         pass
     svc._sync_manager.apply_offer.assert_awaited_once()
+
+
+# ─── Part A: requester-side direct-ready / direct-failed watcher ──
+
+
+async def test_offer_handler_spawns_ready_watcher(svc):
+    """After ``apply_offer`` builds the answer and we ship it back,
+    the requester MUST start a watcher that emits DIRECT_READY when
+    the DataChannel opens. Before this fix nothing did, so the
+    provider sat waiting forever and the sync silently failed."""
+    rtc_session = SimpleNamespace(
+        wait_ready=AsyncMock(return_value=True),
+        recv_chunk=AsyncMock(side_effect=ConnectionError("eof")),
+    )
+    record = SimpleNamespace(
+        sync_id="s",
+        space_id="sp",
+        rtc=rtc_session,
+        rtc_watcher=None,
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.apply_offer = AsyncMock(return_value="sdp-ans")
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._space_sync_receiver = SimpleNamespace(on_chunk=AsyncMock())
+    with patch.object(
+        FederationService,
+        "send_event",
+        new_callable=AsyncMock,
+    ) as send_mock:
+        await svc._handle_space_sync_offer(
+            _event(
+                "SPACE_SYNC_OFFER",
+                {"sync_id": "s", "sdp_offer": "x"},
+                space_id="sp",
+            ),
+        )
+        # Drive the watcher one tick so the wait_ready + emit run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # The answer ships immediately; the ready event fires after
+        # the watcher resolves.
+        sent_events = [c.kwargs["event_type"].value for c in send_mock.await_args_list]
+    assert "space_sync_answer" in sent_events
+    assert "space_sync_direct_ready" in sent_events
+
+
+async def test_offer_handler_emits_direct_failed_on_ice_timeout(svc):
+    """When ``wait_ready`` returns ``False`` (the 15 s ICE timeout
+    expired), the watcher MUST send DIRECT_FAILED back to the
+    provider so the existing relay-fallback hook re-issues the BEGIN
+    with ``prefer_direct=False``. Before this, the requester just
+    sat there with the session half-open."""
+    rtc_session = SimpleNamespace(
+        wait_ready=AsyncMock(return_value=False),
+        recv_chunk=AsyncMock(side_effect=ConnectionError("not_open")),
+    )
+    record = SimpleNamespace(
+        sync_id="s",
+        space_id="sp",
+        rtc=rtc_session,
+        rtc_watcher=None,
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.apply_offer = AsyncMock(return_value="sdp-ans")
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._space_sync_receiver = SimpleNamespace(on_chunk=AsyncMock())
+    with patch.object(
+        FederationService,
+        "send_event",
+        new_callable=AsyncMock,
+    ) as send_mock:
+        await svc._handle_space_sync_offer(
+            _event(
+                "SPACE_SYNC_OFFER",
+                {"sync_id": "s", "sdp_offer": "x"},
+                space_id="sp",
+            ),
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        sent_events = [c.kwargs["event_type"].value for c in send_mock.await_args_list]
+    assert "space_sync_direct_failed" in sent_events
+    failed_call = next(
+        c
+        for c in send_mock.await_args_list
+        if c.kwargs["event_type"].value == "space_sync_direct_failed"
+    )
+    assert failed_call.kwargs["payload"]["reason"] == "ice_timeout"
+
+
+async def test_offer_handler_ice_timeout_emits_relay_begin_when_peer_supports(svc):
+    """Requester-side ICE timeout sends DIRECT_FAILED (for the
+    provider's cleanup) AND locally re-issues the BEGIN with
+    ``prefer_direct=False``. Gated on the provider supporting v_13+
+    so older peers don't get a BEGIN they can't honour."""
+    rtc_session = SimpleNamespace(
+        wait_ready=AsyncMock(return_value=False),
+        recv_chunk=AsyncMock(side_effect=ConnectionError("not_open")),
+    )
+    record = SimpleNamespace(
+        sync_id="s",
+        space_id="sp",
+        rtc=rtc_session,
+        rtc_watcher=None,
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.apply_offer = AsyncMock(return_value="sdp-ans")
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._sync_manager.trigger_relay_sync = AsyncMock(
+        return_value=SimpleNamespace(
+            next_event=MagicMock(value="space_sync_begin"),
+            next_payload={
+                "sync_id": "s-new",
+                "space_id": "sp",
+                "prefer_direct": False,
+            },
+        ),
+    )
+    svc._space_sync_receiver = SimpleNamespace(on_chunk=AsyncMock())
+    with (
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+        patch.object(
+            FederationService,
+            "peer_supports",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+    ):
+        await svc._handle_space_sync_offer(
+            _event(
+                "SPACE_SYNC_OFFER",
+                {"sync_id": "s", "sdp_offer": "x"},
+                space_id="sp",
+            ),
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        sent = [c.kwargs["event_type"] for c in send_mock.await_args_list]
+    # Order: ANSWER (immediate) → DIRECT_FAILED + relay BEGIN (from watcher).
+    sent_values = [getattr(e, "value", e) for e in sent]
+    assert "space_sync_direct_failed" in sent_values
+    assert "space_sync_begin" in sent_values
+    svc._sync_manager.trigger_relay_sync.assert_awaited_once_with("s")
+
+
+async def test_offer_handler_ice_timeout_skips_relay_for_old_peer(svc):
+    """When the provider doesn't advertise v_13, the requester only
+    emits DIRECT_FAILED (so the provider cleans up) and closes its
+    own session — without sending a BEGIN the older provider would
+    accept and silently ignore."""
+    rtc_session = SimpleNamespace(
+        wait_ready=AsyncMock(return_value=False),
+        recv_chunk=AsyncMock(side_effect=ConnectionError("not_open")),
+    )
+    record = SimpleNamespace(
+        sync_id="s",
+        space_id="sp",
+        rtc=rtc_session,
+        rtc_watcher=None,
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.apply_offer = AsyncMock(return_value="sdp-ans")
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._sync_manager.trigger_relay_sync = AsyncMock()
+    svc._sync_manager.close_session = MagicMock()
+    svc._space_sync_receiver = SimpleNamespace(on_chunk=AsyncMock())
+    with (
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+        patch.object(
+            FederationService,
+            "peer_supports",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        await svc._handle_space_sync_offer(
+            _event(
+                "SPACE_SYNC_OFFER",
+                {"sync_id": "s", "sdp_offer": "x"},
+                space_id="sp",
+            ),
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        sent_values = [c.kwargs["event_type"].value for c in send_mock.await_args_list]
+    assert "space_sync_direct_failed" in sent_values
+    assert "space_sync_begin" not in sent_values
+    svc._sync_manager.trigger_relay_sync.assert_not_awaited()
+    svc._sync_manager.close_session.assert_called_once_with("s")
+
+
+# ─── Part C: SPACE_SYNC_CHUNK inbound (HTTPS fallback) ─────────────
+
+
+async def test_handle_space_sync_chunk_forwards_to_receiver(svc):
+    """The HTTPS fallback ships chunks as signed ``SPACE_SYNC_CHUNK``
+    federation events. The handler must forward the inner chunk
+    body to the receiver, which runs the same signature +
+    decryption pipeline RTC frames go through."""
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.get_session = MagicMock(
+        return_value=SimpleNamespace(provider_instance_id="peer-id"),
+    )
+    svc._space_sync_receiver = SimpleNamespace(on_chunk=AsyncMock())
+    await svc._handle_space_sync_chunk(
+        _event(
+            "SPACE_SYNC_CHUNK",
+            {"sync_id": "s", "chunk": "raw-bytes"},
+            from_instance="peer-id",
+        ),
+    )
+    svc._space_sync_receiver.on_chunk.assert_awaited_once_with(
+        "raw-bytes",
+        from_instance="peer-id",
+    )
+
+
+async def test_handle_space_sync_chunk_rejects_wrong_provider(svc):
+    """The provider_instance_id on the session must match the
+    envelope's from_instance — otherwise a paired peer could inject
+    chunks into someone else's sync session."""
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.get_session = MagicMock(
+        return_value=SimpleNamespace(provider_instance_id="legit-peer"),
+    )
+    svc._space_sync_receiver = SimpleNamespace(on_chunk=AsyncMock())
+    await svc._handle_space_sync_chunk(
+        _event(
+            "SPACE_SYNC_CHUNK",
+            {"sync_id": "s", "chunk": "raw"},
+            from_instance="attacker",
+        ),
+    )
+    svc._space_sync_receiver.on_chunk.assert_not_awaited()
 
 
 # ─── _handle_space_sync_answer ─────────────────────────────────────
@@ -540,6 +799,10 @@ async def test_handle_direct_failed_releases_signaling_node(svc):
     session = SimpleNamespace(
         sync_id="s1",
         signaling_node="https://b.gfs.test",
+        # Provider-side cleanup branch: local is the requester here,
+        # so the existing relay-retry path runs (provider_instance_id
+        # is the peer, not us).
+        provider_instance_id="other-iid",
     )
     svc._sync_manager = MagicMock()
     svc._sync_manager.get_session = MagicMock(return_value=session)
@@ -552,6 +815,33 @@ async def test_handle_direct_failed_releases_signaling_node(svc):
         _event("SPACE_SYNC_DIRECT_FAILED", {"sync_id": "s1"}),
     )
     svc._gfs_connection_service.release_signaling_node.assert_awaited_once()
+
+
+async def test_handle_direct_failed_as_provider_skips_retry(svc):
+    """When local is the provider for the sync_id (the requester sent
+    DIRECT_FAILED on their ICE timeout), the handler MUST close the
+    session and stop — bouncing a fresh BEGIN at the requester from
+    this side is the wrong direction."""
+    session = SimpleNamespace(
+        sync_id="s1",
+        signaling_node=None,
+        provider_instance_id="self-iid",  # local IS the provider
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.get_session = MagicMock(return_value=session)
+    svc._sync_manager.trigger_relay_sync = AsyncMock()
+    svc._sync_manager.close_session = MagicMock()
+    with patch.object(
+        FederationService,
+        "send_event",
+        new_callable=AsyncMock,
+    ) as send_mock:
+        await svc._handle_space_sync_direct_failed(
+            _event("SPACE_SYNC_DIRECT_FAILED", {"sync_id": "s1"}),
+        )
+    svc._sync_manager.close_session.assert_called_once_with("s1")
+    svc._sync_manager.trigger_relay_sync.assert_not_awaited()
+    send_mock.assert_not_awaited()
 
 
 async def test_release_signaling_node_idempotent(svc):

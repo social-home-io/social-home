@@ -165,7 +165,15 @@ class SyncSessionManager:
 
     def close_session(self, sync_id: str) -> None:
         sess = self._sessions.pop(sync_id, None)
-        if sess and sess.rtc is not None:
+        if sess is None:
+            return
+        if sess.rtc_watcher is not None:
+            # Stop the requester-side wait_ready / chunk-drain task
+            # before tearing down the RTC handle so the loop doesn't
+            # observe a torn-down PeerConnection mid-iteration.
+            sess.rtc_watcher.cancel()
+            sess.rtc_watcher = None
+        if sess.rtc is not None:
             sess.rtc.close()
 
     # ─── S-6: rate limit ──────────────────────────────────────────────────
