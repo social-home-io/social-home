@@ -377,6 +377,58 @@ async def test_presence_includes_remote_member_pins(client):
     assert jacqueline["instance_id"] == "peer-jacqueline"
 
 
+async def test_presence_includes_remote_member_picture_url(client):
+    """The map renders one pin per entry, using ``picture_url`` for the
+    avatar. Pascal's report: own avatar shows but cross-household
+    members are initials. Root cause: ``_remote_member_pin_entries``
+    used to hardcode ``picture_url: None``. With the fix, the route
+    looks up ``remote_users.picture_hash`` (kept fresh by
+    ``USERS_SYNC``) and builds the same
+    ``api/users/{user_id}/picture?v=<hash>`` URL the member list uses,
+    then signs it through the media signer."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    await _seed_remote_member(
+        client,
+        space_id,
+        instance_id="peer-jacqueline",
+        user_id="uid-jacqueline",
+        display_name="Jacqueline",
+    )
+    await client._db.enqueue(
+        "INSERT INTO remote_users"
+        "(user_id, instance_id, remote_username, display_name,"
+        " picture_hash, synced_at, deprovisioned_at)"
+        " VALUES(?,?,?,?,?, datetime('now'), NULL)",
+        (
+            "uid-jacqueline",
+            "peer-jacqueline",
+            "jacqueline",
+            "Jacqueline",
+            "feedface",
+        ),
+    )
+    await _seed_remote_pin(
+        client,
+        space_id,
+        instance_id="peer-jacqueline",
+        user_id="uid-jacqueline",
+        lat=48.1351,
+        lon=11.5820,
+    )
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    jacqueline = next(e for e in body["entries"] if e["user_id"] == "uid-jacqueline")
+    assert jacqueline["picture_url"] is not None
+    assert "api/users/uid-jacqueline/picture" in jacqueline["picture_url"]
+    # The signer ran — the URL carries the cache-busting hash and
+    # the signature query the SPA needs for <img> loads under ingress.
+    assert "v=feedface" in jacqueline["picture_url"]
+
+
 async def test_presence_skips_remote_pin_without_member_row(client):
     """If the SPACE_REMOTE_MEMBER_REMOVED cleanup raced ahead but
     a stale location row survived, we must NOT render a ghost pin."""

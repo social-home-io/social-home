@@ -1398,6 +1398,7 @@ async def _remote_member_pin_entries(
     member_repo = request.app.get(space_remote_member_repo_key)
     if repo is None or member_repo is None:
         return []
+    signer = request.app.get(media_signer_key)
     locs = await repo.list_for_space(space_id)
     if not locs:
         return []
@@ -1423,12 +1424,27 @@ async def _remote_member_pin_entries(
         remote_user = await user_repo.get_remote(loc.user_id)
         if remote_user is not None and remote_user.display_name:
             display_name = remote_user.display_name
+        # Picture URL: ``USERS_SYNC`` lands the WebP bytes in the
+        # shared ``user_profile_pictures`` table keyed by user_id;
+        # ``UserPictureView`` serves them whether the target is
+        # local or remote. Mirror what ``_remote_member_to_dict``
+        # does so the map pin shows the member's avatar instead
+        # of just initials. Was previously hardcoded ``None``
+        # (Pascal's report: "the space/map does not render image
+        # profile on the map, only for myself - not for someone
+        # on another household").
+        picture_hash = remote_user.picture_hash if remote_user is not None else None
+        picture_url = (
+            f"api/users/{loc.user_id}/picture?v={picture_hash}"
+            if picture_hash
+            else None
+        )
         entry: dict = {
             "user_id": loc.user_id,
             "username": None,
             "display_name": display_name,
             "state": "home",
-            "picture_url": None,
+            "picture_url": picture_url,
             "instance_id": loc.instance_id,
         }
         if mode_filter == "gps":
@@ -1438,6 +1454,8 @@ async def _remote_member_pin_entries(
         else:  # zone_only
             entry["zone_id"] = loc.zone_id
             entry["zone_name"] = loc.zone_name
+        if signer is not None and entry.get("picture_url"):
+            sign_media_urls_in(entry, signer)
         out.append(entry)
     return out
 
