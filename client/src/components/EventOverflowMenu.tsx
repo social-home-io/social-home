@@ -23,12 +23,19 @@ export interface EventOverflowMenuProps {
   children?: ComponentChildren
   /** ARIA label on the trigger button. Defaults to "Event actions". */
   label?: string
+  /** When ``false`` the built-in "Add to my calendar" item is
+   *  suppressed — the parent surfaces the .ics affordance somewhere
+   *  more discoverable (a sibling button on the RSVP row, for
+   *  example). Defaults to ``true`` so existing call sites
+   *  (CalendarPage detail row) keep their behaviour. */
+  showIcsItem?: boolean
 }
 
 export function EventOverflowMenu({
   eventId,
   children,
   label,
+  showIcsItem = true,
 }: EventOverflowMenuProps) {
   const [open, setOpen] = useState(false)
   const close = () => setOpen(false)
@@ -50,20 +57,22 @@ export function EventOverflowMenu({
       {open && (
         <div class="sh-post-menu" role="menu">
           {children}
-          <a
-            role="menuitem"
-            // Relative URL (no leading slash) so the browser resolves
-            // it against ``<base href>``. ``download`` makes the
-            // browser fetch the URL directly (not the SPA router), so
-            // an absolute ``/api/...`` would skip the HA Supervisor
-            // ingress prefix and 404. Same class as #303.
-            href={`api/calendars/events/${eventId}/export.ics`}
-            download
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={close}
-          >
-            {t('event.add_to_calendar')}
-          </a>
+          {showIcsItem && (
+            <a
+              role="menuitem"
+              // Relative URL (no leading slash) so the browser resolves
+              // it against ``<base href>``. ``download`` makes the
+              // browser fetch the URL directly (not the SPA router), so
+              // an absolute ``/api/...`` would skip the HA Supervisor
+              // ingress prefix and 404. Same class as #303.
+              href={`api/calendars/events/${eventId}/export.ics`}
+              download
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={close}
+            >
+              {t('event.add_to_calendar')}
+            </a>
+          )}
         </div>
       )}
     </div>

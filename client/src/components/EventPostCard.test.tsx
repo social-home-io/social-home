@@ -87,6 +87,85 @@ describe('EventPostCard', () => {
     expect(disabledCount).toBeGreaterThan(0)
   })
 
+  it('renders the event title as an in-card headline', async () => {
+    apiMock.get.mockResolvedValueOnce({
+      ...futureEvent,
+      id: 'ev-title',
+      summary: 'Annual block party',
+    })
+    const { container, findByText } = render(<EventPostCard eventId="ev-title" />)
+    await findByText('Going')
+    const title = container.querySelector('.sh-event-card-title')
+    expect(title?.textContent).toBe('Annual block party')
+  })
+
+  it('renders the description through markdown rendering', async () => {
+    apiMock.get.mockResolvedValueOnce({
+      ...futureEvent,
+      id: 'ev-desc',
+      description: 'Bring a **side dish** or drinks.',
+    })
+    const { container, findByText } = render(<EventPostCard eventId="ev-desc" />)
+    await findByText('Going')
+    const desc = container.querySelector('.sh-event-card-description')
+    // Markdown rendered into innerHTML — the strong wrapper proves
+    // PostBody-equivalent rendering ran (vs plain text fallback).
+    expect(desc?.innerHTML).toContain('<strong>side dish</strong>')
+  })
+
+  it('shows the end time on the dateline (range, not just start)', async () => {
+    apiMock.get.mockResolvedValueOnce(futureEvent)
+    const { container, findByText } = render(<EventPostCard eventId="ev-1" />)
+    await findByText('Going')
+    const when = container.querySelector('.sh-event-card-when-text')
+    // Range separator (en-dash with surrounding spaces) is what
+    // ``EventWhen`` joins start + end with.
+    expect(when?.textContent).toContain(' – ')
+  })
+
+  it('renders attendance summary for uncapped events with responses', async () => {
+    apiMock.get.mockResolvedValueOnce(futureEvent)
+    rsvpCounts.value = { 'ev-1': { going: 7, maybe: 2, declined: 0 } }
+    const { container, findByText } = render(<EventPostCard eventId="ev-1" />)
+    await findByText('Going')
+    const att = container.querySelector('.sh-event-card-attendance')
+    expect(att?.textContent).toBe('7 going · 2 maybe')
+  })
+
+  it('suppresses the redundant "You\'re going" pill', async () => {
+    apiMock.get.mockResolvedValueOnce({ ...futureEvent, id: 'ev-going' })
+    myRsvpStatus.value = { 'ev-going': 'going' }
+    const { container, findByText } = render(<EventPostCard eventId="ev-going" />)
+    await findByText('Going')
+    expect(container.querySelector('.sh-event-card-pill')).toBeNull()
+  })
+
+  it('keeps the pill for the informative waitlist case', async () => {
+    apiMock.get.mockResolvedValueOnce({
+      ...futureEvent,
+      id: 'ev-waitlist',
+      capacity: 4,
+    })
+    rsvpCounts.value = {
+      'ev-waitlist': { going: 4, maybe: 0, declined: 0, waitlist: 3 },
+    }
+    myRsvpStatus.value = { 'ev-waitlist': 'waitlist' }
+    const { container, findByText } = render(<EventPostCard eventId="ev-waitlist" />)
+    await findByText('Maybe')
+    expect(container.querySelector('.sh-event-card-pill')).not.toBeNull()
+  })
+
+  it('promotes "Add to my calendar" onto the RSVP row (out of the kebab)', async () => {
+    apiMock.get.mockResolvedValueOnce(futureEvent)
+    const { container, findByText } = render(<EventPostCard eventId="ev-1" />)
+    await findByText('Going')
+    const ics = container.querySelector('a.sh-event-card-ics')
+    expect(ics).not.toBeNull()
+    expect(ics?.getAttribute('href')).toContain(
+      'api/calendars/events/ev-1/export.ics',
+    )
+  })
+
   it('POSTs to the rsvp endpoint when a button is clicked', async () => {
     apiMock.get.mockResolvedValueOnce(futureEvent)
     apiMock.post.mockResolvedValueOnce({ ok: true })

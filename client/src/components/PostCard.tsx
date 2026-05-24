@@ -201,7 +201,13 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
           <em class="sh-muted">This post was deleted</em>
         ) : (
           <>
-            {post.content && (
+            {/* Event posts own their title rendering inside
+                ``EventPostCard`` so the summary doesn't appear twice
+                (once as a markdown paragraph here, once as the card's
+                headline). Same for highlight shares which carry their
+                own headline. Every other post type keeps the
+                markdown body. */}
+            {post.content && post.type !== 'event' && (
               <PostBody content={post.content} />
             )}
             {post.type === 'file' && post.file_meta && <FileRenderer file={post.file_meta} />}

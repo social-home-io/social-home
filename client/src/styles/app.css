@@ -15322,11 +15322,35 @@ a.sh-welcome-card:hover {
   100% { background-position: -200% 0; }
 }
 
+/* Event title — promoted to a card headline so the summary doesn't
+ * float orphaned above the card as a markdown paragraph (the parent
+ * PostCard now skips the body render for ``type === 'event'``).
+ * Margin is collapsed so the title sits flush against the cover
+ * image when one is present. */
+.sh-event-card-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--sh-text);
+}
+
 .sh-event-card-when {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sh-event-card-when-row {
   display: flex;
   align-items: center;
   gap: var(--sh-space-xs);
   font-weight: 500;
+  flex-wrap: wrap;
+}
+.sh-event-card-when-viewer {
+  font-size: 0.85em;
+  color: var(--sh-text-muted);
+  padding-left: 1.6em;  /* aligns under the date text, past the 📅 icon */
 }
 .sh-event-card-when-icon {
   font-size: 1.2em;
@@ -15415,6 +15439,73 @@ a.sh-welcome-card:hover {
 }
 .sh-event-card-rsvp > .sh-post-overflow-wrap {
   margin-left: auto;
+}
+/* "Add to my calendar" promoted out of the kebab — sits on the RSVP
+ * row as a sibling action so non-creators can find the .ics export
+ * without hunting in the overflow menu. The icon-prefixed link
+ * styles as a quiet secondary affordance (text + emoji, no button
+ * chrome) so the primary RSVP buttons stay visually dominant. On
+ * narrow viewports the label is hidden so just the 📥 icon remains
+ * — the kebab and the buttons keep the row from wrapping vertically. */
+.sh-event-card-ics {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  padding: 0.35em 0.6em;
+  border-radius: var(--sh-radius-sm);
+  color: var(--sh-text-muted);
+  text-decoration: none;
+  font-size: 0.9em;
+  margin-left: auto;
+}
+.sh-event-card-ics:hover,
+.sh-event-card-ics:focus-visible {
+  background: var(--sh-bg-tertiary);
+  color: var(--sh-text);
+}
+.sh-event-card-ics + .sh-post-overflow-wrap {
+  margin-left: 0;  /* the ICS link absorbs the auto-margin */
+}
+@media (max-width: 480px) {
+  .sh-event-card-ics-label {
+    /* Hide label on cramped widths — emoji + aria-label keep
+     * meaning available to screen readers and touch targets. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+/* Free-form description authored by the host — rendered through
+ * PostBody so links, mentions, and basic markdown work. Slightly
+ * muted vs the title so the headline still leads. */
+.sh-event-card-description {
+  font-size: 0.95em;
+  color: var(--sh-text);
+  line-height: 1.45;
+}
+
+/* "12 going · 3 maybe" attendance summary for uncapped events.
+ * Capped events render :class:`CapacityStrip` instead; this line
+ * stays empty for fresh events with no responses. */
+.sh-event-card-attendance {
+  font-size: 0.9em;
+  color: var(--sh-text-muted);
+}
+
+/* Past events read as a softer, "this already happened" surface.
+ * The cover and buttons stay visible (a member might want to see
+ * who came, or save the recording link in the description), but
+ * the card is desaturated to match its archive role. */
+.sh-event-card--past {
+  filter: saturate(0.7) opacity(0.85);
+}
+.sh-event-card-when--past {
+  color: var(--sh-text-muted);
+  font-style: italic;
 }
 
 .sh-event-card-host-hint {
