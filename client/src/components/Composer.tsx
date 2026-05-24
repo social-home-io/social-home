@@ -535,10 +535,17 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
             <label class="sh-composer-image-add">
               <span aria-hidden="true">＋</span>
               <span>Add photo</span>
+              {/*
+               * Single-pick + specific MIME list for the same
+               * HA-Android-WebView reason documented on the
+               * MediaDropzone usage above. The user picks one
+               * photo per "+ Add photo" tap; the tile stays
+               * available until ``MAX_IMAGES`` so multiple
+               * additions still work, just one chooser at a time.
+               */}
               <input
                 type="file"
-                multiple
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                 class="sr-only"
                 onChange={onFilePicked}
               />
@@ -570,14 +577,31 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       {showMediaAttach
         && uploadProgress.value === null
         && (postType.value === 'image' ? images.length === 0 : !mediaUrl) && (
+        /*
+         * Picker is single-pick + specific image MIME list (not
+         * ``multiple`` + ``image/*``) on the picker path because the
+         * HA Android Companion App's WebView ``WebChromeClient`` was
+         * suppressing the chooser's result callback in
+         * multi-select / ``image/*`` mode (Google Photos picker) —
+         * the user picked a photo, the picker closed, and the
+         * input's ``change`` event never fired, so the diagnostic
+         * toast for empty files didn't even surface. The DM
+         * thread's paperclip (no ``accept``, no ``multiple``)
+         * works on the same device, which is the structural
+         * difference this aligns with. Drag-and-drop still
+         * accepts multiple files via ``DataTransfer.files`` — only
+         * the chooser path is single-pick. The "+ Add photo" tile
+         * lets the user stack multiple images one at a time.
+         */
         <MediaDropzone
-          multiple={postType.value === 'image'}
-          accept={postType.value === 'image' ? 'image/*'
-                : postType.value === 'video' ? 'video/*' : undefined}
+          multiple={false}
+          accept={postType.value === 'image'
+            ? 'image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif'
+            : postType.value === 'video' ? 'video/*' : undefined}
           hint={postType.value === 'image'
             ? 'Drag photos here, or'
             : `Drag a ${postType.value} here, or`}
-          pickLabel={postType.value === 'image' ? 'choose photos…' : 'choose a file…'}
+          pickLabel={postType.value === 'image' ? 'choose a photo…' : 'choose a file…'}
           draggingHint={`Drop to attach ${postType.value}`}
           onFiles={acceptFiles}
         />
