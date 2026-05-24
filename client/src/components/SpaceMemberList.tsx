@@ -23,6 +23,7 @@ import {
 import { openSpaceInvite } from './SpaceInviteDialog'
 import { openRemoteInviteDialog } from './RemoteInviteDialog'
 import { currentUser } from '@/store/auth'
+import { resolveAvatar } from '@/utils/avatar'
 
 /** Friendly relative duration for "joined …" — drops the
  *  utilitarian ``5/8/2026`` for "joined today" / "joined 3 days ago"
@@ -238,7 +239,14 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
             >
               <Avatar
                 name={r.name}
-                src={m.picture_url ?? null}
+                // ``m.picture_url`` is the per-space override only —
+                // local members typically don't set one, so the row
+                // would show initials even when the household-level
+                // avatar is cached. Route through ``resolveAvatar``
+                // so the householdUsers fallback (and, for remote
+                // members, the picture URL backend serves directly)
+                // kicks in. The space-override still wins when set.
+                src={resolveAvatar(spaceId, m.user_id, null)}
                 size={32}
                 online={m.is_online ? (m.is_idle ? 'idle' : 'online') : null}
               />
