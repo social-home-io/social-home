@@ -204,7 +204,7 @@ def _write_config(label: str, port: int, name: str) -> None:
     )
 
 
-def _spawn(label: str, port: int) -> int:
+def _spawn(label: str, port: int, *, extra_env: dict | None = None) -> int:
     d = _instance_dir(label)
     log = open(d / "log.txt", "wb")
     env = {
@@ -213,6 +213,8 @@ def _spawn(label: str, port: int) -> int:
         "SH_CONFIG": str(d / "socialhome.toml"),
         "SH_LOG_LEVEL": "INFO",
     }
+    if extra_env:
+        env.update(extra_env)
     p = subprocess.Popen(
         [sys.executable, "-u", "-m", "socialhome"],
         stdout=log,
@@ -2829,6 +2831,103 @@ def cmd_visibility() -> None:
     print("visibility: ok (per-pair user-visibility filter works both ways)")
 
 
+def cmd_sync_https_fallback() -> None:
+    """§25.6 HTTPS chunk-stream fallback (Part C).
+
+    Runs *after* :func:`cmd_space_sync_catchup_media` — reuses the
+    space dave already joined there. Sequence:
+
+    1. Kill dave's process. c posts new content in the shared space
+       so the realtime SPACE_POST_CREATED fan-out misses dave.
+    2. Restart dave with ``SH_FORCE_SYNC_HTTPS=1`` in the env. The
+       scheduler's :meth:`enqueue_sync_for_space` reads this env on
+       each SPACE_SYNC_BEGIN dispatch and flips ``prefer_direct``
+       to ``False``, forcing the relay path regardless of whether
+       WebRTC would have worked.
+    3. After settle, dave's space feed must contain the new post.
+       The only way it can arrive is via ``SPACE_SYNC_CHUNK``
+       federation events — the DataChannel never opened (we never
+       built an offer), and the realtime broadcast happened while
+       dave was dead.
+
+    Asserts the Part C wiring all the way through: requester
+    BEGIN with prefer_direct=False → provider accepts in
+    transport_mode="https" → ``stream_initial`` ships chunks via
+    ``federation.send_event(SPACE_SYNC_CHUNK)`` → receiver's
+    ``_handle_space_sync_chunk`` forwards to
+    ``SpaceSyncReceiver.on_chunk`` → posts persist.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    if not state.get("space_sync_catchup_media_ran"):
+        raise SystemExit(
+            "run 'space-sync-catchup-media' first — this step reuses its space"
+        )
+    c = state["instances"]["c"]
+    d = state["instances"]["d"]
+    space_id = state["space_sync_catchup_media_space_id"]
+    needle_marker = f"https-fallback-{time.time_ns()}"
+    needle = f"[c] HTTPS-only post {needle_marker}"
+
+    # 1. Tear down dave so the realtime fan-out misses him.
+    print(f"  killing d (pid={d['pid']}) so realtime fan-out misses him")
+    try:
+        os.killpg(d["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and _alive(d["pid"]):
+        time.sleep(0.2)
+    if _alive(d["pid"]):
+        try:
+            os.killpg(d["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        time.sleep(0.5)
+
+    # c posts while dave is dead.
+    s, post = _request(
+        f"http://127.0.0.1:{c['port']}/api/spaces/{space_id}/posts",
+        token=c["token"],
+        method="POST",
+        body={"type": "text", "content": needle},
+    )
+    _must("c posts (d offline)", s, post, ok=(201,))
+    print(f"  c posted while d offline (needle={needle_marker})")
+
+    # 2. Restart dave forcing HTTPS-mode sync.
+    new_pid = _spawn("d", d["port"], extra_env={"SH_FORCE_SYNC_HTTPS": "1"})
+    state["instances"]["d"]["pid"] = new_pid
+    _wait_ready(d["port"])
+    print(f"  d respawned with SH_FORCE_SYNC_HTTPS=1: pid={new_pid}")
+
+    # 3. Settle: pairing reconfirm fires PairingConfirmed → scheduler
+    #    enqueues SPACE_SYNC_BEGIN with prefer_direct=False → provider
+    #    accepts in HTTPS mode → chunks arrive via federation events.
+    time.sleep(20)
+
+    s, body = _request(
+        f"http://127.0.0.1:{d['port']}/api/spaces/{space_id}/feed",
+        token=d["token"],
+    )
+    _must("d feed (after HTTPS sync)", s, body, ok=(200,))
+    posts = body.get("posts") if isinstance(body, dict) else body
+    if not isinstance(posts, list):
+        raise SystemExit(f"unexpected feed shape: {body!r}")
+    matched = [p for p in posts if needle_marker in (p.get("content") or "")]
+    if not matched:
+        raise SystemExit(
+            f"HTTPS fallback failed: d did NOT receive needle "
+            f"{needle_marker!r}; saw {[p.get('content') for p in posts]!r}",
+        )
+    print(f"  d received the post via HTTPS fallback ✓ ({needle_marker})")
+
+    state["sync_https_fallback_ran"] = True
+    _save(state)
+    print("sync-https-fallback: ok (SPACE_SYNC_CHUNK federation transport works)")
+
+
 def cmd_replay() -> None:
     """Federation outbox redelivery — kill Carol, post from Alpha, restart.
 
@@ -4276,6 +4375,12 @@ def main() -> None:
         # joining a long-running space sees post/gallery rows but
         # broken ``<img src>`` tags.
         cmd_space_sync_catchup_media()
+        # ``sync-https-fallback`` proves the Part C wiring: dave
+        # restarts with ``SH_FORCE_SYNC_HTTPS=1`` so the scheduler
+        # asks for ``prefer_direct=False`` syncs. c streams chunks
+        # via ``SPACE_SYNC_CHUNK`` federation events instead of the
+        # DataChannel, and dave's feed catches up.
+        cmd_sync_https_fallback()
         # ``admin-promote-kick`` exercises the cross-household admin
         # promotion path (#114, v_8+): c promotes dave to admin via
         # the new PATCH /api/spaces/{id}/remote-members/{instance}/

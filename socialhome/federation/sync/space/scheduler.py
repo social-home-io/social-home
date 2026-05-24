@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import TYPE_CHECKING
 
@@ -110,6 +111,13 @@ class SpaceSyncScheduler:
         """
 
         async def _task() -> None:
+            # Debug knob — when set, the scheduler always asks for
+            # HTTPS-mode (Part C) so the federation-demo harness can
+            # exercise the fallback path without staging a real ICE
+            # failure. Production deployments leave this unset; the
+            # runtime negotiates DataChannel first and falls back via
+            # ``trigger_relay_sync`` on the 15 s ICE timeout.
+            prefer_direct = os.environ.get("SH_FORCE_SYNC_HTTPS") != "1"
             try:
                 await self._federation.send_event(
                     to_instance_id=peer_instance_id,
@@ -118,7 +126,7 @@ class SpaceSyncScheduler:
                         "sync_id": uuid.uuid4().hex,
                         "space_id": space_id,
                         "sync_mode": "initial",
-                        "prefer_direct": True,
+                        "prefer_direct": prefer_direct,
                     },
                     space_id=space_id,
                 )

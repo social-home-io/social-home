@@ -339,6 +339,22 @@ class SyncRtcSession:
         except asyncio.TimeoutError:
             return False
 
+    async def recv_chunk(self) -> bytes | str:
+        """Receive the next ``SPACE_SYNC_CHUNK`` frame from the DataChannel.
+
+        Raises :class:`ConnectionError` if the channel is closed before a
+        frame arrives. The requester drives a loop over this method while
+        the channel is open and forwards each frame to
+        :meth:`SpaceSyncReceiver.on_chunk` for decryption + persistence.
+        Before this method existed, the channel-open watcher set
+        ``_ready`` and then sat on ``wait_closed()`` — incoming frames
+        were never read off the channel, so even a healthy WebRTC
+        handshake produced no useful state on the requester.
+        """
+        if self._channel is None or self._closed:
+            raise ConnectionError("DataChannel not open")
+        return await self._channel.recv()
+
     async def send_chunk(self, chunk_payload: bytes | str) -> None:
         """Send a ``SPACE_SYNC_CHUNK`` frame over the DataChannel.
 
@@ -403,3 +419,14 @@ class SyncSessionRecord:
     #: to release the GFS counter. ``None`` for single-node GFS or
     #: HFS-only deployments.
     signaling_node: str | None = None
+    #: ``"rtc"`` — chunks flow over the DataChannel. ``"https"`` —
+    #: chunks flow over signed ``SPACE_SYNC_CHUNK`` federation events
+    #: through the peer's inbox. The provider sets this when admitting
+    #: a session (``prefer_direct=True`` → rtc, ``=False`` → https);
+    #: ``provider._send`` branches on it to choose the transport.
+    transport_mode: str = "rtc"
+    #: Background task driving the requester-side DataChannel readiness
+    #: watcher (Part A) — emits ``SPACE_SYNC_DIRECT_READY`` on open or
+    #: ``SPACE_SYNC_DIRECT_FAILED`` on the 15 s ICE timeout. Tracked so
+    #: ``close_session`` can cancel it cleanly.
+    rtc_watcher: Any | None = None

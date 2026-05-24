@@ -108,11 +108,36 @@ bounded even when the underlying SCTP buffer grows.
 when it's finished writing the current one — useful on constrained
 devices.
 
-## DataChannel failure
+## DataChannel failure (HTTPS fallback)
 
-If the DataChannel negotiation fails, the provider emits
-`SPACE_SYNC_DIRECT_FAILED` and continues over HTTPS inbox. The sync
-completes; only the transport changes.
+A space sync session has two transports:
+
+- **DataChannel** — `session.transport_mode = "rtc"`. The requester
+  fires `SPACE_SYNC_BEGIN {prefer_direct: true}`; the provider sends
+  `SPACE_SYNC_OFFER`; ICE trickles via `SPACE_SYNC_ICE`; chunks ride
+  the `sync-v1` channel.
+- **HTTPS inbox** — `session.transport_mode = "https"`. The requester
+  fires `SPACE_SYNC_BEGIN {prefer_direct: false}`; the provider skips
+  the SDP / ICE dance and ships `SPACE_SYNC_CHUNK` federation events
+  straight into the inbox. Slower per chunk but always reachable.
+
+The requester chooses RTC first. After it dispatches the `ANSWER` it
+spawns a 15-second `wait_ready` watcher (`SyncRtcSession.wait_ready`):
+
+- DataChannel opens → emit `SPACE_SYNC_DIRECT_READY` and start
+  consuming chunks off the channel.
+- Timeout / channel never opens → emit `SPACE_SYNC_DIRECT_FAILED
+  {reason: "ice_timeout"}`. The provider's `_handle_space_sync_direct_failed`
+  calls `trigger_relay_sync`, which mints a fresh `SPACE_SYNC_BEGIN
+  {prefer_direct: false}` and the provider re-admits the session in
+  HTTPS mode.
+
+The HTTPS chunk handler (`_handle_space_sync_chunk`) validates that the
+envelope's `from_instance` matches the session's recorded provider and
+then forwards the inner payload to `SpaceSyncReceiver.on_chunk` — the
+same pipeline RTC chunks go through. The receiver verifies the
+per-chunk signature, decrypts, persists. Tier 3 (`sync_mode="full"`)
+still aborts on `DIRECT_FAILED` per §25.8.18.
 
 ## Round-robin signaling-node selection (cluster GFS)
 

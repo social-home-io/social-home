@@ -97,6 +97,49 @@ async def test_stream_request_more_unknown_resource_is_noop(provider):
     assert session.rtc.sent == []
 
 
+# ─── Part C: HTTPS-mode transport ─────────────────────────────────────
+
+
+async def test_stream_initial_uses_https_when_session_marked(provider):
+    """When ``session.transport_mode == "https"`` (the WebRTC handshake
+    couldn't finish — carrier-grade NAT, missing STUN — and the
+    requester re-issued the BEGIN with ``prefer_direct=False``), the
+    provider MUST ship chunks as ``SPACE_SYNC_CHUNK`` federation
+    events through the attached federation service instead of trying
+    the absent DataChannel. Before this fix relay-mode sync accepted
+    the session and then did nothing."""
+    from unittest.mock import AsyncMock
+
+    session = _FakeSession()
+    session.rtc = None
+    session.transport_mode = "https"
+
+    federation = AsyncMock()
+    provider.attach_federation(federation)
+
+    await provider.stream_initial(session)
+
+    # Every chunk + the sentinel travels via send_event.
+    assert federation.send_event.await_count >= 3
+    first_call = federation.send_event.await_args_list[0]
+    assert first_call.kwargs["event_type"].value == "space_sync_chunk"
+    assert first_call.kwargs["to_instance_id"] == session.requester_instance_id
+    assert first_call.kwargs["space_id"] == session.space_id
+    assert first_call.kwargs["payload"]["sync_id"] == session.sync_id
+    assert first_call.kwargs["payload"]["chunk"]  # serialised chunk body
+
+
+async def test_stream_initial_https_requires_attached_federation(provider):
+    """HTTPS-mode without ``attach_federation`` is a wiring bug; the
+    provider raises so the missing wiring shows up in tests instead
+    of silently dropping chunks in production."""
+    session = _FakeSession()
+    session.rtc = None
+    session.transport_mode = "https"
+    with pytest.raises(RuntimeError, match="attach_federation"):
+        await provider._send(session, {"resource": "posts"})
+
+
 # ─── Catch-up media (#PR442) ──────────────────────────────────────────
 
 
