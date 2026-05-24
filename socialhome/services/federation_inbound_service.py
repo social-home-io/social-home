@@ -88,6 +88,32 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _coerce_sequence(meta: dict, payload: dict) -> int | None:
+    """Pull ``config_sequence`` out of a SPACE_CONFIG_CHANGED payload.
+
+    Senders ship the integer at two layers — the flat legacy
+    ``payload["sequence"]`` (catch-up reply path + SpaceConfigOutbound)
+    and inside the modern ``space_meta`` blob as
+    ``space_meta["config_sequence"]``. Prefer the legacy field because
+    it's the one every sender populates today; fall through to the
+    space_meta value if a future sender drops the legacy shape.
+
+    Returns ``None`` when neither layer carries an integer — the caller
+    treats that as "no guard available, fall through to upsert" so a
+    malformed/older sender doesn't accidentally lock us out of legitimate
+    updates.
+    """
+    raw = payload.get("sequence")
+    if raw is None:
+        raw = meta.get("config_sequence")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except TypeError, ValueError:
+        return None
+
+
 #: Mapping from canonical media MIME types (produced by
 #: :class:`ImageProcessor` / :class:`VideoProcessor`) to file
 #: extensions for the receiver-side ``DM_MEDIA_BLOB`` write. Falls
@@ -1336,6 +1362,28 @@ class FederationInboundService:
             # user never joined. Bail.
             return
         if existing.owner_instance_id != event.from_instance:
+            return
+        # Out-of-order delivery guard: with #459, every config edit
+        # broadcasts a SPACE_CONFIG_CHANGED, AND the §D1b catch-up
+        # path (_push_config_to) still ships a snapshot on demand. If
+        # a stale catch-up reply races a newer realtime broadcast the
+        # older could clobber the newer — drop incoming snapshots
+        # whose sequence is ≤ what we already have. ``config_sequence``
+        # is monotonic on the host (incremented per edit) and ships
+        # in the payload + space_meta for exactly this purpose.
+        #
+        # Equality is treated as "no-op" (same sequence = same state)
+        # rather than "apply" because the receiver-side save is an
+        # UPSERT and an equal-sequence apply is purely wasted work.
+        incoming_seq = _coerce_sequence(meta, event.payload)
+        if incoming_seq is not None and incoming_seq <= existing.config_sequence:
+            log.debug(
+                "SPACE_CONFIG_CHANGED for %s: incoming seq %d <= existing %d "
+                "— dropping (out-of-order or replay)",
+                space_id,
+                incoming_seq,
+                existing.config_sequence,
+            )
             return
         refreshed = stub_space_from_metadata(
             space_id,

@@ -1302,3 +1302,190 @@ async def test_space_media_blob_assembles_chunked_transfer(db, bus, tmp_path):
     assert (tmp_path / "big.webm").read_bytes() == full
     # Partial directory cleaned up.
     assert not (tmp_path / ".partial" / "tx-1").exists()
+
+
+# ─── Space config sequence gate (PR follow-up to #459) ────────────────
+
+
+async def _seed_space(db, *, space_id="sp-cfg", from_instance="peer-a", seq=0):
+    await db.enqueue(
+        """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
+                              identity_public_key, space_type, join_mode,
+                              config_sequence)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            space_id,
+            "Cfg Space",
+            from_instance,
+            "owner",
+            "aa" * 32,
+            SpaceType.PRIVATE.value,
+            JoinMode.INVITE_ONLY.value,
+            seq,
+        ),
+    )
+
+
+def _cfg_event(*, space_id, from_instance, sequence, name):
+    """SPACE_CONFIG_CHANGED envelope shaped like SpaceConfigOutbound (#459).
+
+    Carries both the flat legacy fields AND ``space_meta`` (modern shape)
+    plus a top-level ``sequence`` — matches the on-wire shape the
+    receiver guard reads.
+    """
+    return _event(
+        FederationEventType.SPACE_CONFIG_CHANGED,
+        {
+            "space_id": space_id,
+            "sequence": sequence,
+            "event_type": "rename",
+            "name": name,
+            "join_mode": "invite_only",
+            "space_type": "private",
+            "features": {
+                "calendar": True,
+                "todo": True,
+                "location": False,
+                "location_mode": "gps",
+                "stickies": True,
+                "pages": True,
+                "gallery": True,
+            },
+            "space_meta": {
+                "name": name,
+                "owner_instance_id": from_instance,
+                "owner_username": "owner",
+                "identity_public_key": "aa" * 32,
+                "config_sequence": sequence,
+                "space_type": "private",
+                "join_mode": "invite_only",
+                "features": {
+                    "calendar": True,
+                    "todo": True,
+                    "location": False,
+                    "location_mode": "gps",
+                    "stickies": True,
+                    "pages": True,
+                    "gallery": True,
+                },
+            },
+        },
+        from_instance=from_instance,
+        space_id=space_id,
+    )
+
+
+async def test_space_config_changed_applies_when_sequence_advances(
+    db,
+    bus,
+    inbound,
+):
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=5)
+    await inbound._on_space_config_changed(
+        _cfg_event(
+            space_id="sp-cfg",
+            from_instance="peer-a",
+            sequence=6,
+            name="Renamed",
+        ),
+    )
+    row = await db.fetchone(
+        "SELECT name, config_sequence FROM spaces WHERE id=?",
+        ("sp-cfg",),
+    )
+    assert row["name"] == "Renamed"
+    assert row["config_sequence"] == 6
+
+
+async def test_space_config_changed_dropped_on_stale_sequence(
+    db,
+    bus,
+    inbound,
+):
+    """Out-of-order delivery: an older snapshot must not clobber a newer
+    one. The receiver guards on ``incoming.sequence > existing``."""
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=10)
+    await inbound._on_space_config_changed(
+        _cfg_event(
+            space_id="sp-cfg",
+            from_instance="peer-a",
+            sequence=7,  # stale
+            name="StaleName",
+        ),
+    )
+    row = await db.fetchone(
+        "SELECT name, config_sequence FROM spaces WHERE id=?",
+        ("sp-cfg",),
+    )
+    # No clobber.
+    assert row["name"] == "Cfg Space"
+    assert row["config_sequence"] == 10
+
+
+async def test_space_config_changed_dropped_on_equal_sequence(
+    db,
+    bus,
+    inbound,
+):
+    """Equal sequence = same state, no-op. Don't waste an UPSERT."""
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=4)
+    await inbound._on_space_config_changed(
+        _cfg_event(
+            space_id="sp-cfg",
+            from_instance="peer-a",
+            sequence=4,
+            name="ShouldNotApply",
+        ),
+    )
+    row = await db.fetchone(
+        "SELECT name FROM spaces WHERE id=?",
+        ("sp-cfg",),
+    )
+    assert row["name"] == "Cfg Space"
+
+
+async def test_space_config_changed_missing_sequence_falls_through(
+    db,
+    bus,
+    inbound,
+):
+    """Older sender doesn't ship ``sequence`` — the guard treats this
+    as "no sequence available" and applies the upsert anyway. Otherwise
+    a sender's omission would silently lock the receiver out of legit
+    updates.
+    """
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=2)
+    event = _cfg_event(
+        space_id="sp-cfg",
+        from_instance="peer-a",
+        sequence=99,  # value here ignored — we strip the field below
+        name="ShouldApply",
+    )
+    del event.payload["sequence"]
+    del event.payload["space_meta"]["config_sequence"]
+    await inbound._on_space_config_changed(event)
+    row = await db.fetchone(
+        "SELECT name FROM spaces WHERE id=?",
+        ("sp-cfg",),
+    )
+    assert row["name"] == "ShouldApply"
+
+
+async def test_space_config_changed_wrong_owner_drops(db, bus, inbound):
+    """Defence-in-depth: only the row's owner_instance_id can update
+    via this path. A second peer can't spoof a config change for
+    somebody else's space."""
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=5)
+    await inbound._on_space_config_changed(
+        _cfg_event(
+            space_id="sp-cfg",
+            from_instance="peer-b",  # not the owner
+            sequence=10,
+            name="Spoofed",
+        ),
+    )
+    row = await db.fetchone(
+        "SELECT name FROM spaces WHERE id=?",
+        ("sp-cfg",),
+    )
+    assert row["name"] == "Cfg Space"
