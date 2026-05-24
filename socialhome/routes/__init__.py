@@ -252,6 +252,7 @@ from .spaces import (
     SpacePostCollectionView,
     SpacePostCommentDetailView,
     SpacePostCommentView,
+    SpacePostItemView,
     SpacePostReactionView,
     SpaceSyncTriggerView,
     SpaceUnbanView,
@@ -492,6 +493,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/spaces/{id}/feed", SpaceFeedView)
     app.router.add_view("/api/spaces/{id}/cover", SpaceCoverView)
     app.router.add_view("/api/spaces/{id}/posts", SpacePostCollectionView)
+    app.router.add_view(
+        "/api/spaces/{id}/posts/{post_id}",
+        SpacePostItemView,
+    )
     app.router.add_view("/api/spaces/{id}/sync", SpaceSyncTriggerView)
     app.router.add_view("/api/spaces/{id}/subscribe", SpaceSubscribeView)
     app.router.add_view("/api/me/subscriptions", MySubscriptionsView)

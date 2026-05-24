@@ -46,3 +46,75 @@ async def test_space_full_lifecycle(client):
 
     r = await client.delete(f"/api/spaces/{sid}", headers=h)
     assert r.status == 200
+
+
+async def test_space_post_delete_route_exists(client):
+    """Regression — the SPA fires ``DELETE /api/spaces/{id}/posts/{post_id}``
+    and aiohttp's routing layer must have a handler. Before this fix
+    that path returned 404 at routing (no server log, SPA's async-fn
+    rejection silently swallowed → confirmation dialog closed and
+    the post stayed visible)."""
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "PostDeleteSpace", "emoji": "🗑"},
+        headers=h,
+    )
+    assert r.status == 201
+    sid = (await r.json())["id"]
+
+    r = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "delete me"},
+        headers=h,
+    )
+    assert r.status == 201
+    pid = (await r.json())["id"]
+
+    r = await client.delete(f"/api/spaces/{sid}/posts/{pid}", headers=h)
+    assert r.status == 204
+
+    # Idempotency: deleting an already-deleted post is still 404 (post
+    # gone from the author's view) — not 500.
+    r = await client.delete(f"/api/spaces/{sid}/posts/{pid}", headers=h)
+    assert r.status in (204, 404)
+
+
+async def test_space_post_delete_404_for_unknown_post(client):
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "X", "emoji": "🏠"},
+        headers=h,
+    )
+    sid = (await r.json())["id"]
+    r = await client.delete(
+        f"/api/spaces/{sid}/posts/does-not-exist",
+        headers=h,
+    )
+    assert r.status == 404
+
+
+async def test_space_post_patch_edits_content(client):
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "EditSpace", "emoji": "✏"},
+        headers=h,
+    )
+    sid = (await r.json())["id"]
+    r = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "original"},
+        headers=h,
+    )
+    pid = (await r.json())["id"]
+    r = await client.patch(
+        f"/api/spaces/{sid}/posts/{pid}",
+        json={"content": "edited"},
+        headers=h,
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["content"] == "edited"
+    assert body["edited_at"] is not None
