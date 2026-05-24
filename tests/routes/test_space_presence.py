@@ -399,3 +399,90 @@ async def test_presence_skips_remote_pin_without_member_row(client):
     # Admin is opted out by default — no local entries. Stale remote
     # pin is dropped.
     assert body["entries"] == []
+
+
+async def test_presence_reports_total_members_and_sharing_count(client):
+    """Pascal's repro: space has 3 members (2 local + 1 remote) but
+    the map header showed '2 of 2'. The denominator must be the full
+    roster (local + remote member rows), the numerator the count of
+    members who opted in to share with this space."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    # Local member 1: admin (the caller) — opted in, has GPS.
+    await _set_member_opt_in(client, space_id, client._uid, enabled=True)
+    await _seed_presence(
+        client,
+        username="admin",
+        user_id=client._uid,
+        lat=52.5,
+        lon=13.4,
+    )
+    # Local member 2: housemate — opted in, no GPS yet. They count
+    # toward total_members AND toward sharing_count (intent), even
+    # without an active pin.
+    await client._db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) "
+        "VALUES('housemate', 'uid-housemate', 'Housemate', 0)",
+    )
+    await client._db.enqueue(
+        "INSERT INTO space_members(space_id, user_id, role, joined_at, "
+        "location_share_enabled) VALUES(?, 'uid-housemate', 'member', "
+        "datetime('now'), 1)",
+        (space_id,),
+    )
+    # Remote member: opted in via their own household, federated a
+    # SPACE_LOCATION_UPDATED to us, has a current pin row.
+    await _seed_remote_member(
+        client,
+        space_id,
+        instance_id="peer-jacqueline",
+        user_id="uid-jacqueline",
+        display_name="Jacqueline",
+    )
+    await _seed_remote_pin(
+        client,
+        space_id,
+        instance_id="peer-jacqueline",
+        user_id="uid-jacqueline",
+        lat=48.1,
+        lon=11.5,
+    )
+
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    assert r.status == 200
+    # 2 local members + 1 remote = 3 in the roster.
+    assert body["total_members"] == 3
+    # All 3 are sharing (admin via GPS row, housemate via opt-in
+    # without GPS yet, Jacqueline via pin row existence).
+    assert body["sharing_count"] == 3
+
+
+async def test_presence_total_members_excludes_share_state(client):
+    """A non-sharing member still counts toward total_members so the
+    SPA's denominator is honest about the space size."""
+    space_id = await _create_space(client)
+    await _enable_feature_location(client, space_id, enabled=True)
+    # Admin opted-in.
+    await _set_member_opt_in(client, space_id, client._uid, enabled=True)
+    # Housemate — present in the space but NOT sharing.
+    await client._db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin) "
+        "VALUES('housemate', 'uid-housemate', 'Housemate', 0)",
+    )
+    await client._db.enqueue(
+        "INSERT INTO space_members(space_id, user_id, role, joined_at, "
+        "location_share_enabled) VALUES(?, 'uid-housemate', 'member', "
+        "datetime('now'), 0)",
+        (space_id,),
+    )
+    r = await client.get(
+        f"/api/spaces/{space_id}/presence",
+        headers=_auth(client._tok),
+    )
+    body = await r.json()
+    assert body["total_members"] == 2
+    assert body["sharing_count"] == 1
