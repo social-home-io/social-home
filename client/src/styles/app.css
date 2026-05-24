@@ -8974,6 +8974,10 @@ hr {
 }
 .sh-member-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .sh-member-name { font-weight: 600; }
+/* Joined date sits on its own line under the name + chips so a long
+ * display name doesn't push the date off the row (or worse, collide
+ * with the chips and wrap badly on a 360 px phone). */
+.sh-member-joined { font-size: var(--sh-font-size-xs); }
 .sh-member-me-chip {
   display: inline-flex;
   font-size: var(--sh-font-size-xs);

@@ -389,6 +389,131 @@ async def test_remote_member_display_name_prefers_fresh_users_table_row(client):
     assert remote["display_name"] == "Jacqueline Williams"
 
 
+async def test_remote_member_surfaces_picture_url_when_users_sync_delivered_bytes(
+    client,
+):
+    """``USERS_SYNC`` fans the remote user's WebP avatar bytes onto every
+    paired peer; they land in the shared ``user_profile_pictures`` table
+    keyed by ``user_id`` and the ``remote_users`` row picks up
+    ``picture_hash``. The space member list MUST surface the resulting
+    ``api/users/{user_id}/picture?v=<hash>`` URL so the SPA shows
+    cross-household members with their actual avatar instead of just
+    initials. Pascal's report was "all members have no profile
+    pictures" — root cause was the route hardcoding ``picture_url:
+    None`` on the remote row even when the bytes had arrived."""
+    app = client.app
+    db = app[_db_key]
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "RemoteAvatar"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    # Pair-instance + remote_user row carrying the synced picture hash.
+    await db.enqueue(
+        "INSERT INTO remote_instances"
+        "(id, display_name, remote_identity_pk, key_self_to_remote,"
+        " key_remote_to_self, remote_inbox_url, local_inbox_id, status,"
+        " source) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            "peer-instance-id",
+            "Peer",
+            "00" * 32,
+            "k1",
+            "k2",
+            "https://peer/wh",
+            "wh-peer",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await db.enqueue(
+        "INSERT INTO space_remote_members"
+        "(space_id, instance_id, user_id, user_pk, display_name)"
+        " VALUES(?,?,?,?,?)",
+        (sid, "peer-instance-id", "uid-bob", "pk", "Bob"),
+    )
+    await db.enqueue(
+        "INSERT INTO remote_users"
+        "(user_id, instance_id, remote_username, display_name,"
+        " picture_hash, synced_at, deprovisioned_at)"
+        " VALUES(?,?,?,?,?, datetime('now'), NULL)",
+        ("uid-bob", "peer-instance-id", "bob", "Bob", "deadbeef"),
+    )
+
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    remote = next(m for m in members if m.get("instance_id"))
+    assert remote["picture_hash"] == "deadbeef"
+    assert remote["picture_url"] is not None
+    assert "api/users/uid-bob/picture" in remote["picture_url"]
+    assert "v=deadbeef" in remote["picture_url"]
+
+
+async def test_remote_member_surfaces_personal_alias(client):
+    """``personal_aliases`` keys on (viewer, target_user_id) and the
+    ``alias_service`` already accepts remote ``user_id``s. The roster
+    route must include remote members in the bulk alias resolve and
+    pass the value through to the rendered row — without this, the
+    nickname Pascal sets via the friends list never surfaces in the
+    space-member list."""
+    app = client.app
+    db = app[_db_key]
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "RemoteAlias"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    await db.enqueue(
+        "INSERT INTO remote_instances"
+        "(id, display_name, remote_identity_pk, key_self_to_remote,"
+        " key_remote_to_self, remote_inbox_url, local_inbox_id, status,"
+        " source) VALUES(?,?,?,?,?,?,?,?,?)",
+        (
+            "peer-instance-id",
+            "Peer",
+            "00" * 32,
+            "k1",
+            "k2",
+            "https://peer/wh",
+            "wh-peer",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await db.enqueue(
+        "INSERT INTO space_remote_members"
+        "(space_id, instance_id, user_id, user_pk, display_name)"
+        " VALUES(?,?,?,?,?)",
+        (sid, "peer-instance-id", "uid-bob", "pk", "Bob"),
+    )
+    await db.enqueue(
+        "INSERT INTO remote_users"
+        "(user_id, instance_id, remote_username, display_name,"
+        " synced_at, deprovisioned_at)"
+        " VALUES(?,?,?,?, datetime('now'), NULL)",
+        ("uid-bob", "peer-instance-id", "bob", "Bob"),
+    )
+    # Seed the alias as if the admin set it via PUT /api/aliases/users.
+    await db.enqueue(
+        "INSERT INTO user_aliases (viewer_user_id, target_user_id, alias)"
+        " VALUES (?, ?, ?)",
+        (client._admin_uid, "uid-bob", "Bob the Carpenter"),
+    )
+
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    remote = next(m for m in members if m.get("instance_id"))
+    assert remote["personal_alias"] == "Bob the Carpenter"
+
+
 async def test_remote_member_falls_back_to_snapshot_when_users_table_missing(client):
     """When ``remote_users`` has no row for the user (the §D1b accept
     landed before USERS_SYNC, or the household never paired), the
