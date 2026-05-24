@@ -155,6 +155,7 @@ from .services.highlight_publication_service import HighlightPublicationService
 from .services.moment_public_service import MomentPublicService
 from .services.profile_sync_service import ProfileSyncService
 from .services.moment_public_outbound import MomentPublicOutbound
+from .services.space_config_outbound import SpaceConfigOutbound
 from .services.space_post_outbound import SpacePostOutbound
 from .services.moment_public_inbound import MomentPublicInbound
 from .repositories.moment_public_repo import (
@@ -2058,6 +2059,19 @@ def create_app(config: Config | None = None) -> web.Application:
             media_sync=space_media_sync_service,
             federation_repo=repos.federation,
         )
+        # Federate per-edit config changes (rename, emoji, feature
+        # toggles, location_mode flips, retention bumps) to remote
+        # member stubs in realtime. Before this, SPACE_CONFIG_CHANGED
+        # only shipped via the §D1b catch-up reply, so toggling
+        # ``location_mode`` on the host left every remote stub with
+        # the prior mode — the receiver-side strict ``mode_filter``
+        # in the space-map API then dropped pin rows that had
+        # otherwise been validated + persisted.
+        SpaceConfigOutbound(
+            bus=bus,
+            federation_service=federation_service,
+            space_repo=space_repo,
+        ).wire()
         # Wire RSVP propagation onto the calendar service. Done after
         # federation_service is built so the service can broadcast on
         # rsvp() / remove_rsvp() (§Phase A).
