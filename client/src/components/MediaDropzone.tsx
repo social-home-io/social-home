@@ -9,7 +9,8 @@
  * call-site flexibility for per-feature constraints (highlight's
  * per-day frame cap, momentum's 15-second video probe).
  */
-import { useRef, useState } from 'preact/hooks'
+import { useState } from 'preact/hooks'
+import { showToast } from './Toast'
 
 interface MediaDropzoneProps {
   /** Called once per drop / pick with every selected File. */
@@ -38,7 +39,6 @@ export function MediaDropzone({
   pickLabel = 'choose a file…',
   draggingHint = 'Drop to attach',
 }: MediaDropzoneProps) {
-  const inputRef = useRef<HTMLInputElement | null>(null)
   const [dragActive, setDragActive] = useState(false)
 
   const handleFiles = async (files: File[]) => {
@@ -49,6 +49,20 @@ export function MediaDropzone({
   const onPicked = async (e: Event) => {
     const input = e.target as HTMLInputElement
     const files = Array.from(input.files ?? [])
+    if (files.length === 0) {
+      // The HA Android Companion App's WebView occasionally fires
+      // ``change`` with an empty FileList — the picker UI confirmed
+      // a photo but the WebChromeClient didn't propagate the URI back
+      // to the page. Without this toast the user sees pure silence
+      // and assumes the upload is broken. Surfacing it directs them
+      // to retry or fall back to drag-and-drop / desktop.
+      showToast(
+        'The file picker didn\'t return a photo. Tap "choose photos…" again, '
+        + 'or drag a file in.',
+        'error',
+      )
+      return
+    }
     await handleFiles(files)
     input.value = ''
   }
@@ -89,34 +103,45 @@ export function MediaDropzone({
       onDragLeave={onDragLeave}
     >
       <span>{dragActive ? draggingHint : hint}</span>
-      <button
-        type="button"
-        class="sh-link"
-        disabled={disabled}
-        onClick={() => inputRef.current?.click()}
-      >
-        {pickLabel}
-      </button>
       {/*
-        The input MUST stay in the layout tree — the Android System
-        WebView used by the HA Companion App does not fire the
-        ``onChange`` callback when the input is ``display: none``
-        (or ``hidden``). The user picks a file, the picker closes,
-        ``input.files`` stays empty, and the composer silently shows
-        nothing. ``.sr-only`` keeps the element 1×1 px offscreen so
-        the picker callback fires correctly while staying invisible
-        to the eye. Same fix applied at every other file-input site
-        in the SPA — see git blame for the full list.
+        ``<label>`` wraps the file input so the user's tap on the
+        affordance flows directly into the chooser via the
+        platform's native label semantics — no synthetic JS
+        ``.click()`` indirection. This is the pattern every other
+        working file-input site in the SPA uses already
+        (``SpaceSettingsPage``, ``SettingsPage``,
+        ``SpaceProfileDialog``, ``BazaarCreateDialog``,
+        ``CalendarEventDialog``). The previous shape — a separate
+        ``<button onClick={() => inputRef.current?.click()}>`` —
+        opened the picker on the HA Android Companion App's
+        WebView but the chooser result didn't always make it back
+        into ``input.files``: picker closed, nothing happened.
+        DM thread's paperclip uses the same synthetic-click pattern
+        and DOES work, which weakens the "synthetic click is the
+        bug" theory; the empty-files diagnostic toast in
+        ``onPicked`` is what tells us which failure mode this
+        actually is (URI dropped vs. ``change`` never firing).
+        ``.sr-only`` keeps the input 1×1 px offscreen so the
+        chooser callback still fires reliably.
+
+        Disabled visual feedback comes from the parent
+        ``.sh-mediadrop--disabled`` class (opacity 0.5, cursor
+        not-allowed), which propagates to the label via CSS
+        inheritance. Clicking a label that wraps a disabled input
+        is a no-op per the HTML spec, so we rely on the input's
+        ``disabled`` attribute alone for the gating logic.
       */}
-      <input
-        ref={inputRef}
-        type="file"
-        multiple={multiple}
-        accept={accept}
-        disabled={disabled}
-        class="sr-only"
-        onChange={onPicked}
-      />
+      <label class="sh-link">
+        {pickLabel}
+        <input
+          type="file"
+          multiple={multiple}
+          accept={accept}
+          disabled={disabled}
+          class="sr-only"
+          onChange={onPicked}
+        />
+      </label>
     </div>
   )
 }
