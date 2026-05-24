@@ -430,12 +430,24 @@ async def test_spaces_member_management(client):
     )
     sid = (await resp.json())["id"]
 
+    # ``POST /members`` now creates a pending invite (PR #470 — local
+    # invites require the invitee's consent, parity with the §D1b
+    # cross-household flow). The admin's call returns 202 +
+    # ``{invitation_id}``; the invitee accepts via
+    # ``POST /api/local_invites/{id}/accept`` before they're seated.
     resp2 = await client.post(
         f"/api/spaces/{sid}/members",
         json={"user_id": client._bob_uid},
         headers=_auth(client._admin_token),
     )
-    assert resp2.status == 201
+    assert resp2.status == 202
+    invitation_id = (await resp2.json())["invitation_id"]
+    resp2b = await client.post(
+        f"/api/local_invites/{invitation_id}/accept",
+        json={},
+        headers=_auth(client._bob_token),
+    )
+    assert resp2b.status == 200
 
     resp3 = await client.get(
         f"/api/spaces/{sid}/members",

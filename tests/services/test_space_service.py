@@ -102,6 +102,216 @@ async def test_ban_and_unban(stack):
     assert not await stack.space_repo.is_banned(space.id, b.user_id)
 
 
+async def test_invite_local_user_creates_pending_then_accept_seats(stack):
+    """``invite_local_user`` creates a row in ``space_invitations``
+    with status='pending'; the invitee is NOT yet a member. After
+    ``accept_local_invite`` they're seated and the row flips to
+    ``accepted``. Mirrors the §D1b cross-household flow Pascal
+    asked for parity with."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    invitation_id = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    pending = await stack.space_repo.list_pending_local_invites_for(b.user_id)
+    assert any(r["id"] == invitation_id for r in pending)
+    assert await stack.space_repo.get_member(space.id, b.user_id) is None
+    member = await stack.space_svc.accept_local_invite(
+        invitation_id,
+        user_id=b.user_id,
+    )
+    assert member.user_id == b.user_id
+    assert await stack.space_repo.get_member(space.id, b.user_id) is not None
+    # Pending list is empty post-accept.
+    assert await stack.space_repo.list_pending_local_invites_for(b.user_id) == []
+
+
+async def test_invite_local_user_idempotent(stack):
+    """Re-inviting the same user on the same space returns the
+    existing pending row instead of stacking duplicates."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    first = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    second = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    assert first == second
+    pending = await stack.space_repo.list_pending_local_invites_for(b.user_id)
+    assert len(pending) == 1
+
+
+async def test_invite_local_user_refuses_existing_member(stack):
+    """Inviting a user who's already a member is a 409-shape error
+    (SpacePermissionError) so the route can map it cleanly."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    with pytest.raises(SpacePermissionError, match="already a member"):
+        await stack.space_svc.invite_local_user(
+            space.id,
+            actor_username="anna",
+            user_id=b.user_id,
+        )
+
+
+async def test_invite_local_user_refuses_banned_user(stack):
+    """A banned user can't be invited; the invitee isn't given a
+    prompt for a space they couldn't satisfy."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_repo.ban_member(
+        space.id,
+        b.user_id,
+        banned_by="anna",
+    )
+    with pytest.raises(SpacePermissionError) as exc:
+        await stack.space_svc.invite_local_user(
+            space.id,
+            actor_username="anna",
+            user_id=b.user_id,
+        )
+    assert exc.value.banned is True
+
+
+async def test_invite_local_user_requires_admin(stack):
+    """Non-admin members can't invite — same gate as the existing
+    add_member path."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    c = await stack.provision_user("carl")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    with pytest.raises(SpacePermissionError):
+        await stack.space_svc.invite_local_user(
+            space.id,
+            actor_username="bob",
+            user_id=c.user_id,
+        )
+
+
+async def test_accept_local_invite_rejects_wrong_user(stack):
+    """An invite addressed to bob cannot be accepted by carl."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    c = await stack.provision_user("carl")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    invitation_id = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    with pytest.raises(SpacePermissionError, match="different user"):
+        await stack.space_svc.accept_local_invite(
+            invitation_id,
+            user_id=c.user_id,
+        )
+
+
+async def test_accept_local_invite_unknown_id_raises(stack):
+    """A bogus invitation id surfaces as KeyError so the route maps
+    to 404."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    with pytest.raises(KeyError):
+        await stack.space_svc.accept_local_invite(
+            "no-such-id",
+            user_id=b.user_id,
+        )
+
+
+async def test_decline_local_invite_marks_declined(stack):
+    """Declining a pending invite flips status without seating the
+    user; a second decline is a no-op."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    invitation_id = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    await stack.space_svc.decline_local_invite(
+        invitation_id,
+        user_id=b.user_id,
+    )
+    assert await stack.space_repo.get_member(space.id, b.user_id) is None
+    row = await stack.space_repo.get_invitation(invitation_id)
+    assert row["status"] == "declined"
+    # Idempotent — second decline doesn't toggle back to pending or
+    # error out.
+    await stack.space_svc.decline_local_invite(
+        invitation_id,
+        user_id=b.user_id,
+    )
+    row = await stack.space_repo.get_invitation(invitation_id)
+    assert row["status"] == "declined"
+
+
+async def test_accept_local_invite_refuses_already_accepted(stack):
+    """Re-accepting a row that's already been accepted is a
+    permission error — not a second seat."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    invitation_id = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=b.user_id,
+    )
+    await stack.space_svc.accept_local_invite(invitation_id, user_id=b.user_id)
+    with pytest.raises(SpacePermissionError, match="already 'accepted'"):
+        await stack.space_svc.accept_local_invite(
+            invitation_id,
+            user_id=b.user_id,
+        )
+
+
+async def test_local_invite_methods_refuse_remote_row(stack):
+    """``accept_local_invite`` and ``decline_local_invite`` must
+    refuse rows that belong to the cross-household flow — those go
+    through ``/api/remote_invites/{token}/{decision}`` instead."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    invitation_id = await stack.space_repo.save_remote_invitation(
+        space_id=space.id,
+        invited_by="anna",
+        remote_instance_id="peer-iid",
+        remote_user_id=b.user_id,
+        invite_token="tok-x",
+    )
+    with pytest.raises(SpacePermissionError, match="cross-household"):
+        await stack.space_svc.accept_local_invite(
+            invitation_id,
+            user_id=b.user_id,
+        )
+    with pytest.raises(SpacePermissionError, match="cross-household"):
+        await stack.space_svc.decline_local_invite(
+            invitation_id,
+            user_id=b.user_id,
+        )
+
+
 async def test_invite_flow(stack):
     """Invite token can be created and accepted; expired token is rejected."""
     _a = await stack.provision_user("anna")
