@@ -91,6 +91,7 @@ UNGATED_METHODS: frozenset[str] = frozenset(
     {
         # Pure reads.
         "list_feed",
+        "list_comments",  # route layer applies the membership gate
         "list_links",
         "list_pending_moderation",
         "list_subscriptions",
@@ -326,6 +327,34 @@ async def test_subscriber_cannot_comment(stack):
             author_user_id=stack.bob.user_id,
             content="should fail",
         )
+
+
+async def test_list_comments_returns_chronological_order(stack):
+    """``list_comments`` is a bare repo delegation — verify the
+    round-trip after add_comment so the GET-route path that calls it
+    has confidence at the service layer too."""
+    post = await stack.space_svc.create_post(
+        stack.public_space.id,
+        author_user_id=stack.anna.user_id,
+        type=PostType.TEXT,
+        content="anchor",
+    )
+    assert post is not None
+    # No comments yet.
+    assert await stack.space_svc.list_comments(post.id) == []
+    # Add two and confirm both surface.
+    await stack.space_svc.add_comment(
+        post.id,
+        author_user_id=stack.anna.user_id,
+        content="first",
+    )
+    await stack.space_svc.add_comment(
+        post.id,
+        author_user_id=stack.anna.user_id,
+        content="second",
+    )
+    comments = await stack.space_svc.list_comments(post.id)
+    assert [c.content for c in comments] == ["first", "second"]
 
 
 async def test_subscriber_cannot_react(stack):
