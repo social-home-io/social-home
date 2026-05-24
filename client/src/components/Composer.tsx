@@ -158,7 +158,6 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
   const showCount = charCount > MAX_LENGTH * 0.8
   const overLimit = charCount > MAX_LENGTH
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [pendingSchedule, setPendingSchedule] = useState<ScheduleDraft | null>(null)
   const [pollOpen, setPollOpen] = useState(false)
@@ -266,7 +265,19 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
   const onFilePicked = async (e: Event) => {
     const input = e.target as HTMLInputElement
     const files = Array.from(input.files ?? [])
-    if (files.length === 0) return
+    if (files.length === 0) {
+      // HA Android Companion App WebView occasionally fires ``change``
+      // with an empty FileList — the user confirmed a photo in the
+      // picker but the WebChromeClient didn't propagate the URI back
+      // into ``input.files``. Toast it so they know to retry rather
+      // than staring at silent failure.
+      showToast(
+        'The file picker didn\'t return a photo. Tap "Add photo" again, '
+        + 'or drag a file in.',
+        'error',
+      )
+      return
+    }
     await acceptFiles(files)
     input.value = ''  // allow re-selecting the same file later
   }
@@ -509,11 +520,36 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
             </div>
           ))}
           {images.length < MAX_IMAGES && (
-            <button type="button" class="sh-composer-image-add"
-                    onClick={() => fileInputRef.current?.click()}>
+            /*
+             * ``<label>`` wraps the file input so the user-gesture
+             * flows straight into the chooser via the platform's
+             * native label semantics — see ``MediaDropzone`` for the
+             * full rationale. The synthetic ``inputRef.current.click()``
+             * pattern opened the picker but, on the HA Android
+             * Companion App's WebView, the resulting
+             * ``onShowFileChooser`` URI didn't always propagate back
+             * to ``input.files`` — the picker closed and "nothing
+             * happened". The wrap pattern matches every other working
+             * file-picker surface in the SPA.
+             */
+            <label class="sh-composer-image-add">
               <span aria-hidden="true">＋</span>
               <span>Add photo</span>
-            </button>
+              {/*
+               * Single-pick + specific MIME list for the same
+               * HA-Android-WebView reason documented on the
+               * MediaDropzone usage above. The user picks one
+               * photo per "+ Add photo" tap; the tile stays
+               * available until ``MAX_IMAGES`` so multiple
+               * additions still work, just one chooser at a time.
+               */}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
+                class="sr-only"
+                onChange={onFilePicked}
+              />
+            </label>
           )}
         </div>
       )}
@@ -541,28 +577,34 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       {showMediaAttach
         && uploadProgress.value === null
         && (postType.value === 'image' ? images.length === 0 : !mediaUrl) && (
+        /*
+         * Picker is single-pick + specific image MIME list (not
+         * ``multiple`` + ``image/*``) on the picker path because the
+         * HA Android Companion App's WebView ``WebChromeClient`` was
+         * suppressing the chooser's result callback in
+         * multi-select / ``image/*`` mode (Google Photos picker) —
+         * the user picked a photo, the picker closed, and the
+         * input's ``change`` event never fired, so the diagnostic
+         * toast for empty files didn't even surface. The DM
+         * thread's paperclip (no ``accept``, no ``multiple``)
+         * works on the same device, which is the structural
+         * difference this aligns with. Drag-and-drop still
+         * accepts multiple files via ``DataTransfer.files`` — only
+         * the chooser path is single-pick. The "+ Add photo" tile
+         * lets the user stack multiple images one at a time.
+         */
         <MediaDropzone
-          multiple={postType.value === 'image'}
-          accept={postType.value === 'image' ? 'image/*'
-                : postType.value === 'video' ? 'video/*' : undefined}
+          multiple={false}
+          accept={postType.value === 'image'
+            ? 'image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif'
+            : postType.value === 'video' ? 'video/*' : undefined}
           hint={postType.value === 'image'
             ? 'Drag photos here, or'
             : `Drag a ${postType.value} here, or`}
-          pickLabel={postType.value === 'image' ? 'choose photos…' : 'choose a file…'}
+          pickLabel={postType.value === 'image' ? 'choose a photo…' : 'choose a file…'}
           draggingHint={`Drop to attach ${postType.value}`}
           onFiles={acceptFiles}
         />
-      )}
-      {/* Hidden picker reused by the "Add photo" tile so a user can
-          extend an existing image post without re-rendering the
-          dropzone path. The MediaDropzone above only renders in the
-          empty state, so we mount this raw input for the
-          fill-with-more case. */}
-      {postType.value === 'image' && images.length > 0
-        && images.length < MAX_IMAGES && (
-        <input ref={fileInputRef} type="file" multiple accept="image/*"
-               class="sr-only"
-               onChange={onFilePicked} />
       )}
       <UploadProgressBar />
       {postType.value === 'schedule' && pendingSchedule && (

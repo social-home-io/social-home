@@ -191,6 +191,15 @@ module = ["pywebpush", "pywebpush.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
+# pillow_heif ships no py.typed marker. The image processor's
+# ``# type: ignore[import-untyped]`` worked on the contributor's
+# local mypy build, but on a fresh venv mypy raises the
+# ``import-not-found`` code instead — the suppression doesn't
+# match, the hook fails. The override covers both shapes.
+module = ["pillow_heif", "pillow_heif.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # orjson has no stubs in older releases.
 module = ["orjson"]
 ignore_missing_imports = true

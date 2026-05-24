@@ -12,7 +12,7 @@ import io
 import logging
 import uuid
 
-import pillow_heif  # type: ignore[import-untyped]
+import pillow_heif
 from PIL import Image, ImageOps
 from PIL.Image import Resampling
 
