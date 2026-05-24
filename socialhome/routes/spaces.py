@@ -327,6 +327,8 @@ def _remote_member_to_dict(
     rm,
     *,
     display_name_override: str | None = None,
+    personal_alias: str | None = None,
+    picture_hash: str | None = None,
     is_online: bool = False,
     is_idle: bool = False,
     last_seen_at: str | None = None,
@@ -345,6 +347,20 @@ def _remote_member_to_dict(
     deprovisioned, the row was seeded before USERS_SYNC arrived,
     etc.).
 
+    ``personal_alias`` — viewer-private nickname from
+    ``personal_aliases`` (set via :class:`AliasItemView`). The alias
+    service stores the row keyed on ``(viewer, target)`` regardless
+    of whether the target is local or remote, so this surfaces
+    naturally here — the only reason it used to be hardcoded ``None``
+    is that the caller wasn't passing it through.
+
+    ``picture_hash`` — when set, builds the same
+    ``api/users/{user_id}/picture?v=<hash>`` URL the local row uses.
+    The bytes are federated to this household via ``USERS_SYNC`` and
+    stored in the shared ``user_profile_pictures`` table keyed by
+    ``user_id``, so :class:`UserPictureView` serves them without
+    caring whether the target is local or remote.
+
     Differences from a local row:
 
     - ``role`` reads ``rm.role`` from ``space_remote_members.role``,
@@ -354,8 +370,9 @@ def _remote_member_to_dict(
     - ``instance_id`` is set so the UI can render a "from {household}"
       affordance and route role / kick PATCH+DELETE to the
       ``/remote-members/{instance}/{user}`` endpoint.
-    - ``picture_url`` is null — picture sync over federation isn't
-      part of §D1b. (The SPA falls back to the initials avatar.)
+    - ``space_display_name`` is still ``None`` — ``space_remote_members``
+      has no per-space override column; admins who want a different
+      label per space need a schema bump first (deferred).
     - presence fields default to ``false`` / ``null`` — we have no
       session presence signal from the peer's instance.
     """
@@ -365,9 +382,11 @@ def _remote_member_to_dict(
         "joined_at": rm.joined_at or "",
         "display_name": display_name_override or rm.display_name,
         "space_display_name": None,
-        "personal_alias": None,
-        "picture_hash": None,
-        "picture_url": None,
+        "personal_alias": personal_alias,
+        "picture_hash": picture_hash,
+        "picture_url": (
+            f"api/users/{rm.user_id}/picture?v={picture_hash}" if picture_hash else None
+        ),
         "is_online": is_online,
         "is_idle": is_idle,
         "last_seen_at": last_seen_at,
@@ -377,6 +396,33 @@ def _remote_member_to_dict(
         # admin gestures.
         "instance_id": rm.instance_id,
     }
+
+
+def _remote_member_to_dict_signed(
+    request: web.Request,
+    rm,
+    *,
+    display_name_override: str | None = None,
+    personal_alias: str | None = None,
+    picture_hash: str | None = None,
+    is_online: bool = False,
+    is_idle: bool = False,
+    last_seen_at: str | None = None,
+) -> dict:
+    """:func:`_remote_member_to_dict` + sign the picture URL when set."""
+    payload = _remote_member_to_dict(
+        rm,
+        display_name_override=display_name_override,
+        personal_alias=personal_alias,
+        picture_hash=picture_hash,
+        is_online=is_online,
+        is_idle=is_idle,
+        last_seen_at=last_seen_at,
+    )
+    signer = request.app.get(media_signer_key)
+    if signer is not None:
+        sign_media_urls_in(payload, signer)
+    return payload
 
 
 def _member_to_dict_signed(
@@ -440,9 +486,16 @@ class SpaceMembersView(BaseView):
                 display_names[m.user_id] = remote.display_name
         viewer = self.user
         viewer_id = viewer.user_id if viewer is not None else ""
+        # Resolve viewer-private aliases for BOTH local and remote
+        # members in one bulk call. ``personal_aliases`` keys on
+        # ``(viewer, target_user_id)`` regardless of whether the
+        # target is local or remote, so the same lookup covers both.
+        # Before this, the remote roster never surfaced the alias
+        # the user already set via the friends list (the wire field
+        # was hardcoded to ``None``).
         aliases = await self.svc(alias_resolver_key).resolve_users(
             viewer_id,
-            [m.user_id for m in members],
+            [m.user_id for m in members] + [rm.user_id for rm in remote_members],
         )
         # Session-presence snapshot — single call, applied per-row below.
         online_svc = self.request.app.get(online_status_service_key)
@@ -485,6 +538,12 @@ class SpaceMembersView(BaseView):
                 if remote_user is not None and remote_user.display_name
                 else None
             )
+            # ``remote_users.picture_hash`` is kept fresh by USERS_SYNC
+            # inbound; the bytes land in the shared
+            # ``user_profile_pictures`` table keyed by user_id, so the
+            # local picture endpoint serves them without any extra
+            # routing.
+            picture_hash = remote_user.picture_hash if remote_user is not None else None
             is_online = rm.user_id in online_ids
             is_idle = rm.user_id in idle_ids
             last_seen_at: str | None = None
@@ -492,9 +551,12 @@ class SpaceMembersView(BaseView):
                 ls = online_svc.last_seen(rm.user_id)
                 last_seen_at = ls.isoformat() if ls is not None else None
             remote_rows.append(
-                _remote_member_to_dict(
+                _remote_member_to_dict_signed(
+                    self.request,
                     rm,
                     display_name_override=override,
+                    personal_alias=aliases.get(rm.user_id),
+                    picture_hash=picture_hash,
                     is_online=is_online,
                     is_idle=is_idle,
                     last_seen_at=last_seen_at,

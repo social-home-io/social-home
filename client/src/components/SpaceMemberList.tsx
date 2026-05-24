@@ -267,11 +267,22 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
                 {isMe && (
                   <span class="sh-muted sh-member-me-chip">you</span>
                 )}
+                {/* Joined date moved INSIDE the column-flex info block
+                    so it stacks underneath the name + chips instead of
+                    sharing a row with them. For a long display name on
+                    a same-household row the two were colliding (no room
+                    for both "Pascal Vizeli ✏ Your nickname" and the
+                    date on a 360 px phone). On its own line the date
+                    reads as quiet metadata. */}
+                <time
+                  class="sh-muted sh-member-joined"
+                  dateTime={m.joined_at}
+                  title={new Date(m.joined_at).toLocaleString()}
+                >
+                  joined {formatRelativeJoined(m.joined_at)}
+                </time>
               </div>
-              <time class="sh-muted" dateTime={m.joined_at} title={new Date(m.joined_at).toLocaleString()}>
-                joined {formatRelativeJoined(m.joined_at)}
-              </time>
-              {!isMe && !m.instance_id && (
+              {!isMe && (
                 <button
                   class="sh-member-rename-btn"
                   type="button"
@@ -280,6 +291,12 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
                       ? `Edit nickname for ${r.fallback}`
                       : `Set nickname for ${r.fallback}`
                   }
+                  // Viewer-private nickname applies to local and
+                  // remote members alike — ``personal_aliases`` is
+                  // keyed on ``(viewer, target_user_id)`` regardless
+                  // of which household ``target`` lives on. The
+                  // backend's ``GET /api/spaces/{id}/members`` now
+                  // surfaces the alias for remote rows too.
                   title="Set a nickname (only you see it)"
                   onClick={() =>
                     openAliasDialog({
