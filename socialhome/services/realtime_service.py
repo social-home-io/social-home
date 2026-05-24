@@ -75,6 +75,7 @@ from ..domain.events import (
     HighlightFrameRemoved,
     HighlightFrameViewed,
     HighlightRemoved,
+    LocalSpaceInviteCreated,
     MomentCreated,
     MomentDeleted,
     MomentReactionChanged,
@@ -239,6 +240,10 @@ class RealtimeService:
         self._bus.subscribe(SpaceBotTokenRotated, self._on_space_bot_token_rotated)
         self._bus.subscribe(SpaceMemberLeft, self._on_space_member_left)
         self._bus.subscribe(SpaceJoinRequested, self._on_space_join_requested)
+        self._bus.subscribe(
+            LocalSpaceInviteCreated,
+            self._on_local_space_invite_created,
+        )
         self._bus.subscribe(SpaceJoinApproved, self._on_space_join_approved)
         self._bus.subscribe(SpaceJoinDenied, self._on_space_join_denied)
         self._bus.subscribe(SpacePostModerated, self._on_space_post_moderated)
@@ -856,6 +861,25 @@ class RealtimeService:
                 "space_id": event.space_id,
                 "user_id": event.user_id,
                 "request_id": event.request_id,
+            },
+        )
+
+    async def _on_local_space_invite_created(
+        self,
+        event: LocalSpaceInviteCreated,
+    ) -> None:
+        """Push the invite to the recipient's session so the inbox
+        banner appears immediately. The SPA already polls
+        ``/api/local_invites`` on mount; this WS frame just collapses
+        the latency from "user opens the SPA" to "user sees the
+        prompt the instant the admin clicks Invite"."""
+        await self._ws.broadcast_to_user(
+            event.invited_user_id,
+            {
+                "type": "space.local_invite_received",
+                "space_id": event.space_id,
+                "invitation_id": event.invitation_id,
+                "invited_by": event.invited_by,
             },
         )
 

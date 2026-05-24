@@ -565,21 +565,33 @@ class SpaceMembersView(BaseView):
         return web.json_response(local_rows + remote_rows)
 
     async def post(self) -> web.Response:
+        """Issue a pending invitation for a same-household user.
+
+        Used to seat directly via :meth:`SpaceService.add_member`,
+        which surprised invitees ("I'm suddenly in this space — no
+        idea who put me here"). Now mirrors the cross-household
+        flow: a row in ``space_invitations`` is created, the user
+        sees it on ``GET /api/local_invites``, and they accept or
+        decline via ``POST /api/local_invites/{id}/{decision}``.
+        Returns 202 + ``{invitation_id}`` instead of the old 201 +
+        ``{user_id, role}`` so the SPA can branch on the response.
+        """
         ctx = self.user
         svc = self.svc(space_service_key)
         space_id = self.match("id")
         body = await self.body()
-        member = await svc.add_member(
+        invitation_id = await svc.invite_local_user(
             space_id,
             actor_username=ctx.username,
             user_id=body["user_id"],
         )
         return web.json_response(
             {
-                "user_id": member.user_id,
-                "role": member.role,
+                "invitation_id": invitation_id,
+                "invited_user_id": body["user_id"],
+                "status": "pending",
             },
-            status=201,
+            status=202,
         )
 
 
@@ -1023,6 +1035,73 @@ class SpaceRemoteMemberRoleView(BaseView):
             user_id=user_id,
         )
         return web.json_response({"ok": True})
+
+
+class LocalInviteCollectionView(BaseView):
+    """``GET /api/local_invites`` — same-household invitations
+    pending for the caller. Symmetric to
+    :class:`RemoteInviteCollectionView` (which covers the §D1b
+    cross-household case); both list endpoints feed
+    ``RemoteInviteInboxBanner`` so a member sees pending invites
+    regardless of who issued them.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        if ctx is None or ctx.user_id is None:
+            return error_response(401, "UNAUTHENTICATED", "Login required.")
+        repo = self.svc(space_repo_key)
+        rows = await repo.list_pending_local_invites_for(ctx.user_id)
+        return web.json_response(
+            [
+                {
+                    "invitation_id": r["id"],
+                    "space_id": r["space_id"],
+                    "invited_by": r.get("invited_by"),
+                    "expires_at": r.get("expires_at"),
+                    "created_at": r.get("created_at"),
+                }
+                for r in rows
+            ]
+        )
+
+
+class LocalInviteDecisionView(BaseView):
+    """``POST /api/local_invites/{id}/accept`` or ``/decline``."""
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        if ctx is None or ctx.user_id is None:
+            return error_response(401, "UNAUTHENTICATED", "Login required.")
+        invitation_id = self.match("id")
+        decision = self.match("decision")
+        svc = self.svc(space_service_key)
+        if decision == "accept":
+            try:
+                member = await svc.accept_local_invite(
+                    invitation_id,
+                    user_id=ctx.user_id,
+                )
+            except KeyError:
+                return error_response(404, "NOT_FOUND", "Invitation not found.")
+            return web.json_response(
+                {"user_id": member.user_id, "role": member.role},
+                status=200,
+            )
+        if decision == "decline":
+            try:
+                await svc.decline_local_invite(
+                    invitation_id,
+                    user_id=ctx.user_id,
+                )
+            except KeyError:
+                return error_response(404, "NOT_FOUND", "Invitation not found.")
+            return web.Response(status=204)
+        return error_response(
+            404,
+            "NOT_FOUND",
+            f"unknown decision {decision!r}",
+        )
 
 
 class RemoteInviteCollectionView(BaseView):

@@ -56,6 +56,7 @@ GATED_METHODS: frozenset[str] = frozenset(
         "dissolve_space",
         "update_config",
         "add_member",
+        "invite_local_user",
         "remove_member",
         "set_role",
         "set_remote_member_role",
@@ -103,6 +104,8 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         "redeem_invite_token",  # token validates the actor; cross-instance route
         "accept_remote_invite",  # cross-instance — own user
         "decline_remote_invite",  # cross-instance — own user
+        "accept_local_invite",  # same-household — own user (the invitee)
+        "decline_local_invite",  # same-household — own user (the invitee)
         "request_join",  # any user may request; gate is on approval
         "request_join_remote",  # cross-instance request
         "subscribe_to_space",  # public-space follow-only

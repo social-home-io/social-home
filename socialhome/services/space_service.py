@@ -42,6 +42,7 @@ from ..domain.events import (
     CommentAdded,
     CommentDeleted,
     CommentUpdated,
+    LocalSpaceInviteCreated,
     PostDeleted,
     PostEdited,
     RemoteJoinRequestApproved,
@@ -642,6 +643,148 @@ class SpaceService:
                 actor_id=actor_uid,
             )
         return member
+
+    async def invite_local_user(
+        self,
+        space_id: str,
+        *,
+        actor_username: str,
+        user_id: str,
+    ) -> str:
+        """Issue a pending invitation to a same-household user. The
+        invitee accepts via :meth:`accept_local_invite` (or declines
+        via :meth:`decline_local_invite`) before they're seated.
+
+        Pascal's report: "if I invite local member to space — they
+        should receive a join request like all others". Before this
+        method existed, the route handler called :meth:`add_member`
+        directly and the user appeared in the space without ever
+        being asked. Cross-household invites already require accept
+        (§D1b); this lifts the local path to the same shape.
+
+        Returns the new invitation id so the route can echo it back.
+        Idempotent against an existing pending invite for the same
+        ``(space_id, user_id)`` — re-issuing returns the existing id
+        rather than creating a duplicate row.
+        """
+        space = await self._require_space(space_id)
+        await self._require_admin_or_owner(space, actor_username)
+        if await self._spaces.is_banned(space_id, user_id):
+            raise SpacePermissionError(
+                f"user {user_id!r} is banned from this space",
+                banned=True,
+            )
+        # Already a member → 409-shape error so the route can map.
+        if await self._spaces.get_member(space_id, user_id) is not None:
+            raise SpacePermissionError(
+                f"user {user_id!r} is already a member",
+            )
+        # §CP.F1 — block underage minors here too, so they never see
+        # the accept prompt for a space they couldn't actually join.
+        if self._child_protection is not None:
+            await self._child_protection.check_space_age_gate(space_id, user_id)
+        # Idempotent re-issue: look for an existing pending row.
+        existing = await self._spaces.list_pending_local_invites_for(user_id)
+        for row in existing:
+            if row.get("space_id") == space_id:
+                return str(row["id"])
+        actor = await self._users.get(actor_username)
+        invited_by = actor.user_id if actor is not None else actor_username
+        invitation_id = await self._spaces.save_invitation(
+            space_id=space_id,
+            invited_user_id=user_id,
+            invited_by=invited_by,
+        )
+        await self._bus.publish(
+            LocalSpaceInviteCreated(
+                space_id=space_id,
+                invitation_id=invitation_id,
+                invited_user_id=user_id,
+                invited_by=invited_by,
+            )
+        )
+        return invitation_id
+
+    async def accept_local_invite(
+        self,
+        invitation_id: str,
+        *,
+        user_id: str,
+    ) -> SpaceMember:
+        """Invitee accepts a same-household invite. Seats the user
+        via the existing :meth:`add_member` and marks the row
+        accepted. Refuses if the row belongs to a different user or
+        already resolved (defence — the route only surfaces pending
+        invites for the caller, but a stale request shouldn't sneak
+        someone in).
+        """
+        row = await self._spaces.get_invitation(invitation_id)
+        if row is None:
+            raise KeyError(invitation_id)
+        if row.get("invited_user_id") != user_id:
+            raise SpacePermissionError(
+                "invite belongs to a different user",
+            )
+        if row.get("remote_instance_id"):
+            raise SpacePermissionError(
+                "use /api/remote_invites for cross-household invites",
+            )
+        if row.get("status") != "pending":
+            raise SpacePermissionError(
+                f"invite already {row.get('status')!r}",
+            )
+        space = await self._require_space(row["space_id"])
+        if await self._spaces.is_banned(space.id, user_id):
+            await self._spaces.update_invitation_status(
+                invitation_id,
+                "declined",
+            )
+            raise SpacePermissionError(
+                f"user {user_id!r} is banned from this space",
+                banned=True,
+            )
+        member = SpaceMember(
+            space_id=space.id,
+            user_id=user_id,
+            role=SpaceRole.MEMBER,
+            joined_at=datetime.now(timezone.utc).isoformat(),
+        )
+        await self._spaces.save_member(member)
+        await self._spaces.update_invitation_status(invitation_id, "accepted")
+        await self._bus.publish(
+            SpaceMemberJoined(
+                space_id=space.id,
+                user_id=user_id,
+                role=SpaceRole.MEMBER,
+            )
+        )
+        return member
+
+    async def decline_local_invite(
+        self,
+        invitation_id: str,
+        *,
+        user_id: str,
+    ) -> None:
+        """Invitee declines a same-household invite. Marks the row
+        declined; no membership row is created. Idempotent — a
+        second decline (or accept-after-decline) is a no-op."""
+        row = await self._spaces.get_invitation(invitation_id)
+        if row is None:
+            raise KeyError(invitation_id)
+        if row.get("invited_user_id") != user_id:
+            raise SpacePermissionError(
+                "invite belongs to a different user",
+            )
+        if row.get("remote_instance_id"):
+            raise SpacePermissionError(
+                "use /api/remote_invites for cross-household invites",
+            )
+        if row.get("status") == "pending":
+            await self._spaces.update_invitation_status(
+                invitation_id,
+                "declined",
+            )
 
     async def remove_member(
         self,

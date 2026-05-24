@@ -17,6 +17,32 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def _seat_local_member(client, sid: str, user_token: str, user_uid: str) -> None:
+    """Test helper: admin invites + the invitee accepts in one shot.
+
+    The HTTP surface for adding a member now requires the invitee's
+    consent (Pascal: "if I invite local member to space — they should
+    receive a join request like all others"), so most existing tests
+    that wanted bob seated immediately need to drive both legs. This
+    helper keeps each test focused on its own assertion rather than
+    re-stating the invite + accept dance every time.
+    """
+    r = await client.post(
+        f"/api/spaces/{sid}/members",
+        json={"user_id": user_uid},
+        headers=_auth(client._admin_token),
+    )
+    body = await r.json()
+    assert r.status == 202, f"invite failed: {body!r}"
+    invitation_id = body["invitation_id"]
+    r2 = await client.post(
+        f"/api/local_invites/{invitation_id}/accept",
+        json={},
+        headers=_auth(user_token),
+    )
+    assert r2.status == 200, f"accept failed: {await r2.text()!r}"
+
+
 @pytest.fixture
 async def client(tmp_dir):
     """App client with admin (pascal) and regular user (bob)."""
@@ -231,11 +257,77 @@ async def test_dissolve_space(client):
     assert resp.status == 200
 
 
-async def test_add_and_list_members(client):
-    """POST + GET /api/spaces/{id}/members manages space membership."""
+async def test_invite_and_accept_local_member(client):
+    """``POST /api/spaces/{id}/members`` now creates a pending
+    invitation; the invitee accepts via
+    ``POST /api/local_invites/{id}/accept`` before they're seated.
+
+    Pascal: "if I invite local member to space — they should receive
+    a join request like all others". Before this change the admin's
+    POST seated the user immediately; now the user-side acceptance is
+    required for parity with the §D1b cross-household flow.
+    """
     r = await client.post(
         "/api/spaces",
-        json={"name": "MemberSpace"},
+        json={"name": "InviteSpace"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    # Admin invites bob — response is 202 + pending invitation id.
+    r2 = await client.post(
+        f"/api/spaces/{sid}/members",
+        json={"user_id": client._bob_uid},
+        headers=_auth(client._admin_token),
+    )
+    assert r2.status == 202
+    body = await r2.json()
+    assert body["status"] == "pending"
+    invitation_id = body["invitation_id"]
+    # Member list still shows only the admin (owner); bob isn't
+    # seated yet.
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    assert len(members) == 1
+    # Bob's inbox surfaces the pending invite.
+    r3 = await client.get(
+        "/api/local_invites",
+        headers=_auth(client._bob_token),
+    )
+    invites = await r3.json()
+    assert any(i["invitation_id"] == invitation_id for i in invites)
+    # Bob accepts.
+    r4 = await client.post(
+        f"/api/local_invites/{invitation_id}/accept",
+        json={},
+        headers=_auth(client._bob_token),
+    )
+    assert r4.status == 200
+    # Now the member list contains both.
+    resp = await client.get(
+        f"/api/spaces/{sid}/members",
+        headers=_auth(client._admin_token),
+    )
+    members = await resp.json()
+    assert len(members) == 2
+    user_ids = {m["user_id"] for m in members}
+    assert client._bob_uid in user_ids
+    # Online-status + location-share fields still ride on every row.
+    for member in members:
+        assert "is_online" in member
+        assert "is_idle" in member
+        assert "last_seen_at" in member
+        assert "location_share_enabled" in member
+        assert isinstance(member["location_share_enabled"], bool)
+
+
+async def test_decline_local_invite(client):
+    """Bob can decline — no seat, invite marked declined."""
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "DeclineSpace"},
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
@@ -244,26 +336,45 @@ async def test_add_and_list_members(client):
         json={"user_id": client._bob_uid},
         headers=_auth(client._admin_token),
     )
-    assert r2.status == 201
-    resp = await client.get(
-        f"/api/spaces/{sid}/members",
+    invitation_id = (await r2.json())["invitation_id"]
+    r3 = await client.post(
+        f"/api/local_invites/{invitation_id}/decline",
+        json={},
+        headers=_auth(client._bob_token),
+    )
+    assert r3.status == 204
+    # Bob's pending list is empty.
+    r4 = await client.get(
+        "/api/local_invites",
+        headers=_auth(client._bob_token),
+    )
+    invites = await r4.json()
+    assert not any(i["invitation_id"] == invitation_id for i in invites)
+
+
+async def test_local_invite_accept_rejects_other_user(client):
+    """An invite for bob cannot be accepted by the admin (or anyone
+    else). Defence-in-depth — the route only surfaces a user's own
+    invites, but a hostile API call shouldn't seat the wrong user."""
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "GuardSpace"},
         headers=_auth(client._admin_token),
     )
-    members = await resp.json()
-    assert len(members) == 2
-    # Online-status fields ride on every row so the SPA can render the
-    # green/amber dot without an extra round-trip.
-    for member in members:
-        assert "is_online" in member
-        assert "is_idle" in member
-        assert "last_seen_at" in member
-        # §23.8.8 — the per-space location-share opt-in must be on the
-        # member row so the map tab's sharing chip can hydrate on a
-        # cold load. Pre-fix the field was dropped from the serializer,
-        # so the chip rendered as OFF on every re-entry even though
-        # the row was actually enabled — which read as "it reset".
-        assert "location_share_enabled" in member
-        assert isinstance(member["location_share_enabled"], bool)
+    sid = (await r.json())["id"]
+    r2 = await client.post(
+        f"/api/spaces/{sid}/members",
+        json={"user_id": client._bob_uid},
+        headers=_auth(client._admin_token),
+    )
+    invitation_id = (await r2.json())["invitation_id"]
+    # Admin tries to "accept on bob's behalf" — refuse.
+    r3 = await client.post(
+        f"/api/local_invites/{invitation_id}/accept",
+        json={},
+        headers=_auth(client._admin_token),
+    )
+    assert r3.status == 403
 
 
 async def test_list_members_includes_federated_remote_members(client):
@@ -579,11 +690,7 @@ async def test_remove_member(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     resp = await client.delete(
         f"/api/spaces/{sid}/members/{client._bob_uid}",
         headers=_auth(client._admin_token),
@@ -599,11 +706,7 @@ async def test_ban_member(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     resp = await client.post(
         f"/api/spaces/{sid}/ban",
         json={"user_id": client._bob_uid, "reason": "spam"},
@@ -843,11 +946,7 @@ async def test_leave_via_members_me(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     r = await client.delete(
         f"/api/spaces/{sid}/members/me",
         headers=_auth(client._bob_token),
@@ -862,11 +961,7 @@ async def test_set_role_owner_promotes_admin(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     r = await client.patch(
         f"/api/spaces/{sid}/members/{client._bob_uid}",
         json={"role": "admin"},
@@ -883,11 +978,7 @@ async def test_set_role_non_owner_forbidden(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     r = await client.patch(
         f"/api/spaces/{sid}/members/{client._admin_uid}",
         json={"role": "admin"},
@@ -903,11 +994,7 @@ async def test_set_role_invalid_value_422(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     r = await client.patch(
         f"/api/spaces/{sid}/members/{client._bob_uid}",
         json={"role": "overlord"},
@@ -923,11 +1010,7 @@ async def test_ownership_transfer_owner_only(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     r = await client.post(
         f"/api/spaces/{sid}/ownership",
         json={"to_user_id": client._bob_uid},
@@ -1214,11 +1297,7 @@ async def test_space_cover_non_admin_forbidden(client):
     )
     sid = (await r.json())["id"]
     # Add bob as a plain member.
-    await client.post(
-        f"/api/spaces/{sid}/members",
-        json={"user_id": client._bob_uid},
-        headers=_auth(client._admin_token),
-    )
+    await _seat_local_member(client, sid, client._bob_token, client._bob_uid)
     form = aiohttp.FormData()
     form.add_field(
         "file",

@@ -70,10 +70,18 @@ async def _seed_moderated_space(client):
         headers=_auth(client._admin_token),
     )
     sid = (await r.json())["id"]
-    await client.post(
+    # ``POST /members`` now creates a pending invite (parity with the
+    # cross-household flow); the invitee accepts before being seated.
+    r2 = await client.post(
         f"/api/spaces/{sid}/members",
         json={"user_id": client._bob_uid},
         headers=_auth(client._admin_token),
+    )
+    invitation_id = (await r2.json())["invitation_id"]
+    await client.post(
+        f"/api/local_invites/{invitation_id}/accept",
+        json={},
+        headers=_auth(client._bob_token),
     )
     # Flip posts_access to moderated via PATCH.
     from socialhome.app_keys import space_service_key

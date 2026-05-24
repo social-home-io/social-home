@@ -182,4 +182,68 @@ describe('RemoteInviteInboxBanner', () => {
       expect(container.querySelector('.sh-remote-invite-banner')).toBeNull()
     })
   })
+
+  it('also renders pending local-household invitations', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/remote_invites') return Promise.resolve([])
+      if (url === '/api/local_invites') {
+        return Promise.resolve([
+          {
+            invitation_id: 'inv-1',
+            space_id: 'space-fam',
+            invited_by: 'uid-admin',
+            expires_at: null,
+            created_at: '2026-05-24T12:00:00Z',
+          },
+        ])
+      }
+      if (url === '/api/friends') return Promise.resolve({ households: [] })
+      if (url === '/api/users') return Promise.resolve([])
+      return Promise.reject(new Error(`unknown url: ${url}`))
+    })
+    const { container } = render(<RemoteInviteInboxBanner />)
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="local-invite-accept"]'),
+      ).not.toBeNull()
+    })
+    expect(container.textContent).toContain('space-fam')
+  })
+
+  it('local-invite accept POSTs to /api/local_invites/{id}/accept', async () => {
+    apiGet.mockImplementation((url: string) => {
+      if (url === '/api/remote_invites') return Promise.resolve([])
+      if (url === '/api/local_invites') {
+        return Promise.resolve([
+          {
+            invitation_id: 'inv-2',
+            space_id: 'sp',
+            invited_by: 'uid-admin',
+            expires_at: null,
+            created_at: '2026-05-24T12:00:00Z',
+          },
+        ])
+      }
+      if (url === '/api/friends') return Promise.resolve({ households: [] })
+      if (url === '/api/users') return Promise.resolve([])
+      return Promise.reject(new Error(`unknown url: ${url}`))
+    })
+    apiPost.mockResolvedValue({})
+    const { container } = render(<RemoteInviteInboxBanner />)
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="local-invite-accept"]'),
+      ).not.toBeNull()
+    })
+    const btn = container.querySelector(
+      '[data-testid="local-invite-accept"]',
+    ) as HTMLButtonElement
+    fireEvent.click(btn)
+    await waitFor(() => {
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/local_invites/inv-2/accept',
+        {},
+      )
+    })
+  })
 })

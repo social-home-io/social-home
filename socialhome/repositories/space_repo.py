@@ -173,6 +173,10 @@ class AbstractSpaceRepo(Protocol):
         self,
         user_id: str,
     ) -> list[dict]: ...
+    async def list_pending_local_invites_for(
+        self,
+        user_id: str,
+    ) -> list[dict]: ...
     async def update_invitation_status(
         self,
         invitation_id: str,
@@ -1051,6 +1055,30 @@ class SqliteSpaceRepo:
             SELECT * FROM space_invitations
              WHERE remote_user_id=?
                AND remote_instance_id IS NOT NULL
+               AND status='pending'
+             ORDER BY created_at DESC
+            """,
+            (user_id,),
+        )
+        return rows_to_dicts(rows)
+
+    async def list_pending_local_invites_for(
+        self,
+        user_id: str,
+    ) -> list[dict]:
+        """Pending same-household invites where ``user_id`` is the
+        invitee. Symmetric to :meth:`list_pending_remote_invites_for`
+        but for the local-add flow Pascal asked for: an admin's
+        "add member" no longer seats the user immediately — they get
+        a row here and have to accept it. ``remote_instance_id IS
+        NULL`` distinguishes local from cross-household invites; both
+        live in the same table.
+        """
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM space_invitations
+             WHERE invited_user_id=?
+               AND remote_instance_id IS NULL
                AND status='pending'
              ORDER BY created_at DESC
             """,
