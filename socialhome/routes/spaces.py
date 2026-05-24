@@ -1837,7 +1837,18 @@ def _serialise_comment(comment) -> dict:
 
 
 class SpacePostCommentView(BaseView):
-    """``POST /api/spaces/{id}/posts/{post_id}/comments`` — add a comment."""
+    """``POST/GET /api/spaces/{id}/posts/{post_id}/comments`` — add or
+    list comments.
+
+    The household-feed twin at ``/api/feed/posts/{id}/comments`` had
+    both verbs since forever; the space twin was POST-only. The SPA
+    at ``CommentOverlay.tsx`` fires ``api.get(commentsUrl)`` to render
+    the thread on every overlay open + after every POST. Without a
+    GET handler aiohttp returned 405, the SPA's promise rejected, and
+    the overlay rendered "no comments" even though ``post.comment_count``
+    correctly incremented — Pascal's symptom: "I see '1 comment' but
+    no comment body".
+    """
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -1861,6 +1872,18 @@ class SpacePostCommentView(BaseView):
             parent_id=body.get("parent_id"),
         )
         return web.json_response(_serialise_comment(comment), status=201)
+
+    async def get(self) -> web.Response:
+        self.user  # auth gate
+        svc = self.svc(space_service_key)
+        post_id = self.match("post_id")
+        try:
+            comments = await svc.list_comments(post_id)
+        except KeyError:
+            return error_response(404, "NOT_FOUND", "Post not found.")
+        return web.json_response(
+            [_serialise_comment(c) for c in comments],
+        )
 
 
 class SpacePostCommentDetailView(BaseView):

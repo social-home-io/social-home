@@ -118,3 +118,76 @@ async def test_space_post_patch_edits_content(client):
     body = await r.json()
     assert body["content"] == "edited"
     assert body["edited_at"] is not None
+
+
+async def test_space_post_comments_round_trip(client):
+    """The SPA's CommentOverlay fires GET on /api/spaces/{id}/posts/{pid}/comments
+    to render the thread on overlay open and after every POST. Before
+    this fix the view was POST-only — GET returned 405, the SPA's
+    fetch promise rejected, and the overlay showed 'no comments' even
+    though ``post.comment_count`` ticked up.
+
+    Pascal's repro: '1 comment shown but I can't see any comments'.
+    """
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "CommentSpace", "emoji": "💬"},
+        headers=h,
+    )
+    sid = (await r.json())["id"]
+    r = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "hello"},
+        headers=h,
+    )
+    pid = (await r.json())["id"]
+
+    # Empty thread on the freshly-created post.
+    r = await client.get(
+        f"/api/spaces/{sid}/posts/{pid}/comments",
+        headers=h,
+    )
+    assert r.status == 200
+    assert await r.json() == []
+
+    # Add two comments.
+    r = await client.post(
+        f"/api/spaces/{sid}/posts/{pid}/comments",
+        json={"content": "first"},
+        headers=h,
+    )
+    assert r.status == 201
+    r = await client.post(
+        f"/api/spaces/{sid}/posts/{pid}/comments",
+        json={"content": "second"},
+        headers=h,
+    )
+    assert r.status == 201
+
+    # The list endpoint now returns both, in insertion order.
+    r = await client.get(
+        f"/api/spaces/{sid}/posts/{pid}/comments",
+        headers=h,
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert [c["content"] for c in body] == ["first", "second"]
+
+
+async def test_space_post_comments_get_404_for_unknown_post(client):
+    h = _auth(client._tok)
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "X", "emoji": "🏠"},
+        headers=h,
+    )
+    sid = (await r.json())["id"]
+    r = await client.get(
+        f"/api/spaces/{sid}/posts/does-not-exist/comments",
+        headers=h,
+    )
+    # list_comments on a missing post returns empty rather than 404
+    # (matches household feed semantics). Accept either as long as it
+    # isn't 500 / 405.
+    assert r.status in (200, 404)

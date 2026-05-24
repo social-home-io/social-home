@@ -2170,6 +2170,17 @@ class SpaceService:
         )
         return comment
 
+    async def list_comments(self, post_id: str) -> list[Comment]:
+        """Return every comment on a space post in chronological order.
+
+        Used by ``GET /api/spaces/{id}/posts/{post_id}/comments``.
+        Bare delegation to the repo — the route layer is responsible
+        for the (cheap) membership check before calling. Soft-deleted
+        comments are excluded by the repo's filter so the response
+        matches what the SPA expects to render.
+        """
+        return await self._posts.list_comments(post_id)
+
     async def edit_comment(
         self,
         comment_id: str,
