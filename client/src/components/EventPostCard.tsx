@@ -27,8 +27,10 @@ import { Button } from '@/components/Button'
 import { CapacityStrip } from '@/components/CapacityStrip'
 import { EventOverflowMenu } from '@/components/EventOverflowMenu'
 import { LocationLink } from '@/components/LocationLink'
+import { renderMarkdown } from '@/components/markdown'
 import { openEditEventDialog } from '@/components/CalendarEventDialog'
 import { showToast } from '@/components/Toast'
+import { addBase } from '@/baseUrl'
 import { t } from '@/i18n/i18n'
 import { currentUser } from '@/store/auth'
 import {
@@ -36,6 +38,10 @@ import {
   rsvpCounts,
   type RsvpCounts,
 } from '@/store/calendar'
+import {
+  detectBrowserTz,
+  formatEventTime as formatTimeInTz,
+} from '@/utils/timezone'
 import type { CalendarEvent } from '@/types'
 
 export interface EventPostCardProps {
@@ -111,15 +117,29 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
 
   const occurrence = nextOccurrenceFor(event)
   const ended = occurrence == null
-  const startStr = occurrence
-    ? formatEventTime(occurrence.start, event.all_day)
-    : t('event.has_ended')
+  const occurrenceStart = occurrence?.start ?? null
+  const occurrenceEnd = occurrenceStart
+    ? new Date(
+        new Date(occurrenceStart).getTime()
+        + (new Date(event.end).getTime() - new Date(event.start).getTime()),
+      ).toISOString()
+    : null
+  const eventTz = event.tz || 'UTC'
+  const viewerTz = detectBrowserTz()
+  const showTzHint = eventTz !== viewerTz && !event.all_day
 
   const isCapped = event.capacity != null
   const isCreator = event.created_by === currentUser.value?.user_id
 
+  // RSVP attendance line — populated only when we know at least one
+  // response. Capped events lean on CapacityStrip instead; uncapped
+  // events surface their own one-liner so members can tell who else
+  // is coming without opening the dialog.
+  const attendance = !isCapped && counts ? formatAttendance(counts) : null
+  const cardClass = `sh-event-card${ended ? ' sh-event-card--past' : ''}`
+
   return (
-    <div class="sh-event-card" data-event-id={event.id}>
+    <div class={cardClass} data-event-id={event.id}>
       {event.cover_url && (
         <img
           class="sh-event-card-cover"
@@ -128,18 +148,17 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
           loading="lazy"
         />
       )}
-      <div class="sh-event-card-when">
-        <span class="sh-event-card-when-icon" aria-hidden="true">📅</span>
-        <span class="sh-event-card-when-text">{startStr}</span>
-        {event.rrule && (
-          <span class="sh-event-card-recur">
-            {' · '}
-            {t('event.recurring_chip', {
-              freq: rruleHumanFreq(event.rrule),
-            })}
-          </span>
-        )}
-      </div>
+      <h3 class="sh-event-card-title">{event.summary}</h3>
+      <EventWhen
+        occurrenceStart={occurrenceStart}
+        occurrenceEnd={occurrenceEnd}
+        allDay={event.all_day}
+        eventTz={eventTz}
+        viewerTz={viewerTz}
+        showTzHint={showTzHint}
+        rrule={event.rrule ?? null}
+        ended={ended}
+      />
       {event.location && (
         <div class="sh-event-card-location">
           <LocationLink
@@ -148,21 +167,34 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
           />
         </div>
       )}
+      {event.description && (
+        <div
+          class="sh-event-card-description sh-post-body"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(event.description) }}
+        />
+      )}
 
       <CapacityStrip counts={counts} capacity={event.capacity} myStatus={myStatus} />
+      {attendance && (
+        <div class="sh-event-card-attendance">{attendance}</div>
+      )}
 
-      {myStatus && (
+      {/* Status pill is only useful when it carries information the
+          RSVP buttons don't: "Pending approval" / "On waitlist #N".
+          For plain going/maybe/declined the primary-variant button
+          already states it. */}
+      {myStatus === 'requested' || myStatus === 'waitlist' ? (
         <div class="sh-event-card-pill">
           <StatusPill status={myStatus} counts={counts} />
         </div>
-      )}
+      ) : null}
 
       <div class="sh-event-card-rsvp" role="group" aria-label={t('event.rsvp.aria')}>
         {RSVP_BUTTONS.map((btn) => (
           <RsvpButton
             key={btn.status}
             event={event}
-            occurrenceAt={occurrence?.start ?? null}
+            occurrenceAt={occurrenceStart}
             status={btn.status}
             emoji={btn.emoji}
             i18nKey={btn.i18nKey}
@@ -171,7 +203,25 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
             mine={myStatus}
           />
         ))}
-        <EventOverflowMenu eventId={event.id}>
+        {/* ``Add to my calendar`` promoted out of the kebab — for
+            non-creators it's the most useful follow-up, so it earns a
+            sibling slot next to the RSVP set. Uses a relative URL
+            (no leading slash) so the browser resolves it against
+            ``<base href>`` for the HA Supervisor ingress prefix. */}
+        <a
+          class="sh-event-card-ics"
+          href={addBase(`/api/calendars/events/${event.id}/export.ics`)}
+          download
+          aria-label={t('event.add_to_calendar')}
+          title={t('event.add_to_calendar')}
+        >
+          <span aria-hidden="true">📥</span>
+          <span class="sh-event-card-ics-label">{t('event.add_to_calendar')}</span>
+        </a>
+        <EventOverflowMenu
+          eventId={event.id}
+          showIcsItem={false}
+        >
           {isCreator && (
             <button
               type="button"
@@ -198,6 +248,120 @@ export function EventPostCard({ eventId }: EventPostCardProps) {
       )}
     </div>
   )
+}
+
+/** Pretty-prints the date + time-range for a single occurrence,
+ *  honouring the event's authored tz and surfacing a "≈ HH:MM your
+ *  time" hint when the viewer's browser tz differs. */
+function EventWhen({
+  occurrenceStart,
+  occurrenceEnd,
+  allDay,
+  eventTz,
+  viewerTz,
+  showTzHint,
+  rrule,
+  ended,
+}: {
+  occurrenceStart: string | null
+  occurrenceEnd: string | null
+  allDay: boolean
+  eventTz: string
+  viewerTz: string
+  showTzHint: boolean
+  rrule: string | null
+  ended: boolean
+}) {
+  if (!occurrenceStart) {
+    return (
+      <div class="sh-event-card-when sh-event-card-when--past">
+        <span class="sh-event-card-when-icon" aria-hidden="true">📅</span>
+        <span class="sh-event-card-when-text">{t('event.has_ended')}</span>
+      </div>
+    )
+  }
+
+  const dateStr = formatDate(occurrenceStart, eventTz, allDay)
+  let timeStr = ''
+  let viewerHint: string | null = null
+  if (allDay) {
+    if (occurrenceEnd) {
+      const endDate = formatDate(occurrenceEnd, eventTz, true)
+      if (endDate !== dateStr) {
+        timeStr = `${dateStr} – ${endDate}`
+      } else {
+        timeStr = dateStr
+      }
+    } else {
+      timeStr = dateStr
+    }
+  } else {
+    const startFmt = formatTimeInTz(occurrenceStart, eventTz, viewerTz)
+    const endFmt = occurrenceEnd
+      ? formatTimeInTz(occurrenceEnd, eventTz, viewerTz)
+      : null
+    timeStr = endFmt
+      ? `${dateStr}, ${startFmt.primary} – ${endFmt.primary}`
+      : `${dateStr}, ${startFmt.primary}`
+    if (showTzHint && endFmt) {
+      viewerHint = `≈ ${endFmt.secondary?.replace(/^≈ /, '') ?? ''}`
+      // ``secondary`` is non-null whenever ``showTzHint`` is true, but
+      // be defensive — fall back to the start-only hint if the helper
+      // ever returns a degenerate range.
+      if (!endFmt.secondary && startFmt.secondary) viewerHint = startFmt.secondary
+    } else if (showTzHint && startFmt.secondary) {
+      viewerHint = startFmt.secondary
+    }
+  }
+
+  return (
+    <div class={`sh-event-card-when${ended ? ' sh-event-card-when--past' : ''}`}>
+      <div class="sh-event-card-when-row">
+        <span class="sh-event-card-when-icon" aria-hidden="true">📅</span>
+        <span class="sh-event-card-when-text">{timeStr}</span>
+        {rrule && (
+          <span class="sh-event-card-recur">
+            {' · '}
+            {t('event.recurring_chip', {
+              freq: rruleHumanFreq(rrule),
+            })}
+          </span>
+        )}
+      </div>
+      {viewerHint && (
+        <div class="sh-event-card-when-viewer">{viewerHint}</div>
+      )}
+    </div>
+  )
+}
+
+/** Render a YYYY-MM-DD-ish date label for the card headline,
+ *  honouring the event's authored tz so the wall clock matches what
+ *  the host typed. For all-day events the time portion is dropped. */
+function formatDate(iso: string, tz: string, allDay: boolean): string {
+  const d = new Date(iso)
+  return d.toLocaleDateString(undefined, {
+    timeZone: allDay ? 'UTC' : tz,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+/** "12 going · 3 maybe" — only counts non-zero buckets so a fresh
+ *  event without responses doesn't show a depressing "0 going". */
+function formatAttendance(counts: RsvpCounts): string | null {
+  const parts: string[] = []
+  if (counts.going > 0) {
+    parts.push(t('event.attendance.going', { n: String(counts.going) }))
+  }
+  if (counts.maybe > 0) {
+    parts.push(t('event.attendance.maybe', { n: String(counts.maybe) }))
+  }
+  if (counts.declined > 0) {
+    parts.push(t('event.attendance.declined', { n: String(counts.declined) }))
+  }
+  return parts.length > 0 ? parts.join(' · ') : null
 }
 
 function StatusPill({
@@ -353,22 +517,4 @@ function rruleHumanFreq(rrule: string): string {
   if (!m) return ''
   const freq = m[1].toLowerCase()
   return t(`event.rrule.${freq}`) || freq
-}
-
-function formatEventTime(iso: string, allDay: boolean): string {
-  const d = new Date(iso)
-  if (allDay) {
-    return d.toLocaleDateString(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-  return d.toLocaleString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
 }
