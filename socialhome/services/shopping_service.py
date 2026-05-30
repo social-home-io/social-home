@@ -34,6 +34,7 @@ from ..repositories.shopping_repo import (
     ShoppingItem,
     UNSET_FIELD,
 )
+from .bus_publisher import BusPublisherMixin
 
 
 #: Upper bound on the free-form store name. Keeps the chip / pill
@@ -58,7 +59,7 @@ def _clean_store(value: str | None) -> str | None:
     return trimmed[:_STORE_MAX]
 
 
-class ShoppingService:
+class ShoppingService(BusPublisherMixin):
     """Household shopping list operations."""
 
     __slots__ = ("_repo", "_bus")
@@ -86,16 +87,15 @@ class ShoppingService:
             raise ValueError("shopping item text must not be empty")
         clean_store = _clean_store(store)
         item = await self._repo.add(text, created_by=created_by, store=clean_store)
-        if self._bus is not None:
-            await self._bus.publish(
-                ShoppingItemAdded(
-                    item_id=item.id,
-                    text=item.text,
-                    created_by=item.created_by,
-                    created_at=item.created_at,
-                    store=item.store,
-                )
+        await self._emit(
+            ShoppingItemAdded(
+                item_id=item.id,
+                text=item.text,
+                created_by=item.created_by,
+                created_at=item.created_at,
+                store=item.store,
             )
+        )
         return item
 
     async def get_item(self, item_id: str) -> ShoppingItem:
@@ -139,14 +139,13 @@ class ShoppingService:
         )
         if updated is None:
             raise KeyError(f"shopping item {item_id!r} not found")
-        if self._bus is not None:
-            await self._bus.publish(
-                ShoppingItemUpdated(
-                    item_id=updated.id,
-                    text=updated.text,
-                    store=updated.store,
-                )
+        await self._emit(
+            ShoppingItemUpdated(
+                item_id=updated.id,
+                text=updated.text,
+                store=updated.store,
             )
+        )
         return updated
 
     async def complete_item(self, item_id: str) -> None:
@@ -154,34 +153,31 @@ class ShoppingService:
         if item is None:
             raise KeyError(f"shopping item {item_id!r} not found")
         await self._repo.complete(item_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                ShoppingItemToggled(
-                    item_id=item_id,
-                    completed=True,
-                )
+        await self._emit(
+            ShoppingItemToggled(
+                item_id=item_id,
+                completed=True,
             )
+        )
 
     async def uncomplete_item(self, item_id: str) -> None:
         item = await self._repo.get(item_id)
         if item is None:
             raise KeyError(f"shopping item {item_id!r} not found")
         await self._repo.uncomplete(item_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                ShoppingItemToggled(
-                    item_id=item_id,
-                    completed=False,
-                )
+        await self._emit(
+            ShoppingItemToggled(
+                item_id=item_id,
+                completed=False,
             )
+        )
 
     async def delete_item(self, item_id: str) -> None:
         item = await self._repo.get(item_id)
         if item is None:
             raise KeyError(f"shopping item {item_id!r} not found")
         await self._repo.delete(item_id)
-        if self._bus is not None:
-            await self._bus.publish(ShoppingItemRemoved(item_id=item_id))
+        await self._emit(ShoppingItemRemoved(item_id=item_id))
 
     async def clear_completed(self) -> int:
         """Remove all completed items. Returns the count removed."""
@@ -202,12 +198,11 @@ class ShoppingService:
         """
         await self._repo.reorder_stores(ordered_names)
         result = await self._repo.list_stores()
-        if self._bus is not None:
-            await self._bus.publish(
-                ShoppingStoresReordered(
-                    order=tuple(s.name for s in result),
-                )
+        await self._emit(
+            ShoppingStoresReordered(
+                order=tuple(s.name for s in result),
             )
+        )
         return result
 
     async def rename_store(self, old_name: str, new_name: str) -> bool:
@@ -235,6 +230,5 @@ class ShoppingService:
         hint. Broadcasts :class:`ShoppingStoreDeleted`.
         """
         affected = await self._repo.delete_store(name)
-        if self._bus is not None:
-            await self._bus.publish(ShoppingStoreDeleted(name=name.strip()))
+        await self._emit(ShoppingStoreDeleted(name=name.strip()))
         return affected

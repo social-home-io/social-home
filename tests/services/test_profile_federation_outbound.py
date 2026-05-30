@@ -25,6 +25,12 @@ class _FakeFederationService:
         self._own_instance_id = own_instance_id
         self.sent: list[tuple[str, FederationEventType, dict]] = []
 
+    @property
+    def own_instance_id(self) -> str:
+        # Mirror the real FederationService's public accessor — the
+        # outbound mixins read the public property, not the private attr.
+        return self._own_instance_id
+
     async def send_event(self, *, to_instance_id, event_type, payload):
         self.sent.append((to_instance_id, event_type, payload))
         return None

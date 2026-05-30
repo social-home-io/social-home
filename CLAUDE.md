@@ -126,12 +126,24 @@ truth — if code and spec disagree, fix the code.
 - **Prefer mixins for cross-cutting behaviour.** When the same
   attribute+method pair recurs across unrelated services (presence, DMs,
   highlights, moments all filter on the per-pair visibility hide list), pull
-  it into a mixin: the mixin owns the slot via `__slots__ = ("_field",)`, the
-  subclass writes it in its own `__init__` and inherits the reader. Canonical:
-  `socialhome.services.visibility.VisibilityMixin` (~10 outbound services).
-  Don't use inheritance to bolt *one* field onto an unrelated class (that's
-  the `*Addendum` anti-pattern) — mixins are for behaviour that genuinely
-  recurs.
+  it into a mixin. **A mixin must own a shared *method* (behaviour), not just
+  a slot** — inheritance purely to declare a field is the `*Addendum`
+  anti-pattern (a `_bus`-only mixin over the 50+ services that hold a bus is
+  the textbook bad case; what's shareable is the *fail-soft publish*, not the
+  field). Two slot styles, picked by composability:
+  - **Owns the slot** (`__slots__ = ("_field",)`, subclass writes it in
+    `__init__`, inherits the reader) — only when the mixin is the *sole*
+    slotted base for every consumer. Canonical:
+    `socialhome.services.visibility.VisibilityMixin` (~10 outbound services).
+  - **Behaviour-only** (`__slots__ = ()`, reads a slot the consumer declares)
+    — required when a consumer composes it with another slotted mixin. Python
+    forbids inheriting from >1 base with non-empty `__slots__` ("multiple
+    bases have instance lay-out conflict"), so composable mixins carry no
+    slots. Refs: `services.bus_publisher.BusPublisherMixin` (`_emit`),
+    `services.peer_outbound.{ConfirmedPeerBroadcaster,SingleTargetSender}`. A
+    consumer that needs a narrower type for the borrowed slot re-declares it
+    (e.g. `_federation: "FederationService"` to narrow the mixin's
+    `| None`).
 - **Module filenames never start with `_`.** New shared helper →
   `socialhome/services/visibility.py`, test → `tests/services/test_visibility.py`.
   Privacy is signalled by package boundaries + `__init__.py` re-exports, not

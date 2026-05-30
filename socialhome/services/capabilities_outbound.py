@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 from ..domain.events import PairingConfirmed
 from ..domain.federation import FederationEventType
 from ..domain.federation_capabilities import OURS as OUR_PROTO_VERSION
+from .peer_outbound import ConfirmedPeerBroadcaster
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -36,10 +37,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class CapabilitiesOutbound:
+class CapabilitiesOutbound(ConfirmedPeerBroadcaster):
     """Fan out ``INSTANCE_CAPABILITIES_UPDATED`` to every confirmed peer."""
 
     __slots__ = ("_federation", "_federation_repo", "_bus")
+
+    # Narrow the broadcaster's optional ``_federation`` — required at
+    # construction, so the direct ``send_event`` access below is non-None.
+    _federation: "FederationService"
 
     def __init__(
         self,
@@ -105,16 +110,8 @@ class CapabilitiesOutbound:
         outbox retry layer redelivers anything that landed in the
         queue).
         """
-        try:
-            peers = await self._federation_repo.list_instances(status="confirmed")
-        except Exception as exc:  # pragma: no cover — defensive
-            log.debug("capabilities-outbound: list peers failed: %s", exc)
-            return 0
         sent = 0
-        for peer in peers:
-            instance_id = getattr(peer, "id", None)
-            if not instance_id:
-                continue
+        for instance_id in await self.list_confirmed_peer_ids():
             try:
                 if await self._send_to(instance_id):
                     sent += 1

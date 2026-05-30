@@ -38,9 +38,10 @@ from ..domain.task import (
 )
 from ..repositories.task_repo import AbstractTaskRepo, AbstractSpaceTaskRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .bus_publisher import BusPublisherMixin
 
 
-class TaskService:
+class TaskService(BusPublisherMixin):
     """Household task list operations."""
 
     __slots__ = ("_repo", "_bus", "_household", "_users")
@@ -85,13 +86,12 @@ class TaskService:
             created_by=created_by,
         )
         saved = await self._repo.save_list(task_list)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskListCreated(
-                    list_id=saved.id,
-                    name=saved.name,
-                )
+        await self._emit(
+            TaskListCreated(
+                list_id=saved.id,
+                name=saved.name,
             )
+        )
         return saved
 
     async def rename_list(self, list_id: str, *, name: str) -> TaskList:
@@ -105,13 +105,12 @@ class TaskService:
             raise KeyError(f"task list {list_id!r} not found")
         updated = replace(current, name=name)
         saved = await self._repo.save_list(updated)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskListUpdated(
-                    list_id=saved.id,
-                    name=saved.name,
-                )
+        await self._emit(
+            TaskListUpdated(
+                list_id=saved.id,
+                name=saved.name,
             )
+        )
         return saved
 
     async def get_list(self, list_id: str) -> TaskList:
@@ -128,8 +127,7 @@ class TaskService:
         if result is None:
             raise KeyError(f"task list {list_id!r} not found")
         await self._repo.delete_list(list_id)
-        if self._bus is not None:
-            await self._bus.publish(TaskListDeleted(list_id=list_id))
+        await self._emit(TaskListDeleted(list_id=list_id))
 
     # ── Tasks ────────────────────────────────────────────────────────────
 
@@ -290,13 +288,12 @@ class TaskService:
 
         # Publish TaskCompleted when transitioning to DONE.
         if saved.status == TaskStatus.DONE and task.status != TaskStatus.DONE:
-            if self._bus is not None:
-                await self._bus.publish(
-                    TaskCompleted(
-                        task=saved,
-                        completed_by=actor_user_id,
-                    )
+            await self._emit(
+                TaskCompleted(
+                    task=saved,
+                    completed_by=actor_user_id,
                 )
+            )
             # §15 recurrence: spawn the next instance so the user
             # doesn't lose the schedule.
             if saved.is_recurring():
@@ -307,13 +304,12 @@ class TaskService:
     async def delete_task(self, task_id: str, *, actor_user_id: str) -> None:
         task = await self.get_task(task_id)  # raises KeyError if not found
         await self._repo.delete(task_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskDeleted(
-                    task_id=task_id,
-                    list_id=task.list_id,
-                )
+        await self._emit(
+            TaskDeleted(
+                task_id=task_id,
+                list_id=task.list_id,
             )
+        )
 
     async def archive_task(self, task_id: str, *, actor_user_id: str) -> Task:
         return await self._set_archived(task_id, actor_user_id, archived=True)
@@ -342,8 +338,7 @@ class TaskService:
             updated_at=now,
         )
         saved = await self._repo.save(updated)
-        if self._bus is not None:
-            await self._bus.publish(TaskUpdated(task=saved))
+        await self._emit(TaskUpdated(task=saved))
         return saved
 
     async def reorder_tasks(
@@ -377,8 +372,7 @@ class TaskService:
             )
             saved = await self._repo.save(new_task)
             updated.append(saved)
-            if self._bus is not None:
-                await self._bus.publish(TaskUpdated(task=saved))
+            await self._emit(TaskUpdated(task=saved))
         return updated
 
     # ── Task comments / attachments (spec §23.68) ────────────────────
@@ -559,7 +553,7 @@ def _next_occurrence(rrule: str, *, base: date) -> date | None:
     return None
 
 
-class SpaceTaskService:
+class SpaceTaskService(BusPublisherMixin):
     """Space task list operations.
 
     Each method publishes the corresponding domain event with
@@ -595,14 +589,13 @@ class SpaceTaskService:
             created_by=created_by,
         )
         saved = await self._repo.save_list(space_id, lst)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskListCreated(
-                    list_id=saved.id,
-                    name=saved.name,
-                    space_id=space_id,
-                )
+        await self._emit(
+            TaskListCreated(
+                list_id=saved.id,
+                name=saved.name,
+                space_id=space_id,
             )
+        )
         return saved
 
     async def rename_list(
@@ -620,14 +613,13 @@ class SpaceTaskService:
         space_id, current = result
         updated = replace(current, name=name)
         saved = await self._repo.save_list(space_id, updated)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskListUpdated(
-                    list_id=saved.id,
-                    name=saved.name,
-                    space_id=space_id,
-                )
+        await self._emit(
+            TaskListUpdated(
+                list_id=saved.id,
+                name=saved.name,
+                space_id=space_id,
             )
+        )
         return saved
 
     async def delete_list(self, list_id: str) -> None:
@@ -636,13 +628,12 @@ class SpaceTaskService:
             raise KeyError(f"task list {list_id!r} not found")
         space_id, _ = result
         await self._repo.delete_list(list_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskListDeleted(
-                    list_id=list_id,
-                    space_id=space_id,
-                )
+        await self._emit(
+            TaskListDeleted(
+                list_id=list_id,
+                space_id=space_id,
             )
+        )
 
     async def list_lists(self, space_id: str) -> list[TaskList]:
         return await self._repo.list_lists(space_id)
@@ -774,14 +765,13 @@ class SpaceTaskService:
             raise KeyError(f"space task {task_id!r} not found")
         space_id, task = result
         await self._repo.delete(task_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                TaskDeleted(
-                    task_id=task_id,
-                    list_id=task.list_id,
-                    space_id=space_id,
-                )
+        await self._emit(
+            TaskDeleted(
+                task_id=task_id,
+                list_id=task.list_id,
+                space_id=space_id,
             )
+        )
 
     async def archive_task(self, task_id: str, *, actor_user_id: str) -> Task:
         return await self._set_archived(task_id, actor_user_id, archived=True)
@@ -807,6 +797,5 @@ class SpaceTaskService:
             updated_at=now,
         )
         saved = await self._repo.save(space_id, updated)
-        if self._bus is not None:
-            await self._bus.publish(TaskUpdated(task=saved, space_id=space_id))
+        await self._emit(TaskUpdated(task=saved, space_id=space_id))
         return saved

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from ..domain.federation import FederationEventType
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .peer_outbound import SingleTargetSender
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ class _TypingState:
     last_seen_at: float
 
 
-class TypingService(VisibilityMixin):
+class TypingService(VisibilityMixin, SingleTargetSender):
     """Relay + dedup typing indicators across conversation members."""
 
     __slots__ = (
@@ -349,15 +350,12 @@ class TypingService(VisibilityMixin):
             hidden = await self.hidden_for_peer(inst)
             if sender_user_id in hidden:
                 continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=inst,
-                    event_type=FederationEventType.DM_USER_TYPING,
-                    payload={
-                        "conversation_id": conversation_id,
-                        "sender_user_id": sender_user_id,
-                        "sender_username": sender_username,
-                    },
-                )
-            except Exception as exc:  # pragma: no cover
-                log.debug("typing: failed to relay to %s: %s", inst, exc)
+            await self.send_to_instance(
+                inst,
+                FederationEventType.DM_USER_TYPING,
+                {
+                    "conversation_id": conversation_id,
+                    "sender_user_id": sender_user_id,
+                    "sender_username": sender_username,
+                },
+            )

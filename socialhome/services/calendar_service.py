@@ -38,6 +38,7 @@ from ..infrastructure.event_bus import EventBus
 from ..media_signer import strip_signature_query
 from ..repositories.calendar_repo import AbstractCalendarRepo, AbstractSpaceCalendarRepo
 from ..utils.rrule import expand_rrule
+from .bus_publisher import BusPublisherMixin
 
 if TYPE_CHECKING:
     from ..repositories.federation_repo import AbstractFederationRepo
@@ -160,7 +161,7 @@ _DEFAULT_CALENDAR_PALETTE: tuple[str, ...] = (
 )
 
 
-class CalendarService:
+class CalendarService(BusPublisherMixin):
     """Personal calendar operations."""
 
     __slots__ = (
@@ -520,8 +521,7 @@ class CalendarService:
             client_event_uuid=_clean_client_event_uuid(client_event_uuid),
         )
         saved = await self._repo.save_event(event)
-        if self._bus is not None:
-            await self._bus.publish(CalendarEventCreated(event=saved))
+        await self._emit(CalendarEventCreated(event=saved))
         await self._publish_federation_event(
             event=saved,
             calendar=cal,
@@ -561,8 +561,7 @@ class CalendarService:
             raise KeyError(f"calendar event {event_id!r} not found")
         cal = await self._repo.get_calendar(existing.calendar_id)
         await self._repo.delete_event(event_id)
-        if self._bus is not None:
-            await self._bus.publish(CalendarEventDeleted(event_id=event_id))
+        await self._emit(CalendarEventDeleted(event_id=event_id))
         # Federate a deletion to peers that previously received the
         # event. Re-resolves attendee → instance because the event row
         # is gone now; we tolerate stragglers (a user removed from the
@@ -665,8 +664,7 @@ class CalendarService:
             tz=new_tz,
         )
         await self._repo.save_event(updated)
-        if self._bus is not None:
-            await self._bus.publish(CalendarEventUpdated(event=updated))
+        await self._emit(CalendarEventUpdated(event=updated))
         cal = await self._repo.get_calendar(updated.calendar_id)
         if cal is not None:
             await self._publish_federation_event(
@@ -881,7 +879,7 @@ def _personal_event_payload(event: CalendarEvent, calendar: Calendar) -> dict:
     }
 
 
-class SpaceCalendarService:
+class SpaceCalendarService(BusPublisherMixin):
     """Space calendar event operations."""
 
     __slots__ = ("_repo", "_bus", "_federation", "_space_repo", "_household")
@@ -1080,8 +1078,7 @@ class SpaceCalendarService:
             tz=event_tz,
         )
         saved = await self._repo.save_event(space_id, event)
-        if self._bus is not None:
-            await self._bus.publish(CalendarEventCreated(event=saved))
+        await self._emit(CalendarEventCreated(event=saved))
         await self._publish_federation_event_saved(
             space_id=space_id,
             event=saved,
@@ -1134,15 +1131,14 @@ class SpaceCalendarService:
                 }
             )
         await self._repo.delete_event(event_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                CalendarEventDeleted(
-                    event_id=event_id,
-                    summary=snapshot_summary,
-                    space_id=snapshot_space,
-                    notify_user_ids=notify,
-                )
+        await self._emit(
+            CalendarEventDeleted(
+                event_id=event_id,
+                summary=snapshot_summary,
+                space_id=snapshot_space,
+                notify_user_ids=notify,
             )
+        )
         if snapshot_space is not None:
             await self._publish_federation_event_deleted(
                 space_id=snapshot_space,
@@ -1268,13 +1264,12 @@ class SpaceCalendarService:
             and new_capacity < existing.capacity
         ):
             changes.append("capacity_down")
-        if self._bus is not None:
-            await self._bus.publish(
-                CalendarEventUpdated(
-                    event=updated,
-                    material_changes=tuple(changes),
-                )
+        await self._emit(
+            CalendarEventUpdated(
+                event=updated,
+                material_changes=tuple(changes),
             )
+        )
         # Capacity raised — promote from waitlist to fill new seats.
         if (
             existing.capacity is not None

@@ -49,6 +49,7 @@ from ..repositories.space_key_repo import (
     AbstractSpaceKeyRepo,
     SpaceKey,
 )
+from .bus_publisher import BusPublisherMixin
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class UnsupportedKeySuite(ValueError):
     possible once a Phase-2 hybrid scheme lands."""
 
 
-class SpaceContentEncryption:
+class SpaceContentEncryption(BusPublisherMixin):
     """Encrypt/decrypt space content under per-epoch AES-256-GCM keys.
 
     Parameters
@@ -198,10 +199,9 @@ class SpaceContentEncryption:
             epoch,
             space_id,
         )
-        if self._bus is not None:
-            await self._bus.publish(
-                SpaceContentKeyImported(space_id=space_id, epoch=epoch),
-            )
+        await self._emit(
+            SpaceContentKeyImported(space_id=space_id, epoch=epoch),
+        )
 
     # ─── Encrypt / decrypt ────────────────────────────────────────────────
 

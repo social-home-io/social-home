@@ -19,6 +19,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEventType
+from .peer_outbound import ConfirmedPeerBroadcaster
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -27,10 +28,14 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class UrlUpdateOutbound:
+class UrlUpdateOutbound(ConfirmedPeerBroadcaster):
     """Fan out ``URL_UPDATED`` to every confirmed peer."""
 
     __slots__ = ("_federation", "_federation_repo")
+
+    # Narrow the broadcaster's optional ``_federation`` — required at
+    # construction, so the direct ``send_event`` access below is non-None.
+    _federation: "FederationService"
 
     def __init__(
         self,
@@ -52,17 +57,11 @@ class UrlUpdateOutbound:
         sends are logged but do not raise).
         """
         base = new_inbox_base_url.rstrip("/")
-        try:
-            peers = await self._federation_repo.list_instances(status="confirmed")
-        except Exception as exc:  # pragma: no cover — defensive
-            log.debug("url-update-outbound: list peers failed: %s", exc)
-            return 0
-        own = getattr(self._federation, "_own_instance_id", "")
         sent = 0
-        for peer in peers:
-            instance_id = getattr(peer, "id", None)
+        for peer in await self.confirmed_peers():
+            instance_id = peer.id
             local_id = getattr(peer, "local_inbox_id", None)
-            if not instance_id or instance_id == own or not local_id:
+            if not local_id:
                 continue
             peer_specific_url = f"{base}/{local_id}"
             try:

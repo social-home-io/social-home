@@ -38,6 +38,7 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType
 from ..domain.moment import MOMENT_MAX_HOPS
 from ..infrastructure.event_bus import EventBus
+from .peer_outbound import ConfirmedPeerBroadcaster, SingleTargetSender
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -50,7 +51,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class MomentFederationOutbound(VisibilityMixin):
+class MomentFederationOutbound(
+    VisibilityMixin,
+    ConfirmedPeerBroadcaster,
+    SingleTargetSender,
+):
     """Publish moment mutations to the 3-hop peer mesh."""
 
     __slots__ = (
@@ -60,6 +65,10 @@ class MomentFederationOutbound(VisibilityMixin):
         "_user_repo",
         "_relay_policy",
     )
+
+    # Narrow the mixins' optional ``_federation`` — this service requires it
+    # at construction, so direct attribute access elsewhere is non-None.
+    _federation: "FederationService"
 
     def __init__(
         self,
@@ -159,10 +168,10 @@ class MomentFederationOutbound(VisibilityMixin):
         hidden = await self.hidden_for_peer(target)
         if event.reactor_user_id in hidden:
             return
-        await self._send_to(
-            instance_id=target,
-            event_type=ev_type,
-            payload={
+        await self.send_to_instance(
+            target,
+            ev_type,
+            {
                 "moment_id": event.moment_id,
                 "reactor_user_id": event.reactor_user_id,
                 "author_user_id": event.author_user_id,
@@ -231,17 +240,13 @@ class MomentFederationOutbound(VisibilityMixin):
         exclude_instances: set[str],
         author_user_id: str | None = None,
     ) -> None:
-        own = self._federation.own_instance_id
-        try:
-            peers = await self._federation_repo.list_instances(status="confirmed")
-        except Exception as exc:  # pragma: no cover — defensive
-            log.debug("moment-outbound: list peers failed: %s", exc)
-            return
-        skip = exclude_instances | {own, origin_instance_id}
+        # ``confirmed_peers`` already drops our own instance + null ids;
+        # the relay/origin skip set adds the origin + the immediate sender.
+        skip = exclude_instances | {origin_instance_id}
         hidden_per_peer: dict[str, frozenset[str]] = {}
-        for peer in peers:
-            instance_id = getattr(peer, "id", None)
-            if not instance_id or instance_id in skip:
+        for peer in await self.confirmed_peers():
+            instance_id = peer.id
+            if instance_id in skip:
                 continue
             if author_user_id is not None:
                 if instance_id not in hidden_per_peer:
@@ -250,32 +255,7 @@ class MomentFederationOutbound(VisibilityMixin):
                     )
                 if author_user_id in hidden_per_peer[instance_id]:
                     continue
-            await self._send_to(
-                instance_id=instance_id,
-                event_type=event_type,
-                payload=payload,
-            )
-
-    async def _send_to(
-        self,
-        *,
-        instance_id: str,
-        event_type: FederationEventType,
-        payload: dict,
-    ) -> None:
-        try:
-            await self._federation.send_event(
-                to_instance_id=instance_id,
-                event_type=event_type,
-                payload=payload,
-            )
-        except Exception as exc:  # pragma: no cover — defensive
-            log.debug(
-                "moment-outbound: send %s to %s failed: %s",
-                event_type,
-                instance_id,
-                exc,
-            )
+            await self.send_to_instance(instance_id, event_type, payload)
 
     async def _is_local_user(self, user_id: str) -> bool:
         return await self._home_or_none(user_id) == self._federation.own_instance_id

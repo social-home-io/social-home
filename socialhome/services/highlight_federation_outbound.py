@@ -35,6 +35,7 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from .peer_outbound import ConfirmedPeerBroadcaster, SingleTargetSender
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -46,7 +47,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class HighlightFederationOutbound(VisibilityMixin):
+class HighlightFederationOutbound(
+    VisibilityMixin,
+    ConfirmedPeerBroadcaster,
+    SingleTargetSender,
+):
     """Publish Highlight mutations to paired peer instances."""
 
     __slots__ = (
@@ -55,6 +60,10 @@ class HighlightFederationOutbound(VisibilityMixin):
         "_federation_repo",
         "_user_repo",
     )
+
+    # Narrow the mixins' optional ``_federation`` — this service requires it
+    # at construction, so direct attribute access elsewhere is non-None.
+    _federation: "FederationService"
 
     def __init__(
         self,
@@ -162,10 +171,10 @@ class HighlightFederationOutbound(VisibilityMixin):
         hidden = await self.hidden_for_peer(target)
         if event.viewer_user_id in hidden:
             return
-        await self._send_to(
-            instance_id=target,
-            event_type=FederationEventType.HIGHLIGHT_FRAME_VIEWED,
-            payload={
+        await self.send_to_instance(
+            target,
+            FederationEventType.HIGHLIGHT_FRAME_VIEWED,
+            {
                 "highlight_id": event.highlight_id,
                 "frame_id": event.frame_id,
                 "viewer_user_id": event.viewer_user_id,
@@ -187,10 +196,10 @@ class HighlightFederationOutbound(VisibilityMixin):
             ev_type = FederationEventType.HIGHLIGHT_FRAME_REACTION_REMOVED
         else:
             ev_type = FederationEventType.HIGHLIGHT_FRAME_REACTED
-        await self._send_to(
-            instance_id=target,
-            event_type=ev_type,
-            payload={
+        await self.send_to_instance(
+            target,
+            ev_type,
+            {
                 "highlight_id": event.highlight_id,
                 "frame_id": event.frame_id,
                 "reactor_user_id": event.reactor_user_id,
@@ -232,18 +241,7 @@ class HighlightFederationOutbound(VisibilityMixin):
         """Return the set of peer instance_ids to send the event to."""
         own = self._federation.own_instance_id
         if kind == "all_paired":
-            try:
-                peers = await self._federation_repo.list_instances(
-                    status="confirmed",
-                )
-            except Exception as exc:  # pragma: no cover — defensive
-                log.debug("highlight-outbound: list peers failed: %s", exc)
-                return set()
-            return {
-                pid
-                for pid in (getattr(p, "id", None) for p in peers)
-                if pid and pid != own
-            }
+            return set(await self.list_confirmed_peer_ids())
         if kind == "households":
             return {iid for iid in audience if iid and iid != own}
         if kind == "users":
@@ -278,35 +276,4 @@ class HighlightFederationOutbound(VisibilityMixin):
             hidden = await self.hidden_for_peer(instance_id)
             if author_user_id in hidden:
                 continue
-            await self._send_to(
-                instance_id=instance_id,
-                event_type=event_type,
-                payload=payload,
-            )
-
-    async def _send_to(
-        self,
-        *,
-        instance_id: str,
-        event_type: FederationEventType,
-        payload: dict,
-    ) -> None:
-        """Single-target wrapper around ``federation_service.send_event``
-        that swallows errors so one bad peer doesn't kill the bus
-        subscriber. Identical contract to the loop body in
-        ``_fan_to_audience`` — extracted so the back-channel handlers
-        (which are unicast to the author's home instance) don't have to
-        rebuild the audience structure."""
-        try:
-            await self._federation.send_event(
-                to_instance_id=instance_id,
-                event_type=event_type,
-                payload=payload,
-            )
-        except Exception as exc:  # pragma: no cover — defensive
-            log.debug(
-                "highlight-outbound: send %s to %s failed: %s",
-                event_type,
-                instance_id,
-                exc,
-            )
+            await self.send_to_instance(instance_id, event_type, payload)
