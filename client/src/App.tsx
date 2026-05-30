@@ -37,6 +37,7 @@ import { RejectReasonDialog } from '@/components/RejectReasonDialog'
 import { ReportDialog } from '@/components/ReportDialog'
 import { InstallPrompt } from '@/components/InstallPrompt'
 import { OfflineIndicator } from '@/components/OfflineIndicator'
+import { RouteProgress, routeLoadStart, routeLoadEnd } from '@/components/RouteProgress'
 import { BackToTop } from '@/components/BackToTop'
 import { SpaceInviteDialog } from '@/components/SpaceInviteDialog'
 import { RemoteInviteDialog } from '@/components/RemoteInviteDialog'
@@ -349,7 +350,8 @@ export function App() {
           <div class="sh-content">
             <TopBar />
             <main class="sh-main" id="main" role="main" tabIndex={-1}>
-              <Router>
+              <RouteProgress />
+              <Router onLoadStart={routeLoadStart} onLoadEnd={routeLoadEnd}>
                 {Object.entries(routes).map(([path, Component]) => {
                   // preact-iso's ``lazy()`` returns an AsyncComponent with
                   // a ``.preload`` property; TypeScript's JSX checker
