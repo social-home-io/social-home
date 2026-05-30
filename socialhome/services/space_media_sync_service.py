@@ -55,9 +55,11 @@ log = logging.getLogger(__name__)
 #: :data:`socialhome.services.dm_media_sync_service.SINGLE_CHUNK_BYTES_THRESHOLD`
 #: — keeps the wire shape comparable.
 SINGLE_CHUNK_BYTES_THRESHOLD: int = 1024 * 1024
-#: 256 KiB chunks keep the federation envelope well under the
-#: per-event size cap (post sig + base64 expansion).
-MAX_BLOB_CHUNK_BYTES: int = 256 * 1024
+#: 512 KiB chunks keep the federation envelope under the ~1 MiB
+#: per-event send budget (~700 KB after sig + base64 expansion) while
+#: halving the chunk count vs the old 256 KiB. Matches
+#: :data:`socialhome.services.dm_media_sync_service.MAX_BLOB_CHUNK_BYTES`.
+MAX_BLOB_CHUNK_BYTES: int = 512 * 1024
 #: Cap on retry attempts before a row is moved to ``status='failed'``.
 #: Same as the DM curve so behaviour matches.
 MAX_ATTEMPTS: int = 6
