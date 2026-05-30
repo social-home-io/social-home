@@ -43,6 +43,7 @@ from ..infrastructure.event_bus import EventBus
 from ..repositories.space_bot_repo import AbstractSpaceBotRepo
 from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .space_member_guard import SpaceMemberGuardMixin
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class SpaceBotTokenRotated(DomainEvent):
 # ─── Service ──────────────────────────────────────────────────────────────
 
 
-class SpaceBotService:
+class SpaceBotService(SpaceMemberGuardMixin):
     """Owner/admin + member CRUD for :class:`SpaceBot` rows."""
 
     __slots__ = ("_bots", "_spaces", "_users", "_bus")
@@ -277,32 +278,23 @@ class SpaceBotService:
         return bot
 
     async def _require_member(self, space_id: str, username: str):
-        actor = await self._users.get(username)
-        if actor is None:
-            raise KeyError(f"user {username!r} not found")
-        member = await self._spaces.get_member(space_id, actor.user_id)
-        if member is None:
-            raise SpacePermissionError("not a member of this space")
+        actor = await self._actor_or_raise(username, label="user")
+        await self._member_or_raise(space_id, actor.user_id)
         return actor
 
     async def _require_admin_or_owner(self, space_id: str, username: str) -> None:
-        actor = await self._users.get(username)
-        if actor is None:
-            raise KeyError(f"user {username!r} not found")
-        member = await self._spaces.get_member(space_id, actor.user_id)
-        if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
-            raise SpacePermissionError(
-                "owner/admin required to manage space-scope bots"
-            )
+        actor = await self._actor_or_raise(username, label="user")
+        await self._role_or_raise(
+            space_id,
+            actor.user_id,
+            (SpaceRole.OWNER, SpaceRole.ADMIN),
+            message="owner/admin required to manage space-scope bots",
+        )
 
     async def _require_can_manage(self, bot: SpaceBot, actor_username: str) -> None:
         """Admin/owner always; creating member for their own scope=member bot."""
-        actor = await self._users.get(actor_username)
-        if actor is None:
-            raise KeyError(f"user {actor_username!r} not found")
-        member = await self._spaces.get_member(bot.space_id, actor.user_id)
-        if member is None:
-            raise SpacePermissionError("not a member of this space")
+        actor = await self._actor_or_raise(actor_username, label="user")
+        member = await self._member_or_raise(bot.space_id, actor.user_id)
         if member.role in (SpaceRole.OWNER, SpaceRole.ADMIN):
             return
         # Non-admins can only manage their own member-scope bots.
