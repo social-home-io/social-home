@@ -116,6 +116,7 @@ class DmMediaSyncService(VisibilityMixin):
         "_interval",
         "_task",
         "_stop",
+        "_wake",
     )
 
     def __init__(
@@ -144,6 +145,11 @@ class DmMediaSyncService(VisibilityMixin):
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # Set by ``enqueue_for_message`` so the loop ships freshly-queued
+        # media immediately instead of waiting up to ``interval_seconds``
+        # for the next periodic tick. ``_interval`` stays as a fallback
+        # poll (catches rows reclaimed after a crash / retries coming due).
+        self._wake = asyncio.Event()
 
     def attach_federation(self, federation: "FederationService") -> None:
         """Wire federation after construction (breaks the boot cycle).
@@ -279,6 +285,8 @@ class DmMediaSyncService(VisibilityMixin):
                 target_instance_id=inst,
                 bytes_path=str(path),
             )
+        # Nudge the loop so it ships now rather than on the next poll.
+        self._wake.set()
 
     # ── Scheduler loop ────────────────────────────────────────────────
 
@@ -308,6 +316,7 @@ class DmMediaSyncService(VisibilityMixin):
     async def stop(self) -> None:
         """Stop the loop and wait for the task to exit."""
         self._stop.set()
+        self._wake.set()  # break the loop's wake-wait so shutdown is prompt
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
@@ -317,6 +326,10 @@ class DmMediaSyncService(VisibilityMixin):
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
+            # Clear before flushing so an enqueue that races the flush
+            # still leaves ``_wake`` set, and the wait below returns at
+            # once instead of losing the signal.
+            self._wake.clear()
             try:
                 shipped = await self.flush_once()
                 if shipped:
@@ -326,9 +339,13 @@ class DmMediaSyncService(VisibilityMixin):
                     )
             except Exception as exc:  # pragma: no cover
                 log.warning("dm-media-sync flush failed: %s", exc)
+            if self._stop.is_set():
+                break
+            # Wake on a fresh enqueue (``_wake``), else fall back to the
+            # periodic poll after ``_interval`` seconds.
             try:
                 await asyncio.wait_for(
-                    self._stop.wait(),
+                    self._wake.wait(),
                     timeout=self._interval,
                 )
             except asyncio.TimeoutError:

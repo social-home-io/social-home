@@ -736,3 +736,38 @@ async def test_dm_media_blob_no_repo_passes_through(stack):
     assert shipped == 1
     assert len(stack["fed"].sent) >= 1
     assert stack["fed"].sent[0]["event"] == FederationEventType.DM_MEDIA_BLOB
+
+
+async def test_enqueue_sets_wake_event(stack):
+    """Enqueuing media nudges the loop's wake event."""
+    _make_test_image(stack["media_dir"])
+    assert not stack["svc"]._wake.is_set()  # type: ignore[attr-defined]
+    await stack["svc"].enqueue_for_message(
+        message_id="m1",
+        media_url="api/media/cat.webp",
+        target_instance_ids=["inst-bob"],
+    )
+    assert stack["svc"]._wake.is_set()  # type: ignore[attr-defined]
+
+
+async def test_loop_ships_promptly_via_wake_not_poll(stack):
+    """A blob enqueued after start ships well before the long fallback
+    poll — proving wake-on-enqueue, not the periodic tick, drives it."""
+    import asyncio
+
+    _make_test_image(stack["media_dir"])
+    stack["svc"]._interval = 30.0  # type: ignore[attr-defined]
+    await stack["svc"].start()
+    try:
+        await stack["svc"].enqueue_for_message(
+            message_id="m1",
+            media_url="api/media/cat.webp",
+            target_instance_ids=["inst-bob"],
+        )
+        for _ in range(20):
+            if stack["fed"].sent:
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        await stack["svc"].stop()
+    assert len(stack["fed"].sent) >= 1

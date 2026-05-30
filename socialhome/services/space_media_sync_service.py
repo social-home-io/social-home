@@ -75,6 +75,7 @@ class SpaceMediaSyncService:
         "_interval",
         "_task",
         "_stop",
+        "_wake",
     )
 
     def __init__(
@@ -91,6 +92,10 @@ class SpaceMediaSyncService:
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
+        # Set by ``enqueue_for_blob`` so freshly-queued media ships
+        # immediately instead of waiting up to ``interval_seconds`` for
+        # the next poll. ``_interval`` remains a fallback poll.
+        self._wake = asyncio.Event()
 
     def attach_federation(self, federation: "FederationService") -> None:
         """Wire federation after construction (breaks the boot cycle).
@@ -139,6 +144,8 @@ class SpaceMediaSyncService:
                     target_instance_id=target,
                     bytes_path=str(path),
                 )
+        # Nudge the loop so it ships now rather than on the next poll.
+        self._wake.set()
 
     # Back-compat alias for the post-only signature shipped in PR #440.
     # ``space_id`` defaults to ``""`` for callers that don't have it
@@ -184,6 +191,7 @@ class SpaceMediaSyncService:
     async def stop(self) -> None:
         """Stop the loop and wait for the task to exit."""
         self._stop.set()
+        self._wake.set()  # break the loop's wake-wait so shutdown is prompt
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
@@ -193,6 +201,9 @@ class SpaceMediaSyncService:
 
     async def _loop(self) -> None:
         while not self._stop.is_set():
+            # Clear before flushing so an enqueue racing the flush still
+            # leaves ``_wake`` set and the wait below returns at once.
+            self._wake.clear()
             try:
                 shipped = await self.flush_once()
                 if shipped:
@@ -202,9 +213,12 @@ class SpaceMediaSyncService:
                     )
             except Exception as exc:  # pragma: no cover
                 log.warning("space-media-sync flush failed: %s", exc)
+            if self._stop.is_set():
+                break
+            # Wake on a fresh enqueue, else fall back to the periodic poll.
             try:
                 await asyncio.wait_for(
-                    self._stop.wait(),
+                    self._wake.wait(),
                     timeout=self._interval,
                 )
             except asyncio.TimeoutError:
