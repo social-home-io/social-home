@@ -87,19 +87,23 @@ BACKOFF_BASE_SECONDS: float = 30.0
 BACKOFF_CAP_SECONDS: float = 30 * 60.0
 
 #: Per-chunk raw byte cap for the ``DM_MEDIA_BLOB`` payload. The
-#: federation transport (HTTPS inbox or RTC DataChannel) has a soft
-#: ~1 MiB ceiling on a single event's serialised JSON; 256 KiB of
-#: raw bytes lands at ~360 KB after base64 inflation, well under
-#: that. Files at or under :data:`SINGLE_CHUNK_BYTES_THRESHOLD`
-#: still ride a single chunk (the simpler path); above the
-#: threshold the sender splits into N sequenced chunks and the
-#: receiver buffers them on disk until ``final=true`` lands.
-MAX_BLOB_CHUNK_BYTES: int = 256 * 1024
+#: federation transport (HTTPS inbox or RTC DataChannel) drops a frame
+#: to the slow HTTPS fallback once a single serialised event exceeds
+#: the ~1 MiB send budget (``transport.SEND_HWM_BYTES``). Base64 inflates
+#: the raw bytes by ~37%, so 512 KiB lands at ~700 KB encoded — still
+#: comfortably under the cap, while halving the chunk count (and the
+#: per-chunk encrypt+sign passes) versus the old 256 KiB. 1 MiB raw would
+#: inflate to ~1.37 MiB and blow the budget — the binary-framing follow-up
+#: is what unlocks larger chunks. Files at or under
+#: :data:`SINGLE_CHUNK_BYTES_THRESHOLD` still ride a single chunk; above
+#: it the sender splits into N sequenced chunks and the receiver buffers
+#: them on disk until ``final=true`` lands.
+MAX_BLOB_CHUNK_BYTES: int = 512 * 1024
 #: Files at or below this size go through the single-chunk fast
 #: path. Picked so typical phone photos / short clips (≤ ~1 MB)
 #: never chunk — they're below the federation transport's
 #: per-event budget already, and chunking just adds latency. A 200
-#: MiB video, on the other hand, ships as ~819 chunks.
+#: MiB video, on the other hand, ships as ~410 chunks.
 SINGLE_CHUNK_BYTES_THRESHOLD: int = 1024 * 1024
 
 
