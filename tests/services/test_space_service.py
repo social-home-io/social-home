@@ -369,6 +369,32 @@ async def test_space_location_post_round_trip(stack):
     assert p.location.label == "Marina"
 
 
+async def test_delete_space_post_removes_media_files(stack, tmp_dir):
+    """Deleting a space image post unlinks its media file(s) from disk."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    svc = SpaceService(
+        stack.space_repo,
+        stack.space_post_repo,
+        SqliteUserRepo(stack.db),
+        EventBus(),
+        own_instance_id=stack.iid,
+        media_dir=media_dir,
+    )
+    a = await stack.provision_user("anna")
+    space = await svc.create_space(owner_username="anna", name="S")
+    (media_dir / "sp.webp").write_bytes(b"x")
+    p = await svc.create_post(
+        space.id,
+        author_user_id=a.user_id,
+        type=PostType.IMAGE,
+        image_urls=["api/media/sp.webp"],
+    )
+    assert (media_dir / "sp.webp").exists()
+    await svc.delete_post(p.id, actor_user_id=a.user_id)
+    assert not (media_dir / "sp.webp").exists()
+
+
 async def test_space_location_post_requires_coords(stack):
     """LOCATION without a LocationData payload is a 422 / ValueError."""
     a = await stack.provision_user("anna")

@@ -1206,13 +1206,19 @@ def create_app(config: Config | None = None) -> web.Application:
         own_instance_public_key=_sentinel_pk,
         profile_picture_repo=profile_picture_repo,
     )
-    feed_service = FeedService(post_repo, user_repo, bus)
+    feed_service = FeedService(
+        post_repo,
+        user_repo,
+        bus,
+        media_dir=pathlib.Path(config.media_path),
+    )
     space_service = SpaceService(
         space_repo,
         space_post_repo,
         user_repo,
         bus,
         own_instance_id="unknown",  # patched on startup
+        media_dir=pathlib.Path(config.media_path),
     )
     space_service.attach_profile_picture_repo(profile_picture_repo)
     space_service.attach_cover_repo(space_cover_repo)
@@ -1908,6 +1914,7 @@ def create_app(config: Config | None = None) -> web.Application:
             user_repo,
             bus,
             own_instance_id=real_instance_id,
+            media_dir=pathlib.Path(config.media_path),
         )
         # §CP.F1: hook child-protection age gate into add_member.
         real_space_service.attach_child_protection(child_protection_service)

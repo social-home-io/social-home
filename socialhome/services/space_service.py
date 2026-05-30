@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING, Literal
 from ..crypto import generate_identity_keypair
 
 if TYPE_CHECKING:
+    import pathlib
+
     from ..federation.route_discovery import RouteDiscoveryService
     from ..federation.routed_envelope import SpaceRoutedHandler
 from ..domain.events import (
@@ -62,6 +64,7 @@ from ..domain.events import (
     SpacePostModerated,
 )
 from ..domain.federation import FederationEventType, PairingStatus
+from ..media.cleanup import unlink_media
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
 from ..domain.post import (
@@ -137,6 +140,7 @@ class SpaceService(SpaceMemberGuardMixin):
         "_remote_members",
         "_redeem_coordinator",
         "_space_crypto",
+        "_media_dir",
     )
 
     def __init__(
@@ -147,12 +151,16 @@ class SpaceService(SpaceMemberGuardMixin):
         bus: EventBus,
         *,
         own_instance_id: str,
+        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._spaces = space_repo
         self._posts = space_post_repo
         self._users = user_repo
         self._bus = bus
         self._own_instance_id = own_instance_id
+        # When set, a deleted space post's media file(s) are removed once
+        # the post row + its gallery system-album mirror are gone.
+        self._media_dir = media_dir
         self._child_protection = None
         self._pictures = None
         self._covers = None
@@ -2202,6 +2210,9 @@ class SpaceService(SpaceMemberGuardMixin):
         space_id, post = got
         if post.deleted:
             return
+        # Capture media URLs before soft_delete nulls them; unlinked after
+        # the PostDeleted publish unmirrors the shared gallery item.
+        media = [post.media_url, *post.image_urls] if self._media_dir else []
         moderated_by: str | None = None
         if post.author != actor_user_id:
             # Moderation path — actor must be admin/owner
@@ -2226,6 +2237,9 @@ class SpaceService(SpaceMemberGuardMixin):
         # hook regardless of who deleted the row. ``space_id`` gates the
         # outbound broadcast so household-feed deletes stay local.
         await self._bus.publish(PostDeleted(post_id=post_id, space_id=space_id))
+        if self._media_dir is not None:
+            for url in media:
+                await unlink_media(self._media_dir, url)
 
     async def add_reaction(
         self,

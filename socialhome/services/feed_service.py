@@ -21,6 +21,7 @@ from __future__ import annotations
 import unicodedata
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from ..domain.events import (
     CommentAdded,
@@ -42,8 +43,12 @@ from ..domain.post import (
 )
 from ..domain.presence import truncate_coord
 from ..infrastructure.event_bus import EventBus
+from ..media.cleanup import unlink_media
 from ..repositories.post_repo import AbstractPostRepo
 from ..repositories.user_repo import AbstractUserRepo
+
+if TYPE_CHECKING:
+    import pathlib
 
 
 #: Max content length for a text / transcript post. Longer content is
@@ -64,19 +69,24 @@ LOCATION_LABEL_MAX = 80
 class FeedService:
     """Household-feed CRUD + reactions + comments."""
 
-    __slots__ = ("_posts", "_users", "_bus", "_household", "_quota")
+    __slots__ = ("_posts", "_users", "_bus", "_household", "_quota", "_media_dir")
 
     def __init__(
         self,
         post_repo: AbstractPostRepo,
         user_repo: AbstractUserRepo,
         bus: EventBus,
+        *,
+        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._posts = post_repo
         self._users = user_repo
         self._bus = bus
         self._household = None  # set via attach_household_features
         self._quota = None  # set via attach_storage_quota
+        # When set, a deleted post's media file(s) are removed from disk
+        # once the post row + its gallery system-album mirror are gone.
+        self._media_dir = media_dir
 
     def attach_household_features(self, svc) -> None:
         """Wire :class:`PreferencesService` for toggle enforcement
@@ -197,8 +207,16 @@ class FeedService:
         """Soft-delete a post. Only the author or an admin may delete."""
         post = await self._require_post(post_id)
         await self._require_author_or_admin(post.author, actor_user_id)
+        # Capture media URLs before soft_delete nulls them.
+        media = [post.media_url, *post.image_urls] if self._media_dir else []
         await self._posts.soft_delete(post_id)
+        # PostDeleted runs synchronously through the bus; SystemAlbumBridge
+        # unmirrors (drops the gallery item that shared this file) within
+        # the publish, so afterwards nothing references the blob.
         await self._bus.publish(PostDeleted(post_id=post_id))
+        if self._media_dir is not None:
+            for url in media:
+                await unlink_media(self._media_dir, url)
 
     async def get_post(self, post_id: str) -> Post:
         return await self._require_post(post_id)
