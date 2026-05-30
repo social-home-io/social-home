@@ -738,6 +738,60 @@ async def test_dm_media_blob_no_repo_passes_through(stack):
     assert stack["fed"].sent[0]["event"] == FederationEventType.DM_MEDIA_BLOB
 
 
+async def test_chunks_pipeline_bounded_by_window(stack):
+    """Multi-chunk blobs ship concurrently, capped at PIPELINE_WINDOW."""
+    import asyncio
+
+    from socialhome.services.dm_media_sync_service import PIPELINE_WINDOW
+
+    class _TrackingFed(FakeFederation):
+        def __init__(self):
+            super().__init__()
+            self.inflight = 0
+            self.max_inflight = 0
+
+        async def send_event(self, *, to_instance_id, event_type, payload):
+            self.inflight += 1
+            self.max_inflight = max(self.max_inflight, self.inflight)
+            await asyncio.sleep(0.01)  # hold the slot so overlap is observable
+            self.inflight -= 1
+            await super().send_event(
+                to_instance_id=to_instance_id,
+                event_type=event_type,
+                payload=payload,
+            )
+
+    fed = _TrackingFed()
+    stack["svc"].attach_federation(fed)
+    # 4 MiB file with a 512 KiB chunk size → 8 chunks (well over the window).
+    (stack["media_dir"] / "big.bin").write_bytes(b"\0" * (4 * 1024 * 1024))
+    await stack["svc"].enqueue_for_message(
+        message_id="m1",
+        media_url="api/media/big.bin",
+        target_instance_ids=["inst-bob"],
+    )
+    shipped = await stack["svc"].flush_once()
+    assert shipped == 1
+    assert len(fed.sent) == 8  # all chunks delivered
+    assert 1 < fed.max_inflight <= PIPELINE_WINDOW  # pipelined, but bounded
+
+
+async def test_one_failed_chunk_reschedules_whole_row(stack):
+    """If any chunk fails, the row is rescheduled (not deleted)."""
+    fed = stack["fed"]
+    fed.should_fail = True
+    (stack["media_dir"] / "big.bin").write_bytes(b"\0" * (4 * 1024 * 1024))
+    await stack["svc"].enqueue_for_message(
+        message_id="m1",
+        media_url="api/media/big.bin",
+        target_instance_ids=["inst-bob"],
+    )
+    shipped = await stack["svc"].flush_once()
+    assert shipped == 0
+    # Row still present (rescheduled / failed), not deleted.
+    assert ("m1", "inst-bob") in stack["outbox"].rows
+
+
 async def test_enqueue_sets_wake_event(stack):
     """Enqueuing media nudges the loop's wake event."""
     _make_test_image(stack["media_dir"])

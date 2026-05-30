@@ -99,6 +99,11 @@ BACKOFF_CAP_SECONDS: float = 30 * 60.0
 #: it the sender splits into N sequenced chunks and the receiver buffers
 #: them on disk until ``final=true`` lands.
 MAX_BLOB_CHUNK_BYTES: int = 512 * 1024
+#: Max chunks of a single blob in flight at once. Pipelining cuts the
+#: per-chunk round-trip latency (esp. on the HTTPS fallback). Kept small:
+#: the RTC transport drops to HTTPS once its ~1 MiB send buffer fills, so a
+#: large window can't overrun the DataChannel — it just backpressures.
+PIPELINE_WINDOW: int = 4
 #: Files at or below this size go through the single-chunk fast
 #: path. Picked so typical phone photos / short clips (≤ ~1 MB)
 #: never chunk — they're below the federation transport's
@@ -368,6 +373,7 @@ class DmMediaSyncService(VisibilityMixin):
             # service is properly configured. Same behaviour the
             # general federation outbox has.
             return 0
+        fed = self._federation  # non-None past the guard; captured for closures
         due = await self._outbox.list_due(limit=limit)
         shipped = 0
         for entry in due:
@@ -413,33 +419,41 @@ class DmMediaSyncService(VisibilityMixin):
                 )
                 await self._reschedule_or_fail(entry, str(exc))
                 continue
-            # Dispatch every chunk in order. A mid-stream failure
-            # reschedules the whole row; on the next attempt the
-            # receiver overwrites the part files it already has
-            # (writes are idempotent by ``chunk_index``), so no
-            # explicit cleanup is needed when chunks are partially
-            # through.
-            send_failed = False
-            for payload in payloads:
-                try:
-                    await self._federation.send_event(
-                        to_instance_id=entry.target_instance_id,
+            # Dispatch chunks with a bounded concurrency window. Order is
+            # irrelevant — the receiver writes each by ``chunk_index``
+            # idempotently — so pipelining cuts per-chunk round-trip latency
+            # (most visibly on the HTTPS fallback). Any chunk failing
+            # reschedules the whole row; the next attempt re-sends all chunks
+            # and the receiver overwrites the parts it already has.
+            sem = asyncio.Semaphore(PIPELINE_WINDOW)
+
+            async def _send(
+                payload: dict, *, tgt: str = entry.target_instance_id
+            ) -> None:
+                async with sem:
+                    await fed.send_event(
+                        to_instance_id=tgt,
                         event_type=FederationEventType.DM_MEDIA_BLOB,
                         payload=payload,
                     )
-                except Exception as exc:
+
+            results = await asyncio.gather(
+                *(_send(p) for p in payloads), return_exceptions=True
+            )
+            send_failed = False
+            for payload, result in zip(payloads, results):
+                if isinstance(result, Exception):
                     log.warning(
                         "dm-media-sync: send_event failed for %s chunk %d/%d → %s: %s",
                         entry.blob_id,
                         payload.get("chunk_index", 0),
                         payload.get("chunk_count", 1),
                         entry.target_instance_id,
-                        exc,
+                        result,
                     )
-                    await self._reschedule_or_fail(entry, str(exc))
                     send_failed = True
-                    break
             if send_failed:
+                await self._reschedule_or_fail(entry, "chunk send failed")
                 continue
             await self._outbox.delete(
                 blob_id=entry.blob_id,
