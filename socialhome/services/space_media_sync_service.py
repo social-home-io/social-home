@@ -60,6 +60,9 @@ SINGLE_CHUNK_BYTES_THRESHOLD: int = 1024 * 1024
 #: halving the chunk count vs the old 256 KiB. Matches
 #: :data:`socialhome.services.dm_media_sync_service.MAX_BLOB_CHUNK_BYTES`.
 MAX_BLOB_CHUNK_BYTES: int = 512 * 1024
+#: Max chunks of one blob in flight at once (see DmMediaSyncService). Small
+#: so the RTC ~1 MiB send buffer can't be overrun — it just backpressures.
+PIPELINE_WINDOW: int = 4
 #: Cap on retry attempts before a row is moved to ``status='failed'``.
 #: Same as the DM curve so behaviour matches.
 MAX_ATTEMPTS: int = 6
@@ -233,6 +236,7 @@ class SpaceMediaSyncService:
         """
         if self._federation is None:
             return 0
+        fed = self._federation  # non-None past the guard; captured for closures
         due = await self._outbox.list_due(limit=limit)
         shipped = 0
         for entry in due:
@@ -258,47 +262,48 @@ class SpaceMediaSyncService:
             # relays. A direct-peer path uses ``send_event``
             # internally so the per-chunk overhead matches the DM
             # case for the common LAN-paired scenario.
-            send_failed = False
-            for payload in payloads:
-                try:
-                    result = await self._federation.send_with_mesh_fallback(
-                        to_instance_id=entry.target_instance_id,
+            # Dispatch chunks with a bounded concurrency window (order is
+            # irrelevant — the receiver writes each by ``chunk_index``).
+            # ``send_with_mesh_fallback`` doesn't raise on delivery failure;
+            # it returns ``DeliveryResult(ok=False)`` (no_route /
+            # not_confirmed / transport blip), so we raise on that inside the
+            # task to funnel both failure modes through ``gather``. Any chunk
+            # failing reschedules the whole row.
+            sem = asyncio.Semaphore(PIPELINE_WINDOW)
+
+            async def _send(
+                payload: dict, *, tgt: str = entry.target_instance_id
+            ) -> None:
+                async with sem:
+                    result = await fed.send_with_mesh_fallback(
+                        to_instance_id=tgt,
                         event_type=FederationEventType.SPACE_MEDIA_BLOB,
                         payload=payload,
                     )
-                except Exception as exc:
+                    if not result.ok:
+                        raise RuntimeError(result.error or "delivery_failed")
+
+            results = await asyncio.gather(
+                *(_send(p) for p in payloads), return_exceptions=True
+            )
+            send_failed = False
+            first_error = ""
+            for payload, result in zip(payloads, results):
+                if isinstance(result, Exception):
                     log.warning(
-                        "space-media-sync: send chunk %d/%d raised for %s → %s: %s",
+                        "space-media-sync: chunk %d/%d failed for %s → %s: %s",
                         payload.get("chunk_index", 0),
                         payload.get("chunk_count", 1),
                         entry.blob_id,
                         entry.target_instance_id,
-                        exc,
-                    )
-                    await self._reschedule_or_fail(entry, str(exc))
-                    send_failed = True
-                    break
-                # ``send_with_mesh_fallback`` doesn't raise on
-                # delivery failure — it returns ``DeliveryResult``
-                # with ``ok=False`` (no_route / not_confirmed /
-                # transport blip). Treat those the same as a raise
-                # so the scheduler retries.
-                if not result.ok:
-                    log.warning(
-                        "space-media-sync: chunk %d/%d delivery failed for %s → %s: %s",
-                        payload.get("chunk_index", 0),
-                        payload.get("chunk_count", 1),
-                        entry.blob_id,
-                        entry.target_instance_id,
-                        result.error or "delivery_failed",
-                    )
-                    await self._reschedule_or_fail(
-                        entry,
-                        result.error or "delivery_failed",
+                        result,
                     )
                     send_failed = True
-                    break
+                    first_error = first_error or str(result)
             if send_failed:
+                await self._reschedule_or_fail(
+                    entry, first_error or "chunk send failed"
+                )
                 continue
             await self._outbox.delete(
                 blob_id=entry.blob_id,
