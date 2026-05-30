@@ -59,6 +59,35 @@ async def test_first_frame_creates_highlight_and_publishes(db, svc):
     assert captured[0].is_first_frame is True
 
 
+async def test_delete_highlight_removes_frame_files(db, tmp_dir):
+    """Deleting a highlight unlinks every frame's media file (cascade)."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    service = HighlightService(
+        SqliteHighlightRepo(db),
+        SqliteUserRepo(db),
+        EventBus(),
+        media_dir=media_dir,
+    )
+    await _seed_user(db, "u1", "pascal")
+    for name in ("h1.webp", "h2.webp"):
+        (media_dir / name).write_bytes(b"x")
+    highlight, _ = await service.create_or_append_frame(
+        author_user_id="u1",
+        frame_type=HighlightFrameType.IMAGE,
+        media_url="api/media/h1.webp",
+    )
+    await service.create_or_append_frame(
+        author_user_id="u1",
+        frame_type=HighlightFrameType.IMAGE,
+        media_url="api/media/h2.webp",
+    )
+    assert (media_dir / "h1.webp").exists() and (media_dir / "h2.webp").exists()
+    await service.delete_highlight(highlight_id=highlight.id, actor_user_id="u1")
+    assert not (media_dir / "h1.webp").exists()
+    assert not (media_dir / "h2.webp").exists()
+
+
 async def test_second_frame_appends_to_same_highlight(db, svc):
     service, _ = svc
     await _seed_user(db, "u1", "pascal")
@@ -396,6 +425,73 @@ async def test_expire_due_runs_over_max_pass_per_author(db, svc):
     expired, over_max = await service.expire_due()
     assert expired == 0
     assert over_max == 1
+
+
+async def test_expire_due_removes_expired_frame_files(db, tmp_dir):
+    """Retention expiry unlinks the frame media of expired highlights."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    service = HighlightService(
+        SqliteHighlightRepo(db),
+        SqliteUserRepo(db),
+        EventBus(),
+        media_dir=media_dir,
+    )
+    await _seed_user(db, "u1", "pascal")
+    (media_dir / "e.webp").write_bytes(b"x")
+    h, _ = await service.create_or_append_frame(
+        author_user_id="u1",
+        frame_type=HighlightFrameType.IMAGE,
+        media_url="api/media/e.webp",
+    )
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    await db.enqueue("UPDATE highlights SET expires_at=? WHERE id=?", (past, h.id))
+    assert (media_dir / "e.webp").exists()
+    expired, _ = await service.expire_due()
+    assert expired == 1
+    assert not (media_dir / "e.webp").exists()
+
+
+async def test_expire_due_removes_over_max_frame_files(db, tmp_dir):
+    """The per-author over-max prune unlinks the dropped frames' media."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    service = HighlightService(
+        SqliteHighlightRepo(db),
+        SqliteUserRepo(db),
+        EventBus(),
+        media_dir=media_dir,
+    )
+    # max_count is clamped to a floor of 10, so 11 rows trigger one prune.
+    await _seed_user(db, "u1", "pascal", prefs_json='{"highlights": {"max_count": 10}}')
+    repo = service._highlights
+    future = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+    (media_dir / "old.webp").write_bytes(b"x")
+    # Oldest date sorts last under DESC ordering → it's the one dropped.
+    oldest = await repo.find_or_create_today(
+        author_user_id="u1",
+        audience_kind=HighlightAudience.ALL_PAIRED,
+        audience=(),
+        highlight_date="2026-01-01",
+        expires_at=future,
+    )
+    await repo.append_frame(
+        highlight_id=oldest.id,
+        frame_type=HighlightFrameType.IMAGE,
+        media_url="api/media/old.webp",
+    )
+    for i in range(2, 12):  # 10 newer highlights
+        await repo.find_or_create_today(
+            author_user_id="u1",
+            audience_kind=HighlightAudience.ALL_PAIRED,
+            audience=(),
+            highlight_date=f"2026-02-{i:02d}",
+            expires_at=future,
+        )
+    assert (media_dir / "old.webp").exists()
+    _, over_max = await service.expire_due()
+    assert over_max == 1
+    assert not (media_dir / "old.webp").exists()
 
 
 async def test_create_or_append_frame_unknown_author_raises_lookup(db, svc):

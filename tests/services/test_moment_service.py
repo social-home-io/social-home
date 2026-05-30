@@ -8,6 +8,7 @@ import pytest
 
 from socialhome.crypto import derive_instance_id, generate_identity_keypair
 from socialhome.db.database import AsyncDatabase
+from socialhome.domain.moment import Moment
 from socialhome.domain.events import (
     MomentCreated,
     MomentDeleted,
@@ -77,6 +78,50 @@ async def test_create_text_moment_persists_and_publishes(stack):
     assert m.content == "hello"
     assert m.origin_instance_id == stack.iid
     assert len(captured) == 1
+
+
+async def test_delete_and_expiry_remove_media_file(stack, tmp_dir):
+    """A moment's backing file is unlinked on delete and on retention expiry."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    svc = MomentService(
+        stack.moment_repo,
+        SqliteUserRepo(stack.db),
+        stack.bus,
+        own_instance_id=stack.iid,
+        media_dir=media_dir,
+    )
+    a = await stack.provision("alice")
+
+    # delete path
+    (media_dir / "a.webm").write_bytes(b"x")
+    m = await svc.create_moment(
+        author_user_id=a.user_id,
+        content="",
+        media_url="api/media/a.webm",
+    )
+    assert (media_dir / "a.webm").exists()
+    await svc.delete_moment(m.id, actor_user_id=a.user_id)
+    assert not (media_dir / "a.webm").exists()
+
+    # expiry path — insert an already-expired row with media, then prune
+    (media_dir / "b.webm").write_bytes(b"y")
+    expired = Moment(
+        id="m-exp",
+        author_user_id=a.user_id,
+        content="old",
+        media_url="api/media/b.webm",
+        media_type="video",
+        duration_ms=1000,
+        parent_moment_id=None,
+        origin_instance_id=stack.iid,
+        created_at=(datetime.now(timezone.utc) - timedelta(days=9)).isoformat(),
+        expires_at=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+    )
+    await stack.moment_repo.save(expired)
+    assert (media_dir / "b.webm").exists()
+    await svc.expire_due()
+    assert not (media_dir / "b.webm").exists()
 
 
 async def test_empty_text_and_no_media_rejected(stack):

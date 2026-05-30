@@ -95,6 +95,10 @@ class AbstractHighlightRepo(Protocol):
     async def delete_frame(self, frame_id: str) -> None: ...
     async def delete_highlight(self, highlight_id: str) -> None: ...
     async def delete_by_author(self, author_user_id: str) -> int: ...
+    async def list_expired_frame_media_urls(self) -> builtins.list[str]: ...
+    async def list_over_max_frame_media_urls(
+        self, author_user_id: str, max_count: int
+    ) -> builtins.list[str]: ...
     async def prune_expired(self) -> int: ...
     async def prune_over_max(self, author_user_id: str, max_count: int) -> int: ...
     async def save_highlight(self, highlight: Highlight) -> Highlight: ...
@@ -429,11 +433,55 @@ class SqliteHighlightRepo:
 
     # ── Retention ───────────────────────────────────────────────────────
 
-    async def prune_expired(self) -> int:
+    async def _expired_ids(self) -> list[str]:
         rows = await self._db.fetchall(
             "SELECT id FROM highlights WHERE expires_at < datetime('now')",
         )
-        ids = [r["id"] for r in rows_to_dicts(rows)]
+        return [r["id"] for r in rows_to_dicts(rows)]
+
+    async def _over_max_ids(self, author_user_id: str, max_count: int) -> list[str]:
+        if max_count <= 0:
+            return []
+        rows = await self._db.fetchall(
+            "SELECT id FROM highlights WHERE author_user_id=? "
+            "ORDER BY highlight_date DESC, created_at DESC",
+            (author_user_id,),
+        )
+        return [r["id"] for r in rows_to_dicts(rows)][max_count:]
+
+    async def _frame_media_urls(self, highlight_ids: list[str]) -> list[str]:
+        """Frame ``media_url`` values for the given highlights (non-null)."""
+        if not highlight_ids:
+            return []
+        placeholders = ",".join("?" * len(highlight_ids))
+        rows = await self._db.fetchall(
+            "SELECT media_url FROM highlight_frames "
+            f"WHERE highlight_id IN ({placeholders}) AND media_url IS NOT NULL",
+            tuple(highlight_ids),
+        )
+        return [r["media_url"] for r in rows_to_dicts(rows) if r.get("media_url")]
+
+    async def list_expired_frame_media_urls(self) -> list[str]:
+        """Frame media URLs for highlights :meth:`prune_expired` will drop.
+
+        Collected before the prune (a superset-safe predicate match) so
+        the caller can delete the backing files; the cascade ``DELETE``
+        on ``highlights`` removes the frame rows.
+        """
+        return await self._frame_media_urls(await self._expired_ids())
+
+    async def list_over_max_frame_media_urls(
+        self,
+        author_user_id: str,
+        max_count: int,
+    ) -> list[str]:
+        """Frame media URLs for highlights :meth:`prune_over_max` will drop."""
+        return await self._frame_media_urls(
+            await self._over_max_ids(author_user_id, max_count)
+        )
+
+    async def prune_expired(self) -> int:
+        ids = await self._expired_ids()
         for sid in ids:
             await self._db.enqueue("DELETE FROM highlights WHERE id=?", (sid,))
         return len(ids)
@@ -443,15 +491,7 @@ class SqliteHighlightRepo:
         author_user_id: str,
         max_count: int,
     ) -> int:
-        if max_count <= 0:
-            return 0
-        rows = await self._db.fetchall(
-            "SELECT id FROM highlights WHERE author_user_id=? "
-            "ORDER BY highlight_date DESC, created_at DESC",
-            (author_user_id,),
-        )
-        ids = [r["id"] for r in rows_to_dicts(rows)]
-        too_old = ids[max_count:]
+        too_old = await self._over_max_ids(author_user_id, max_count)
         for sid in too_old:
             await self._db.enqueue("DELETE FROM highlights WHERE id=?", (sid,))
         return len(too_old)

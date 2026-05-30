@@ -1487,7 +1487,12 @@ def create_app(config: Config | None = None) -> web.Application:
     bazaar_expiry_scheduler = BazaarExpiryScheduler(bazaar_service)
 
     # ── Highlights (§Highlights) ────────────────────────────────────────────
-    highlight_service = HighlightService(highlight_repo, user_repo, bus)
+    highlight_service = HighlightService(
+        highlight_repo,
+        user_repo,
+        bus,
+        media_dir=pathlib.Path(config.media_path),
+    )
     highlight_retention_scheduler = HighlightRetentionScheduler(highlight_service)
     # Public-publish service. ``attach_session`` + ``attach_identity``
     # are called from the startup hook once the shared aiohttp client
@@ -1512,7 +1517,12 @@ def create_app(config: Config | None = None) -> web.Application:
     # in the startup hook (see ``moment_service.attach_instance_id``).
     # ``moment_repo`` is shared with the federation inbound handler so
     # remote-author rows land in the same table.
-    moment_service = MomentService(moment_repo, user_repo, bus)
+    moment_service = MomentService(
+        moment_repo,
+        user_repo,
+        bus,
+        media_dir=pathlib.Path(config.media_path),
+    )
     moment_retention_scheduler = MomentRetentionScheduler(moment_service)
 
     # ── Public Momentum via GFS (§Momentum-public) ─────────────────────
