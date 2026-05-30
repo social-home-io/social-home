@@ -81,6 +81,31 @@ async def test_edit_and_delete(stack):
         await stack.feed_svc.get_post(p.id)
 
 
+async def test_delete_post_removes_media_files(stack, tmp_dir):
+    """Deleting an image post unlinks its media file(s) from disk."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    svc = FeedService(
+        SqlitePostRepo(stack.db),
+        SqliteUserRepo(stack.db),
+        EventBus(),
+        media_dir=media_dir,
+    )
+    u = await stack.provision_user("pascal")
+    for name in ("p1.webp", "p2.webp"):
+        (media_dir / name).write_bytes(b"x")
+    p = await svc.create_post(
+        author_user_id=u.user_id,
+        type=PostType.IMAGE,
+        content="",
+        image_urls=["api/media/p1.webp", "api/media/p2.webp"],
+    )
+    assert (media_dir / "p1.webp").exists() and (media_dir / "p2.webp").exists()
+    await svc.delete_post(p.id, actor_user_id=u.user_id)
+    assert not (media_dir / "p1.webp").exists()
+    assert not (media_dir / "p2.webp").exists()
+
+
 async def test_non_author_cannot_edit(stack):
     """Non-author editing raises PermissionError."""
     a = await stack.provision_user("anna")
