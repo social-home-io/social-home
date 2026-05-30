@@ -69,6 +69,7 @@ from .infrastructure.task_recurrence_scheduler import TaskRecurrenceScheduler
 from .infrastructure.post_draft_scheduler import PostDraftCleanupScheduler
 from .infrastructure.gfs_ws_supervisor import GfsWebSocketSupervisor
 from .infrastructure.dm_gc_scheduler import DmGcScheduler
+from .infrastructure.media_orphan_sweep_scheduler import MediaOrphanSweepScheduler
 from .infrastructure.dm_relay_seen_scheduler import DmRelaySeenPruneScheduler
 from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionScheduler
 from .infrastructure.pairing_session_prune_scheduler import (
@@ -171,7 +172,9 @@ from .services.calendar_service import CalendarService, SpaceCalendarService
 from .services.child_protection_service import ChildProtectionService
 from .services.audio_transcription_service import AudioTranscriptionService
 from .services.data_export_service import DataExportService
+from .repositories.media_reference_repo import SqliteMediaReferenceRepo
 from .services.dm_media_sync_service import DmMediaSyncService
+from .services.media_orphan_sweep_service import MediaOrphanSweepService
 from .services.space_media_sync_service import SpaceMediaSyncService
 from .services.dm_routing_service import DmRoutingService
 from .services.federation_inbound_service import FederationInboundService
@@ -1685,6 +1688,7 @@ def create_app(config: Config | None = None) -> web.Application:
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
     pairing_session_prune_scheduler: PairingSessionPruneScheduler | None = None
     dm_gc_scheduler: DmGcScheduler | None = None
+    media_sweep_scheduler: MediaOrphanSweepScheduler | None = None
     page_lock_scheduler: PageLockExpiryScheduler | None = None
     space_retention_scheduler: SpaceRetentionScheduler | None = None
     post_draft_scheduler: PostDraftCleanupScheduler | None = None
@@ -2328,6 +2332,18 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         await dm_gc_scheduler.start()
 
+        # Media orphan sweep — backstop that removes media-dir files no DB
+        # row references (e.g. media whose post was deleted remotely). 24 h
+        # grace + skip-patterns guard in-flight transfers + DM intermediates.
+        nonlocal media_sweep_scheduler
+        media_sweep_scheduler = MediaOrphanSweepScheduler(
+            MediaOrphanSweepService(
+                media_dir=pathlib.Path(config.media_path),
+                reference_repo=SqliteMediaReferenceRepo(db),
+            ),
+        )
+        await media_sweep_scheduler.start()
+
         # Bazaar auction expiry — closes due auctions on a 60-s cadence.
         await bazaar_expiry_scheduler.start()
 
@@ -2457,6 +2473,8 @@ def create_app(config: Config | None = None) -> web.Application:
             await pairing_session_prune_scheduler.stop()
         if dm_gc_scheduler is not None:
             await dm_gc_scheduler.stop()
+        if media_sweep_scheduler is not None:
+            await media_sweep_scheduler.stop()
         if page_lock_scheduler is not None:
             await page_lock_scheduler.stop()
         if space_retention_scheduler is not None:

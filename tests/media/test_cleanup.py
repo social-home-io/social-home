@@ -4,7 +4,20 @@ import pathlib
 
 import pytest
 
-from socialhome.media.cleanup import unlink_media
+from socialhome.media.cleanup import media_basename, unlink_media
+
+
+def test_media_basename_strips_prefix_and_query():
+    assert media_basename("api/media/a.webp") == "a.webp"
+    assert media_basename("/api/media/a.webp?v=3") == "a.webp"
+    assert media_basename("bare.webp") == "bare.webp"
+
+
+def test_media_basename_rejects_empty_and_traversal():
+    assert media_basename(None) is None
+    assert media_basename("") is None
+    assert media_basename("api/media/..") is None
+
 
 pytestmark = pytest.mark.asyncio
 

@@ -25,6 +25,21 @@ import aiofiles.os
 log = logging.getLogger(__name__)
 
 
+def media_basename(media_url: str | None) -> str | None:
+    """Resolve a stored ``api/media/<file>`` URL to its bare filename.
+
+    Tolerates a leading ``/`` and a ``?query``. Returns ``None`` for an
+    empty/``.``/``..`` value. Splitting on ``/`` guarantees the result has
+    no path separator, so ``media_dir / basename`` can't escape media_dir.
+    """
+    if not media_url:
+        return None
+    name = media_url.rsplit("/", 1)[-1].split("?", 1)[0]
+    if not name or name in (".", ".."):
+        return None
+    return name
+
+
 async def unlink_media(media_dir: pathlib.Path, media_url: str | None) -> bool:
     """Best-effort delete of the local file backing ``media_url``.
 
@@ -33,12 +48,8 @@ async def unlink_media(media_dir: pathlib.Path, media_url: str | None) -> bool:
     was removed. Never raises: a missing file, an unresolvable URL, or a
     filesystem error is logged at debug and swallowed.
     """
-    if not media_url:
-        return False
-    # Basename only — splitting on "/" means the result can't contain a
-    # path separator, so ``media_dir / filename`` can't escape media_dir.
-    filename = media_url.rsplit("/", 1)[-1].split("?", 1)[0]
-    if not filename or filename in (".", ".."):
+    filename = media_basename(media_url)
+    if filename is None:
         return False
     path = media_dir / filename
     try:
