@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from ..domain.events import UserProfileUpdated
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from .peer_outbound import ConfirmedPeerBroadcaster, SingleTargetSender
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -37,7 +38,11 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class ProfileFederationOutbound(VisibilityMixin):
+class ProfileFederationOutbound(
+    VisibilityMixin,
+    ConfirmedPeerBroadcaster,
+    SingleTargetSender,
+):
     """Publish :class:`UserProfileUpdated` events as ``USER_UPDATED``."""
 
     __slots__ = (
@@ -79,18 +84,7 @@ class ProfileFederationOutbound(VisibilityMixin):
                 event.picture_webp,
             ).decode("ascii")
 
-        try:
-            peers = await self._federation_repo.list_instances(
-                status="confirmed",
-            )
-        except Exception as exc:  # pragma: no cover — defensive
-            log.debug("profile-outbound: list peers failed: %s", exc)
-            return
-        own = getattr(self._federation, "_own_instance_id", "")
-        for peer in peers:
-            instance_id = getattr(peer, "id", None)
-            if not instance_id or instance_id == own:
-                continue
+        for instance_id in await self.list_confirmed_peer_ids():
             # Per-pair user-visibility filter (peer_user_visibility).
             # ``hidden_for_peer`` is fail-soft — repo errors default to
             # visible so we never silently lose profile updates on a
@@ -98,15 +92,8 @@ class ProfileFederationOutbound(VisibilityMixin):
             hidden = await self.hidden_for_peer(instance_id)
             if event.user_id in hidden:
                 continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=instance_id,
-                    event_type=FederationEventType.USER_UPDATED,
-                    payload=payload,
-                )
-            except Exception as exc:  # pragma: no cover — defensive
-                log.debug(
-                    "profile-outbound: send to %s failed: %s",
-                    instance_id,
-                    exc,
-                )
+            await self.send_to_instance(
+                instance_id,
+                FederationEventType.USER_UPDATED,
+                payload,
+            )

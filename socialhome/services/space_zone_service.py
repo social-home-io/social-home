@@ -36,6 +36,7 @@ from ..infrastructure.event_bus import EventBus
 from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.space_zone_repo import AbstractSpaceZoneRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .bus_publisher import BusPublisherMixin
 
 #: §23.8.7: 25 m floor (just above the 4-dp ~11 m precision); 50 km
 #: ceiling (a "city-wide" zone is the largest meaningful display
@@ -77,7 +78,7 @@ class SpaceZoneNameConflictError(Exception):
     """
 
 
-class SpaceZoneService:
+class SpaceZoneService(BusPublisherMixin):
     """Admin-gated CRUD for per-space zones (§23.8.7)."""
 
     __slots__ = ("_zones", "_spaces", "_users", "_bus")
@@ -241,14 +242,13 @@ class SpaceZoneService:
         if actor is None:
             raise KeyError(f"actor {actor_username!r} not found")
         await self._zones.delete(zone_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                SpaceZoneDeleted(
-                    space_id=space_id,
-                    zone_id=zone_id,
-                    deleted_by=actor.user_id,
-                ),
-            )
+        await self._emit(
+            SpaceZoneDeleted(
+                space_id=space_id,
+                zone_id=zone_id,
+                deleted_by=actor.user_id,
+            ),
+        )
 
     # ── Internal helpers ────────────────────────────────────────────────
 

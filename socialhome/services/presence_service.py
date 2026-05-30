@@ -25,6 +25,7 @@ from ..domain.presence import (
 from ..infrastructure.event_bus import EventBus
 from ..repositories.presence_repo import AbstractPresenceRepo
 from ..repositories.user_repo import AbstractUserRepo
+from .bus_publisher import BusPublisherMixin
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class UserNotFoundError(LookupError):
     """
 
 
-class PresenceService:
+class PresenceService(BusPublisherMixin):
     """Read and update household member presence."""
 
     __slots__ = ("_repo", "_users", "_bus")
@@ -145,18 +146,17 @@ class PresenceService:
         # per-space outbound service can build a GPS-only payload
         # without a second DB hit; subscribers that target a
         # space-bound channel must drop ``zone_name`` (§23.8.6).
-        if self._bus is not None:
-            await self._bus.publish(
-                PresenceUpdated(
-                    username=update.username,
-                    state=update.state,
-                    zone_name=update.zone_name,
-                    latitude=lat,
-                    longitude=lon,
-                    gps_accuracy_m=acc,
-                    updated_at=datetime.now(timezone.utc).isoformat(),
-                )
+        await self._emit(
+            PresenceUpdated(
+                username=update.username,
+                state=update.state,
+                zone_name=update.zone_name,
+                latitude=lat,
+                longitude=lon,
+                gps_accuracy_m=acc,
+                updated_at=datetime.now(timezone.utc).isoformat(),
             )
+        )
 
     async def apply_remote(self, *, from_instance: str, payload: dict) -> None:
         """Apply a ``PRESENCE_UPDATED`` federation event from a remote peer.

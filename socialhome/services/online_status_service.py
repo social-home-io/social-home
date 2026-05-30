@@ -52,6 +52,7 @@ from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.ws_manager import WebSocketManager
 from ..repositories.user_repo import AbstractUserRepo
+from .peer_outbound import SingleTargetSender
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ class _RemoteEntry:
     last_seen_at: datetime | None
 
 
-class OnlineStatusService(VisibilityMixin):
+class OnlineStatusService(VisibilityMixin, SingleTargetSender):
     """Track WS-session presence and publish online/idle/offline events."""
 
     #: A user is *idle* when every open session has been silent for at
@@ -391,18 +392,7 @@ class OnlineStatusService(VisibilityMixin):
             hidden = await self.hidden_for_peer(inst_id)
             if user_id in hidden:
                 continue
-            try:
-                await self._federation.send_event(
-                    to_instance_id=inst_id,
-                    event_type=event_type,
-                    payload=payload,
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                log.debug(
-                    "online-status fan-out to %s failed: %s",
-                    inst_id,
-                    exc,
-                )
+            await self.send_to_instance(inst_id, event_type, payload)
 
     async def apply_remote(
         self,

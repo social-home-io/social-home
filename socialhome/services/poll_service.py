@@ -21,6 +21,7 @@ from ..domain.events import (
 )
 from ..infrastructure.event_bus import EventBus
 from ..repositories.poll_repo import AbstractPollRepo
+from .bus_publisher import BusPublisherMixin
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ class PollClosedError(PollServiceError):
     """Votes are rejected once the poll is closed."""
 
 
-class PollService:
+class PollService(BusPublisherMixin):
     """One shared service for both reply polls and schedule polls."""
 
     __slots__ = ("_repo", "_bus")
@@ -83,15 +84,14 @@ class PollService:
             allow_multiple=allow_multiple,
             options=option_rows,
         )
-        if self._bus is not None:
-            await self._bus.publish(
-                PollCreated(
-                    post_id=post_id,
-                    question=question,
-                    allow_multiple=allow_multiple,
-                    space_id=space_id,
-                )
+        await self._emit(
+            PollCreated(
+                post_id=post_id,
+                question=question,
+                allow_multiple=allow_multiple,
+                space_id=space_id,
             )
+        )
         return await self.summary(post_id, space_id=space_id)
 
     async def cast_vote(
@@ -173,15 +173,14 @@ class PollService:
             post_id=post_id,
             voter_user_id=voter_user_id,
         )
-        if self._bus is not None:
-            await self._bus.publish(
-                PollVoted(
-                    post_id=post_id,
-                    voter_user_id=voter_user_id,
-                    option_ids=(),
-                    space_id=space_id,
-                )
+        await self._emit(
+            PollVoted(
+                post_id=post_id,
+                voter_user_id=voter_user_id,
+                option_ids=(),
+                space_id=space_id,
             )
+        )
 
     async def close_poll(
         self,
@@ -198,13 +197,12 @@ class PollService:
         if author is None or author != actor_user_id:
             raise PermissionError("Only the post author may close this poll")
         await self._repo.close(post_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                PollClosed(
-                    post_id=post_id,
-                    space_id=space_id,
-                )
+        await self._emit(
+            PollClosed(
+                post_id=post_id,
+                space_id=space_id,
             )
+        )
 
     async def summary(
         self,
@@ -288,16 +286,15 @@ class PollService:
             deadline=deadline,
             slots=minted,
         )
-        if self._bus is not None:
-            await self._bus.publish(
-                SchedulePollCreated(
-                    post_id=post_id,
-                    title=title,
-                    deadline=deadline,
-                    slots=tuple(minted),
-                    space_id=space_id,
-                ),
-            )
+        await self._emit(
+            SchedulePollCreated(
+                post_id=post_id,
+                title=title,
+                deadline=deadline,
+                slots=tuple(minted),
+                space_id=space_id,
+            ),
+        )
         return await self.schedule_summary(post_id, space_id=space_id)
 
     async def respond_schedule(
@@ -316,16 +313,15 @@ class PollService:
             user_id=user_id,
             response=response,
         )
-        if self._bus is not None:
-            await self._bus.publish(
-                SchedulePollResponded(
-                    post_id=poll_id,
-                    slot_id=slot_id,
-                    user_id=user_id,
-                    response=response,
-                    space_id=space_id,
-                )
+        await self._emit(
+            SchedulePollResponded(
+                post_id=poll_id,
+                slot_id=slot_id,
+                user_id=user_id,
+                response=response,
+                space_id=space_id,
             )
+        )
 
     async def retract_schedule(
         self,
@@ -339,16 +335,15 @@ class PollService:
             slot_id=slot_id,
             user_id=user_id,
         )
-        if self._bus is not None:
-            await self._bus.publish(
-                SchedulePollResponded(
-                    post_id=poll_id,
-                    slot_id=slot_id,
-                    user_id=user_id,
-                    response="retracted",
-                    space_id=space_id,
-                )
+        await self._emit(
+            SchedulePollResponded(
+                post_id=poll_id,
+                slot_id=slot_id,
+                user_id=user_id,
+                response="retracted",
+                space_id=space_id,
             )
+        )
 
     async def finalize_schedule_poll(
         self,
@@ -372,19 +367,18 @@ class PollService:
         if slot is None:
             raise ValueError(f"slot {slot_id!r} not in poll {post_id!r}")
         summary = await self.schedule_summary(post_id, space_id=space_id)
-        if self._bus is not None:
-            await self._bus.publish(
-                SchedulePollFinalized(
-                    post_id=post_id,
-                    slot_id=slot_id,
-                    slot_date=slot["slot_date"],
-                    start_time=slot["start_time"],
-                    end_time=slot["end_time"],
-                    title=summary.get("title") or "",
-                    finalized_by=actor_user_id,
-                    space_id=space_id,
-                )
+        await self._emit(
+            SchedulePollFinalized(
+                post_id=post_id,
+                slot_id=slot_id,
+                slot_date=slot["slot_date"],
+                start_time=slot["start_time"],
+                end_time=slot["end_time"],
+                title=summary.get("title") or "",
+                finalized_by=actor_user_id,
+                space_id=space_id,
             )
+        )
         return summary
 
     async def schedule_summary(

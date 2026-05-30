@@ -33,6 +33,10 @@ class _FakeFederationService:
         self._fail_for = fail_for or set()
         self.sent: list[tuple[str, FederationEventType, dict]] = []
 
+    @property
+    def own_instance_id(self) -> str:
+        return self._own_instance_id
+
     async def send_event(self, *, to_instance_id, event_type, payload) -> None:
         if to_instance_id in self._fail_for:
             raise RuntimeError(f"simulated failure for {to_instance_id}")
