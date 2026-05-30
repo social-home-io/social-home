@@ -100,6 +100,7 @@ from .space_crypto_service import (
     SUPPORTED_KEY_SUITES,
     UnsupportedKeySuite,
 )
+from .space_member_guard import SpaceMemberGuardMixin
 
 
 log = logging.getLogger(__name__)
@@ -118,7 +119,7 @@ MAX_POST_LENGTH = 10_000
 MAX_COMMENT_LENGTH = 2_000
 
 
-class SpaceService:
+class SpaceService(SpaceMemberGuardMixin):
     """Orchestrates space lifecycle + member + post flows."""
 
     __slots__ = (
@@ -2584,10 +2585,7 @@ class SpaceService:
         space_id: str,
         user_id: str,
     ) -> SpaceMember:
-        member = await self._spaces.get_member(space_id, user_id)
-        if member is None:
-            raise SpacePermissionError("not a member of this space")
-        return member
+        return await self._member_or_raise(space_id, user_id)
 
     async def _reject_subscriber(
         self,
@@ -2646,26 +2644,26 @@ class SpaceService:
         space: Space,
         actor_username: str,
     ) -> SpaceMember:
-        actor = await self._users.get(actor_username)
-        if actor is None:
-            raise KeyError(f"actor {actor_username!r} not found")
-        member = await self._spaces.get_member(space.id, actor.user_id)
-        if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
-            raise SpacePermissionError("admin or owner required")
-        return member
+        actor = await self._actor_or_raise(actor_username)
+        return await self._role_or_raise(
+            space.id,
+            actor.user_id,
+            (SpaceRole.OWNER, SpaceRole.ADMIN),
+            message="admin or owner required",
+        )
 
     async def _require_owner(
         self,
         space: Space,
         actor_username: str,
     ) -> SpaceMember:
-        actor = await self._users.get(actor_username)
-        if actor is None:
-            raise KeyError(f"actor {actor_username!r} not found")
-        member = await self._spaces.get_member(space.id, actor.user_id)
-        if member is None or member.role != SpaceRole.OWNER:
-            raise SpacePermissionError("owner required")
-        return member
+        actor = await self._actor_or_raise(actor_username)
+        return await self._role_or_raise(
+            space.id,
+            actor.user_id,
+            (SpaceRole.OWNER,),
+            message="owner required",
+        )
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────

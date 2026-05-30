@@ -31,12 +31,13 @@ from datetime import datetime, timezone
 
 from ..domain.events import SpaceZoneDeleted, SpaceZoneUpserted
 from ..domain.presence import truncate_coord
-from ..domain.space import SpacePermissionError, SpaceRole, SpaceZone
+from ..domain.space import SpaceRole, SpaceZone
 from ..infrastructure.event_bus import EventBus
 from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.space_zone_repo import AbstractSpaceZoneRepo
 from ..repositories.user_repo import AbstractUserRepo
 from .bus_publisher import BusPublisherMixin
+from .space_member_guard import SpaceMemberGuardMixin
 
 #: §23.8.7: 25 m floor (just above the 4-dp ~11 m precision); 50 km
 #: ceiling (a "city-wide" zone is the largest meaningful display
@@ -78,7 +79,7 @@ class SpaceZoneNameConflictError(Exception):
     """
 
 
-class SpaceZoneService(BusPublisherMixin):
+class SpaceZoneService(BusPublisherMixin, SpaceMemberGuardMixin):
     """Admin-gated CRUD for per-space zones (§23.8.7)."""
 
     __slots__ = ("_zones", "_spaces", "_users", "_bus")
@@ -257,21 +258,20 @@ class SpaceZoneService(BusPublisherMixin):
         space_id: str,
         actor_user_id: str,
     ) -> None:
-        member = await self._spaces.get_member(space_id, actor_user_id)
-        if member is None:
-            raise SpacePermissionError("not a member of this space")
+        await self._member_or_raise(space_id, actor_user_id)
 
     async def _require_admin(
         self,
         space_id: str,
         actor_username: str,
     ) -> None:
-        actor = await self._users.get(actor_username)
-        if actor is None:
-            raise KeyError(f"actor {actor_username!r} not found")
-        member = await self._spaces.get_member(space_id, actor.user_id)
-        if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
-            raise SpacePermissionError("admin or owner required")
+        actor = await self._actor_or_raise(actor_username)
+        await self._role_or_raise(
+            space_id,
+            actor.user_id,
+            (SpaceRole.OWNER, SpaceRole.ADMIN),
+            message="admin or owner required",
+        )
 
     async def _publish_upserted(self, zone: SpaceZone) -> None:
         if self._bus is None:
