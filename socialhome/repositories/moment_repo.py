@@ -84,6 +84,7 @@ class AbstractMomentRepo(Protocol):
     ) -> list[tuple[str, int]]: ...
 
     # Retention -----------------------------------------------------------
+    async def list_expired_media_urls(self) -> list[str]: ...
     async def prune_expired(self) -> int: ...
 
 
@@ -463,6 +464,21 @@ class SqliteMomentRepo:
         return [(r["tag"], int(r["n"])) for r in rows]
 
     # ── Retention ──────────────────────────────────────────────────────
+
+    async def list_expired_media_urls(self) -> list[str]:
+        """``media_url`` of every row :meth:`prune_expired` would drop.
+
+        Collected before the prune so the caller can delete the backing
+        files. The predicate matches ``prune_expired`` exactly, and the
+        prune's ``DELETE`` runs a hair later (a superset), so every URL
+        returned here is guaranteed to be pruned — we never report a URL
+        whose row survives.
+        """
+        rows = await self._db.fetchall(
+            "SELECT media_url FROM moments "
+            "WHERE expires_at < datetime('now') AND media_url IS NOT NULL",
+        )
+        return [r["media_url"] for r in rows_to_dicts(rows) if r.get("media_url")]
 
     async def prune_expired(self) -> int:
         """Drop rows past their absolute 7-day cap. Reactions cascade."""

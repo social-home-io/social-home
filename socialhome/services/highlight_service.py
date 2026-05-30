@@ -43,9 +43,12 @@ from ..domain.highlight import (
     HighlightFrameReplySnapshot,
     HighlightFrameType,
 )
+from ..media.cleanup import unlink_media
 from .user_preferences import parse_highlights_preferences
 
 if TYPE_CHECKING:
+    import pathlib
+
     from ..infrastructure.event_bus import EventBus
     from ..repositories.highlight_repo import AbstractHighlightRepo
     from ..repositories.user_repo import AbstractUserRepo
@@ -72,17 +75,23 @@ class HighlightFrameLimitError(ValueError):
 class HighlightService:
     """Personal highlights: create / view / react / share / expire."""
 
-    __slots__ = ("_highlights", "_users", "_bus")
+    __slots__ = ("_highlights", "_users", "_bus", "_media_dir")
 
     def __init__(
         self,
         repo: "AbstractHighlightRepo",
         user_repo: "AbstractUserRepo",
         bus: "EventBus",
+        *,
+        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._highlights = repo
         self._users = user_repo
         self._bus = bus
+        # When set, frame media files are removed on delete / expiry.
+        # A highlight frame owns its media 1:1 (not mirrored), so this
+        # is safe.
+        self._media_dir = media_dir
 
     # ── Create / append ─────────────────────────────────────────────────
 
@@ -272,6 +281,8 @@ class HighlightService:
         if highlight.author_user_id != actor_user_id:
             raise HighlightForbiddenError("only the author can delete their frame")
         await self._highlights.delete_frame(frame_id)
+        if self._media_dir is not None:
+            await unlink_media(self._media_dir, frame.media_url)
         await self._bus.publish(
             HighlightFrameRemoved(
                 highlight_id=highlight.id,
@@ -293,7 +304,17 @@ class HighlightService:
             raise HighlightNotFoundError(highlight_id)
         if highlight.author_user_id != actor_user_id:
             raise HighlightForbiddenError("only the author can delete their highlight")
+        # Collect frame media before the cascade delete so we can drop the
+        # files too (deleting the highlight row cascades the frame rows).
+        frame_urls = (
+            [f.media_url for f in await self._highlights.list_frames(highlight_id)]
+            if self._media_dir is not None
+            else []
+        )
         await self._highlights.delete_highlight(highlight_id)
+        if self._media_dir is not None:
+            for url in frame_urls:
+                await unlink_media(self._media_dir, url)
         await self._bus.publish(
             HighlightRemoved(
                 highlight_id=highlight.id,
@@ -460,6 +481,9 @@ class HighlightService:
         to call as often as the scheduler ticks; the underlying queries
         are idempotent.
         """
+        media_urls: list[str] = []
+        if self._media_dir is not None:
+            media_urls.extend(await self._highlights.list_expired_frame_media_urls())
         expired = await self._highlights.prune_expired()
         over_max = 0
         authors = await self._highlights.list_authors_with_highlights()
@@ -468,9 +492,18 @@ class HighlightService:
             prefs = parse_highlights_preferences(
                 user.preferences_json if user is not None else None
             )
+            if self._media_dir is not None:
+                media_urls.extend(
+                    await self._highlights.list_over_max_frame_media_urls(
+                        author_user_id, prefs.max_count
+                    )
+                )
             over_max += await self._highlights.prune_over_max(
                 author_user_id, prefs.max_count
             )
+        if self._media_dir is not None:
+            for url in media_urls:
+                await unlink_media(self._media_dir, url)
         return expired, over_max
 
 

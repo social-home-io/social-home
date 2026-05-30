@@ -32,9 +32,12 @@ from ..domain.moment import (
     MOMENT_MAX_VIDEO_MS,
     Moment,
 )
+from ..media.cleanup import unlink_media
 from .user_preferences import parse_moment_preferences
 
 if TYPE_CHECKING:
+    import pathlib
+
     from ..infrastructure.event_bus import EventBus
     from ..repositories.moment_repo import AbstractMomentRepo
     from ..repositories.user_repo import AbstractUserRepo
@@ -65,7 +68,7 @@ class MomentRateLimitError(Exception):
 class MomentService:
     """Create + react + delete moments and drive their lifecycle."""
 
-    __slots__ = ("_moments", "_users", "_bus", "_own_instance_id")
+    __slots__ = ("_moments", "_users", "_bus", "_own_instance_id", "_media_dir")
 
     def __init__(
         self,
@@ -74,11 +77,15 @@ class MomentService:
         bus: "EventBus",
         *,
         own_instance_id: str = "",
+        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._moments = moment_repo
         self._users = user_repo
         self._bus = bus
         self._own_instance_id = own_instance_id
+        # When set, the backing media file is removed on delete / expiry.
+        # A moment owns its media 1:1 (not mirrored), so unlinking is safe.
+        self._media_dir = media_dir
 
     def attach_instance_id(self, own_instance_id: str) -> None:
         """Late binding for the instance id (set after federation
@@ -192,6 +199,8 @@ class MomentService:
         if moment.author_user_id != actor_user_id and not actor_is_admin:
             raise PermissionError("Only the author or an admin can delete this moment.")
         await self._moments.delete(moment_id)
+        if self._media_dir is not None:
+            await unlink_media(self._media_dir, moment.media_url)
         await self._bus.publish(
             MomentDeleted(
                 moment_id=moment_id,
@@ -296,9 +305,19 @@ class MomentService:
 
     async def expire_due(self) -> int:
         """Drop moments past the absolute 7-day cap. Reactions cascade."""
+        # Collect the backing media URLs before the prune so we can drop
+        # the files too (the row delete alone would orphan them on disk).
+        urls = (
+            await self._moments.list_expired_media_urls()
+            if self._media_dir is not None
+            else []
+        )
         n = await self._moments.prune_expired()
         if n:
             log.info("momentum: pruned %d expired moments", n)
+        if self._media_dir is not None:
+            for url in urls:
+                await unlink_media(self._media_dir, url)
         return n
 
     # ── Internal helpers ───────────────────────────────────────────────
