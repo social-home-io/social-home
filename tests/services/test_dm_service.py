@@ -93,6 +93,35 @@ async def test_edit_delete_sender_only(stack):
         await stack.dm_svc.delete_message(m.id, actor_username="bob")
 
 
+async def test_delete_message_removes_media_file(stack, tmp_dir):
+    """Deleting an image DM unlinks its backing media file from disk."""
+    media_dir = tmp_dir / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    (media_dir / "del.webp").write_bytes(b"bytes")
+    dm_svc = DmService(
+        SqliteConversationRepo(stack.db),
+        SqliteUserRepo(stack.db),
+        EventBus(),
+        media_dir=media_dir,
+    )
+    await stack.provision_user("anna")
+    await stack.provision_user("bob")
+    dm = await dm_svc.create_dm(creator_username="anna", other_username="bob")
+    msg = await dm_svc.send_message(
+        dm.id,
+        sender_username="anna",
+        content="",
+        type="image",
+        media_url="api/media/del.webp",
+        file_name="del.webp",
+        mime_type="image/webp",
+        file_size_bytes=5,
+    )
+    assert (media_dir / "del.webp").exists()
+    await dm_svc.delete_message(msg.id, actor_username="anna")
+    assert not (media_dir / "del.webp").exists()
+
+
 async def test_group_dm(stack):
     """Creating a group DM produces a GROUP_DM conversation."""
     for name in ["anna", "bob", "carl"]:

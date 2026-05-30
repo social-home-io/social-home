@@ -42,6 +42,7 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType
 from ..federation import compat
 from ..infrastructure.event_bus import EventBus
+from ..media.cleanup import unlink_media
 from ..repositories.conversation_repo import AbstractConversationRepo
 from ..repositories.user_repo import AbstractUserRepo
 from .visibility import VisibilityMixin
@@ -781,6 +782,11 @@ class DmService(VisibilityMixin):
         if msg.sender_user_id != actor.user_id:
             raise PermissionError("only the sender can delete a message")
         await self._convos.soft_delete_message(message_id)
+        # The row is gone; drop the backing media file too (a DM blob is
+        # owned 1:1 by its message — not shared — so this is safe). Best
+        # effort: a missing file never blocks the delete.
+        if self._media_dir is not None:
+            await unlink_media(self._media_dir, msg.media_url)
         await self._fan_to_remote(
             conversation_id=msg.conversation_id,
             event_type=FederationEventType.DM_MESSAGE_DELETED,

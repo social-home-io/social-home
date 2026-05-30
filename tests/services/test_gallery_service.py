@@ -288,6 +288,36 @@ async def test_system_album_upload_blocked(env):
         )
 
 
+async def test_delete_item_removes_files_from_disk(env):
+    import io
+
+    from PIL import Image
+
+    album = await env.create_album(
+        space_id=None,
+        owner_user_id="a-id",
+        name="Trip",
+    )
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 48), (10, 120, 200)).save(buf, format="JPEG")
+    item = await env.upload_item(
+        album.id,
+        data=buf.getvalue(),
+        content_type="image/jpeg",
+        caption=None,
+        uploader_user_id="a-id",
+    )
+    media_dir = env._media_dir  # type: ignore[attr-defined]
+    full = media_dir / item.url.rsplit("/", 1)[-1]
+    thumb = media_dir / item.thumbnail_url.rsplit("/", 1)[-1]
+    assert full.exists()
+    assert thumb.exists()
+
+    await env.delete_item(item.id, actor_user_id="a-id")
+    assert not full.exists()
+    assert not thumb.exists()
+
+
 async def test_system_album_set_retention_exempt_blocked(env):
     a = await env.ensure_system_album(space_id=None)
     with pytest.raises(GalleryPermissionError):

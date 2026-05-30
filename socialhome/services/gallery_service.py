@@ -46,6 +46,7 @@ from ..domain.media_constraints import (
 from ..domain.post import Post, PostType
 from ..domain.space import SpaceRole
 from ..infrastructure.event_bus import EventBus
+from ..media.cleanup import unlink_media
 from ..media.image_processor import ImageProcessor
 from ..media.video_processor import VideoProcessor
 from ..repositories.gallery_repo import AbstractGalleryRepo
@@ -402,6 +403,13 @@ class GalleryService:
                 )
         await self._repo.delete_item(item_id)
         await self._repo.increment_item_count(item.album_id, -1)
+        # Drop the backing file(s). Only non-system items reach here
+        # (system-album items are delete-blocked above), and those are
+        # own uploads with their own UUID filenames — never shared with a
+        # post — so unlinking is safe. Best effort; a missing file is fine.
+        await unlink_media(self._media_dir, item.url)
+        if item.thumbnail_url and item.thumbnail_url != item.url:
+            await unlink_media(self._media_dir, item.thumbnail_url)
         await self._bus.publish(
             GalleryItemDeleted(
                 item_id=item_id,
