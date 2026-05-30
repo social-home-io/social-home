@@ -85,7 +85,7 @@ from .infrastructure.highlight_retention_scheduler import HighlightRetentionSche
 from .platform import build_platform_adapter
 from .platform.adapter import Capability
 from .rate_limiter import RateLimiter, build_rate_limit_middleware
-from .webrtc_ice import build_ice_servers, warn_if_no_turn
+from .webrtc_ice import build_ice_servers, warn_if_no_turn, warn_if_turn_unusable
 from .repositories import (
     SqliteBazaarRepo,
     SqliteCalendarRepo,
@@ -2144,6 +2144,7 @@ def create_app(config: Config | None = None) -> web.Application:
             hmac_user_id=real_instance_id,
         )
         warn_if_no_turn(fed_ice_servers)
+        warn_if_turn_unusable(fed_ice_servers)
         fed_transport = FederationTransport(
             own_instance_id=real_instance_id,
             https_inbox=HttpsInboxTransport(

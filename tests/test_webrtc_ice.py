@@ -10,6 +10,7 @@ from socialhome.webrtc_ice import (
     build_ice_servers,
     make_turn_credential,
     warn_if_no_turn,
+    warn_if_turn_unusable,
 )
 
 
@@ -173,3 +174,34 @@ def test_warn_if_no_turn_recognises_turns_url(caplog):
         ]
     )
     assert not any("no TURN" in rec.message for rec in caplog.records)
+
+
+def test_warn_if_turn_unusable_fires_for_credentialless_turn(caplog):
+    """A TURN entry with no username/credential is a half-wired footgun —
+    warn_if_no_turn stays quiet (a TURN entry IS present) so this catches it."""
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="socialhome.webrtc_ice")
+    servers = [{"urls": ["turn:turn.example:3478"]}]  # no creds
+    warn_if_no_turn(servers)
+    warn_if_turn_unusable(servers)
+    assert not any("no TURN server configured" in r.message for r in caplog.records)
+    assert any("WITHOUT usable credentials" in r.message for r in caplog.records)
+
+
+def test_warn_if_turn_unusable_silent_with_credentials(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="socialhome.webrtc_ice")
+    warn_if_turn_unusable(
+        [{"urls": ["turn:turn.example:3478"], "username": "u", "credential": "c"}]
+    )
+    assert not any("usable credentials" in r.message for r in caplog.records)
+
+
+def test_warn_if_turn_unusable_silent_when_no_turn(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="socialhome.webrtc_ice")
+    warn_if_turn_unusable([{"urls": ["stun:stun.l.google.com:19302"]}])
+    assert not any("usable credentials" in r.message for r in caplog.records)

@@ -129,3 +129,29 @@ def warn_if_no_turn(ice_servers: list[dict]) -> None:
             "webrtc_turn_secret (or webrtc_turn_user/cred) in "
             "socialhome.toml.",
         )
+
+
+def warn_if_turn_unusable(ice_servers: list[dict]) -> None:
+    """Warn when a TURN server is configured but carries no credentials.
+
+    A ``turn:``/``turns:`` entry without ``username`` + ``credential`` (and
+    no HMAC secret to mint them) authenticates anonymously — coturn rejects
+    it, so the relay silently never works and RTC falls back to slow HTTPS.
+    This is worse than no TURN at all: :func:`warn_if_no_turn` stays quiet
+    because a TURN entry *is* present. Surface the misconfig so the operator
+    can fix the half-wired setup.
+    """
+    for srv in ice_servers:
+        urls = srv.get("urls", [])
+        if not any(u.startswith(("turn:", "turns:")) for u in urls):
+            continue
+        if not srv.get("username") or not srv.get("credential"):
+            log.warning(
+                "WebRTC: TURN server %s is configured WITHOUT usable "
+                "credentials. Set webrtc_turn_secret (HMAC, recommended) or "
+                "a static webrtc_turn_user / webrtc_turn_cred pair, or coturn "
+                "rejects the relay and RTC falls back to slow HTTPS. See "
+                "docs/operations/turn.md.",
+                urls[0] if urls else "?",
+            )
+        return
