@@ -17,8 +17,9 @@ business logic.
 
 from __future__ import annotations
 
-import json
 from typing import Any, Protocol, runtime_checkable
+
+import orjson
 
 from ..db import AsyncDatabase
 from .domain import (
@@ -559,7 +560,13 @@ class SqliteGfsAdminRepo:
                 action, target_type, target_id, metadata_json, admin_ip
             ) VALUES(?, ?, ?, ?, ?)
             """,
-            (action, target_type, target_id, json.dumps(metadata or {}), admin_ip),
+            (
+                action,
+                target_type,
+                target_id,
+                orjson.dumps(metadata or {}).decode(),
+                admin_ip,
+            ),
         )
 
     async def list_admin_actions(
@@ -919,7 +926,7 @@ def _safe_json(value) -> dict:
     if not value:
         return {}
     try:
-        parsed = json.loads(value)
+        parsed = orjson.loads(value)
         return parsed if isinstance(parsed, dict) else {}
     except ValueError, TypeError:
         return {}

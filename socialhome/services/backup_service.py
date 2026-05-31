@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 import tarfile
 from dataclasses import dataclass
@@ -26,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import aiofiles.os
+import orjson
 
 from ..db import AsyncDatabase
 
@@ -189,15 +189,15 @@ class BackupService:
             exported_at=datetime.now(timezone.utc).isoformat(),
             table_names=list(EXPORTABLE_TABLES),
         )
-        manifest_payload = json.dumps(
+        manifest_payload = orjson.dumps(
             {
                 "schema_version": manifest.schema_version,
                 "instance_id": manifest.instance_id,
                 "exported_at": manifest.exported_at,
                 "table_names": manifest.table_names,
             },
-            indent=2,
-        ).encode("utf-8")
+            option=orjson.OPT_INDENT_2,
+        )
 
         table_payloads: list[tuple[str, bytes]] = []
         for table in EXPORTABLE_TABLES:
@@ -205,7 +205,7 @@ class BackupService:
                 continue
             rows = await self._dump_table(table)
             table_payloads.append(
-                (table, json.dumps(rows).encode("utf-8")),
+                (table, orjson.dumps(rows)),
             )
         return manifest_payload, table_payloads
 
@@ -274,7 +274,7 @@ class BackupService:
             self._read_restore_tar, blob
         )
 
-        manifest = json.loads(manifest_payload.decode("utf-8"))
+        manifest = orjson.loads(manifest_payload)
         if int(manifest.get("schema_version", -1)) != self._schema_version:
             raise BackupError(
                 f"schema_version mismatch: backup={manifest.get('schema_version')!r} "
@@ -284,7 +284,7 @@ class BackupService:
         # Async phase: replay each table's rows through the DB writer
         # queue so they get the normal aiosqlite WAL coalescing.
         for table, payload in table_payloads:
-            rows = json.loads(payload.decode("utf-8"))
+            rows = orjson.loads(payload)
             await self._import_table(table, rows)
 
         # Sync, I/O-bound phase: write the media files onto disk.

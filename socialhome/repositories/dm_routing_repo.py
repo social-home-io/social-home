@@ -16,9 +16,10 @@ Tables touched:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Iterable, Protocol, runtime_checkable
+
+import orjson
 
 from ..db import AsyncDatabase
 
@@ -206,7 +207,7 @@ class SqliteDmRoutingRepo:
                         sender_user_id,
                         idx,
                         target_instance,
-                        json.dumps(path, separators=(",", ":")),
+                        orjson.dumps(path).decode(),
                         len(path),
                         now,
                     ),
@@ -246,7 +247,7 @@ class SqliteDmRoutingRepo:
         target_instance = ""
         for r in rows:
             try:
-                path = json.loads(r["relay_path"])
+                path = orjson.loads(r["relay_path"])
             except TypeError, ValueError:
                 continue
             if not isinstance(path, list):
@@ -498,7 +499,7 @@ class SqliteDmRoutingRepo:
         out: list[dict] = []
         for r in rows:
             try:
-                path = json.loads(r["relay_path"])
+                path = orjson.loads(r["relay_path"])
             except TypeError, ValueError:
                 path = []
             out.append(
@@ -562,7 +563,7 @@ class SqliteDmRoutingRepo:
         control the ``target_instance``, ``via`` (first hop), and
         ``last_used_at`` timestamp independently.
         """
-        relay_path_json = json.dumps([via, target_instance], separators=(",", ":"))
+        relay_path_json = orjson.dumps([via, target_instance]).decode()
         await self._db.enqueue(
             "INSERT OR REPLACE INTO conversation_relay_paths("
             "  conversation_id, sender_user_id, path_index,"

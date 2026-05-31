@@ -21,11 +21,11 @@ they are generated automatically on first start.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import orjson
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -69,7 +69,7 @@ class PushPayload:
     icon_url: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps(
+        return orjson.dumps(
             {
                 k: v
                 for k, v in {
@@ -81,7 +81,7 @@ class PushPayload:
                 }.items()
                 if v is not None
             }
-        )
+        ).decode()
 
 
 class PushService:

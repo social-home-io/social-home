@@ -25,12 +25,12 @@ never sends application frames after hello.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 
 import aiohttp
+import orjson
 
 from ..crypto import b64url_encode, sign_ed25519
 
@@ -230,8 +230,8 @@ class GfsWebSocketClient:
 
     async def _on_text(self, raw: str) -> None:
         try:
-            frame = json.loads(raw)
-        except json.JSONDecodeError:
+            frame = orjson.loads(raw)
+        except orjson.JSONDecodeError:
             log.warning(
                 "gfs.ws.client: ignoring malformed JSON frame from %s",
                 self._gfs_url,

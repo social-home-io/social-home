@@ -18,9 +18,10 @@ Tables touched:
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Protocol, runtime_checkable
+
+import orjson
 
 from ..db import AsyncDatabase
 
@@ -331,7 +332,7 @@ class SqliteCpRepo:
                 minor_id,
                 guardian_id,
                 action,
-                json.dumps(detail or {}),
+                orjson.dumps(detail or {}).decode(),
             ),
         )
 

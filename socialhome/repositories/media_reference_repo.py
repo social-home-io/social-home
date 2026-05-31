@@ -25,9 +25,10 @@ staging dir — the sweep skips those by pattern; ``dm_gc`` owns them.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Protocol, runtime_checkable
+
+import orjson
 
 from ..db import AsyncDatabase
 from ..media.cleanup import media_basename
@@ -79,7 +80,7 @@ class SqliteMediaReferenceRepo:
                 if not raw:
                     continue
                 try:
-                    urls = json.loads(raw)
+                    urls = orjson.loads(raw)
                 except ValueError, TypeError:  # pragma: no cover — defensive
                     continue
                 if isinstance(urls, list):

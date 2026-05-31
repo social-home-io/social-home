@@ -31,7 +31,7 @@ Fire-and-forget — the SH never acks at the application layer.
 from __future__ import annotations
 
 import asyncio
-import json
+import orjson
 import logging
 import time
 
@@ -122,8 +122,8 @@ class GfsWebSocketView(web.View):
             return None
 
         try:
-            payload = json.loads(msg.data)
-        except json.JSONDecodeError:
+            payload = orjson.loads(msg.data)
+        except orjson.JSONDecodeError:
             await ws.close(
                 code=WS_CLOSE_PROTOCOL_VIOLATION,
                 message=b"hello-not-json",

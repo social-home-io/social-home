@@ -20,10 +20,11 @@ logged at DEBUG so they show up during dev but don't spam logs.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from string import Formatter
+
+import orjson
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +62,8 @@ class Catalog:
         for f in d.glob("*.json"):
             locale = f.stem
             try:
-                catalog._messages[locale] = json.loads(f.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
+                catalog._messages[locale] = orjson.loads(f.read_text(encoding="utf-8"))
+            except (OSError, orjson.JSONDecodeError) as exc:
                 log.warning("i18n: failed to load %s: %s", f, exc)
         return catalog
 

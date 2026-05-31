@@ -18,6 +18,8 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import orjson
+
 from ..crypto import derive_user_id
 from ..domain.events import (
     UserBlocked,
@@ -37,7 +39,6 @@ from ..repositories.profile_picture_repo import (
     compute_picture_hash,
 )
 from ..repositories.user_repo import AbstractUserRepo
-
 
 _USERNAME_MAX_LENGTH = 32
 
@@ -362,8 +363,8 @@ class UserService:
         if user is None:
             raise KeyError(f"user {username!r} not found")
         try:
-            prefs = json.loads(user.preferences_json or "{}")
-        except json.JSONDecodeError:
+            prefs = orjson.loads(user.preferences_json or "{}")
+        except orjson.JSONDecodeError:
             prefs = {}
         for key, value in patch.items():
             if value is None:

@@ -31,13 +31,14 @@ SDPs from federation are verified against the sender's identity key
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+
+import orjson
 
 from ..domain.call import CallQualitySample, CallSession
 from ..domain.conversation import ConversationMessage
@@ -896,7 +897,7 @@ class CallSignalingService:
         """
         if not session.conversation_id:
             return
-        content = json.dumps(
+        content = orjson.dumps(
             {
                 "event": event,
                 "call_id": session.id,
@@ -905,9 +906,8 @@ class CallSignalingService:
                 "callee_user_id": session.callee_user_id,
                 "duration_seconds": session.duration_seconds,
             },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
+            option=orjson.OPT_SORT_KEYS,
+        ).decode()
         await self._conv_repo.save_message(
             ConversationMessage(
                 id="msg-" + secrets.token_urlsafe(12),

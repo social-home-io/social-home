@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import orjson
 import logging
 import time
 
@@ -51,7 +51,7 @@ class ClusterSyncView(GfsBaseView):
         svc = self.svc(K.gfs_cluster_key)
         raw = await self.request.read()
         try:
-            body = json.loads(raw.decode("utf-8"))
+            body = orjson.loads(raw.decode("utf-8"))
         except Exception as exc:
             raise web.HTTPBadRequest(reason="Invalid JSON body") from exc
 

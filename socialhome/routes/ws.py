@@ -26,7 +26,7 @@ Anything else is ignored — outbound is the primary direction.
 from __future__ import annotations
 
 import asyncio
-import json
+import orjson
 import logging
 from urllib.parse import urlparse
 
@@ -155,8 +155,8 @@ class WebSocketView(BaseView):
     async def _on_text(self, ctx, ws, data: str) -> None:
         """Handle an inbound text frame."""
         try:
-            payload = json.loads(data)
-        except json.JSONDecodeError:
+            payload = orjson.loads(data)
+        except orjson.JSONDecodeError:
             return
         if not isinstance(payload, dict):
             return
