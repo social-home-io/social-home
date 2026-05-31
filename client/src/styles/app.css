@@ -12891,6 +12891,64 @@ a.sh-welcome-card:hover {
 .sh-reaction-grid button:hover { background: var(--sh-bg-secondary); transform: scale(1.15); }
 .sh-reaction-close { background: none; border: none; cursor: pointer; font-size: 1.25rem; color: var(--sh-text-muted); }
 
+/* Inline picker variant — used by EmojiField inside scroll-clipping
+ * containers (create-space modal, settings form). Sits in document
+ * flow, full-width, no drop shadow / absolute offset. */
+.sh-reaction-picker--inline {
+  position: static;
+  width: 100%;
+  box-shadow: none;
+  margin-top: var(--sh-space-xs);
+  animation: none;
+}
+
+/* EmojiField — single-emoji icon picker (spaces). */
+.sh-emoji-field { display: flex; flex-direction: column; gap: 6px; }
+.sh-emoji-field-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--sh-text);
+}
+.sh-emoji-field-row { display: flex; align-items: center; gap: var(--sh-space-sm); }
+.sh-emoji-field-tile {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--sh-radius-lg);
+  border: 1px solid var(--sh-border);
+  background: var(--sh-bg);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.9rem;
+  line-height: 1;
+  transition: background var(--sh-transition-fast), border-color var(--sh-transition-fast), transform var(--sh-transition-fast);
+}
+.sh-emoji-field-tile:hover { background: var(--sh-bg-secondary); transform: scale(1.04); }
+.sh-emoji-field-tile:focus-visible {
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 2px;
+}
+.sh-emoji-field-tile.is-empty {
+  border-style: dashed;
+  color: var(--sh-text-muted);
+}
+.sh-emoji-field-plus { font-size: 1.6rem; font-weight: 400; }
+.sh-emoji-field-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sh-emoji-field-hint { color: var(--sh-text-muted); font-size: 0.85rem; }
+.sh-emoji-field-clear {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--sh-primary);
+  font-size: 0.85rem;
+  text-decoration: underline;
+}
+.sh-emoji-field-clear:hover { color: var(--sh-primary-hover, var(--sh-primary)); }
+
 /* Notification bell + panel */
 .sh-notif-bell {
   position: relative;

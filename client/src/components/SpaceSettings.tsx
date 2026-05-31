@@ -7,6 +7,7 @@ import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
+import { EmojiField } from './EmojiField'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import type { Space, GfsConnection, GfsSpacePublication } from '@/types'
@@ -206,7 +207,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
       <div class="sh-form">
         <label>Name <input value={name.value} onInput={(e) => name.value = (e.target as HTMLInputElement).value} /></label>
         <label>Description <textarea value={description.value} onInput={(e) => description.value = (e.target as HTMLTextAreaElement).value} rows={2} /></label>
-        <label>Emoji <input value={emoji.value} maxLength={2} onInput={(e) => emoji.value = (e.target as HTMLInputElement).value} /></label>
+        <EmojiField value={emoji} openKey="space-settings-icon" />
         <label>Join mode
           <select value={joinMode.value} onChange={(e) => joinMode.value = (e.target as HTMLSelectElement).value as any}>
             <option value="invite_only">Invite only</option>
