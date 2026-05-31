@@ -11,6 +11,11 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
 
+export interface DmReaction {
+  user_id: string
+  emoji:   string
+}
+
 export interface DmMessageLite {
   message_id:      string
   conversation_id: string
@@ -19,6 +24,7 @@ export interface DmMessageLite {
   content:         string
   occurred_at?:    string
   edited_at?:      string | null
+  reactions?:      DmReaction[]
 }
 
 export interface DmReactionPatch {
@@ -67,6 +73,38 @@ function removeMessage(convo: string, messageId: string): void {
   }
 }
 
+/** Apply a reaction add / remove to the cached copy of a message,
+ *  deduping so a duplicate ``add`` frame (reconnect / multi-session)
+ *  doesn't stack the same (user, emoji) twice and a ``remove`` for a
+ *  reaction that isn't present is a no-op. Mirrors
+ *  ``DmThreadPage``'s ``offReaction`` handler — the working reference. */
+function applyReaction(patch: DmReactionPatch): void {
+  const list = messagesByConversation.value[patch.conversation_id]
+  if (!list) return
+  const idx = list.findIndex((m) => m.message_id === patch.message_id)
+  if (idx < 0) return
+  const current = list[idx].reactions ?? []
+  const exists = current.some(
+    (r) => r.user_id === patch.user_id && r.emoji === patch.emoji,
+  )
+  let nextReactions: DmReaction[]
+  if (patch.action === 'remove') {
+    if (!exists) return
+    nextReactions = current.filter(
+      (r) => !(r.user_id === patch.user_id && r.emoji === patch.emoji),
+    )
+  } else {
+    if (exists) return
+    nextReactions = [...current, { user_id: patch.user_id, emoji: patch.emoji }]
+  }
+  const next = list.slice()
+  next[idx] = { ...next[idx], reactions: nextReactions }
+  messagesByConversation.value = {
+    ...messagesByConversation.value,
+    [patch.conversation_id]: next,
+  }
+}
+
 function addTyping(convo: string, userId: string, ttlSeconds = 6): void {
   const until = Date.now() + ttlSeconds * 1000
   const existing = (typingByConversation.value[convo] ?? []).filter(
@@ -91,9 +129,34 @@ export async function loadDmUnread(): Promise<void> {
 
 export function wireDmWs(): void {
   ws.on('dm.message', (e) => {
-    const m = e.data as unknown as DmMessageLite
-    if (!m?.conversation_id || !m?.message_id) return
-    append(m.conversation_id, m)
+    // The real frame nests the message: ``{type, conversation_id,
+    // sender_display, message: {id, sender_user_id, content, ...}}`` —
+    // the id is ``message.id`` (NOT ``message_id``). The previous code
+    // treated ``e.data`` as the message and guarded on a field that
+    // never exists, so the handler was dead. Match
+    // ``DmThreadPage``'s working ``offNewMsg`` shape.
+    const d = e.data as {
+      conversation_id?: string
+      sender_display?: string
+      message?: {
+        id?: string
+        sender_user_id?: string
+        content?: string
+        created_at?: string
+        edited_at?: string | null
+      }
+    }
+    const msg = d.message
+    if (!d.conversation_id || !msg?.id) return
+    append(d.conversation_id, {
+      message_id:      msg.id,
+      conversation_id: d.conversation_id,
+      sender_user_id:  msg.sender_user_id ?? '',
+      sender_display:  d.sender_display,
+      content:         msg.content ?? '',
+      occurred_at:     msg.created_at,
+      edited_at:       msg.edited_at ?? null,
+    })
     void loadDmUnread()
   })
   ws.on('dm.message_deleted', (e) => {
@@ -103,13 +166,15 @@ export function wireDmWs(): void {
     void loadDmUnread()
   })
   ws.on('dm.message_reaction', (e) => {
+    // The frame is a patch: ``{conversation_id, message_id, user_id,
+    // emoji, action}``. The previous code cloned the array but never
+    // applied the change — the reaction strip never updated. Apply the
+    // add / remove for real (dedup on add, no-op on absent remove).
     const r = e.data as unknown as DmReactionPatch
-    const convoMessages = messagesByConversation.value[r.conversation_id]
-    if (!convoMessages) return
-    messagesByConversation.value = {
-      ...messagesByConversation.value,
-      [r.conversation_id]: [...convoMessages],
+    if (!r?.conversation_id || !r?.message_id || !r?.user_id || !r?.emoji) {
+      return
     }
+    applyReaction(r)
   })
   ws.on('conversation.user_typing', (e) => {
     const t = e.data as unknown as { conversation_id: string, user_id: string, ttl?: number }

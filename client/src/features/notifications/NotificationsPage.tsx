@@ -5,6 +5,7 @@ import { useEffect } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { ws } from '@/ws'
 import { Button } from '@/components/Button'
 import { NotificationListSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
@@ -14,13 +15,24 @@ import type { Notification } from '@/types'
 const notifications = signal<Notification[]>([])
 const loading = signal(true)
 
+/** Refetch the notification list. Reused by the initial load and by the
+ *  ``notification.new`` WS refresh below so a freshly-arrived
+ *  notification lands without a manual reload. */
+function loadNotifications(): Promise<void> {
+  return api.get('/api/notifications?limit=50').then(data => {
+    notifications.value = data
+    loading.value = false
+  })
+}
+
 export default function NotificationsPage() {
   useTitle('Notifications')
   useEffect(() => {
-    api.get('/api/notifications?limit=50').then(data => {
-      notifications.value = data
-      loading.value = false
-    })
+    void loadNotifications()
+    // Live refresh on inbound notifications — refetch-on-frame keeps the
+    // page simple and lets the server own ordering / read-state.
+    const offNew = ws.on('notification.new', () => { void loadNotifications() })
+    return () => { offNew() }
   }, [])
 
   const markAllRead = async () => {

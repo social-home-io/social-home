@@ -2,6 +2,7 @@ import { useEffect } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { ws } from '@/ws'
 import { Avatar } from '@/components/Avatar'
 import { StatusEditor } from '@/components/StatusEditor'
 import { Spinner } from '@/components/Spinner'
@@ -63,13 +64,31 @@ function presenceLabel(state: string): string {
   }
 }
 
+/** Refetch the household presence list. Reused by the initial load and
+ *  by the presence-WS refresh subscriptions below — keeping a single
+ *  loader means a `user.online` frame and the first paint go through the
+ *  exact same path (no drift between the two). */
+function loadPresenceList(): Promise<void> {
+  return api.get('/api/presence').then(data => {
+    presenceList.value = data
+    loading.value = false
+  })
+}
+
 export default function PresencePage() {
   useTitle('Presence')
   useEffect(() => {
-    api.get('/api/presence').then(data => {
-      presenceList.value = data
-      loading.value = false
-    })
+    void loadPresenceList()
+    // Live refresh: presence frames (physical state + GPS) and the
+    // session-presence frames (online / idle / offline) both move the
+    // roster, so refetch on any of them. Refetch-on-frame keeps this
+    // page dead simple — the list is small and the endpoint cached.
+    const refresh = () => { void loadPresenceList() }
+    const offUpdated = ws.on('presence.updated', refresh)
+    const offOnline = ws.on('user.online', refresh)
+    const offIdle = ws.on('user.idle', refresh)
+    const offOffline = ws.on('user.offline', refresh)
+    return () => { offUpdated(); offOnline(); offIdle(); offOffline() }
   }, [])
 
   const setExpiry = async (duration: ExpiryDuration) => {

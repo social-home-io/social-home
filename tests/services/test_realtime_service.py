@@ -12,6 +12,12 @@ from socialhome.domain.events import (
     CalendarEventDeleted,
     CalendarEventUpdated,
     CommentAdded,
+    ConnectionReachable,
+    ConnectionUnreachable,
+    GalleryAlbumCreated,
+    GalleryAlbumDeleted,
+    GalleryItemDeleted,
+    GalleryItemUploaded,
     PeerTransportChanged,
     PostCreated,
     PostDeleted,
@@ -85,6 +91,12 @@ class _FakeSpaceRepo:
 
     async def list_local_member_user_ids(self, space_id):
         return self._members.get(space_id, [])
+
+    async def get(self, space_id):
+        # A calendar_id is "a space" iff we know members for it; household /
+        # personal calendars (not in the members map) return None so the
+        # calendar broadcast falls through to the household fan-out.
+        return object() if space_id in self._members else None
 
 
 def _user(uid, name="x"):
@@ -403,6 +415,83 @@ async def test_calendar_created_updated_deleted_fan(env):
     assert any("calendar.created" in m for m in types)
     assert any("calendar.updated" in m for m in types)
     assert any("calendar.deleted" in m for m in types)
+
+
+async def test_space_calendar_event_fans_to_members_only(env):
+    """A calendar whose ``calendar_id`` resolves to a space fans out to
+    that space's members only — never the whole household — so a
+    non-member local user never sees space calendar content."""
+    svc, bus, ws = env
+    member = _FakeWS()
+    nonmember = _FakeWS()
+    await ws.register("u1", member)  # member of sp-1
+    await ws.register("u9", nonmember)  # not in sp-1's member list
+    e = CalendarEvent(
+        id="e1",
+        calendar_id="sp-1",  # known space → members-only routing
+        summary="X",
+        created_by="me",
+        start=datetime(2026, 4, 15, tzinfo=timezone.utc),
+        end=datetime(2026, 4, 15, 1, tzinfo=timezone.utc),
+    )
+    await bus.publish(CalendarEventCreated(event=e))
+    await bus.publish(CalendarEventDeleted(event_id="e1", space_id="sp-1"))
+    assert any("calendar.created" in m for m in member.sent)
+    assert any("calendar.deleted" in m for m in member.sent)
+    assert nonmember.sent == []
+
+
+async def test_connection_reachable_unreachable_fan_to_household(env):
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(ConnectionReachable(instance_id="inst-7"))
+    await bus.publish(ConnectionUnreachable(instance_id="inst-7"))
+    assert any("connection.reachable" in m for m in sock.sent)
+    assert any("connection.unreachable" in m for m in sock.sent)
+    assert all("inst-7" in m for m in sock.sent)
+
+
+async def test_gallery_household_events_fan_to_household(env):
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        GalleryAlbumCreated(album_id="al-1", space_id=None, owner_id="u1")
+    )
+    await bus.publish(
+        GalleryItemUploaded(
+            item_id="it-1", album_id="al-1", item_type="photo", uploader="u1"
+        )
+    )
+    await bus.publish(GalleryItemDeleted(item_id="it-1", album_id="al-1"))
+    await bus.publish(GalleryAlbumDeleted(album_id="al-1", space_id=None))
+    joined = " ".join(sock.sent)
+    assert "gallery.album_created" in joined
+    assert "gallery.item_uploaded" in joined
+    assert "gallery.item_deleted" in joined
+    assert "gallery.album_deleted" in joined
+    assert "al-1" in joined
+
+
+async def test_gallery_space_album_fans_to_members_only(env):
+    """A space-album gallery event reaches that space's members only."""
+    svc, bus, ws = env
+    member = _FakeWS()
+    nonmember = _FakeWS()
+    await ws.register("u1", member)  # member of sp-1
+    await ws.register("u9", nonmember)
+    await bus.publish(
+        GalleryItemUploaded(
+            item_id="it-9",
+            album_id="al-9",
+            item_type="photo",
+            uploader="u1",
+            space_id="sp-1",
+        )
+    )
+    assert any("gallery.item_uploaded" in m for m in member.sent)
+    assert nonmember.sent == []
 
 
 async def test_user_status_changed_fans_to_household(env):

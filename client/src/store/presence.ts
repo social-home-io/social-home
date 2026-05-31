@@ -14,11 +14,14 @@
  * patch the same row.
  */
 import { signal } from '@preact/signals'
+import { api } from '@/api'
 import { ws } from '@/ws'
 
 export interface PresenceEntry {
   username:      string
   user_id?:      string
+  display_name?: string
+  picture_url?:  string | null
   state:         string
   zone_name?:    string | null
   latitude?:     number | null
@@ -44,8 +47,54 @@ function patchByUserId(
       return
     }
   }
-  // Unknown user_id — drop the frame. The next /api/presence fetch (or
-  // the user's first physical-presence update) will repopulate the row.
+  // No row yet for this user_id (session-presence frames carry only
+  // ``user_id`` + ``last_seen_at`` — no username — and nothing may have
+  // seeded the store before the first ``user.online``). UPSERT keyed by
+  // ``user_id`` so the user appears (online/idle/offline) immediately;
+  // a later ``presence.updated`` or ``loadPresence()`` merges the
+  // username-keyed physical-presence row on top. We avoid clobbering a
+  // future username-keyed row by keying the placeholder on the user_id
+  // itself — ``loadPresence`` upsert-merges into the username slot and
+  // drops the placeholder once a real row arrives.
+  presence.value = {
+    ...map,
+    [user_id]: { username: user_id, user_id, state: 'unknown', ...patch },
+  }
+}
+
+/** Seed (and refresh) the presence signal from ``GET /api/presence``.
+ *
+ *  Idempotent + upsert-merge: live WS state already in the signal is
+ *  preserved (session flags from ``user.*`` frames win where the GET
+ *  response is silent), so calling this after frames have arrived never
+ *  clobbers them. Rows are keyed by ``username`` (matching
+ *  ``presence.updated``); any placeholder row that an early
+ *  ``user.*`` frame inserted under a bare ``user_id`` key is dropped
+ *  once the canonical username-keyed row lands. */
+export async function loadPresence(): Promise<void> {
+  let rows: PresenceEntry[]
+  try {
+    rows = (await api.get('/api/presence')) as PresenceEntry[]
+  } catch {
+    // Auth not ready / presence feature disabled / transient — leave
+    // whatever live WS state is already in the signal untouched.
+    return
+  }
+  const map = { ...presence.value }
+  // Drop user_id-keyed placeholders for users the GET now supplies a
+  // real username-keyed row for, so we don't render the same person
+  // twice (once as "u-anna", once as "anna").
+  const incomingIds = new Set(rows.map(r => r.user_id).filter(Boolean))
+  for (const key of Object.keys(map)) {
+    if (key === map[key].user_id && incomingIds.has(key)) delete map[key]
+  }
+  for (const r of rows) {
+    if (!r.username) continue
+    // Existing row's live session flags win — the GET's is_online /
+    // is_idle / last_seen_at may lag a just-arrived WS frame.
+    map[r.username] = { ...r, ...map[r.username] }
+  }
+  presence.value = map
 }
 
 export function wirePresenceWs(): void {

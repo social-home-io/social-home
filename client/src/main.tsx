@@ -15,7 +15,7 @@ import { wireGalleryWs } from './store/gallery'
 import { wireCalendarWs } from './store/calendar'
 import { wireTasksWs } from './store/tasks'
 import { wireNotificationsWs } from './store/notifications'
-import { wirePresenceWs } from './store/presence'
+import { wirePresenceWs, loadPresence } from './store/presence'
 import { wireStickiesWs } from './store/stickies'
 import { wireDmWs } from './store/dms'
 import { wireCallsWs } from './store/calls'
@@ -31,6 +31,10 @@ wireCalendarWs()
 wireTasksWs()
 wireNotificationsWs()
 wirePresenceWs()
+// Seed the shared presence store from GET so author online-pills resolve
+// by user_id before any WS frame arrives (session-presence frames carry
+// no username). Upsert-merge — safe to fire alongside the WS wiring.
+void loadPresence()
 wireStickiesWs()
 wireDmWs()
 wireCallsWs()

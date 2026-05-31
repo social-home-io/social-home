@@ -176,7 +176,52 @@ export default function SpaceFeedPage() {
       const d = e.data as { space_id?: string | null }
       if (d.space_id === spaceId) void loadSpaceFeed(spaceId)
     })
-    return () => { off4() }
+    // Live comment counts — the space analogue of store/feed.ts. The
+    // frame fans out to space members as
+    // {type, post_id, space_id, comment}; bump the matching post's
+    // comment_count in place so the badge updates without a refetch.
+    const offComment = ws.on('comment.added', (e) => {
+      const d = e.data as { space_id?: string | null; post_id?: string }
+      if (d.space_id === spaceId) {
+        posts.value = posts.value.map(p =>
+          p.id === d.post_id
+            ? { ...p, comment_count: (p.comment_count ?? 0) + 1 }
+            : p,
+        )
+      }
+    })
+    // space.post.moderated is the only space-post mutation the backend
+    // broadcasts to space members (realtime_service._on_space_post_moderated);
+    // post.edited / post.deleted / post.reaction_changed go to the
+    // household only and carry no space_id, so they're not wired here.
+    const offModerated = ws.on('space.post.moderated', (e) => {
+      const d = e.data as { space_id?: string | null }
+      if (d.space_id === spaceId) void loadSpaceFeed(spaceId)
+    })
+    // Live space calendar — the shared store/calendar.ts won't refresh
+    // this tab (its activeCalendarScope is null on the space view), so
+    // refetch the space calendar signal directly. created/updated carry
+    // event.calendar_id; deleted carries calendar_id.
+    const offCalCreated = ws.on('calendar.created', (e) => {
+      const d = e.data as { event?: { calendar_id?: string } }
+      if (d.event?.calendar_id === spaceId) void loadSpaceCalendar(spaceId)
+    })
+    const offCalUpdated = ws.on('calendar.updated', (e) => {
+      const d = e.data as { event?: { calendar_id?: string } }
+      if (d.event?.calendar_id === spaceId) void loadSpaceCalendar(spaceId)
+    })
+    const offCalDeleted = ws.on('calendar.deleted', (e) => {
+      const d = e.data as { calendar_id?: string | null }
+      if (d.calendar_id === spaceId) void loadSpaceCalendar(spaceId)
+    })
+    return () => {
+      off4()
+      offComment()
+      offModerated()
+      offCalCreated()
+      offCalUpdated()
+      offCalDeleted()
+    }
   }, [spaceId])
 
   const loadTabData = (tab: SpaceTab) => {

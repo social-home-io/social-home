@@ -443,6 +443,8 @@ async def test_send_event_to_peer():
 @pytest.mark.asyncio
 async def test_send_event_failure_enqueues_outbox():
     """On HTTP failure, send_event marks unreachable and enqueues to outbox."""
+    from socialhome.domain.events import ConnectionUnreachable
+
     km = _make_kek_manager()
     fed_repo = InMemoryFederationRepo()
     outbox_repo = InMemoryOutboxRepo()
@@ -455,11 +457,20 @@ async def test_send_event_failure_enqueues_outbox():
     mock_http = MagicMock()
     mock_http.post = MagicMock(side_effect=Exception("connection refused"))
 
+    bus = EventBus()
+    unreachable: list[str] = []
+
+    async def _capture(e: ConnectionUnreachable) -> None:
+        unreachable.append(e.instance_id)
+
+    bus.subscribe(ConnectionUnreachable, _capture)
+
     svc, _ = _make_service(
         federation_repo=fed_repo,
         outbox_repo=outbox_repo,
         key_manager=km,
         http_client=mock_http,
+        bus=bus,
     )
 
     result = await svc.send_event(
@@ -472,6 +483,53 @@ async def test_send_event_failure_enqueues_outbox():
     assert inst.id in fed_repo.unreachable_calls
     assert len(outbox_repo.enqueued) == 1
     assert outbox_repo.enqueued[0]["instance_id"] == inst.id
+    # reachable → unreachable edge fired exactly once so the SPA flips red live
+    assert unreachable == [inst.id]
+
+
+@pytest.mark.asyncio
+async def test_send_event_failure_when_already_unreachable_no_duplicate_event():
+    """A repeat failure against an already-unreachable peer re-marks it but
+    does NOT re-publish ConnectionUnreachable (edge-triggered, no noise)."""
+    from dataclasses import replace
+
+    from socialhome.domain.events import ConnectionUnreachable
+
+    km = _make_kek_manager()
+    fed_repo = InMemoryFederationRepo()
+    outbox_repo = InMemoryOutboxRepo()
+    inst, _ = _make_remote_instance(km, peer_kp=generate_identity_keypair())
+    # Already unreachable → no edge transition on this failure.
+    await fed_repo.save_instance(replace(inst, unreachable_since="2026-05-01"))
+
+    mock_http = MagicMock()
+    mock_http.post = MagicMock(side_effect=Exception("still down"))
+
+    bus = EventBus()
+    fired: list[str] = []
+
+    async def _capture(e: ConnectionUnreachable) -> None:
+        fired.append(e.instance_id)
+
+    bus.subscribe(ConnectionUnreachable, _capture)
+
+    svc, _ = _make_service(
+        federation_repo=fed_repo,
+        outbox_repo=outbox_repo,
+        key_manager=km,
+        http_client=mock_http,
+        bus=bus,
+    )
+
+    result = await svc.send_event(
+        to_instance_id=inst.id,
+        event_type=FederationEventType.USER_UPDATED,
+        payload={"user_id": "abc123"},
+    )
+
+    assert result.ok is False
+    assert inst.id in fed_repo.unreachable_calls
+    assert fired == []  # no duplicate edge event
 
 
 @pytest.mark.asyncio
