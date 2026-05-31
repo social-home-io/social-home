@@ -147,7 +147,8 @@ events these routes fire.
 |---|---|---|
 | GET | `/api/spaces` | List spaces the caller belongs to. |
 | POST | `/api/spaces` | Create a new space. |
-| GET / PATCH / DELETE | `/api/spaces/{id}` | Read / update / delete. |
+| GET / PATCH / DELETE | `/api/spaces/{id}` | Read / update / **dissolve** (DELETE = permanent hard delete, cascades to members). |
+| POST / DELETE | `/api/spaces/{id}/archive` | Archive (read-only, reversible) / unarchive. Owner or admin. |
 | POST | `/api/spaces/join` | Join a space via an invite token. |
 | PATCH | `/api/spaces/{id}/ownership` | Transfer ownership. |
 | GET | `/api/admin/spaces` | Admin-only: list all spaces on this HFS. |

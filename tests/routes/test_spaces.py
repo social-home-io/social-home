@@ -257,6 +257,47 @@ async def test_dissolve_space(client):
     assert resp.status == 200
 
 
+async def test_archive_and_unarchive_space(client):
+    """POST /api/spaces/{id}/archive makes a space read-only (and visible
+    via GET with archived=true); DELETE unarchives it."""
+    r = await client.post(
+        "/api/spaces", json={"name": "Arch"}, headers=_auth(client._admin_token)
+    )
+    sid = (await r.json())["id"]
+
+    resp = await client.post(
+        f"/api/spaces/{sid}/archive", headers=_auth(client._admin_token)
+    )
+    assert resp.status == 200
+    assert (await resp.json())["archived"] is True
+
+    # GET reflects the archived flag; the space is still readable.
+    got = await client.get(f"/api/spaces/{sid}", headers=_auth(client._admin_token))
+    assert got.status == 200
+    assert (await got.json())["archived"] is True
+
+    # Writing to the feed is rejected while archived.
+    post = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "nope"},
+        headers=_auth(client._admin_token),
+    )
+    assert post.status == 403
+
+    # Unarchive restores read-write.
+    resp = await client.delete(
+        f"/api/spaces/{sid}/archive", headers=_auth(client._admin_token)
+    )
+    assert resp.status == 200
+    assert (await resp.json())["archived"] is False
+    post = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "ok"},
+        headers=_auth(client._admin_token),
+    )
+    assert post.status in (200, 201)
+
+
 async def test_invite_and_accept_local_member(client):
     """``POST /api/spaces/{id}/members`` now creates a pending
     invitation; the invitee accepts via

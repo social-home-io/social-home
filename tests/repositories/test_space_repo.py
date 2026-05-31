@@ -56,6 +56,7 @@ def _space(
     space_id: str = "sp-1",
     name: str = "TestSpace",
     space_type: SpaceType = SpaceType.PRIVATE,
+    archived: bool = False,
 ) -> Space:
     return Space(
         id=space_id,
@@ -67,6 +68,7 @@ def _space(
         features=SpaceFeatures(),
         space_type=space_type,
         join_mode=JoinMode.INVITE_ONLY,
+        archived=archived,
     )
 
 
@@ -96,6 +98,20 @@ async def test_save_and_get_space(env):
 async def test_get_missing_space(env):
     """get returns None for an unknown space id."""
     assert await env.repo.get("nope") is None
+
+
+async def test_archived_round_trips_and_set_archived(env):
+    """``archived`` persists through save/get, and ``set_archived`` flips
+    it both ways (soft, reversible — the row is never removed)."""
+    await env.repo.save(_space("sp-arch", archived=True))
+    assert (await env.repo.get("sp-arch")).archived is True
+
+    await env.repo.set_archived("sp-arch", False)
+    assert (await env.repo.get("sp-arch")).archived is False
+    await env.repo.set_archived("sp-arch", True)
+    assert (await env.repo.get("sp-arch")).archived is True
+    # Still present — archive never deletes.
+    assert await env.repo.get("sp-arch") is not None
 
 
 async def test_list_by_type(env):

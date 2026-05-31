@@ -54,6 +54,8 @@ GATED_METHODS: frozenset[str] = frozenset(
         "set_cover",
         "clear_cover",
         "dissolve_space",
+        "archive_space",
+        "unarchive_space",
         "update_config",
         "add_member",
         "invite_local_user",

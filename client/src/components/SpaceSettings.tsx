@@ -186,6 +186,20 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
     }
   }
 
+  const setArchived = async (archived: boolean) => {
+    try {
+      if (archived) await api.post(`/api/spaces/${space.id}/archive`)
+      else await api.delete(`/api/spaces/${space.id}/archive`)
+      showToast(
+        archived ? 'Space archived — now read-only' : 'Space unarchived',
+        'success',
+      )
+      onUpdate()
+    } catch (e: any) {
+      showToast(e.message || 'Failed to update archive state', 'error')
+    }
+  }
+
   return (
     <div class="sh-space-settings">
       <h3>Space Settings</h3>
@@ -455,10 +469,31 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
       )}
 
       <hr />
+      <h3>Archive</h3>
+      {space.archived ? (
+        <>
+          <p class="sh-muted" style={{ marginTop: 0 }}>
+            This space is <strong>archived</strong>: it's read-only and hidden
+            from your active spaces. Everything is kept — unarchive to use it
+            again.
+          </p>
+          <Button onClick={() => setArchived(false)}>Unarchive space</Button>
+        </>
+      ) : (
+        <>
+          <p class="sh-muted" style={{ marginTop: 0 }}>
+            Hide this space and make it read-only without deleting anything.
+            Reversible at any time.
+          </p>
+          <Button onClick={() => setArchived(true)}>Archive space</Button>
+        </>
+      )}
+
+      <hr />
       <h3>Danger zone</h3>
       <Button variant="danger" onClick={() => showDissolve.value = true}>Dissolve space</Button>
       <ConfirmDialog open={showDissolve.value} title="Dissolve space?"
-        message="This will permanently remove the space and all its content. This cannot be undone."
+        message="This permanently deletes the space and all its content — posts, photos, events, everything — for every member household. This cannot be undone. To just hide it, use Archive instead."
         confirmLabel="Dissolve" destructive
         onConfirm={() => { showDissolve.value = false; dissolve() }}
         onCancel={() => showDissolve.value = false} />

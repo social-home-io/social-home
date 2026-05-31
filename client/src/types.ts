@@ -266,6 +266,11 @@ export interface Space {
   /** When true, HA automations may post into this space via the
    *  bot-bridge. Required before any SpaceBot is registered. */
   bot_enabled?: boolean
+  /** Soft, reversible archive. When true the space is read-only (the
+   *  server rejects writes) and the SPA groups it out of the active
+   *  list + shows a read-only banner. Distinct from a dissolve (hard
+   *  delete). */
+  archived?: boolean
   /** §D1b — the instance that originally created this space. When
    *  this differs from the caller's own instance, the local row is a
    *  *stub* mirroring a space hosted on another household. The SPA

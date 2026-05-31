@@ -55,6 +55,8 @@ interface SpaceDetail {
    *  ``instanceConfig.value.instance_id``, this is a stub of a
    *  remote-hosted space and local admin gestures are suppressed. */
   owner_instance_id?: string
+  /** Read-only archive state — hide the composer + show a banner. */
+  archived?: boolean
 }
 
 const posts = signal<FeedPost[]>([])
@@ -344,6 +346,17 @@ export default function SpaceFeedPage() {
               >
                 🔕 Unsubscribe
               </button>
+            </div>
+          ) : spaceDetail.value?.archived ? (
+            <div class="sh-subscriber-banner" role="status">
+              <span class="sh-subscriber-banner__icon" aria-hidden="true">🗄️</span>
+              <div class="sh-subscriber-banner__body">
+                <strong>This space is archived.</strong>
+                <p class="sh-muted">
+                  It's read-only — existing content is kept, but no new posts
+                  or comments can be added until an admin unarchives it.
+                </p>
+              </div>
             </div>
           ) : (
             <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId} />

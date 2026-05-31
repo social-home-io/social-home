@@ -64,6 +64,7 @@ class AbstractSpaceRepo(Protocol):
     async def list_subscriptions_for_user(self, user_id: str) -> list[dict]: ...
     async def list_all(self) -> list[Space]: ...
     async def mark_dissolved(self, space_id: str) -> None: ...
+    async def set_archived(self, space_id: str, archived: bool) -> None: ...
     async def purge(self, space_id: str) -> None: ...
     async def increment_config_sequence(self, space_id: str) -> int: ...
     async def update_age_gate(
@@ -282,9 +283,9 @@ class SqliteSpaceRepo:
                 allow_post_transcript, allow_post_poll, allow_post_schedule,
                 allow_post_file, allow_post_bazaar,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
-                dissolved, about_markdown, cover_hash, tz
+                dissolved, archived, about_markdown, cover_hash, tz
             ) VALUES(
-                -- 43 placeholders, one per column listed above.
+                -- 44 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
@@ -298,7 +299,7 @@ class SqliteSpaceRepo:
                 ?, ?, ?,                      -- allow_post_transcript, allow_post_poll, allow_post_schedule
                 ?, ?,                         -- allow_post_file, allow_post_bazaar
                 ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
-                ?, ?, ?, ?                    -- dissolved, about_markdown, cover_hash, tz
+                ?, ?, ?, ?, ?                 -- dissolved, archived, about_markdown, cover_hash, tz
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -338,6 +339,7 @@ class SqliteSpaceRepo:
                 bot_enabled=excluded.bot_enabled,
                 allow_here_mention=excluded.allow_here_mention,
                 dissolved=excluded.dissolved,
+                archived=excluded.archived,
                 about_markdown=excluded.about_markdown,
                 cover_hash=excluded.cover_hash,
                 tz=excluded.tz
@@ -384,6 +386,7 @@ class SqliteSpaceRepo:
                 int(space.bot_enabled),
                 int(space.allow_here_mention),
                 int(space.dissolved),
+                int(space.archived),
                 space.about_markdown,
                 space.cover_hash,
                 space.tz,
@@ -548,6 +551,14 @@ class SqliteSpaceRepo:
         await self._db.enqueue(
             "UPDATE spaces SET dissolved=1 WHERE id=?",
             (space_id,),
+        )
+
+    async def set_archived(self, space_id: str, archived: bool) -> None:
+        """Soft, reversible archive flag. Unlike :meth:`purge` this keeps
+        all rows + media; the space stays readable but read-only."""
+        await self._db.enqueue(
+            "UPDATE spaces SET archived=? WHERE id=?",
+            (int(archived), space_id),
         )
 
     async def purge(self, space_id: str) -> None:
@@ -1354,6 +1365,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         bot_enabled=bool_col(row.get("bot_enabled", 0)),
         allow_here_mention=bool_col(row.get("allow_here_mention", 0)),
         dissolved=bool_col(row.get("dissolved", 0)),
+        archived=bool_col(row.get("archived", 0)),
         about_markdown=row.get("about_markdown"),
         cover_hash=row.get("cover_hash"),
         tz=row.get("tz") or "UTC",

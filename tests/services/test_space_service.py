@@ -1765,3 +1765,58 @@ async def test_dissolve_hard_deletes_content_and_unlinks_media(tmp_dir):
         assert not (media / gone).exists(), gone
     assert (media / "keep.webp").exists()
     await db.shutdown()
+
+
+async def test_archive_makes_space_read_only_and_reversible(stack):
+    """Archive = soft + reversible: rows stay, the space is still readable,
+    but content writes are rejected until unarchived."""
+    a = await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    p = await stack.space_svc.create_post(
+        space.id, author_user_id=a.user_id, type=PostType.TEXT, content="hi"
+    )
+    assert p is not None
+
+    await stack.space_svc.archive_space(space.id, actor_username="anna")
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.archived is True
+    # Still readable (rows retained, not hard-deleted).
+    await stack.space_svc.list_feed(space.id)
+    # Writes rejected.
+    with pytest.raises(SpacePermissionError, match="archived"):
+        await stack.space_svc.create_post(
+            space.id, author_user_id=a.user_id, type=PostType.TEXT, content="no"
+        )
+    with pytest.raises(SpacePermissionError, match="archived"):
+        await stack.space_svc.add_comment(p.id, author_user_id=a.user_id, content="no")
+    with pytest.raises(SpacePermissionError, match="archived"):
+        await stack.space_svc.add_reaction(p.id, user_id=a.user_id, emoji="👍")
+
+    # Reversible: unarchive restores read-write.
+    await stack.space_svc.unarchive_space(space.id, actor_username="anna")
+    assert (await stack.space_repo.get(space.id)).archived is False
+    p2 = await stack.space_svc.create_post(
+        space.id, author_user_id=a.user_id, type=PostType.TEXT, content="again"
+    )
+    assert p2 is not None
+
+
+async def test_archive_federates_via_space_meta(stack):
+    """The archived flag rides the federation metadata snapshot so member
+    households apply it through the normal config-change stub refresh."""
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.archive_space(space.id, actor_username="anna")
+    refreshed = await stack.space_repo.get(space.id)
+
+    meta = _space_metadata_for_federation(refreshed)
+    assert meta["archived"] is True
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=refreshed.owner_instance_id, meta=meta
+    )
+    assert stub.archived is True
