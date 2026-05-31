@@ -97,6 +97,35 @@ class FederationEncoder:
         plaintext = aesgcm.decrypt(nonce, ct_with_tag, None)
         return plaintext.decode("utf-8")
 
+    # ─── AES-256-GCM raw-bytes payloads ──────────────────────────────────
+    #
+    # The string variants above carry small JSON; these carry bulk binary
+    # (media chunks on the ``fed-media-v1`` channel) with no base64 tax.
+    # Wire shape is ``nonce(12) || ciphertext+tag`` as raw bytes — never
+    # base64-encoded. The same directional session key protects both
+    # surfaces; each call draws a fresh random 96-bit nonce, so the
+    # birthday bound on nonce reuse is shared across the string + bytes
+    # streams to one peer (negligible below ~2**32 messages/key).
+
+    def encrypt_bytes(self, raw: bytes, session_key: bytes) -> bytes:
+        """AES-256-GCM encrypt raw bytes → ``nonce(12) || ciphertext+tag``."""
+        nonce = os.urandom(12)
+        aesgcm = AESGCM(session_key)
+        return nonce + aesgcm.encrypt(nonce, raw, None)
+
+    def decrypt_bytes(self, blob: bytes, session_key: bytes) -> bytes:
+        """Inverse of :meth:`encrypt_bytes`.
+
+        Raises :class:`ValueError` if ``blob`` is too short to hold a
+        nonce, or :class:`cryptography.exceptions.InvalidTag` if the GCM
+        tag fails.
+        """
+        if len(blob) < 12:
+            raise ValueError("Encrypted bytes blob too short for nonce")
+        nonce, ct_with_tag = blob[:12], blob[12:]
+        aesgcm = AESGCM(session_key)
+        return aesgcm.decrypt(nonce, ct_with_tag, None)
+
     # ─── Multi-algorithm envelope signatures ─────────────────────────────
 
     def sign_envelope(self, envelope_bytes: bytes) -> str:

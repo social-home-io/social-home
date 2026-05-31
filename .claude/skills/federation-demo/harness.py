@@ -1592,6 +1592,41 @@ def cmd_verify() -> None:
                                 "  c received a→c media DM (preview + "
                                 "full bytes via DM_MEDIA_BLOB) ✓",
                             )
+                            # Binary media channel (capability v_14): a and
+                            # c are CONFIRMED direct peers, so the full
+                            # bytes above rode the dedicated ``fed-media-v1``
+                            # binary frame (no base64), not JSON on
+                            # ``fed-v1``. Confirm c advertises >= v_14 to a
+                            # so we know the binary path was the eligible
+                            # transport — if either side were sub-v_14 the
+                            # sender would have transparently fallen back to
+                            # JSON (still correct, but not what v_14 ships).
+                            _, conns_c = _request(
+                                f"http://127.0.0.1:{c['port']}"
+                                f"/api/pairing/connections",
+                                token=c["token"],
+                            )
+                            a_iid = state["instances"]["a"]["instance_id"]
+                            row_a = next(
+                                (
+                                    r
+                                    for r in (conns_c if isinstance(conns_c, list) else [])
+                                    if r.get("instance_id") == a_iid
+                                ),
+                                None,
+                            )
+                            pv_a = int((row_a or {}).get("proto_version") or 1)
+                            if pv_a < 14:
+                                failures.append(
+                                    "c: peer a at proto_version="
+                                    f"{pv_a} (< 14) — binary media channel "
+                                    "not eligible; check the v_14 bump",
+                                )
+                            else:
+                                print(
+                                    "  a↔c at proto_version>=14 — media rode "
+                                    "the binary fed-media-v1 channel ✓",
+                                )
     else:
         print("  DM a→c was skipped during traffic step")
 

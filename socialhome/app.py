@@ -2157,6 +2157,7 @@ def create_app(config: Config | None = None) -> web.Application:
             signaling_send=_signaling_send,
             ice_servers=fed_ice_servers,
             inbound_handler=federation_service.handle_inbound_rtc,
+            media_inbound_handler=federation_service.handle_inbound_media_frame,
             bus=bus,
         )
         federation_service.attach_transport(fed_transport)

@@ -41,7 +41,9 @@ async def inbound(db, bus):
     return service
 
 
-def _event(event_type, payload, *, from_instance="peer-a", space_id=None):
+def _event(
+    event_type, payload, *, from_instance="peer-a", space_id=None, media_bytes=None
+):
     return FederationEvent(
         msg_id="msg-" + event_type.value,
         event_type=event_type,
@@ -50,6 +52,7 @@ def _event(event_type, payload, *, from_instance="peer-a", space_id=None):
         timestamp=datetime.now(timezone.utc).isoformat(),
         payload=payload,
         space_id=space_id,
+        media_bytes=media_bytes,
     )
 
 
@@ -1208,6 +1211,68 @@ async def test_space_media_blob_writes_bytes_to_local_media_dir(
         )
     )
     assert (tmp_path / "abc123.webp").read_bytes() == body
+
+
+async def test_space_media_blob_prefers_raw_media_bytes(db, bus, tmp_path):
+    """Binary ``fed-media-v1`` path: ``event.media_bytes`` is used and
+    written verbatim, with NO base64 field in the payload."""
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        media_dir=tmp_path,
+    )
+    body = b"\x00\x01raw-binary-no-base64\xff"
+    await service._on_space_media_blob(
+        _event(
+            FederationEventType.SPACE_MEDIA_BLOB,
+            {
+                "post_id": "post-bin",
+                "space_id": "sp-bin",
+                "filename": "binary.webp",
+                "transfer_id": "tx-1",
+                "chunk_count": 1,
+                "final": True,
+            },
+            media_bytes=body,
+        )
+    )
+    assert (tmp_path / "binary.webp").read_bytes() == body
+
+
+async def test_dm_media_blob_prefers_raw_media_bytes(db, bus, tmp_path):
+    """DM binary path: ``event.media_bytes`` lands as the final file and
+    flips ``media_sync_status`` even with no ``bytes_b64`` present."""
+    convo_repo = SqliteConversationRepo(db)
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=convo_repo,
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+        media_dir=tmp_path,
+    )
+    body = b"\x89PNG raw dm media bytes"
+    await service._on_dm_media_blob(
+        _event(
+            FederationEventType.DM_MEDIA_BLOB,
+            {
+                "media_blob_id": "mblob-1",
+                "message_id": "mblob-1",
+                "conversation_id": "c-1",
+                "mime_type": "image/png",
+                "chunk_index": 0,
+                "chunk_count": 1,
+                "final": True,
+            },
+            media_bytes=body,
+        )
+    )
+    # The single-chunk fast path writes ``<message_id><ext>``.
+    written = tmp_path / "mblob-1.png"
+    assert written.read_bytes() == body
 
 
 async def test_space_media_blob_rejects_path_traversal(db, bus, tmp_path):

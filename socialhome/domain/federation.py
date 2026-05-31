@@ -627,6 +627,20 @@ class FederationEvent:
     #: re-uses the forward leg's ephemeral keypairs keyed on the same
     #: ``route_id``. Wire-invisible; never persisted.
     routed_route_id: str | None = None
+    #: Decrypted raw media bytes when this event arrived as a binary frame
+    #: on the ``fed-media-v1`` DataChannel (§24.12). ``None`` for every
+    #: event delivered as JSON (the common case) — handlers then fall back
+    #: to the base64 ``bytes_b64`` field in :attr:`payload`. Set by
+    #: :meth:`FederationService.handle_inbound_media_frame` after the
+    #: §24.11 pipeline validates the wrapping envelope and the per-chunk
+    #: ``chunk_sha256`` binding checks out, so a media handler that reads
+    #: this sees bytes already authenticated + integrity-checked.
+    #:
+    #: Wire-invisible in the same sense as :attr:`routed_path`: it is
+    #: never a field on the JSON envelope. The binary transport carries
+    #: the bytes alongside (not inside) the signed envelope and the
+    #: receiver attaches them here before dispatch.
+    media_bytes: bytes | None = None
 
 
 # ─── GFS connection types (§24 — Global Federation Server) ──────────────

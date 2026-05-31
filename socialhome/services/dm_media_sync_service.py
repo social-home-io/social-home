@@ -425,26 +425,33 @@ class DmMediaSyncService(VisibilityMixin):
             # (most visibly on the HTTPS fallback). Any chunk failing
             # reschedules the whole row; the next attempt re-sends all chunks
             # and the receiver overwrites the parts it already has.
+            # ``send_media_chunk`` ships each chunk over the binary
+            # ``fed-media-v1`` channel when the peer supports it, else
+            # transparently over the JSON ``DM_MEDIA_BLOB`` path.
             sem = asyncio.Semaphore(PIPELINE_WINDOW)
 
             async def _send(
-                payload: dict, *, tgt: str = entry.target_instance_id
+                item: tuple[dict, bytes], *, tgt: str = entry.target_instance_id
             ) -> None:
+                payload, raw = item
                 async with sem:
-                    await fed.send_event(
+                    result = await fed.send_media_chunk(
                         to_instance_id=tgt,
                         event_type=FederationEventType.DM_MEDIA_BLOB,
                         payload=payload,
+                        raw_chunk=raw,
                     )
+                    if not result.ok:
+                        raise RuntimeError(result.error or "delivery_failed")
 
             results = await asyncio.gather(
-                *(_send(p) for p in payloads), return_exceptions=True
+                *(_send(item) for item in payloads), return_exceptions=True
             )
             send_failed = False
-            for payload, result in zip(payloads, results):
+            for (payload, _raw), result in zip(payloads, results):
                 if isinstance(result, Exception):
                     log.warning(
-                        "dm-media-sync: send_event failed for %s chunk %d/%d → %s: %s",
+                        "dm-media-sync: send failed for %s chunk %d/%d → %s: %s",
                         entry.blob_id,
                         payload.get("chunk_index", 0),
                         payload.get("chunk_count", 1),
@@ -464,20 +471,22 @@ class DmMediaSyncService(VisibilityMixin):
 
     # ── Internals ─────────────────────────────────────────────────────
 
-    async def _build_blob_payloads(self, entry) -> list[dict]:
-        """Construct the ``DM_MEDIA_BLOB`` payload(s) from an outbox row.
+    async def _build_blob_payloads(self, entry) -> list[tuple[dict, bytes]]:
+        """Construct the ``DM_MEDIA_BLOB`` chunk(s) from an outbox row.
 
-        Reads the full file off disk, base64-encodes the bytes,
-        attaches the message + conversation correlation ids, and
-        returns one dict per chunk the federation layer can
-        serialise.
+        Reads the full file off disk and returns one ``(metadata,
+        raw_chunk)`` pair per chunk. The metadata dict carries the
+        message + conversation correlation ids and chunk sequencing but
+        **not** the bytes — :meth:`FederationService.send_media_chunk`
+        ships ``raw_chunk`` as a binary frame on ``fed-media-v1`` (no
+        base64) when the peer supports it, or re-attaches it as a base64
+        ``bytes_b64`` field on the JSON fallback.
 
-        Files at or below :data:`SINGLE_CHUNK_BYTES_THRESHOLD` ship
-        as one payload with ``chunk_count=1`` (the receiver's
-        backwards-compat branch). Larger files split into
-        ``ceil(len/MAX_BLOB_CHUNK_BYTES)`` chunks, each carrying
-        its 0-based ``chunk_index`` + total ``chunk_count`` + a
-        ``final`` flag that the receiver uses to trigger the
+        Files at or below :data:`SINGLE_CHUNK_BYTES_THRESHOLD` ship as
+        one chunk with ``chunk_count=1`` (the receiver's single-chunk
+        branch). Larger files split into ``ceil(len/MAX_BLOB_CHUNK_BYTES)``
+        chunks, each carrying its 0-based ``chunk_index`` + total
+        ``chunk_count`` + a ``final`` flag that triggers the receiver's
         concatenate-and-rename finalisation.
         """
         path = pathlib.Path(entry.bytes_path)
@@ -499,27 +508,26 @@ class DmMediaSyncService(VisibilityMixin):
         }
         if size <= SINGLE_CHUNK_BYTES_THRESHOLD:
             return [
-                {
-                    **common,
-                    "bytes_b64": base64.b64encode(data).decode("ascii"),
-                    "chunk_index": 0,
-                    "chunk_count": 1,
-                    "final": True,
-                }
+                (
+                    {**common, "chunk_index": 0, "chunk_count": 1, "final": True},
+                    data,
+                )
             ]
-        chunks: list[dict] = []
+        chunks: list[tuple[dict, bytes]] = []
         total = (size + MAX_BLOB_CHUNK_BYTES - 1) // MAX_BLOB_CHUNK_BYTES
         for i in range(total):
             start = i * MAX_BLOB_CHUNK_BYTES
             end = min(start + MAX_BLOB_CHUNK_BYTES, size)
             chunks.append(
-                {
-                    **common,
-                    "bytes_b64": base64.b64encode(data[start:end]).decode("ascii"),
-                    "chunk_index": i,
-                    "chunk_count": total,
-                    "final": i == total - 1,
-                }
+                (
+                    {
+                        **common,
+                        "chunk_index": i,
+                        "chunk_count": total,
+                        "final": i == total - 1,
+                    },
+                    data[start:end],
+                )
             )
         return chunks
 

@@ -27,7 +27,7 @@ import pytest
 from PIL import Image
 
 from socialhome.domain.conversation import ConversationMessage
-from socialhome.domain.federation import FederationEventType
+from socialhome.domain.federation import DeliveryResult, FederationEventType
 from socialhome.repositories.dm_media_outbox_repo import DmMediaOutboxEntry
 from socialhome.services.dm_media_sync_service import DmMediaSyncService
 
@@ -169,18 +169,40 @@ class FakeConvosRepo:
 
 
 class FakeFederation:
-    """Records every ``send_event`` call."""
+    """Records every media chunk handed to ``send_media_chunk``.
+
+    The sender now routes media through ``send_media_chunk`` (which picks
+    the binary ``fed-media-v1`` channel or the JSON fallback). This stub
+    re-attaches the base64 ``bytes_b64`` so the recorded payload matches
+    the JSON wire shape the existing assertions expect — the chunking +
+    correlation behaviour under test is identical either way.
+    """
 
     def __init__(self) -> None:
         self.sent: list[dict] = []
         self.should_fail = False
 
-    async def send_event(self, *, to_instance_id, event_type, payload):
+    async def send_media_chunk(
+        self,
+        *,
+        to_instance_id,
+        event_type,
+        payload,
+        raw_chunk,
+        space_id=None,
+        mesh_fallback=False,
+    ):
         if self.should_fail:
-            raise RuntimeError("simulated transport failure")
+            return DeliveryResult(
+                instance_id=to_instance_id,
+                ok=False,
+                error="simulated transport failure",
+            )
+        rec = {**payload, "bytes_b64": base64.b64encode(raw_chunk).decode("ascii")}
         self.sent.append(
-            {"to": to_instance_id, "event": event_type, "payload": payload},
+            {"to": to_instance_id, "event": event_type, "payload": rec},
         )
+        return DeliveryResult(instance_id=to_instance_id, ok=True)
 
 
 class _FakeVisibilityRepo:
@@ -750,15 +772,27 @@ async def test_chunks_pipeline_bounded_by_window(stack):
             self.inflight = 0
             self.max_inflight = 0
 
-        async def send_event(self, *, to_instance_id, event_type, payload):
+        async def send_media_chunk(
+            self,
+            *,
+            to_instance_id,
+            event_type,
+            payload,
+            raw_chunk,
+            space_id=None,
+            mesh_fallback=False,
+        ):
             self.inflight += 1
             self.max_inflight = max(self.max_inflight, self.inflight)
             await asyncio.sleep(0.01)  # hold the slot so overlap is observable
             self.inflight -= 1
-            await super().send_event(
+            return await super().send_media_chunk(
                 to_instance_id=to_instance_id,
                 event_type=event_type,
                 payload=payload,
+                raw_chunk=raw_chunk,
+                space_id=space_id,
+                mesh_fallback=mesh_fallback,
             )
 
     fed = _TrackingFed()

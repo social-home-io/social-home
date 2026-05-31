@@ -27,7 +27,6 @@ vice-versa.
 from __future__ import annotations
 
 import asyncio
-import base64
 import logging
 import pathlib
 import random
@@ -272,23 +271,31 @@ class SpaceMediaSyncService:
             sem = asyncio.Semaphore(PIPELINE_WINDOW)
 
             async def _send(
-                payload: dict, *, tgt: str = entry.target_instance_id
+                item: tuple[dict, bytes], *, tgt: str = entry.target_instance_id
             ) -> None:
+                payload, raw = item
                 async with sem:
-                    result = await fed.send_with_mesh_fallback(
+                    # ``mesh_fallback=True`` keeps the existing semantics:
+                    # a CONFIRMED v_14+ peer gets the binary channel; a
+                    # non-CONFIRMED / mesh-only member still receives the
+                    # bytes as base64 over SPACE_ROUTED. The binary channel
+                    # is point-to-point only, so mesh members never use it.
+                    result = await fed.send_media_chunk(
                         to_instance_id=tgt,
                         event_type=FederationEventType.SPACE_MEDIA_BLOB,
                         payload=payload,
+                        raw_chunk=raw,
+                        mesh_fallback=True,
                     )
                     if not result.ok:
                         raise RuntimeError(result.error or "delivery_failed")
 
             results = await asyncio.gather(
-                *(_send(p) for p in payloads), return_exceptions=True
+                *(_send(item) for item in payloads), return_exceptions=True
             )
             send_failed = False
             first_error = ""
-            for payload, result in zip(payloads, results):
+            for (payload, _raw), result in zip(payloads, results):
                 if isinstance(result, Exception):
                     log.warning(
                         "space-media-sync: chunk %d/%d failed for %s → %s: %s",
@@ -317,8 +324,15 @@ class SpaceMediaSyncService:
     async def _build_blob_payloads(
         self,
         entry: SpaceMediaOutboxEntry,
-    ) -> list[dict]:
-        """Build one or more ``SPACE_MEDIA_BLOB`` payloads from a row.
+    ) -> list[tuple[dict, bytes]]:
+        """Build ``SPACE_MEDIA_BLOB`` chunk(s) from a row.
+
+        Returns one ``(metadata, raw_chunk)`` pair per chunk. The
+        metadata carries the correlation ids + chunk sequencing but not
+        the bytes — :meth:`FederationService.send_media_chunk` ships
+        ``raw_chunk`` as a binary frame on ``fed-media-v1`` to a CONFIRMED
+        v_14+ peer, else re-attaches it as base64 ``bytes_b64`` on the
+        JSON / ``SPACE_ROUTED`` fallback.
 
         Single-chunk for files ≤ :data:`SINGLE_CHUNK_BYTES_THRESHOLD`;
         multi-chunk otherwise. Each chunk carries ``chunk_index`` +
@@ -347,27 +361,26 @@ class SpaceMediaSyncService:
         }
         if size <= SINGLE_CHUNK_BYTES_THRESHOLD:
             return [
-                {
-                    **common,
-                    "bytes_b64": base64.b64encode(data).decode("ascii"),
-                    "chunk_index": 0,
-                    "chunk_count": 1,
-                    "final": True,
-                }
+                (
+                    {**common, "chunk_index": 0, "chunk_count": 1, "final": True},
+                    data,
+                )
             ]
-        chunks: list[dict] = []
+        chunks: list[tuple[dict, bytes]] = []
         total = (size + MAX_BLOB_CHUNK_BYTES - 1) // MAX_BLOB_CHUNK_BYTES
         for i in range(total):
             start = i * MAX_BLOB_CHUNK_BYTES
             end = min(start + MAX_BLOB_CHUNK_BYTES, size)
             chunks.append(
-                {
-                    **common,
-                    "bytes_b64": base64.b64encode(data[start:end]).decode("ascii"),
-                    "chunk_index": i,
-                    "chunk_count": total,
-                    "final": i == total - 1,
-                }
+                (
+                    {
+                        **common,
+                        "chunk_index": i,
+                        "chunk_count": total,
+                        "final": i == total - 1,
+                    },
+                    data[start:end],
+                )
             )
         return chunks
 
