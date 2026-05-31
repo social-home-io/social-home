@@ -411,6 +411,8 @@ class SpaceConfigEventType(StrEnum):
     MEMBER_BANNED = "member_banned"
     MEMBER_UNBANNED = "member_unbanned"
     DISSOLVED = "dissolved"
+    ARCHIVED = "archived"
+    UNARCHIVED = "unarchived"
     PUBLIC_MODE_CHANGED = "public_mode_changed"
     COVER_UPDATED = "cover_updated"
     ABOUT_UPDATED = "about_updated"
@@ -518,6 +520,10 @@ class Space:
     radius_km: float | None = None
     bot_enabled: bool = False
     dissolved: bool = False
+    #: Soft, reversible archive. Distinct from ``dissolved`` (hard-gone):
+    #: an archived space stays readable but is read-only and drops out of
+    #: active space lists. Federates over SPACE_CONFIG_CHANGED + space_meta.
+    archived: bool = False
     allow_here_mention: bool = False
     # Rich-text "about" block rendered at the top of the space feed
     # via MarkdownView (§23 customization).

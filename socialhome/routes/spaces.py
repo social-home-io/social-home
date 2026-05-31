@@ -157,6 +157,9 @@ class SpaceCollectionView(BaseView):
                         "description": s.description,
                         "space_type": s.space_type.value,
                         "join_mode": s.join_mode.value,
+                        # Read-only archive state — the SPA groups
+                        # archived spaces out of the active sidebar list.
+                        "archived": s.archived,
                         # §D1b — the creator's instance. When it
                         # differs from our own, the row is a remote
                         # stub: the SPA gates the Settings link + any
@@ -224,6 +227,9 @@ class SpaceDetailView(BaseView):
                 "cover_hash": space.cover_hash,
                 "cover_url": cover_url,
                 "bot_enabled": space.bot_enabled,
+                # Read-only archive state — the SPA disables write
+                # affordances and shows a read-only banner when true.
+                "archived": space.archived,
                 # §D1b — see ``SpaceCollectionView.get`` for the
                 # complement; the SPA reads this on the SpaceFeedPage
                 # to suppress local-only admin gestures on a remote
@@ -280,6 +286,26 @@ class SpaceDetailView(BaseView):
         space_id = self.match("id")
         await svc.dissolve_space(space_id, actor_username=ctx.username)
         return web.json_response({"ok": True})
+
+
+class SpaceArchiveView(BaseView):
+    """``POST`` / ``DELETE /api/spaces/{id}/archive`` — archive (make
+    read-only + drop from active lists) or restore a space. Owner / admin
+    only; reversible. Distinct from ``DELETE /api/spaces/{id}`` (dissolve),
+    which is a permanent hard delete.
+    """
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        await svc.archive_space(self.match("id"), actor_username=ctx.username)
+        return web.json_response({"ok": True, "archived": True})
+
+    async def delete(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        await svc.unarchive_space(self.match("id"), actor_username=ctx.username)
+        return web.json_response({"ok": True, "archived": False})
 
 
 def _member_to_dict(

@@ -77,6 +77,26 @@ it reconnects. (`SPACE_CONFIG_CHANGED` is deliberately **not** used for
 dissolve — it would refresh the member's stub and resurrect a row the
 purge just removed.)
 
+## Archive (soft, reversible, federated read-only)
+
+Distinct from dissolution: archiving **hides + freezes** a space without
+deleting anything, and is reversible.
+
+- `SpaceService.archive_space` / `unarchive_space` (owner / admin) set the
+  `spaces.archived` flag and publish `SpaceConfigChanged` (`archived` /
+  `unarchived`). Unlike dissolve, this rides the **normal**
+  `SPACE_CONFIG_CHANGED` + `space_meta` path — `archived` is a `space_meta`
+  field, so member households apply it through the same
+  `stub_space_from_metadata` refresh used for any config edit. **No new
+  event type or capability bump.**
+- While archived the space stays **readable** but is **read-only**:
+  `SpaceService._require_writable_space` rejects content writes (post /
+  comment / edit / react) with a 403 on host *and* member, and it drops
+  out of active space lists. Unarchiving ships `archived=false` and
+  restores read-write everywhere.
+- `archived` is independent of `dissolved`: `dissolved` means *gone*
+  (`_require_space` 404s it), `archived` means *read-only-visible*.
+
 ## Flow — rekey
 
 Triggered on every member-removal path (#121, PR #432): local kick,

@@ -508,6 +508,44 @@ class SpaceService(SpaceMemberGuardMixin):
             space_id=space_id,
         )
 
+    async def archive_space(self, space_id: str, *, actor_username: str) -> None:
+        """Archive a space (owner / admin) — a soft, reversible removal.
+
+        The space stays readable but becomes **read-only** and drops out
+        of active space lists; nothing is deleted. The read-only state
+        federates to member households over the existing
+        ``SPACE_CONFIG_CHANGED`` + ``space_meta`` path (``archived`` is a
+        space_meta field), so members apply it on their stub via
+        :func:`stub_space_from_metadata`. Reverse with
+        :meth:`unarchive_space`.
+        """
+        space = await self._require_space(space_id)
+        await self._require_admin_or_owner(space, actor_username)
+        await self._apply_archive(space_id, True, SpaceConfigEventType.ARCHIVED)
+
+    async def unarchive_space(self, space_id: str, *, actor_username: str) -> None:
+        """Restore an archived space to read-write + active lists (owner/admin)."""
+        space = await self._require_space(space_id)
+        await self._require_admin_or_owner(space, actor_username)
+        await self._apply_archive(space_id, False, SpaceConfigEventType.UNARCHIVED)
+
+    async def _apply_archive(
+        self,
+        space_id: str,
+        archived: bool,
+        event_type: SpaceConfigEventType,
+    ) -> None:
+        await self._spaces.set_archived(space_id, archived)
+        sequence = await self._spaces.increment_config_sequence(space_id)
+        await self._bus.publish(
+            SpaceConfigChanged(
+                space_id=space_id,
+                event_type=event_type.value,
+                payload={"archived": archived},
+                sequence=sequence,
+            )
+        )
+
     async def update_config(
         self,
         space_id: str,
@@ -2030,7 +2068,7 @@ class SpaceService(SpaceMemberGuardMixin):
         enters the moderation queue and this method returns ``None`` after
         publishing :class:`SpaceModerationQueued`.
         """
-        space = await self._require_space(space_id)
+        space = await self._require_writable_space(space_id)
         author = await self._users.get_by_user_id(author_user_id)
         if author is None:
             raise KeyError(f"user {author_user_id!r} not found")
@@ -2229,8 +2267,8 @@ class SpaceService(SpaceMemberGuardMixin):
         space_id, post = got
         if post.deleted:
             raise KeyError("post already deleted")
-        # Verifies space exists — raises KeyError if not.
-        await self._require_space(space_id)
+        # Verifies space exists + is writable (not archived) — raises if not.
+        await self._require_writable_space(space_id)
         if post.author != editor_user_id:
             # Admin override
             editor = await self._users.get_by_user_id(editor_user_id)
@@ -2306,6 +2344,7 @@ class SpaceService(SpaceMemberGuardMixin):
         got = await self._posts.get(post_id)
         if got is not None:
             space_id, _post = got
+            await self._require_writable_space(space_id)
             await self._reject_subscriber(space_id, user_id, action="react")
         return await self._posts.add_reaction(post_id, emoji, user_id)
 
@@ -2339,6 +2378,7 @@ class SpaceService(SpaceMemberGuardMixin):
         space_id, post = got
         if post.deleted:
             raise KeyError("cannot comment on deleted post")
+        await self._require_writable_space(space_id)
         # Membership check
         member = await self._spaces.get_member(space_id, author_user_id)
         if member is None:
@@ -2408,6 +2448,7 @@ class SpaceService(SpaceMemberGuardMixin):
         if got is None:
             raise KeyError("post disappeared")
         space_id, _post = got
+        await self._require_writable_space(space_id)
         if comment.author != editor_user_id:
             member = await self._spaces.get_member(space_id, editor_user_id)
             if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
@@ -2646,6 +2687,18 @@ class SpaceService(SpaceMemberGuardMixin):
             raise KeyError(f"space {space_id!r} not found")
         return space
 
+    async def _require_writable_space(self, space_id: str) -> Space:
+        """Like :meth:`_require_space` but also rejects an **archived**
+        space — archive is read-only, so content writes (post / comment /
+        edit / react) raise :class:`SpacePermissionError` until the space
+        is unarchived. Reads keep using :meth:`_require_space`."""
+        space = await self._require_space(space_id)
+        if space.archived:
+            raise SpacePermissionError(
+                "space is archived (read-only) — unarchive it to make changes",
+            )
+        return space
+
     async def _require_member(
         self,
         space_id: str,
@@ -2862,6 +2915,9 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "tz": space.tz,
         "cover_hash": space.cover_hash,
         "about_markdown": space.about_markdown,
+        # Read-only archive state — federates so member households go
+        # read-only too. Reversible (an unarchive ships archived=False).
+        "archived": space.archived,
     }
 
 
@@ -3034,6 +3090,7 @@ def stub_space_from_metadata(
         tz=str(meta.get("tz") or "UTC"),
         cover_hash=meta.get("cover_hash"),
         about_markdown=meta.get("about_markdown"),
+        archived=bool(meta.get("archived", False)),
     )
 
 
