@@ -213,6 +213,92 @@ describe('SpaceSettings', () => {
     expect(body.features.gallery).toBe(true)
   })
 
+  it('renders the Post types fieldset reflecting allowed_post_types', () => {
+    const space = makeSpace({
+      features: {
+        calendar: true, todo: true, location: false,
+        stickies: true, pages: true, gallery: true,
+        posts_access: 'open', pages_access: 'open',
+        stickies_access: 'open', calendar_access: 'open', tasks_access: 'open',
+        allowed_post_types: ['text', 'image'],
+      },
+    })
+    const { getByTestId } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-post-types')
+    const boxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    // Order: text, image, video, file, poll, schedule, location, bazaar,
+    // highlight_share.
+    expect(boxes).toHaveLength(9)
+    expect(boxes[0].checked).toBe(true)  // text
+    expect(boxes[1].checked).toBe(true)  // image
+    expect(boxes[2].checked).toBe(false) // video (not in the list)
+    expect(boxes[7].checked).toBe(false) // bazaar
+    expect(boxes[8].checked).toBe(false) // highlight_share
+  })
+
+  it('sends allowed_post_types on save, preserving non-composer types', async () => {
+    apiMock.patch.mockResolvedValueOnce({})
+    const space = makeSpace({
+      features: {
+        calendar: true, todo: true, location: false,
+        stickies: true, pages: true, gallery: true,
+        posts_access: 'open', pages_access: 'open',
+        stickies_access: 'open', calendar_access: 'open', tasks_access: 'open',
+        // transcript + event aren't in the settings UI — they must
+        // survive a save untouched rather than being silently dropped.
+        allowed_post_types: ['text', 'transcript', 'event'],
+      },
+    })
+    const { getByTestId, getByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-post-types')
+    const boxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    // Turn poll (index 4) ON in addition to the already-on text.
+    fireEvent.change(boxes[4], { target: { checked: true } })
+    fireEvent.click(getByText('Save changes'))
+    await new Promise(r => setTimeout(r, 0))
+    const [, body] = apiMock.patch.mock.calls[0]
+    const allowed: string[] = body.features.allowed_post_types
+    expect(allowed).toContain('text')
+    expect(allowed).toContain('poll')
+    // Preserved, even though they have no checkbox.
+    expect(allowed).toContain('transcript')
+    expect(allowed).toContain('event')
+    // Never-enabled composer type stays out.
+    expect(allowed).not.toContain('video')
+  })
+
+  it('refuses to save when every post type is disabled', async () => {
+    apiMock.patch.mockResolvedValueOnce({})
+    const space = makeSpace({
+      features: {
+        calendar: true, todo: true, location: false,
+        stickies: true, pages: true, gallery: true,
+        posts_access: 'open', pages_access: 'open',
+        stickies_access: 'open', calendar_access: 'open', tasks_access: 'open',
+        allowed_post_types: ['text'],
+      },
+    })
+    const { getByTestId, getByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    const fieldset = getByTestId('space-post-types')
+    const boxes = Array.from(
+      fieldset.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[]
+    boxes.forEach((b) => fireEvent.change(b, { target: { checked: false } }))
+    fireEvent.click(getByText('Save changes'))
+    await new Promise(r => setTimeout(r, 0))
+    expect(apiMock.patch).not.toHaveBeenCalled()
+  })
+
   it('preserves typed name across re-renders triggered by sibling state', async () => {
     // Regression for the signal-in-render footgun: previously the
     // form rebuilt fresh ``signal()`` instances on every render, so

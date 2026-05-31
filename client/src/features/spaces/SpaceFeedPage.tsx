@@ -50,6 +50,9 @@ interface SpaceDetail {
     stickies?: boolean
     gallery?: boolean
     location?: boolean
+    /** §23.49 — post types members may compose here; gates the
+     *  composer's type picker. Absent → all types offered. */
+    allowed_post_types?: string[]
   }
   /** §D1b — the originating instance. When it differs from
    *  ``instanceConfig.value.instance_id``, this is a stub of a
@@ -404,7 +407,8 @@ export default function SpaceFeedPage() {
               </div>
             </div>
           ) : (
-            <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId} />
+            <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId}
+              allowedTypes={spaceDetail.value?.features?.allowed_post_types} />
           )}
           {posts.value.length === 0 && (
             <div class="sh-empty-state">

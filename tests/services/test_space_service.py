@@ -1820,3 +1820,44 @@ async def test_archive_federates_via_space_meta(stack):
         space.id, host_instance_id=refreshed.owner_instance_id, meta=meta
     )
     assert stub.archived is True
+
+
+async def test_allowed_post_types_federate_via_space_meta(stack):
+    """The per-space post-type allow-list rides the federation metadata so a
+    member household enforces the same restriction when its users compose."""
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    restricted = space.features.with_allowed_post_types({"text", "image"})
+    await stack.space_svc.update_config(
+        space.id, actor_username="anna", features=restricted
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert set(refreshed.features.allowed_post_types) == {"text", "image"}
+
+    meta = _space_metadata_for_federation(refreshed)
+    assert sorted(meta["features"]["allowed_post_types"]) == ["image", "text"]
+
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=refreshed.owner_instance_id, meta=meta
+    )
+    assert set(stub.features.allowed_post_types) == {"text", "image"}
+
+
+def test_stub_space_defaults_all_post_types_when_meta_omits_them():
+    """An older sender omits ``allowed_post_types`` → the receiver defaults
+    to all types allowed (the pre-federation behaviour), never an accidental
+    text-only lockdown."""
+    from socialhome.domain.space import _ALL_POST_TYPES
+    from socialhome.services.space_service import stub_space_from_metadata
+
+    stub = stub_space_from_metadata(
+        "sp-x",
+        host_instance_id="inst-h",
+        meta={"name": "X", "features": {"pages": True}},
+    )
+    assert stub.features.allowed_post_types == _ALL_POST_TYPES
