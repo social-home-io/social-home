@@ -39,6 +39,44 @@ describe('Composer', () => {
     expect(queryByLabelText('Bazaar listing')).toBeTruthy()
   })
 
+  it('filters the type picker to the space allowed_post_types', async () => {
+    commonMocks()
+    const { Composer } = await import('./Composer')
+    const { queryByLabelText } = render(
+      <Composer onSubmit={vi.fn()} spaceId="space-1"
+        allowedTypes={['text', 'image']} />,
+    )
+    expect(queryByLabelText('Text post')).toBeTruthy()
+    expect(queryByLabelText('Image post')).toBeTruthy()
+    // Disabled types disappear from the picker entirely.
+    expect(queryByLabelText('Poll')).toBeNull()
+    expect(queryByLabelText('Bazaar listing')).toBeNull()
+  })
+
+  it('falls back to the first allowed type when text is disabled', async () => {
+    commonMocks()
+    const { Composer } = await import('./Composer')
+    const { queryByLabelText } = render(
+      <Composer onSubmit={vi.fn()} spaceId="space-1"
+        allowedTypes={['image', 'video']} />,
+    )
+    // ``text`` (the module default) isn't offered, so the picker auto-
+    // selects the first type that is, keeping the active button + submit
+    // in sync instead of leaving a phantom ``text`` selection.
+    expect(queryByLabelText('Text post')).toBeNull()
+    expect(queryByLabelText('Image post')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('offers every type when allowedTypes is omitted', async () => {
+    commonMocks()
+    const { Composer } = await import('./Composer')
+    const { queryByLabelText } = render(
+      <Composer onSubmit={vi.fn()} spaceId="space-1" />,
+    )
+    expect(queryByLabelText('Poll')).toBeTruthy()
+    expect(queryByLabelText('Bazaar listing')).toBeTruthy()
+  })
+
   it('hides the textarea when poll/schedule is picked (builder modes)', async () => {
     commonMocks()
     const { Composer } = await import('./Composer')

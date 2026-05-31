@@ -306,6 +306,11 @@ export interface SpaceFeatures {
    *  reactions / comments without promoting them to full members. */
   allow_subscriber_comment?: boolean
   allow_subscriber_react?: boolean
+  /** Post types members may compose in this space (§23.49). An admin
+   *  toggles these in space settings to hide post kinds the space
+   *  doesn't want (e.g. no polls). Absent → treat as all-allowed
+   *  (a freshly-stubbed remote space before the host's config lands). */
+  allowed_post_types?: string[]
 }
 
 /** Per-space display zone (§23.8.7). Members' GPS pins are matched to

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -93,6 +94,45 @@ async def test_save_and_get_space(env):
     fetched = await env.repo.get("sp-1")
     assert fetched is not None
     assert fetched.name == "TestSpace"
+
+
+async def test_allowed_post_types_round_trip_including_event_location_highlight(env):
+    """Every gatable post type persists — incl. event / location /
+    highlight_share, which were previously dropped from the INSERT/UPDATE
+    and stuck at their DEFAULT 1 (so they could never be disabled)."""
+    restricted = SpaceFeatures().with_allowed_post_types({"text", "image"})
+    space = Space(
+        id="sp-allow",
+        name="Restricted",
+        owner_instance_id="inst-x",
+        owner_username="alice",
+        identity_public_key="aabb" * 16,
+        config_sequence=0,
+        features=restricted,
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+    await env.repo.save(space)
+    fetched = await env.repo.get("sp-allow")
+    assert fetched is not None
+    assert set(fetched.features.allowed_post_types) == {"text", "image"}
+    # The three formerly-unpersisted types are genuinely off now.
+    for t in ("event", "location", "highlight_share"):
+        assert not fetched.features.allows(t)
+
+    # And re-enabling them via an UPDATE (ON CONFLICT) sticks too.
+    await env.repo.save(
+        replace(
+            space,
+            features=restricted.with_allowed_post_types(
+                {"text", "image", "location", "event", "highlight_share"}
+            ),
+        )
+    )
+    again = await env.repo.get("sp-allow")
+    assert again is not None
+    for t in ("location", "event", "highlight_share"):
+        assert again.features.allows(t)
 
 
 async def test_get_missing_space(env):

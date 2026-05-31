@@ -97,6 +97,25 @@ deleting anything, and is reversible.
 - `archived` is independent of `dissolved`: `dissolved` means *gone*
   (`_require_space` 404s it), `archived` means *read-only-visible*.
 
+## Post-type allow-list (per-space feed composer gating)
+
+A space admin chooses which post kinds members may compose in the feed
+(`SpaceSettings` → "Post types"). The set lives on `SpaceFeatures.allowed_post_types`
+(persisted as the `spaces.allow_post_*` columns) and is enforced on every
+instance independently: `SpaceService.create_post` rejects a disallowed
+type with `SpacePermissionError` (403), and the SPA composer hides the
+disabled type buttons so members don't hit that wall.
+
+- **Federation:** the set rides the **normal** `SPACE_CONFIG_CHANGED` +
+  `space_meta` path — `allowed_post_types` is a `space_meta.features` field,
+  applied by member households through the same `stub_space_from_metadata`
+  refresh used for any config edit. This is what makes a member household
+  enforce the host's restriction when *its* users compose (each instance
+  gates `create_post` against its own stub).
+- **Backward-compatible:** an older sender that omits the field → the
+  receiver defaults to **all types allowed** (the historical behaviour).
+  **No new event type or capability bump** — additive and fail-soft.
+
 ## Flow — rekey
 
 Triggered on every member-removal path (#121, PR #432): local kick,

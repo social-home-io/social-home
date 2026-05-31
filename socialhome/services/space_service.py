@@ -2911,6 +2911,15 @@ def _space_metadata_for_federation(space: Space) -> dict:
             "location_mode": space.features.location_mode,
             "stickies": space.features.stickies,
             "gallery": space.features.gallery,
+            # Per-space post-type allow-list (§23.49). Federated so a
+            # member household enforces the same restriction locally when
+            # its users compose — without it the host's "no polls here"
+            # rule wouldn't reach remote members (each instance gates
+            # `create_post` against its own stub). Missing on an older
+            # sender → the receiver defaults to all-allowed (the historical
+            # behaviour), so this is additive and fail-soft: no new event
+            # type or capability bump.
+            "allowed_post_types": list(space.features.allowed_post_types),
         },
         "tz": space.tz,
         "cover_hash": space.cover_hash,
@@ -3066,6 +3075,15 @@ def stub_space_from_metadata(
     location_mode: "Literal['gps', 'zone_only']" = (
         "zone_only" if raw_mode == "zone_only" else "gps"
     )
+    # Reconstruct the post-type allow-list when the sender includes it.
+    # Older senders omit the key → fall back to the dataclass default
+    # (all types allowed), matching the pre-federation behaviour.
+    raw_allowed = feats_in.get("allowed_post_types")
+    allowed_kwargs: dict = {}
+    if isinstance(raw_allowed, (list, tuple)) and raw_allowed:
+        allowed_kwargs["allowed_post_types"] = tuple(
+            sorted(str(t) for t in raw_allowed)
+        )
     features = SpaceFeatures(
         calendar=bool(feats_in.get("calendar", True)),
         todo=bool(feats_in.get("todo", True)),
@@ -3074,6 +3092,7 @@ def stub_space_from_metadata(
         stickies=bool(feats_in.get("stickies", True)),
         pages=bool(feats_in.get("pages", True)),
         gallery=bool(feats_in.get("gallery", True)),
+        **allowed_kwargs,
     )
     return Space(
         id=space_id,

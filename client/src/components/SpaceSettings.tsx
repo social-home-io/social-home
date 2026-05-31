@@ -12,6 +12,25 @@ import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import type { Space, GfsConnection, GfsSpacePublication } from '@/types'
 
+// Post types an admin can enable/disable for the space feed (§23.49) —
+// the same set the space composer offers, in composer order, so each
+// toggle maps 1:1 to a button members see. Types the backend tracks but
+// that aren't composed via the picker (transcript / event /
+// highlight_share) are intentionally absent here and preserved untouched
+// on save (see ``save``), so toggling these never disables them.
+const SPACE_POST_TYPES: [string, string][] = [
+  ['text', '🔤 Text'],
+  ['image', '📷 Image'],
+  ['video', '🎬 Video'],
+  ['file', '📄 File'],
+  ['poll', '📊 Poll'],
+  ['schedule', '📅 Schedule'],
+  ['location', '📍 Location'],
+  ['bazaar', '🛍 Bazaar listing'],
+  ['highlight_share', '⭕ Highlight share'],
+]
+const SPACE_POST_TYPE_KEYS = SPACE_POST_TYPES.map(([k]) => k)
+
 const showDissolve = signal(false)
 const gfsServers = signal<GfsConnection[]>([])
 const publications = signal<GfsSpacePublication[]>([])
@@ -112,6 +131,18 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   const allowSubscriberReact = useSignal(
     Boolean(space.features?.allow_subscriber_react),
   )
+  // Per-space post-type allow-list (§23.49). A missing list means a
+  // freshly-stubbed space the host config hasn't reached yet — treat
+  // that as all-allowed so the checkboxes don't render everything off.
+  const allowedPostTypes = space.features?.allowed_post_types
+  const postTypeEnabled = useSignal<Record<string, boolean>>(
+    Object.fromEntries(
+      SPACE_POST_TYPE_KEYS.map((k) => [
+        k,
+        !allowedPostTypes || allowedPostTypes.includes(k),
+      ]),
+    ),
+  )
   // Retention is "delete posts older than N days". ``null`` means
   // "keep forever" — that's the legacy default and what fresh spaces
   // ship with. The text input is empty in that case; entering 0 or
@@ -139,6 +170,22 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
         : Number.isFinite(parsedRetention)
           ? parsedRetention
           : undefined
+    // Rebuild allowed_post_types from the checkboxes, but PRESERVE any
+    // type the UI doesn't manage (transcript / event / highlight_share)
+    // exactly as the space already had it — otherwise saving settings
+    // would silently strip them.
+    const existingAllowed =
+      space.features?.allowed_post_types
+      ?? SPACE_POST_TYPE_KEYS.slice()
+    const preserved = existingAllowed.filter(
+      (t) => !SPACE_POST_TYPE_KEYS.includes(t),
+    )
+    const chosen = SPACE_POST_TYPE_KEYS.filter((k) => postTypeEnabled.value[k])
+    if (chosen.length === 0) {
+      showToast('Enable at least one post type for the feed', 'error')
+      return
+    }
+    const allowedPostTypesPayload = [...preserved, ...chosen].sort()
     try {
       await api.patch(`/api/spaces/${space.id}`, {
         name: name.value,
@@ -159,6 +206,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
           location_mode: locationMode.value,
           allow_subscriber_comment: allowSubscriberComment.value,
           allow_subscriber_react: allowSubscriberReact.value,
+          allowed_post_types: allowedPostTypesPayload,
         },
       })
       if (modeChanged) {
@@ -295,6 +343,29 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             />
             🖼 Gallery
           </label>
+        </fieldset>
+        <fieldset class="sh-form-fieldset" data-testid="space-post-types">
+          <legend>📮 Post types</legend>
+          <p class="sh-muted" style={{ marginTop: 0 }}>
+            Choose which kinds of posts members can create in this feed.
+            Turning one off hides it from the composer; existing posts of
+            that type stay visible.
+          </p>
+          {SPACE_POST_TYPES.map(([key, label]) => (
+            <label key={key} class="sh-toggle-row">
+              <input
+                type="checkbox"
+                checked={postTypeEnabled.value[key]}
+                onChange={(e) => {
+                  postTypeEnabled.value = {
+                    ...postTypeEnabled.value,
+                    [key]: (e.target as HTMLInputElement).checked,
+                  }
+                }}
+              />
+              {label}
+            </label>
+          ))}
         </fieldset>
 
         <fieldset class="sh-form-fieldset">

@@ -66,6 +66,12 @@ interface ComposerProps {
    * poll attaches as a space-scoped poll so finalize → space calendar
    * auto-create fires. */
   spaceId?: string
+  /** Post types the space allows (§23.49 `allowed_post_types`). When
+   * provided, the type picker only shows these — so a member never
+   * picks a type the space has disabled and eats a 403 on submit.
+   * Omitted (household feed, or a remote stub before config lands) →
+   * every type stays available. */
+  allowedTypes?: readonly string[]
 }
 
 const content = signal('')
@@ -151,9 +157,25 @@ function inferTypeFromFile(file: File): 'image' | 'video' | 'file' {
   return 'file'
 }
 
-export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerProps) {
+export function Composer({ onSubmit, context, placeholder, spaceId, allowedTypes }: ComposerProps) {
   const user = currentUser.value
   const TYPE_ICONS = spaceId ? TYPE_ICONS_SPACE : TYPE_ICONS_HOUSEHOLD
+  // Restrict the picker to the space's allowed post types when supplied.
+  // ``allowedTypes`` may list types with no composer button (transcript,
+  // event, highlight_share) — the intersection with TYPE_ICONS is what
+  // renders.
+  const typeEntries = Object.entries(TYPE_ICONS).filter(
+    ([type]) => !allowedTypes || allowedTypes.includes(type),
+  )
+  // Keep the selected type valid: if the space disabled whatever is
+  // currently selected (e.g. ``text`` off), fall back to the first
+  // type that's still offered so the active button + submit stay in sync.
+  const allowedKey = allowedTypes ? allowedTypes.join(',') : null
+  useEffect(() => {
+    if (allowedTypes && !typeEntries.some(([t]) => t === postType.value)) {
+      postType.value = typeEntries[0]?.[0] ?? 'text'
+    }
+  }, [allowedKey])
   const charCount = content.value.length
   const showCount = charCount > MAX_LENGTH * 0.8
   const overLimit = charCount > MAX_LENGTH
@@ -434,7 +456,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
       <div class="sh-composer-header">
         <Avatar name={user?.display_name || '?'} src={user?.picture_url} size={32} />
         <div class="sh-composer-type-picker">
-          {Object.entries(TYPE_ICONS).map(([type, icon]) => {
+          {typeEntries.map(([type, icon]) => {
             const label = TYPE_LABELS[type] ?? type
             return (
               <button key={type} type="button"
@@ -450,18 +472,20 @@ export function Composer({ onSubmit, context, placeholder, spaceId }: ComposerPr
               </button>
             )
           })}
-          <button
-            type="button"
-            class="sh-type-btn"
-            onClick={() => openHighlightPicker({
-              scope: spaceId ? 'space' : 'household',
-              spaceId: spaceId ?? null,
-            })}
-            aria-label="Share a highlight"
-            title="Share a highlight"
-          >
-            ⭕
-          </button>
+          {(!allowedTypes || allowedTypes.includes('highlight_share')) && (
+            <button
+              type="button"
+              class="sh-type-btn"
+              onClick={() => openHighlightPicker({
+                scope: spaceId ? 'space' : 'household',
+                spaceId: spaceId ?? null,
+              })}
+              aria-label="Share a highlight"
+              title="Share a highlight"
+            >
+              ⭕
+            </button>
+          )}
         </div>
       </div>
       {postType.value === 'text' && formatOpen && (
