@@ -39,6 +39,7 @@ from ..crypto import (
 from ..db import AsyncDatabase
 from ..domain.events import (
     ConnectionReachable,
+    ConnectionUnreachable,
     LocalHomeLocationUpdated,
     PairingIntroRelayReceived,
     PeerHomeChanged,
@@ -742,6 +743,12 @@ class FederationService:
 
         # Delivery failed — mark and enqueue for retry.
         await self._federation_repo.mark_unreachable(to_instance_id)
+        if not was_unreachable:
+            # reachable → unreachable edge only (mirrors the reachable
+            # publish above) so the SPA flips the dot red live.
+            await self._bus.publish(
+                ConnectionUnreachable(instance_id=to_instance_id),
+            )
         await self._outbox_repo.enqueue(
             instance_id=to_instance_id,
             event_type=event_type,

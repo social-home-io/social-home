@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { ws } from '@/ws'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
@@ -60,6 +61,26 @@ export interface GalleryPageProps {
 export default function GalleryPage({ spaceId }: GalleryPageProps) {
   useTitle('Gallery')
   useEffect(() => { void loadAlbums(spaceId) }, [spaceId])
+
+  // Live cross-device updates: refetch on gallery WS frames, scoped to
+  // this page (a space gallery vs the household gallery). Thin frames →
+  // refetch the canonical GET shape; reload the open album's items too.
+  useEffect(() => {
+    const handle = (e: { data: { space_id?: string | null; album_id?: string } }) => {
+      if ((e.data.space_id ?? null) !== (spaceId ?? null)) return
+      void loadAlbums(spaceId)
+      if (activeAlbum.value && e.data.album_id === activeAlbum.value.id) {
+        void loadItems(activeAlbum.value.id)
+      }
+    }
+    const offs = [
+      ws.on('gallery.album_created', handle),
+      ws.on('gallery.album_deleted', handle),
+      ws.on('gallery.item_uploaded', handle),
+      ws.on('gallery.item_deleted', handle),
+    ]
+    return () => { offs.forEach((off) => off()) }
+  }, [spaceId])
 
   if (loading.value) return <Spinner />
 

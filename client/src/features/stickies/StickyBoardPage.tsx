@@ -22,7 +22,7 @@ import {
   openEditStickyDialog,
 } from '@/components/StickyDialog'
 import { showToast } from '@/components/Toast'
-import { stickies, type StickyRow } from '@/store/stickies'
+import { stickies, activeStickyScope, type StickyRow } from '@/store/stickies'
 
 const BOARD_W = 1000   // normalised coordinate space (width units)
 const BOARD_H = 700    // normalised coordinate space (height units)
@@ -46,6 +46,10 @@ export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
 
   useEffect(() => {
     loading.value = true
+    // Scope WS frames to this board — a space board (``spaceId``) only
+    // accepts that space's sticky.* frames; the household board accepts
+    // ``null``-scoped frames. Mirrors CalendarPage's activeCalendarScope.
+    activeStickyScope.value = spaceId ?? null
     api.get(base(spaceId)).then((rows: StickyRow[]) => {
       stickies.value = rows
       loading.value = false
@@ -53,6 +57,12 @@ export default function StickyBoardPage({ spaceId }: StickyBoardPageProps) {
       loading.value = false
       stickies.value = []
     })
+    return () => {
+      // Stop accepting WS frames into the shared ``stickies`` cache once
+      // the board unmounts — otherwise a background broadcast for the
+      // other scope would pollute it between visits.
+      activeStickyScope.value = null
+    }
   }, [spaceId])
 
   const addSticky = () => {

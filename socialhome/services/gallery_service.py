@@ -375,6 +375,7 @@ class GalleryService:
                 album_id=album_id,
                 item_type=item.item_type,
                 uploader=uploader_user_id,
+                space_id=album.space_id,
             )
         )
         return item
@@ -414,6 +415,7 @@ class GalleryService:
             GalleryItemDeleted(
                 item_id=item_id,
                 album_id=item.album_id,
+                space_id=album.space_id if album is not None else None,
             )
         )
 
@@ -665,6 +667,7 @@ class GalleryService:
                     album_id=album.id,
                     item_type=item.item_type,
                     uploader=post.author,
+                    space_id=album.space_id,
                 )
             )
         await self._repo.recount_items(album.id)

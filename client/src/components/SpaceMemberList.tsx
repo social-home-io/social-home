@@ -140,7 +140,22 @@ export function SpaceMemberList({ spaceId, viewerRole }: Props) {
         last_seen_at: d.last_seen_at ?? null,
       })
     })
-    return () => { offOnline(); offIdle(); offOffline() }
+    // Roster mutations — the backend broadcasts join / leave / profile
+    // change to every space member (frame carries ``space_id``). The
+    // join frame is too thin to build a row from, so refetch: a full
+    // ``/members`` reload is the simplest correct path and the list is
+    // small. Scope each frame to THIS space so an unrelated space's
+    // churn doesn't reload our roster.
+    const onRoster = (e: { data: { space_id?: string } }) => {
+      if (e.data.space_id === spaceId) reload()
+    }
+    const offJoined = ws.on('space.member.joined', onRoster)
+    const offLeft = ws.on('space.member.left', onRoster)
+    const offProfile = ws.on('space.member.profile_updated', onRoster)
+    return () => {
+      offOnline(); offIdle(); offOffline()
+      offJoined(); offLeft(); offProfile()
+    }
   }, [spaceId, viewerRole])
 
   if (loading.value) return <Spinner />

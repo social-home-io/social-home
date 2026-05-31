@@ -27,6 +27,12 @@ from ..domain.events import (
     BazaarOfferAccepted,
     BazaarOfferRejected,
     CalendarEventCreated,
+    ConnectionReachable,
+    ConnectionUnreachable,
+    GalleryAlbumCreated,
+    GalleryAlbumDeleted,
+    GalleryItemDeleted,
+    GalleryItemUploaded,
     CalendarEventDeleted,
     CalendarEventUpdated,
     AutoPairRequestIncoming,
@@ -278,6 +284,12 @@ class RealtimeService:
         self._bus.subscribe(CalendarEventCreated, self._on_calendar_created)
         self._bus.subscribe(CalendarEventUpdated, self._on_calendar_updated)
         self._bus.subscribe(CalendarEventDeleted, self._on_calendar_deleted)
+        self._bus.subscribe(ConnectionReachable, self._on_connection_reachable)
+        self._bus.subscribe(ConnectionUnreachable, self._on_connection_unreachable)
+        self._bus.subscribe(GalleryAlbumCreated, self._on_gallery_album_created)
+        self._bus.subscribe(GalleryAlbumDeleted, self._on_gallery_album_deleted)
+        self._bus.subscribe(GalleryItemUploaded, self._on_gallery_item_uploaded)
+        self._bus.subscribe(GalleryItemDeleted, self._on_gallery_item_deleted)
         self._bus.subscribe(UserStatusChanged, self._on_user_status)
         self._bus.subscribe(PresenceUpdated, self._on_presence_updated)
         # Online status (session presence) — orthogonal to physical
@@ -1078,28 +1090,111 @@ class RealtimeService:
     # ─── Calendar ─────────────────────────────────────────────────────────
 
     async def _on_calendar_created(self, event: CalendarEventCreated) -> None:
-        await self._broadcast_household(
-            {
-                "type": "calendar.created",
-                "event": _safe(event.event),
-            }
+        await self._broadcast_calendar_event(
+            {"type": "calendar.created", "event": _safe(event.event)},
+            calendar_id=event.event.calendar_id,
         )
 
     async def _on_calendar_updated(self, event: CalendarEventUpdated) -> None:
-        await self._broadcast_household(
-            {
-                "type": "calendar.updated",
-                "event": _safe(event.event),
-            }
+        await self._broadcast_calendar_event(
+            {"type": "calendar.updated", "event": _safe(event.event)},
+            calendar_id=event.event.calendar_id,
         )
 
     async def _on_calendar_deleted(self, event: CalendarEventDeleted) -> None:
+        frame = {
+            "type": "calendar.deleted",
+            "event_id": event.event_id,
+            # Scope hint for the SPA: the space id for a space calendar,
+            # else None (household / personal).
+            "calendar_id": event.space_id,
+        }
+        if event.space_id:
+            await self._broadcast_space(event.space_id, frame)
+        else:
+            await self._broadcast_household(frame)
+
+    async def _broadcast_calendar_event(self, frame: dict, *, calendar_id: str) -> None:
+        """Route a calendar WS frame by scope.
+
+        Space-scoped calendars use ``calendar_id == space_id``; those
+        frames fan out to that space's members only — never the whole
+        household — so a non-member local user can't see a space's
+        calendar content (matches the §encryption-first non-member rule
+        the post / comment handlers already follow). Personal / household
+        calendars (``calendar_id`` is not a space) fan to the household.
+        """
+        if calendar_id and await self._space_repo.get(calendar_id) is not None:
+            await self._broadcast_space(calendar_id, frame)
+        else:
+            await self._broadcast_household(frame)
+
+    # ─── Connections (peer reachability) ──────────────────────────────────
+
+    async def _on_connection_reachable(self, event: ConnectionReachable) -> None:
         await self._broadcast_household(
-            {
-                "type": "calendar.deleted",
-                "event_id": event.event_id,
-            }
+            {"type": "connection.reachable", "instance_id": event.instance_id},
         )
+
+    async def _on_connection_unreachable(self, event: ConnectionUnreachable) -> None:
+        await self._broadcast_household(
+            {"type": "connection.unreachable", "instance_id": event.instance_id},
+        )
+
+    # ─── Gallery ──────────────────────────────────────────────────────────
+    #
+    # Thin frames (ids only) — the SPA refetches the affected album/list so
+    # it always renders the canonical GET shape. Space albums fan out to
+    # that space's members only (non-member rule); household albums
+    # (``space_id is None``) fan to the household.
+
+    async def _on_gallery_album_created(self, event: GalleryAlbumCreated) -> None:
+        await self._broadcast_gallery(
+            {
+                "type": "gallery.album_created",
+                "album_id": event.album_id,
+                "space_id": event.space_id,
+            },
+            event.space_id,
+        )
+
+    async def _on_gallery_album_deleted(self, event: GalleryAlbumDeleted) -> None:
+        await self._broadcast_gallery(
+            {
+                "type": "gallery.album_deleted",
+                "album_id": event.album_id,
+                "space_id": event.space_id,
+            },
+            event.space_id,
+        )
+
+    async def _on_gallery_item_uploaded(self, event: GalleryItemUploaded) -> None:
+        await self._broadcast_gallery(
+            {
+                "type": "gallery.item_uploaded",
+                "album_id": event.album_id,
+                "item_id": event.item_id,
+                "space_id": event.space_id,
+            },
+            event.space_id,
+        )
+
+    async def _on_gallery_item_deleted(self, event: GalleryItemDeleted) -> None:
+        await self._broadcast_gallery(
+            {
+                "type": "gallery.item_deleted",
+                "album_id": event.album_id,
+                "item_id": event.item_id,
+                "space_id": event.space_id,
+            },
+            event.space_id,
+        )
+
+    async def _broadcast_gallery(self, frame: dict, space_id: str | None) -> None:
+        if space_id:
+            await self._broadcast_space(space_id, frame)
+        else:
+            await self._broadcast_household(frame)
 
     # ─── User status ──────────────────────────────────────────────────────
 

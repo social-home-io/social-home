@@ -99,6 +99,9 @@ export async function clearCompletedTasks(
 
 export function wireTasksWs(): void {
   ws.on('task.created', (e) => {
+    // Household store ignores space-scoped task events (the space task
+    // grid owns those). Mirrors feed.ts's ``if (space_id) return``.
+    if ((e.data as { space_id?: string | null }).space_id) return
     const t = (e.data as { task: TaskItem }).task
     if (!t) return
     if (!tasks.value.some((x) => x.id === t.id)) {
@@ -106,6 +109,7 @@ export function wireTasksWs(): void {
     }
   })
   ws.on('task.updated', (e) => {
+    if ((e.data as { space_id?: string | null }).space_id) return
     const t = (e.data as { task: TaskItem }).task
     if (!t) return
     if (tasks.value.some((x) => x.id === t.id)) {
@@ -115,11 +119,13 @@ export function wireTasksWs(): void {
     }
   })
   ws.on('task.deleted', (e) => {
+    if ((e.data as { space_id?: string | null }).space_id) return
     const { task_id } = e.data as { task_id: string }
     if (!task_id) return
     tasks.value = tasks.value.filter((x) => x.id !== task_id)
   })
   ws.on('task.completed', (e) => {
+    if ((e.data as { space_id?: string | null }).space_id) return
     const { task_id } = e.data as { task_id: string }
     tasks.value = tasks.value.map((x) =>
       x.id === task_id ? { ...x, status: 'done' } : x,
@@ -131,6 +137,7 @@ export function wireTasksWs(): void {
   })
 
   ws.on('task_list.created', (e) => {
+    if ((e.data as { space_id?: string | null }).space_id) return
     const { list_id, name } = e.data as { list_id: string; name: string }
     if (!list_id) return
     if (!lists.value.some((x) => x.id === list_id)) {
@@ -138,6 +145,7 @@ export function wireTasksWs(): void {
     }
   })
   ws.on('task_list.updated', (e) => {
+    if ((e.data as { space_id?: string | null }).space_id) return
     const { list_id, name } = e.data as { list_id: string; name: string }
     if (!list_id) return
     lists.value = lists.value.map((x) =>
@@ -145,6 +153,7 @@ export function wireTasksWs(): void {
     )
   })
   ws.on('task_list.deleted', (e) => {
+    if ((e.data as { space_id?: string | null }).space_id) return
     const { list_id } = e.data as { list_id: string }
     if (!list_id) return
     lists.value = lists.value.filter((x) => x.id !== list_id)

@@ -28,6 +28,10 @@ export const unreadCount = signal<number>(0)
 export function wireNotificationsWs(): void {
   ws.on('notification.new', (e) => {
     const n = e.data as unknown as NotificationLite
+    // Dedup by id — a duplicate frame (reconnect / multi-session) must
+    // not double the badge or insert a second row. Mirrors feed.ts's
+    // ``.some(p => p.id === post.id)`` guard.
+    if (recent.value.some((x) => x.notification_id === n.notification_id)) return
     recent.value = [n, ...recent.value].slice(0, 50)
     unreadCount.value = unreadCount.value + 1
   })

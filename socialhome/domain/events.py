@@ -663,6 +663,10 @@ class GalleryItemUploaded(DomainEvent):
     album_id: str
     item_type: str  # 'photo' | 'video'
     uploader: str
+    #: Scope for realtime fan-out: the space id for a space album, else
+    #: None (household album). Lets the WS layer route to space members
+    #: only, never the whole household.
+    space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 
@@ -670,6 +674,7 @@ class GalleryItemUploaded(DomainEvent):
 class GalleryItemDeleted(DomainEvent):
     item_id: str
     album_id: str
+    space_id: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 
@@ -982,6 +987,19 @@ class ConnectionReachable(DomainEvent):
     Emitted by :class:`AbstractFederationRepo.mark_reachable` only on the
     transition from unreachable → reachable — no noise on every successful
     send.
+    """
+
+    instance_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class ConnectionUnreachable(DomainEvent):
+    """A previously-reachable peer just failed to answer.
+
+    Published on the reachable → unreachable transition only (mirrors
+    :class:`ConnectionReachable`), so the SPA can flip the peer's dot
+    red live instead of waiting for a manual refresh.
     """
 
     instance_id: str
