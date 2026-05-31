@@ -22,9 +22,10 @@ Event types currently in use:
 
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Protocol
+
+import orjson
 
 from ..db import AsyncDatabase
 
@@ -67,7 +68,7 @@ class SqliteAuthAuditLogRepo:
                 event_type,
                 username,
                 ip_address,
-                json.dumps(metadata) if metadata else None,
+                orjson.dumps(metadata).decode() if metadata else None,
             ),
         )
 
@@ -86,7 +87,7 @@ class SqliteAuthAuditLogRepo:
             row = dict(r)
             if row.get("metadata"):
                 try:
-                    row["metadata"] = json.loads(row["metadata"])
+                    row["metadata"] = orjson.loads(row["metadata"])
                 except ValueError, TypeError:
                     row["metadata"] = None
             out.append(row)

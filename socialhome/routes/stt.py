@@ -28,7 +28,7 @@ pipeline.
 from __future__ import annotations
 
 import asyncio
-import json
+import orjson
 import logging
 from typing import AsyncIterator
 
@@ -118,7 +118,7 @@ class SttStreamView(BaseView):
             await ws.close()
             return ws
 
-        await ws.send_str(json.dumps({"type": "final", "text": text}))
+        await ws.send_str(orjson.dumps({"type": "final", "text": text}).decode())
         await ws.close()
         return ws
 
@@ -137,8 +137,8 @@ async def _read_start_frame(ws: web.WebSocketResponse) -> dict:
     if msg.type != WSMsgType.TEXT:
         raise _BadStartError("Expected initial 'start' text frame.")
     try:
-        payload = json.loads(msg.data)
-    except json.JSONDecodeError as exc:
+        payload = orjson.loads(msg.data)
+    except orjson.JSONDecodeError as exc:
         raise _BadStartError("Initial frame was not valid JSON.") from exc
     if not isinstance(payload, dict) or payload.get("type") != "start":
         raise _BadStartError("Initial frame must have type='start'.")
@@ -155,8 +155,8 @@ async def _drain_client_frames(
             await audio_q.put(msg.data)
         elif msg.type == WSMsgType.TEXT:
             try:
-                payload = json.loads(msg.data)
-            except json.JSONDecodeError:
+                payload = orjson.loads(msg.data)
+            except orjson.JSONDecodeError:
                 continue
             if isinstance(payload, dict) and payload.get("type") == "end":
                 break
@@ -168,6 +168,6 @@ async def _drain_client_frames(
 async def _send_error(ws: web.WebSocketResponse, detail: str) -> None:
     """Send a standard error frame. Best-effort; swallow send failures."""
     try:
-        await ws.send_str(json.dumps({"type": "error", "detail": detail}))
+        await ws.send_str(orjson.dumps({"type": "error", "detail": detail}).decode())
     except Exception:
         pass

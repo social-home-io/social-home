@@ -16,9 +16,10 @@ it plugs into the existing app-startup hook list.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timedelta, timezone
+
+import orjson
 
 from ..db import AsyncDatabase
 
@@ -87,7 +88,7 @@ class SpaceRetentionScheduler:
         total = 0
         for s in spaces:
             try:
-                exempt = set(json.loads(s["retention_exempt_json"] or "[]"))
+                exempt = set(orjson.loads(s["retention_exempt_json"] or "[]"))
             except ValueError, TypeError:
                 exempt = set()
             cutoff = (

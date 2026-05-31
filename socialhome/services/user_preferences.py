@@ -11,10 +11,11 @@ they appear.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+
+import orjson
 
 from ..domain.highlight import HighlightAudience
 
@@ -55,8 +56,8 @@ def parse_highlights_preferences(preferences_json: str | None) -> HighlightsPref
     """
     blob: dict[str, Any] = {}
     try:
-        blob = json.loads(preferences_json or "{}") if preferences_json else {}
-    except json.JSONDecodeError:
+        blob = orjson.loads(preferences_json or "{}") if preferences_json else {}
+    except orjson.JSONDecodeError:
         log.debug("preferences_json is not valid JSON; using defaults")
         blob = {}
     if not isinstance(blob, dict):
@@ -134,8 +135,8 @@ def parse_moment_preferences(preferences_json: str | None) -> MomentPreferences:
     """
     blob: dict[str, Any] = {}
     try:
-        blob = json.loads(preferences_json or "{}") if preferences_json else {}
-    except json.JSONDecodeError:
+        blob = orjson.loads(preferences_json or "{}") if preferences_json else {}
+    except orjson.JSONDecodeError:
         log.debug("preferences_json is not valid JSON; using defaults")
         blob = {}
     if not isinstance(blob, dict):

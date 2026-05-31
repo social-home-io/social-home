@@ -23,11 +23,12 @@ mis-wired caller can't do silent damage.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
+
+import orjson
 
 from ..domain.events import (
     HighlightFrameAdded,
@@ -446,7 +447,7 @@ class HighlightService:
             caption_text=frame.caption_text,
             caption_emoji=frame.caption_emoji,
         )
-        snapshot_json = json.dumps(
+        snapshot_json = orjson.dumps(
             {
                 "thumb_url": snapshot.thumb_url,
                 "author_user_id": snapshot.author_user_id,
@@ -454,10 +455,8 @@ class HighlightService:
                 "caption_text": snapshot.caption_text,
                 "caption_emoji": snapshot.caption_emoji,
             },
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+            option=orjson.OPT_SORT_KEYS,
+        ).decode()
         return await dm_service.send_message(
             conversation_id,
             sender_username=sender.username,

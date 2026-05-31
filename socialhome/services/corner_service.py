@@ -12,11 +12,12 @@ a single widget failure never fails the whole dashboard.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+
+import orjson
 
 from ..domain.calendar import CalendarEvent
 from ..domain.post import BazaarStatus
@@ -241,8 +242,8 @@ class CornerService:
             return (), ()
 
         try:
-            prefs = json.loads(user.preferences_json or "{}")
-        except json.JSONDecodeError:
+            prefs = orjson.loads(user.preferences_json or "{}")
+        except orjson.JSONDecodeError:
             prefs = {}
         raw_ids = prefs.get("followed_space_ids", [])
         if not isinstance(raw_ids, list):

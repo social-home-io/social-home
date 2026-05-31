@@ -25,13 +25,14 @@ Security invariants enforced here (§CP):
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import uuid
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Iterable
+
+import orjson
 
 from ..domain.federation import (
     FederationEventType,
@@ -581,7 +582,7 @@ class DmRoutingService(VisibilityMixin):
         if row is None:
             return None
         try:
-            path = json.loads(row["relay_path"])
+            path = orjson.loads(row["relay_path"])
             via = str(path[0]) if path else ""
         except ValueError, IndexError, KeyError:
             return None

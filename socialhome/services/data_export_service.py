@@ -13,10 +13,11 @@ belong to or were authored by the specified user.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+
+import orjson
 
 from ..db import AsyncDatabase
 
@@ -136,12 +137,12 @@ class DataExportService:
     async def export_to_bytes(self, user_id: str) -> bytes:
         """Convenience: build the export and serialise to UTF-8 JSON."""
         export = await self.export_for_user(user_id)
-        return json.dumps(
+        return orjson.dumps(
             {
                 "user_id": export.user_id,
                 "exported_at": export.exported_at,
                 "tables": export.tables,
             },
-            indent=2,
+            option=orjson.OPT_INDENT_2,
             default=str,
-        ).encode("utf-8")
+        )

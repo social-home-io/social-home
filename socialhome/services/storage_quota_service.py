@@ -17,10 +17,11 @@ by a single file's size; that's acceptable for the v1 quota model.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Iterable
+
+import orjson
 
 from ..repositories.storage_stats_repo import AbstractStorageStatsRepo
 
@@ -125,8 +126,8 @@ def _sum_meta_sizes(json_blobs: Iterable[str]) -> int:
     total = 0
     for blob in json_blobs:
         try:
-            data = json.loads(blob)
-        except TypeError, json.JSONDecodeError:
+            data = orjson.loads(blob)
+        except TypeError, orjson.JSONDecodeError:
             continue
         size = data.get("size_bytes") if isinstance(data, dict) else 0
         if isinstance(size, int) and size > 0:
