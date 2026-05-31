@@ -363,15 +363,24 @@ export default function SpaceFeedPage() {
           )}
           {posts.value.length === 0 && (
             <div class="sh-empty-state">
-              <div aria-hidden="true">💬</div>
-              <h3>No posts in this space yet</h3>
-              <p>
-                Be the first to share something with the rest of the space.
-                Members from connected households see what you post here.
-              </p>
-              <p class="sh-muted">
-                Use the composer above ↑ to start the conversation.
-              </p>
+              <div aria-hidden="true">{spaceDetail.value?.archived ? '🗄️' : '💬'}</div>
+              <h3>No posts in this space</h3>
+              {spaceDetail.value?.archived ? (
+                <p class="sh-muted">
+                  This space is archived (read-only). Unarchive it from
+                  settings to start posting again.
+                </p>
+              ) : (
+                <>
+                  <p>
+                    Be the first to share something with the rest of the space.
+                    Members from connected households see what you post here.
+                  </p>
+                  <p class="sh-muted">
+                    Use the composer above ↑ to start the conversation.
+                  </p>
+                </>
+              )}
             </div>
           )}
           {posts.value.map(post => (

@@ -477,7 +477,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             from your active spaces. Everything is kept — unarchive to use it
             again.
           </p>
-          <Button onClick={() => setArchived(false)}>Unarchive space</Button>
+          <Button variant="secondary" onClick={() => setArchived(false)}>Unarchive space</Button>
         </>
       ) : (
         <>
@@ -485,7 +485,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             Hide this space and make it read-only without deleting anything.
             Reversible at any time.
           </p>
-          <Button onClick={() => setArchived(true)}>Archive space</Button>
+          <Button variant="secondary" onClick={() => setArchived(true)}>Archive space</Button>
         </>
       )}
 
