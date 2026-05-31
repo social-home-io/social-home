@@ -116,6 +116,7 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
 - **Realtime**
   - [Direct messages](./dm.md) — 1:1 and group conversations.
   - [DM media — pictures, videos, files](./dm-media.md) — `image` / `video` / `file` attachments, preview-now-sync-later for cross-household.
+  - [Media transport — the binary `fed-media-v1` channel](./media.md) — second DataChannel carrying DM + space media chunks as binary frames (no base64), capability v14.
   - [Presence](./presence.md) — online/away/home + truncated location.
   - [Calls](./calls.md) — WebRTC voice/video signalling.
   - [Highlights](./highlights.md) — per-author per-day frame bag with author-controlled retention and audience.

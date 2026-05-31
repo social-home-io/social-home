@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from unittest.mock import AsyncMock
 
 import pytest
@@ -90,7 +89,7 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     body = b"WEBP-small-bytes-" * 8
     (tmp_path / "small.webp").write_bytes(body)
     fed = AsyncMock()
-    fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
+    fed.send_media_chunk = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=fed,
@@ -104,8 +103,8 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     )
     shipped = await svc.flush_once()
     assert shipped == 1
-    fed.send_with_mesh_fallback.assert_awaited_once()
-    call = fed.send_with_mesh_fallback.call_args
+    fed.send_media_chunk.assert_awaited_once()
+    call = fed.send_media_chunk.call_args
     assert call.kwargs["to_instance_id"] == "peer-x"
     assert call.kwargs["event_type"] is FederationEventType.SPACE_MEDIA_BLOB
     payload = call.kwargs["payload"]
@@ -115,7 +114,12 @@ async def test_flush_once_ships_small_file_as_single_chunk(
     assert payload["final"] is True
     assert payload["correlation_id"] == "p-1"
     assert payload["space_id"] == "sp-1"
-    assert base64.b64decode(payload["bytes_b64"]) == body
+    # Bytes ride the dedicated ``raw_chunk`` arg now (binary channel, or
+    # base64 on the JSON/SPACE_ROUTED fallback), not a ``bytes_b64``
+    # field in the metadata.
+    assert "bytes_b64" not in payload
+    assert call.kwargs["raw_chunk"] == body
+    assert call.kwargs["mesh_fallback"] is True
     assert await outbox.list_for_correlation("p-1") == []
 
 
@@ -129,7 +133,7 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
     body = body[:size]
     (tmp_path / "big.webm").write_bytes(body)
     fed = AsyncMock()
-    fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
+    fed.send_media_chunk = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=fed,
@@ -143,8 +147,9 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
     )
     shipped = await svc.flush_once()
     assert shipped == 1
-    assert fed.send_with_mesh_fallback.await_count == 6
-    payloads = [c.kwargs["payload"] for c in fed.send_with_mesh_fallback.call_args_list]
+    assert fed.send_media_chunk.await_count == 6
+    calls = fed.send_media_chunk.call_args_list
+    payloads = [c.kwargs["payload"] for c in calls]
     assert [p["chunk_index"] for p in payloads] == [0, 1, 2, 3, 4, 5]
     assert all(p["chunk_count"] == 6 for p in payloads)
     assert [p["final"] for p in payloads] == [
@@ -155,7 +160,7 @@ async def test_flush_once_chunks_large_file(db, outbox, tmp_path):
         False,
         True,
     ]
-    reassembled = b"".join(base64.b64decode(p["bytes_b64"]) for p in payloads)
+    reassembled = b"".join(c.kwargs["raw_chunk"] for c in calls)
     assert reassembled == body
 
 
@@ -182,7 +187,7 @@ async def test_flush_once_missing_file_reschedules(db, outbox, tmp_path):
     """File missing → row reschedules with backoff, not a crash."""
     await _seed_space(db)
     fed = AsyncMock()
-    fed.send_with_mesh_fallback = AsyncMock(return_value=_OK)
+    fed.send_media_chunk = AsyncMock(return_value=_OK)
     svc = SpaceMediaSyncService(
         outbox=outbox,
         federation=fed,
@@ -196,7 +201,7 @@ async def test_flush_once_missing_file_reschedules(db, outbox, tmp_path):
     )
     shipped = await svc.flush_once()
     assert shipped == 0
-    fed.send_with_mesh_fallback.assert_not_awaited()
+    fed.send_media_chunk.assert_not_awaited()
     rows = await outbox.list_for_correlation("p-1")
     assert len(rows) == 1
     assert rows[0].attempts == 1
@@ -208,13 +213,13 @@ async def test_flush_once_reschedules_on_delivery_failure(
     outbox,
     tmp_path,
 ):
-    """``send_with_mesh_fallback`` returns ``ok=False`` (no_route /
+    """``send_media_chunk`` returns ``ok=False`` (no_route /
     not_confirmed / transport blip) — the scheduler must reschedule
     rather than treat that as a success."""
     await _seed_space(db)
     (tmp_path / "x.webp").write_bytes(b"x")
     fed = AsyncMock()
-    fed.send_with_mesh_fallback = AsyncMock(
+    fed.send_media_chunk = AsyncMock(
         return_value=DeliveryResult(
             instance_id="peer-x",
             ok=False,

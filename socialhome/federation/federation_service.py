@@ -15,8 +15,12 @@ shared session keys and ``RemoteInstance`` row.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import logging
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -30,6 +34,7 @@ if TYPE_CHECKING:
 
 from ..crypto import (
     ReplayCache,
+    b64url_encode,
 )
 from ..db import AsyncDatabase
 from ..domain.events import (
@@ -54,6 +59,11 @@ from ..infrastructure.key_manager import KeyManager
 from ..repositories.federation_repo import AbstractFederationRepo
 from ..repositories.outbox_repo import AbstractOutboxRepo
 from .encoder import FederationEncoder
+from .media_framing import (
+    MEDIA_AEAD_SUITE_AESGCM_256,
+    SUPPORTED_MEDIA_AEAD_SUITES,
+    UnsupportedMediaAeadSuite,
+)
 from .pq_signer import PqSigner
 from .inbound_validator import (
     InboundContext,
@@ -820,6 +830,145 @@ class FederationService:
             )
         return DeliveryResult(instance_id=to_instance_id, ok=True)
 
+    async def send_media_chunk(
+        self,
+        *,
+        to_instance_id: str,
+        event_type: FederationEventType,
+        payload: dict,
+        raw_chunk: bytes,
+        space_id: str | None = None,
+        mesh_fallback: bool = False,
+    ) -> DeliveryResult:
+        """Ship one media chunk, preferring the binary ``fed-media-v1`` channel.
+
+        The binary channel is used iff **all** hold: the peer is a
+        CONFIRMED direct peer, advertises
+        :data:`FederationCapability.MIN_FOR_MEDIA_CHANNEL`, and its media
+        channel is currently open. Then ``raw_chunk`` ships encrypted as
+        binary (no base64) alongside a signed envelope whose encrypted
+        metadata carries a ``chunk_sha256`` binding.
+
+        Otherwise — sub-v_14 peer, non-CONFIRMED / mesh-only member, or
+        the channel not yet open / a send error — falls back transparently
+        to the JSON path: :meth:`send_event` for DM, or
+        :meth:`send_with_mesh_fallback` when ``mesh_fallback`` is set (so
+        a mesh-only space member still receives the bytes via
+        ``SPACE_ROUTED``). The fallback adds the base64 ``bytes_b64``
+        field, producing the exact wire shape sub-v_14 peers already
+        understand.
+
+        ``payload`` is the chunk metadata dict **without** the bytes; the
+        binary path encrypts ``raw_chunk`` separately, the JSON fallback
+        re-attaches it as base64.
+        """
+        instance = await self._federation_repo.get_instance(to_instance_id)
+        if (
+            self._transport is not None
+            and instance is not None
+            and instance.status is PairingStatus.CONFIRMED
+            and self._transport.is_media_ready(to_instance_id)
+            and await self.peer_supports(
+                to_instance_id,
+                min_version=FederationCapability.MIN_FOR_MEDIA_CHANNEL,
+            )
+        ):
+            result = await self._send_media_binary(
+                instance=instance,
+                event_type=event_type,
+                payload=payload,
+                raw_chunk=raw_chunk,
+                space_id=space_id,
+            )
+            if result is not None:
+                return result
+            # Binary send didn't land (channel raced closed / over HWM) —
+            # fall through to the JSON path so the chunk still delivers.
+
+        json_payload = {
+            **payload,
+            "bytes_b64": base64.b64encode(raw_chunk).decode("ascii"),
+        }
+        if mesh_fallback:
+            return await self.send_with_mesh_fallback(
+                to_instance_id=to_instance_id,
+                event_type=event_type,
+                payload=json_payload,
+                space_id=space_id,
+            )
+        return await self.send_event(
+            to_instance_id=to_instance_id,
+            event_type=event_type,
+            payload=json_payload,
+            space_id=space_id,
+        )
+
+    async def _send_media_binary(
+        self,
+        *,
+        instance: RemoteInstance,
+        event_type: FederationEventType,
+        payload: dict,
+        raw_chunk: bytes,
+        space_id: str | None,
+    ) -> DeliveryResult | None:
+        """Build + sign the media envelope and ship it as a binary frame.
+
+        Returns :class:`DeliveryResult` on success, ``None`` when the
+        binary send didn't land (caller falls back to JSON). Mirrors
+        :meth:`send_event`'s envelope construction byte-for-byte — same
+        field set, same ``proto_version=1``, same ``_dumps`` + suite-aware
+        signing — so the receiver's signature reconstruction matches and
+        the chunk inherits the full §24.11 guarantees. The only addition
+        is the second AEAD over the raw chunk bytes.
+        """
+        if self._transport is None:  # pragma: no cover — caller gates on transport
+            return None
+        try:
+            session_key = self._key_manager.decrypt(instance.key_self_to_remote)
+        except Exception:
+            log.warning(
+                "send_media_chunk: failed to decrypt session key for %s",
+                instance.id,
+            )
+            return None
+        chunk_sha256 = b64url_encode(hashlib.sha256(raw_chunk).digest())
+        metadata = {
+            **payload,
+            "chunk_sha256": chunk_sha256,
+            "media_aead_suite": MEDIA_AEAD_SUITE_AESGCM_256,
+        }
+        encrypted_payload = self._encrypt_payload(_dumps(metadata), session_key)
+        msg_id = str(uuid.uuid4())
+        timestamp = datetime.now(timezone.utc).isoformat()
+        effective_suite = instance.sig_suite or self._encoder.sig_suite
+        envelope_dict: dict = {
+            "msg_id": msg_id,
+            "event_type": event_type.value,
+            "from_instance": self._own_instance_id,
+            "to_instance": instance.id,
+            "timestamp": timestamp,
+            "encrypted_payload": encrypted_payload,
+            "space_id": space_id,
+            "proto_version": 1,
+            "sig_suite": effective_suite,
+        }
+        envelope_bytes = _dumps(envelope_dict).encode("utf-8")
+        envelope_dict["signatures"] = self._encoder.sign_envelope_all(
+            envelope_bytes,
+            suite=effective_suite,
+        )
+        payload_bytes = self._encoder.encrypt_bytes(raw_chunk, session_key)
+        sent = await self._transport.send_media(
+            instance=instance,
+            header_dict=envelope_dict,
+            payload_bytes=payload_bytes,
+        )
+        if not sent:
+            return None
+        await self._federation_repo.mark_reachable(instance.id)
+        return DeliveryResult(instance_id=instance.id, ok=True, status_code=None)
+
     async def broadcast_to_peers(
         self,
         *,
@@ -951,6 +1100,34 @@ class FederationService:
 
         return result
 
+    async def validate_inbound_rtc(
+        self,
+        instance_id: str,
+        raw_body: bytes,
+    ) -> InboundContext:
+        """Run the §24.11 RTC validation pipeline WITHOUT dispatching.
+
+        Resolves the sender by ``instance_id`` (already known from the
+        peer connection) instead of ``inbox_id``, runs the full
+        validation chain (parse → lookup → timestamp → sig verify →
+        replay → decrypt → idempotency → ban → persist replay →
+        deprovisioned-author), and returns the populated
+        :class:`InboundContext`. ``ctx.event`` is the validated event
+        (or ``None`` if a step set ``ctx.early_response``).
+
+        Shared by :meth:`handle_inbound_rtc` (which then dispatches) and
+        :meth:`handle_inbound_media_frame` (which attaches the decrypted
+        chunk bytes before dispatch). Keeping the chain identical means
+        the binary media path inherits replay, ban, and idempotency
+        protection unchanged.
+        """
+        if self._rtc_inbound_pipeline is None:
+            self._rtc_inbound_pipeline = self._build_rtc_inbound_pipeline()
+        pipeline: InboundPipeline = self._rtc_inbound_pipeline  # type: ignore[assignment]
+        ctx = InboundContext(raw_body=raw_body, instance_id=instance_id)
+        await pipeline.run(ctx)
+        return ctx
+
     async def handle_inbound_rtc(
         self,
         instance_id: str,
@@ -962,20 +1139,81 @@ class FederationService:
         the sender by ``instance_id`` (already known from the peer
         connection) instead of ``inbox_id``.
         """
-        if self._rtc_inbound_pipeline is None:
-            self._rtc_inbound_pipeline = self._build_rtc_inbound_pipeline()
-
-        pipeline: InboundPipeline = self._rtc_inbound_pipeline  # type: ignore[assignment]
-        ctx = InboundContext(raw_body=raw_body, instance_id=instance_id)
-        result = await pipeline.run(ctx)
+        ctx = await self.validate_inbound_rtc(instance_id, raw_body)
 
         if ctx.early_response is not None:
-            return result
+            return ctx.early_response
 
         if ctx.event is not None:
             await self._dispatch_event(ctx.event)
 
-        return result
+        return {"status": "ok"}
+
+    async def handle_inbound_media_frame(
+        self,
+        instance_id: str,
+        header_bytes: bytes,
+        payload_bytes: bytes,
+    ) -> dict:
+        """Validate + decrypt one binary media frame, then dispatch.
+
+        Inbound entry point for the ``fed-media-v1`` channel. The frame
+        header is a signed federation envelope carrying the chunk
+        metadata as its (encrypted) payload; ``payload_bytes`` is the
+        AES-256-GCM-encrypted chunk bound to that envelope by a
+        ``chunk_sha256`` field inside the signed+encrypted metadata.
+
+        Flow:
+
+        1. Run the full §24.11 pipeline on the header (origin auth via
+           Ed25519, replay, timestamp, ban, decrypt metadata). Honour
+           ``ctx.early_response`` (idempotency / deprovisioned-author)
+           exactly like dispatch would — skip assembly on a short-circuit.
+        2. Validate ``media_aead_suite`` against the supported set — no
+           default fallback (CLAUDE.md crypto-suite rule).
+        3. Decrypt the chunk under the directional receive key.
+        4. Verify ``sha256(plaintext) == chunk_sha256`` (constant-time).
+           Because the hash lives inside the signature-covered encrypted
+           metadata, this binds the binary payload to the signed
+           envelope: tamper the bytes → hash mismatch; tamper the hash →
+           GCM tag / signature failure.
+        5. Attach the raw bytes to the event and dispatch through the
+           SAME registry the JSON media events use — no new dispatch
+           surface; the handlers prefer ``event.media_bytes`` over the
+           base64 ``bytes_b64``.
+
+        Raises :class:`ValueError` (or
+        :class:`~socialhome.federation.media_framing.UnsupportedMediaAeadSuite`)
+        on any validation failure so the transport logs + drops the frame.
+        """
+        ctx = await self.validate_inbound_rtc(instance_id, header_bytes)
+        if ctx.early_response is not None:
+            return ctx.early_response
+        event = ctx.event
+        if (
+            event is None
+        ):  # pragma: no cover — pipeline always sets event or early_response
+            return {"status": "ok"}
+        meta = event.payload if isinstance(event.payload, dict) else {}
+        suite = meta.get("media_aead_suite")
+        if suite not in SUPPORTED_MEDIA_AEAD_SUITES:
+            raise UnsupportedMediaAeadSuite(
+                f"unknown media_aead_suite: {suite!r}",
+            )
+        # The pipeline already decrypted the metadata payload with this
+        # same directional key, so it is known-good here — no second
+        # try/except needed.
+        session_key = self._key_manager.decrypt(ctx.instance.key_remote_to_self)
+        try:
+            raw = self._encoder.decrypt_bytes(payload_bytes, session_key)
+        except Exception as exc:
+            raise ValueError(f"Failed to decrypt media chunk: {exc}") from exc
+        expected = str(meta.get("chunk_sha256") or "")
+        actual = b64url_encode(hashlib.sha256(raw).digest())
+        if not expected or not hmac.compare_digest(expected, actual):
+            raise ValueError("media chunk sha256 mismatch")
+        await self._dispatch_event(replace(event, media_bytes=raw))
+        return {"status": "ok"}
 
     async def _dispatch_event(self, event: FederationEvent) -> None:
         """Route a validated inbound event to registered handlers.

@@ -183,7 +183,20 @@ from __future__ import annotations
 #:   to direct-only (which still works on the local LAN and behind
 #:   modest NATs; cross-NAT fail-soft for older peers becomes "no
 #:   sync" rather than silently broken).
-OURS: int = 13
+#: * **v_14** (2026-05-31) — dedicated binary media DataChannel
+#:   (``fed-media-v1``). A CONFIRMED direct peer that advertises v_14+
+#:   receives DM + space media as binary frames (no base64) on a second
+#:   DataChannel multiplexed on the same federation PeerConnection, so
+#:   bulk media stops head-of-line-blocking latency-sensitive control
+#:   events on ``fed-v1`` and drops the ~37 % base64 tax. **Fallback.**
+#:   Sub-v_14 peers (and any non-CONFIRMED / mesh-only space member —
+#:   the binary channel is point-to-point only) keep receiving the
+#:   existing JSON :data:`FederationEventType.DM_MEDIA_BLOB` /
+#:   :data:`SPACE_MEDIA_BLOB` events over ``fed-v1`` / HTTPS / SPACE_ROUTED.
+#:   The sender chooses per-peer via
+#:   :meth:`FederationService.peer_supports` so there is no user-visible
+#:   regression — only a throughput improvement when both sides are v_14+.
+OURS: int = 14
 
 
 class FederationCapability:
@@ -284,6 +297,16 @@ class FederationCapability:
     #: works against them as before (still useful on same-LAN +
     #: modest-NAT pairs), cross-NAT pairs require both sides on v_13+.
     MIN_FOR_SYNC_HTTPS_FALLBACK = 13
+
+    #: Minimum proto_version where the peer accepts media as binary
+    #: frames on the ``fed-media-v1`` DataChannel. The sender gates the
+    #: binary path on this AND on the peer being a CONFIRMED direct peer
+    #: (the channel is point-to-point — mesh-only space members never use
+    #: it). Sub-v_14 peers transparently fall back to the JSON
+    #: ``DM_MEDIA_BLOB`` / ``SPACE_MEDIA_BLOB`` path inside
+    #: :meth:`FederationService.send_media_chunk`, so the gate degrades
+    #: throughput, never correctness.
+    MIN_FOR_MEDIA_CHANNEL = 14
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

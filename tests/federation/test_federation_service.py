@@ -25,7 +25,13 @@ from socialhome.domain.federation import (
     PairingStatus,
     RemoteInstance,
 )
+from socialhome.domain.federation_capabilities import FederationCapability
 from socialhome.federation import FederationService
+from socialhome.federation.encoder import FederationEncoder
+from socialhome.federation.media_framing import (
+    MEDIA_AEAD_SUITE_AESGCM_256,
+    UnsupportedMediaAeadSuite,
+)
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.infrastructure.key_manager import KeyManager
 
@@ -1523,3 +1529,406 @@ async def test_dispatch_unknown_event():
         payload={},
     )
     await svc._dispatch_event(event)
+
+
+# ─── Binary media channel (fed-media-v1) ───────────────────────────────────
+#
+# These exercise send_media_chunk (sender) + handle_inbound_media_frame
+# (receiver) end-to-end across two services A→B that share a session key,
+# plus the §24.11 + per-chunk-binding negative paths.
+
+import hashlib  # noqa: E402
+import types  # noqa: E402
+
+import orjson  # noqa: E402
+
+from socialhome.crypto import b64url_encode as _b64url_encode  # noqa: E402
+
+
+class _CaptureMediaTransport:
+    """Stub transport: records the binary media frame and the JSON
+    fallback envelope so a test can see which path the sender chose."""
+
+    def __init__(self) -> None:
+        self.media: tuple[dict, bytes] | None = None
+        self.json_envelopes: list[dict] = []
+        self.media_ready = True
+        self.media_returns = True
+
+    def is_media_ready(self, instance_id: str) -> bool:
+        return self.media_ready
+
+    async def send_media(self, *, instance, header_dict, payload_bytes) -> bool:
+        self.media = (header_dict, payload_bytes)
+        return self.media_returns
+
+    async def send(self, *, instance, envelope_dict):
+        self.json_envelopes.append(envelope_dict)
+        return types.SimpleNamespace(ok=True, via="rtc", status_code=None, error=None)
+
+
+def _svc_with(own_kp, repo, km) -> FederationService:
+    return FederationService(
+        db=MagicMock(),
+        federation_repo=repo,
+        outbox_repo=InMemoryOutboxRepo(),
+        key_manager=km,
+        bus=EventBus(),
+        own_instance_id=derive_instance_id(own_kp.public_key),
+        own_identity_seed=own_kp.private_key,
+        own_identity_pk=own_kp.public_key,
+        http_client=None,
+    )
+
+
+def _paired(*, peer_proto_version: int = FederationCapability.MIN_FOR_MEDIA_CHANNEL):
+    """Two services A and B that share a session key and each list the
+    other as a CONFIRMED peer. A's transport is a capture stub."""
+    import os
+
+    a_kp = generate_identity_keypair()
+    b_kp = generate_identity_keypair()
+    a_id = derive_instance_id(a_kp.public_key)
+    b_id = derive_instance_id(b_kp.public_key)
+    session = os.urandom(32)
+    km_a = _make_kek_manager()
+    km_b = _make_kek_manager()
+    repo_a = InMemoryFederationRepo()
+    repo_b = InMemoryFederationRepo()
+
+    inst_b_for_a, _ = _make_remote_instance(km_a, peer_kp=b_kp, session_key=session)
+    repo_a._instances[b_id] = dataclasses.replace(
+        inst_b_for_a, proto_version=peer_proto_version
+    )
+    inst_a_for_b, _ = _make_remote_instance(km_b, peer_kp=a_kp, session_key=session)
+    repo_b._instances[a_id] = inst_a_for_b
+
+    svc_a = _svc_with(a_kp, repo_a, km_a)
+    svc_b = _svc_with(b_kp, repo_b, km_b)
+    cap = _CaptureMediaTransport()
+    svc_a.attach_transport(cap)
+
+    captured: list = []
+
+    async def _record(event):
+        captured.append(event)
+
+    svc_b._event_registry.register(FederationEventType.DM_MEDIA_BLOB, _record)
+    svc_b._event_registry.register(FederationEventType.SPACE_MEDIA_BLOB, _record)
+
+    return types.SimpleNamespace(
+        a_kp=a_kp,
+        b_kp=b_kp,
+        a_id=a_id,
+        b_id=b_id,
+        session=session,
+        svc_a=svc_a,
+        svc_b=svc_b,
+        repo_a=repo_a,
+        repo_b=repo_b,
+        cap=cap,
+        received=captured,
+    )
+
+
+def _make_frame(
+    p,
+    *,
+    event_type=FederationEventType.DM_MEDIA_BLOB,
+    payload=None,
+    raw=b"the full media bytes",
+    suite=MEDIA_AEAD_SUITE_AESGCM_256,
+    sha_override=None,
+    corrupt_sig=False,
+    space_id=None,
+) -> tuple[bytes, bytes]:
+    """Build a media frame (header_bytes, payload_bytes) signed by A, the
+    way the production sender would, with knobs for the negative paths."""
+    enc_a = FederationEncoder(p.a_kp.private_key)
+    sha = sha_override or _b64url_encode(hashlib.sha256(raw).digest())
+    meta = {**(payload or {"media_blob_id": "m1", "message_id": "m1"})}
+    meta["chunk_sha256"] = sha
+    meta["media_aead_suite"] = suite
+    encrypted_payload = enc_a.encrypt_payload(orjson.dumps(meta).decode(), p.session)
+    envelope = {
+        "msg_id": str(uuid.uuid4()),
+        "event_type": event_type.value,
+        "from_instance": p.a_id,
+        "to_instance": p.b_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "encrypted_payload": encrypted_payload,
+        "space_id": space_id,
+        "proto_version": 1,
+        "sig_suite": "ed25519",
+    }
+    envelope_bytes = orjson.dumps(envelope)
+    envelope["signatures"] = enc_a.sign_envelope_all(envelope_bytes, suite="ed25519")
+    if corrupt_sig:
+        envelope["signatures"]["ed25519"] = b64url_encode(b"\x00" * 64)
+    payload_bytes = enc_a.encrypt_bytes(raw, p.session)
+    return orjson.dumps(envelope), payload_bytes
+
+
+@pytest.mark.asyncio
+async def test_send_media_chunk_uses_binary_when_peer_supports():
+    """CONFIRMED v_14 peer with an open channel → binary frame, no base64."""
+    p = _paired()
+    raw = b"\x89PNG\r\n" + b"binary-payload" * 50
+    result = await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.DM_MEDIA_BLOB,
+        payload={
+            "media_blob_id": "m1",
+            "message_id": "m1",
+            "chunk_index": 0,
+            "chunk_count": 1,
+            "final": True,
+        },
+        raw_chunk=raw,
+    )
+    assert result.ok
+    assert p.cap.json_envelopes == []  # JSON path NOT used
+    assert p.cap.media is not None
+    header, payload_bytes = p.cap.media
+    # Payload is raw AEAD bytes (nonce+ct+tag), not base64.
+    assert len(payload_bytes) == 12 + len(raw) + 16
+    assert p.svc_b._encoder.decrypt_bytes(payload_bytes, p.session) == raw
+    # Header is a normal signed envelope; metadata carries the binding +
+    # suite and NOT the bytes.
+    assert header["event_type"] == "dm_media_blob"
+    assert header["from_instance"] == p.a_id
+    assert header["proto_version"] == 1
+    assert "signatures" in header
+    meta = orjson.loads(
+        p.svc_b._encoder.decrypt_payload(header["encrypted_payload"], p.session)
+    )
+    assert "bytes_b64" not in meta
+    assert meta["media_aead_suite"] == MEDIA_AEAD_SUITE_AESGCM_256
+    assert meta["chunk_sha256"] == _b64url_encode(hashlib.sha256(raw).digest())
+
+
+@pytest.mark.asyncio
+async def test_media_frame_round_trip_dispatches_with_raw_bytes():
+    """A's binary frame validates on B and dispatches with media_bytes set."""
+    p = _paired()
+    raw = b"round-trip-bytes" * 64
+    await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.DM_MEDIA_BLOB,
+        payload={"media_blob_id": "m1", "message_id": "m1"},
+        raw_chunk=raw,
+    )
+    header, payload_bytes = p.cap.media
+    res = await p.svc_b.handle_inbound_media_frame(
+        p.a_id, orjson.dumps(header), payload_bytes
+    )
+    assert res == {"status": "ok"}
+    assert len(p.received) == 1
+    event = p.received[0]
+    assert event.event_type is FederationEventType.DM_MEDIA_BLOB
+    assert event.media_bytes == raw
+    assert event.payload["media_blob_id"] == "m1"
+
+
+@pytest.mark.asyncio
+async def test_space_media_frame_round_trip():
+    """SPACE_MEDIA_BLOB rides the same binary path."""
+    p = _paired()
+    raw = b"space-media" * 32
+    await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.SPACE_MEDIA_BLOB,
+        payload={"filename": "img.webp", "transfer_id": "t1"},
+        raw_chunk=raw,
+    )
+    header, payload_bytes = p.cap.media
+    await p.svc_b.handle_inbound_media_frame(
+        p.a_id, orjson.dumps(header), payload_bytes
+    )
+    assert len(p.received) == 1
+    assert p.received[0].event_type is FederationEventType.SPACE_MEDIA_BLOB
+    assert p.received[0].media_bytes == raw
+
+
+@pytest.mark.asyncio
+async def test_send_media_chunk_falls_back_when_peer_unsupported():
+    """Sub-v_14 peer → JSON send_event path with a base64 bytes_b64."""
+    p = _paired(peer_proto_version=1)
+    raw = b"fallback-bytes"
+    result = await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.DM_MEDIA_BLOB,
+        payload={"media_blob_id": "m1", "message_id": "m1"},
+        raw_chunk=raw,
+    )
+    assert result.ok
+    assert p.cap.media is None  # binary channel NOT used
+    assert len(p.cap.json_envelopes) == 1
+    # The JSON envelope's encrypted payload carries the base64 bytes.
+    env = p.cap.json_envelopes[0]
+    meta = orjson.loads(
+        p.svc_b._encoder.decrypt_payload(env["encrypted_payload"], p.session)
+    )
+    assert base64_b64decode_eq(meta["bytes_b64"], raw)
+
+
+def base64_b64decode_eq(b64: str, raw: bytes) -> bool:
+    import base64 as _b64
+
+    return _b64.b64decode(b64) == raw
+
+
+@pytest.mark.asyncio
+async def test_send_media_chunk_falls_back_when_channel_not_ready():
+    """Channel down → JSON path even though the peer supports v_14."""
+    p = _paired()
+    p.cap.media_ready = False
+    result = await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.DM_MEDIA_BLOB,
+        payload={"media_blob_id": "m1", "message_id": "m1"},
+        raw_chunk=b"x",
+    )
+    assert result.ok
+    assert p.cap.media is None
+    assert len(p.cap.json_envelopes) == 1
+
+
+@pytest.mark.asyncio
+async def test_media_frame_rejects_sha256_mismatch():
+    """Valid GCM payload whose plaintext hash ≠ committed sha256 → reject."""
+    p = _paired()
+    raw = b"the committed bytes"
+    header, _ = _make_frame(p, raw=raw, payload={"media_blob_id": "m1"})
+    # Re-encrypt DIFFERENT bytes under the session key — GCM tag is valid
+    # but the plaintext no longer matches the signed chunk_sha256.
+    other = p.svc_b._encoder.encrypt_bytes(b"tampered different bytes", p.session)
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        await p.svc_b.handle_inbound_media_frame(p.a_id, header, other)
+    assert p.received == []
+
+
+@pytest.mark.asyncio
+async def test_media_frame_rejects_bad_signature():
+    p = _paired()
+    header, payload_bytes = _make_frame(p, corrupt_sig=True)
+    with pytest.raises(ValueError, match="signature"):
+        await p.svc_b.handle_inbound_media_frame(p.a_id, header, payload_bytes)
+    assert p.received == []
+
+
+@pytest.mark.asyncio
+async def test_media_frame_rejects_replay():
+    p = _paired()
+    header, payload_bytes = _make_frame(p, raw=b"once")
+    await p.svc_b.handle_inbound_media_frame(p.a_id, header, payload_bytes)
+    assert len(p.received) == 1
+    with pytest.raises(ValueError, match="[Rr]eplay"):
+        await p.svc_b.handle_inbound_media_frame(p.a_id, header, payload_bytes)
+    assert len(p.received) == 1  # not dispatched twice
+
+
+@pytest.mark.asyncio
+async def test_media_frame_rejects_unknown_aead_suite():
+    p = _paired()
+    header, payload_bytes = _make_frame(p, suite="chacha-bogus")
+    with pytest.raises(UnsupportedMediaAeadSuite):
+        await p.svc_b.handle_inbound_media_frame(p.a_id, header, payload_bytes)
+    assert p.received == []
+
+
+@pytest.mark.asyncio
+async def test_send_media_chunk_space_non_confirmed_uses_mesh_fallback():
+    """A non-CONFIRMED space target never uses the binary channel; with no
+    mesh attached it surfaces not_confirmed (the mesh-fallback path)."""
+    p = _paired()
+    # Demote the peer to non-CONFIRMED in A's repo.
+    p.repo_a._instances[p.b_id] = dataclasses.replace(
+        p.repo_a._instances[p.b_id], status=PairingStatus.PENDING_SENT
+    )
+    result = await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.SPACE_MEDIA_BLOB,
+        payload={"filename": "f.webp", "transfer_id": "t1"},
+        raw_chunk=b"x",
+        mesh_fallback=True,
+    )
+    assert p.cap.media is None  # binary channel never used for non-CONFIRMED
+    assert not result.ok
+    assert result.error == "not_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_send_media_chunk_falls_back_when_binary_send_returns_false():
+    """transport.send_media returns False (channel raced closed / over HWM)
+    → transparent JSON fallback."""
+    p = _paired()
+    p.cap.media_returns = False
+    result = await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.DM_MEDIA_BLOB,
+        payload={"media_blob_id": "m1", "message_id": "m1"},
+        raw_chunk=b"bytes",
+    )
+    assert result.ok
+    assert p.cap.media is not None  # binary was attempted
+    assert len(p.cap.json_envelopes) == 1  # then fell back to JSON
+
+
+@pytest.mark.asyncio
+async def test_send_media_chunk_falls_back_when_session_key_undecryptable():
+    """A corrupt stored session key → binary build fails → JSON fallback
+    (which then also fails the key decrypt and reports it)."""
+    p = _paired()
+    p.repo_a._instances[p.b_id] = dataclasses.replace(
+        p.repo_a._instances[p.b_id], key_self_to_remote="not-a-valid-encrypted-key"
+    )
+    result = await p.svc_a.send_media_chunk(
+        to_instance_id=p.b_id,
+        event_type=FederationEventType.DM_MEDIA_BLOB,
+        payload={"media_blob_id": "m1", "message_id": "m1"},
+        raw_chunk=b"bytes",
+    )
+    assert p.cap.media is None  # binary never shipped a frame
+    assert not result.ok
+    assert result.error == "key_decrypt_error"
+
+
+@pytest.mark.asyncio
+async def test_handle_inbound_rtc_dispatches_validated_event():
+    """The (non-media) RTC entry point validates + dispatches."""
+    p = _paired()
+    header, _payload = _make_frame(p, payload={"media_blob_id": "m1"})
+    res = await p.svc_b.handle_inbound_rtc(p.a_id, header)
+    assert res == {"status": "ok"}
+    assert len(p.received) == 1
+
+
+@pytest.mark.asyncio
+async def test_media_frame_rejects_corrupt_payload():
+    """A payload whose GCM tag fails (tampered ciphertext) → reject."""
+    p = _paired()
+    header, payload_bytes = _make_frame(p, raw=b"good bytes")
+    corrupt = bytearray(payload_bytes)
+    corrupt[-1] ^= 0x01  # break the GCM tag
+    with pytest.raises(ValueError, match="decrypt media chunk"):
+        await p.svc_b.handle_inbound_media_frame(p.a_id, header, bytes(corrupt))
+    assert p.received == []
+
+
+@pytest.mark.asyncio
+async def test_media_frame_idempotency_short_circuits_before_assembly():
+    """Two frames sharing an idempotency_key: the second is deduped by the
+    pipeline (early_response) and never re-dispatched."""
+    from socialhome.infrastructure.idempotency import IdempotencyCache
+
+    p = _paired()
+    p.svc_b.attach_idempotency_cache(IdempotencyCache(ttl_seconds=60))
+    payload = {"media_blob_id": "m1", "idempotency_key": "dedup-key-1"}
+    h1, pl1 = _make_frame(p, payload=dict(payload), raw=b"first")
+    h2, pl2 = _make_frame(p, payload=dict(payload), raw=b"second")
+    r1 = await p.svc_b.handle_inbound_media_frame(p.a_id, h1, pl1)
+    r2 = await p.svc_b.handle_inbound_media_frame(p.a_id, h2, pl2)
+    assert r1 == {"status": "ok"}
+    assert r2.get("deduped") is True
+    assert len(p.received) == 1  # only the first dispatched

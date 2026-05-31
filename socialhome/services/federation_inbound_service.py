@@ -728,6 +728,28 @@ class FederationInboundService:
             return None, "pending"
         return f"api/media/{dest.name}", "pending"
 
+    @staticmethod
+    def _media_chunk_bytes(event: "FederationEvent") -> bytes | None:
+        """Return the decoded chunk bytes for a media blob event.
+
+        Prefers :attr:`FederationEvent.media_bytes` — the
+        already-decrypted payload of a binary ``fed-media-v1`` frame
+        (which the §24.11 pipeline + ``chunk_sha256`` binding have
+        authenticated). Falls back to the base64 ``bytes_b64`` /
+        ``bytes_base64`` field of the JSON path. Returns ``None`` when
+        neither is present or the base64 is malformed.
+        """
+        if event.media_bytes is not None:
+            return event.media_bytes
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        b64 = payload.get("bytes_b64") or payload.get("bytes_base64")
+        if not isinstance(b64, str):
+            return None
+        try:
+            return base64.b64decode(b64)
+        except binascii.Error, ValueError:
+            return None
+
     async def _on_dm_media_blob(self, event: "FederationEvent") -> None:
         """Land the full bytes for a previously-arrived ``DM_MESSAGE``.
 
@@ -750,23 +772,17 @@ class FederationInboundService:
         p = event.payload
         blob_id = str(p.get("media_blob_id") or "")
         message_id = str(p.get("message_id") or "")
-        bytes_b64 = p.get("bytes_b64")
-        if not blob_id or not message_id or not bytes_b64:
+        # Chunk bytes arrive either as the decrypted binary-frame payload
+        # (``fed-media-v1``) or as a base64 ``bytes_b64`` field (JSON
+        # path). ``_media_chunk_bytes`` prefers the former.
+        raw = self._media_chunk_bytes(event)
+        if raw is None or not blob_id or not message_id:
             log.debug("DM_MEDIA_BLOB missing required field: %s", p)
             return
         if self._media_dir is None:
             log.warning(
                 "DM_MEDIA_BLOB: media_dir not wired; dropping blob %s",
                 blob_id,
-            )
-            return
-        try:
-            data = base64.b64decode(bytes_b64)
-        except Exception as exc:  # pragma: no cover
-            log.warning(
-                "DM_MEDIA_BLOB: malformed bytes_b64 for %s: %s",
-                message_id,
-                exc,
             )
             return
         # Chunk metadata. Default to a single-chunk transfer for
@@ -780,6 +796,38 @@ class FederationInboundService:
             chunk_count = 1
         is_final = bool(p.get("final", chunk_index == chunk_count - 1))
         mime_type = str(p.get("mime_type") or "application/octet-stream")
+        await self._assemble_dm_chunk(
+            raw=raw,
+            message_id=message_id,
+            chunk_index=chunk_index,
+            chunk_count=chunk_count,
+            is_final=is_final,
+            mime_type=mime_type,
+            conversation_id=str(p.get("conversation_id") or ""),
+        )
+
+    async def _assemble_dm_chunk(
+        self,
+        *,
+        raw: bytes,
+        message_id: str,
+        chunk_index: int,
+        chunk_count: int,
+        is_final: bool,
+        mime_type: str,
+        conversation_id: str,
+    ) -> None:
+        """Write one DM media chunk to disk and finalise on the last one.
+
+        Source-agnostic core shared by the JSON ``DM_MEDIA_BLOB`` handler
+        and the binary ``fed-media-v1`` path — ``raw`` is the already-
+        decoded chunk bytes (base64-decoded or AEAD-decrypted upstream).
+        On the final chunk it concatenates the parts, swaps the message
+        row's ``media_url``, and pushes the ``dm.media_ready`` WS frame.
+        ``self._media_dir`` is guaranteed non-None by the caller.
+        """
+        assert self._media_dir is not None
+        data = raw
         ext = _mime_to_ext(mime_type)
         try:
             await aiofiles.os.makedirs(self._media_dir, exist_ok=True)
@@ -890,7 +938,7 @@ class FederationInboundService:
                 try:
                     await broadcaster(
                         message_id=message_id,
-                        conversation_id=str(p.get("conversation_id") or ""),
+                        conversation_id=conversation_id,
                         media_url=new_url,
                     )
                 except Exception as exc:  # pragma: no cover
@@ -987,12 +1035,10 @@ class FederationInboundService:
             return
         p = event.payload
         filename = str(p.get("filename") or "")
-        b64 = p.get("bytes_b64") or p.get("bytes_base64")
-        transfer_id = str(p.get("transfer_id") or "")
-        chunk_index = int(p.get("chunk_index") or 0)
-        chunk_count = int(p.get("chunk_count") or 1)
-        final = bool(p.get("final"))
-        if not filename or not isinstance(b64, str):
+        # Bytes arrive as the decrypted binary-frame payload
+        # (``fed-media-v1``) or base64 ``bytes_b64`` / ``bytes_base64``.
+        raw = self._media_chunk_bytes(event)
+        if not filename or raw is None:
             return
         if "/" in filename or "\\" in filename or filename.startswith("."):
             log.warning(
@@ -1001,6 +1047,7 @@ class FederationInboundService:
                 event.from_instance,
             )
             return
+        transfer_id = str(p.get("transfer_id") or "")
         if not transfer_id:
             # First-revision senders that didn't include transfer_id
             # fall back to a per-blob assembly directory keyed on the
@@ -1010,15 +1057,37 @@ class FederationInboundService:
             transfer_id = filename
         if "/" in transfer_id or "\\" in transfer_id or transfer_id.startswith("."):
             return
-        try:
-            data = base64.b64decode(b64)
-        except (binascii.Error, ValueError) as exc:
-            log.warning(
-                "SPACE_MEDIA_BLOB: bad base64 from %s: %s",
-                event.from_instance,
-                exc,
-            )
-            return
+        await self._assemble_space_chunk(
+            raw=raw,
+            filename=filename,
+            transfer_id=transfer_id,
+            chunk_index=int(p.get("chunk_index") or 0),
+            chunk_count=int(p.get("chunk_count") or 1),
+            final=bool(p.get("final")),
+            post_id=p.get("post_id"),
+        )
+
+    async def _assemble_space_chunk(
+        self,
+        *,
+        raw: bytes,
+        filename: str,
+        transfer_id: str,
+        chunk_index: int,
+        chunk_count: int,
+        final: bool,
+        post_id: object,
+    ) -> None:
+        """Write one space-media chunk to disk and finalise on the last.
+
+        Source-agnostic core shared by the JSON ``SPACE_MEDIA_BLOB``
+        handler and the binary ``fed-media-v1`` path. ``raw`` is the
+        already-decoded chunk bytes; ``filename`` / ``transfer_id`` have
+        been path-traversal-validated by the caller. ``self._media_dir``
+        is guaranteed non-None by the caller.
+        """
+        assert self._media_dir is not None
+        data = raw
         # Single-chunk fast path: write straight to the final filename.
         target = self._media_dir / filename
         if chunk_count == 1:
@@ -1037,7 +1106,7 @@ class FederationInboundService:
                 "SPACE_MEDIA_BLOB: stored %s (%d bytes) for post=%s",
                 filename,
                 len(data),
-                p.get("post_id"),
+                post_id,
             )
             return
         # Multi-chunk: write to a part file under a per-transfer dir.
@@ -1060,7 +1129,11 @@ class FederationInboundService:
         # Final chunk landed — assemble the parts in index order.
         try:
             parts = sorted(
-                [p.name for p in pathlib.Path(partial_root).iterdir() if p.is_file()]
+                [
+                    entry.name
+                    for entry in pathlib.Path(partial_root).iterdir()
+                    if entry.is_file()
+                ]
             )
             if len(parts) < chunk_count:
                 log.warning(
@@ -1093,7 +1166,7 @@ class FederationInboundService:
             "SPACE_MEDIA_BLOB: assembled %s from %d chunk(s) for post=%s",
             filename,
             chunk_count,
-            p.get("post_id"),
+            post_id,
         )
 
     async def _on_space_post_updated(self, event: "FederationEvent") -> None:

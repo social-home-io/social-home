@@ -155,6 +155,30 @@ carries a ``*_suite`` identifier (signatures, mesh KEM, content-key
 delivery, sealed-sender AEAD). A future ChaCha20-Poly1305 or
 PQ-protected variant is a wire-additive change.
 
+**Binary media chunks** (`federation/media_framing.py`,
+`federation/encoder.py:encrypt_bytes`) — media on the `fed-media-v1`
+DataChannel ships the raw chunk as `nonce(12) ‖ AES-256-GCM(ct+tag)`,
+**not base64**. The chunk's wrapping header is an ordinary signed
+federation envelope, so origin auth + replay are the §24.11 envelope
+guarantees unchanged. The binary payload is bound to that signed
+envelope by a `chunk_sha256` field — the b64url SHA-256 of the
+**plaintext** chunk — carried *inside* the AES-GCM-encrypted,
+signature-covered envelope metadata. The receiver verifies
+`sha256(plaintext) == chunk_sha256` (constant-time) after decryption,
+so the hash commits to the exact bytes written to disk; tampering with
+the payload fails the hash, tampering with the hash fails the GCM tag
+or the signature. The metadata carries a `media_aead_suite` tag (today
+only `"aesgcm-256"`, validated against `SUPPORTED_MEDIA_AEAD_SUITES`,
+rejected-not-defaulted on unknown). **Nonce budget:** both the metadata
+AEAD and the chunk AEAD draw a fresh random 96-bit nonce under the same
+directional session key already used for every JSON envelope to that
+peer. Chunking raises the messages-per-key count (a 200 MiB video ≈ 400
+chunks × 2 GCM ops), but stays ~7–8 orders of magnitude under the NIST
+SP 800-38D random-nonce birthday bound (~2³² messages/key) for any
+realistic peer lifetime — never introduce a deterministic/counter nonce
+that could collide with this random-nonce stream. See
+[`protocol/media.md`](protocol/media.md).
+
 **WebRTC SDP signing** (`federation/sdp_signing.py`) — Ed25519
 signature over `<sdp_type>:<sdp>` so a MITM can't swap DTLS endpoints.
 
