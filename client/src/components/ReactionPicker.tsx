@@ -13,11 +13,16 @@ import {
 interface ReactionPickerProps {
   onSelect: (emoji: string) => void
   onClose: () => void
+  /** Render in document flow (static, full-width) instead of as an
+   *  absolutely-positioned popover. Used by :class:`EmojiField` inside
+   *  scroll-clipping containers (the create-space modal, settings form)
+   *  where an absolute popover would be clipped by ``overflow: auto``. */
+  inline?: boolean
 }
 
 const search = signal('')
 
-export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
+export function ReactionPicker({ onSelect, onClose, inline = false }: ReactionPickerProps) {
   const filtered = search.value
     ? ALL_EMOJI_WITH_KEYWORDS.filter(e => emojiMatches(e, search.value)).map(e => e.emoji)
     : ALL_EMOJI
@@ -50,7 +55,8 @@ export function ReactionPicker({ onSelect, onClose }: ReactionPickerProps) {
   }, [onClose])
 
   return (
-    <div class="sh-reaction-picker" onClick={(e) => e.stopPropagation()}>
+    <div class={`sh-reaction-picker${inline ? ' sh-reaction-picker--inline' : ''}`}
+      onClick={(e) => e.stopPropagation()}>
       <div class="sh-reaction-picker-header">
         <input class="sh-reaction-search" placeholder="Search emoji..."
           value={search.value}

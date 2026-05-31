@@ -6,6 +6,7 @@ import { api } from '@/api'
 import { loadSpaces } from '@/store/spaces'
 import { Modal } from './Modal'
 import { Button } from './Button'
+import { EmojiField } from './EmojiField'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 
@@ -64,12 +65,7 @@ export function SpaceCreateDialog() {
             onInput={(e) => description.value = (e.target as HTMLTextAreaElement).value}
             placeholder="What's this space about?" rows={2} />
         </label>
-        <label>
-          Emoji
-          <input value={emoji.value} maxLength={2}
-            onInput={(e) => emoji.value = (e.target as HTMLInputElement).value}
-            placeholder="🏠" />
-        </label>
+        <EmojiField value={emoji} openKey="space-create-icon" />
         <label>
           Type
           <select value={spaceType.value}
