@@ -212,7 +212,7 @@ async def test_ws_user_profile_updated_picture_url_null_when_cleared(env):
     )
     assert sock.sent
     frame = sock.sent[0]
-    assert '"picture_url": null' in frame
+    assert '"picture_url": null' in frame or '"picture_url":null' in frame
 
 
 async def test_post_edited_fans_to_household(env):

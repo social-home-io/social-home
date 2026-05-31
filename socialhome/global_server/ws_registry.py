@@ -21,10 +21,10 @@ block fan-out.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
+import orjson
 from aiohttp import web
 
 log = logging.getLogger(__name__)
@@ -120,7 +120,9 @@ class GfsWebSocketRegistry:
         ws = self._by_instance.get(instance_id)
         if ws is None or ws.closed:
             return False
-        msg = json.dumps(payload, default=str)
+        msg = orjson.dumps(
+            payload, default=str, option=orjson.OPT_PASSTHROUGH_DATETIME
+        ).decode()
         try:
             await ws.send_str(msg)
             return True
