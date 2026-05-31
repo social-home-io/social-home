@@ -1635,3 +1635,133 @@ async def test_rotation_broadcast_failure_does_not_break_kick(stack):
     )
     members = await stack.space_repo.list_members(space.id)
     assert len(members) == 1
+
+
+async def test_dissolve_hard_deletes_content_and_unlinks_media(tmp_dir):
+    """Dissolving a space drops its content (FK cascade) and unlinks every
+    media file it owned — posts + multi-image + gallery."""
+    import pathlib
+    from unittest.mock import AsyncMock, MagicMock
+
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.repositories.bazaar_repo import SqliteBazaarRepo
+    from socialhome.repositories.gallery_repo import SqliteGalleryRepo
+
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    db = AsyncDatabase(tmp_dir / "hd.db", batch_timeout_ms=10)
+    await db.startup()
+    await db.enqueue(
+        """INSERT INTO instance_identity(instance_id, identity_private_key,
+           identity_public_key, routing_secret) VALUES(?,?,?,?)""",
+        (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
+    )
+    bus = EventBus()
+    user_repo = SqliteUserRepo(db)
+    space_repo = SqliteSpaceRepo(db)
+    post_repo = SqliteSpacePostRepo(db)
+    gallery = SqliteGalleryRepo(db)
+    bazaar = SqliteBazaarRepo(db)
+    user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
+    media = pathlib.Path(tmp_dir) / "media"
+    media.mkdir()
+    for name in (
+        "pic.webp",
+        "img2.webp",
+        "gal.webp",
+        "galthumb.webp",
+        "baz.webp",
+        "keep.webp",
+    ):
+        (media / name).write_bytes(b"X")
+    svc = SpaceService(
+        space_repo, post_repo, user_repo, bus, own_instance_id=iid, media_dir=media
+    )
+    svc.attach_gallery_repo(gallery)
+    svc.attach_bazaar_repo(bazaar)
+    # Spy federation so we can assert SPACE_DISSOLVED is broadcast to members.
+    fed = MagicMock()
+    fed.broadcast_to_space_members = AsyncMock()
+    svc._federation = fed
+
+    anna = await user_svc.provision(username="anna", display_name="A", is_admin=True)
+    space = await svc.create_space(owner_username="anna", name="Fam")
+    await db.enqueue(
+        """INSERT INTO space_posts(id, space_id, author, type, media_url,
+           image_urls_json) VALUES(?,?,?,?,?,?)""",
+        (
+            "p1",
+            space.id,
+            anna.user_id,
+            "image",
+            "api/media/pic.webp",
+            '["api/media/img2.webp"]',
+        ),
+    )
+    await db.enqueue(
+        "INSERT INTO gallery_albums(id, space_id, name) VALUES(?,?,?)",
+        ("al1", space.id, "Album"),
+    )
+    await db.enqueue(
+        """INSERT INTO gallery_items(id, album_id, uploaded_by, item_type,
+           filename, thumbnail_filename, width, height)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        ("gi1", "al1", anna.user_id, "photo", "gal.webp", "galthumb.webp", 1, 1),
+    )
+    # Bazaar listing: the wrapper post carries no image, so the photo
+    # lives only on the listing row and would leak without bazaar
+    # collection.
+    await db.enqueue(
+        "INSERT INTO space_posts(id, space_id, author, type) VALUES(?,?,?,?)",
+        ("pb", space.id, anna.user_id, "bazaar"),
+    )
+    await db.enqueue(
+        """INSERT INTO bazaar_listings(post_id, space_id, seller_user_id, mode,
+           title, image_urls_json, end_time, currency)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            "pb",
+            space.id,
+            anna.user_id,
+            "fixed",
+            "Chair",
+            '["api/media/baz.webp"]',
+            "2030-01-01T00:00:00+00:00",
+            "EUR",
+        ),
+    )
+
+    # Sanity: media is collectable + files present pre-dissolve.
+    assert set(await post_repo.list_space_media_urls(space.id)) == {
+        "api/media/pic.webp",
+        "api/media/img2.webp",
+    }
+    assert set(await gallery.list_space_item_filenames(space.id)) == {
+        "gal.webp",
+        "galthumb.webp",
+    }
+
+    assert await bazaar.list_space_media_urls(space.id) == ["api/media/baz.webp"]
+
+    await svc.dissolve_space(space.id, actor_username="anna")
+
+    # Members are told to hard-delete their copy too.
+    fed.broadcast_to_space_members.assert_awaited_once()
+    bcall = fed.broadcast_to_space_members.await_args
+    assert bcall.args[0] == space.id
+    assert bcall.args[1] == FederationEventType.SPACE_DISSOLVED
+    assert bcall.args[2] == {"space_id": space.id}
+
+    # Space + all content rows gone (cascade).
+    with pytest.raises(KeyError):
+        await svc.list_feed(space.id)
+    assert await post_repo.list_space_media_urls(space.id) == []
+    assert await gallery.list_space_item_filenames(space.id) == []
+    assert await bazaar.list_space_media_urls(space.id) == []
+    assert await space_repo.get(space.id) is None
+
+    # Every owned media file unlinked; the unrelated file survives.
+    for gone in ("pic.webp", "img2.webp", "gal.webp", "galthumb.webp", "baz.webp"):
+        assert not (media / gone).exists(), gone
+    assert (media / "keep.webp").exists()
+    await db.shutdown()

@@ -34,6 +34,7 @@ class _FakeSpaceRepo:
     def __init__(self) -> None:
         self.saved = []
         self.dissolved = []
+        self.purged = []
         self.instance_removes = []
         self.bans = []
         self.unbans = []
@@ -47,6 +48,9 @@ class _FakeSpaceRepo:
 
     async def mark_dissolved(self, space_id):
         self.dissolved.append(space_id)
+
+    async def purge(self, space_id):
+        self.purged.append(space_id)
 
     async def remove_space_instance(self, space_id, instance_id):
         self.instance_removes.append((space_id, instance_id))
@@ -145,7 +149,7 @@ async def test_space_created_missing_identity_key_drops(repo, handlers):
     assert repo.saved == []
 
 
-async def test_space_dissolved_marks_and_publishes(bus, repo, handlers):
+async def test_space_dissolved_purges_and_publishes(bus, repo, handlers):
     captured: list[RemoteSpaceDissolved] = []
     bus.subscribe(RemoteSpaceDissolved, captured.append)
     await handlers._on_dissolved(
@@ -155,7 +159,11 @@ async def test_space_dissolved_marks_and_publishes(bus, repo, handlers):
             space_id="sp-1",
         )
     )
-    assert repo.dissolved == ["sp-1"]
+    # Hard delete now: the inbound handler purges the local copy (FK
+    # cascade) rather than soft-flagging it, and still publishes the
+    # local removal event for connected tabs.
+    assert repo.purged == ["sp-1"]
+    assert repo.dissolved == []
     assert captured[0].space_id == "sp-1"
 
 

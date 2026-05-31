@@ -577,3 +577,25 @@ async def test_peer_transport_changed_broadcasts_to_household(env):
         and m.get("transport") == "rtc"
         for m in frames
     )
+
+
+async def test_remote_space_dissolved_broadcasts_dissolved_frame(env):
+    """A member household's inbound SPACE_DISSOLVED → RemoteSpaceDissolved
+    pushes the same ``dissolved`` frame the host path emits, so the SPA
+    drops the space card uniformly."""
+    import orjson
+
+    from socialhome.domain.events import RemoteSpaceDissolved
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(RemoteSpaceDissolved(space_id="sp-1"))
+    assert sock.sent
+    frames = [orjson.loads(s) for s in sock.sent]
+    assert any(
+        f.get("type") == "space.config.changed"
+        and f.get("event_type") == "dissolved"
+        and f.get("space_id") == "sp-1"
+        for f in frames
+    )

@@ -101,6 +101,28 @@ async def test_config_changed_broadcasts_post_mutation_snapshot(
     assert payload["space_meta"]["features"]["location_mode"] == "gps"
 
 
+async def test_dissolved_is_skipped_here(fed, space_repo):
+    """Dissolve must NOT emit SPACE_CONFIG_CHANGED (it would refresh +
+    resurrect members' stubs). ``SpaceService.dissolve_space`` broadcasts
+    the dedicated SPACE_DISSOLVED itself, so this subscriber skips the
+    event entirely."""
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=space_repo,
+    ).wire()
+    await bus.publish(
+        SpaceConfigChanged(
+            space_id="sp-1",
+            event_type="dissolved",
+            payload={},
+            sequence=6,
+        ),
+    )
+    fed.broadcast_to_space_members.assert_not_awaited()
+
+
 async def test_config_changed_skipped_when_not_owner(fed):
     """Only the owner host broadcasts — a remote-stub holder must
     not re-broadcast somebody else's space config."""

@@ -86,6 +86,7 @@ class AbstractSpacePostRepo(Protocol):
     async def increment_comment_count(self, post_id: str) -> None: ...
     async def decrement_comment_count(self, post_id: str) -> None: ...
 
+    async def list_space_media_urls(self, space_id: str) -> list[str]: ...
     async def add_comment(self, comment: Comment) -> Comment: ...
     async def get_comment(self, comment_id: str) -> Comment | None: ...
     async def list_comments(self, post_id: str) -> list[Comment]: ...
@@ -264,6 +265,36 @@ class SqliteSpacePostRepo:
             "UPDATE space_posts SET content=?, edited_at=datetime('now') WHERE id=?",
             (new_content, post_id),
         )
+
+    async def list_space_media_urls(self, space_id: str) -> list[str]:
+        """Every ``api/media/<file>`` URL a space's posts + image comments
+        reference, for on-disk cleanup when the space is hard-deleted.
+
+        Covers post ``media_url`` + the ``image_urls`` gallery list +
+        image-comment ``media_url``. Returned values are the raw stored
+        strings (``unlink_media`` resolves the basename). Must be called
+        *before* the space rows are dropped.
+        """
+        urls: list[str] = []
+        post_rows = await self._db.fetchall(
+            "SELECT media_url, image_urls_json FROM space_posts WHERE space_id=?",
+            (space_id,),
+        )
+        for r in post_rows:
+            if r["media_url"]:
+                urls.append(r["media_url"])
+            urls.extend(_decode_image_urls(r["image_urls_json"]))
+        comment_rows = await self._db.fetchall(
+            """
+            SELECT c.media_url
+              FROM space_post_comments c
+              JOIN space_posts p ON c.post_id = p.id
+             WHERE p.space_id=? AND c.media_url IS NOT NULL
+            """,
+            (space_id,),
+        )
+        urls.extend(r["media_url"] for r in comment_rows if r["media_url"])
+        return urls
 
     # ── Reactions (atomic) ─────────────────────────────────────────────
 

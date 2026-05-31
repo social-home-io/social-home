@@ -65,6 +65,7 @@ from ..domain.events import (
 )
 from ..domain.federation import FederationEventType, PairingStatus
 from ..media.cleanup import unlink_media
+from .space_purge import purge_space_and_media
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
 from ..domain.post import (
@@ -141,6 +142,8 @@ class SpaceService(SpaceMemberGuardMixin):
         "_redeem_coordinator",
         "_space_crypto",
         "_media_dir",
+        "_gallery",
+        "_bazaar",
     )
 
     def __init__(
@@ -170,6 +173,22 @@ class SpaceService(SpaceMemberGuardMixin):
         self._remote_members = None
         self._redeem_coordinator = None
         self._space_crypto = None
+        # Optional: lets ``dissolve_space`` unlink native gallery uploads
+        # for the space. When unset, gallery media files are skipped
+        # (post media still cleaned via ``space_post_repo``).
+        self._gallery = None
+        self._bazaar = None
+
+    def attach_gallery_repo(self, gallery_repo) -> None:
+        """Wire the gallery repo so a hard-deleted space's gallery media
+        files are unlinked alongside its post media."""
+        self._gallery = gallery_repo
+
+    def attach_bazaar_repo(self, bazaar_repo) -> None:
+        """Wire the bazaar repo so a hard-deleted space's listing photos
+        (which live only on the listing, not the wrapper post) are
+        unlinked too."""
+        self._bazaar = bazaar_repo
 
     def attach_child_protection(self, child_protection_service) -> None:
         """Wire §CP.F1 enforcement into add_member."""
@@ -437,15 +456,40 @@ class SpaceService(SpaceMemberGuardMixin):
         *,
         actor_username: str,
     ) -> None:
-        """Mark a space dissolved (owner only)."""
+        """Hard-delete a space and all its content (owner only).
+
+        Dissolution is a permanent removal, not a soft archive:
+
+        1. unpublish from any paired GFS (while the row still exists);
+        2. broadcast :data:`FederationEventType.SPACE_DISSOLVED` to every
+           member household (explicitly — not via the config-change
+           subscriber — so propagation can't silently no-op if that
+           subscriber isn't wired) so they hard-delete their copy too;
+        3. publish :class:`SpaceConfigChanged` (``DISSOLVED``) for the
+           local realtime fan-out so connected tabs drop the space;
+        4. drop the entire content graph (FK cascade) and unlink every
+           on-disk media file the space owned.
+
+        Steps 1–3 run *before* the purge because the broadcast + WS
+        fan-out resolve recipients from the membership / instance rows
+        the cascade is about to delete.
+        """
         space = await self._require_space(space_id)
         await self._require_owner(space, actor_username)
-        await self._spaces.mark_dissolved(space_id)
         await self._auto_publish_on_type(
             space_id,
             was_global=space.space_type is SpaceType.GLOBAL,
             is_global=False,
         )
+        if self._federation is not None:
+            try:
+                await self._federation.broadcast_to_space_members(
+                    space_id,
+                    FederationEventType.SPACE_DISSOLVED,
+                    {"space_id": space_id},
+                )
+            except Exception:
+                log.exception("SPACE_DISSOLVED broadcast failed for space=%s", space_id)
         sequence = await self._spaces.increment_config_sequence(space_id)
         await self._bus.publish(
             SpaceConfigChanged(
@@ -454,6 +498,14 @@ class SpaceService(SpaceMemberGuardMixin):
                 payload={},
                 sequence=sequence,
             )
+        )
+        await purge_space_and_media(
+            space_repo=self._spaces,
+            post_repo=self._posts,
+            gallery_repo=self._gallery,
+            bazaar_repo=self._bazaar,
+            media_dir=self._media_dir,
+            space_id=space_id,
         )
 
     async def update_config(

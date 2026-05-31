@@ -64,6 +64,7 @@ class AbstractSpaceRepo(Protocol):
     async def list_subscriptions_for_user(self, user_id: str) -> list[dict]: ...
     async def list_all(self) -> list[Space]: ...
     async def mark_dissolved(self, space_id: str) -> None: ...
+    async def purge(self, space_id: str) -> None: ...
     async def increment_config_sequence(self, space_id: str) -> int: ...
     async def update_age_gate(
         self,
@@ -548,6 +549,20 @@ class SqliteSpaceRepo:
             "UPDATE spaces SET dissolved=1 WHERE id=?",
             (space_id,),
         )
+
+    async def purge(self, space_id: str) -> None:
+        """Hard-delete the space and its entire content graph.
+
+        Every space-scoped child table is declared ``REFERENCES
+        spaces(id) ON DELETE CASCADE`` and the connection runs ``PRAGMA
+        foreign_keys=ON`` (see ``db/database.py``), so dropping the
+        parent row cascades the full graph — posts, comments, members,
+        gallery albums/items, calendar, pages, tasks, stickies, content
+        keys, the media-outbox rows, location pins — in one statement.
+        Callers must collect any on-disk media filenames *before* calling
+        this (the rows that point at them are gone afterwards).
+        """
+        await self._db.enqueue("DELETE FROM spaces WHERE id=?", (space_id,))
 
     async def update_age_gate(
         self,
