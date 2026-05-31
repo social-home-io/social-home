@@ -25,8 +25,8 @@ raising, so a single dead client cannot block the rest of the fan-out.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import orjson
 from collections import defaultdict
 from typing import Any
 
@@ -207,7 +207,11 @@ class WebSocketManager:
         sessions: list[web.WebSocketResponse],
         payload: dict[str, Any],
     ) -> int:
-        msg = json.dumps(sanitise_for_api(payload), default=str)
+        msg = orjson.dumps(
+            sanitise_for_api(payload),
+            default=str,
+            option=orjson.OPT_PASSTHROUGH_DATETIME,
+        ).decode()
         delivered = 0
         dead: list[web.WebSocketResponse] = []
         for ws in sessions:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import orjson
 import pytest
 
 from socialhome.global_server.moment_public_registry import MomentPublicRegistry
@@ -21,6 +22,16 @@ class _StubWs:
 
     async def send_str(self, msg: str) -> None:
         self.sent.append(msg)
+
+
+def _sent_field(ws: "_StubWs", key: str) -> list:
+    """Decoded values of ``key`` across every frame a stub WS received.
+
+    Parses each frame so assertions are robust to JSON formatting
+    (compact vs spaced) — the registry serialises with orjson, which is
+    always compact.
+    """
+    return [orjson.loads(s).get(key) for s in ws.sent]
 
 
 @pytest.fixture
@@ -100,8 +111,8 @@ async def test_add_follow_pushes_follow_changed_to_author_ws(gfs_setup):
     )
     assert follow.followed_user_id == "u-author"
     # Author received the follow_changed frame.
-    assert any('"type": "follow_changed"' in s for s in author_ws.sent)
-    assert any('"action": "add"' in s for s in author_ws.sent)
+    assert "follow_changed" in _sent_field(author_ws, "type")
+    assert "add" in _sent_field(author_ws, "action")
 
 
 async def test_add_follow_unknown_author_raises(gfs_setup):
@@ -134,7 +145,7 @@ async def test_remove_follow_pushes_follow_changed_remove(gfs_setup):
         follower_user_id="u-follower", followed_user_id="u-author"
     )
     assert ok is True
-    assert any('"action": "remove"' in s for s in author_ws.sent)
+    assert "remove" in _sent_field(author_ws, "action")
     # Idempotent on a second call.
     ok2 = await reg.remove_follow(
         follower_user_id="u-follower", followed_user_id="u-author"
@@ -167,7 +178,7 @@ async def test_fan_out_moment_pushes_to_each_unique_follower_instance(gfs_setup)
         }
     )
     assert delivered == 1
-    assert any('"type": "incoming_public_moment"' in s for s in follower_ws.sent)
+    assert "incoming_public_moment" in _sent_field(follower_ws, "type")
 
 
 async def test_fan_out_moment_drops_author_with_no_followers(gfs_setup):
@@ -211,7 +222,7 @@ async def test_fan_out_delete_pushes_tombstone(gfs_setup):
         envelope={"moment_id": "m-1", "author_user_id": "u-author"}
     )
     assert delivered == 1
-    assert any('"type": "incoming_public_moment_delete"' in s for s in follower_ws.sent)
+    assert "incoming_public_moment_delete" in _sent_field(follower_ws, "type")
 
 
 async def test_follower_count_reads_repo(gfs_setup):

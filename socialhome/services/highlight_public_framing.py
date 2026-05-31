@@ -32,10 +32,11 @@ Both sides agree on these wire constants:
 
 from __future__ import annotations
 
-import json
 import struct
 from dataclasses import dataclass
 from typing import Iterator
+
+import orjson
 
 #: Maximum bytes per ``frame_chunk`` payload. Matches the chunk size
 #: used by :class:`MediaServeView` so the disk-read pacing is aligned
@@ -95,9 +96,12 @@ def encode(header: dict, payload: bytes = b"") -> bytes:
     if not isinstance(payload, (bytes, bytearray, memoryview)):
         raise FramingError("payload must be bytes")
     body = bytes(payload)
-    header_bytes = json.dumps(
-        header, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
+    # Canonical: sorted keys, compact, UTF-8. ``orjson.dumps`` already
+    # returns UTF-8 bytes (no ``ensure_ascii`` escaping, always compact),
+    # so ``OPT_SORT_KEYS`` reproduces the previous
+    # ``json.dumps(sort_keys=True, separators=(",",":"), ensure_ascii=False)``
+    # output byte-for-byte.
+    header_bytes = orjson.dumps(header, option=orjson.OPT_SORT_KEYS)
     return (
         struct.pack(">I", len(header_bytes))
         + header_bytes
@@ -134,8 +138,8 @@ def decode(buf: bytes) -> Frame:
         raise FramingError("buffer too short for header_json + payload_len")
     header_bytes = buf[4 : 4 + header_len]
     try:
-        header = json.loads(header_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        header = orjson.loads(header_bytes)
+    except orjson.JSONDecodeError as exc:
         raise FramingError(f"invalid header JSON: {exc}") from exc
     if not isinstance(header, dict):
         raise FramingError("header must be a JSON object")
