@@ -86,6 +86,7 @@ def _features_from_body(raw: object) -> SpaceFeatures | None:
         "stickies": bool(raw.get("stickies", False)),
         "pages": bool(raw.get("pages", True)),
         "gallery": bool(raw.get("gallery", True)),
+        "bazaar": bool(raw.get("bazaar", True)),
         "posts_access": access("posts_access", SpaceFeatureAccess.OPEN),
         "pages_access": access("pages_access", SpaceFeatureAccess.OPEN),
         "stickies_access": access("stickies_access", SpaceFeatureAccess.OPEN),

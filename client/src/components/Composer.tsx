@@ -26,6 +26,7 @@ import { ScheduleBuilder, type ScheduleDraft } from './ScheduleBuilder'
 import { SttButton } from './SttButton'
 import { hasCapability } from '@/store/instance'
 import { openHighlightPicker } from './HighlightPickerDialog'
+import { openBazaarCreate } from './BazaarCreateDialog'
 import { showToast } from './Toast'
 import { UploadProgressBar, uploadProgress, uploadWithProgress } from './UploadProgress'
 import { describeUploadError } from '@/utils/uploadErrors'
@@ -72,6 +73,10 @@ interface ComposerProps {
    * Omitted (household feed, or a remote stub before config lands) →
    * every type stays available. */
   allowedTypes?: readonly string[]
+  /** When true (and ``spaceId`` is set) the composer shows a 🛍 shortcut
+   * that opens the full Bazaar new-listing dialog (§23.15). Gated on the
+   * space's ``bazaar`` feature toggle. */
+  bazaarEnabled?: boolean
 }
 
 const content = signal('')
@@ -85,9 +90,12 @@ const TYPE_ICONS_HOUSEHOLD: Record<string, string> = {
   text: '🔤', image: '📷', video: '🎬', file: '📄',
   poll: '📊', schedule: '📅', location: '📍',
 }
+// Bazaar is a first-class space tab (§23.15), not a feed post type — the
+// composer surfaces it as a dedicated shortcut button that opens the
+// full new-listing dialog, not as a picker entry that mints an empty
+// bazaar post. So the space picker is the same set as the household one.
 const TYPE_ICONS_SPACE: Record<string, string> = {
   ...TYPE_ICONS_HOUSEHOLD,
-  bazaar: '🛍',
 }
 // Human-readable labels paired with each icon. The picker buttons
 // are emoji-only; without these labels, screen-reader users hear
@@ -157,7 +165,7 @@ function inferTypeFromFile(file: File): 'image' | 'video' | 'file' {
   return 'file'
 }
 
-export function Composer({ onSubmit, context, placeholder, spaceId, allowedTypes }: ComposerProps) {
+export function Composer({ onSubmit, context, placeholder, spaceId, allowedTypes, bazaarEnabled }: ComposerProps) {
   const user = currentUser.value
   const TYPE_ICONS = spaceId ? TYPE_ICONS_SPACE : TYPE_ICONS_HOUSEHOLD
   // Restrict the picker to the space's allowed post types when supplied.
@@ -484,6 +492,17 @@ export function Composer({ onSubmit, context, placeholder, spaceId, allowedTypes
               title="Share a highlight"
             >
               ⭕
+            </button>
+          )}
+          {spaceId && bazaarEnabled && (
+            <button
+              type="button"
+              class="sh-type-btn"
+              onClick={() => openBazaarCreate(spaceId)}
+              aria-label="List something in the Bazaar"
+              title="List something in the Bazaar"
+            >
+              🛍
             </button>
           )}
         </div>

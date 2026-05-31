@@ -34,6 +34,7 @@ export type SpaceTab =
   | 'calendar'
   | 'tasks'
   | 'gallery'
+  | 'bazaar'
   | 'map'
   | 'moderation'
 

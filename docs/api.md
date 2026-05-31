@@ -367,6 +367,21 @@ system album — items appear and disappear strictly with their source
 feed post. Each item also carries `source_post_id: string | null`;
 non-null means the item was mirrored from a feed post.
 
+### Space Bazaar tab (§23.15)
+
+Bazaar is a first-class space tab alongside Calendar / Gallery. Listings
+are space-scoped (`bazaar_listings.space_id`); the tab browses one space.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/spaces/{id}/bazaar` | List every listing in this space (any status), newest-first. Member-only; 403 `FEATURE_DISABLED` (`space:bazaar`) when the space's Bazaar feature is off. |
+
+`POST /api/bazaar` accepts an optional `announce_in_feed: bool` (default
+**false**). The listing always appears in the space Bazaar tab; the
+wrapper post only surfaces in the space feed when `announce_in_feed` is
+true (otherwise it carries `space_posts.hidden_from_feed = 1`). Creating a
+listing in a space whose `bazaar` feature is off returns 403.
+
 ### Bazaar offers & saved listings (§23.23)
 
 Offers write to a dedicated `bazaar_offers` table — distinct from

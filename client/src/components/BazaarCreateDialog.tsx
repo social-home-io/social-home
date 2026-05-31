@@ -44,6 +44,12 @@ const submitting = signal(false)
 const availableSpaces = signal<Space[]>([])
 const spacesLoading = signal(false)
 const spaceId = signal<string>('')
+// When opened from a space's Bazaar tab the target space is fixed — the
+// picker is replaced by a static label so the seller can't retarget.
+const lockedSpaceId = signal<string | null>(null)
+// Opt-in feed announcement (§23.15). Off by default: listings live in the
+// Bazaar tab and only surface in the feed when the seller asks.
+const announceInFeed = signal(false)
 
 function reset() {
   step.value = 1
@@ -58,10 +64,16 @@ function reset() {
   imageUrls.value = []
   submitting.value = false
   spaceId.value = ''
+  lockedSpaceId.value = null
+  announceInFeed.value = false
 }
 
-export function openBazaarCreate() {
+export function openBazaarCreate(presetSpaceId?: string) {
   reset()
+  if (presetSpaceId) {
+    spaceId.value = presetSpaceId
+    lockedSpaceId.value = presetSpaceId
+  }
   open.value = true
 }
 
@@ -141,6 +153,7 @@ export function BazaarCreateDialog({ onCreated }: { onCreated?: () => void }) {
       currency:      currency.value,
       duration_days: durationDays.value,
       image_urls:    imageUrls.value.map((e) => e.url),
+      announce_in_feed: announceInFeed.value,
     }
     const priceC = toCents(price.value, currency.value)
     const startC = toCents(startPrice.value, currency.value)
@@ -181,29 +194,43 @@ export function BazaarCreateDialog({ onCreated }: { onCreated?: () => void }) {
            title="New listing">
       {step.value === 1 && (
         <div class="sh-form sh-bazaar-create">
-          <label>
-            Space *
-            {spacesLoading.value ? (
-              <span class="sh-muted">Loading spaces…</span>
-            ) : availableSpaces.value.length === 0 ? (
+          {lockedSpaceId.value ? (
+            <label>
+              Space
               <span class="sh-muted">
-                Create or join a space first — listings live inside spaces.
+                {(() => {
+                  const s = availableSpaces.value.find(
+                    (x) => x.id === lockedSpaceId.value,
+                  )
+                  return s ? `${s.emoji ? `${s.emoji} ` : ''}${s.name}` : 'This space'
+                })()}
               </span>
-            ) : (
-              <select
-                value={spaceId.value}
-                onChange={(e) => {
-                  spaceId.value = (e.target as HTMLSelectElement).value
-                }}
-              >
-                {availableSpaces.value.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.emoji ? `${s.emoji} ` : ''}{s.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </label>
+            </label>
+          ) : (
+            <label>
+              Space *
+              {spacesLoading.value ? (
+                <span class="sh-muted">Loading spaces…</span>
+              ) : availableSpaces.value.length === 0 ? (
+                <span class="sh-muted">
+                  Create or join a space first — listings live inside spaces.
+                </span>
+              ) : (
+                <select
+                  value={spaceId.value}
+                  onChange={(e) => {
+                    spaceId.value = (e.target as HTMLSelectElement).value
+                  }}
+                >
+                  {availableSpaces.value.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.emoji ? `${s.emoji} ` : ''}{s.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+          )}
           <label>
             Title *
             <input value={title.value} maxLength={200}
@@ -315,6 +342,16 @@ export function BazaarCreateDialog({ onCreated }: { onCreated?: () => void }) {
               <option value="5">5 days</option>
               <option value="7">7 days</option>
             </select>
+          </label>
+
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={announceInFeed.value}
+              onChange={(e) =>
+                announceInFeed.value = (e.target as HTMLInputElement).checked}
+            />
+            Also announce this listing in the space feed
           </label>
 
           <div class="sh-form-actions">

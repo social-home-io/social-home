@@ -127,6 +127,10 @@ class SpacePostOutbound:
             "media_url": post.media_url,
             "image_urls": list(post.image_urls),
             "occurred_at": post.created_at.isoformat() if post.created_at else None,
+            # Mirror feed visibility on member households: a Bazaar listing's
+            # anchor post is hidden from the feed unless the seller announced
+            # it. Omitted-on-older-sender → receiver defaults to visible.
+            "hidden_from_feed": post.hidden_from_feed,
         }
         if post.location is not None:
             payload["location"] = {

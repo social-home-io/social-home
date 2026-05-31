@@ -95,6 +95,25 @@ async def test_list_feed_scoped_to_space(env):
     assert len(results) == 2
 
 
+async def test_list_feed_excludes_hidden_from_feed(env):
+    """list_feed drops posts flagged hidden_from_feed (Bazaar/calendar
+    anchor posts the author didn't announce) but still persists them."""
+    from dataclasses import replace
+
+    visible = _post("sp-vis")
+    hidden = replace(_post("sp-hid"), hidden_from_feed=True)
+    await env.repo.save(env.space_id, visible)
+    await env.repo.save(env.space_id, hidden)
+    feed_ids = {p.id for p in await env.repo.list_feed(env.space_id)}
+    assert "sp-vis" in feed_ids
+    assert "sp-hid" not in feed_ids
+    # The hidden post still exists and round-trips its flag (the Bazaar
+    # tab reads it by id regardless of feed visibility).
+    got = await env.repo.get("sp-hid")
+    assert got is not None
+    assert got[1].hidden_from_feed is True
+
+
 async def test_list_feed_excludes_deleted(env):
     """list_feed does not return soft-deleted posts."""
     post = _post("sp-del-1")

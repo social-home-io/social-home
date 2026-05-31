@@ -165,12 +165,35 @@ class BazaarCollectionView(BaseView):
                 price=_int_or_none(body.get("price")),
                 start_price=_int_or_none(body.get("start_price")),
                 step_price=_int_or_none(body.get("step_price")),
+                announce_in_feed=bool(body.get("announce_in_feed", False)),
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))
         return web.json_response(
             _listing_dict_signed(self.request, listing),
             status=201,
+        )
+
+
+class SpaceBazaarView(BaseView):
+    """``GET /api/spaces/{id}/bazaar`` — list a single space's listings.
+
+    Backs the space Bazaar tab (§23.15). Membership-gated and gated on
+    the space's ``bazaar`` feature toggle, mirroring the space calendar
+    surface. Returns every listing in the space (any status), newest-first.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        space_id = self.match("id")
+        space_repo = self.svc(space_repo_key)
+        if await space_repo.get_member(space_id, ctx.user_id) is None:
+            return error_response(403, "FORBIDDEN", "Not a space member.")
+        await self.require_space_feature(space_id, "bazaar")
+        svc = self.svc(bazaar_service_key)
+        listings = await svc.list_space_listings(space_id)
+        return web.json_response(
+            [_listing_dict_signed(self.request, lst) for lst in listings],
         )
 
 

@@ -116,6 +116,27 @@ disabled type buttons so members don't hit that wall.
   receiver defaults to **all types allowed** (the historical behaviour).
   **No new event type or capability bump** — additive and fail-soft.
 
+## Bazaar tab + opt-in feed announcement
+
+The Bazaar is a first-class space tab (gated on `SpaceFeatures.bazaar`,
+defaulting on, federated in `space_meta.features.bazaar`). Listings are
+space-scoped (`bazaar_listings.space_id`) and browsed per-space via
+`GET /api/spaces/{id}/bazaar`.
+
+A listing is anchored to a `PostType.BAZAAR` wrapper post (the listing's
+id, comment thread, and media host). Whether that post shows in the feed
+is opt-in:
+
+- `BazaarService.create_listing(announce_in_feed=False)` (the default)
+  creates the wrapper with `space_posts.hidden_from_feed = 1`. The post is
+  excluded from `list_feed` so the listing lives only in the Bazaar tab.
+- `announce_in_feed=True` clears the flag → the listing's card also shows
+  in the feed (the historical behaviour).
+- **Federation:** `hidden_from_feed` rides the `SPACE_POST_CREATED`
+  payload so member households mirror the same feed visibility. Absent on
+  an older sender → the receiver defaults to **visible**. Additive +
+  fail-soft — **no new event type or capability bump**.
+
 ## Flow — rekey
 
 Triggered on every member-removal path (#121, PR #432): local kick,

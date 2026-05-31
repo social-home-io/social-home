@@ -300,6 +300,9 @@ export interface SpaceFeatures {
   /** Per-space gallery tab (§23.119). When false the gallery tab is
    *  hidden in the SPA shell; existing albums remain in storage. */
   gallery: boolean
+  /** Per-space Bazaar tab (§23.15). When false the marketplace tab is
+   *  hidden and new listings are rejected; existing listings remain. */
+  bazaar?: boolean
   posts_access: 'open' | 'moderated' | 'admin_only'
   /** Subscriber-engagement opt-ins (§23.49). Subscribers are
    *  read-only by default; admins flip these to let followers leave

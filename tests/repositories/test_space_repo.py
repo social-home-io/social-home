@@ -135,6 +135,22 @@ async def test_allowed_post_types_round_trip_including_event_location_highlight(
         assert again.features.allows(t)
 
 
+async def test_feature_bazaar_round_trips(env):
+    """The Bazaar tab toggle persists like the other feature flags."""
+    space = replace(
+        _space("sp-baz"),
+        features=SpaceFeatures(bazaar=False),
+    )
+    await env.repo.save(space)
+    fetched = await env.repo.get("sp-baz")
+    assert fetched is not None
+    assert fetched.features.bazaar is False
+    # Default stays on for a space that never touched the flag.
+    await env.repo.save(_space("sp-baz-on"))
+    on = await env.repo.get("sp-baz-on")
+    assert on is not None and on.features.bazaar is True
+
+
 async def test_get_missing_space(env):
     """get returns None for an unknown space id."""
     assert await env.repo.get("nope") is None

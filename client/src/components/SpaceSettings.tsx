@@ -26,7 +26,6 @@ const SPACE_POST_TYPES: [string, string][] = [
   ['poll', '📊 Poll'],
   ['schedule', '📅 Schedule'],
   ['location', '📍 Location'],
-  ['bazaar', '🛍 Bazaar listing'],
   ['highlight_share', '⭕ Highlight share'],
 ]
 const SPACE_POST_TYPE_KEYS = SPACE_POST_TYPES.map(([k]) => k)
@@ -122,6 +121,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   const featureTodo = useSignal(space.features?.todo ?? true)
   const featureStickies = useSignal(space.features?.stickies ?? true)
   const featureGallery = useSignal(space.features?.gallery ?? true)
+  const featureBazaar = useSignal(space.features?.bazaar ?? true)
   // Subscriber-engagement opt-ins (§23.49) — admins flip these when
   // they want followers to be able to react / comment without being
   // promoted to full members.  Posts always remain member-only.
@@ -202,6 +202,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
           todo: featureTodo.value,
           stickies: featureStickies.value,
           gallery: featureGallery.value,
+          bazaar: featureBazaar.value,
           location: locationEnabled.value,
           location_mode: locationMode.value,
           allow_subscriber_comment: allowSubscriberComment.value,
@@ -342,6 +343,16 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
               }}
             />
             🖼 Gallery
+          </label>
+          <label class="sh-toggle-row">
+            <input
+              type="checkbox"
+              checked={featureBazaar.value}
+              onChange={(e) => {
+                featureBazaar.value = (e.target as HTMLInputElement).checked
+              }}
+            />
+            🛍 Bazaar
           </label>
         </fieldset>
         <fieldset class="sh-form-fieldset" data-testid="space-post-types">
