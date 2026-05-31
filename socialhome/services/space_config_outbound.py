@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from ..domain.events import SpaceConfigChanged
 from ..domain.federation import FederationEventType
+from ..domain.space import SpaceConfigEventType
 from ..infrastructure.event_bus import EventBus
 from .space_service import _space_metadata_for_federation
 
@@ -76,6 +77,13 @@ class SpaceConfigOutbound:
         # absent here, so guard on owner identity.
         own = getattr(self._federation, "_own_instance_id", "") or ""
         if space.owner_instance_id != own:
+            return
+        # Dissolution is a removal, not a config edit. ``SpaceService.
+        # dissolve_space`` broadcasts the dedicated SPACE_DISSOLVED itself
+        # (so propagation doesn't depend on this subscriber being wired),
+        # so just skip here — emitting SPACE_CONFIG_CHANGED would instead
+        # refresh members' stubs and resurrect a row the purge removed.
+        if event.event_type == SpaceConfigEventType.DISSOLVED.value:
             return
         payload: dict = {
             "space_id": space.id,

@@ -47,6 +47,36 @@ sequenceDiagram
     Note over A,B: both sides ready to<br/>exchange encrypted content
 ```
 
+## Dissolution (hard delete)
+
+Dissolving a space is a **permanent removal**, not a soft archive — on
+the owner host *and* on every member household:
+
+1. **Host** (`SpaceService.dissolve_space`, owner-only): unpublish from
+   any paired GFS; publish `SpaceConfigChanged(DISSOLVED)`, which (a)
+   fans a `space.config.changed` WS frame to local tabs and (b) makes
+   `SpaceConfigOutbound` broadcast `SPACE_DISSOLVED` (`{space_id}`) to
+   every member household via `broadcast_to_space_members`. These run
+   while the rows still exist (the broadcast + WS fan-out resolve
+   recipients from the membership rows about to be deleted).
+2. **Purge**: `DELETE FROM spaces WHERE id=?`. Every space-scoped child
+   table is `REFERENCES spaces(id) ON DELETE CASCADE` and the connection
+   runs `PRAGMA foreign_keys=ON`, so the full content graph — posts,
+   comments, members, gallery albums/items, calendar, pages, tasks,
+   stickies, content keys, the media-outbox rows, location pins — drops
+   in one statement. Media **files** (no FK) are collected before the
+   delete and unlinked after (`services/space_purge.py`).
+3. **Member** (inbound `SPACE_DISSOLVED` → `_on_dissolved`): publishes
+   `RemoteSpaceDissolved` (→ `space.config.changed` WS frame so the
+   member's tabs drop the card), then runs the identical purge + media
+   unlink on its local copy.
+
+`SPACE_DISSOLVED` carries only `{space_id}` and is in the outbox
+`NEVER_DROP` set, so an offline member still hard-deletes its copy once
+it reconnects. (`SPACE_CONFIG_CHANGED` is deliberately **not** used for
+dissolve — it would refresh the member's stub and resurrect a row the
+purge just removed.)
+
 ## Flow — rekey
 
 Triggered on every member-removal path (#121, PR #432): local kick,

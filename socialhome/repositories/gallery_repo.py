@@ -52,6 +52,7 @@ class AbstractGalleryRepo(Protocol):
     async def increment_item_count(self, album_id: str, delta: int) -> None: ...
     async def recount_items(self, album_id: str) -> int: ...
     async def get_first_item_thumbnail(self, album_id: str) -> str | None: ...
+    async def list_space_item_filenames(self, space_id: str) -> list[str]: ...
     async def set_retention_exempt(
         self,
         album_id: str,
@@ -381,3 +382,30 @@ class SqliteGalleryRepo:
             (album_id,),
         )
         return f"api/media/{row['thumbnail_filename']}" if row else None
+
+    async def list_space_item_filenames(self, space_id: str) -> list[str]:
+        """Every gallery item file + thumbnail in a space's albums, for
+        on-disk cleanup when the space is hard-deleted.
+
+        Returns bare basenames (``unlink_media`` resolves them under the
+        media dir). Mirrored items reuse the source post's blob — the
+        caller dedupes across post + gallery collections, and a missing
+        file unlink is a no-op, so the overlap is harmless. Must be
+        called *before* the rows are dropped.
+        """
+        rows = await self._db.fetchall(
+            """
+            SELECT i.filename, i.thumbnail_filename
+              FROM gallery_items i
+              JOIN gallery_albums a ON i.album_id = a.id
+             WHERE a.space_id = ?
+            """,
+            (space_id,),
+        )
+        out: list[str] = []
+        for r in rows:
+            if r["filename"]:
+                out.append(r["filename"])
+            if r["thumbnail_filename"]:
+                out.append(r["thumbnail_filename"])
+        return out

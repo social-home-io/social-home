@@ -80,6 +80,7 @@ from ..domain.events import (
     MomentDeleted,
     MomentReactionChanged,
     PresenceUpdated,
+    RemoteSpaceDissolved,
     ShoppingItemAdded,
     ShoppingItemRemoved,
     ShoppingItemsCleared,
@@ -251,6 +252,7 @@ class RealtimeService:
         self._bus.subscribe(SpaceModerationApproved, self._on_space_mod_approved)
         self._bus.subscribe(SpaceModerationRejected, self._on_space_mod_rejected)
         self._bus.subscribe(SpaceConfigChanged, self._on_space_config_changed)
+        self._bus.subscribe(RemoteSpaceDissolved, self._on_remote_space_dissolved)
         self._bus.subscribe(SpaceZoneUpserted, self._on_space_zone_upserted)
         self._bus.subscribe(SpaceZoneDeleted, self._on_space_zone_deleted)
         self._bus.subscribe(TaskAssigned, self._on_task_assigned)
@@ -702,6 +704,21 @@ class RealtimeService:
                 "space_id": event.space_id,
                 "sequence": event.sequence,
                 "event_type": event.event_type,
+            },
+        )
+
+    async def _on_remote_space_dissolved(self, event: RemoteSpaceDissolved) -> None:
+        """A host dissolved a space we're a member of — tell connected tabs
+        to drop it, using the same ``dissolved`` frame the host path emits
+        so the client handles both uniformly. Fanned out *before* the
+        inbound handler purges the membership rows this resolves against.
+        """
+        await self._broadcast_space(
+            event.space_id,
+            {
+                "type": "space.config.changed",
+                "space_id": event.space_id,
+                "event_type": "dissolved",
             },
         )
 

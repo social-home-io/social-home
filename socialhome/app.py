@@ -708,6 +708,10 @@ def _wire_federation_stack(
     SpaceMembershipInboundHandlers(
         bus=bus,
         space_repo=space_repo,
+        post_repo=space_post_repo,
+        gallery_repo=gallery_repo,
+        bazaar_repo=bazaar_repo,
+        media_dir=pathlib.Path(config.media_path),
     ).attach_to(federation_service)
     SpaceInviteInboundHandlers(
         bus=bus,
@@ -1225,6 +1229,8 @@ def create_app(config: Config | None = None) -> web.Application:
     )
     space_service.attach_profile_picture_repo(profile_picture_repo)
     space_service.attach_cover_repo(space_cover_repo)
+    space_service.attach_gallery_repo(gallery_repo)
+    space_service.attach_bazaar_repo(bazaar_repo)
     # i18n catalog — loaded once at process start, used by NotificationService.
     i18n_dir = Path(__file__).parent / "i18n" / "messages"
     i18n = Catalog.from_directory(i18n_dir)
@@ -1924,6 +1930,8 @@ def create_app(config: Config | None = None) -> web.Application:
         real_space_service.attach_child_protection(child_protection_service)
         real_space_service.attach_profile_picture_repo(profile_picture_repo)
         real_space_service.attach_cover_repo(space_cover_repo)
+        real_space_service.attach_gallery_repo(gallery_repo)
+        real_space_service.attach_bazaar_repo(bazaar_repo)
         real_space_service.attach_gfs_connection_service(gfs_connection_service)
         # ``attach_federation`` is deferred until just after
         # ``_wire_federation_stack`` returns the live ``federation_service``

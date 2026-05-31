@@ -24,11 +24,17 @@ from ...domain.space import (
     SpaceType,
 )
 from ...infrastructure.event_bus import EventBus
+from ..space_purge import purge_space_and_media
 from ..space_service import _space_metadata_for_federation
 
 if TYPE_CHECKING:
+    import pathlib
+
     from ...domain.federation import FederationEvent
     from ...federation.federation_service import FederationService
+    from ...repositories.bazaar_repo import AbstractBazaarRepo
+    from ...repositories.gallery_repo import AbstractGalleryRepo
+    from ...repositories.space_post_repo import AbstractSpacePostRepo
     from ...repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
@@ -37,16 +43,37 @@ log = logging.getLogger(__name__)
 class SpaceMembershipInboundHandlers:
     """Register the membership-family inbound handlers on one service."""
 
-    __slots__ = ("_bus", "_space_repo", "_federation")
+    __slots__ = (
+        "_bus",
+        "_space_repo",
+        "_post_repo",
+        "_gallery_repo",
+        "_bazaar_repo",
+        "_media_dir",
+        "_federation",
+    )
 
     def __init__(
         self,
         *,
         bus: EventBus,
         space_repo: "AbstractSpaceRepo",
+        post_repo: "AbstractSpacePostRepo | None" = None,
+        gallery_repo: "AbstractGalleryRepo | None" = None,
+        bazaar_repo: "AbstractBazaarRepo | None" = None,
+        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._bus = bus
         self._space_repo = space_repo
+        # Wired so an inbound SPACE_DISSOLVED can hard-delete the local
+        # copy's content + media, mirroring the host. Optional for
+        # minimal/legacy wirings — post media still drops via the FK
+        # cascade even when ``post_repo`` is absent (only the on-disk
+        # file unlink is skipped).
+        self._post_repo = post_repo
+        self._gallery_repo = gallery_repo
+        self._bazaar_repo = bazaar_repo
+        self._media_dir = media_dir
         self._federation: "FederationService | None" = None
 
     def attach_to(self, federation_service: "FederationService") -> None:
@@ -105,11 +132,30 @@ class SpaceMembershipInboundHandlers:
         )
 
     async def _on_dissolved(self, event: "FederationEvent") -> None:
+        """The host dissolved a space — hard-delete our local copy.
+
+        Mirrors :meth:`SpaceService.dissolve_space`: publish the local
+        ``RemoteSpaceDissolved`` first (so connected tabs drop the space
+        while its members still resolve), then drop the content graph
+        (FK cascade) and unlink the on-disk media. When the media repos
+        aren't wired we still purge the rows — only the file unlink is
+        skipped.
+        """
         space_id = event.space_id or str(event.payload.get("space_id") or "")
         if not space_id:
             return
-        await self._space_repo.mark_dissolved(space_id)
         await self._bus.publish(RemoteSpaceDissolved(space_id=space_id))
+        if self._post_repo is not None:
+            await purge_space_and_media(
+                space_repo=self._space_repo,
+                post_repo=self._post_repo,
+                gallery_repo=self._gallery_repo,
+                bazaar_repo=self._bazaar_repo,
+                media_dir=self._media_dir,
+                space_id=space_id,
+            )
+        else:
+            await self._space_repo.purge(space_id)
 
     async def _on_instance_left(self, event: "FederationEvent") -> None:
         space_id = event.space_id or str(event.payload.get("space_id") or "")
