@@ -110,3 +110,26 @@ async def test_upsert_space_persists(env):
     again = await env.get_space("sp-1")
     assert again is not None
     assert again.accent_color == "#fedcba"
+
+
+async def test_upsert_space_coerces_null_font_and_layout_to_default(env):
+    """The SPA sends font_family / post_layout = null to mean "no override".
+    Those columns are non-null with a default, so null must coerce to the
+    default rather than raising (regression: theme save 422'd)."""
+    theme = await env.upsert_space(
+        space_id="sp-1",
+        primary_color="#112233",
+        accent_color="#445566",
+        background_tint=None,
+        mode_override=None,
+        font_family=None,
+        post_layout=None,
+    )
+    assert theme.font_family == "system"
+    assert theme.post_layout == "card"
+    # An explicit valid choice still applies.
+    theme2 = await env.upsert_space(
+        space_id="sp-1", font_family="serif", post_layout="magazine"
+    )
+    assert theme2.font_family == "serif"
+    assert theme2.post_layout == "magazine"

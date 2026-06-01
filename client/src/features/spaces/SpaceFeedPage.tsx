@@ -33,6 +33,7 @@ import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openSpaceEventDialog } from '@/components/CalendarEventDialog'
 import { SpaceLinksStrip } from './SpaceLinksStrip'
 import { SpaceProposalsBanner } from '@/components/SpaceProposalsBanner'
+import { SpaceHero } from '@/components/SpaceHero'
 import { SpaceNotifPrefsMenu } from './SpaceNotifPrefsMenu'
 import { confirmDialog } from '@/components/confirm'
 
@@ -356,6 +357,17 @@ export default function SpaceFeedPage() {
         />
       )}
       {s && <SpaceLinksStrip spaceId={spaceId} />}
+
+      {/* Cover banner + About blurb (Space → Settings → About). Shown on
+       *  the feed tab when an admin has set either. */}
+      {activeTab.value === 'feed' && s && (s.cover_url || s.about_markdown) && (
+        <SpaceHero
+          name={s.name}
+          emoji={s.emoji ?? null}
+          coverUrl={s.cover_url ?? null}
+          about={s.about_markdown ?? null}
+        />
+      )}
 
       {activeTab.value === 'feed' && (
         <div class="sh-feed sh-space-feed-content">

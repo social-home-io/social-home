@@ -222,13 +222,17 @@ class SqliteThemeRepo:
             ALLOWED_MODES,
             "mode_override",
         )
+        # ``font_family`` / ``post_layout`` are non-null columns with a
+        # default ("system" / "card"). The SPA sends ``null`` to mean
+        # "no override → default", so coerce null/absent back to the
+        # current value (the default on a fresh theme) rather than 422.
         font = _validate_choice(
-            patch.get("font_family", current.font_family),
+            patch.get("font_family") or current.font_family,
             ALLOWED_FONTS,
             "font_family",
         )
         layout = _validate_choice(
-            patch.get("post_layout", current.post_layout),
+            patch.get("post_layout") or current.post_layout,
             ALLOWED_POST_LAYOUTS,
             "post_layout",
         )
