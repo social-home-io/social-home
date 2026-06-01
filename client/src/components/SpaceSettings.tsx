@@ -106,6 +106,9 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   const description = useSignal(space.description || '')
   const emoji = useSignal(space.emoji || '')
   const joinMode = useSignal(space.join_mode)
+  // Publication tier (space_type) is quorum-gated (v_16) — changing it is a
+  // *proposal*, separate from the rest of the config form below.
+  const tierChoice = useSignal(space.space_type)
   const locationEnabled = useSignal(Boolean(space.features?.location))
   const locationMode = useSignal<'gps' | 'zone_only'>(
     space.features?.location_mode ?? 'gps',
@@ -246,6 +249,32 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
       }
     } catch (e: any) {
       showToast(e.message || 'Failed to dissolve', 'error')
+    }
+  }
+
+  const proposeTier = async () => {
+    if (tierChoice.value === space.space_type) return
+    try {
+      // Publication-tier changes are quorum-gated (v_16): this opens a
+      // proposal. Solo-admin spaces apply immediately; otherwise it needs a
+      // majority to approve from the banner on the space.
+      const res = await api.post<{
+        proposal?: { status?: string }
+      }>(`/api/spaces/${space.id}/proposals`, {
+        action: 'set_public_tier',
+        space_type: tierChoice.value,
+      })
+      if (res?.proposal?.status === 'executed') {
+        showToast('Publication tier updated.', 'success')
+        onUpdate()
+      } else {
+        showToast(
+          'Tier change proposed — it needs a majority of admins to approve.',
+          'info',
+        )
+      }
+    } catch (e: any) {
+      showToast(e.message || 'Failed to change publication tier', 'error')
     }
   }
 
@@ -503,6 +532,45 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
 
         <div class="sh-form-actions">
           <Button onClick={save}>Save changes</Button>
+        </div>
+      </div>
+
+      <hr />
+      <h3>Publication tier</h3>
+      <p class="sh-muted" style={{ marginTop: 0 }}>
+        Who can discover this space. Changing it is a critical action — with
+        more than one admin it needs a majority to approve before it takes
+        effect (no single admin can publish the group alone).
+      </p>
+      <div class="sh-form">
+        <label>Tier
+          <select
+            value={tierChoice.value}
+            onChange={(e) =>
+              (tierChoice.value = (e.target as HTMLSelectElement)
+                .value as Space['space_type'])
+            }
+          >
+            <option value="private">Private — invite only, not listed</option>
+            <option value="household">Household — everyone in your home</option>
+            <option value="public">
+              Public — listed in this instance's directory
+            </option>
+            <option value="global">
+              Global — published to connected global servers
+            </option>
+          </select>
+        </label>
+        <div class="sh-form-actions">
+          <Button
+            variant="secondary"
+            disabled={tierChoice.value === space.space_type}
+            onClick={proposeTier}
+          >
+            {tierChoice.value === space.space_type
+              ? 'Current tier'
+              : 'Propose tier change'}
+          </Button>
         </div>
       </div>
 
