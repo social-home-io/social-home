@@ -141,7 +141,7 @@ export default function GalleryPage({ spaceId }: GalleryPageProps) {
           <div aria-hidden="true">📸</div>
           <h3>No albums yet</h3>
           <p>Albums are shared photo collections — holidays, birthdays,
-             pet updates, anything you want the household to see.</p>
+             pet updates, anything you want {spaceId ? 'this space' : 'the household'} to see.</p>
           <Button onClick={() => (showCreate.value = true)}>
             + Create your first album
           </Button>
