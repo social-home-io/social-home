@@ -44,6 +44,7 @@ from ..domain.events import (
     MomentReactionChanged,
     PostDeleted,
     PostEdited,
+    SpaceConfigChanged,
     SpaceMemberProfileUpdated,
     SpacePostCreated,
     HighlightFrameAdded,
@@ -55,7 +56,7 @@ from ..domain.events import (
 )
 from ..domain.post import Comment, CommentType, LocationData, Post, PostType
 from ..domain.presence import truncate_coord
-from ..domain.space import SpaceMember
+from ..domain.space import SpaceConfigEventType, SpaceMember, SpaceRole
 from ..domain.highlight import (
     Highlight,
     HighlightAudience,
@@ -300,6 +301,9 @@ class FederationInboundService:
 
         registry.register(FET.SPACE_MEMBER_JOINED, self._on_space_member_joined)
         registry.register(FET.SPACE_MEMBER_LEFT, self._on_space_member_left)
+        registry.register(
+            FET.SPACE_MEMBER_ROLE_CHANGED, self._on_space_member_role_changed
+        )
         registry.register(
             FET.SPACE_MEMBER_PROFILE_UPDATED,
             self._on_space_member_profile_updated,
@@ -1352,6 +1356,85 @@ class FederationInboundService:
             joined_at=str(joined_at),
         )
         await self._space_repo.save_member(member)
+
+    async def _on_space_member_role_changed(self, event: "FederationEvent") -> None:
+        """Apply a host's admin promotion/demotion locally (§13, multi-admin).
+
+        The host broadcasts ``SPACE_MEMBER_ROLE_CHANGED`` whenever it
+        grants/revokes admin on a member. Without applying it, the role
+        lived only on the host: a promoted cross-household admin stayed a
+        plain ``member`` on their own household, and every admin guard
+        (``_require_admin_or_owner`` reads the *local* role) blocked them —
+        so multi-admin never worked end-to-end. Roles are host-authoritative,
+        so only honour the event from the space's owner instance.
+        """
+        space_id = event.space_id or str(event.payload.get("space_id") or "")
+        user_id = str(event.payload.get("user_id") or "")
+        role = str(event.payload.get("role") or "")
+        if (
+            not space_id
+            or not user_id
+            or role
+            not in (
+                SpaceRole.ADMIN,
+                SpaceRole.MEMBER,
+            )
+        ):
+            return
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            return
+        # Host authority: a role change is only valid from the owning
+        # instance. Reject anything else (a peer can't promote itself).
+        if space.owner_instance_id != event.from_instance:
+            log.debug(
+                "SPACE_MEMBER_ROLE_CHANGED for %s from non-host %s — dropping",
+                space_id,
+                event.from_instance,
+            )
+            return
+        member_instance = str(event.payload.get("instance_id") or "")
+        own = (
+            self._federation_service.own_instance_id
+            if self._federation_service is not None
+            else None
+        )
+        if member_instance and own and member_instance != own:
+            # The promoted member lives on another peer household — update
+            # our roster mirror so the Members tab shows the right role.
+            if self._space_remote_member_repo is None:
+                return
+            await self._space_remote_member_repo.set_role(
+                space_id,
+                member_instance,
+                user_id,
+                role,
+            )
+        else:
+            # One of our own users was promoted/demoted — update their
+            # local space_members role so the admin guards + SPA see it.
+            if await self._space_repo.get_member(space_id, user_id) is None:
+                return
+            await self._space_repo.set_role(space_id, user_id, role)
+        # Mirror the host's local notification so connected tabs refresh
+        # the roster. Safe on a receiver: space_config_outbound only
+        # re-broadcasts when this instance owns the space.
+        await self._bus.publish(
+            SpaceConfigChanged(
+                space_id=space_id,
+                event_type=(
+                    SpaceConfigEventType.ADMIN_GRANTED
+                    if role == SpaceRole.ADMIN
+                    else SpaceConfigEventType.ADMIN_REVOKED
+                ).value,
+                payload={
+                    "user_id": user_id,
+                    "instance_id": member_instance,
+                    "role": role,
+                },
+                sequence=space.config_sequence,
+            )
+        )
 
     async def _on_space_member_left(self, event: "FederationEvent") -> None:
         space_id = event.space_id or str(event.payload.get("space_id") or "")

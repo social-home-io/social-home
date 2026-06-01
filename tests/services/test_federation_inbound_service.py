@@ -11,12 +11,13 @@ from socialhome.domain.events import (
     CommentAdded,
     DmMessageCreated,
     PostDeleted,
+    SpaceConfigChanged,
     SpacePostCreated,
     UserStatusChanged,
 )
 from socialhome.domain.federation import FederationEvent, FederationEventType
 from socialhome.domain.post import Post, PostType
-from socialhome.domain.space import JoinMode, SpaceType
+from socialhome.domain.space import JoinMode, SpaceMember, SpaceType
 from socialhome.repositories import (
     SqliteConversationRepo,
     SqliteSpacePostRepo,
@@ -794,6 +795,77 @@ async def test_space_member_join_and_leave(db, inbound):
         ("sp-1", "u-1"),
     )
     assert row is None
+
+
+async def _seed_role_space(db, *, owner="peer-a"):
+    await db.enqueue(
+        """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
+                              identity_public_key, space_type, join_mode)
+           VALUES(?,?,?,?,?,?,?)""",
+        (
+            "sp-role",
+            "Space",
+            owner,
+            "owner",
+            "aa" * 32,
+            SpaceType.HOUSEHOLD.value,
+            JoinMode.INVITE_ONLY.value,
+        ),
+    )
+    await SqliteSpaceRepo(db).save_member(
+        SpaceMember(
+            space_id="sp-role",
+            user_id="u-1",
+            role="member",
+            joined_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+
+
+async def test_space_member_role_changed_promotes_local_member(db, bus, inbound):
+    """A host promotion is applied to the local space_members role so admin
+    guards + the SPA see it (regression: the event used to be unhandled)."""
+    await _seed_role_space(db)
+    captured: list = []
+
+    async def _cap(e):
+        captured.append(e)
+
+    bus.subscribe(SpaceConfigChanged, _cap)
+    await inbound._on_space_member_role_changed(
+        _event(
+            FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
+            {"user_id": "u-1", "role": "admin"},
+            space_id="sp-role",
+            from_instance="peer-a",  # the owner/host
+        )
+    )
+    row = await db.fetchone(
+        "SELECT role FROM space_members WHERE space_id=? AND user_id=?",
+        ("sp-role", "u-1"),
+    )
+    assert row["role"] == "admin"
+    # Publishes a local config-changed so connected tabs refresh.
+    assert len(captured) == 1
+
+
+async def test_space_member_role_changed_rejects_non_host(db, inbound):
+    """Roles are host-authoritative — a role change from anyone other than
+    the owning instance is dropped (no privilege spoofing)."""
+    await _seed_role_space(db, owner="peer-a")
+    await inbound._on_space_member_role_changed(
+        _event(
+            FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
+            {"user_id": "u-1", "role": "admin"},
+            space_id="sp-role",
+            from_instance="peer-b",  # NOT the owner
+        )
+    )
+    row = await db.fetchone(
+        "SELECT role FROM space_members WHERE space_id=? AND user_id=?",
+        ("sp-role", "u-1"),
+    )
+    assert row["role"] == "member"  # unchanged
 
 
 async def test_attach_registers_handlers_on_federation_service(db, bus):
