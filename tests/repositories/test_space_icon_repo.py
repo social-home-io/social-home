@@ -1,0 +1,47 @@
+"""Tests for SqliteSpaceIconRepo (per-space icon/avatar blob)."""
+
+from __future__ import annotations
+
+import pytest
+
+from socialhome.crypto import derive_instance_id, generate_identity_keypair
+from socialhome.db.database import AsyncDatabase
+from socialhome.repositories.space_icon_repo import SqliteSpaceIconRepo
+
+
+@pytest.fixture
+async def repo(tmp_dir):
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    db = AsyncDatabase(tmp_dir / "t.db", batch_timeout_ms=10)
+    await db.startup()
+    await db.enqueue(
+        "INSERT INTO instance_identity(instance_id, identity_private_key,"
+        " identity_public_key, routing_secret) VALUES(?,?,?,?)",
+        (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
+    )
+    await db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key) VALUES('sp-1', 'X', ?, 'p', ?)",
+        (iid, "ab" * 32),
+    )
+    yield SqliteSpaceIconRepo(db)
+    await db.shutdown()
+
+
+async def test_get_returns_none_when_unset(repo):
+    assert await repo.get("sp-1") is None
+
+
+async def test_set_get_clear_roundtrip(repo):
+    await repo.set("sp-1", bytes_webp=b"RIFFwebp", hash="abc123", width=256, height=256)
+    got = await repo.get("sp-1")
+    assert got is not None
+    blob, h = got
+    assert blob == b"RIFFwebp"
+    assert h == "abc123"
+    # Upsert replaces.
+    await repo.set("sp-1", bytes_webp=b"RIFFnew", hash="def456", width=256, height=256)
+    assert (await repo.get("sp-1"))[1] == "def456"
+    await repo.clear("sp-1")
+    assert await repo.get("sp-1") is None

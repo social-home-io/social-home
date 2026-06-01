@@ -22,6 +22,7 @@ from ..app_keys import (
     profile_picture_repo_key,
     space_bot_repo_key,
     space_cover_repo_key,
+    space_icon_repo_key,
     space_remote_location_repo_key,
     space_approval_service_key,
     space_remote_member_repo_key,
@@ -215,6 +216,11 @@ class SpaceDetailView(BaseView):
             if space.cover_hash
             else None
         )
+        icon_url = (
+            f"/api/spaces/{space.id}/icon?v={space.icon_hash}"
+            if space.icon_hash
+            else None
+        )
         payload = sanitise_for_api(
             {
                 "id": space.id,
@@ -229,6 +235,8 @@ class SpaceDetailView(BaseView):
                 "about_markdown": space.about_markdown,
                 "cover_hash": space.cover_hash,
                 "cover_url": cover_url,
+                "icon_hash": space.icon_hash,
+                "icon_url": icon_url,
                 "bot_enabled": space.bot_enabled,
                 # Read-only archive state — the SPA disables write
                 # affordances and shows a read-only banner when true.
@@ -958,6 +966,65 @@ class SpaceCoverView(BaseView):
                 space_id,
                 actor_username=ctx.username,
             )
+        except PermissionError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
+        return web.Response(status=204)
+
+
+class SpaceIconView(BaseView):
+    """Space icon (avatar) image — distinct from the cover banner (§23).
+
+    * ``GET    /api/spaces/{id}/icon`` — stream the WebP bytes.
+    * ``POST   /api/spaces/{id}/icon`` — multipart upload; owner/admin only.
+    * ``DELETE /api/spaces/{id}/icon`` — remove the icon (falls back to emoji).
+    """
+
+    async def get(self) -> web.Response:
+        space_id = self.match("id")
+        repo = self.svc(space_icon_repo_key)
+        got = await repo.get(space_id)
+        if got is None:
+            return error_response(404, "NOT_FOUND", "This space has no icon set.")
+        bytes_webp, _hash = got
+        return web.Response(
+            body=bytes_webp,
+            content_type="image/webp",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        space_id = self.match("id")
+        try:
+            raw = await _read_multipart_image_bytes(self.request)
+        except ValueError as exc:
+            return error_response(422, "UNPROCESSABLE", str(exc))
+        try:
+            updated = await svc.set_icon(
+                space_id,
+                actor_username=ctx.username,
+                raw_bytes=raw,
+            )
+        except PermissionError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
+        except ValueError as exc:
+            return error_response(422, "UNPROCESSABLE", str(exc))
+        payload = {
+            "icon_hash": updated.icon_hash,
+            "icon_url": f"/api/spaces/{space_id}/icon?v={updated.icon_hash}",
+        }
+        signer = self.request.app.get(media_signer_key)
+        if signer is not None:
+            sign_media_urls_in(payload, signer)
+        return web.json_response(payload)
+
+    async def delete(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        space_id = self.match("id")
+        try:
+            await svc.clear_icon(space_id, actor_username=ctx.username)
         except PermissionError as exc:
             return error_response(403, "FORBIDDEN", str(exc))
         return web.Response(status=204)

@@ -189,7 +189,8 @@ events these routes fire.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET / POST / DELETE | `/api/spaces/{id}/cover` | Space cover image. |
+| GET / POST / DELETE | `/api/spaces/{id}/cover` | Space cover image (hero banner). |
+| GET / POST / DELETE | `/api/spaces/{id}/icon` | Space icon (avatar), distinct from the cover; owner/admin upload. Falls back to the emoji when unset. |
 | GET / PATCH | `/api/spaces/{id}/theme` | Space-level theme. |
 
 **Customisation**

@@ -98,7 +98,10 @@ from ..repositories.base import row_to_dict
 from ..repositories.space_post_repo import AbstractSpacePostRepo
 from ..repositories.space_repo import AbstractSpaceRepo
 from ..repositories.user_repo import AbstractUserRepo
-from ..domain.media_constraints import SPACE_COVER_MAX_DIMENSION
+from ..domain.media_constraints import (
+    SPACE_COVER_MAX_DIMENSION,
+    SPACE_ICON_MAX_DIMENSION,
+)
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
 from .space_crypto_service import (
     KEY_SUITE_AESGCM_256,
@@ -136,6 +139,7 @@ class SpaceService(SpaceMemberGuardMixin):
         "_child_protection",
         "_pictures",
         "_covers",
+        "_icons",
         "_gfs",
         "_federation_repo",
         "_federation",
@@ -168,6 +172,7 @@ class SpaceService(SpaceMemberGuardMixin):
         self._child_protection = None
         self._pictures = None
         self._covers = None
+        self._icons = None
         self._gfs = None
         self._federation_repo = None
         self._federation = None
@@ -202,6 +207,10 @@ class SpaceService(SpaceMemberGuardMixin):
     def attach_cover_repo(self, repo) -> None:
         """Wire the space-cover blob store (§23 customization)."""
         self._covers = repo
+
+    def attach_icon_repo(self, repo) -> None:
+        """Wire the space-icon (avatar) blob store (§23 customization)."""
+        self._icons = repo
 
     def attach_space_crypto_service(self, space_crypto) -> None:
         """Wire SpaceContentEncryption so §D1b invite/redeem envelopes
@@ -365,6 +374,69 @@ class SpaceService(SpaceMemberGuardMixin):
                 space_id=space_id,
                 event_type=SpaceConfigEventType.COVER_UPDATED.value,
                 payload={"cover_hash": None},
+                sequence=sequence,
+            )
+        )
+        return updated
+
+    async def set_icon(
+        self,
+        space_id: str,
+        *,
+        actor_username: str,
+        raw_bytes: bytes,
+    ) -> Space:
+        """Transcode the upload to a small square WebP, persist as the
+        space icon (avatar), bump icon_hash, and publish
+        :class:`SpaceConfigChanged`. Mirrors :meth:`set_cover`."""
+        if self._icons is None:
+            raise RuntimeError("icon repo not attached")
+        space = await self._require_space(space_id)
+        await self._require_admin_or_owner(space, actor_username)
+        webp = await ImageProcessor().generate_thumbnail(
+            raw_bytes,
+            size=SPACE_ICON_MAX_DIMENSION,
+        )
+        hash_ = compute_picture_hash(webp)
+        await self._icons.set(
+            space_id,
+            bytes_webp=webp,
+            hash=hash_,
+            width=SPACE_ICON_MAX_DIMENSION,
+            height=SPACE_ICON_MAX_DIMENSION,
+        )
+        await self._spaces.set_icon_hash(space_id, hash_)
+        sequence = await self._spaces.increment_config_sequence(space_id)
+        updated = replace(space, icon_hash=hash_)
+        await self._bus.publish(
+            SpaceConfigChanged(
+                space_id=space_id,
+                event_type=SpaceConfigEventType.ICON_UPDATED.value,
+                payload={"icon_hash": hash_},
+                sequence=sequence,
+            )
+        )
+        return updated
+
+    async def clear_icon(
+        self,
+        space_id: str,
+        *,
+        actor_username: str,
+    ) -> Space:
+        if self._icons is None:
+            raise RuntimeError("icon repo not attached")
+        space = await self._require_space(space_id)
+        await self._require_admin_or_owner(space, actor_username)
+        await self._icons.clear(space_id)
+        await self._spaces.set_icon_hash(space_id, None)
+        sequence = await self._spaces.increment_config_sequence(space_id)
+        updated = replace(space, icon_hash=None)
+        await self._bus.publish(
+            SpaceConfigChanged(
+                space_id=space_id,
+                event_type=SpaceConfigEventType.ICON_UPDATED.value,
+                payload={"icon_hash": None},
                 sequence=sequence,
             )
         )

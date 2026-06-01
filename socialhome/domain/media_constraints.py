@@ -170,3 +170,7 @@ AUDIO_BITRATE_KBPS: int = 24
 #: Space cover image resized to this longest side; larger than the 256-px
 #: profile-picture cap so a hero banner has real estate.
 SPACE_COVER_MAX_DIMENSION: int = 1200
+
+#: Space icon (avatar) resized to this longest side — small, like a
+#: profile picture, since it renders as a circular chip.
+SPACE_ICON_MAX_DIMENSION: int = 256

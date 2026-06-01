@@ -11055,6 +11055,34 @@ a.sh-welcome-card:hover {
   border: 3px solid var(--sh-bg, #fff);
   box-shadow: var(--sh-shadow-sm);
   color: var(--sh-primary);
+  overflow: hidden;
+}
+.sh-space-hero-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+/* Slim variant for non-feed tabs: shorter banner, smaller avatar pulled up
+   less, no About. */
+.sh-space-hero--slim {
+  margin-bottom: var(--sh-space-sm);
+}
+.sh-space-hero--slim .sh-space-hero-banner {
+  aspect-ratio: auto;
+  min-height: 0;
+  height: 84px;
+}
+.sh-space-hero--slim .sh-space-hero-identity {
+  margin-top: calc(-1 * var(--sh-space-lg));
+}
+.sh-space-hero--slim .sh-space-hero-avatar {
+  width: 52px;
+  height: 52px;
+  font-size: 1.6rem;
+}
+.sh-space-hero--slim .sh-space-hero-name {
+  font-size: clamp(1.1rem, 3vw, 1.4rem);
 }
 .sh-space-hero-meta {
   display: flex;
@@ -11097,6 +11125,18 @@ a.sh-welcome-card:hover {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.sh-about-icon-preview {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--sh-bg-secondary) center / cover no-repeat;
+  border: 1px dashed var(--sh-border-strong);
+  display: grid;
+  place-items: center;
+  font-size: 1.8rem;
+  line-height: 1;
 }
 .sh-about-editor-grid {
   display: grid;

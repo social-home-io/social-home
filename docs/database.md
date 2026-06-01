@@ -79,6 +79,7 @@ anything below contradicts the file, the file wins.
 | `space_remote_members` | Cross-household members admitted via `SPACE_PRIVATE_INVITE` (§D1b). Lets fan-out include the invitee's instance. Carries a per-row `role` (`'member'` or `'admin'`, never `'owner'`) from migration `0009_space_remote_members_role.sql`; promotions flow over `SPACE_MEMBER_ROLE_CHANGED` (#114). |
 | `space_zones` | Per-space labelled circles for the space map (§23.8.7). 4dp lat/lon, 25–50000 m radius. Replicated to remote member instances via sealed `SPACE_ZONE_*` events. |
 | `space_covers` | Hero-banner WebP bytes per space. |
+| `space_icons` | Space icon (avatar) WebP bytes per space (`0018_space_icon.sql`), distinct from the cover. `spaces.icon_hash` mirrors the blob hash for cache-busting; null → the SPA falls back to the space emoji. |
 | `space_instances` | One row per `(space_id, instance_id)` — which peer instances participate in a space, with `last_seen_at`. |
 | `space_keys` | One row per `(space_id, epoch)` holding the KEK-encrypted AES-256 content key. Epoch advances on member removal/ban (§4.3). |
 | `space_bans` / `space_instance_bans` | Banned users / banned remote instances. Identity public key is captured for cross-instance ban enforcement. |

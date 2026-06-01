@@ -1330,6 +1330,44 @@ async def test_space_cover_upload_and_fetch(client, tmp_path):
     assert fetch2.status == 404
 
 
+async def test_space_icon_upload_fetch_and_clear(client):
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "WithIcon"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    form = aiohttp.FormData()
+    form.add_field("file", _TINY_PNG, filename="x.png", content_type="image/png")
+    up = await client.post(
+        f"/api/spaces/{sid}/icon", data=form, headers=_auth(client._admin_token)
+    )
+    assert up.status == 200
+    body = await up.json()
+    assert body["icon_hash"]
+    assert body["icon_url"].startswith(f"/api/spaces/{sid}/icon?v=")
+
+    fetch = await client.get(
+        f"/api/spaces/{sid}/icon", headers=_auth(client._admin_token)
+    )
+    assert fetch.status == 200
+    assert fetch.headers["Content-Type"] == "image/webp"
+    assert (await fetch.read())[:4] == b"RIFF"
+
+    detail = await client.get(f"/api/spaces/{sid}", headers=_auth(client._admin_token))
+    dbody = await detail.json()
+    assert dbody["icon_hash"] == body["icon_hash"]
+    assert "sig=" in dbody["icon_url"]
+
+    rm = await client.delete(
+        f"/api/spaces/{sid}/icon", headers=_auth(client._admin_token)
+    )
+    assert rm.status == 204
+    assert (
+        await client.get(f"/api/spaces/{sid}/icon", headers=_auth(client._admin_token))
+    ).status == 404
+
+
 async def test_space_cover_non_admin_forbidden(client):
     r = await client.post(
         "/api/spaces",

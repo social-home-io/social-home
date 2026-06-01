@@ -56,6 +56,8 @@ interface SpaceDetail extends Space {
   about_markdown: string | null
   cover_url: string | null
   cover_hash: string | null
+  icon_url: string | null
+  icon_hash: string | null
   bot_enabled?: boolean
 }
 
@@ -221,7 +223,43 @@ function AboutTab({
   const [saving, setSaving] = useState(false)
   const [uploadingCover, setUploadingCover] = useState(false)
   const [coverUrl, setCoverUrl] = useState<string | null>(space.cover_url)
+  const [uploadingIcon, setUploadingIcon] = useState(false)
+  const [iconUrl, setIconUrl] = useState<string | null>(space.icon_url)
   const fileRef = useRef<HTMLInputElement | null>(null)
+
+  const uploadIcon = async (e: Event) => {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+    setUploadingIcon(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const resp = (await api.upload(`/api/spaces/${space.id}/icon`, fd)) as {
+        icon_url: string
+      }
+      setIconUrl(resp.icon_url)
+      onSaved()
+      showToast('Icon updated', 'success')
+    } catch (err: unknown) {
+      showToast(`Upload failed: ${(err as Error).message ?? err}`, 'error')
+    } finally {
+      setUploadingIcon(false)
+      input.value = ''
+    }
+  }
+
+  const clearIcon = async () => {
+    if (!(await confirmDialog('Remove the space icon?', { destructive: true }))) return
+    try {
+      await api.delete(`/api/spaces/${space.id}/icon`)
+      setIconUrl(null)
+      onSaved()
+      showToast('Icon removed', 'info')
+    } catch (err: unknown) {
+      showToast(`Clear failed: ${(err as Error).message ?? err}`, 'error')
+    }
+  }
 
   const saveAbout = async () => {
     setSaving(true)
@@ -301,6 +339,32 @@ function AboutTab({
           {uploadingCover && <span class="sh-muted">Uploading…</span>}
           {coverUrl && (
             <Button variant="secondary" onClick={clearCover}>
+              Remove
+            </Button>
+          )}
+        </div>
+      </section>
+
+      <section>
+        <h3 style={{ margin: 0 }}>Icon</h3>
+        <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-sm)', margin: 0 }}>
+          The space's avatar — shown as a circle on the cover header and in
+          the tab bar. Falls back to the emoji icon when none is set.
+        </p>
+        <div class="sh-row" style={{ gap: 'var(--sh-space-sm)', alignItems: 'center' }}>
+          <span
+            class="sh-about-icon-preview"
+            style={iconUrl ? { backgroundImage: `url(${iconUrl})` } : {}}
+          >
+            {!iconUrl && (space.emoji || '🏠')}
+          </span>
+          <label class="sh-btn sh-btn--secondary">
+            {iconUrl ? 'Change icon' : 'Upload icon'}
+            <input type="file" accept="image/*" class="sr-only" onChange={uploadIcon} />
+          </label>
+          {uploadingIcon && <span class="sh-muted">Uploading…</span>}
+          {iconUrl && (
+            <Button variant="secondary" onClick={clearIcon}>
               Remove
             </Button>
           )}

@@ -229,6 +229,7 @@ from .spaces import (
     SpaceProposalsView,
     SpaceProposalVoteView,
     SpaceCoverView,
+    SpaceIconView,
     SpaceFeedView,
     SpaceSubscribeView,
     LocalInviteCollectionView,
@@ -509,6 +510,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     )
     app.router.add_view("/api/spaces/{id}/feed", SpaceFeedView)
     app.router.add_view("/api/spaces/{id}/cover", SpaceCoverView)
+    app.router.add_view("/api/spaces/{id}/icon", SpaceIconView)
     app.router.add_view("/api/spaces/{id}/posts", SpacePostCollectionView)
     app.router.add_view(
         "/api/spaces/{id}/posts/{post_id}",
