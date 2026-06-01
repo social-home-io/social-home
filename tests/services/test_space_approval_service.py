@@ -362,3 +362,86 @@ async def test_apply_remote_propose_by_non_admin_dropped(stack):
         params={},
     )
     assert await stack.approvals.list_for_space(space.id) == []
+
+
+# ── member-household mirror shows the host's exact tally (fast-follow) ──
+
+
+async def test_mirror_update_shows_host_tally_not_local_recompute(stack):
+    """A member household stores + returns the host's authoritative view
+    verbatim, even when its own roster would compute a different tally."""
+    from socialhome.domain.space import JoinMode, Space, SpaceFeatures
+
+    # A stub of a space hosted elsewhere — locally we know of NO admins,
+    # so a local recompute would say 0 total. The host's view says 2-of-3.
+    stub = Space(
+        id="sp-remote",
+        name="S",
+        owner_instance_id="host-instance",
+        owner_username="hostowner",
+        identity_public_key="",
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        emoji="🏠",
+        description="",
+    )
+    await stack.space_repo.save(stub)
+    host_view = {
+        "id": "prop-1",
+        "space_id": stub.id,
+        "action": "dissolve",
+        "params": {},
+        "status": "pending",
+        "proposed_by_instance": "host-instance",
+        "proposed_by_user": "hostadmin",
+        "approvals": 2,
+        "total_admins": 3,
+        "needed": 2,
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "expires_at": "2026-06-08T00:00:00+00:00",
+    }
+    await stack.approvals.apply_mirror_update(stub.id, host_view)
+    listed = await stack.approvals.list_for_space(stub.id)
+    assert len(listed) == 1
+    assert listed[0]["approvals"] == 2
+    assert listed[0]["total_admins"] == 3
+    assert listed[0]["needed"] == 2
+
+
+async def test_mirror_update_drops_resolved_proposal(stack):
+    """A resolved (executed/rejected) host view removes the mirror row."""
+    from socialhome.domain.space import JoinMode, Space, SpaceFeatures
+
+    stub = Space(
+        id="sp-remote2",
+        name="S",
+        owner_instance_id="host-instance",
+        owner_username="hostowner",
+        identity_public_key="",
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        emoji="🏠",
+        description="",
+    )
+    await stack.space_repo.save(stub)
+    base = {
+        "id": "prop-2",
+        "space_id": stub.id,
+        "action": "dissolve",
+        "params": {},
+        "proposed_by_instance": "host-instance",
+        "proposed_by_user": "hostadmin",
+        "approvals": 1,
+        "total_admins": 2,
+        "needed": 2,
+        "created_at": "2026-06-01T00:00:00+00:00",
+        "expires_at": "2026-06-08T00:00:00+00:00",
+    }
+    await stack.approvals.apply_mirror_update(stub.id, {**base, "status": "pending"})
+    assert len(await stack.approvals.list_for_space(stub.id)) == 1
+    await stack.approvals.apply_mirror_update(stub.id, {**base, "status": "rejected"})
+    assert await stack.approvals.list_for_space(stub.id) == []

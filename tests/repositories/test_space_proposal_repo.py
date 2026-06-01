@@ -109,3 +109,15 @@ async def test_delete_cascades_votes(repo):
     await repo.delete("p1")
     assert await repo.get("p1") is None
     assert await repo.list_votes("p1") == []
+
+
+async def test_host_view_json_roundtrip(repo):
+    import dataclasses
+
+    await repo.upsert(
+        dataclasses.replace(_p("pv"), host_view={"approvals": 2, "total_admins": 3})
+    )
+    assert (await repo.get("pv")).host_view == {"approvals": 2, "total_admins": 3}
+    # A row without it hydrates to None.
+    await repo.upsert(_p("pv2"))
+    assert (await repo.get("pv2")).host_view is None

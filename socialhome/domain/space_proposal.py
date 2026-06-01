@@ -47,6 +47,11 @@ class SpaceAdminProposal:
     status: ProposalStatus
     created_at: str
     expires_at: str
+    #: On a member-household *mirror* row, the host's authoritative SPA view
+    #: (tally included), so the member shows the host's exact numbers rather
+    #: than recomputing from its own roster. ``None`` on the host (it
+    #: recomputes the view authoritatively).
+    host_view: dict | None = None
 
 
 @dataclass(slots=True, frozen=True)
