@@ -443,6 +443,12 @@ class SpaceApprovalService:
         )
 
     async def _view(self, proposal: SpaceAdminProposal) -> dict:
+        # On a member-household mirror the host's authoritative view (tally
+        # included) is stored verbatim — return it rather than recomputing
+        # against this household's possibly-stale roster. Only the current
+        # status is taken from the local row.
+        if proposal.host_view is not None:
+            return {**proposal.host_view, "status": proposal.status.value}
         admins = await self._admin_keys(proposal.space_id)
         votes = await self._proposals.list_votes(proposal.id)
         relevant = [v for v in votes if (v.voter_instance, v.voter_user) in admins]
@@ -509,4 +515,7 @@ def _proposal_from_view(space_id: str, view: dict) -> SpaceAdminProposal:
         status=ProposalStatus(view.get("status") or "pending"),
         created_at=str(view.get("created_at") or _now()),
         expires_at=str(view.get("expires_at") or _now()),
+        # Keep the host's authoritative view verbatim so the member shows
+        # the host's exact tally, not a local recomputation.
+        host_view=view,
     )
