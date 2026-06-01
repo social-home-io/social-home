@@ -190,9 +190,11 @@ class SpacePublishView(GfsBaseView):
                 description=body.get("description"),
                 about_markdown=body.get("about_markdown"),
                 cover_url=body.get("cover_url"),
+                icon_url=body.get("icon_url"),
                 min_age=int(body.get("min_age") or 0),
                 target_audience=str(body.get("target_audience") or "all"),
                 accent_color=str(body.get("accent_color") or "#D2542A"),
+                primary_color=str(body.get("primary_color") or "#D2542A"),
                 signature=str(body.get("signature") or ""),
             )
         except PermissionError as exc:

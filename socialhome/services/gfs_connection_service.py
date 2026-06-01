@@ -19,6 +19,7 @@ The pairing flow (simpler than HFS):
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import uuid
@@ -46,6 +47,9 @@ class GfsConnectionService:
         "_repo",
         "_http_client",
         "_space_repo",
+        "_theme_repo",
+        "_cover_repo",
+        "_icon_repo",
         "_own_instance_id",
         "_own_signing_key",
     )
@@ -63,6 +67,9 @@ class GfsConnectionService:
         # repo). When unset, ``publish_space`` falls back to a metadata-
         # less ``{space_id}`` body and the GFS lands a pending row.
         self._space_repo = None
+        self._theme_repo = None
+        self._cover_repo = None
+        self._icon_repo = None
         self._own_instance_id = ""
         self._own_signing_key = b""
 
@@ -72,14 +79,25 @@ class GfsConnectionService:
         space_repo,
         own_instance_id: str,
         own_signing_key: bytes,
+        theme_repo=None,
+        cover_repo=None,
+        icon_repo=None,
     ) -> None:
         """Wire the dependencies needed to ship full space metadata (and
         an Ed25519 signature) on publish. Optional — without it,
         ``publish_space`` no-ops the body, the GFS sits at
-        ``status='pending'`` until an admin completes it manually."""
+        ``status='pending'`` until an admin completes it manually.
+
+        ``theme_repo`` / ``cover_repo`` / ``icon_repo`` let the publish
+        body carry the space's real brand — theme colours + the cover and
+        icon images as self-contained data URIs, so the GFS public page
+        renders them on its own origin (no cross-origin / auth fetch)."""
         self._space_repo = space_repo
         self._own_instance_id = own_instance_id
         self._own_signing_key = own_signing_key
+        self._theme_repo = theme_repo
+        self._cover_repo = cover_repo
+        self._icon_repo = icon_repo
 
     def attach_session(self, session: aiohttp.ClientSession) -> None:
         """Provide the shared aiohttp session after construction.
@@ -260,20 +278,26 @@ class GfsConnectionService:
         # graph clean for tests that stub publish out entirely.
         from ..crypto import b64url_encode, sign_ed25519
 
+        # Brand: the GFS public page is unauthenticated and on a different
+        # origin, so a host-relative ``/api/spaces/{id}/cover`` path can't
+        # load there. Ship the cover + icon as self-contained data URIs
+        # (read straight from the blob repos) and the real theme colours, so
+        # the page renders the space's brand on the GFS's own origin.
+        primary, accent = await self._brand_colors(space_id)
+        cover_uri = await self._image_data_uri(self._cover_repo, space)
+        icon_uri = await self._image_data_uri(self._icon_repo, space, icon=True)
         body: dict = {
             "space_id": space.id,
             "owning_instance": self._own_instance_id,
             "name": space.name,
             "description": space.description or "",
             "about_markdown": getattr(space, "about_markdown", "") or "",
-            "cover_url": (
-                f"/api/spaces/{space.id}/cover?v={space.cover_hash}"
-                if getattr(space, "cover_hash", None)
-                else ""
-            ),
+            "cover_url": cover_uri,
+            "icon_url": icon_uri,
             "min_age": 0,
             "target_audience": "all",
-            "accent_color": "#D2542A",
+            "accent_color": accent,
+            "primary_color": primary,
         }
         canonical = json.dumps(
             body,
@@ -284,6 +308,29 @@ class GfsConnectionService:
             sign_ed25519(self._own_signing_key, canonical),
         )
         return body
+
+    async def _brand_colors(self, space_id: str) -> tuple[str, str]:
+        """The space's (primary, accent) theme colours, or the defaults."""
+        primary, accent = "#D2542A", "#C8902F"
+        if self._theme_repo is not None:
+            theme = await self._theme_repo.get_space(space_id)
+            if theme is not None:
+                primary = theme.primary_color or primary
+                accent = theme.accent_color or accent
+        return primary, accent
+
+    async def _image_data_uri(self, repo, space, *, icon: bool = False) -> str:
+        """A ``data:image/webp;base64,…`` URI for the space's cover/icon, or
+        ``""`` when none is set. Self-contained so the GFS page renders it
+        without a cross-origin, auth-gated fetch back to the host."""
+        has = getattr(space, "icon_hash" if icon else "cover_hash", None)
+        if repo is None or not has:
+            return ""
+        got = await repo.get(space.id)
+        if got is None:
+            return ""
+        webp, _hash = got
+        return "data:image/webp;base64," + base64.b64encode(webp).decode("ascii")
 
     async def unpublish_space(self, space_id: str, gfs_id: str) -> None:
         """Unpublish a space from a GFS."""

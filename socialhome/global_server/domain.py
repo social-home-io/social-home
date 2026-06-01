@@ -32,9 +32,13 @@ class GlobalSpace:
     description: str | None = None
     about_markdown: str | None = None
     cover_url: str | None = None
+    #: Space icon (avatar) — a self-contained ``data:image/webp;base64,…``
+    #: URI so the public page renders it on the GFS origin. None → emoji.
+    icon_url: str | None = None
     min_age: int = 0
     target_audience: str = "all"
     accent_color: str = "#6366f1"
+    primary_color: str = "#6366f1"
     status: str = "pending"  # 'pending' | 'active' | 'banned'
     subscriber_count: int = 0
     posts_per_week: float = 0.0

@@ -189,18 +189,21 @@ class SqliteGfsFederationRepo:
             """
             INSERT INTO global_spaces(
                 space_id, owning_instance, name, description, about_markdown,
-                cover_url, min_age, target_audience, accent_color,
-                status, subscriber_count, posts_per_week, published_at
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                cover_url, icon_url, min_age, target_audience, accent_color,
+                primary_color, status, subscriber_count, posts_per_week,
+                published_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                      COALESCE(?, datetime('now')))
             ON CONFLICT(space_id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 about_markdown = excluded.about_markdown,
                 cover_url = excluded.cover_url,
+                icon_url = excluded.icon_url,
                 min_age = excluded.min_age,
                 target_audience = excluded.target_audience,
                 accent_color = excluded.accent_color,
+                primary_color = excluded.primary_color,
                 status = excluded.status,
                 subscriber_count = excluded.subscriber_count,
                 posts_per_week = excluded.posts_per_week
@@ -212,9 +215,11 @@ class SqliteGfsFederationRepo:
                 space.description,
                 space.about_markdown,
                 space.cover_url,
+                space.icon_url,
                 space.min_age,
                 space.target_audience,
                 space.accent_color,
+                space.primary_color,
                 space.status,
                 space.subscriber_count,
                 space.posts_per_week,
@@ -956,9 +961,11 @@ def _row_to_space(row: dict | None) -> GlobalSpace | None:
         description=row.get("description"),
         about_markdown=row.get("about_markdown"),
         cover_url=row.get("cover_url"),
+        icon_url=row.get("icon_url"),
         min_age=int(row.get("min_age") or 0),
         target_audience=row.get("target_audience", "all"),
         accent_color=row.get("accent_color", "#6366f1"),
+        primary_color=row.get("primary_color") or "#6366f1",
         status=row.get("status", "pending"),
         subscriber_count=int(row.get("subscriber_count") or 0),
         posts_per_week=float(row.get("posts_per_week") or 0.0),

@@ -415,9 +415,14 @@ def _render_space_page(
     server_name: str,
     base_url: str,
 ) -> str:
-    accent = _escape(space.get("accent_color") or "#D2542A")
+    primary = _escape(
+        space.get("primary_color") or space.get("accent_color") or "#D2542A"
+    )
+    accent = _escape(space.get("accent_color") or primary)
+    icon_url = _escape(space.get("icon_url") or "")
+    cover_uri = _escape(space.get("cover_url") or "")
     deep_link = f"sh://join-space/{base_url}/spaces/{_escape(space['space_id'])}"
-    og_image = _escape(space.get("cover_url") or "")
+    og_image = cover_uri or icon_url
     og_title = _escape(f"{space.get('name') or ''} — {server_name}")
     og_desc = _escape(space.get("description") or "")
     return f"""<!doctype html>
@@ -429,7 +434,9 @@ def _render_space_page(
   <meta property="og:title"       content="{og_title}" />
   <meta property="og:description" content="{og_desc}" />
   <meta property="og:image"       content="{og_image}" />
-  <meta property="og:url"         content="{_escape(base_url)}/spaces/{_escape(space["space_id"])}" />
+  <meta property="og:url"         content="{_escape(base_url)}/spaces/{
+        _escape(space["space_id"])
+    }" />
   <meta name="twitter:card"       content="summary_large_image" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -449,7 +456,8 @@ def _render_space_page(
       --ink:      #1A1814;
       --ink-soft: #807766;
       --hair:     #D8CFC0;
-      --primary:  {accent};
+      --primary:  {primary};
+      --accent:   {accent};
     }}
     /* Dark mode — warm ember (see ``users_directory.css`` rationale).
      * ``--primary`` keeps the per-space accent so the page reads as
@@ -471,7 +479,14 @@ def _render_space_page(
     main {{ max-width: 780px; margin: 0 auto; padding: 24px; }}
     .accent-bar {{ height: 6px; background: var(--primary);
                    margin: 12px 0 22px; border-radius: 3px; }}
-    .cover {{ width: 100%; max-height: 360px; object-fit: cover; }}
+    .cover {{ width: 100%; max-height: 360px; object-fit: cover;
+              display: block; }}
+    /* Space icon (avatar) — overlaps the cover bottom-left, profile-style. */
+    .space-avatar {{ width: 76px; height: 76px; border-radius: 50%;
+                     object-fit: cover; border: 3px solid var(--warm-bg);
+                     box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+                     margin: -52px 0 8px; background: var(--paper); }}
+    .about-md {{ white-space: pre-wrap; }}
     h1, h2 {{
       font-family: 'Fraunces', 'Iowan Old Style', 'Palatino Linotype', serif;
       font-feature-settings: "ss01" on, "salt" on;
@@ -506,8 +521,9 @@ def _render_space_page(
   </style>
 </head>
 <body>
-  {'<img class="cover" src="' + og_image + '" alt="" />' if og_image else ""}
+  {'<img class="cover" src="' + cover_uri + '" alt="" />' if cover_uri else ""}
   <main>
+    {'<img class="space-avatar" src="' + icon_url + '" alt="" />' if icon_url else ""}
     <div class="accent-bar"></div>
     <a href="/" class="secondary">← {_escape(server_name)}</a>
     <h1>{_escape(space.get("name") or "—")}</h1>
@@ -520,7 +536,15 @@ def _render_space_page(
     <section>
       <h2>About</h2>
       <p>{_escape(space.get("description") or "")}</p>
-      {space.get("about_markdown") or ""}
+      {
+        (
+            '<div class="about-md">'
+            + _escape(space.get("about_markdown") or "")
+            + "</div>"
+        )
+        if space.get("about_markdown")
+        else ""
+    }
     </section>
   </main>
   <p class="footer-brand">
@@ -713,7 +737,9 @@ async def handle_space_page(request: web.Request) -> web.Response:
         "description": space.description,
         "about_markdown": space.about_markdown,
         "cover_url": space.cover_url,
+        "icon_url": space.icon_url,
         "accent_color": space.accent_color,
+        "primary_color": space.primary_color,
         "subscriber_count": space.subscriber_count,
     }
     html = _render_space_page(
