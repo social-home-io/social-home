@@ -649,6 +649,17 @@ class SpaceService(SpaceMemberGuardMixin):
         # mirroring the per-field gates below, and let the host run the
         # real edit so the change federates back to every member.
         if space.owner_instance_id and space.owner_instance_id != self._own_instance_id:
+            # ``space_type`` is the publication tier: flipping to public
+            # (host's public directory) or global (auto-publish to paired
+            # GFS) is an outward-facing, hard-to-reverse change, so it
+            # stays owner-only and host-local — a remote admin cannot
+            # publish someone else's space. (The host also drops it from
+            # ``_REMOTE_CONFIG_FIELDS`` as defence-in-depth.)
+            if space_type is not None:
+                raise SpacePermissionError(
+                    "changing a space's publication tier (public / global) "
+                    "is owner-only and can't be done from another household",
+                )
             fwd: dict = {}
             if name is not None:
                 fwd["name"] = name
@@ -660,8 +671,6 @@ class SpaceService(SpaceMemberGuardMixin):
                 fwd["features"] = features.to_wire_dict()
             if join_mode is not None:
                 fwd["join_mode"] = _coerce_join_mode(join_mode).value
-            if space_type is not None:
-                fwd["space_type"] = _coerce_space_type(space_type).value
             if retention_days is not None:
                 fwd["retention_days"] = retention_days
             if retention_exempt_types is not None:
@@ -1201,6 +1210,10 @@ class SpaceService(SpaceMemberGuardMixin):
     #: ``SPACE_REMOTE_ADMIN_ACTION``. Whitelisted so an unexpected wire
     #: key can never become an ``update_config`` keyword (collision with
     #: ``actor_username`` / unknown kwarg → ``TypeError``).
+    #: ``space_type`` is intentionally absent — the publication tier
+    #: (public / global) is owner-only and host-local; a remote admin
+    #: cannot change it (the forward raises before sending, and the host
+    #: drops it here even if an old/forged client includes it).
     _REMOTE_CONFIG_FIELDS = frozenset(
         {
             "name",
@@ -1208,7 +1221,6 @@ class SpaceService(SpaceMemberGuardMixin):
             "emoji",
             "features",
             "join_mode",
-            "space_type",
             "retention_days",
             "retention_exempt_types",
             "about_markdown",

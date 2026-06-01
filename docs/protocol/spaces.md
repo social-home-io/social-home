@@ -321,8 +321,13 @@ sequenceDiagram
 
 Scope is admin-level only. **Owner-only** actions — dissolve,
 transfer-ownership, role assignment (`set_role` /
-`set_remote_member_role`) — are NOT forwardable and stay host-local;
-ownership privileges don't cross households. Against a host older than
+`set_remote_member_role`), and **changing the publication tier**
+(`space_type` → public / global, which advertises the space or
+auto-publishes it to paired GFS) — are NOT forwardable and stay
+host-local; ownership and publication privileges don't cross
+households. A remote admin attempting a `space_type` change gets a
+`SpacePermissionError`; the host also drops `space_type` from the
+forwarded-config whitelist as defence-in-depth. Against a host older than
 v_15 (no handler) the forward raises `SpacePermissionError` rather
 than silently mutating the stub, so the admin gets a clear
 "host needs upgrading" error instead of a divergent local view.
