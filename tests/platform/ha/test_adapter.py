@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import AsyncIterable
 
+import json
 import aiohttp
 import pytest
 from aiohttp import web
@@ -409,25 +410,53 @@ async def test_get_instance_config_fallback_on_client_error():
 # ─── Push + events ───────────────────────────────────────────────────────
 
 
-async def test_send_push_targets_mobile_app_service():
-    client = _FakeHaClient()
-    adapter = _build_adapter(client=client)
-    from socialhome.platform.adapter import ExternalUser
+def _push_user(notify_service: str | None):
+    """A user-like object carrying the per-user ``ha_notify_service``
+    profile preference the push provider reads (mirrors the SH ``User``
+    shape: ``username`` + ``preferences_json``)."""
+    from types import SimpleNamespace
 
-    user = ExternalUser(
+    prefs = {"ha_notify_service": notify_service} if notify_service else {}
+    return SimpleNamespace(
         username="pascal",
-        display_name="P",
-        picture_url=None,
-        is_admin=False,
+        preferences_json=json.dumps(prefs),
     )
+
+
+async def test_send_push_uses_configured_notify_service():
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("notify.mobile_app_pascals_iphone")
     await adapter.send_push(user, "title", "message", data={"x": 1})
     assert any(
         c[0] == "call_service"
         and c[1] == "notify"
-        and c[2] == "mobile_app_pascal"
+        and c[2] == "mobile_app_pascals_iphone"
         and c[3] == {"title": "title", "message": "message", "data": {"x": 1}}
         for c in client.calls
     )
+
+
+async def test_send_push_accepts_bare_service_name():
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("mobile_app_pascals_iphone")  # no "notify." prefix
+    await adapter.send_push(user, "t", "m")
+    assert any(
+        c[0] == "call_service"
+        and c[1] == "notify"
+        and c[2] == "mobile_app_pascals_iphone"
+        for c in client.calls
+    )
+
+
+async def test_send_push_skips_when_unconfigured():
+    """No ha_notify_service preference → no service call (the old
+    mobile_app_{username} guess silently 400'd for everyone)."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    await adapter.send_push(_push_user(None), "t", "m")
+    assert not any(c[0] == "call_service" for c in client.calls)
 
 
 async def test_fire_event_delegates():
