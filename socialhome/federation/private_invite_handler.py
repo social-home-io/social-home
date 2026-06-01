@@ -515,7 +515,15 @@ class PrivateSpaceInviteHandler:
         p = event.payload
         space_id = str(p.get("space_id") or "") or (event.space_id or "")
         actor_user_id = str(p.get("actor_user_id") or "")
-        actor_instance_id = str(p.get("actor_instance_id") or event.from_instance)
+        # SECURITY: bind the actor's household to the *signed* envelope —
+        # never trust a payload-supplied actor_instance_id. ``from_instance``
+        # is cryptographically bound to the signer (inbound_validator); a
+        # payload claim is authored by that signer, so honouring it would
+        # let a confirmed peer forge an action attributed to another
+        # household's admin (the role lookup would match the impersonated
+        # admin's row). An admin's action MUST originate from the admin's
+        # own household.
+        actor_instance_id = event.from_instance
         target_user_id = str(p.get("target_user_id") or "")
         if not space_id or not actor_user_id or not target_user_id:
             log.debug(
@@ -550,7 +558,11 @@ class PrivateSpaceInviteHandler:
         p = event.payload
         space_id = str(p.get("space_id") or "") or (event.space_id or "")
         actor_user_id = str(p.get("actor_user_id") or "")
-        actor_instance_id = str(p.get("actor_instance_id") or event.from_instance)
+        # SECURITY: bind the actor's household to the *signed* envelope —
+        # never trust a payload-supplied actor_instance_id (see
+        # ``_on_remote_admin_kick``). Honouring it would let a confirmed
+        # peer impersonate another household's admin.
+        actor_instance_id = event.from_instance
         action = str(p.get("action") or "")
         raw_params = p.get("params")
         params = raw_params if isinstance(raw_params, dict) else {}

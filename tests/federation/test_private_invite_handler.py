@@ -483,6 +483,61 @@ async def test_remote_admin_action_dispatches_to_space_service():
     )
 
 
+async def test_remote_admin_action_ignores_forged_actor_instance():
+    """SECURITY: a payload-supplied actor_instance_id must NOT override the
+    signed envelope's from_instance — otherwise a confirmed peer could
+    impersonate another household's admin. The service must be called with
+    the signer (from_instance), not the forged claim."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "victim-admin",
+            "actor_instance_id": "instance-VICTIM-ADMIN",  # forged
+            "action": "archive",
+            "params": {},
+        },
+        from_instance="instance-MALLORY",  # the actual (signed) sender
+    )
+    await h._on_remote_admin_action(ev)
+    kwargs = space_service.apply_remote_admin_action.call_args.kwargs
+    assert kwargs["actor_instance_id"] == "instance-MALLORY"
+
+
+async def test_remote_admin_kick_ignores_forged_actor_instance():
+    """SECURITY: same binding for the kick — from_instance wins over a
+    payload-supplied actor_instance_id."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_kick = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_KICK",
+        {
+            "space_id": "sp",
+            "actor_user_id": "victim-admin",
+            "actor_instance_id": "instance-VICTIM-ADMIN",  # forged
+            "target_user_id": "u-target",
+        },
+        from_instance="instance-MALLORY",
+    )
+    await h._on_remote_admin_kick(ev)
+    kwargs = space_service.apply_remote_admin_kick.call_args.kwargs
+    assert kwargs["actor_instance_id"] == "instance-MALLORY"
+
+
 async def test_remote_admin_action_missing_action_skipped():
     """No ``action`` field → drop without calling the service."""
     space_service = AsyncMock()
