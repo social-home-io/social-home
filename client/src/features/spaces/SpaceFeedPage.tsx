@@ -331,7 +331,13 @@ export default function SpaceFeedPage() {
             {s && viewerRole.value !== undefined && (
               <SpaceNotifPrefsMenu spaceId={spaceId} />
             )}
-            {canAdmin && (
+            {/* Every full member can open space settings — the page itself
+             *  gates what's shown: a non-admin sees only their own surface
+             *  (Bots), a remote admin sees the forwarding-capable tabs, a
+             *  local admin sees the full hub. Subscribers (read-only) don't. */}
+            {(viewerRole.value === 'owner' ||
+              viewerRole.value === 'admin' ||
+              viewerRole.value === 'member') && (
               <a href={`/spaces/${spaceId}/settings`}
                  class="sh-space-settings-btn"
                  aria-label="Space settings">

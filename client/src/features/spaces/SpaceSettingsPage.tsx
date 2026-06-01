@@ -21,12 +21,36 @@ import { SpaceSettings } from '@/components/SpaceSettings'
 import { SpaceThemeStudio } from '@/components/SpaceThemeStudio'
 import { showToast } from '@/components/Toast'
 import { currentUser } from '@/store/auth'
+import { instanceConfig } from '@/store/instance'
 import type { Space } from '@/types'
 import { SpaceBotsTab } from './SpaceBotsTab'
 import { SpaceLinksTab } from './SpaceLinksTab'
 import { confirmDialog } from '@/components/confirm'
 
 type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots'
+
+/**
+ * Which settings tabs a viewer can see.
+ *
+ * - Non-admin members get only their own surface ("Bots").
+ * - A local admin gets the full hub.
+ * - A *remote* admin (the space is hosted on another household) gets only
+ *   the tabs whose controls forward to the host — General (config / archive
+ *   / dissolve + tier proposals all federate) and About. Theme and Quick
+ *   links are host-local config that would silently mutate our stub, so
+ *   they're hidden on a remote stub.
+ *
+ * Exported pure so the gating is unit-tested without standing up a second
+ * household.
+ */
+export function visibleSettingsTabs(
+  canAdmin: boolean,
+  isRemoteSpace: boolean,
+): SettingsTab[] {
+  if (!canAdmin) return ['bots']
+  if (isRemoteSpace) return ['general', 'about', 'bots']
+  return ['general', 'about', 'theme', 'links', 'bots']
+}
 
 interface SpaceDetail extends Space {
   about_markdown: string | null
@@ -100,13 +124,17 @@ export default function SpaceSettingsPage() {
     )
   }
 
-  // Tabs the active user can see. The per-member notification level lives
-  // on the 🔔 bell menu in the space header (reachable by every member),
-  // not here — so this admin-entry page no longer carries a Notifications
-  // tab. Non-admins keep only the Bots tab (their own personal automations).
-  const visibleTabs: SettingsTab[] = canAdmin
-    ? ['general', 'about', 'theme', 'links', 'bots']
-    : ['bots']
+  // A stub of a space hosted on another household: General config, archive,
+  // and the dissolve / tier proposals all forward to the host, but theme /
+  // links / GFS publication are host-local — see visibleSettingsTabs.
+  const isRemoteSpace = !!(
+    space.owner_instance_id &&
+    instanceConfig.value?.instance_id &&
+    space.owner_instance_id !== instanceConfig.value.instance_id
+  )
+  // Per-member notifications live on the 🔔 bell in the space header, not
+  // here — this page has no Notifications tab.
+  const visibleTabs = visibleSettingsTabs(canAdmin, isRemoteSpace)
   if (!visibleTabs.includes(activeTab.value)) {
     activeTab.value = visibleTabs[0]
   }
@@ -156,7 +184,11 @@ export default function SpaceSettingsPage() {
       )}
 
       {activeTab.value === 'general' && (
-        <SpaceSettings space={space} onUpdate={() => void reload()} />
+        <SpaceSettings
+          space={space}
+          onUpdate={() => void reload()}
+          isRemoteSpace={isRemoteSpace}
+        />
       )}
       {activeTab.value === 'about' && (
         <AboutTab space={space} onSaved={() => void reload()} />
@@ -170,7 +202,9 @@ export default function SpaceSettingsPage() {
       {activeTab.value === 'bots' && (
         <SpaceBotsTab
           spaceId={space.id}
-          canAdmin={canAdmin}
+          // Space-scope bot management is host-local; on a remote stub a
+          // remote admin manages only their own member-scope bots.
+          canAdmin={canAdmin && !isRemoteSpace}
           currentUserId={currentUser.value?.user_id ?? null}
           botEnabled={space.bot_enabled === true}
           onBotEnabledChange={(next) => setSpace({ ...space, bot_enabled: next })}

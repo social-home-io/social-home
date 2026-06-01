@@ -96,7 +96,18 @@ async function togglePublish(spaceId: string, gfsId: string) {
   }
 }
 
-export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () => void }) {
+export function SpaceSettings({
+  space,
+  onUpdate,
+  isRemoteSpace = false,
+}: {
+  space: Space
+  onUpdate: () => void
+  /** True when this space is hosted on another household (we hold a stub).
+   *  General config, archive, dissolve + tier proposals all forward to the
+   *  host, but GFS publication is the host's own concern — hide it. */
+  isRemoteSpace?: boolean
+}) {
   // ``useSignal`` (not ``signal()``) so the underlying signal instance
   // is stable across renders. Plain ``signal(initial)`` inside a
   // component body recreates a fresh signal on every render, which
@@ -156,8 +167,9 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
   )
 
   useEffect(() => {
-    loadFederationData(space.id)
-  }, [space.id])
+    // GFS publication is host-local; on a remote stub there's nothing to load.
+    if (!isRemoteSpace) loadFederationData(space.id)
+  }, [space.id, isRemoteSpace])
 
   const save = async () => {
     const previousMode = space.features?.location_mode ?? 'gps'
@@ -574,9 +586,9 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
         </div>
       </div>
 
-      <hr />
-      <h3>{t('space.federation')}</h3>
-      {federationLoading.value ? (
+      {!isRemoteSpace && <hr />}
+      {!isRemoteSpace && <h3>{t('space.federation')}</h3>}
+      {!isRemoteSpace && (federationLoading.value ? (
         <p class="sh-muted">{t('common.loading')}</p>
       ) : gfsServers.value.length === 0 ? (
         <p class="sh-muted">{t('space.no_gfs_connections')}</p>
@@ -630,7 +642,7 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
             )
           })}
         </div>
-      )}
+      ))}
 
       <hr />
       <h3>Archive</h3>
