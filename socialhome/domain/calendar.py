@@ -101,6 +101,13 @@ class CalendarEvent:
     #: heuristic. ``None`` for legacy / externally-imported events; the
     #: SPA falls back to the content key in that case.
     client_event_uuid: str | None = None
+    #: Opt-in feed announcement (§23.15). Space events live in the
+    #: Calendar tab; the auto-mirrored ``PostType.EVENT`` feed post is
+    #: created by :class:`CalendarFeedBridge` only when this is True.
+    #: Defaults False so the feed stays opt-in, matching the Bazaar tab.
+    #: Federated on the calendar event so member households' bridges make
+    #: the same decision. Meaningful for space events only.
+    announce_in_feed: bool = False
 
 
 @dataclass(slots=True, frozen=True)

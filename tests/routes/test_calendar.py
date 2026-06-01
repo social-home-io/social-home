@@ -804,3 +804,55 @@ async def test_approve_non_creator_non_admin_403(client):
         headers=carol_auth,
     )
     assert r2.status == 403
+
+
+async def _space(client) -> str:
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "Crew", "emoji": "📅"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    return (await r.json())["id"]
+
+
+async def _now_iso(days_ahead: int = 1) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) + timedelta(days=days_ahead)).isoformat()
+
+
+async def test_space_event_not_in_feed_by_default(client):
+    """§23.15 — a space calendar event lives in the Calendar tab; it does
+    NOT mirror to the feed unless the creator announces it."""
+    h = _auth(client._tok)
+    sid = await _space(client)
+    start = await _now_iso()
+    r = await client.post(
+        f"/api/spaces/{sid}/calendar/events",
+        json={"summary": "Standup", "start": start, "end": start},
+        headers=h,
+    )
+    assert r.status == 201, await r.text()
+    feed = await (await client.get(f"/api/spaces/{sid}/feed", headers=h)).json()
+    assert all(p["type"] != "event" for p in feed), feed
+
+
+async def test_space_event_in_feed_when_announced(client):
+    """``announce_in_feed=True`` mirrors the event into the space feed."""
+    h = _auth(client._tok)
+    sid = await _space(client)
+    start = await _now_iso()
+    r = await client.post(
+        f"/api/spaces/{sid}/calendar/events",
+        json={
+            "summary": "Launch party",
+            "start": start,
+            "end": start,
+            "announce_in_feed": True,
+        },
+        headers=h,
+    )
+    assert r.status == 201, await r.text()
+    feed = await (await client.get(f"/api/spaces/{sid}/feed", headers=h)).json()
+    assert any(p["type"] == "event" for p in feed), feed

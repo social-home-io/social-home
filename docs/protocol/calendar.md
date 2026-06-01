@@ -59,16 +59,23 @@ honoured at flush time rather than resurrected.
 The buffer is bounded by a periodic GC sweep that drops rows older
 than 24 h whose event still hasn't arrived (e.g. cancelled upstream).
 
-## Feed surface (Phase B)
+## Feed surface (Phase B) — opt-in (§23.15)
 
-A calendar event auto-creates a `PostType.EVENT` post in the space feed
-via :class:`CalendarFeedBridge`. The bridge subscribes to
-`CalendarEventCreated` / `CalendarEventUpdated` /
+A calendar event can mirror to the space feed as a `PostType.EVENT` post
+via :class:`CalendarFeedBridge`, but the mirror is **opt-in**: events live
+in the Calendar tab and only post to the feed when the creator ticks
+"announce in feed" (`CalendarEvent.announce_in_feed`, default False —
+matching the Bazaar tab). The flag federates on the calendar event so a
+member household's bridge makes the same decision; **absent on an older
+sender it defaults to True** (the historic always-mirror behaviour), so
+events from un-upgraded peers still surface in the feed. The bridge
+subscribes to `CalendarEventCreated` / `CalendarEventUpdated` /
 `CalendarEventDeleted` on the bus and:
 
-* **Created**: writes a single `Post(type=EVENT, linked_event_id=<id>,
-  content=<summary>)`. Idempotent — duplicate creates (e.g. local +
-  federation replay) are no-ops.
+* **Created**: when `announce_in_feed` is True, writes a single
+  `Post(type=EVENT, linked_event_id=<id>, content=<summary>)`. Idempotent
+  — duplicate creates (e.g. local + federation replay) are no-ops. When
+  False, no post is written.
 * **Updated**: rewrites the post body when the title changes (otherwise
   no-op).
 * **Deleted**: soft-deletes the linked post; the row + comment thread

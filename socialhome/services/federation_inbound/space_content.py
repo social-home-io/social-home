@@ -357,6 +357,10 @@ class SpaceContentInboundHandlers:
             location=location if isinstance(location, str) and location else None,
             # IANA wall-clock anchor. Old peers omit; default ``"UTC"``.
             tz=str(p.get("tz") or "UTC"),
+            # §23.15 opt-in feed mirror. Absent on an older sender →
+            # default True so the bridge keeps the historic always-mirror
+            # behaviour for events from un-upgraded peers.
+            announce_in_feed=bool(p.get("announce_in_feed", True)),
         )
         is_new = await self._calendar_repo.get_event(event_id) is None
         await self._calendar_repo.save_event(space_id, ev)

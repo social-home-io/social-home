@@ -32,6 +32,34 @@ describe('CalendarEventDialog', () => {
     expect(Object.keys(mod).length).toBeGreaterThan(0)
   })
 
+  it('sends announce_in_feed when announcing a space event (§23.15)', async () => {
+    const { render, fireEvent } = await import('@testing-library/preact')
+    const { api } = await import('@/api')
+    ;(api.post as ReturnType<typeof vi.fn>).mockClear()
+    const mod = await import('./CalendarEventDialog')
+    mod.openSpaceEventDialog('sp-1')
+    const { container } = render(<mod.CalendarEventDialog />)
+    // Summary is the only untyped text input; dates/times carry a type.
+    const summary = container.querySelector('input:not([type])') as HTMLInputElement
+    fireEvent.input(summary, { target: { value: 'Picnic' } })
+    // Default: the announce checkbox is present and OFF.
+    const announceLabel = Array.from(container.querySelectorAll('label')).find(
+      (l) => /announce this event in the space feed/i.test(l.textContent ?? ''),
+    )
+    expect(announceLabel).toBeTruthy()
+    const cb = announceLabel!.querySelector('input[type="checkbox"]') as HTMLInputElement
+    expect(cb.checked).toBe(false)
+    fireEvent.click(cb)
+    const buttons = Array.from(container.querySelectorAll('button'))
+    fireEvent.click(buttons[buttons.length - 1])  // Create
+    await new Promise((r) => setTimeout(r, 0))
+    const call = (api.post as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c: unknown[]) => String(c[0]).includes('/calendar/events'),
+    )
+    expect(call).toBeTruthy()
+    expect((call![1] as { announce_in_feed?: boolean }).announce_in_feed).toBe(true)
+  })
+
   /** Open the dialog with a clean state and pre-seed start / end with
    *  known values so the test isn't reading "today + 1h" derived from
    *  wall-clock time. */

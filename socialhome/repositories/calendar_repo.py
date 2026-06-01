@@ -572,8 +572,8 @@ class SqliteSpaceCalendarRepo:
             INSERT INTO space_calendar_events(
                 id, space_id, summary, description, start_dt, end_dt,
                 all_day, attendees_json, rrule, capacity, cover_url,
-                location, tz, created_by, created_at, updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                location, tz, announce_in_feed, created_by, created_at, updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                      COALESCE(?, datetime('now')),
                      COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
@@ -588,6 +588,7 @@ class SqliteSpaceCalendarRepo:
                 cover_url=excluded.cover_url,
                 location=excluded.location,
                 tz=excluded.tz,
+                announce_in_feed=excluded.announce_in_feed,
                 updated_at=datetime('now')
             """,
             (
@@ -604,6 +605,7 @@ class SqliteSpaceCalendarRepo:
                 event.cover_url,
                 event.location,
                 event.tz,
+                int(event.announce_in_feed),
                 event.created_by,
                 None,
                 None,
@@ -1095,4 +1097,5 @@ def _row_to_space_event(row: dict) -> CalendarEvent:
         cover_url=row.get("cover_url"),
         location=row.get("location"),
         tz=row.get("tz") or "UTC",
+        announce_in_feed=bool_col(row.get("announce_in_feed", 0)),
     )
