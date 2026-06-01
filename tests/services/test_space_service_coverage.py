@@ -659,6 +659,22 @@ async def test_clear_cover_without_repo_raises(stack):
         )
 
 
+async def test_set_icon_without_repo_raises(stack):
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="F")
+    with pytest.raises(RuntimeError):
+        await stack.space_svc.set_icon(
+            space.id, actor_username="anna", raw_bytes=b"not-an-image"
+        )
+
+
+async def test_clear_icon_without_repo_raises(stack):
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="F")
+    with pytest.raises(RuntimeError):
+        await stack.space_svc.clear_icon(space.id, actor_username="anna")
+
+
 async def test_set_member_picture_without_repo_raises(stack):
     anna = await stack.provision_user("anna")
     space = await stack.space_svc.create_space(

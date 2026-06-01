@@ -59,6 +59,40 @@ describe('SpaceHero', () => {
     )
   })
 
+  it('uses the uploaded icon image as the avatar when set', () => {
+    const { container } = render(
+      <SpaceHero
+        name="Family Hub"
+        emoji="🏡"
+        coverUrl={null}
+        iconUrl="/api/spaces/s1/icon?v=abc"
+        about={null}
+      />,
+    )
+    const img = container.querySelector('.sh-space-hero-avatar-img') as HTMLImageElement
+    expect(img).toBeTruthy()
+    expect(img.getAttribute('src')).toBe('/api/spaces/s1/icon?v=abc')
+    // The emoji fallback text is not shown when an image is present.
+    expect(container.querySelector('.sh-space-hero-avatar')?.textContent).toBe('')
+  })
+
+  it('slim variant: shorter, no about and no member count', () => {
+    const { container } = render(
+      <SpaceHero
+        name="Family Hub"
+        emoji="🏡"
+        coverUrl="/c.webp"
+        about="Some about text"
+        memberCount={3}
+        slim
+      />,
+    )
+    expect(container.querySelector('.sh-space-hero--slim')).toBeTruthy()
+    expect(container.querySelector('.sh-space-hero-about')).toBeNull()
+    expect(container.querySelector('.sh-space-hero-members')).toBeNull()
+    expect(container.querySelector('.sh-space-hero-name')?.textContent).toBe('Family Hub')
+  })
+
   it('omits the about block when there is no about text', () => {
     const { container } = render(
       <SpaceHero name="Cover only" emoji="🎉" coverUrl="/x.webp" about={null} />,

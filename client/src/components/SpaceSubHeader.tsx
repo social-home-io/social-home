@@ -42,6 +42,7 @@ export type SpaceTab =
 interface SpaceSubHeaderProps {
   name: string
   emoji: string | null
+  iconUrl?: string | null
   memberCount: number | null
   activeTab: Signal<SpaceTab>
   visibleTabs: readonly SpaceTab[]
@@ -55,7 +56,7 @@ function tabLabel(tab: SpaceTab): string {
 }
 
 export function SpaceSubHeader({
-  name, emoji, memberCount,
+  name, emoji, iconUrl, memberCount,
   activeTab, visibleTabs, onSelectTab, actions,
 }: SpaceSubHeaderProps) {
   const stripRef = useRef<HTMLElement | null>(null)
@@ -69,10 +70,12 @@ export function SpaceSubHeader({
   return (
     <div class="sh-space-subheader" role="presentation">
       <div class="sh-space-subheader-identity">
-        {/* The cover is now the brand banner (SpaceHero); the compact
-         *  identity chip is the space's icon — its emoji, or initials
-         *  when none is set. */}
-        {emoji ? (
+        {/* The cover is the brand banner (SpaceHero); the compact identity
+         *  chip is the space's icon — its uploaded image, else its emoji,
+         *  else initials. */}
+        {iconUrl ? (
+          <Avatar src={iconUrl} name={name} size={28} />
+        ) : emoji ? (
           <span class="sh-space-subheader-emoji" aria-hidden="true">{emoji}</span>
         ) : (
           <Avatar name={name} size={28} />

@@ -47,6 +47,8 @@ interface SpaceDetail {
   about_markdown: string | null
   cover_url: string | null
   cover_hash: string | null
+  icon_url: string | null
+  icon_hash: string | null
   features?: {
     pages?: boolean
     calendar?: boolean
@@ -322,6 +324,7 @@ export default function SpaceFeedPage() {
       <SpaceSubHeader
         name={s?.name ?? 'Space'}
         emoji={s?.emoji ?? null}
+        iconUrl={s?.icon_url ?? null}
         memberCount={memberCount.value}
         activeTab={activeTab}
         visibleTabs={visibleTabs}
@@ -357,17 +360,29 @@ export default function SpaceFeedPage() {
       )}
       {s && <SpaceLinksStrip spaceId={spaceId} />}
 
-      {/* Cover banner + About blurb (Space → Settings → About). Shown on
-       *  the feed tab when an admin has set either. */}
-      {activeTab.value === 'feed' && s && (s.cover_url || s.about_markdown) && (
-        <SpaceHero
-          name={s.name}
-          emoji={s.emoji ?? null}
-          coverUrl={s.cover_url ?? null}
-          about={s.about_markdown ?? null}
-          memberCount={memberCount.value}
-        />
-      )}
+      {/* Branded header (Space → Settings → About + Theme). On the feed
+       *  tab: the full hero (cover + avatar + name + members + About) when
+       *  the admin set a cover, icon or About. On other tabs: a slim
+       *  variant (short banner + avatar + name) when there's a visual brand
+       *  (cover or icon), so the space stays branded without eating the
+       *  vertical space a tool tab needs. */}
+      {s && (() => {
+        const isFeed = activeTab.value === 'feed'
+        const branded = !!(s.cover_url || s.icon_url)
+        const show = isFeed ? branded || !!s.about_markdown : branded
+        if (!show) return null
+        return (
+          <SpaceHero
+            name={s.name}
+            emoji={s.emoji ?? null}
+            coverUrl={s.cover_url ?? null}
+            iconUrl={s.icon_url ?? null}
+            about={s.about_markdown ?? null}
+            memberCount={memberCount.value}
+            slim={!isFeed}
+          />
+        )
+      })()}
 
       {activeTab.value === 'feed' && (
         <div class="sh-feed sh-space-feed-content">

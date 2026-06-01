@@ -478,6 +478,7 @@ class SpaceConfigEventType(StrEnum):
     UNARCHIVED = "unarchived"
     PUBLIC_MODE_CHANGED = "public_mode_changed"
     COVER_UPDATED = "cover_updated"
+    ICON_UPDATED = "icon_updated"
     ABOUT_UPDATED = "about_updated"
 
 
@@ -594,6 +595,9 @@ class Space:
     # Short hex digest of the current cover WebP; bytes in
     # ``space_covers``. None → render a gradient fallback.
     cover_hash: str | None = None
+    # Short hex digest of the current icon (avatar) WebP; bytes in
+    # ``space_icons``. None → fall back to the space emoji.
+    icon_hash: str | None = None
     # IANA timezone name (``"Europe/Berlin"``) that anchors this
     # space's calendar wall clock. Defaults to ``"UTC"`` at the schema
     # level (``spaces.tz NOT NULL DEFAULT 'UTC'``); on space creation

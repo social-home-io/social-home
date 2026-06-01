@@ -52,6 +52,11 @@ class AbstractSpaceRepo(Protocol):
         space_id: str,
         cover_hash: str | None,
     ) -> None: ...
+    async def set_icon_hash(
+        self,
+        space_id: str,
+        icon_hash: str | None,
+    ) -> None: ...
     async def set_tz(self, space_id: str, tz: str) -> None: ...
     async def list_by_type(self, space_type: SpaceType) -> list[Space]: ...
     async def list_for_user(self, user_id: str) -> list[Space]: ...
@@ -412,6 +417,16 @@ class SqliteSpaceRepo:
         await self._db.enqueue(
             "UPDATE spaces SET cover_hash=? WHERE id=?",
             (cover_hash, space_id),
+        )
+
+    async def set_icon_hash(
+        self,
+        space_id: str,
+        icon_hash: str | None,
+    ) -> None:
+        await self._db.enqueue(
+            "UPDATE spaces SET icon_hash=? WHERE id=?",
+            (icon_hash, space_id),
         )
 
     async def set_tz(self, space_id: str, tz: str) -> None:
@@ -1378,6 +1393,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         archived=bool_col(row.get("archived", 0)),
         about_markdown=row.get("about_markdown"),
         cover_hash=row.get("cover_hash"),
+        icon_hash=row.get("icon_hash"),
         tz=row.get("tz") or "UTC",
     )
 

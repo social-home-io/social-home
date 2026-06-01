@@ -125,6 +125,7 @@ from .repositories.space_poll_repo import SqliteSpacePollRepo
 from .repositories.profile_picture_repo import SqliteProfilePictureRepo
 from .repositories.space_bot_repo import SqliteSpaceBotRepo
 from .repositories.space_cover_repo import SqliteSpaceCoverRepo
+from .repositories.space_icon_repo import SqliteSpaceIconRepo
 from .repositories.space_zone_repo import SqliteSpaceZoneRepo
 from .repositories.moment_repo import SqliteMomentRepo
 from .repositories.highlight_repo import SqliteHighlightRepo
@@ -477,6 +478,7 @@ def _build_repos(db: AsyncDatabase):
         call=SqliteCallRepo(db),
         profile_picture=SqliteProfilePictureRepo(db),
         space_cover=SqliteSpaceCoverRepo(db),
+        space_icon=SqliteSpaceIconRepo(db),
         space_bot=SqliteSpaceBotRepo(db),
         alias=SqliteAliasRepo(db),
         pairing_relay=SqlitePairingRelayRepo(db),
@@ -1200,6 +1202,7 @@ def create_app(config: Config | None = None) -> web.Application:
     theme_repo = repos.theme
     profile_picture_repo = repos.profile_picture
     space_cover_repo = repos.space_cover
+    space_icon_repo = repos.space_icon
     space_bot_repo = repos.space_bot
 
     # ── Event bus ────────────────────────────────────────────────────────
@@ -1232,6 +1235,7 @@ def create_app(config: Config | None = None) -> web.Application:
     )
     space_service.attach_profile_picture_repo(profile_picture_repo)
     space_service.attach_cover_repo(space_cover_repo)
+    space_service.attach_icon_repo(space_icon_repo)
     space_service.attach_gallery_repo(gallery_repo)
     space_service.attach_bazaar_repo(bazaar_repo)
     # Multi-admin approval (quorum) for critical space actions (dissolve /
@@ -1786,6 +1790,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.auth_audit_log_repo_key] = repos.auth_audit_log
     app[K.profile_picture_repo_key] = profile_picture_repo
     app[K.space_cover_repo_key] = space_cover_repo
+    app[K.space_icon_repo_key] = space_icon_repo
     app[K.post_repo_key] = post_repo
     app[K.space_repo_key] = space_repo
     app[K.space_remote_member_repo_key] = repos.space_remote_member
@@ -1946,6 +1951,7 @@ def create_app(config: Config | None = None) -> web.Application:
         real_space_service.attach_child_protection(child_protection_service)
         real_space_service.attach_profile_picture_repo(profile_picture_repo)
         real_space_service.attach_cover_repo(space_cover_repo)
+        real_space_service.attach_icon_repo(space_icon_repo)
         real_space_service.attach_gallery_repo(gallery_repo)
         real_space_service.attach_bazaar_repo(bazaar_repo)
         real_space_service.attach_gfs_connection_service(gfs_connection_service)
