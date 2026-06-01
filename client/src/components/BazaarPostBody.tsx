@@ -15,7 +15,7 @@ import { ImageRenderer } from './FileRenderer'
 import { SaveListingButton } from './SaveListingButton'
 import { showToast } from './Toast'
 import { currentUser } from '@/store/auth'
-import type { BazaarBid, BazaarListing } from '@/types'
+import type { BazaarBid, BazaarListing, BazaarOffer } from '@/types'
 import { confirmDialog } from '@/components/confirm'
 
 const CURRENCY_FRACTION_DIGITS: Record<string, number> = {
@@ -65,6 +65,11 @@ interface Props {
 export function BazaarPostBody({ postId, onUpdated }: Props) {
   const [listing, setListing] = useState<BazaarListing | null>(null)
   const [bids, setBids] = useState<BazaarBid[]>([])
+  // Offers (offer / negotiable modes) live in a separate table from bids.
+  // Fetched here only to drive the "N offers" activity count; the
+  // interactive list lives in BazaarOffersPanel. The API scopes the rows
+  // per viewer (seller → all, buyer → own), so the count is privacy-safe.
+  const [offers, setOffers] = useState<BazaarOffer[]>([])
   const [busy, setBusy] = useState(false)
   const [bidAmount, setBidAmount] = useState('')
   const [offerMessage, setOfferMessage] = useState('')
@@ -82,13 +87,17 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
     let stopped = false
     const refresh = async () => {
       try {
-        const [l, bs] = await Promise.all([
+        const [l, bs, os] = await Promise.all([
           api.get(`/api/bazaar/${postId}`) as Promise<BazaarListing>,
           api.get(`/api/bazaar/${postId}/bids`) as Promise<BazaarBid[]>,
+          // Returns [] for non-offer listings; scoped per viewer by the API.
+          (api.get(`/api/bazaar/${postId}/offers`) as Promise<BazaarOffer[]>)
+            .catch(() => [] as BazaarOffer[]),
         ])
         if (stopped) return
         setListing(l)
         setBids(bs)
+        setOffers(os)
         setLoadState('ok')
       } catch (err: unknown) {
         if (stopped) return
@@ -151,6 +160,7 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
 
   const isSeller = me === listing.seller_user_id
   const activeBids = bids.filter(b => !b.withdrawn && !b.rejected && !b.accepted)
+  const pendingOffers = offers.filter(o => o.status === 'pending')
   const highestBid = activeBids.reduce<BazaarBid | null>(
     (best, b) => best == null || b.amount > best.amount ? b : best, null,
   )
@@ -350,7 +360,7 @@ export function BazaarPostBody({ postId, onUpdated }: Props) {
         )}
         {(listing.mode === 'offer' || listing.mode === 'negotiable') && (
           <span>
-            {activeBids.length} {activeBids.length === 1 ? 'offer' : 'offers'}
+            {pendingOffers.length} {pendingOffers.length === 1 ? 'offer' : 'offers'}
           </span>
         )}
         {/* listing.mode === 'fixed' → no activity row; the price + countdown
