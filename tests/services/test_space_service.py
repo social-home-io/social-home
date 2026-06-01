@@ -1822,6 +1822,59 @@ async def test_archive_federates_via_space_meta(stack):
     assert stub.archived is True
 
 
+async def test_icon_hash_federates_via_space_meta(stack):
+    """icon_hash rides the federation metadata + the stub carries it, so a
+    member household renders the host's icon (after the bytes arrive via
+    icon_webp_base64)."""
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_repo.set_icon_hash(space.id, "feedface")
+    refreshed = await stack.space_repo.get(space.id)
+    meta = _space_metadata_for_federation(refreshed)
+    assert meta["icon_hash"] == "feedface"
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=refreshed.owner_instance_id, meta=meta
+    )
+    assert stub.icon_hash == "feedface"
+
+
+async def test_apply_space_icon_from_metadata_persists_bytes(stack):
+    """The joiner-side helper decodes + persists the host's icon bytes."""
+    import base64
+
+    from socialhome.services.space_service import apply_space_icon_from_metadata
+
+    class _IconRepo:
+        def __init__(self):
+            self.saved = None
+
+        async def set(self, space_id, *, bytes_webp, hash, width, height):
+            self.saved = (space_id, bytes_webp, hash)
+
+    repo = _IconRepo()
+    raw = b"RIFFwebp-icon"
+    await apply_space_icon_from_metadata(
+        "sp-x",
+        meta={
+            "icon_hash": "abc123",
+            "icon_webp_base64": base64.b64encode(raw).decode("ascii"),
+        },
+        icon_repo=repo,
+    )
+    assert repo.saved == ("sp-x", raw, "abc123")
+    # No bytes → no write.
+    repo2 = _IconRepo()
+    await apply_space_icon_from_metadata(
+        "sp-x", meta={"icon_hash": "h"}, icon_repo=repo2
+    )
+    assert repo2.saved is None
+
+
 async def test_allowed_post_types_federate_via_space_meta(stack):
     """The per-space post-type allow-list rides the federation metadata so a
     member household enforces the same restriction when its users compose."""

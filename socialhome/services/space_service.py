@@ -1899,6 +1899,7 @@ class SpaceService(SpaceMemberGuardMixin):
                     user_repo=self._users,
                     own_instance_id=self._own_instance_id,
                     cover_repo=self._covers,
+                    icon_repo=self._icons,
                     space_crypto_service=self._space_crypto,
                 ),
             },
@@ -3109,6 +3110,7 @@ async def build_space_snapshot_for_federation(
     user_repo,
     own_instance_id: str,
     cover_repo=None,
+    icon_repo=None,
     space_crypto_service=None,
 ) -> dict:
     """:func:`_space_metadata_for_federation` + a roster of every
@@ -3168,6 +3170,14 @@ async def build_space_snapshot_for_federation(
         if cover is not None:
             bytes_webp, _hash = cover
             meta["cover_webp_base64"] = base64.b64encode(bytes_webp).decode("ascii")
+    # §D1b icon federation — ship the space icon (avatar) WebP bytes the
+    # same way as the cover, so a joiner's stub shows the real icon rather
+    # than falling back to the emoji. Small (≤256 px), so cheap to inline.
+    if icon_repo is not None and space.icon_hash:
+        icon = await icon_repo.get(space.id)
+        if icon is not None:
+            icon_webp, _ih = icon
+            meta["icon_webp_base64"] = base64.b64encode(icon_webp).decode("ascii")
     # §D1b content-key handoff (#117) — the space content key is the
     # symmetric AES-256 secret that decrypts every event in this
     # space. Ship it inside the (already-encrypted to the invitee
@@ -3237,6 +3247,7 @@ def _space_metadata_for_federation(space: Space) -> dict:
         },
         "tz": space.tz,
         "cover_hash": space.cover_hash,
+        "icon_hash": space.icon_hash,
         "about_markdown": space.about_markdown,
         # Read-only archive state — federates so member households go
         # read-only too. Reversible (an unarchive ships archived=False).
@@ -3361,6 +3372,41 @@ async def apply_space_cover_from_metadata(
     )
 
 
+async def apply_space_icon_from_metadata(
+    space_id: str,
+    *,
+    meta: dict,
+    icon_repo,
+) -> None:
+    """Persist the host's icon WebP bytes (``meta['icon_webp_base64']``) on
+    a joiner so ``/api/spaces/{id}/icon`` serves the real avatar. Mirrors
+    :func:`apply_space_cover_from_metadata`; no-op when the repo isn't wired,
+    the host shipped no bytes, or decoding fails."""
+    if icon_repo is None:
+        return
+    b64 = meta.get("icon_webp_base64")
+    if not isinstance(b64, str) or not b64:
+        return
+    try:
+        icon_webp = base64.b64decode(b64)
+    except Exception:  # pragma: no cover — defensive
+        log.warning(
+            "apply_space_icon_from_metadata: invalid base64 for space %s",
+            space_id,
+        )
+        return
+    icon_hash = str(meta.get("icon_hash") or "")
+    if not icon_hash:
+        return
+    await icon_repo.set(
+        space_id,
+        bytes_webp=icon_webp,
+        hash=icon_hash,
+        width=0,
+        height=0,
+    )
+
+
 def stub_space_from_metadata(
     space_id: str,
     *,
@@ -3423,6 +3469,7 @@ def stub_space_from_metadata(
         join_mode=_coerce_join_mode(meta.get("join_mode") or "invite_only"),
         tz=str(meta.get("tz") or "UTC"),
         cover_hash=meta.get("cover_hash"),
+        icon_hash=meta.get("icon_hash"),
         about_markdown=meta.get("about_markdown"),
         archived=bool(meta.get("archived", False)),
     )

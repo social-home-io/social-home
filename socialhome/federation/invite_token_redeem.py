@@ -50,6 +50,7 @@ from ..domain.space import SpaceMember, SpacePermissionError, SpaceRole
 from ..services.space_service import (
     apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
+    apply_space_icon_from_metadata,
     build_space_snapshot_for_federation,
     stub_space_from_metadata,
 )
@@ -94,6 +95,7 @@ class SpaceInviteTokenRedeemCoordinator:
         "_users",
         "_federation_repo",
         "_cover_repo",
+        "_icon_repo",
         "_space_crypto",
         "_pending",
         "_timeout",
@@ -114,6 +116,7 @@ class SpaceInviteTokenRedeemCoordinator:
         route_service: "RouteDiscoveryService | None" = None,
         routed_handler: "SpaceRoutedHandler | None" = None,
         cover_repo: "AbstractSpaceCoverRepo | None" = None,
+        icon_repo=None,
         space_crypto_service=None,
     ) -> None:
         self._bus = bus
@@ -127,6 +130,7 @@ class SpaceInviteTokenRedeemCoordinator:
         #: receiver's local stub doesn't fall back to the gradient
         #: placeholder (§D1b #116).
         self._cover_repo = cover_repo
+        self._icon_repo = icon_repo
         #: Optional — when wired, the issuer ships the current
         #: epoch's space content key in the ACK and the receiver
         #: imports it into its local space_keys (#117).
@@ -315,6 +319,11 @@ class SpaceInviteTokenRedeemCoordinator:
                     space_id,
                     meta=meta,
                     cover_repo=self._cover_repo,
+                )
+                await apply_space_icon_from_metadata(
+                    space_id,
+                    meta=meta,
+                    icon_repo=self._icon_repo,
                 )
                 # §D1b space content key (#117) — persist the
                 # receiver's local epoch key from the ACK so
@@ -523,6 +532,7 @@ class SpaceInviteTokenRedeemCoordinator:
                 user_repo=self._users,
                 own_instance_id=self._federation.own_instance_id,
                 cover_repo=self._cover_repo,
+                icon_repo=self._icon_repo,
                 space_crypto_service=self._space_crypto,
             )
         if routed_route_id is not None and self._routed_handler is not None:
