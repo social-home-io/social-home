@@ -1,13 +1,23 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { render } from '@testing-library/preact'
 import { LocationProvider } from 'preact-iso'
 import { MobileNav } from './MobileNav'
+import { dmUnreadTotal } from '@/store/dms'
+
+function dmTab(container: Element): HTMLAnchorElement {
+  const bar = container.querySelector('.sh-mobile-nav')!
+  return [...bar.querySelectorAll('a.sh-mobile-tab')].find(
+    (a) => a.getAttribute('href') === '/dms',
+  ) as HTMLAnchorElement
+}
 
 const wrap = (ui: any) => (
   <LocationProvider>{ui}</LocationProvider>
 )
 
 describe('MobileNav', () => {
+  afterEach(() => { dmUnreadTotal.value = 0 })
+
   it('renders 5 bottom tabs (4 link tabs + 1 More button)', () => {
     const { container } = render(wrap(<MobileNav />))
     // Only the bottom-bar tabs — the drawer hosts the full SideNav,
@@ -41,6 +51,26 @@ describe('MobileNav', () => {
     expect(active).toBeTruthy()
     expect(active?.getAttribute('aria-current')).toBe('page')
     expect(active?.getAttribute('href')).toBe('/')
+  })
+
+  it('badges the DMs tab with the live unread count', () => {
+    dmUnreadTotal.value = 3
+    const { container } = render(wrap(<MobileNav />))
+    const badge = dmTab(container).querySelector('.sh-mobile-tab__badge')
+    expect(badge?.textContent).toBe('3')
+  })
+
+  it('hides the DMs badge when there are no unread messages', () => {
+    dmUnreadTotal.value = 0
+    const { container } = render(wrap(<MobileNav />))
+    expect(dmTab(container).querySelector('.sh-mobile-tab__badge')).toBeNull()
+  })
+
+  it('caps the DMs badge at 99+', () => {
+    dmUnreadTotal.value = 150
+    const { container } = render(wrap(<MobileNav />))
+    expect(dmTab(container).querySelector('.sh-mobile-tab__badge')?.textContent)
+      .toBe('99+')
   })
 
   it('More tab toggles the sidebar drawer', () => {
