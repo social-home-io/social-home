@@ -528,6 +528,17 @@ bang.
 - Add bootstrap logic to `run.sh` — it belongs in `ha_bootstrap.py`.
 - Assume `SUPERVISOR_TOKEN` is present — only set in `haos`. Query
   `adapter.capabilities` (`Capability.INGRESS in caps`), not the env var.
+- **Guess a Home Assistant API contract.** When SH fetches from HA or calls
+  an HA service (REST `/api/...`, WS commands, `notify.*` / other service
+  names, entity & attribute shapes), verify the endpoint/shape against HA's
+  source or developer docs (developers.home-assistant.io, the REST/WS API
+  reference, the relevant integration) — never infer it from a
+  plausible-looking pattern. Cite the contract in a comment/PR note, and
+  surface HA call failures at **WARNING** (not DEBUG) so a wrong assumption
+  is diagnosable, not silent. (The #497 push bug shipped
+  `notify.mobile_app_{username}` — a guess; HA names that service after the
+  device slug, so it silently 400'd for everyone.) HA surface lives in
+  `socialhome/platform/ha/{client,providers}.py`.
 - Branch on `config.mode` outside `platform/__init__.py` and `config.py`, or
   `isinstance`-check concrete adapters — consume the Provider interfaces
   (`adapter.auth` / `users` / `push` / …) so a fourth platform drops in
