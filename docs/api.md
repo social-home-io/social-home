@@ -147,7 +147,9 @@ events these routes fire.
 |---|---|---|
 | GET | `/api/spaces` | List spaces the caller belongs to. |
 | POST | `/api/spaces` | Create a new space. |
-| GET / PATCH / DELETE | `/api/spaces/{id}` | Read / update / **dissolve** (DELETE = permanent hard delete, cascades to members). |
+| GET / PATCH / DELETE | `/api/spaces/{id}` | Read / update / **dissolve**. DELETE opens a `dissolve` **approval proposal** (v_16) — a permanent hard delete that needs a majority of admins to approve (executes immediately for a solo-admin space). PATCH ignores `space_type` (publication tier is proposal-gated — see below). |
+| GET / POST | `/api/spaces/{id}/proposals` | Multi-admin approval (quorum) for critical actions (v_16). GET lists open proposals + tally. POST `{action, space_type?}` opens a `dissolve` or `set_public_tier` proposal. Any admin may propose; executes once a majority of admins approve. |
+| POST | `/api/spaces/{id}/proposals/{pid}/vote` | Admin approves / rejects an open proposal (`{approve}`). A reject cancels it; a majority of approvals executes it. |
 | POST / DELETE | `/api/spaces/{id}/archive` | Archive (read-only, reversible) / unarchive. Owner or admin. |
 | POST | `/api/spaces/join` | Join a space via an invite token. |
 | PATCH | `/api/spaces/{id}/ownership` | Transfer ownership. |

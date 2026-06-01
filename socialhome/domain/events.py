@@ -201,6 +201,23 @@ class SpaceConfigChanged(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class SpaceProposalUpdated(DomainEvent):
+    """A critical-action approval proposal was opened / voted / resolved.
+
+    Drives the local realtime ``space.proposal.updated`` WS frame and, on
+    the host, the ``SPACE_ADMIN_PROPOSAL_UPDATED`` federation broadcast that
+    mirrors the proposal + tally onto admin households so their SPA can
+    render it and vote. ``view`` is the SPA-facing snapshot built by
+    :class:`SpaceApprovalService` (id, action, tally, status, …).
+    """
+
+    space_id: str
+    proposal_id: str
+    view: dict
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
 class SpaceMemberLocationOptedIn(DomainEvent):
     """A member just enabled location_share_enabled for a space.
 

@@ -23,6 +23,7 @@ from ..app_keys import (
     space_bot_repo_key,
     space_cover_repo_key,
     space_remote_location_repo_key,
+    space_approval_service_key,
     space_remote_member_repo_key,
     space_repo_key,
     space_service_key,
@@ -38,6 +39,7 @@ from ..domain.space import (
     SpacePermissionError,
     SpaceZone,
 )
+from ..domain.space_proposal import ProposalAction
 from ..domain.user import SYSTEM_AUTHOR
 from ..domain.federation import PairingStatus
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
@@ -255,6 +257,10 @@ class SpaceDetailView(BaseView):
         # feature.  Rehydrate into a ``SpaceFeatures`` instance so the
         # service layer can persist it.
         features = _features_from_body(body.get("features"))
+        # ``space_type`` (publication tier) is NOT applied here — it is gated
+        # behind multi-admin approval (v_16). The SPA proposes a tier change
+        # via ``POST /api/spaces/{id}/proposals``; the generic config PATCH
+        # ignores any ``space_type`` it is sent.
         updated = await svc.update_config(
             space_id,
             actor_username=ctx.username,
@@ -263,7 +269,6 @@ class SpaceDetailView(BaseView):
             emoji=body.get("emoji"),
             features=features,
             join_mode=body.get("join_mode"),
-            space_type=body.get("space_type"),
             retention_days=body.get("retention_days"),
             retention_exempt_types=body.get("retention_exempt_types"),
             about_markdown=(
@@ -282,11 +287,73 @@ class SpaceDetailView(BaseView):
         )
 
     async def delete(self) -> web.Response:
+        """Dissolving a space is a critical action — gated behind
+        multi-admin approval (v_16). This opens a ``dissolve`` proposal
+        (and executes immediately for a solo-admin space). Returns the
+        proposal view so the SPA can show the pending state."""
         ctx = self.user
-        svc = self.svc(space_service_key)
+        approvals = self.svc(space_approval_service_key)
         space_id = self.match("id")
-        await svc.dissolve_space(space_id, actor_username=ctx.username)
-        return web.json_response({"ok": True})
+        view = await approvals.propose(
+            space_id,
+            actor_username=ctx.username,
+            action=ProposalAction.DISSOLVE,
+        )
+        return web.json_response({"ok": True, "proposal": view})
+
+
+class SpaceProposalsView(BaseView):
+    """``GET`` / ``POST /api/spaces/{id}/proposals`` — multi-admin approval
+    (quorum) for critical space actions (v_16).
+
+    * ``GET`` lists open proposals (with tally) for the space.
+    * ``POST {action, params}`` opens a proposal (``dissolve`` or
+      ``set_public_tier``). Any admin may propose; it executes only once a
+      majority of the space's admins approve (the proposer auto-counts, so
+      a solo-admin space executes immediately).
+    """
+
+    async def get(self) -> web.Response:
+        approvals = self.svc(space_approval_service_key)
+        proposals = await approvals.list_for_space(self.match("id"))
+        return web.json_response({"proposals": proposals})
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        approvals = self.svc(space_approval_service_key)
+        body = await self.body()
+        try:
+            action = ProposalAction(str(body.get("action") or ""))
+        except ValueError:
+            return error_response(400, "BAD_ACTION", "unknown proposal action")
+        params: dict = {}
+        if action is ProposalAction.SET_PUBLIC_TIER:
+            params["space_type"] = str(body.get("space_type") or "")
+        view = await approvals.propose(
+            self.match("id"),
+            actor_username=ctx.username,
+            action=action,
+            params=params,
+        )
+        return web.json_response({"proposal": view})
+
+
+class SpaceProposalVoteView(BaseView):
+    """``POST /api/spaces/{id}/proposals/{pid}/vote {approve}`` — an admin
+    approves or rejects an open proposal. A reject cancels it; reaching a
+    majority of approvals executes it (v_16)."""
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        approvals = self.svc(space_approval_service_key)
+        body = await self.body()
+        view = await approvals.vote(
+            self.match("id"),
+            self.match("pid"),
+            actor_username=ctx.username,
+            approve=bool(body.get("approve", True)),
+        )
+        return web.json_response({"proposal": view})
 
 
 class SpaceArchiveView(BaseView):

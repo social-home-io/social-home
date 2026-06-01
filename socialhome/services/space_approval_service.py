@@ -1,0 +1,512 @@
+"""Multi-admin approval (quorum) for critical space actions (#114 follow-on).
+
+Dissolving a space and changing its publication tier are too high-stakes
+for one admin to do alone, so they become *proposals* that execute only
+once a **majority of the space's admins approve** — the owner included.
+
+Flow (host is authoritative):
+
+* A local admin calls :meth:`propose` / :meth:`vote`. If the space is
+  hosted on another household, the intent forwards to the host via
+  ``SPACE_REMOTE_ADMIN_ACTION`` (``propose`` / ``vote`` verbs); otherwise
+  it runs here.
+* On the host, :meth:`_evaluate` recomputes the threshold against the
+  *current* admin set after every vote: any reject cancels; once
+  approvals exceed half the admins the proposal executes (runs the real
+  :meth:`SpaceService.dissolve_space` / :meth:`SpaceService.update_config`
+  as the owner, so the result federates through the normal outbounds).
+* Every change publishes :class:`SpaceProposalUpdated` for the local WS
+  fan-out and (host only) the ``SPACE_ADMIN_PROPOSAL_UPDATED`` broadcast
+  that mirrors the state onto admin households.
+
+The owner is bound by the same rule: a solo-admin space (owner only)
+executes immediately (majority of 1), but the moment a second admin
+exists no single person can dissolve or publish the space alone.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+
+from ..domain.events import SpaceProposalUpdated
+from ..domain.federation import FederationEventType
+from ..domain.federation_capabilities import FederationCapability
+from ..domain.space import SpacePermissionError, SpaceRole
+from ..domain.space_proposal import (
+    ProposalAction,
+    ProposalStatus,
+    ProposalVote,
+    SpaceAdminProposal,
+    SpaceAdminProposalVote,
+)
+from ..infrastructure.event_bus import EventBus
+from ..repositories.space_proposal_repo import AbstractSpaceProposalRepo
+from ..repositories.space_remote_member_repo import AbstractSpaceRemoteMemberRepo
+from ..repositories.space_repo import AbstractSpaceRepo
+from ..repositories.user_repo import AbstractUserRepo
+
+log = logging.getLogger(__name__)
+
+#: How long a proposal stays open before it lapses unapproved.
+PROPOSAL_TTL = timedelta(days=7)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class SpaceApprovalService:
+    """Quorum approval for ``dissolve`` and ``set_public_tier``."""
+
+    __slots__ = (
+        "_proposals",
+        "_spaces",
+        "_remote_members",
+        "_users",
+        "_bus",
+        "_own_instance_id",
+        "_federation",
+        "_space_service",
+    )
+
+    def __init__(
+        self,
+        proposal_repo: AbstractSpaceProposalRepo,
+        space_repo: AbstractSpaceRepo,
+        remote_member_repo: AbstractSpaceRemoteMemberRepo,
+        user_repo: AbstractUserRepo,
+        bus: EventBus,
+        *,
+        own_instance_id: str | None = None,
+    ) -> None:
+        self._proposals = proposal_repo
+        self._spaces = space_repo
+        self._remote_members = remote_member_repo
+        self._users = user_repo
+        self._bus = bus
+        self._own_instance_id = own_instance_id
+        self._federation = None
+        self._space_service = None
+
+    def attach(self, *, federation_service=None, space_service=None) -> None:
+        """Wire the federation transport (for cross-household forward +
+        broadcast) and the :class:`SpaceService` used to execute an
+        approved proposal. Both are set after construction to avoid an
+        import cycle; see :mod:`socialhome.app`."""
+        if federation_service is not None:
+            self._federation = federation_service
+        if space_service is not None:
+            self._space_service = space_service
+
+    # ── Public entry points (called by routes with a local actor) ────────
+
+    async def propose(
+        self,
+        space_id: str,
+        *,
+        actor_username: str,
+        action: ProposalAction,
+        params: dict | None = None,
+    ) -> dict:
+        """Open (or join) a proposal for a critical action. Returns the
+        SPA-facing proposal view. When the space is hosted elsewhere the
+        intent forwards to the host and a ``pending`` placeholder view is
+        returned (the real state arrives via the mirror broadcast)."""
+        space = await self._require_space(space_id)
+        actor = await self._require_local_admin(space_id, actor_username)
+        params = params or {}
+        if space.owner_instance_id and space.owner_instance_id != self._own_instance_id:
+            await self._forward(
+                space, "propose", {"action": action.value, "params": params}, actor
+            )
+            return {
+                "action": action.value,
+                "status": ProposalStatus.PENDING.value,
+                "forwarded": True,
+            }
+        return await self._host_propose(
+            space_id,
+            action,
+            params,
+            proposer_instance=self._own_instance_id or "",
+            proposer_user=actor.user_id,
+        )
+
+    async def vote(
+        self,
+        space_id: str,
+        proposal_id: str,
+        *,
+        actor_username: str,
+        approve: bool,
+    ) -> dict | None:
+        space = await self._require_space(space_id)
+        actor = await self._require_local_admin(space_id, actor_username)
+        if space.owner_instance_id and space.owner_instance_id != self._own_instance_id:
+            await self._forward(
+                space,
+                "vote",
+                {"proposal_id": proposal_id, "vote": _vote_str(approve)},
+                actor,
+            )
+            return None
+        return await self._host_vote(
+            proposal_id,
+            voter_instance=self._own_instance_id or "",
+            voter_user=actor.user_id,
+            approve=approve,
+        )
+
+    async def list_for_space(self, space_id: str) -> list[dict]:
+        """Open proposals for a space (SPA views), lazily expiring stale
+        ones. Reads the local table — authoritative on the host, mirror on
+        a member household."""
+        out: list[dict] = []
+        for p in await self._proposals.list_open(space_id):
+            if p.expires_at <= _now():
+                # Lazy expiry — only the host mutates state; a mirror just
+                # hides it (the host's EXPIRED broadcast will follow).
+                if (
+                    not (space := await self._spaces.get(space_id))
+                    or space.owner_instance_id == self._own_instance_id
+                ):
+                    await self._proposals.set_status(p.id, ProposalStatus.EXPIRED)
+                    await self._emit(p, ProposalStatus.EXPIRED)
+                continue
+            out.append(await self._view(p))
+        return out
+
+    async def expire_due(self) -> int:
+        """Mark every lapsed pending proposal EXPIRED + emit. Returns the
+        count. Intended for a periodic sweep on the host."""
+        due = await self._proposals.list_expired(_now())
+        for p in due:
+            await self._proposals.set_status(p.id, ProposalStatus.EXPIRED)
+            await self._emit(p, ProposalStatus.EXPIRED)
+        return len(due)
+
+    # ── Inbound (host-side, called by the federation handler) ────────────
+
+    async def apply_remote_propose(
+        self,
+        space_id: str,
+        *,
+        proposer_instance: str,
+        proposer_user: str,
+        action: str,
+        params: dict,
+    ) -> None:
+        """A remote admin proposed a critical action. The §24.11 pipeline
+        verified the signer; we re-validate the proposer is a current admin
+        before opening the proposal."""
+        if not await self._host_owns(space_id):
+            return
+        if (proposer_instance, proposer_user) not in await self._admin_keys(space_id):
+            log.info(
+                "apply_remote_propose: %s@%s not an admin of space=%s — dropping",
+                proposer_user,
+                proposer_instance,
+                space_id,
+            )
+            return
+        try:
+            act = ProposalAction(action)
+        except ValueError:
+            log.info("apply_remote_propose: unknown action=%r — dropping", action)
+            return
+        await self._host_propose(
+            space_id,
+            act,
+            params if isinstance(params, dict) else {},
+            proposer_instance=proposer_instance,
+            proposer_user=proposer_user,
+        )
+
+    async def apply_remote_vote(
+        self,
+        space_id: str,
+        *,
+        voter_instance: str,
+        voter_user: str,
+        proposal_id: str,
+        approve: bool,
+    ) -> None:
+        if not await self._host_owns(space_id):
+            return
+        await self._host_vote(
+            proposal_id,
+            voter_instance=voter_instance,
+            voter_user=voter_user,
+            approve=approve,
+        )
+
+    async def apply_mirror_update(self, space_id: str, view: dict) -> None:
+        """Member-household side: mirror the host's proposal state so local
+        admins can render + vote. Resolved (executed/rejected/expired)
+        proposals are dropped from the mirror."""
+        pid = str(view.get("id") or "")
+        if not pid:
+            return
+        status = str(view.get("status") or "")
+        if status != ProposalStatus.PENDING.value:
+            await self._proposals.delete(pid)
+        else:
+            await self._proposals.upsert(_proposal_from_view(space_id, view))
+        await self._bus.publish(
+            SpaceProposalUpdated(space_id=space_id, proposal_id=pid, view=view)
+        )
+
+    # ── Host-side core ───────────────────────────────────────────────────
+
+    async def _host_propose(
+        self,
+        space_id: str,
+        action: ProposalAction,
+        params: dict,
+        *,
+        proposer_instance: str,
+        proposer_user: str,
+    ) -> dict:
+        existing = await self._proposals.find_open(space_id, action)
+        if existing is not None and existing.expires_at > _now():
+            proposal = existing
+        else:
+            if existing is not None:
+                await self._proposals.set_status(existing.id, ProposalStatus.EXPIRED)
+            now = _now()
+            proposal = SpaceAdminProposal(
+                id=str(uuid.uuid4()),
+                space_id=space_id,
+                action=action,
+                params=params,
+                proposed_by_instance=proposer_instance,
+                proposed_by_user=proposer_user,
+                status=ProposalStatus.PENDING,
+                created_at=now,
+                expires_at=(datetime.now(timezone.utc) + PROPOSAL_TTL).isoformat(),
+            )
+            await self._proposals.upsert(proposal)
+        await self._proposals.record_vote(
+            SpaceAdminProposalVote(
+                proposal_id=proposal.id,
+                voter_instance=proposer_instance,
+                voter_user=proposer_user,
+                vote=ProposalVote.APPROVE,
+                voted_at=_now(),
+            )
+        )
+        return await self._evaluate(proposal)
+
+    async def _host_vote(
+        self,
+        proposal_id: str,
+        *,
+        voter_instance: str,
+        voter_user: str,
+        approve: bool,
+    ) -> dict | None:
+        proposal = await self._proposals.get(proposal_id)
+        if proposal is None:
+            return None
+        if proposal.status != ProposalStatus.PENDING:
+            return await self._view(proposal)
+        if proposal.expires_at <= _now():
+            await self._proposals.set_status(proposal.id, ProposalStatus.EXPIRED)
+            return await self._emit(proposal, ProposalStatus.EXPIRED)
+        if (voter_instance, voter_user) not in await self._admin_keys(
+            proposal.space_id
+        ):
+            log.info(
+                "vote: %s@%s not a current admin of space=%s — dropping",
+                voter_user,
+                voter_instance,
+                proposal.space_id,
+            )
+            return await self._view(proposal)
+        await self._proposals.record_vote(
+            SpaceAdminProposalVote(
+                proposal_id=proposal_id,
+                voter_instance=voter_instance,
+                voter_user=voter_user,
+                vote=ProposalVote.APPROVE if approve else ProposalVote.REJECT,
+                voted_at=_now(),
+            )
+        )
+        return await self._evaluate(proposal)
+
+    async def _evaluate(self, proposal: SpaceAdminProposal) -> dict:
+        """Recompute the threshold against the current admin set and, if
+        met, execute. Returns the SPA view with the resolved status."""
+        admins = await self._admin_keys(proposal.space_id)
+        votes = await self._proposals.list_votes(proposal.id)
+        relevant = [v for v in votes if (v.voter_instance, v.voter_user) in admins]
+        if any(v.vote == ProposalVote.REJECT for v in relevant):
+            await self._proposals.set_status(proposal.id, ProposalStatus.REJECTED)
+            return await self._emit(proposal, ProposalStatus.REJECTED)
+        approvals = sum(1 for v in relevant if v.vote == ProposalVote.APPROVE)
+        total = len(admins)
+        if total > 0 and approvals * 2 > total:
+            await self._proposals.set_status(proposal.id, ProposalStatus.EXECUTED)
+            view = await self._emit(proposal, ProposalStatus.EXECUTED)
+            await self._execute(proposal)
+            return view
+        return await self._emit(proposal, ProposalStatus.PENDING)
+
+    async def _execute(self, proposal: SpaceAdminProposal) -> None:
+        if self._space_service is None:
+            log.warning("approval execute: no space_service wired — dropping")
+            return
+        space = await self._spaces.get(proposal.space_id)
+        if space is None:
+            return
+        owner = space.owner_username
+        try:
+            if proposal.action == ProposalAction.DISSOLVE:
+                await self._space_service.dissolve_space(
+                    proposal.space_id, actor_username=owner
+                )
+            elif proposal.action == ProposalAction.SET_PUBLIC_TIER:
+                st = proposal.params.get("space_type")
+                if st:
+                    await self._space_service.update_config(
+                        proposal.space_id, actor_username=owner, space_type=st
+                    )
+        except Exception:
+            log.exception(
+                "approval execute failed for proposal=%s action=%s",
+                proposal.id,
+                proposal.action,
+            )
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    async def _admin_keys(self, space_id: str) -> set[tuple[str, str]]:
+        """The (instance_id, user_id) of every current admin (owner counts),
+        local + remote — the electorate the majority is computed against."""
+        keys: set[tuple[str, str]] = set()
+        own = self._own_instance_id or ""
+        for m in await self._spaces.list_members(space_id):
+            if m.role in (SpaceRole.OWNER, SpaceRole.ADMIN):
+                keys.add((own, m.user_id))
+        for rm in await self._remote_members.list_for_space(space_id):
+            if rm.role == SpaceRole.ADMIN:
+                keys.add((rm.instance_id, rm.user_id))
+        return keys
+
+    async def _require_space(self, space_id: str):
+        space = await self._spaces.get(space_id)
+        if space is None:
+            raise KeyError(f"space {space_id!r} not found")
+        return space
+
+    async def _require_local_admin(self, space_id: str, actor_username: str):
+        actor = await self._users.get(actor_username)
+        if actor is None:
+            raise KeyError(f"actor {actor_username!r} not found")
+        member = await self._spaces.get_member(space_id, actor.user_id)
+        if member is None or member.role not in (SpaceRole.OWNER, SpaceRole.ADMIN):
+            raise SpacePermissionError("only an admin can propose or vote")
+        return actor
+
+    async def _host_owns(self, space_id: str) -> bool:
+        space = await self._spaces.get(space_id)
+        return bool(
+            space is not None
+            and self._own_instance_id is not None
+            and space.owner_instance_id == self._own_instance_id
+        )
+
+    async def _forward(self, space, verb: str, params: dict, actor) -> None:
+        if self._federation is None:
+            raise RuntimeError("remote proposal requires federation to be attached")
+        if not await self._federation.peer_supports(
+            space.owner_instance_id,
+            min_version=FederationCapability.MIN_FOR_ADMIN_PROPOSALS,
+        ):
+            raise SpacePermissionError(
+                "this space's host doesn't support admin approvals yet "
+                "— ask the host's operator to upgrade",
+            )
+        await self._federation.send_with_mesh_fallback(
+            to_instance_id=space.owner_instance_id,
+            event_type=FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
+            payload={
+                "space_id": space.id,
+                "actor_user_id": actor.user_id,
+                "actor_instance_id": self._own_instance_id,
+                "action": verb,
+                "params": params,
+            },
+            space_id=space.id,
+        )
+
+    async def _view(self, proposal: SpaceAdminProposal) -> dict:
+        admins = await self._admin_keys(proposal.space_id)
+        votes = await self._proposals.list_votes(proposal.id)
+        relevant = [v for v in votes if (v.voter_instance, v.voter_user) in admins]
+        approvals = sum(1 for v in relevant if v.vote == ProposalVote.APPROVE)
+        total = len(admins)
+        return {
+            "id": proposal.id,
+            "space_id": proposal.space_id,
+            "action": proposal.action.value,
+            "params": proposal.params,
+            "status": proposal.status.value,
+            "proposed_by_instance": proposal.proposed_by_instance,
+            "proposed_by_user": proposal.proposed_by_user,
+            "approvals": approvals,
+            "total_admins": total,
+            "needed": (total // 2) + 1,
+            "created_at": proposal.created_at,
+            "expires_at": proposal.expires_at,
+        }
+
+    async def _emit(self, proposal: SpaceAdminProposal, status: ProposalStatus) -> dict:
+        """Publish the updated proposal view (status overridden to reflect
+        the just-applied transition, since the frozen row may be stale) and
+        return that view."""
+        view = await self._view(proposal)
+        view["status"] = status.value
+        await self._bus.publish(
+            SpaceProposalUpdated(
+                space_id=proposal.space_id, proposal_id=proposal.id, view=view
+            )
+        )
+        # Host mirrors the authoritative view onto member households so a
+        # remote admin's SPA shows the same proposal + tally and can vote.
+        if self._federation is not None and await self._host_owns(proposal.space_id):
+            try:
+                await self._federation.broadcast_to_space_members(
+                    proposal.space_id,
+                    FederationEventType.SPACE_ADMIN_PROPOSAL_UPDATED,
+                    {"space_id": proposal.space_id, "view": view},
+                )
+            except Exception:
+                log.exception(
+                    "SPACE_ADMIN_PROPOSAL_UPDATED broadcast failed for space=%s",
+                    proposal.space_id,
+                )
+        return view
+
+
+def _vote_str(approve: bool) -> str:
+    return ProposalVote.APPROVE.value if approve else ProposalVote.REJECT.value
+
+
+def _proposal_from_view(space_id: str, view: dict) -> SpaceAdminProposal:
+    """Reconstruct a mirror row from a broadcast view (member household)."""
+    raw_params = view.get("params")
+    params: dict = raw_params if isinstance(raw_params, dict) else {}
+    return SpaceAdminProposal(
+        id=str(view["id"]),
+        space_id=space_id,
+        action=ProposalAction(view["action"]),
+        params=params,
+        proposed_by_instance=str(view.get("proposed_by_instance") or ""),
+        proposed_by_user=str(view.get("proposed_by_user") or ""),
+        status=ProposalStatus(view.get("status") or "pending"),
+        created_at=str(view.get("created_at") or _now()),
+        expires_at=str(view.get("expires_at") or _now()),
+    )

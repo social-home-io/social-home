@@ -14672,6 +14672,69 @@ a.sh-welcome-card:hover {
   font-size: var(--sh-font-size-xs);
 }
 
+/* Pending multi-admin approval proposals (v_16). Attention-tinted so a
+   pending dissolve / publication change is obvious, but not alarming. */
+.sh-space-proposals {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+  margin-bottom: var(--sh-space-md);
+}
+.sh-proposal-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-md);
+  border-radius: var(--sh-radius-md);
+  background: color-mix(in srgb, var(--sh-warning, #c47f17) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sh-warning, #c47f17) 38%, transparent);
+}
+.sh-proposal-banner__body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sh-space-sm);
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+.sh-proposal-banner__icon {
+  font-size: 1.4em;
+  line-height: 1;
+  padding-top: 2px;
+}
+.sh-proposal-banner__text {
+  min-width: 0;
+}
+.sh-proposal-banner__text strong {
+  display: block;
+  margin-bottom: 2px;
+}
+.sh-proposal-banner__text p {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
+}
+.sh-proposal-banner__actions {
+  display: flex;
+  gap: var(--sh-space-sm);
+  flex-shrink: 0;
+}
+.sh-proposal-banner__note {
+  margin: 0;
+  font-size: var(--sh-font-size-xs);
+  flex-shrink: 0;
+}
+/* On a narrow phone the actions wrap under the text and stretch full-width
+   so the tap targets stay ≥ 36 px and reachable. */
+@media (max-width: 480px) {
+  .sh-proposal-banner__actions {
+    flex: 1 1 100%;
+  }
+  .sh-proposal-banner__actions > * {
+    flex: 1;
+  }
+}
+
 /* Scope chips — which kind of space is this? */
 .sh-scope-chip, .sh-join-mode-chip, .sh-age-chip {
   display: inline-flex; align-items: center; gap: 4px;

@@ -228,9 +228,22 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
 
   const dissolve = async () => {
     try {
-      await api.delete(`/api/spaces/${space.id}`)
-      showToast('Space dissolved', 'info')
-      location.href = '/spaces'
+      // Dissolving is gated behind multi-admin approval (v_16): this opens
+      // a proposal. It executes immediately only when the caller is the
+      // sole admin (majority of 1); otherwise it needs other admins to
+      // approve from the banner on the space.
+      const res = await api.post<{
+        proposal?: { status?: string; needed?: number }
+      }>(`/api/spaces/${space.id}/proposals`, { action: 'dissolve' })
+      if (res?.proposal?.status === 'executed') {
+        showToast('Space dissolved', 'info')
+        location.href = '/spaces'
+      } else {
+        showToast(
+          'Dissolve proposed — it needs a majority of admins to approve.',
+          'info',
+        )
+      }
     } catch (e: any) {
       showToast(e.message || 'Failed to dissolve', 'error')
     }
@@ -574,10 +587,16 @@ export function SpaceSettings({ space, onUpdate }: { space: Space; onUpdate: () 
 
       <hr />
       <h3>Danger zone</h3>
+      <p class="sh-muted">
+        Permanently deletes the space and all its content for every member.
+        When the space has more than one admin this opens a proposal that a
+        majority of admins must approve — no single admin (not even the
+        owner) can delete the group alone.
+      </p>
       <Button variant="danger" onClick={() => showDissolve.value = true}>Dissolve space</Button>
       <ConfirmDialog open={showDissolve.value} title="Dissolve space?"
-        message="This permanently deletes the space and all its content — posts, photos, events, everything — for every member household. This cannot be undone. To just hide it, use Archive instead."
-        confirmLabel="Dissolve" destructive
+        message="This permanently deletes the space and all its content — posts, photos, events, everything — for every member household. This cannot be undone. With more than one admin it needs a majority to approve before it takes effect. To just hide it, use Archive instead."
+        confirmLabel="Propose dissolve" destructive
         onConfirm={() => { showDissolve.value = false; dissolve() }}
         onCancel={() => showDissolve.value = false} />
     </div>

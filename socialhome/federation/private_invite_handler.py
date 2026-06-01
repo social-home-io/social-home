@@ -59,6 +59,7 @@ class PrivateSpaceInviteHandler:
         "_cover_repo",
         "_space_crypto",
         "_space_service",
+        "_approval_service",
         "_remote_locations",
     )
 
@@ -90,6 +91,10 @@ class PrivateSpaceInviteHandler:
         #: path (rotation, role-check, broadcast). Tests that don't
         #: exercise admin actions can omit it.
         self._space_service = space_service
+        #: Optional — multi-admin approval workflow (v_16). Dispatches the
+        #: ``propose`` / ``vote`` verbs and the ``SPACE_ADMIN_PROPOSAL_UPDATED``
+        #: mirror. Wired post-construction like ``_space_service``.
+        self._approval_service = None
         #: Optional — when wired, inbound ``SPACE_LOCATION_UPDATED``
         #: events from member households are persisted here so the
         #: space map endpoint surfaces remote members' pins alongside
@@ -105,6 +110,12 @@ class PrivateSpaceInviteHandler:
         — degrading to a no-op rather than crashing the receiver.
         """
         self._space_service = space_service
+
+    def attach_approval_service(self, approval_service) -> None:
+        """Wire :class:`SpaceApprovalService` post-construction (v_16) so the
+        host can dispatch validated ``propose`` / ``vote`` verbs and mirror
+        ``SPACE_ADMIN_PROPOSAL_UPDATED`` onto member households."""
+        self._approval_service = approval_service
 
     def attach_to(self, federation_service: "FederationService") -> None:
         registry = federation_service._event_registry  # noqa: SLF001
@@ -139,6 +150,10 @@ class PrivateSpaceInviteHandler:
         registry.register(
             FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
             self._on_remote_admin_action,
+        )
+        registry.register(
+            FederationEventType.SPACE_ADMIN_PROPOSAL_UPDATED,
+            self._on_proposal_mirror,
         )
         registry.register(
             FederationEventType.SPACE_LOCATION_UPDATED,
@@ -543,18 +558,12 @@ class PrivateSpaceInviteHandler:
 
         Receiver is the host of the space; sender is the household of a
         remote admin who wants to run an admin-level mutation (config
-        edit, ban / unban, archive / unarchive). Delegates to
-        :meth:`SpaceService.apply_remote_admin_action`, which re-validates
-        the actor's role from ``space_remote_members.role`` before running
-        the real host method. The §24.11 pipeline has already verified the
-        envelope signature; the role-check is the second gate. Generalises
+        edit, ban / unban, archive / unarchive) — or, for the ``propose`` /
+        ``vote`` verbs (v_16), a quorum-gated critical action. The §24.11
+        pipeline has already verified the envelope signature; the role
+        re-check happens inside the target service. Generalises
         :meth:`_on_remote_admin_kick`.
         """
-        if self._space_service is None:
-            log.warning(
-                "SPACE_REMOTE_ADMIN_ACTION: no space_service wired — dropping",
-            )
-            return
         p = event.payload
         space_id = str(p.get("space_id") or "") or (event.space_id or "")
         actor_user_id = str(p.get("actor_user_id") or "")
@@ -572,6 +581,39 @@ class PrivateSpaceInviteHandler:
                 event.from_instance,
             )
             return
+        # Quorum-approval verbs route to the approval service; everything
+        # else is a direct admin mutation on SpaceService.
+        if action in ("propose", "vote"):
+            if self._approval_service is None:
+                log.warning(
+                    "SPACE_REMOTE_ADMIN_ACTION %s: no approval_service — dropping",
+                    action,
+                )
+                return
+            if action == "propose":
+                await self._approval_service.apply_remote_propose(
+                    space_id,
+                    proposer_instance=actor_instance_id,
+                    proposer_user=actor_user_id,
+                    action=str(params.get("action") or ""),
+                    params=params.get("params")
+                    if isinstance(params.get("params"), dict)
+                    else {},
+                )
+            else:
+                await self._approval_service.apply_remote_vote(
+                    space_id,
+                    voter_instance=actor_instance_id,
+                    voter_user=actor_user_id,
+                    proposal_id=str(params.get("proposal_id") or ""),
+                    approve=str(params.get("vote") or "") == "approve",
+                )
+            return
+        if self._space_service is None:
+            log.warning(
+                "SPACE_REMOTE_ADMIN_ACTION: no space_service wired — dropping",
+            )
+            return
         await self._space_service.apply_remote_admin_action(
             space_id,
             actor_instance_id=actor_instance_id,
@@ -579,6 +621,25 @@ class PrivateSpaceInviteHandler:
             action=action,
             params=params,
         )
+
+    async def _on_proposal_mirror(self, event: "FederationEvent") -> None:
+        """Member-household side of ``SPACE_ADMIN_PROPOSAL_UPDATED`` (v_16).
+
+        The host broadcasts the current proposal view; we mirror it so
+        local admins can render the pending dissolve / publication-tier
+        change and vote. Host-authoritative: we only accept a mirror for a
+        space whose owner is the signer.
+        """
+        if self._approval_service is None:
+            return
+        space_id = str(event.payload.get("space_id") or "") or (event.space_id or "")
+        view = event.payload.get("view")
+        if not space_id or not isinstance(view, dict):
+            return
+        space = await self._space_repo.get(space_id)
+        if space is None or space.owner_instance_id != event.from_instance:
+            return  # only the host may mirror proposal state
+        await self._approval_service.apply_mirror_update(space_id, view)
 
     async def _on_key_exchange_rekey(self, event: "FederationEvent") -> None:
         """Forward-secrecy rekey from the host (#121).
