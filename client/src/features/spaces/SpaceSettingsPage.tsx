@@ -24,10 +24,9 @@ import { currentUser } from '@/store/auth'
 import type { Space } from '@/types'
 import { SpaceBotsTab } from './SpaceBotsTab'
 import { SpaceLinksTab } from './SpaceLinksTab'
-import { SpaceNotifPrefsPanel } from './SpaceNotifPrefsPanel'
 import { confirmDialog } from '@/components/confirm'
 
-type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots' | 'notifications'
+type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots'
 
 interface SpaceDetail extends Space {
   about_markdown: string | null
@@ -101,12 +100,13 @@ export default function SpaceSettingsPage() {
     )
   }
 
-  // Tabs the active user can see. Non-admins get only the Bots tab
-  // (where they manage their own personal automations) and the
-  // Notifications tab (their own per-space alert level).
+  // Tabs the active user can see. The per-member notification level lives
+  // on the 🔔 bell menu in the space header (reachable by every member),
+  // not here — so this admin-entry page no longer carries a Notifications
+  // tab. Non-admins keep only the Bots tab (their own personal automations).
   const visibleTabs: SettingsTab[] = canAdmin
-    ? ['general', 'notifications', 'about', 'theme', 'links', 'bots']
-    : ['notifications', 'bots']
+    ? ['general', 'about', 'theme', 'links', 'bots']
+    : ['bots']
   if (!visibleTabs.includes(activeTab.value)) {
     activeTab.value = visibleTabs[0]
   }
@@ -114,7 +114,6 @@ export default function SpaceSettingsPage() {
   const tabLabel = (t: SettingsTab): string => {
     switch (t) {
       case 'general':       return 'General'
-      case 'notifications': return 'Notifications'
       case 'about':         return 'About'
       case 'theme':         return 'Theme'
       case 'links':         return 'Quick links'
@@ -143,24 +142,21 @@ export default function SpaceSettingsPage() {
         ))}
       </nav>
 
-      {/* Member-only context line — non-admins see just two tabs
-       *  (Notifications / Bots) and might wonder why the rest are
-       *  missing.  Naming the scope explicitly makes the limited
-       *  surface read as "your settings for this space" rather than
-       *  as a permissions glitch. */}
+      {/* Member-only context line — non-admins see just the Bots tab and
+       *  might wonder why the rest are missing.  Naming the scope explicitly
+       *  makes the limited surface read as "your settings for this space"
+       *  rather than as a permissions glitch, and points them at the 🔔 bell
+       *  in the space header for their notification level. */}
       {!canAdmin && (
         <p class="sh-muted" style={{ marginTop: 0, fontSize: 'var(--sh-font-size-sm)' }}>
-          These are <strong>your</strong> settings for this space — alerts and the
-          personal automations you've connected. Space-wide admin controls
-          live with the owner.
+          These are <strong>your</strong> personal automations for this space.
+          Your notification level is on the 🔔 bell in the space header.
+          Space-wide admin controls live with the owner.
         </p>
       )}
 
       {activeTab.value === 'general' && (
         <SpaceSettings space={space} onUpdate={() => void reload()} />
-      )}
-      {activeTab.value === 'notifications' && (
-        <SpaceNotifPrefsPanel spaceId={space.id} />
       )}
       {activeTab.value === 'about' && (
         <AboutTab space={space} onSaved={() => void reload()} />
