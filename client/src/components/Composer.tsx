@@ -24,7 +24,7 @@ import { MediaDropzone } from './MediaDropzone'
 import { PollBuilder, type PollDraft } from './PollUI'
 import { ScheduleBuilder, type ScheduleDraft } from './ScheduleBuilder'
 import { SttButton } from './SttButton'
-import { hasCapability } from '@/store/instance'
+import { supportsStt } from '@/platform'
 import { openHighlightPicker } from './HighlightPickerDialog'
 import { openBazaarCreate } from './BazaarCreateDialog'
 import { showToast } from './Toast'
@@ -707,7 +707,7 @@ export function Composer({ onSubmit, context, placeholder, spaceId, allowedTypes
             Aa
           </button>
         )}
-        {postType.value === 'text' && hasCapability('stt') && (
+        {postType.value === 'text' && supportsStt() && (
           <SttButton onText={(t) => {
             const sep = content.value && !/\s$/.test(content.value) ? ' ' : ''
             content.value = (content.value + sep + t).slice(0, MAX_LENGTH)

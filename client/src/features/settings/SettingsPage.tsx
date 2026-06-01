@@ -27,7 +27,7 @@ import {
 } from '@/store/householdUsers'
 import { relativeDocsTime } from '@/utils/relativeTime'
 import { userPreferences } from '@/store/userPreferences'
-import { instanceConfig } from '@/store/instance'
+import { isHomeAssistant } from '@/platform'
 
 interface SpaceLocationRow {
   space_id: string
@@ -870,8 +870,7 @@ function NotificationsTab() {
           ? 'You will receive push notifications for new messages and mentions.'
           : 'Enable push notifications to stay updated when you are away.'}
       </p>
-      {(instanceConfig.value?.mode === 'ha'
-        || instanceConfig.value?.mode === 'haos') && <HaNotifyServiceRow />}
+      {isHomeAssistant() && <HaNotifyServiceRow />}
     </section>
   )
 }

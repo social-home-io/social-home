@@ -18,7 +18,7 @@ import { useLocation } from 'preact-iso'
 import { useComputed } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { isGuardian } from '@/store/guardian'
-import { instanceConfig } from '@/store/instance'
+import { isSupervisorAddon } from '@/platform'
 import { active as activeCalls } from '@/store/calls'
 import { dmUnreadTotal } from '@/store/dms'
 import { spaces, loadSpaces } from '@/store/spaces'
@@ -206,7 +206,7 @@ export function SideNav() {
     // doubles up. ha and standalone modes keep the strip; it's the
     // user's only "who am I signed in as" cue when SH is the primary
     // UI surface.
-    const isHaos = instanceConfig.value?.mode === 'haos'
+    const isHaos = isSupervisorAddon()
     const up = userPreferences.value
     const state: SideNavState = {
       isAdmin: !!user?.is_admin,

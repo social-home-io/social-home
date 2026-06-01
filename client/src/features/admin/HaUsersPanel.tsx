@@ -17,7 +17,7 @@ import { Spinner } from '@/components/Spinner'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
 import { Modal } from '@/components/Modal'
-import { instanceConfig } from '@/store/instance'
+import { requiresHaUserPassword } from '@/platform'
 
 interface HaUser {
   username:     string
@@ -94,12 +94,11 @@ export function HaUsersPanel() {
   }
 
   const toggle = (row: HaUser) => {
-    const mode = instanceConfig.value?.mode
     // ha mode: server requires a password on provision so the picked
     // HA person can sign in via /api/auth/token.  haos mode: ingress
     // signs them in, so no password.  Deprovision (wasSynced=true) is
     // password-less in both modes.
-    if (!row.synced && mode === 'ha') {
+    if (!row.synced && requiresHaUserPassword()) {
       passwordPromptOpen.value = { user: row }
       return
     }
