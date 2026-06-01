@@ -33,6 +33,7 @@ export type SpaceTab =
   | 'pages'
   | 'calendar'
   | 'tasks'
+  | 'stickies'
   | 'gallery'
   | 'bazaar'
   | 'map'

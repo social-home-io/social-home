@@ -28,6 +28,7 @@ import { openCommentOverlay } from '@/components/CommentOverlay'
 import { SpaceSubHeader, type SpaceTab } from '@/components/SpaceSubHeader'
 import { SpaceTasksTab, resetSpaceTasks } from './SpaceTasksTab'
 import { SpaceBazaarTab } from './SpaceBazaarTab'
+import StickyBoardPage from '@/features/stickies/StickyBoardPage'
 import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openSpaceEventDialog } from '@/components/CalendarEventDialog'
 import { SpaceLinksStrip } from './SpaceLinksStrip'
@@ -307,6 +308,7 @@ export default function SpaceFeedPage() {
     ...((f?.pages ?? true) ? (['pages'] as const) : []),
     ...((f?.calendar ?? true) ? (['calendar'] as const) : []),
     ...((f?.todo ?? true) ? (['tasks'] as const) : []),
+    ...((f?.stickies ?? true) ? (['stickies'] as const) : []),
     ...((f?.gallery ?? true) ? (['gallery'] as const) : []),
     ...((f?.bazaar ?? true) ? (['bazaar'] as const) : []),
     ...(f?.location ? (['map'] as const) : []),
@@ -594,6 +596,10 @@ export default function SpaceFeedPage() {
 
       {activeTab.value === 'tasks' && (
         <SpaceTasksTab spaceId={spaceId} />
+      )}
+
+      {activeTab.value === 'stickies' && (
+        <StickyBoardPage spaceId={spaceId} />
       )}
 
       {activeTab.value === 'gallery' && (
