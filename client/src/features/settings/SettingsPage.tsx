@@ -27,6 +27,7 @@ import {
 } from '@/store/householdUsers'
 import { relativeDocsTime } from '@/utils/relativeTime'
 import { userPreferences } from '@/store/userPreferences'
+import { instanceConfig } from '@/store/instance'
 
 interface SpaceLocationRow {
   space_id: string
@@ -45,6 +46,10 @@ const displayName = signal('')
 const bio = signal('')
 const landingPath = signal<LandingPath>('/')
 const avatarUrl = signal<string | null>(null)
+// Per-user HA Companion-app notify service (§25.3). Only meaningful in
+// ha / haos mode; the field is hidden otherwise.
+const haNotifyService = signal('')
+const haNotifySaving = signal(false)
 const onlineStatusVisible = signal(true)
 const pushEnabled = signal(
   typeof Notification !== 'undefined' ? Notification.permission === 'granted' : false
@@ -78,6 +83,7 @@ export default function SettingsPage() {
       avatarUrl.value = currentUser.value.picture_url
     }
     landingPath.value = getLandingPath()
+    haNotifyService.value = getPreferences().ha_notify_service ?? ''
     syncOnlineStatusFromUser()
   }, [])
 
@@ -864,7 +870,57 @@ function NotificationsTab() {
           ? 'You will receive push notifications for new messages and mentions.'
           : 'Enable push notifications to stay updated when you are away.'}
       </p>
+      {(instanceConfig.value?.mode === 'ha'
+        || instanceConfig.value?.mode === 'haos') && <HaNotifyServiceRow />}
     </section>
+  )
+}
+
+/** ha / haos only: the notify service that pushes to *this* user's HA
+ *  Companion app. HA names that service after the device
+ *  (`notify.mobile_app_<device>`), not the username — so it can't be
+ *  guessed and the user sets it here. */
+function HaNotifyServiceRow() {
+  const save = async () => {
+    haNotifySaving.value = true
+    try {
+      const v = haNotifyService.value.trim()
+      // Store the trimmed value (empty string = disabled; the backend
+      // push provider treats blank as "no target" and skips).
+      await setPreference('ha_notify_service', v)
+      showToast(
+        v ? 'HA notification target saved' : 'HA notification target cleared',
+        'success',
+      )
+    } catch {
+      showToast('Failed to save', 'error')
+    } finally {
+      haNotifySaving.value = false
+    }
+  }
+  return (
+    <div class="sh-settings-subsection">
+      <h3>Home Assistant app</h3>
+      <label class="sh-field">
+        <span>Notify service</span>
+        <input
+          type="text"
+          placeholder="notify.mobile_app_my_phone"
+          value={haNotifyService.value}
+          onInput={(e) =>
+            haNotifyService.value = (e.target as HTMLInputElement).value}
+        />
+      </label>
+      <p class="sh-muted">
+        The Home Assistant notify service for your phone — find it under
+        Developer Tools → Actions as <code>notify.mobile_app_…</code> (named
+        after your device, not your username). Leave empty to disable HA-app
+        notifications for your account.
+      </p>
+      <div class="sh-settings-row">
+        <Button onClick={save} loading={haNotifySaving.value}>Save</Button>
+      </div>
+    </div>
   )
 }
 

@@ -21,6 +21,10 @@ interface Preferences {
   landing_path?: LandingPath
   followed_space_ids?: string[]
   moments?: MomentsPreferences
+  /** ha / haos only — the HA notify service that pushes this user's
+   *  Companion app (e.g. ``notify.mobile_app_pascals_iphone``). Empty /
+   *  absent disables HA-app push for the user (§25.3). */
+  ha_notify_service?: string
   [key: string]: unknown
 }
 

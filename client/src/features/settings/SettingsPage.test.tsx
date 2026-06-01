@@ -39,9 +39,21 @@ vi.mock('@/store/auth', () => ({
 vi.mock('@/ws', () => ({ ws: { on: vi.fn(() => () => {}) } }))
 
 import { userPreferences } from '@/store/userPreferences'
+import { instanceConfig } from '@/store/instance'
 import { spaceLocationRows, spaceLocationLoading } from './SettingsPage'
 
+function setMode(mode: 'standalone' | 'ha' | 'haos') {
+  instanceConfig.value = {
+    mode,
+    instance_name: 'Home',
+    instance_id: 'i1',
+    capabilities: [],
+    setup_required: false,
+  }
+}
+
 beforeEach(() => {
+  setMode('standalone')
   mockPatch.mockResolvedValue({})
   // Default: empty space-location list and no presence data.
   mockGet.mockResolvedValue({ spaces: [] })
@@ -282,6 +294,40 @@ describe('SpaceLocationSharingPanel', () => {
     await waitFor(() => {
       // After error + revert, state returns to the pre-click value
       expect(cb.checked).toBe(initialChecked)
+    })
+  })
+})
+
+async function renderNotificationsTab() {
+  const { default: SettingsPage } = await import('./SettingsPage')
+  const result = render(<SettingsPage />)
+  fireEvent.click(result.getByRole('tab', { name: 'Notifications' }))
+  return result
+}
+
+describe('SettingsPage — HA notify service (§25.3)', () => {
+  it('shows the HA notify-service field in ha mode', async () => {
+    setMode('ha')
+    const { queryByPlaceholderText } = await renderNotificationsTab()
+    expect(queryByPlaceholderText('notify.mobile_app_my_phone')).toBeTruthy()
+  })
+
+  it('hides the HA notify-service field in standalone mode', async () => {
+    setMode('standalone')
+    const { queryByPlaceholderText } = await renderNotificationsTab()
+    expect(queryByPlaceholderText('notify.mobile_app_my_phone')).toBeNull()
+  })
+
+  it('saves the notify service to preferences', async () => {
+    setMode('haos')
+    const { getByPlaceholderText, getByText } = await renderNotificationsTab()
+    const input = getByPlaceholderText('notify.mobile_app_my_phone') as HTMLInputElement
+    fireEvent.input(input, { target: { value: 'notify.mobile_app_pixel' } })
+    fireEvent.click(getByText('Save'))
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith('/api/me', {
+        preferences: { ha_notify_service: 'notify.mobile_app_pixel' },
+      })
     })
   })
 })

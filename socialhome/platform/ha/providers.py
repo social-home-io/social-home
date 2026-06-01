@@ -15,9 +15,13 @@ access ``adapter._client`` (only available after the adapter's
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import TYPE_CHECKING, Any, AsyncIterable
 
 from ..adapter import ExternalUser, _extract_bearer
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -258,8 +262,40 @@ class HaUserDirectory:
         )
 
 
+def _resolve_notify_service(user: Any) -> tuple[str, str] | None:
+    """The HA notify service to push this user's mobile app, taken from
+    their per-user profile setting ``preferences.ha_notify_service``.
+
+    Accepts either a fully-qualified ``"notify.mobile_app_pascals_iphone"``
+    or a bare service ``"mobile_app_pascals_iphone"`` (assumed ``notify``
+    domain). Returns ``(domain, service)`` or ``None`` when unconfigured.
+
+    There is no auto-derived default: HA's Companion-app notify service is
+    named after the *device* (``notify.mobile_app_<device-slug>``), which
+    almost never equals the username — so guessing ``mobile_app_<username>``
+    silently failed for everyone. The user sets the real service in
+    Settings → profile (§25.3).
+    """
+    raw = getattr(user, "preferences_json", None)
+    if not raw:
+        return None
+    try:
+        prefs = json.loads(raw)
+    except ValueError, TypeError:
+        return None
+    svc = prefs.get("ha_notify_service") if isinstance(prefs, dict) else None
+    if not isinstance(svc, str) or not svc.strip():
+        return None
+    svc = svc.strip()
+    domain, _, service = svc.partition(".")
+    if not service:  # bare "mobile_app_x" → notify domain
+        return "notify", domain
+    return domain, service
+
+
 class HaPushProvider:
-    """Deliver via ``notify.mobile_app_{username}`` HA service call."""
+    """Deliver to the user's HA Companion app via their configured notify
+    service (``preferences.ha_notify_service``). No-op when unset."""
 
     __slots__ = ("_adapter",)
 
@@ -273,14 +309,32 @@ class HaPushProvider:
         message: str,
         data: dict | None = None,
     ) -> None:
+        target = _resolve_notify_service(user)
+        if target is None:
+            log.debug(
+                "HA push: %s has no ha_notify_service configured — skipping. "
+                "Set it in Settings → profile (e.g. notify.mobile_app_<device>).",
+                getattr(user, "username", "?"),
+            )
+            return
+        domain, service = target
         body: dict = {"title": title, "message": message}
         if data:
             body["data"] = data
-        await self._adapter._client.call_service(
-            "notify",
-            f"mobile_app_{user.username}",
-            body,
-        )
+        result = await self._adapter._client.call_service(domain, service, body)
+        if result is None:
+            # call_service swallows non-2xx at debug; surface push failures
+            # at WARNING so a wrong service name is diagnosable instead of
+            # silently dropping every notification.
+            log.warning(
+                "HA push to %s via %s.%s failed — check the notify service "
+                "name in Settings → profile (does %s.%s exist in HA?).",
+                getattr(user, "username", "?"),
+                domain,
+                service,
+                domain,
+                service,
+            )
 
 
 class HaSTTProvider:

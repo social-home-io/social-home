@@ -65,6 +65,16 @@ Protocols (`AuthProvider`, `UserDirectory`, `PushProvider`, …) plus
 a `capabilities` set, never by branching on `config.mode`. See
 `socialhome/platform/adapter.py`.
 
+Push (§25.3) fans out to every registered surface: Web Push (browsers,
+VAPID) and the platform adapter's `PushProvider`. In `ha` / `haos` mode
+that provider targets the user's **HA Companion app** via the notify
+service they set per-user in Settings → Notifications
+(`preferences.ha_notify_service`, e.g. `notify.mobile_app_<device>`).
+HA names that service after the *device*, not the username, so there is
+no auto-derived default — an unset value skips HA-app push for that user,
+and a configured-but-wrong service is logged at WARNING (not silently
+dropped).
+
 ## Identity (§4.1)
 
 Every identity in Social Home — instance and user — is bound to an
