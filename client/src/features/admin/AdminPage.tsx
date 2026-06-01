@@ -21,7 +21,7 @@ import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { HouseholdToggles, loadToggles } from '@/components/HouseholdToggles'
 import { HaUsersPanel } from './HaUsersPanel'
-import { instanceConfig } from '@/store/instance'
+import { managesLocalUsers, usesHaUserDirectory } from '@/platform'
 import CpAdminPanel from '@/features/child-protection/CpAdminPanel'
 import type { User } from '@/types'
 import { confirmDialog } from '@/components/confirm'
@@ -79,8 +79,7 @@ export default function AdminPage() {
   // the active tab IS ha-users when the capability flips off (e.g.
   // adapter swap mid-session), fall back to Members so the admin
   // doesn't land on a hidden tab.
-  const hasHaPersonDirectory = instanceConfig.value
-    ?.capabilities.includes('ha_person_directory') ?? false
+  const hasHaPersonDirectory = usesHaUserDirectory()
   const visibleTabs: TabId[] = [
     'members',
     ...(hasHaPersonDirectory ? (['ha-users'] as const) : []),
@@ -255,7 +254,7 @@ function MembersTab() {
       showToast(`Export failed: ${(e as Error)?.message ?? e}`, 'error')
     }
   }
-  const isStandalone = instanceConfig.value?.mode === 'standalone'
+  const isStandalone = managesLocalUsers()
   if (users.value.length === 0) {
     return (
       <section class="sh-admin-section">

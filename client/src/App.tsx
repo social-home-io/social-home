@@ -7,6 +7,7 @@ import { api } from '@/api'
 import { basePath } from '@/baseUrl'
 import { isAuthed, currentUser, loadCurrentUser, setToken, token } from '@/store/auth'
 import { instanceConfig, loadInstanceConfig } from '@/store/instance'
+import { usesIngressAuth } from '@/platform'
 import { isGuardian, loadGuardian } from '@/store/guardian'
 import { loadDmUnread } from '@/store/dms'
 import { loadUserPreferences } from '@/store/userPreferences'
@@ -265,7 +266,7 @@ export function App() {
       authProbeAttempted.value = true
       return
     }
-    const shouldProbe = cfg.value.mode === 'haos' || token.value !== null
+    const shouldProbe = usesIngressAuth() || token.value !== null
     if (!shouldProbe) {
       authProbeAttempted.value = true
       return
@@ -318,7 +319,7 @@ export function App() {
   if (!authProbeAttempted.value) return null
 
   if (!authed.value) {
-    return cfg.value.mode === 'haos' ? <IngressAuthFailed /> : <LoginPage />
+    return usesIngressAuth() ? <IngressAuthFailed /> : <LoginPage />
   }
 
   const user = currentUser.value
