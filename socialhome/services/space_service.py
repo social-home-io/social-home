@@ -2060,6 +2060,7 @@ class SpaceService(SpaceMemberGuardMixin):
         file_meta: FileMeta | None = None,
         location: LocationData | None = None,
         linked_highlight_id: str | None = None,
+        hidden_from_feed: bool = False,
     ) -> Post | None:
         """Create a post in the space, subject to the feature's access level.
 
@@ -2114,6 +2115,7 @@ class SpaceService(SpaceMemberGuardMixin):
             file_meta=file_meta,
             location=location,
             linked_highlight_id=linked_highlight_id,
+            hidden_from_feed=hidden_from_feed,
         )
         if decision == "queue":
             now = datetime.now(timezone.utc)
@@ -2511,6 +2513,12 @@ class SpaceService(SpaceMemberGuardMixin):
         await self._require_space(space_id)
         limit = max(1, min(int(limit), 50))
         return await self._posts.list_feed(space_id, before=before, limit=limit)
+
+    async def get_space(self, space_id: str) -> Space | None:
+        """Public read of a space row (``None`` when missing). Used by
+        sibling services (e.g. :class:`BazaarService`) that need to read
+        a space's feature flags without reaching into the repo directly."""
+        return await self._spaces.get(space_id)
 
     # ── Sidebar pins + aliases (convenience) ───────────────────────────
 
@@ -2911,6 +2919,7 @@ def _space_metadata_for_federation(space: Space) -> dict:
             "location_mode": space.features.location_mode,
             "stickies": space.features.stickies,
             "gallery": space.features.gallery,
+            "bazaar": space.features.bazaar,
             # Per-space post-type allow-list (§23.49). Federated so a
             # member household enforces the same restriction locally when
             # its users compose — without it the host's "no polls here"
@@ -3092,6 +3101,7 @@ def stub_space_from_metadata(
         stickies=bool(feats_in.get("stickies", True)),
         pages=bool(feats_in.get("pages", True)),
         gallery=bool(feats_in.get("gallery", True)),
+        bazaar=bool(feats_in.get("bazaar", True)),
         **allowed_kwargs,
     )
     return Space(

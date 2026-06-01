@@ -502,6 +502,13 @@ class Post:
     #: instance's highlights live off-host (the share-card lazy-fetches via
     #: federation).
     linked_highlight_id: str | None = None
+    #: When True the post exists only as an entity's anchor (a Bazaar
+    #: listing's wrapper post; a calendar EVENT post) and is omitted from
+    #: the space feed stream — the entity lives in its own tab and the
+    #: feed appearance is opt-in (§23.15). Defaults False so ordinary
+    #: posts always show. Federates on SPACE_POST_CREATED so member
+    #: households mirror the same feed visibility.
+    hidden_from_feed: bool = False
 
     def with_reaction(self, emoji: str, user_id: str) -> "Post":
         current = self.reactions.get(emoji, frozenset())

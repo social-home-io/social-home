@@ -100,7 +100,7 @@ export default function BazaarPage() {
   return (
     <div class="sh-bazaar">
       <div class="sh-page-header">
-        <Button onClick={openBazaarCreate}>+ New listing</Button>
+        <Button onClick={() => openBazaarCreate()}>+ New listing</Button>
       </div>
 
       <div class="sh-bazaar-filters">
@@ -234,12 +234,12 @@ function EmptyState({ tab }: { tab: BazaarTab }) {
       <div aria-hidden="true">{icon}</div>
       <h3>{heading}</h3>
       <p>{body}</p>
-      <Button onClick={openBazaarCreate}>+ Create a listing</Button>
+      <Button onClick={() => openBazaarCreate()}>+ Create a listing</Button>
     </div>
   )
 }
 
-function BazaarCard({
+export function BazaarCard({
   listing, onOpen,
 }: {
   listing: BazaarListing

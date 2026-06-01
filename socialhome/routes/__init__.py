@@ -32,6 +32,7 @@ from .bazaar import (
     BazaarOfferRejectView,
     BazaarSaveView,
     MySavedBazaarView,
+    SpaceBazaarView,
 )
 from .calendar import (
     CalendarCollectionView,
@@ -845,6 +846,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
 
     # ── Bazaar ──────────────────────────────────────────────────────────
     app.router.add_view("/api/bazaar", BazaarCollectionView)
+    app.router.add_view("/api/spaces/{id}/bazaar", SpaceBazaarView)
     app.router.add_view("/api/bazaar/{id}", BazaarDetailView)
     app.router.add_view("/api/bazaar/{id}/bids", BazaarBidCollectionView)
     app.router.add_view(

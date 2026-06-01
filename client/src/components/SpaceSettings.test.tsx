@@ -101,14 +101,15 @@ describe('SpaceSettings', () => {
     expect(body.retention_days).toBe(0)
   })
 
-  it('renders the Features fieldset with five toggle checkboxes', () => {
+  it('renders the Features fieldset with six toggle checkboxes', () => {
     const space = makeSpace()
     const { getByTestId } = render(
       <SpaceSettings space={space} onUpdate={() => {}} />,
     )
     const fieldset = getByTestId('space-features')
     const checkboxes = fieldset.querySelectorAll('input[type="checkbox"]')
-    expect(checkboxes.length).toBe(5)
+    // Pages, Calendar, Tasks, Stickies, Gallery, Bazaar.
+    expect(checkboxes.length).toBe(6)
   })
 
   it('mirrors the space features in the Features fieldset', () => {
@@ -128,9 +129,10 @@ describe('SpaceSettings', () => {
     const checkboxes = Array.from(
       fieldset.querySelectorAll('input[type="checkbox"]'),
     ) as HTMLInputElement[]
-    // Order matches the JSX: pages, calendar, tasks, stickies, gallery.
+    // Order matches the JSX: pages, calendar, tasks, stickies, gallery,
+    // bazaar. ``bazaar`` is omitted from the payload → defaults on.
     expect(checkboxes.map((c) => c.checked)).toEqual([
-      false, false, true, true, true,
+      false, false, true, true, true, true,
     ])
   })
 
@@ -155,8 +157,10 @@ describe('SpaceSettings', () => {
     const checkboxes = Array.from(
       fieldset.querySelectorAll('input[type="checkbox"]'),
     ) as HTMLInputElement[]
-    // pages, calendar, tasks, stickies, gallery — all on.
-    expect(checkboxes.map((c) => c.checked)).toEqual([true, true, true, true, true])
+    // pages, calendar, tasks, stickies, gallery, bazaar — all on.
+    expect(checkboxes.map((c) => c.checked)).toEqual([
+      true, true, true, true, true, true,
+    ])
   })
 
   it('sends all five feature toggles in the PATCH body on save', async () => {
@@ -230,14 +234,13 @@ describe('SpaceSettings', () => {
     const boxes = Array.from(
       fieldset.querySelectorAll('input[type="checkbox"]'),
     ) as HTMLInputElement[]
-    // Order: text, image, video, file, poll, schedule, location, bazaar,
-    // highlight_share.
-    expect(boxes).toHaveLength(9)
+    // Order: text, image, video, file, poll, schedule, location,
+    // highlight_share. (Bazaar is a tab feature now, not a post type.)
+    expect(boxes).toHaveLength(8)
     expect(boxes[0].checked).toBe(true)  // text
     expect(boxes[1].checked).toBe(true)  // image
     expect(boxes[2].checked).toBe(false) // video (not in the list)
-    expect(boxes[7].checked).toBe(false) // bazaar
-    expect(boxes[8].checked).toBe(false) // highlight_share
+    expect(boxes[7].checked).toBe(false) // highlight_share
   })
 
   it('sends allowed_post_types on save, preserving non-composer types', async () => {

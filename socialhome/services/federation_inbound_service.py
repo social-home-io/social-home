@@ -2303,4 +2303,7 @@ class FederationInboundService:
             file_meta=None,
             location=location,
             created_at=parse_iso8601_lenient(payload.get("occurred_at")),
+            # Mirror the host's feed visibility. Absent on an older sender
+            # → default visible (the historical behaviour).
+            hidden_from_feed=bool(payload.get("hidden_from_feed", False)),
         )

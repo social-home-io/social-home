@@ -275,7 +275,7 @@ class SqliteSpaceRepo:
                 config_sequence, space_type, join_mode, join_code,
                 retention_days, retention_exempt_json,
                 feature_calendar, feature_todo, feature_location, location_mode,
-                feature_stickies, feature_pages, feature_gallery,
+                feature_stickies, feature_pages, feature_gallery, feature_bazaar,
                 posts_access, pages_access, stickies_access,
                 calendar_access, tasks_access,
                 allow_subscriber_comment, allow_subscriber_react,
@@ -286,13 +286,13 @@ class SqliteSpaceRepo:
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
                 dissolved, archived, about_markdown, cover_hash, tz
             ) VALUES(
-                -- 47 placeholders, one per column listed above.
+                -- 48 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
                 ?, ?,                         -- retention_days, retention_exempt_json
                 ?, ?, ?, ?,                   -- feature_calendar, feature_todo, feature_location, location_mode
-                ?, ?, ?,                      -- feature_stickies, feature_pages, feature_gallery
+                ?, ?, ?, ?,                   -- feature_stickies, feature_pages, feature_gallery, feature_bazaar
                 ?, ?, ?,                      -- posts_access, pages_access, stickies_access
                 ?, ?,                         -- calendar_access, tasks_access
                 ?, ?,                         -- allow_subscriber_comment, allow_subscriber_react
@@ -320,6 +320,7 @@ class SqliteSpaceRepo:
                 feature_stickies=excluded.feature_stickies,
                 feature_pages=excluded.feature_pages,
                 feature_gallery=excluded.feature_gallery,
+                feature_bazaar=excluded.feature_bazaar,
                 posts_access=excluded.posts_access,
                 pages_access=excluded.pages_access,
                 stickies_access=excluded.stickies_access,
@@ -370,6 +371,7 @@ class SqliteSpaceRepo:
                 cols["feature_stickies"],
                 cols["feature_pages"],
                 cols["feature_gallery"],
+                cols["feature_bazaar"],
                 cols["posts_access"],
                 cols["pages_access"],
                 cols["stickies_access"],

@@ -30,13 +30,25 @@ describe('Composer', () => {
     expect(queryByLabelText('Bazaar listing')).toBeNull()
   })
 
-  it('exposes the bazaar option inside a space', async () => {
+  it('shows a Bazaar shortcut in a space when the feature is on', async () => {
     commonMocks()
     const { Composer } = await import('./Composer')
     const { queryByLabelText } = render(
-      <Composer onSubmit={vi.fn()} spaceId="space-1" />,
+      <Composer onSubmit={vi.fn()} spaceId="space-1" bazaarEnabled={true} />,
     )
-    expect(queryByLabelText('Bazaar listing')).toBeTruthy()
+    // Bazaar is a tab feature now, not a feed post type — the composer
+    // surfaces it as a shortcut to the full new-listing dialog.
+    expect(queryByLabelText('List something in the Bazaar')).toBeTruthy()
+    expect(queryByLabelText('Bazaar listing')).toBeNull()
+  })
+
+  it('hides the Bazaar shortcut when the bazaar feature is off', async () => {
+    commonMocks()
+    const { Composer } = await import('./Composer')
+    const { queryByLabelText } = render(
+      <Composer onSubmit={vi.fn()} spaceId="space-1" bazaarEnabled={false} />,
+    )
+    expect(queryByLabelText('List something in the Bazaar')).toBeNull()
   })
 
   it('filters the type picker to the space allowed_post_types', async () => {
@@ -74,7 +86,7 @@ describe('Composer', () => {
       <Composer onSubmit={vi.fn()} spaceId="space-1" />,
     )
     expect(queryByLabelText('Poll')).toBeTruthy()
-    expect(queryByLabelText('Bazaar listing')).toBeTruthy()
+    expect(queryByLabelText('Image post')).toBeTruthy()
   })
 
   it('hides the textarea when poll/schedule is picked (builder modes)', async () => {

@@ -27,6 +27,7 @@ import { Composer } from '@/components/Composer'
 import { openCommentOverlay } from '@/components/CommentOverlay'
 import { SpaceSubHeader, type SpaceTab } from '@/components/SpaceSubHeader'
 import { SpaceTasksTab, resetSpaceTasks } from './SpaceTasksTab'
+import { SpaceBazaarTab } from './SpaceBazaarTab'
 import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openSpaceEventDialog } from '@/components/CalendarEventDialog'
 import { SpaceLinksStrip } from './SpaceLinksStrip'
@@ -49,6 +50,7 @@ interface SpaceDetail {
     todo?: boolean
     stickies?: boolean
     gallery?: boolean
+    bazaar?: boolean
     location?: boolean
     /** §23.49 — post types members may compose here; gates the
      *  composer's type picker. Absent → all types offered. */
@@ -306,6 +308,7 @@ export default function SpaceFeedPage() {
     ...((f?.calendar ?? true) ? (['calendar'] as const) : []),
     ...((f?.todo ?? true) ? (['tasks'] as const) : []),
     ...((f?.gallery ?? true) ? (['gallery'] as const) : []),
+    ...((f?.bazaar ?? true) ? (['bazaar'] as const) : []),
     ...(f?.location ? (['map'] as const) : []),
     ...(canAdmin ? (['moderation'] as const) : []),
   ]
@@ -408,7 +411,8 @@ export default function SpaceFeedPage() {
             </div>
           ) : (
             <Composer onSubmit={handleSubmit} context="Space" spaceId={spaceId}
-              allowedTypes={spaceDetail.value?.features?.allowed_post_types} />
+              allowedTypes={spaceDetail.value?.features?.allowed_post_types}
+              bazaarEnabled={spaceDetail.value?.features?.bazaar ?? true} />
           )}
           {posts.value.length === 0 && (
             <div class="sh-empty-state">
@@ -594,6 +598,10 @@ export default function SpaceFeedPage() {
 
       {activeTab.value === 'gallery' && (
         <GalleryPage spaceId={spaceId} />
+      )}
+
+      {activeTab.value === 'bazaar' && (
+        <SpaceBazaarTab spaceId={spaceId} />
       )}
 
       {activeTab.value === 'map' && s?.features?.location && (

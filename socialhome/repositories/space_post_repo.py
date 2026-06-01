@@ -120,8 +120,8 @@ class SqliteSpacePostRepo:
                 id, space_id, author, bot_id, linked_event_id, type, content,
                 media_url, reactions, comment_count, pinned, deleted, edited_at,
                 no_link_preview, moderated, file_meta_json, location_json,
-                image_urls_json, linked_highlight_id, created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
+                image_urls_json, linked_highlight_id, hidden_from_feed, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, COALESCE(?, datetime('now')))
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content,
                 media_url=excluded.media_url,
@@ -136,7 +136,8 @@ class SqliteSpacePostRepo:
                 location_json=excluded.location_json,
                 image_urls_json=excluded.image_urls_json,
                 linked_event_id=excluded.linked_event_id,
-                linked_highlight_id=excluded.linked_highlight_id
+                linked_highlight_id=excluded.linked_highlight_id,
+                hidden_from_feed=excluded.hidden_from_feed
             """,
             (
                 post.id,
@@ -158,6 +159,7 @@ class SqliteSpacePostRepo:
                 _encode_location(post.location),
                 _encode_image_urls(post.image_urls),
                 post.linked_highlight_id,
+                int(post.hidden_from_feed),
                 _iso_or_none(post.created_at),
             ),
         )
@@ -200,17 +202,21 @@ class SqliteSpacePostRepo:
         before: str | None = None,
         limit: int = 20,
     ) -> list[Post]:
+        # ``hidden_from_feed=0`` drops listing/event anchor posts whose
+        # author chose not to announce them in the feed — they live in
+        # their own tab (Bazaar, Calendar) instead.
         if before is None:
             rows = await self._db.fetchall(
                 "SELECT * FROM space_posts "
-                "WHERE space_id=? AND deleted=0 "
+                "WHERE space_id=? AND deleted=0 AND hidden_from_feed=0 "
                 "ORDER BY created_at DESC LIMIT ?",
                 (space_id, int(limit)),
             )
         else:
             rows = await self._db.fetchall(
                 "SELECT * FROM space_posts "
-                "WHERE space_id=? AND deleted=0 AND created_at < ? "
+                "WHERE space_id=? AND deleted=0 AND hidden_from_feed=0 "
+                "AND created_at < ? "
                 "ORDER BY created_at DESC LIMIT ?",
                 (space_id, before, int(limit)),
             )
@@ -501,6 +507,7 @@ def _row_to_space_post(row: dict) -> Post:
         bot_id=row.get("bot_id"),
         linked_event_id=row.get("linked_event_id"),
         linked_highlight_id=row.get("linked_highlight_id"),
+        hidden_from_feed=bool_col(row.get("hidden_from_feed", 0)),
     )
 
 

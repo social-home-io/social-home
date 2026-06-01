@@ -39,6 +39,7 @@ from ..domain.post import (
 )
 from ..infrastructure.event_bus import EventBus
 from ..domain.post import BazaarOffer
+from ..domain.space import SpacePermissionError
 from ..repositories.bazaar_repo import (
     AbstractBazaarRepo,
     BidStateError,
@@ -132,6 +133,7 @@ class BazaarService:
         price: int | None = None,
         start_price: int | None = None,
         step_price: int | None = None,
+        announce_in_feed: bool = False,
     ) -> BazaarListing:
         """Mint a listing + its parent space post atomically.
 
@@ -140,11 +142,22 @@ class BazaarService:
         space's per-feature access decisions, and a :class:`SpacePermissionError`
         propagates out as HTTP 403 via the route layer's central mapper.
 
+        The listing always lives in the space's Bazaar tab. ``announce_in_feed``
+        controls only whether its wrapper post also surfaces in the feed
+        stream — defaults False so the feed stays opt-in (§23.15). The
+        wrapper post is always created (it anchors the listing id, comment
+        thread, and media) but carries ``hidden_from_feed`` unless announced.
+
         Raises :class:`ValueError` on shape-of-input validation failure
         (mapped to HTTP 422).
         """
         if self._spaces is None:
             raise RuntimeError("space service not attached")
+        space = await self._spaces.get_space(space_id)
+        if space is None:
+            raise BazaarServiceError("space not found")
+        if not space.features.bazaar:
+            raise SpacePermissionError("the Bazaar is disabled in this space")
         mode_val = _coerce_mode(mode)
         title_clean = title.strip()
         if not title_clean:
@@ -174,6 +187,7 @@ class BazaarService:
             author_user_id=seller_user_id,
             type="bazaar",
             content=caption,
+            hidden_from_feed=not announce_in_feed,
         )
         if post is None:
             # Post entered the moderation queue (space's posts feature
@@ -213,6 +227,12 @@ class BazaarService:
             )
         )
         return listing
+
+    async def list_space_listings(self, space_id: str) -> list[BazaarListing]:
+        """Every listing in a space (any status), newest-first — backs the
+        space Bazaar tab. Membership + the ``bazaar`` feature gate are
+        enforced by the route before this is called."""
+        return await self._repo.list_in_space(space_id)
 
     async def update_listing(
         self,
