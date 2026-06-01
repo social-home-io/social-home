@@ -196,7 +196,25 @@ from __future__ import annotations
 #:   The sender chooses per-peer via
 #:   :meth:`FederationService.peer_supports` so there is no user-visible
 #:   regression — only a throughput improvement when both sides are v_14+.
-OURS: int = 14
+#: * **v_15** (2026-06-01) — generic cross-household admin actions
+#:   (:data:`FederationEventType.SPACE_REMOTE_ADMIN_ACTION`). Generalises
+#:   the v_9 kick: a remote admin on household A can now run *any*
+#:   admin-level mutation on a space hosted on household B — config edit
+#:   (name / emoji / features / join-mode / retention), ban / unban,
+#:   archive / unarchive. The remote admin's :class:`SpaceService`
+#:   forwards an intent envelope to the host; the host re-validates the
+#:   actor's ``space_remote_members.role == ADMIN`` and runs the real
+#:   host-side method as the owner, so the result federates back to every
+#:   member through the normal outbounds (``SPACE_CONFIG_CHANGED`` etc.).
+#:   Owner-only actions (dissolve, transfer-ownership, role assignment)
+#:   stay host-local and are *not* forwardable. **Force-upgrade.** Sub-v_15
+#:   hosts have no handler, so the action would be silently dropped — the
+#:   sender gates on :data:`FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION`
+#:   and raises :class:`SpacePermissionError` ("host doesn't support remote
+#:   admin actions yet") instead of mutating the local stub, so the actor
+#:   gets a clear error rather than a silent divergence. Operators must
+#:   upgrade hosts together with admins on other households.
+OURS: int = 15
 
 
 class FederationCapability:
@@ -307,6 +325,18 @@ class FederationCapability:
     #: :meth:`FederationService.send_media_chunk`, so the gate degrades
     #: throughput, never correctness.
     MIN_FOR_MEDIA_CHANNEL = 14
+
+    #: Minimum proto_version where the host knows
+    #: :data:`FederationEventType.SPACE_REMOTE_ADMIN_ACTION` — the generic
+    #: cross-household admin mutation (config edit, ban / unban, archive /
+    #: unarchive). The remote admin's :class:`SpaceService` gates the
+    #: forward on this; a sub-v_15 host has no handler, so rather than
+    #: mutate the local stub (which would silently diverge from the host),
+    #: the forward raises :class:`SpacePermissionError`. Force-upgrade:
+    #: operators must upgrade the host before remote admins can run these
+    #: actions. (The v_9 :data:`SPACE_REMOTE_ADMIN_KICK` stays separate for
+    #: back-compat — a v_9..v_14 host still honours kicks.)
+    MIN_FOR_REMOTE_ADMIN_ACTION = 15
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

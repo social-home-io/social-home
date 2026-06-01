@@ -258,10 +258,10 @@ def _alive(pid: int) -> bool:
 # broadcast fires from _on_local_home_location_updated after the first
 # confirmed pairing.
 _SEED_COORDS: dict[str, tuple[float, float]] = {
-    "a": (52.5200, 13.4050),   # Berlin  (Alpha House)
-    "b": (53.5500,  9.9900),   # Hamburg (Beta House)
-    "c": (50.1100,  8.6800),   # Frankfurt (Gamma House)
-    "d": (48.1350, 11.5820),   # Munich  (Delta House)
+    "a": (52.5200, 13.4050),  # Berlin  (Alpha House)
+    "b": (53.5500, 9.9900),  # Hamburg (Beta House)
+    "c": (50.1100, 8.6800),  # Frankfurt (Gamma House)
+    "d": (48.1350, 11.5820),  # Munich  (Delta House)
 }
 
 
@@ -310,10 +310,7 @@ def cmd_up() -> None:
     # we spawn anything so a missing build doesn't leave orphan
     # backends behind for the next ``up`` to trip over.
     static_index = (
-        Path(__file__).resolve().parents[3]
-        / "socialhome"
-        / "static"
-        / "index.html"
+        Path(__file__).resolve().parents[3] / "socialhome" / "static" / "index.html"
     )
     if not static_index.is_file():
         raise SystemExit(
@@ -570,8 +567,7 @@ def cmd_gfs_pair() -> None:
             "status": resp["status"],
         }
         print(
-            f"  {label}: paired with GFS — id={resp['id'][:8]} "
-            f"status={resp['status']}"
+            f"  {label}: paired with GFS — id={resp['id'][:8]} status={resp['status']}"
         )
         if resp["status"] != "active":
             raise SystemExit(
@@ -638,8 +634,7 @@ def cmd_gfs_traffic() -> None:
     sp = match[0]
     if sp["name"] != space_name:
         raise SystemExit(
-            f"gfs-traffic: GFS listed name={sp['name']!r}, expected"
-            f" {space_name!r}",
+            f"gfs-traffic: GFS listed name={sp['name']!r}, expected {space_name!r}",
         )
     if sp["owning_instance"] != a["instance_id"]:
         raise SystemExit(
@@ -801,8 +796,7 @@ def cmd_gfs_replay() -> None:
     listing = payload.get("spaces", []) if isinstance(payload, dict) else []
     if not any(sp["space_id"] == global_space_id for sp in listing):
         raise SystemExit(
-            f"gfs-replay: GFS lost the space after Alpha restart — "
-            f"listing={listing!r}",
+            f"gfs-replay: GFS lost the space after Alpha restart — listing={listing!r}",
         )
     print(f"  post-restart: GFS still lists {global_space_id[:8]}… ✓")
 
@@ -819,12 +813,12 @@ def cmd_gfs_down() -> None:
         return
     try:
         os.killpg(gfs["pid"], signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError, PermissionError:
         pass
     time.sleep(1)
     try:
         os.killpg(gfs["pid"], signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError, PermissionError:
         pass
     state.pop("gfs", None)
     _save(state)
@@ -1262,10 +1256,7 @@ def cmd_traffic() -> None:
         )
         if s in (200, 201):
             state["dm_a_to_b_body"] = msg_body
-            print(
-                f"  a→b bazaar DM created: conv={conv_ab['id']}, "
-                f"msg={msg.get('id')}"
-            )
+            print(f"  a→b bazaar DM created: conv={conv_ab['id']}, msg={msg.get('id')}")
         else:
             print(f"  a→b bazaar DM message FAILED: {s} {msg}")
     else:
@@ -1445,6 +1436,38 @@ def cmd_verify() -> None:
 
     failures: list[str] = []
 
+    # 0. Capability version round-trip — every confirmed inner-ring peer
+    #    must advertise the build's current ``OURS`` via
+    #    INSTANCE_CAPABILITIES_UPDATED. This is the tripwire for a protocol
+    #    bump that lands the constant but never propagates: e.g. v_15
+    #    (SPACE_REMOTE_ADMIN_ACTION) — a remote admin's config/ban/archive
+    #    forward gates on ``peer_supports(min_version=15)``, so if the peer
+    #    is stuck at an older version the forward would raise instead of
+    #    reaching the host.
+    from socialhome.domain.federation_capabilities import OURS as _OURS
+
+    for viewer in ("a", "b", "c"):
+        v = state["instances"][viewer]
+        s, conns = _request(
+            f"http://127.0.0.1:{v['port']}/api/pairing/connections",
+            token=v["token"],
+        )
+        if s != 200 or not isinstance(conns, list):
+            continue
+        for row in conns:
+            if row.get("status") != "confirmed":
+                continue
+            pv = int(row.get("proto_version") or 1)
+            peer = str(row.get("instance_id") or "")[:8]
+            if pv < _OURS:
+                failures.append(
+                    f"{viewer}: confirmed peer {peer} at proto_version={pv} "
+                    f"(< OURS={_OURS}) — capability bump didn't round-trip; "
+                    f"SPACE_REMOTE_ADMIN_ACTION (v_15) would be gated off",
+                )
+            else:
+                print(f"  {viewer} sees {peer} at proto_version={pv} (>= {_OURS}) ✓")
+
     # 1. Profile sync — every household sees the other two users by display name.
     for viewer in ("a", "b", "c"):
         names = _all_display_names(state, viewer)
@@ -1602,15 +1625,16 @@ def cmd_verify() -> None:
                             # sender would have transparently fallen back to
                             # JSON (still correct, but not what v_14 ships).
                             _, conns_c = _request(
-                                f"http://127.0.0.1:{c['port']}"
-                                f"/api/pairing/connections",
+                                f"http://127.0.0.1:{c['port']}/api/pairing/connections",
                                 token=c["token"],
                             )
                             a_iid = state["instances"]["a"]["instance_id"]
                             row_a = next(
                                 (
                                     r
-                                    for r in (conns_c if isinstance(conns_c, list) else [])
+                                    for r in (
+                                        conns_c if isinstance(conns_c, list) else []
+                                    )
                                     if r.get("instance_id") == a_iid
                                 ),
                                 None,
@@ -1753,8 +1777,7 @@ def cmd_verify() -> None:
                 )
             else:
                 print(
-                    f"  {viewer} sees {peer[:8]} at proto_version={pv} "
-                    f"(trust-relay) ✓",
+                    f"  {viewer} sees {peer[:8]} at proto_version={pv} (trust-relay) ✓",
                 )
     else:
         print("  trust-relay pair (a ↔ d via b) skipped — run 'relay-pair' to exercise")
@@ -1812,8 +1835,8 @@ def cmd_verify() -> None:
                 token=guest["token"],
             )
             _must(f"space calendar events({guest_label})", s, events)
-            evt_list = events if isinstance(events, list) else (
-                events.get("events") or []
+            evt_list = (
+                events if isinstance(events, list) else (events.get("events") or [])
             )
             mirror = next((e for e in evt_list if e.get("id") == evt_id), None)
             if mirror is None:
@@ -1916,8 +1939,7 @@ def cmd_verify() -> None:
                 transport = row.get("transport") or "https"
                 if transport == "rtc":
                     ok_lines.append(
-                        f"  {src} sees {row['display_name']} "
-                        "on transport=rtc ✓"
+                        f"  {src} sees {row['display_name']} on transport=rtc ✓"
                     )
                 else:
                     warn_lines.append(
@@ -2000,7 +2022,9 @@ def cmd_verify() -> None:
             else:
                 exp_lat, exp_lon = _expected_coords[other]
                 # Compare at 4 dp (schema precision).
-                if round(lat, 4) != round(exp_lat, 4) or round(lon, 4) != round(exp_lon, 4):
+                if round(lat, 4) != round(exp_lat, 4) or round(lon, 4) != round(
+                    exp_lon, 4
+                ):
                     failures.append(
                         f"{viewer}: peer {other} home coords mismatch — "
                         f"got ({lat}, {lon}), expected ({exp_lat}, {exp_lon})",
@@ -2099,8 +2123,7 @@ def cmd_verify() -> None:
                 )
             else:
                 print(
-                    f"  share_home ON: Bob sees Alpha's home "
-                    f"({row2[0]}, {row2[1]}) ✓"
+                    f"  share_home ON: Bob sees Alpha's home ({row2[0]}, {row2[1]}) ✓"
                 )
 
     # 12. User preferences round-trip — PATCH /api/me/preferences on
@@ -2115,22 +2138,16 @@ def cmd_verify() -> None:
         body={"hide_highlights": True},
     )
     if s not in (200, 204):
-        failures.append(
-            f"a: PATCH /api/me/preferences failed: HTTP {s} {r!r}"
-        )
+        failures.append(f"a: PATCH /api/me/preferences failed: HTTP {s} {r!r}")
     else:
         s2, r2 = _request(
             f"http://127.0.0.1:{a['port']}/api/me/preferences",
             token=a["token"],
         )
         if s2 != 200:
-            failures.append(
-                f"a: GET /api/me/preferences failed after PATCH: HTTP {s2}"
-            )
+            failures.append(f"a: GET /api/me/preferences failed after PATCH: HTTP {s2}")
         elif not r2.get("hide_highlights"):
-            failures.append(
-                f"a: hide_highlights not persisted (got {r2!r})"
-            )
+            failures.append(f"a: hide_highlights not persisted (got {r2!r})")
         else:
             print("  a: user preferences round-trip (hide_highlights=True) ✓")
         # No cross-talk — Bob's preferences should be unmodified.
@@ -2139,9 +2156,7 @@ def cmd_verify() -> None:
             token=b["token"],
         )
         if s3 != 200:
-            failures.append(
-                f"b: GET /api/me/preferences failed: HTTP {s3}"
-            )
+            failures.append(f"b: GET /api/me/preferences failed: HTTP {s3}")
         elif r3.get("hide_highlights"):
             failures.append(
                 f"b: hide_highlights unexpectedly true after Alice's PATCH "
@@ -2185,7 +2200,8 @@ _LOG_BENIGN: tuple[str, ...] = (
     # specific "returned HTTP" pattern so a *different* outbox
     # error (e.g. shutdown corruption, schema mismatch) still
     # surfaces.
-    "outbox: ", " returned HTTP ",
+    "outbox: ",
+    " returned HTTP ",
     # libdatachannel native ICE state-machine status lines. The
     # harness intentionally configures STUN against an external
     # endpoint while the instances themselves talk loopback-only,
@@ -2344,9 +2360,8 @@ def _split_log_into_blocks(text: str) -> list[tuple[str, str]]:
             continue
         # Continuation lines: leading whitespace, or the
         # ``ExceptionType: ...`` summary that closes a Traceback.
-        is_continuation = (
-            cur_header is not None
-            and (line.startswith((" ", "\t")) or _looks_like_exc_summary(line))
+        is_continuation = cur_header is not None and (
+            line.startswith((" ", "\t")) or _looks_like_exc_summary(line)
         )
         if is_continuation:
             cur_lines.append(line)
@@ -2368,9 +2383,17 @@ def _split_log_into_blocks(text: str) -> list[tuple[str, str]]:
 #: real errors (e.g. DTLS handshake failures, outbox terminal
 #: drops). Pin: ``test_audit_block_splitter_separates_log_levels`` in
 #: ``tests/skills/test_federation_demo_audit.py``.
-_LOG_LEVEL_PREFIXES: frozenset[str] = frozenset({
-    "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "FATAL", "NOTSET",
-})
+_LOG_LEVEL_PREFIXES: frozenset[str] = frozenset(
+    {
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+        "FATAL",
+        "NOTSET",
+    }
+)
 
 
 def _looks_like_exc_summary(line: str) -> bool:
@@ -2519,7 +2542,9 @@ def cmd_visibility() -> None:
     time.sleep(3)
 
     # 3. Beta sees Ada in /api/friends.
-    def _friends_users_for(viewer_url: str, viewer_token: str, owner_iid: str) -> set[str]:
+    def _friends_users_for(
+        viewer_url: str, viewer_token: str, owner_iid: str
+    ) -> set[str]:
         s, payload = _request(
             f"{viewer_url}/api/friends",
             token=viewer_token,
@@ -2794,7 +2819,9 @@ def cmd_visibility() -> None:
     s, beta_convs = _request(f"{b_url}/api/conversations", token=b["token"])
     _must("beta conversations", s, beta_convs)
     beta_conv_rows = (
-        beta_convs if isinstance(beta_convs, list) else beta_convs.get("conversations") or []
+        beta_convs
+        if isinstance(beta_convs, list)
+        else beta_convs.get("conversations") or []
     )
     saw_dm = False
     for cv in beta_conv_rows:
@@ -3154,21 +3181,22 @@ def cmd_invite_redeem() -> None:
     #    receiver's awaiting Future only resolves on the inbound
     #    ACK), but the DB-level check is a stronger pin.
     import sqlite3
+
     db_path = _instance_dir("c") / "socialhome.db"
     conn = sqlite3.connect(db_path)
     try:
-        rows = list(conn.execute(
-            "SELECT user_id, instance_id FROM space_remote_members "
-            "WHERE space_id = ?",
-            (space_id,),
-        ))
+        rows = list(
+            conn.execute(
+                "SELECT user_id, instance_id FROM space_remote_members "
+                "WHERE space_id = ?",
+                (space_id,),
+            )
+        )
     finally:
         conn.close()
     alice_user_id = a["user_id"]
     alice_instance_id = a["instance_id"]
-    seated = any(
-        r[0] == alice_user_id and r[1] == alice_instance_id for r in rows
-    )
+    seated = any(r[0] == alice_user_id and r[1] == alice_instance_id for r in rows)
     if not seated:
         raise SystemExit(
             "invite-redeem: Alice not seated in c.space_remote_members — "
@@ -3258,9 +3286,7 @@ def cmd_invite_redeem_routed() -> None:
 
     # Truncate b's log so the post-run scan is bounded to this step.
     b_log_path = _instance_dir("b") / "log.txt"
-    b_log_before_size = (
-        b_log_path.stat().st_size if b_log_path.exists() else 0
-    )
+    b_log_before_size = b_log_path.stat().st_size if b_log_path.exists() else 0
 
     # 2. c redeems — d is NOT a direct peer → mesh path via b.
     s, joined = _request(
@@ -3283,21 +3309,22 @@ def cmd_invite_redeem_routed() -> None:
     # 3. Assert d seated c as a remote member (proves the inner
     #    REDEEM was actually dispatched at d after unseal).
     import sqlite3
+
     db_path = _instance_dir("d") / "socialhome.db"
     conn = sqlite3.connect(db_path)
     try:
-        rows = list(conn.execute(
-            "SELECT user_id, instance_id FROM space_remote_members "
-            "WHERE space_id = ?",
-            (space_id,),
-        ))
+        rows = list(
+            conn.execute(
+                "SELECT user_id, instance_id FROM space_remote_members "
+                "WHERE space_id = ?",
+                (space_id,),
+            )
+        )
     finally:
         conn.close()
     carol_user_id = c["user_id"]
     carol_instance_id = c["instance_id"]
-    seated = any(
-        r[0] == carol_user_id and r[1] == carol_instance_id for r in rows
-    )
+    seated = any(r[0] == carol_user_id and r[1] == carol_instance_id for r in rows)
     if not seated:
         raise SystemExit(
             "routed invite-redeem: Carol not seated in "
@@ -3393,9 +3420,7 @@ def cmd_remote_invite_routed() -> None:
 
     # Truncate b's log so the post-run scan is bounded to this step.
     b_log_path = _instance_dir("b") / "log.txt"
-    b_log_before_size = (
-        b_log_path.stat().st_size if b_log_path.exists() else 0
-    )
+    b_log_before_size = b_log_path.stat().st_size if b_log_path.exists() else 0
 
     # 2. c invites dave — c is NOT directly paired with d → mesh path.
     s, inv = _request(
@@ -3443,21 +3468,22 @@ def cmd_remote_invite_routed() -> None:
     # 5. Wait for the ACCEPT to round-trip back to c's seat.
     time.sleep(10)
     import sqlite3
+
     db_path = _instance_dir("c") / "socialhome.db"
     conn = sqlite3.connect(db_path)
     try:
-        rows = list(conn.execute(
-            "SELECT user_id, instance_id FROM space_remote_members "
-            "WHERE space_id = ?",
-            (space_id,),
-        ))
+        rows = list(
+            conn.execute(
+                "SELECT user_id, instance_id FROM space_remote_members "
+                "WHERE space_id = ?",
+                (space_id,),
+            )
+        )
     finally:
         conn.close()
     dave_user_id = d["user_id"]
     dave_instance_id = d["instance_id"]
-    seated = any(
-        r[0] == dave_user_id and r[1] == dave_instance_id for r in rows
-    )
+    seated = any(r[0] == dave_user_id and r[1] == dave_instance_id for r in rows)
     if not seated:
         raise SystemExit(
             "remote-invite-routed: dave not seated in c.space_remote_members "
@@ -3576,17 +3602,22 @@ def cmd_remote_invite_decline() -> None:
 
     time.sleep(5)
     import sqlite3
+
     db_path = _instance_dir("c") / "socialhome.db"
     conn = sqlite3.connect(db_path)
     try:
-        invitation_rows = list(conn.execute(
-            "SELECT status FROM space_invitations WHERE invite_token = ?",
-            (alice_token,),
-        ))
-        member_rows = list(conn.execute(
-            "SELECT user_id FROM space_remote_members WHERE space_id = ?",
-            (space_id,),
-        ))
+        invitation_rows = list(
+            conn.execute(
+                "SELECT status FROM space_invitations WHERE invite_token = ?",
+                (alice_token,),
+            )
+        )
+        member_rows = list(
+            conn.execute(
+                "SELECT user_id FROM space_remote_members WHERE space_id = ?",
+                (space_id,),
+            )
+        )
     finally:
         conn.close()
     if not invitation_rows or invitation_rows[0][0] != "declined":
@@ -3641,9 +3672,7 @@ def cmd_space_post_routed() -> None:
 
     # Truncate b's log so the post-run scan is bounded to this step.
     b_log_path = _instance_dir("b") / "log.txt"
-    b_log_before_size = (
-        b_log_path.stat().st_size if b_log_path.exists() else 0
-    )
+    b_log_before_size = b_log_path.stat().st_size if b_log_path.exists() else 0
 
     # POST to the SPACE endpoint, not the household-feed endpoint —
     # the latter ignores ``space_id`` in the body and lands the row
@@ -3666,14 +3695,16 @@ def cmd_space_post_routed() -> None:
     time.sleep(12)
 
     import sqlite3
+
     db_path = _instance_dir("d") / "socialhome.db"
     conn = sqlite3.connect(db_path)
     try:
-        rows = list(conn.execute(
-            "SELECT id, content FROM space_posts "
-            "WHERE space_id = ? AND id = ?",
-            (space_id, post_id),
-        ))
+        rows = list(
+            conn.execute(
+                "SELECT id, content FROM space_posts WHERE space_id = ? AND id = ?",
+                (space_id, post_id),
+            )
+        )
     finally:
         conn.close()
     if not rows:
@@ -3742,9 +3773,7 @@ def cmd_space_media_blob() -> None:
     # the inner ``SPACE_MEDIA_BLOB`` payload — same as
     # ``space-post-routed`` checks for SPACE_POST_CREATED.
     b_log_path = _instance_dir("b") / "log.txt"
-    b_log_before_size = (
-        b_log_path.stat().st_size if b_log_path.exists() else 0
-    )
+    b_log_before_size = b_log_path.stat().st_size if b_log_path.exists() else 0
 
     # 1. Build a real WebP byte stream — the upload endpoint runs
     #    every image through ImageProcessor, so we have to ship
@@ -3760,10 +3789,14 @@ def cmd_space_media_blob() -> None:
     # 2. Upload via c.
     boundary = "----sh-demo-boundary"
     body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="demo.png"\r\n'
-        f"Content-Type: image/png\r\n\r\n"
-    ).encode() + png_bytes + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="demo.png"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode()
+        + png_bytes
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
     upload_req = urllib.request.Request(
         f"http://127.0.0.1:{c['port']}/api/media/upload",
         data=body,
@@ -3874,9 +3907,7 @@ def cmd_space_gallery_media_blob() -> None:
     d = state["instances"]["d"]
 
     b_log_path = _instance_dir("b") / "log.txt"
-    b_log_before_size = (
-        b_log_path.stat().st_size if b_log_path.exists() else 0
-    )
+    b_log_before_size = b_log_path.stat().st_size if b_log_path.exists() else 0
 
     # 1. c creates a per-space album.
     s, album = _request(
@@ -3899,10 +3930,14 @@ def cmd_space_gallery_media_blob() -> None:
     png_bytes = buf.getvalue()
     boundary = "----sh-demo-gallery-boundary"
     body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="gallery.png"\r\n'
-        f"Content-Type: image/png\r\n\r\n"
-    ).encode() + png_bytes + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="gallery.png"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode()
+        + png_bytes
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
     upload_req = urllib.request.Request(
         f"http://127.0.0.1:{c['port']}/api/gallery/albums/{album_id}/items",
         data=body,
@@ -4026,10 +4061,14 @@ def cmd_space_sync_catchup_media() -> None:
     png_bytes = buf.getvalue()
     boundary = "----sh-demo-catchup-post"
     body = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="catchup-post.png"\r\n'
-        f"Content-Type: image/png\r\n\r\n"
-    ).encode() + png_bytes + f"\r\n--{boundary}--\r\n".encode()
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="catchup-post.png"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode()
+        + png_bytes
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
     upload_req = urllib.request.Request(
         f"http://127.0.0.1:{c['port']}/api/media/upload",
         data=body,
@@ -4075,10 +4114,14 @@ def cmd_space_sync_catchup_media() -> None:
     gallery_png_bytes = buf2.getvalue()
     boundary2 = "----sh-demo-catchup-gallery"
     body2 = (
-        f"--{boundary2}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="catchup-gallery.png"\r\n'
-        f"Content-Type: image/png\r\n\r\n"
-    ).encode() + gallery_png_bytes + f"\r\n--{boundary2}--\r\n".encode()
+        (
+            f"--{boundary2}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="catchup-gallery.png"\r\n'
+            f"Content-Type: image/png\r\n\r\n"
+        ).encode()
+        + gallery_png_bytes
+        + f"\r\n--{boundary2}--\r\n".encode()
+    )
     upload_req2 = urllib.request.Request(
         f"http://127.0.0.1:{c['port']}/api/gallery/albums/{album_id}/items",
         data=body2,
@@ -4096,9 +4139,7 @@ def cmd_space_sync_catchup_media() -> None:
 
     # 3. Truncate b's log so the relay-invariant scan is bounded.
     b_log_path = _instance_dir("b") / "log.txt"
-    b_log_before_size = (
-        b_log_path.stat().st_size if b_log_path.exists() else 0
-    )
+    b_log_before_size = b_log_path.stat().st_size if b_log_path.exists() else 0
 
     # 4. c invites dave via mesh — c is NOT directly paired with d.
     s, inv = _request(
@@ -4158,8 +4199,7 @@ def cmd_space_sync_catchup_media() -> None:
     c_post_path = _instance_dir("c") / "media" / post_filename
     if c_post_path.read_bytes() != d_post_path.read_bytes():
         raise SystemExit(
-            f"space-sync-catchup-media: post bytes mismatch for "
-            f"{post_filename}",
+            f"space-sync-catchup-media: post bytes mismatch for {post_filename}",
         )
     print(f"  d.media has post image {post_filename} ✓ (catch-up)")
 
@@ -4178,8 +4218,7 @@ def cmd_space_sync_catchup_media() -> None:
         c_path = _instance_dir("c") / "media" / filename
         if c_path.read_bytes() != d_path.read_bytes():
             raise SystemExit(
-                f"space-sync-catchup-media: gallery bytes mismatch for "
-                f"{filename}",
+                f"space-sync-catchup-media: gallery bytes mismatch for {filename}",
             )
         print(f"  d.media has gallery file {filename} ✓ (catch-up)")
 
@@ -4268,10 +4307,12 @@ def cmd_admin_promote_kick() -> None:
     db_path = _instance_dir("d") / "socialhome.db"
     conn = sqlite3.connect(db_path)
     try:
-        rows = list(conn.execute(
-            "SELECT role FROM space_members WHERE space_id=? AND user_id=?",
-            (space_id, d["user_id"]),
-        ))
+        rows = list(
+            conn.execute(
+                "SELECT role FROM space_members WHERE space_id=? AND user_id=?",
+                (space_id, d["user_id"]),
+            )
+        )
     finally:
         conn.close()
     if not rows:
@@ -4298,24 +4339,24 @@ def cmd_down() -> None:
         try:
             os.killpg(gfs["pid"], signal.SIGTERM)
             print(f"  gfs: SIGTERM pid={gfs['pid']}")
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             pass
     for label, info in (state.get("instances") or {}).items():
         try:
             os.killpg(info["pid"], signal.SIGTERM)
             print(f"  {label}: SIGTERM pid={info['pid']}")
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             pass
     time.sleep(1)
     if gfs:
         try:
             os.killpg(gfs["pid"], signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             pass
     for label, info in (state.get("instances") or {}).items():
         try:
             os.killpg(info["pid"], signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError, PermissionError:
             pass
     if ROOT.exists():
         shutil.rmtree(ROOT)

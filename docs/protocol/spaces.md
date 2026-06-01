@@ -26,6 +26,13 @@ may span any number of paired HFS instances.
 `SPACE_KEY_EXCHANGE_REKEY`, `SPACE_ADMIN_KEY_SHARE`,
 `SPACE_SESSION_CLEANUP`.
 
+**Cross-household admin**
+
+`SPACE_MEMBER_ROLE_CHANGED` (v_8+), `SPACE_REMOTE_ADMIN_KICK` (v_9+),
+`SPACE_REMOTE_ADMIN_ACTION` (v_15+). Role propagation + remote admins
+running mutations on a space hosted elsewhere. See "Cross-household
+admin promotion / kick / actions" below.
+
 **Mesh routing (v_6+)**
 
 `SPACE_ROUTED`, `SPACE_FIND_ROUTE`, `SPACE_ROUTE_FOUND`. Generic
@@ -279,6 +286,49 @@ Owner cannot be kicked through this path — same invariant as
 `remove_member`. Self-leaves on a remote space still run the local
 path (the user is dropping their own stub membership; the host
 learns via the existing `SPACE_MEMBER_LEFT` outbound).
+
+### Cross-household admin actions (v_15+)
+
+`SPACE_REMOTE_ADMIN_ACTION` generalises the kick to every other
+admin-level mutation: **config edit** (name / emoji / features /
+join-mode / retention), **ban / unban**, **archive / unarchive**. The
+remote admin's `SpaceService` method detects the space is hosted
+elsewhere (`owner_instance_id != own`) and, via
+`_forward_admin_action_if_remote`, ships an intent envelope carrying
+`{action, params}` to the host instead of mutating the local stub
+(which isn't authoritative and wouldn't federate). The host's
+`apply_remote_admin_action` re-validates the actor's
+`space_remote_members.role == admin`, then runs the **real host method
+as the owner** — so the result federates back to every member through
+the normal outbounds (`SPACE_CONFIG_CHANGED`, ban/unban, archive
+`space_meta`). One event type carries all actions; the host whitelists
+the verb + (for config) the field names.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as HFS A (remote admin)
+    participant H as HFS H (host)
+    participant W as HFS W (other member)
+    A->>A: PATCH /api/spaces/{id}  (or ban / archive)
+    Note over A: update_config sees<br/>owner_instance_id != self
+    A->>H: SPACE_REMOTE_ADMIN_ACTION<br/>{action, params, actor=A.user}
+    Note over H: lookup actor.role in<br/>space_remote_members<br/>(must be 'admin')
+    H->>H: run real method as owner<br/>(update_config / ban / archive…)
+    H->>W: SPACE_CONFIG_CHANGED (+ rekey for ban)
+    H->>A: SPACE_CONFIG_CHANGED
+```
+
+Scope is admin-level only. **Owner-only** actions — dissolve,
+transfer-ownership, role assignment (`set_role` /
+`set_remote_member_role`) — are NOT forwardable and stay host-local;
+ownership privileges don't cross households. Against a host older than
+v_15 (no handler) the forward raises `SpacePermissionError` rather
+than silently mutating the stub, so the admin gets a clear
+"host needs upgrading" error instead of a divergent local view.
+Moderation approve/reject and zone/link edits are admin-level too and
+can ride the same envelope once the host's moderation queue federates
+to remote admins (follow-on).
 
 ## Age gate
 

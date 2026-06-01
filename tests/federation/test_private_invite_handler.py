@@ -451,6 +451,154 @@ async def test_remote_admin_kick_missing_fields_skipped():
     space_service.apply_remote_admin_kick.assert_not_awaited()
 
 
+async def test_remote_admin_action_dispatches_to_space_service():
+    """Generic cross-household admin action (v_15): handler decodes the
+    payload and forwards to ``SpaceService.apply_remote_admin_action``."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp-cfg",
+            "actor_user_id": "u-admin",
+            "actor_instance_id": "instance-A",
+            "action": "update_config",
+            "params": {"name": "Renamed"},
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)
+    space_service.apply_remote_admin_action.assert_awaited_once_with(
+        "sp-cfg",
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "Renamed"},
+    )
+
+
+async def test_remote_admin_action_ignores_forged_actor_instance():
+    """SECURITY: a payload-supplied actor_instance_id must NOT override the
+    signed envelope's from_instance — otherwise a confirmed peer could
+    impersonate another household's admin. The service must be called with
+    the signer (from_instance), not the forged claim."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "victim-admin",
+            "actor_instance_id": "instance-VICTIM-ADMIN",  # forged
+            "action": "archive",
+            "params": {},
+        },
+        from_instance="instance-MALLORY",  # the actual (signed) sender
+    )
+    await h._on_remote_admin_action(ev)
+    kwargs = space_service.apply_remote_admin_action.call_args.kwargs
+    assert kwargs["actor_instance_id"] == "instance-MALLORY"
+
+
+async def test_remote_admin_kick_ignores_forged_actor_instance():
+    """SECURITY: same binding for the kick — from_instance wins over a
+    payload-supplied actor_instance_id."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_kick = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_KICK",
+        {
+            "space_id": "sp",
+            "actor_user_id": "victim-admin",
+            "actor_instance_id": "instance-VICTIM-ADMIN",  # forged
+            "target_user_id": "u-target",
+        },
+        from_instance="instance-MALLORY",
+    )
+    await h._on_remote_admin_kick(ev)
+    kwargs = space_service.apply_remote_admin_kick.call_args.kwargs
+    assert kwargs["actor_instance_id"] == "instance-MALLORY"
+
+
+async def test_remote_admin_action_missing_action_skipped():
+    """No ``action`` field → drop without calling the service."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {"space_id": "sp", "actor_user_id": "u", "actor_instance_id": "i"},
+    )
+    await h._on_remote_admin_action(ev)
+    space_service.apply_remote_admin_action.assert_not_awaited()
+
+
+async def test_remote_admin_action_without_space_service_drops():
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "actor_instance_id": "i",
+            "action": "archive",
+        },
+    )
+    await h._on_remote_admin_action(ev)  # Should not raise.
+
+
+async def test_remote_admin_action_non_dict_params_coerced():
+    """A malformed (non-dict) ``params`` becomes an empty dict so the
+    service never sees a non-mapping."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "actor_instance_id": "i",
+            "action": "archive",
+            "params": "not-a-dict",
+        },
+    )
+    await h._on_remote_admin_action(ev)
+    assert space_service.apply_remote_admin_action.call_args.kwargs["params"] == {}
+
+
 async def test_attach_space_service_wires_post_construction():
     """The wiring helper sets the slot used by the kick handler."""
     h = PrivateSpaceInviteHandler(
@@ -725,5 +873,6 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
         FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
         FederationEventType.SPACE_REMOTE_ADMIN_KICK,
+        FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
         FederationEventType.SPACE_LOCATION_UPDATED,
     }

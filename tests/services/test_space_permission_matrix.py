@@ -119,6 +119,11 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         # the method itself by looking up ``space_remote_members.role``;
         # there is no actor-username to thread through ``_require_admin``.
         "apply_remote_admin_kick",
+        # Federation inbound hook — like apply_remote_admin_kick, the
+        # actor's role is validated inside the method via
+        # ``space_remote_members.role`` before running the real (already
+        # gated) host method; no actor-username to thread through.
+        "apply_remote_admin_action",
         # Personal sidebar state — keyed on the calling user_id, no
         # space-permission shape.
         "pin",
