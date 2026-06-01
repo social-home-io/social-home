@@ -1,12 +1,14 @@
 /**
- * SpaceHero — the cover banner + About blurb shown at the top of a space.
+ * SpaceHero — the branded profile-style header at the top of a space
+ * (Twitter / Facebook cover pattern).
  *
- * Rendered on the space feed when an admin has set a cover image and/or an
- * About markdown (Space → Settings → About). The cover is a 16:5 hero
- * banner with the space name + emoji overlaid; with no cover it falls back
- * to a primary→accent gradient (so an About-only space still gets a header).
- * The About markdown renders below the banner. Styling lives in
- * ``.sh-space-hero*`` (app.css).
+ * A wide cover banner (the admin's uploaded image, or a primary→accent
+ * theme gradient when none is set) with the space's icon as a circular
+ * avatar overlapping the banner's bottom-left, the name + member count
+ * beside it, and the About markdown below. Shown on the space feed when
+ * the admin has branded the space (cover and/or About). Styling lives in
+ * ``.sh-space-hero*`` (app.css); the theme colours flow in via the
+ * per-space CSS vars set by ``useSpaceTheme``.
  */
 import { MarkdownView } from './MarkdownView'
 
@@ -15,11 +17,13 @@ interface Props {
   emoji: string | null
   coverUrl: string | null
   about: string | null
+  memberCount?: number | null
 }
 
-export function SpaceHero({ name, emoji, coverUrl, about }: Props) {
+export function SpaceHero({ name, emoji, coverUrl, about, memberCount }: Props) {
+  const icon = emoji || name.trim().charAt(0).toUpperCase() || '🏠'
   return (
-    <div class="sh-space-hero">
+    <header class="sh-space-hero">
       <div
         class={
           coverUrl
@@ -27,16 +31,19 @@ export function SpaceHero({ name, emoji, coverUrl, about }: Props) {
             : 'sh-space-hero-banner sh-space-hero-banner--gradient'
         }
       >
-        {coverUrl && (
-          <img class="sh-space-hero-image" src={coverUrl} alt="" />
-        )}
-        <div class="sh-space-hero-overlay">
-          {emoji && (
-            <span class="sh-space-hero-emoji" aria-hidden="true">
-              {emoji}
+        {coverUrl && <img class="sh-space-hero-image" src={coverUrl} alt="" />}
+      </div>
+      <div class="sh-space-hero-identity">
+        <span class="sh-space-hero-avatar" aria-hidden="true">
+          {icon}
+        </span>
+        <div class="sh-space-hero-meta">
+          <h2 class="sh-space-hero-name">{name}</h2>
+          {memberCount != null && (
+            <span class="sh-space-hero-members">
+              {memberCount} {memberCount === 1 ? 'member' : 'members'}
             </span>
           )}
-          <h2 class="sh-space-hero-name">{name}</h2>
         </div>
       </div>
       {about && (
@@ -44,6 +51,6 @@ export function SpaceHero({ name, emoji, coverUrl, about }: Props) {
           <MarkdownView src={about} />
         </div>
       )}
-    </div>
+    </header>
   )
 }

@@ -33,6 +33,32 @@ describe('SpaceHero', () => {
     expect(container.querySelector('.sh-space-hero-about')).toBeTruthy()
   })
 
+  it('shows the emoji as the avatar + the member count', () => {
+    const { container } = render(
+      <SpaceHero
+        name="Family Hub"
+        emoji="🏡"
+        coverUrl={null}
+        about={null}
+        memberCount={3}
+      />,
+    )
+    expect(container.querySelector('.sh-space-hero-avatar')?.textContent).toBe('🏡')
+    expect(container.querySelector('.sh-space-hero-members')?.textContent).toContain(
+      '3 members',
+    )
+  })
+
+  it('falls back to the name initial when there is no emoji, and singular member', () => {
+    const { container } = render(
+      <SpaceHero name="zeta" emoji={null} coverUrl={null} about={null} memberCount={1} />,
+    )
+    expect(container.querySelector('.sh-space-hero-avatar')?.textContent).toBe('Z')
+    expect(container.querySelector('.sh-space-hero-members')?.textContent).toContain(
+      '1 member',
+    )
+  })
+
   it('omits the about block when there is no about text', () => {
     const { container } = render(
       <SpaceHero name="Cover only" emoji="🎉" coverUrl="/x.webp" about={null} />,

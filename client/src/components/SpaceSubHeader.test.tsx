@@ -52,7 +52,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji="🌿"
-        coverUrl={null}
         memberCount={3}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -77,7 +76,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -94,7 +92,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={5}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -107,7 +104,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={1}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -121,7 +117,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -137,7 +132,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -156,7 +150,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={TABS}
@@ -176,7 +169,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={FULL_TABS}
@@ -195,7 +187,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={FULL_TABS}
@@ -224,7 +215,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={FULL_TABS}
@@ -252,7 +242,6 @@ describe('SpaceSubHeader', () => {
       <SpaceSubHeader
         name="Garden"
         emoji={null}
-        coverUrl={null}
         memberCount={null}
         activeTab={activeTab}
         visibleTabs={FULL_TABS}
