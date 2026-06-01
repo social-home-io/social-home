@@ -19,6 +19,7 @@ const apiMock = api as unknown as {
   get: ReturnType<typeof vi.fn>
   patch: ReturnType<typeof vi.fn>
   delete: ReturnType<typeof vi.fn>
+  post: ReturnType<typeof vi.fn>
 }
 
 function makeSpace(overrides: Partial<{
@@ -330,5 +331,27 @@ describe('SpaceSettings', () => {
     await new Promise(r => setTimeout(r, 0))
     const [, body] = apiMock.patch.mock.calls[0]
     expect(body.name).toBe('New name')
+  })
+
+  it('proposes a publication-tier change via POST /proposals', async () => {
+    apiMock.post = vi.fn().mockResolvedValue({ proposal: { status: 'pending' } })
+    const space = makeSpace()
+    const { getByText, container } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    // The tier <select> defaults to the space's current tier; the button is
+    // disabled until it changes.
+    const selects = container.querySelectorAll('select')
+    const tierSelect = Array.from(selects).find((s) =>
+      Array.from(s.options).some((o) => o.value === 'global'),
+    ) as HTMLSelectElement
+    expect(tierSelect).toBeTruthy()
+    fireEvent.change(tierSelect, { target: { value: 'public' } })
+    fireEvent.click(getByText('Propose tier change'))
+    await Promise.resolve()
+    expect(apiMock.post).toHaveBeenCalledWith('/api/spaces/s-1/proposals', {
+      action: 'set_public_tier',
+      space_type: 'public',
+    })
   })
 })
