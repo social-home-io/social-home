@@ -1160,6 +1160,7 @@ async def test_update_config_remote_forwards_all_fields(stack):
         emoji="🌟",
         features=SpaceFeatures(),
         join_mode=JoinMode.OPEN,
+        space_type=SpaceType.PRIVATE,
         retention_days=30,
         retention_exempt_types=["text"],
         about_markdown="hello",
@@ -1171,39 +1172,11 @@ async def test_update_config_remote_forwards_all_fields(stack):
     assert params["emoji"] == "🌟"
     assert params["features"] == SpaceFeatures().to_wire_dict()
     assert params["join_mode"] == JoinMode.OPEN.value
+    assert params["space_type"] == SpaceType.PRIVATE.value
     assert params["retention_days"] == 30
     assert params["retention_exempt_types"] == ["text"]
     assert params["about_markdown"] == "hello"
     assert params["bot_enabled"] is True
-    # Publication tier is owner-only — never forwarded.
-    assert "space_type" not in params
-
-
-async def test_update_config_remote_space_type_is_owner_only(stack):
-    """A remote admin cannot change a host space's publication tier."""
-    stub = await _remote_stub_space(stack)
-    with pytest.raises(SpacePermissionError):
-        await stack.svc.update_config(
-            stub.id, actor_username="localadmin", space_type=SpaceType.PUBLIC
-        )
-    stack.fed_svc.send_with_mesh_fallback.assert_not_awaited()
-
-
-async def test_apply_remote_admin_action_drops_space_type_kwarg(stack):
-    """Defence-in-depth: even if a forged/old client forwards space_type,
-    the host whitelist drops it (publication tier stays owner-only)."""
-    space = await _host_space_with_remote_admin(stack)
-    before = (await stack.space_repo.get(space.id)).space_type
-    await stack.svc.apply_remote_admin_action(
-        space.id,
-        actor_instance_id="instance-A",
-        actor_user_id="u-admin",
-        action="update_config",
-        params={"name": "Ok", "space_type": "global"},
-    )
-    refreshed = await stack.space_repo.get(space.id)
-    assert refreshed.name == "Ok"
-    assert refreshed.space_type == before  # unchanged
 
 
 async def test_apply_remote_admin_action_unarchive(stack):
