@@ -34,6 +34,7 @@ from ..repositories.space_remote_location_repo import SpaceRemoteLocation
 from ..services.space_service import (
     apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
+    apply_space_icon_from_metadata,
     stub_space_from_metadata,
 )
 
@@ -57,6 +58,7 @@ class PrivateSpaceInviteHandler:
         "_space_repo",
         "_remote_members",
         "_cover_repo",
+        "_icon_repo",
         "_space_crypto",
         "_space_service",
         "_approval_service",
@@ -70,6 +72,7 @@ class PrivateSpaceInviteHandler:
         space_repo: "AbstractSpaceRepo",
         remote_member_repo: "AbstractSpaceRemoteMemberRepo",
         cover_repo: "AbstractSpaceCoverRepo | None" = None,
+        icon_repo=None,
         space_crypto_service=None,
         space_service=None,
         remote_location_repo=None,
@@ -81,6 +84,10 @@ class PrivateSpaceInviteHandler:
         #: cover bytes from ``space_meta.cover_webp_base64`` (§D1b
         #: #116) so the stub's card renders the real image.
         self._cover_repo = cover_repo
+        #: Optional — same for the space icon (avatar) bytes from
+        #: ``space_meta.icon_webp_base64`` so the stub shows the real icon
+        #: rather than falling back to the emoji.
+        self._icon_repo = icon_repo
         #: Optional — when wired, the joiner imports the host's
         #: space content key from ``space_meta.space_content_key``
         #: so subsequent SPACE_POST_CREATED decrypts succeed
@@ -210,6 +217,12 @@ class PrivateSpaceInviteHandler:
                 space_id,
                 meta=meta,
                 cover_repo=self._cover_repo,
+            )
+            # §D1b icon bytes — same, for the space avatar.
+            await apply_space_icon_from_metadata(
+                space_id,
+                meta=meta,
+                icon_repo=self._icon_repo,
             )
             # §D1b space content key (#117) — persist receiver's
             # local epoch key so this invitee can actually decrypt

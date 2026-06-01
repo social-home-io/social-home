@@ -52,11 +52,14 @@ def handler():
     remote_members.remove = AsyncMock()
     cover_repo = AsyncMock()
     cover_repo.set = AsyncMock()
+    icon_repo = AsyncMock()
+    icon_repo.set = AsyncMock()
     h = PrivateSpaceInviteHandler(
         bus=bus,  # type: ignore[arg-type]
         space_repo=space_repo,
         remote_member_repo=remote_members,
         cover_repo=cover_repo,
+        icon_repo=icon_repo,
     )
     return SimpleNamespace(
         h=h,
@@ -64,6 +67,7 @@ def handler():
         space_repo=space_repo,
         remote_members=remote_members,
         cover_repo=cover_repo,
+        icon_repo=icon_repo,
     )
 
 
@@ -255,6 +259,38 @@ async def test_invite_with_cover_bytes_writes_to_cover_repo(handler):
     assert call.args[0] == "sp-cover"
     assert call.kwargs["bytes_webp"] == fake_webp
     assert call.kwargs["hash"] == "deadbeef"
+
+
+async def test_invite_with_icon_bytes_writes_to_icon_repo(handler):
+    """Icon federation — ``space_meta.icon_webp_base64`` persists to the
+    icon repo so the joiner's stub shows the host's real avatar instead of
+    the emoji fallback. Mirrors the cover-bytes path."""
+    import base64
+
+    fake_webp = b"RIFF\x00\x00\x00\x00WEBPVP8L-icon"
+    ev = _event(
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp-icon",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-pascal",
+            "space_meta": {
+                "name": "Family",
+                "owner_instance_id": "peer-1",
+                "owner_username": "pascal",
+                "identity_public_key": "abc",
+                "icon_hash": "cafef00d",
+                "icon_webp_base64": base64.b64encode(fake_webp).decode("ascii"),
+            },
+        },
+    )
+    await handler.h._on_invite(ev)
+    handler.icon_repo.set.assert_awaited_once()
+    call = handler.icon_repo.set.call_args
+    assert call.args[0] == "sp-icon"
+    assert call.kwargs["bytes_webp"] == fake_webp
+    assert call.kwargs["hash"] == "cafef00d"
 
 
 async def test_invite_skips_cover_write_when_no_bytes(handler):
