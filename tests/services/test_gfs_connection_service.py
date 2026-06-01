@@ -696,6 +696,70 @@ async def test_publish_body_carries_metadata_and_signature(env):
     assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig_b64))
 
 
+async def test_publish_body_carries_brand_colors_and_image_data_uris(env):
+    """With theme/cover/icon repos wired, the publish body ships the real
+    theme colours + the cover and icon as self-contained data URIs (so the
+    GFS public page renders the space's brand on its own origin)."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+    from socialhome.repositories.space_cover_repo import SqliteSpaceCoverRepo
+    from socialhome.repositories.space_icon_repo import SqliteSpaceIconRepo
+    from socialhome.repositories.space_repo import SqliteSpaceRepo
+    from socialhome.repositories.theme_repo import SqliteThemeRepo
+
+    db, conn_repo = env
+    await conn_repo.save(_make_conn("gfs-b", inbox_url="https://gfs.example"))
+    space_repo = SqliteSpaceRepo(db)
+    space = Space(
+        id="sp-brand",
+        name="Brandy",
+        owner_instance_id="alpha.home",
+        owner_username="alice",
+        identity_public_key="aa" * 32,
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.GLOBAL,
+        join_mode=JoinMode.OPEN,
+    )
+    await space_repo.save(space)
+    await space_repo.set_cover_hash("sp-brand", "ch")
+    await space_repo.set_icon_hash("sp-brand", "ih")
+    theme_repo = SqliteThemeRepo(db)
+    await theme_repo.upsert_space(
+        space_id="sp-brand", primary_color="#112233", accent_color="#445566"
+    )
+    cover_repo = SqliteSpaceCoverRepo(db)
+    await cover_repo.set(
+        "sp-brand", bytes_webp=b"RIFFcover", hash="ch", width=8, height=8
+    )
+    icon_repo = SqliteSpaceIconRepo(db)
+    await icon_repo.set(
+        "sp-brand", bytes_webp=b"RIFFicon", hash="ih", width=8, height=8
+    )
+
+    kp = generate_identity_keypair()
+    session = _StubSession(method_responses={"POST": (200, {"status": "ok"})})
+    svc = GfsConnectionService(conn_repo, http_client=session)
+    svc.attach_publish_context(
+        space_repo=space_repo,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+        theme_repo=theme_repo,
+        cover_repo=cover_repo,
+        icon_repo=icon_repo,
+    )
+    await svc.publish_space("sp-brand", "gfs-b")
+    body = session._last_body  # type: ignore[attr-defined]
+    assert body["primary_color"] == "#112233"
+    assert body["accent_color"] == "#445566"
+    assert body["cover_url"].startswith("data:image/webp;base64,")
+    assert body["icon_url"].startswith("data:image/webp;base64,")
+
+
 async def test_publish_body_falls_back_when_space_missing(env):
     """``attach_publish_context`` is wired but the local space row is
     gone — fall back to the legacy ``{space_id}`` body rather than

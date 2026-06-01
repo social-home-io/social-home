@@ -207,6 +207,42 @@ async def test_space_page_renders_deep_link(client):
     assert 'property="og:title"' in text
 
 
+async def test_space_page_renders_icon_and_brand_colors(client):
+    """The per-space page renders the icon avatar + the space's real theme
+    colours (primary), so the GFS page reflects the space's brand."""
+    app = client._app
+    fed_repo = app[gfs_fed_repo_key]
+    await fed_repo.upsert_instance(
+        ClientInstance(
+            instance_id="o2.home",
+            display_name="O2",
+            public_key="bb" * 32,
+            inbox_url="http://o2/wh",
+            status="active",
+        )
+    )
+    await fed_repo.upsert_space(
+        GlobalSpace(
+            space_id="sp-brand",
+            owning_instance="o2.home",
+            name="Branded",
+            description="about",
+            cover_url="data:image/webp;base64,Y292ZXI=",
+            icon_url="data:image/webp;base64,aWNvbg==",
+            accent_color="#445566",
+            primary_color="#112233",
+            status="active",
+        )
+    )
+    resp = await client.get("/spaces/sp-brand")
+    assert resp.status == 200
+    text = await resp.text()
+    assert 'class="space-avatar"' in text
+    assert "data:image/webp;base64,aWNvbg==" in text  # icon
+    assert "data:image/webp;base64,Y292ZXI=" in text  # cover
+    assert "#112233" in text  # primary colour applied to --primary
+
+
 async def test_space_page_404_for_pending_or_banned(client):
     app = client._app
     fed_repo = app[gfs_fed_repo_key]

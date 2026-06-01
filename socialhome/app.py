@@ -1879,6 +1879,9 @@ def create_app(config: Config | None = None) -> web.Application:
             space_repo=repos.space,
             own_instance_id=real_instance_id,
             own_signing_key=identity_seed,
+            theme_repo=repos.theme,
+            cover_repo=repos.space_cover,
+            icon_repo=repos.space_icon,
         )
 
         # Short-lived signed URLs for browser-loaded media — see §23.21

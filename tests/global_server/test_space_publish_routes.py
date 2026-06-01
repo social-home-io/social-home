@@ -142,6 +142,8 @@ async def test_publish_space_happy_path_active(gfs_client):
             "min_age": 0,
             "target_audience": "all",
             "accent_color": "#D2542A",
+            "icon_url": "",
+            "primary_color": "#D2542A",
         },
         seed=seed,
     )
@@ -171,6 +173,8 @@ async def test_publish_space_pending_when_auto_accept_off(gfs_client):
             "min_age": 0,
             "target_audience": "all",
             "accent_color": "#D2542A",
+            "icon_url": "",
+            "primary_color": "#D2542A",
         },
         seed=seed,
     )
@@ -233,6 +237,8 @@ async def test_publish_space_invalid_signature_403(gfs_client):
             "min_age": 0,
             "target_audience": "all",
             "accent_color": "#D2542A",
+            "icon_url": "",
+            "primary_color": "#D2542A",
         },
         seed=other_seed,
     )
@@ -271,6 +277,8 @@ async def test_publish_space_preserves_subscriber_count_across_publishes(gfs_cli
             "min_age": 0,
             "target_audience": "all",
             "accent_color": "#D2542A",
+            "icon_url": "",
+            "primary_color": "#D2542A",
         },
         seed=seed,
     )
@@ -308,6 +316,8 @@ async def test_publish_space_cannot_unban_a_banned_row(gfs_client):
             "min_age": 0,
             "target_audience": "all",
             "accent_color": "#D2542A",
+            "icon_url": "",
+            "primary_color": "#D2542A",
         },
         seed=seed,
     )
