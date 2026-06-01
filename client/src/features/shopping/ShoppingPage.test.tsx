@@ -372,12 +372,11 @@ describe('ShoppingPage', () => {
     })
   })
 
-  it('hides the store pill inside the No store section (redundant with header)', async () => {
-    // The pill says "📍 SET STORE" for unassigned items in the
-    // flat view, but in the grouped view the row already sits
-    // under a "No store" header — rendering both is the loudest
-    // pile of redundant labels on the page. The pill is hidden;
-    // tap the row text to rename or drag to reassign.
+  it('renders compact icon-only store pills in the grouped view (no redundant store name)', async () => {
+    // In the grouped view the section header already names the store,
+    // so repeating it on every row is redundant noise. The pill stays
+    // (a tap target to assign / reassign / manage — drag is desktop-
+    // only) but renders icon-only: no store-name label.
     wireApi({
       items: [
         // One assigned to Aldi (so grouping kicks in) + one
@@ -397,16 +396,23 @@ describe('ShoppingPage', () => {
       expect(container.querySelectorAll('.sh-shopping-group').length).toBeGreaterThanOrEqual(1)
     })
 
-    // Eggs (under Aldi) keeps its pill so the user can reassign.
+    // Eggs (under Aldi): pill present, compact, and does NOT repeat the
+    // store name "Aldi" (the section header already shows it).
     const eggsRow = Array.from(container.querySelectorAll('.sh-shopping-item'))
       .find(li => li.textContent?.includes('Eggs')) as HTMLElement
-    expect(eggsRow.querySelector('.sh-shopping-store-pill')).not.toBeNull()
+    const eggsPill = eggsRow.querySelector('.sh-shopping-store-pill')
+    expect(eggsPill).not.toBeNull()
+    expect(eggsPill?.classList.contains('sh-shopping-store-pill--compact')).toBe(true)
+    expect(eggsPill?.textContent).not.toContain('Aldi')
 
-    // Tools (under "No store") hides the pill — section header
-    // already announces the state.
+    // Tools (under "No store"): also a compact pill — a quiet assign
+    // affordance, not the old "📍 SET STORE" label.
     const toolsRow = Array.from(container.querySelectorAll('.sh-shopping-item'))
       .find(li => li.textContent?.includes('Tools')) as HTMLElement
-    expect(toolsRow.querySelector('.sh-shopping-store-pill')).toBeNull()
+    const toolsPill = toolsRow.querySelector('.sh-shopping-store-pill')
+    expect(toolsPill).not.toBeNull()
+    expect(toolsPill?.classList.contains('sh-shopping-store-pill--compact')).toBe(true)
+    expect(toolsPill?.textContent).not.toContain('Set store')
   })
 
   it('grouped view collects all done items into a single trailer (not per-store)', async () => {

@@ -7158,6 +7158,23 @@ body.sh-dm-thread-open .sh-messages {
   opacity: 0.7;
   margin-left: 2px;
 }
+/* Icon-only variant for the grouped view — the section header already
+   names the store, so the row pill is just a quiet 📍▾ reassign handle. */
+.sh-shopping-store-pill--compact {
+  padding: 4px 7px;
+  gap: 2px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--sh-text-muted);
+}
+.sh-shopping-store-pill--compact:hover {
+  background: color-mix(in srgb, var(--sh-primary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--sh-primary) 25%, transparent);
+  color: var(--sh-primary);
+}
+.sh-shopping-store-pill--compact .sh-shopping-store-pill__chev {
+  margin-left: 0;
+}
 
 /* StorePicker popover anchored under the store pill. The picker is
  * a one-tap reassign affordance — replaces the typing-required

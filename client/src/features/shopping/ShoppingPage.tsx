@@ -747,7 +747,7 @@ function GroupedView(props: GroupedProps) {
                     onReassignStore={(s) => props.onReassignStore(item.id, s)}
                     onRenameStore={props.onRenameStore}
                     onDeleteStore={props.onDeleteStore}
-                    hideStorePill={section.key === NO_STORE_KEY}
+                    compact={true}
                     userNameById={props.userNameById}
                     storeNames={props.storeNames}
                     draggable={true}
@@ -822,14 +822,13 @@ interface RowProps {
    *  these through so the picker shows the manage affordance. */
   onRenameStore?: (oldName: string, newName: string) => Promise<void>
   onDeleteStore?: (name: string) => Promise<void>
-  /** When ``true`` the row hides its store pill. Used inside the
-   *  "No store" section of the grouped view — the section header
-   *  already says "No store", and rendering a "📍 SET STORE" pill
-   *  next to every item is the loudest, most-repeated thing on
-   *  the page. Tapping the row's text still opens the picker via
-   *  the rename flow, and dragging to another section still
-   *  reassigns. */
-  hideStorePill?: boolean
+  /** When ``true`` the store pill renders icon-only (no store name) —
+   *  used in the grouped view, where the section header already names
+   *  the store, so repeating it on every row is redundant noise. The
+   *  icon still opens the picker (assign / reassign / manage), so touch
+   *  users keep a tap target even though drag is desktop-only. The flat
+   *  view leaves it ``false`` so the row shows which store it's in. */
+  compact?: boolean
   userNameById: (uid: string) => string
   storeNames: string[]
   /** When true, the whole row carries HTML5 ``draggable=true`` so the
@@ -904,10 +903,11 @@ function ItemRow(props: RowProps) {
       >
         {item.text}
       </span>
-      {!done && !props.hideStorePill && (
+      {!done && (
         <StorePicker
           currentStore={item.store ?? null}
           storeNames={props.storeNames}
+          compact={props.compact}
           onPick={props.onReassignStore}
           onRenameStore={props.onRenameStore}
           onDeleteStore={props.onDeleteStore}
@@ -1008,6 +1008,9 @@ interface StorePickerProps {
    *  cleared to "No store" (handled server-side + optimistically
    *  by the caller's store helper). */
   onDeleteStore?: (name: string) => Promise<void>
+  /** Icon-only pill (no store-name label) — used in the grouped view
+   *  where the section header already names the store. */
+  compact?: boolean
 }
 
 /** One-tap reassign affordance on the item row.
@@ -1035,6 +1038,7 @@ function StorePicker({
   onPick,
   onRenameStore,
   onDeleteStore,
+  compact,
 }: StorePickerProps) {
   const canManage = !!onRenameStore && !!onDeleteStore
   const [open, setOpen] = useState(false)
@@ -1170,17 +1174,25 @@ function StorePicker({
         class={
           'sh-shopping-store-pill '
           + (currentStore ? '' : 'sh-shopping-store-pill--empty')
+          + (compact ? ' sh-shopping-store-pill--compact' : '')
         }
         aria-haspopup="menu"
         aria-expanded={open}
-        title={currentStore ? `At ${currentStore} — tap to change` : 'Tap to set a store'}
+        aria-label={
+          compact
+            ? currentStore
+              ? `Store: ${label} — tap to change`
+              : 'Set a store'
+            : undefined
+        }
+        title={currentStore ? `At ${label} — tap to change` : 'Tap to set a store'}
         onClick={(e) => {
           e.stopPropagation()
           setOpen((v) => !v)
         }}
       >
         <span aria-hidden="true">📍</span>
-        <span>{label}</span>
+        {!compact && <span>{label}</span>}
         <span aria-hidden="true" class="sh-shopping-store-pill__chev">▾</span>
       </button>
       {open && mode === 'list' && (
