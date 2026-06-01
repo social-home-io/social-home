@@ -64,6 +64,7 @@ from ..domain.events import (
     SpacePostModerated,
 )
 from ..domain.federation import FederationEventType, PairingStatus
+from ..domain.federation_capabilities import FederationCapability
 from ..media.cleanup import unlink_media
 from .space_purge import purge_space_and_media
 from ..media.image_processor import ImageProcessor
@@ -508,6 +509,69 @@ class SpaceService(SpaceMemberGuardMixin):
             space_id=space_id,
         )
 
+    async def _forward_admin_action_if_remote(
+        self,
+        space: Space,
+        actor_username: str,
+        action: str,
+        params: dict,
+    ) -> bool:
+        """Forward an admin-level mutation to the host when this space is
+        hosted on another household (#114, cross-household admin actions,
+        v_15+).
+
+        Generalises the kick path in :meth:`remove_member`: a remote admin
+        can't mutate their local stub for config / ban / archive (the
+        stub isn't authoritative and the change wouldn't federate), so we
+        ship a :data:`FederationEventType.SPACE_REMOTE_ADMIN_ACTION` intent
+        envelope to the host. The host re-validates the actor's role and
+        runs the real method; the result federates back via the normal
+        outbounds.
+
+        Returns ``True`` when the action was forwarded — the caller MUST
+        then return without touching the local stub. Returns ``False``
+        when this instance owns the space, so the caller proceeds with the
+        normal local path.
+
+        Raises :class:`SpacePermissionError` when the host is too old to
+        handle the action (sub-``MIN_FOR_REMOTE_ADMIN_ACTION``) rather than
+        silently mutating the stub into divergence with the host.
+        """
+        if (
+            self._own_instance_id is None
+            or not space.owner_instance_id
+            or space.owner_instance_id == self._own_instance_id
+        ):
+            return False  # we are the host — run locally
+        if self._federation is None:
+            raise RuntimeError(
+                "remote-admin action requires federation to be attached",
+            )
+        if not await self._federation.peer_supports(
+            space.owner_instance_id,
+            min_version=FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION,
+        ):
+            raise SpacePermissionError(
+                "this space's host doesn't support remote admin actions yet "
+                "— ask the host's operator to upgrade",
+            )
+        actor = await self._users.get(actor_username)
+        if actor is None:
+            raise KeyError(f"actor {actor_username!r} not found")
+        await self._federation.send_with_mesh_fallback(
+            to_instance_id=space.owner_instance_id,
+            event_type=FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
+            payload={
+                "space_id": space.id,
+                "actor_user_id": actor.user_id,
+                "actor_instance_id": self._own_instance_id,
+                "action": action,
+                "params": params,
+            },
+            space_id=space.id,
+        )
+        return True
+
     async def archive_space(self, space_id: str, *, actor_username: str) -> None:
         """Archive a space (owner / admin) — a soft, reversible removal.
 
@@ -521,12 +585,20 @@ class SpaceService(SpaceMemberGuardMixin):
         """
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+        if await self._forward_admin_action_if_remote(
+            space, actor_username, "archive", {}
+        ):
+            return
         await self._apply_archive(space_id, True, SpaceConfigEventType.ARCHIVED)
 
     async def unarchive_space(self, space_id: str, *, actor_username: str) -> None:
         """Restore an archived space to read-write + active lists (owner/admin)."""
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+        if await self._forward_admin_action_if_remote(
+            space, actor_username, "unarchive", {}
+        ):
+            return
         await self._apply_archive(space_id, False, SpaceConfigEventType.UNARCHIVED)
 
     async def _apply_archive(
@@ -571,6 +643,37 @@ class SpaceService(SpaceMemberGuardMixin):
         """
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+
+        # Cross-household admin config edit — forward to the host (v_15+).
+        # Build a wire-serialised params dict of only the provided fields,
+        # mirroring the per-field gates below, and let the host run the
+        # real edit so the change federates back to every member.
+        if space.owner_instance_id and space.owner_instance_id != self._own_instance_id:
+            fwd: dict = {}
+            if name is not None:
+                fwd["name"] = name
+            if description is not None:
+                fwd["description"] = description
+            if emoji is not None:
+                fwd["emoji"] = emoji
+            if features is not None:
+                fwd["features"] = features.to_wire_dict()
+            if join_mode is not None:
+                fwd["join_mode"] = _coerce_join_mode(join_mode).value
+            if space_type is not None:
+                fwd["space_type"] = _coerce_space_type(space_type).value
+            if retention_days is not None:
+                fwd["retention_days"] = retention_days
+            if retention_exempt_types is not None:
+                fwd["retention_exempt_types"] = list(retention_exempt_types)
+            if about_markdown is not _UNSET_MEMBER_PROFILE:
+                fwd["about_markdown"] = about_markdown
+            if bot_enabled is not None:
+                fwd["bot_enabled"] = bool(bot_enabled)
+            if await self._forward_admin_action_if_remote(
+                space, actor_username, "update_config", fwd
+            ):
+                return space
 
         payload: dict = {}
         new_fields: dict = {}
@@ -1094,6 +1197,123 @@ class SpaceService(SpaceMemberGuardMixin):
             user_id=target_user_id,
         )
 
+    #: Fields a remote admin may set via ``update_config`` over
+    #: ``SPACE_REMOTE_ADMIN_ACTION``. Whitelisted so an unexpected wire
+    #: key can never become an ``update_config`` keyword (collision with
+    #: ``actor_username`` / unknown kwarg → ``TypeError``).
+    _REMOTE_CONFIG_FIELDS = frozenset(
+        {
+            "name",
+            "description",
+            "emoji",
+            "features",
+            "join_mode",
+            "space_type",
+            "retention_days",
+            "retention_exempt_types",
+            "about_markdown",
+            "bot_enabled",
+        }
+    )
+
+    async def apply_remote_admin_action(
+        self,
+        space_id: str,
+        *,
+        actor_instance_id: str,
+        actor_user_id: str,
+        action: str,
+        params: dict | None = None,
+    ) -> None:
+        """Host-side dispatch for ``SPACE_REMOTE_ADMIN_ACTION`` (v_15+).
+
+        Generalises :meth:`apply_remote_admin_kick`: the §24.11 pipeline
+        already verified the envelope signature, so this validates the
+        actor's *role* in ``space_remote_members.role`` and, if the actor
+        is an admin, runs the real host-side admin method **as the owner**
+        — the result then federates back to every member through the
+        normal outbounds (``SPACE_CONFIG_CHANGED`` etc.).
+
+        Scope is admin-level mutations only: ``update_config``,
+        ``archive`` / ``unarchive``, ``ban`` / ``unban``. Owner-only
+        actions (dissolve, transfer-ownership, role assignment) are NOT
+        forwardable and never reach this dispatcher. Unknown actions,
+        unauthenticated actors, and spaces not hosted here are silently
+        dropped — no differential errors, same posture as the kick path
+        (the most likely cause is a promotion that's since been revoked).
+        """
+        if self._remote_members is None:
+            log.warning(
+                "apply_remote_admin_action: federation not attached; dropping",
+            )
+            return
+        space = await self._spaces.get(space_id)
+        if space is None:
+            log.debug(
+                "apply_remote_admin_action: unknown space=%s — dropping",
+                space_id,
+            )
+            return
+        if (
+            self._own_instance_id is None
+            or space.owner_instance_id != self._own_instance_id
+        ):
+            log.debug(
+                "apply_remote_admin_action: space=%s not hosted here — dropping",
+                space_id,
+            )
+            return
+        actor = await self._remote_members.get(
+            space_id,
+            actor_instance_id,
+            actor_user_id,
+        )
+        if actor is None or actor.role != SpaceRole.ADMIN:
+            log.info(
+                "apply_remote_admin_action: actor %s@%s not an admin "
+                "of space=%s — dropping",
+                actor_user_id,
+                actor_instance_id,
+                space_id,
+            )
+            return
+        owner = space.owner_username
+        p = params or {}
+        match action:
+            case "update_config":
+                kwargs = {k: v for k, v in p.items() if k in self._REMOTE_CONFIG_FIELDS}
+                feats = kwargs.get("features")
+                if feats is not None:
+                    kwargs["features"] = SpaceFeatures.from_wire_dict(feats)
+                await self.update_config(space_id, actor_username=owner, **kwargs)
+            case "archive":
+                await self.archive_space(space_id, actor_username=owner)
+            case "unarchive":
+                await self.unarchive_space(space_id, actor_username=owner)
+            case "ban":
+                target_id = str(p.get("user_id") or "")
+                if not target_id:
+                    return
+                reason = p.get("reason")
+                await self.ban(
+                    space_id,
+                    actor_username=owner,
+                    user_id=target_id,
+                    reason=reason if isinstance(reason, str) else None,
+                )
+            case "unban":
+                target_id = str(p.get("user_id") or "")
+                if not target_id:
+                    return
+                await self.unban(space_id, actor_username=owner, user_id=target_id)
+            case _:
+                log.info(
+                    "apply_remote_admin_action: unknown action=%r for "
+                    "space=%s — dropping",
+                    action,
+                    space_id,
+                )
+
     async def set_remote_member_role(
         self,
         space_id: str,
@@ -1347,6 +1567,10 @@ class SpaceService(SpaceMemberGuardMixin):
     ) -> None:
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+        if await self._forward_admin_action_if_remote(
+            space, actor_username, "ban", {"user_id": user_id, "reason": reason}
+        ):
+            return
         target = await self._spaces.get_member(space_id, user_id)
         if target is not None and target.role == SpaceRole.OWNER:
             raise SpacePermissionError("cannot ban the owner")
@@ -1385,6 +1609,10 @@ class SpaceService(SpaceMemberGuardMixin):
     ) -> None:
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+        if await self._forward_admin_action_if_remote(
+            space, actor_username, "unban", {"user_id": user_id}
+        ):
+            return
         await self._spaces.unban_member(space_id, user_id)
         sequence = await self._spaces.increment_config_sequence(space_id)
         await self._bus.publish(

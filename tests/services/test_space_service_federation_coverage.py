@@ -23,7 +23,9 @@ from socialhome.domain.federation import (
 )
 from socialhome.domain.space import (
     JoinMode,
+    SpaceFeatures,
     SpacePermissionError,
+    SpaceRole,
     SpaceType,
 )
 from socialhome.infrastructure.event_bus import EventBus
@@ -67,6 +69,10 @@ async def stack(tmp_dir):
     fed_svc.send_with_mesh_fallback = AsyncMock(
         return_value=DeliveryResult(instance_id="peer", ok=True),
     )
+    # Default: peers advertise the latest protocol version so the
+    # cross-household admin-action forward is allowed. Tests that need an
+    # older host override this per-case.
+    fed_svc.peer_supports = AsyncMock(return_value=True)
     fed_repo = MagicMock()
     fed_repo.get_instance = AsyncMock(
         return_value=RemoteInstance(
@@ -900,4 +906,334 @@ async def test_apply_remote_admin_kick_unknown_space_drops(stack):
         actor_instance_id="instance-A",
         actor_user_id="u",
         target_user_id="t",
+    )  # Should not raise.
+
+
+# ── cross-household admin actions (#114, v_15) ──────────────────────
+#
+# Two halves to each action: the *forward* (a remote admin on a stub
+# ships SPACE_REMOTE_ADMIN_ACTION to the host instead of mutating the
+# stub) and the host-side *dispatch* (apply_remote_admin_action
+# re-validates the actor's role and runs the real method as owner).
+
+
+async def _remote_stub_space(stack, *, host="instance-remote-host"):
+    """Insert a stub space hosted on another household (owner_instance_id
+    != own) and seat the local ``localadmin`` user as a local admin so
+    ``_require_admin_or_owner`` passes before the forward fires.
+
+    ``space_repo.save`` does not update ``owner_instance_id`` on conflict,
+    so the stub must be a *fresh* id (not a re-homed create_space)."""
+    from socialhome.domain.space import Space, SpaceMember
+
+    localadmin = await _user(stack, "localadmin")
+    stub = Space(
+        id="sp-hosted-elsewhere",
+        name="S",
+        owner_instance_id=host,
+        owner_username="hostowner",
+        identity_public_key="",
+        config_sequence=0,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        emoji="🏠",
+        description="",
+    )
+    await stack.space_repo.save(stub)
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=stub.id,
+            user_id=localadmin.user_id,
+            role=SpaceRole.ADMIN,
+            joined_at="2026-06-01T00:00:00+00:00",
+        )
+    )
+    return stub
+
+
+async def test_update_config_remote_forwards_to_host(stack):
+    """A config edit on a remote stub forwards the action to the host
+    and does NOT mutate the local stub (which isn't authoritative)."""
+    stub = await _remote_stub_space(stack)
+    await stack.svc.update_config(stub.id, actor_username="localadmin", name="Renamed")
+    stack.fed_svc.send_with_mesh_fallback.assert_awaited_once()
+    call = stack.fed_svc.send_with_mesh_fallback.call_args
+    assert call.kwargs["event_type"] is (FederationEventType.SPACE_REMOTE_ADMIN_ACTION)
+    assert call.kwargs["to_instance_id"] == "instance-remote-host"
+    payload = call.kwargs["payload"]
+    assert payload["action"] == "update_config"
+    assert payload["params"]["name"] == "Renamed"
+    # Local stub untouched — the rename only lands when the host
+    # federates SPACE_CONFIG_CHANGED back.
+    refreshed = await stack.space_repo.get(stub.id)
+    assert refreshed.name == "S"
+
+
+async def test_update_config_remote_serialises_features(stack):
+    """The forwarded params carry the wire-dict form of SpaceFeatures."""
+    stub = await _remote_stub_space(stack)
+    feats = SpaceFeatures(calendar=False, bazaar=False)
+    await stack.svc.update_config(stub.id, actor_username="localadmin", features=feats)
+    payload = stack.fed_svc.send_with_mesh_fallback.call_args.kwargs["payload"]
+    assert payload["params"]["features"] == feats.to_wire_dict()
+
+
+async def test_ban_remote_forwards_to_host(stack):
+    stub = await _remote_stub_space(stack)
+    await stack.svc.ban(
+        stub.id, actor_username="localadmin", user_id="victim", reason="spam"
+    )
+    payload = stack.fed_svc.send_with_mesh_fallback.call_args.kwargs["payload"]
+    assert payload["action"] == "ban"
+    assert payload["params"] == {"user_id": "victim", "reason": "spam"}
+
+
+async def test_archive_remote_forwards_to_host(stack):
+    stub = await _remote_stub_space(stack)
+    await stack.svc.archive_space(stub.id, actor_username="localadmin")
+    payload = stack.fed_svc.send_with_mesh_fallback.call_args.kwargs["payload"]
+    assert payload["action"] == "archive"
+
+
+async def test_unarchive_remote_forwards_to_host(stack):
+    stub = await _remote_stub_space(stack)
+    await stack.svc.unarchive_space(stub.id, actor_username="localadmin")
+    payload = stack.fed_svc.send_with_mesh_fallback.call_args.kwargs["payload"]
+    assert payload["action"] == "unarchive"
+
+
+async def test_remote_admin_action_raises_when_host_too_old(stack):
+    """Sub-v_15 host → SpacePermissionError, NOT a silent stub mutation."""
+    stack.fed_svc.peer_supports = AsyncMock(return_value=False)
+    stub = await _remote_stub_space(stack)
+    with pytest.raises(SpacePermissionError):
+        await stack.svc.archive_space(stub.id, actor_username="localadmin")
+    stack.fed_svc.send_with_mesh_fallback.assert_not_awaited()
+
+
+# ── apply_remote_admin_action (host side) ───────────────────────────
+
+
+async def _host_space_with_remote_admin(stack):
+    """Host-owned space + a remote admin seated on instance-A."""
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-A",
+        user_id="u-admin",
+        user_pk=None,
+        display_name=None,
+    )
+    await stack.svc._remote_members.set_role(space.id, "instance-A", "u-admin", "admin")
+    return space
+
+
+async def test_apply_remote_admin_action_update_config(stack):
+    space = await _host_space_with_remote_admin(stack)
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "From Remote Admin"},
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.name == "From Remote Admin"
+
+
+async def test_apply_remote_admin_action_update_config_rebuilds_features(stack):
+    space = await _host_space_with_remote_admin(stack)
+    feats = SpaceFeatures(bazaar=False, calendar=False)
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"features": feats.to_wire_dict()},
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.features.bazaar is False
+    assert refreshed.features.calendar is False
+
+
+async def test_apply_remote_admin_action_drops_unknown_config_kwargs(stack):
+    """An unexpected wire key never reaches update_config as a kwarg."""
+    space = await _host_space_with_remote_admin(stack)
+    # Should not raise (would be a TypeError if injected as a kwarg).
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "Ok", "actor_username": "evil", "bogus": 1},
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.name == "Ok"
+
+
+async def test_apply_remote_admin_action_archive(stack):
+    space = await _host_space_with_remote_admin(stack)
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="archive",
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.archived is True
+
+
+async def test_apply_remote_admin_action_ban(stack):
+    space = await _host_space_with_remote_admin(stack)
+    victim = await _user(stack, "victimlocal")
+    await stack.svc.add_member(
+        space.id, actor_username="alicehost", user_id=victim.user_id, role="member"
+    )
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="ban",
+        params={"user_id": victim.user_id, "reason": "nope"},
+    )
+    assert await stack.space_repo.get_member(space.id, victim.user_id) is None
+
+
+async def test_apply_remote_admin_action_rejects_non_admin(stack):
+    """A remote *member* (not admin) is silently dropped."""
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="instance-A",
+        user_id="u-member",
+        user_pk=None,
+        display_name=None,
+    )  # role defaults to member
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-member",
+        action="update_config",
+        params={"name": "Hacked"},
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.name == "S"
+
+
+async def test_apply_remote_admin_action_unknown_action_noop(stack):
+    space = await _host_space_with_remote_admin(stack)
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="dissolve",  # owner-only; never forwardable
+        params={},
+    )  # Should not raise.
+    assert await stack.space_repo.get(space.id) is not None
+
+
+async def test_apply_remote_admin_action_not_hosted_here_drops(stack):
+    """If the space is hosted elsewhere, the host-side dispatch drops."""
+    stub = await _remote_stub_space(stack)
+    await stack.svc.apply_remote_admin_action(
+        stub.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="archive",
+        params={},
+    )  # Should not raise / not mutate.
+    refreshed = await stack.space_repo.get(stub.id)
+    assert refreshed.archived is False
+
+
+async def test_update_config_remote_forwards_all_fields(stack):
+    """Every provided field is serialised into the forwarded params."""
+    stub = await _remote_stub_space(stack)
+    await stack.svc.update_config(
+        stub.id,
+        actor_username="localadmin",
+        name="N",
+        description="D",
+        emoji="🌟",
+        features=SpaceFeatures(),
+        join_mode=JoinMode.OPEN,
+        space_type=SpaceType.PRIVATE,
+        retention_days=30,
+        retention_exempt_types=["text"],
+        about_markdown="hello",
+        bot_enabled=True,
+    )
+    params = stack.fed_svc.send_with_mesh_fallback.call_args.kwargs["payload"]["params"]
+    assert params["name"] == "N"
+    assert params["description"] == "D"
+    assert params["emoji"] == "🌟"
+    assert params["features"] == SpaceFeatures().to_wire_dict()
+    assert params["join_mode"] == JoinMode.OPEN.value
+    assert params["space_type"] == SpaceType.PRIVATE.value
+    assert params["retention_days"] == 30
+    assert params["retention_exempt_types"] == ["text"]
+    assert params["about_markdown"] == "hello"
+    assert params["bot_enabled"] is True
+
+
+async def test_apply_remote_admin_action_unarchive(stack):
+    space = await _host_space_with_remote_admin(stack)
+    await stack.svc.archive_space(space.id, actor_username="alicehost")
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="unarchive",
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.archived is False
+
+
+async def test_apply_remote_admin_action_unban(stack):
+    space = await _host_space_with_remote_admin(stack)
+    victim = await _user(stack, "victimlocal")
+    await stack.svc.add_member(
+        space.id, actor_username="alicehost", user_id=victim.user_id, role="member"
+    )
+    await stack.svc.ban(space.id, actor_username="alicehost", user_id=victim.user_id)
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="unban",
+        params={"user_id": victim.user_id},
+    )
+    # The ban row is cleared (unban succeeded as the owner).
+    assert await stack.space_repo.is_banned(space.id, victim.user_id) is False
+
+
+async def test_apply_remote_admin_action_ban_missing_user_noop(stack):
+    space = await _host_space_with_remote_admin(stack)
+    # No user_id in params → drop without raising.
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="ban",
+        params={},
+    )
+    await stack.svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="unban",
+        params={},
+    )  # Should not raise.
+
+
+async def test_apply_remote_admin_action_unknown_space_drops(stack):
+    await stack.svc.apply_remote_admin_action(
+        "sp-nonexistent",
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="archive",
+        params={},
     )  # Should not raise.

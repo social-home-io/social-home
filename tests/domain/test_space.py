@@ -20,6 +20,28 @@ def test_space_features_roundtrip():
     assert f == f2
 
 
+def test_space_features_wire_roundtrip():
+    """SpaceFeatures survives a to_wire_dict / from_wire_dict round-trip —
+    the path the cross-household admin config edit uses."""
+    f = SpaceFeatures(
+        calendar=False,
+        bazaar=False,
+        location=True,
+        location_mode="zone_only",
+        tasks_access=SpaceFeatureAccess.MODERATED,
+        allow_subscriber_comment=True,
+        allowed_post_types=("image", "text"),
+    )
+    assert SpaceFeatures.from_wire_dict(f.to_wire_dict()) == f
+
+
+def test_space_features_from_wire_dict_defaults_on_partial():
+    """A partial / older-shaped wire dict falls back to class defaults
+    rather than raising, and an unknown access level degrades to OPEN."""
+    f = SpaceFeatures.from_wire_dict({"name_only": 1, "posts_access": "bogus"})
+    assert f == SpaceFeatures()  # every field defaulted
+
+
 def test_space_features_gallery_roundtrip():
     """gallery flag survives to_columns / from_row + appears on the wire."""
     on = SpaceFeatures(gallery=True)

@@ -264,6 +264,61 @@ class SpaceFeatures:
             "allowed_post_types": list(self.allowed_post_types),
         }
 
+    @classmethod
+    def from_wire_dict(cls, raw: dict) -> "SpaceFeatures":
+        """Faithful inverse of :meth:`to_wire_dict`.
+
+        Used by the cross-household admin-action host dispatcher
+        (``SPACE_REMOTE_ADMIN_ACTION``) to rebuild the
+        :class:`SpaceFeatures` a remote admin forwarded. Each field
+        falls back to the class default when absent so a partial /
+        older-shaped dict still produces a valid object. Unknown access
+        levels fall back to ``OPEN`` rather than raising.
+        """
+        defaults = cls()
+
+        def access(name: str, default: SpaceFeatureAccess) -> SpaceFeatureAccess:
+            v = raw.get(name)
+            if v is None:
+                return default
+            try:
+                return SpaceFeatureAccess(v)
+            except ValueError:
+                return default
+
+        location_mode_raw = raw.get("location_mode", defaults.location_mode)
+        location_mode: Literal["gps", "zone_only"] = (
+            "zone_only" if location_mode_raw == "zone_only" else "gps"
+        )
+        allowed_raw = raw.get("allowed_post_types")
+        allowed = (
+            tuple(sorted(str(t) for t in allowed_raw))
+            if isinstance(allowed_raw, (list, tuple)) and allowed_raw
+            else defaults.allowed_post_types
+        )
+        return cls(
+            calendar=bool(raw.get("calendar", defaults.calendar)),
+            todo=bool(raw.get("todo", defaults.todo)),
+            location=bool(raw.get("location", defaults.location)),
+            location_mode=location_mode,
+            stickies=bool(raw.get("stickies", defaults.stickies)),
+            pages=bool(raw.get("pages", defaults.pages)),
+            gallery=bool(raw.get("gallery", defaults.gallery)),
+            bazaar=bool(raw.get("bazaar", defaults.bazaar)),
+            posts_access=access("posts_access", defaults.posts_access),
+            pages_access=access("pages_access", defaults.pages_access),
+            stickies_access=access("stickies_access", defaults.stickies_access),
+            calendar_access=access("calendar_access", defaults.calendar_access),
+            tasks_access=access("tasks_access", defaults.tasks_access),
+            allow_subscriber_comment=bool(
+                raw.get("allow_subscriber_comment", defaults.allow_subscriber_comment)
+            ),
+            allow_subscriber_react=bool(
+                raw.get("allow_subscriber_react", defaults.allow_subscriber_react)
+            ),
+            allowed_post_types=allowed,
+        )
+
 
 # ─── Household features ───────────────────────────────────────────────────
 

@@ -86,6 +86,14 @@ class FederationEventType(str, enum.Enum):
     #: host validates the actor's role in ``space_remote_members.role``
     #: before dispatching. Payload carries actor identity + target.
     SPACE_REMOTE_ADMIN_KICK = "space_remote_admin_kick"
+    #: Generic cross-household admin action (v_15+). A remote admin
+    #: requests the host to run an admin-level mutation (config edit,
+    #: ban / unban, archive / unarchive). The host re-validates the
+    #: actor's ``space_remote_members.role`` and runs the real host
+    #: method as the owner; the result federates back via the normal
+    #: outbounds. Payload carries actor identity + ``action`` + ``params``.
+    #: Generalises ``SPACE_REMOTE_ADMIN_KICK`` (kept for back-compat).
+    SPACE_REMOTE_ADMIN_ACTION = "space_remote_admin_action"
 
     # ── Space invitations / join requests ──
     SPACE_INVITE = "space_invite"

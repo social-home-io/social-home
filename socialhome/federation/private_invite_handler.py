@@ -137,6 +137,10 @@ class PrivateSpaceInviteHandler:
             self._on_remote_admin_kick,
         )
         registry.register(
+            FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
+            self._on_remote_admin_action,
+        )
+        registry.register(
             FederationEventType.SPACE_LOCATION_UPDATED,
             self._on_space_location_updated,
         )
@@ -524,6 +528,44 @@ class PrivateSpaceInviteHandler:
             actor_instance_id=actor_instance_id,
             actor_user_id=actor_user_id,
             target_user_id=target_user_id,
+        )
+
+    async def _on_remote_admin_action(self, event: "FederationEvent") -> None:
+        """Generic cross-household admin action (v_15+).
+
+        Receiver is the host of the space; sender is the household of a
+        remote admin who wants to run an admin-level mutation (config
+        edit, ban / unban, archive / unarchive). Delegates to
+        :meth:`SpaceService.apply_remote_admin_action`, which re-validates
+        the actor's role from ``space_remote_members.role`` before running
+        the real host method. The §24.11 pipeline has already verified the
+        envelope signature; the role-check is the second gate. Generalises
+        :meth:`_on_remote_admin_kick`.
+        """
+        if self._space_service is None:
+            log.warning(
+                "SPACE_REMOTE_ADMIN_ACTION: no space_service wired — dropping",
+            )
+            return
+        p = event.payload
+        space_id = str(p.get("space_id") or "") or (event.space_id or "")
+        actor_user_id = str(p.get("actor_user_id") or "")
+        actor_instance_id = str(p.get("actor_instance_id") or event.from_instance)
+        action = str(p.get("action") or "")
+        raw_params = p.get("params")
+        params = raw_params if isinstance(raw_params, dict) else {}
+        if not space_id or not actor_user_id or not action:
+            log.debug(
+                "SPACE_REMOTE_ADMIN_ACTION from %s missing required fields",
+                event.from_instance,
+            )
+            return
+        await self._space_service.apply_remote_admin_action(
+            space_id,
+            actor_instance_id=actor_instance_id,
+            actor_user_id=actor_user_id,
+            action=action,
+            params=params,
         )
 
     async def _on_key_exchange_rekey(self, event: "FederationEvent") -> None:
