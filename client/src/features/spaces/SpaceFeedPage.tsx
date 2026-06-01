@@ -32,6 +32,7 @@ import StickyBoardPage from '@/features/stickies/StickyBoardPage'
 import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openSpaceEventDialog } from '@/components/CalendarEventDialog'
 import { SpaceLinksStrip } from './SpaceLinksStrip'
+import { SpaceProposalsBanner } from '@/components/SpaceProposalsBanner'
 import { SpaceNotifPrefsMenu } from './SpaceNotifPrefsMenu'
 import { confirmDialog } from '@/components/confirm'
 
@@ -340,6 +341,14 @@ export default function SpaceFeedPage() {
           </>
         }
       />
+      {s && (
+        <SpaceProposalsBanner
+          spaceId={spaceId}
+          canVote={
+            viewerRole.value === 'owner' || viewerRole.value === 'admin'
+          }
+        />
+      )}
       {s && <SpaceLinksStrip spaceId={spaceId} />}
 
       {activeTab.value === 'feed' && (
