@@ -322,7 +322,6 @@ export default function SpaceFeedPage() {
       <SpaceSubHeader
         name={s?.name ?? 'Space'}
         emoji={s?.emoji ?? null}
-        coverUrl={s?.cover_url ?? null}
         memberCount={memberCount.value}
         activeTab={activeTab}
         visibleTabs={visibleTabs}
@@ -366,6 +365,7 @@ export default function SpaceFeedPage() {
           emoji={s.emoji ?? null}
           coverUrl={s.cover_url ?? null}
           about={s.about_markdown ?? null}
+          memberCount={memberCount.value}
         />
       )}
 
