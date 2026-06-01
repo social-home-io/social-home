@@ -820,7 +820,9 @@ async def space_cal_env(env):
 async def test_rsvp_non_recurring_defaults_occurrence_to_event_start(space_cal_env):
     """RSVP without occurrence_at on a non-recurring event → uses event.start."""
     env = space_cal_env
-    now = datetime(2026, 6, 1, 18, 0, tzinfo=timezone.utc)
+    # Future-relative (not a hardcoded date) — rsvp() rejects an occurrence
+    # that has already ended, so a fixed past start makes this a time-bomb.
+    now = (datetime.now(timezone.utc) + timedelta(days=1)).replace(microsecond=0)
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Birthday",
