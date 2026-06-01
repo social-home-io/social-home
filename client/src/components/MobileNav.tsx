@@ -23,6 +23,7 @@ import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { SideNav } from '@/components/SideNav'
+import { dmUnreadTotal } from '@/store/dms'
 
 interface Tab {
   href:   string
@@ -31,6 +32,9 @@ interface Tab {
   /** Match function — handles "is the user on this tab or a descendant?".
    *  Default is exact match against the path. */
   matches?: (path: string) => boolean
+  /** Optional unread-count badge rendered on the tab icon. Read lazily
+   *  (a signal accessor) so the count stays live. ``0`` hides it. */
+  badge?: () => number
 }
 
 const TABS: readonly Tab[] = [
@@ -43,7 +47,8 @@ const TABS: readonly Tab[] = [
   { href: '/spaces',        emoji: '💬', label: 'Spaces',
     matches: (p) => p === '/spaces' || p.startsWith('/spaces/') },
   { href: '/dms',           emoji: '✉️', label: 'DMs',
-    matches: (p) => p === '/dms' || p.startsWith('/dms/') },
+    matches: (p) => p === '/dms' || p.startsWith('/dms/'),
+    badge: () => dmUnreadTotal.value },
   { href: '/notifications', emoji: '🔔', label: 'Notifs',
     matches: (p) => p.startsWith('/notifications') },
 ]
@@ -116,6 +121,7 @@ export function MobileNav() {
       >
         {TABS.map((t) => {
           const active = t.matches ? t.matches(path) : path === t.href
+          const count = t.badge ? t.badge() : 0
           return (
             <a
               key={t.href}
@@ -125,8 +131,18 @@ export function MobileNav() {
             >
               <span class="sh-mobile-tab__icon" aria-hidden="true">
                 {t.emoji}
+                {count > 0 && (
+                  <span class="sh-mobile-tab__badge">
+                    {count > 99 ? '99+' : count}
+                  </span>
+                )}
               </span>
-              <span class="sh-mobile-tab__label">{t.label}</span>
+              <span class="sh-mobile-tab__label">
+                {t.label}
+                {count > 0 && (
+                  <span class="sr-only">{` (${count} unread)`}</span>
+                )}
+              </span>
             </a>
           )
         })}

@@ -510,6 +510,27 @@ a:focus:not(:focus-visible) { outline: none; }
   align-items: center;
   justify-content: center;
   height: 1.1rem;
+  /* Anchor for the unread-count badge. */
+  position: relative;
+}
+/* Unread-count chip on a mobile tab icon (DMs). Mirrors the desktop
+ * SideNav count chip; sits at the icon's top-right corner. */
+.sh-mobile-tab__badge {
+  position: absolute;
+  top: -6px;
+  left: 60%;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--sh-radius-full);
+  background: var(--sh-primary);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--sh-bg);
+  pointer-events: none;
 }
 .sh-mobile-tab__label { letter-spacing: 0.02em; }
 .sh-mobile-tab.sh-active {
