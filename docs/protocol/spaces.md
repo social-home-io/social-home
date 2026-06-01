@@ -29,9 +29,11 @@ may span any number of paired HFS instances.
 **Cross-household admin**
 
 `SPACE_MEMBER_ROLE_CHANGED` (v_8+), `SPACE_REMOTE_ADMIN_KICK` (v_9+),
-`SPACE_REMOTE_ADMIN_ACTION` (v_15+). Role propagation + remote admins
-running mutations on a space hosted elsewhere. See "Cross-household
-admin promotion / kick / actions" below.
+`SPACE_REMOTE_ADMIN_ACTION` (v_15+), `SPACE_ADMIN_PROPOSAL_UPDATED`
+(v_16+). Role propagation + remote admins running mutations on a space
+hosted elsewhere + multi-admin approval of critical actions. See
+"Cross-household admin promotion / kick / actions" and "Multi-admin
+approval" below.
 
 **Mesh routing (v_6+)**
 
@@ -329,6 +331,54 @@ than silently mutating the stub, so the admin gets a clear
 Moderation approve/reject and zone/link edits are admin-level too and
 can ride the same envelope once the host's moderation queue federates
 to remote admins (follow-on).
+
+## Multi-admin approval (v_16+)
+
+Two actions are too high-stakes for one admin alone: **dissolving** a
+space (permanent delete) and changing its **publication tier**
+(`space_type` → public / global, which advertises it or auto-publishes
+to GFS). These become *proposals* that execute only once a **majority of
+the space's admins approve** — the owner is bound by the same rule, so no
+single person can unilaterally delete or publish the group.
+
+`SpaceApprovalService` (host-authoritative) owns the workflow:
+
+- Any admin **proposes** (`POST /api/spaces/{id}/proposals`, or `DELETE
+  /api/spaces/{id}` for a dissolve). The proposer auto-approves, so a
+  **solo-admin space executes immediately** (majority of 1).
+- Other admins **vote** (`POST /api/spaces/{id}/proposals/{pid}/vote`).
+  The host recomputes the threshold against the *current* admin set after
+  every vote: any **reject cancels**; once approvals exceed half the
+  admins it **executes** the real `dissolve_space` / `update_config` as
+  the owner, so the result federates through the normal outbounds.
+- Proposals **expire** after 7 days if never approved.
+- The electorate is every admin (local `space_members` owner/admin +
+  remote `space_remote_members` admin). A remote admin proposes / votes
+  via `SPACE_REMOTE_ADMIN_ACTION` (`propose` / `vote` verbs); the host
+  re-validates they're a current admin (the proposer/voter household is
+  bound to the signed envelope, never a payload claim). The host mirrors
+  the open proposal + tally onto admin households with
+  `SPACE_ADMIN_PROPOSAL_UPDATED` so their SPA renders it and can vote.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as HFS A (admin, proposer)
+    participant H as HFS H (host)
+    participant B as HFS B (admin)
+    A->>H: SPACE_REMOTE_ADMIN_ACTION {propose, dissolve}
+    Note over H: validate A is admin<br/>record A's approval<br/>1/2 — pending
+    H->>A: SPACE_ADMIN_PROPOSAL_UPDATED (1/2)
+    H->>B: SPACE_ADMIN_PROPOSAL_UPDATED (1/2)
+    B->>H: SPACE_REMOTE_ADMIN_ACTION {vote, approve}
+    Note over H: majority reached →<br/>run dissolve_space as owner
+    H->>A: SPACE_DISSOLVED
+    H->>B: SPACE_DISSOLVED
+```
+
+Owner-only actions that are **not** quorum-gated and stay host-local:
+transfer-ownership and role assignment. Reversible admin actions (name,
+emoji, features, ban/unban, archive/unarchive) remain single-admin.
 
 ## Age gate
 

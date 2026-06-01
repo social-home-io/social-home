@@ -214,7 +214,22 @@ from __future__ import annotations
 #:   admin actions yet") instead of mutating the local stub, so the actor
 #:   gets a clear error rather than a silent divergence. Operators must
 #:   upgrade hosts together with admins on other households.
-OURS: int = 15
+#: * **v_16** (2026-06-01) — multi-admin approval (quorum) for critical
+#:   space actions. Dissolving a space and changing its publication tier
+#:   (``space_type``) now require a *majority* of the space's admins to
+#:   approve — the owner included. A remote admin proposes / votes via the
+#:   ``SPACE_REMOTE_ADMIN_ACTION`` envelope (``propose`` / ``vote`` verbs);
+#:   the host mirrors the open proposal + tally onto admin households with
+#:   :data:`FederationEventType.SPACE_ADMIN_PROPOSAL_UPDATED` so their SPA
+#:   can render it and vote. **Force-upgrade.** A remote admin's
+#:   :class:`SpaceApprovalService` gates the forward on
+#:   :data:`FederationCapability.MIN_FOR_ADMIN_PROPOSALS`; a sub-v_16 host
+#:   has no handler, so the forward raises rather than silently dropping
+#:   the proposal. Sub-v_16 *members* simply don't see the pending-proposal
+#:   UI (best-effort mirror) but the host still collects votes from peers
+#:   that do. Operators must upgrade the host before remote admins can
+#:   propose / vote.
+OURS: int = 16
 
 
 class FederationCapability:
@@ -337,6 +352,14 @@ class FederationCapability:
     #: actions. (The v_9 :data:`SPACE_REMOTE_ADMIN_KICK` stays separate for
     #: back-compat — a v_9..v_14 host still honours kicks.)
     MIN_FOR_REMOTE_ADMIN_ACTION = 15
+
+    #: Minimum proto_version where the host knows the multi-admin approval
+    #: workflow — the ``propose`` / ``vote`` verbs on
+    #: :data:`FederationEventType.SPACE_REMOTE_ADMIN_ACTION` and the
+    #: :data:`SPACE_ADMIN_PROPOSAL_UPDATED` mirror broadcast. A remote
+    #: admin's :class:`SpaceApprovalService` gates the forward on this and
+    #: raises against an older host rather than dropping the proposal.
+    MIN_FOR_ADMIN_PROPOSALS = 16
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

@@ -96,6 +96,7 @@ from ..domain.events import (
     ShoppingStoreRenamed,
     ShoppingStoresReordered,
     SpaceConfigChanged,
+    SpaceProposalUpdated,
     SpaceJoinApproved,
     SpaceJoinDenied,
     SpaceJoinRequested,
@@ -258,6 +259,7 @@ class RealtimeService:
         self._bus.subscribe(SpaceModerationApproved, self._on_space_mod_approved)
         self._bus.subscribe(SpaceModerationRejected, self._on_space_mod_rejected)
         self._bus.subscribe(SpaceConfigChanged, self._on_space_config_changed)
+        self._bus.subscribe(SpaceProposalUpdated, self._on_space_proposal_updated)
         self._bus.subscribe(RemoteSpaceDissolved, self._on_remote_space_dissolved)
         self._bus.subscribe(SpaceZoneUpserted, self._on_space_zone_upserted)
         self._bus.subscribe(SpaceZoneDeleted, self._on_space_zone_deleted)
@@ -716,6 +718,20 @@ class RealtimeService:
                 "space_id": event.space_id,
                 "sequence": event.sequence,
                 "event_type": event.event_type,
+            },
+        )
+
+    async def _on_space_proposal_updated(self, event: SpaceProposalUpdated) -> None:
+        """Realtime fan-out for a critical-action approval proposal (v_16):
+        opened / voted / resolved. The SPA renders the pending banner +
+        live tally and updates Approve/Reject state from this frame."""
+        await self._broadcast_space(
+            event.space_id,
+            {
+                "type": "space.proposal.updated",
+                "space_id": event.space_id,
+                "proposal_id": event.proposal_id,
+                "proposal": event.view,
             },
         )
 

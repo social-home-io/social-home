@@ -226,6 +226,8 @@ from .spaces import (
     SpaceBanView,
     SpaceCollectionView,
     SpaceDetailView,
+    SpaceProposalsView,
+    SpaceProposalVoteView,
     SpaceCoverView,
     SpaceFeedView,
     SpaceSubscribeView,
@@ -450,6 +452,11 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/spaces", SpaceCollectionView)
     app.router.add_view("/api/spaces/join", SpaceJoinView)
     app.router.add_view("/api/spaces/{id}", SpaceDetailView)
+    app.router.add_view("/api/spaces/{id}/proposals", SpaceProposalsView)
+    app.router.add_view(
+        "/api/spaces/{id}/proposals/{pid}/vote",
+        SpaceProposalVoteView,
+    )
     app.router.add_view("/api/spaces/{id}/archive", SpaceArchiveView)
     app.router.add_view("/api/spaces/{id}/members", SpaceMembersView)
     app.router.add_view(

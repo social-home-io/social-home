@@ -82,6 +82,7 @@ anything below contradicts the file, the file wins.
 | `space_instances` | One row per `(space_id, instance_id)` — which peer instances participate in a space, with `last_seen_at`. |
 | `space_keys` | One row per `(space_id, epoch)` holding the KEK-encrypted AES-256 content key. Epoch advances on member removal/ban (§4.3). |
 | `space_bans` / `space_instance_bans` | Banned users / banned remote instances. Identity public key is captured for cross-instance ban enforcement. |
+| `space_admin_proposals` / `space_admin_proposal_votes` | Multi-admin approval (quorum) for critical actions — dissolve + publication-tier change (`0016_space_admin_proposals.sql`, v_16). Authoritative on the host; a read-only mirror on member households (kept in sync by `SPACE_ADMIN_PROPOSAL_UPDATED`) so remote admins can render the pending proposal + tally and vote. Both reference `spaces(id) ON DELETE CASCADE`. |
 | `space_invitations` | Local + cross-household invites. Invitee-side and host-side rows both exist for `type=private` cross-household invites (§D1b). |
 | `space_invite_tokens` | Shareable invite-link tokens — `uses_remaining`, optional expiry. |
 | `space_join_requests` | Open join requests for `request`-mode and global spaces. Captures local + cross-household applicants (§D2). |

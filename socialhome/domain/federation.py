@@ -94,6 +94,12 @@ class FederationEventType(str, enum.Enum):
     #: outbounds. Payload carries actor identity + ``action`` + ``params``.
     #: Generalises ``SPACE_REMOTE_ADMIN_KICK`` (kept for back-compat).
     SPACE_REMOTE_ADMIN_ACTION = "space_remote_admin_action"
+    #: Host → admin households: mirror of an open / resolved critical-action
+    #: approval proposal + its tally (v_16+). Lets a remote admin's SPA
+    #: render the pending dissolve / publication-tier change and vote. The
+    #: payload carries the SPA-facing proposal view. Members that don't
+    #: support it simply don't show the pending UI.
+    SPACE_ADMIN_PROPOSAL_UPDATED = "space_admin_proposal_updated"
 
     # ── Space invitations / join requests ──
     SPACE_INVITE = "space_invite"

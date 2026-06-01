@@ -135,6 +135,8 @@ from .repositories.space_remote_location_repo import (
     SqliteSpaceRemoteLocationRepo,
 )
 from .repositories.space_remote_member_repo import SqliteSpaceRemoteMemberRepo
+from .repositories.space_proposal_repo import SqliteSpaceProposalRepo
+from .services.space_approval_service import SpaceApprovalService
 from .repositories.report_repo import SqliteReportRepo
 from .repositories.search_repo import SqliteSearchRepo
 from .repositories.space_key_repo import SqliteSpaceKeyRepo
@@ -466,6 +468,7 @@ def _build_repos(db: AsyncDatabase):
         public_space=SqlitePublicSpaceRepo(db),
         peer_space_directory=SqlitePeerSpaceDirectoryRepo(db),
         space_remote_member=SqliteSpaceRemoteMemberRepo(db),
+        space_proposal=SqliteSpaceProposalRepo(db),
         space_remote_location=SqliteSpaceRemoteLocationRepo(db),
         storage_stats=SqliteStorageStatsRepo(db),
         poll=SqlitePollRepo(db),
@@ -1231,6 +1234,18 @@ def create_app(config: Config | None = None) -> web.Application:
     space_service.attach_cover_repo(space_cover_repo)
     space_service.attach_gallery_repo(gallery_repo)
     space_service.attach_bazaar_repo(bazaar_repo)
+    # Multi-admin approval (quorum) for critical space actions (dissolve /
+    # publication-tier). ``own_instance_id`` is patched on startup like
+    # SpaceService; ``attach`` wires federation + space_service below.
+    space_approval_service = SpaceApprovalService(
+        repos.space_proposal,
+        space_repo,
+        repos.space_remote_member,
+        user_repo,
+        bus,
+        own_instance_id="unknown",  # patched on startup
+    )
+    space_approval_service.attach(space_service=space_service)
     # i18n catalog — loaded once at process start, used by NotificationService.
     i18n_dir = Path(__file__).parent / "i18n" / "messages"
     i18n = Catalog.from_directory(i18n_dir)
@@ -1739,6 +1754,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.user_service_key] = user_service
     app[K.feed_service_key] = feed_service
     app[K.space_service_key] = space_service
+    app[K.space_approval_service_key] = space_approval_service
     app[K.notification_service_key] = notification_service
     app[K.dm_service_key] = dm_service
     app[K.report_repo_key] = report_repo
@@ -2029,6 +2045,27 @@ def create_app(config: Config | None = None) -> web.Application:
         # can actually dispatch the validated kick into the service.
         app[K.private_invite_handler_key].attach_space_service(
             real_space_service,
+        )
+        # Multi-admin approval (quorum) — rebuild with the real instance_id
+        # (mirrors the real_space_service rebuild) and wire federation + the
+        # real space_service it executes approved actions through.
+        real_space_approval_service = SpaceApprovalService(
+            repos.space_proposal,
+            space_repo,
+            repos.space_remote_member,
+            user_repo,
+            bus,
+            own_instance_id=real_instance_id,
+        )
+        real_space_approval_service.attach(
+            federation_service=federation_service,
+            space_service=real_space_service,
+        )
+        app[K.space_approval_service_key] = real_space_approval_service
+        # The private-invite handler dispatches the propose / vote verbs and
+        # the SPACE_ADMIN_PROPOSAL_UPDATED mirror into the approval service.
+        app[K.private_invite_handler_key].attach_approval_service(
+            real_space_approval_service,
         )
         # §D2 PR 2 — federation-mesh routing primitives. The discovery
         # service runs BFS-flooded probes to find a chain of confirmed

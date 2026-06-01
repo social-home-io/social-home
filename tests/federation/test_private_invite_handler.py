@@ -874,5 +874,6 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
         FederationEventType.SPACE_REMOTE_ADMIN_KICK,
         FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
+        FederationEventType.SPACE_ADMIN_PROPOSAL_UPDATED,
         FederationEventType.SPACE_LOCATION_UPDATED,
     }

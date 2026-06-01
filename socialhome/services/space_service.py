@@ -1201,6 +1201,12 @@ class SpaceService(SpaceMemberGuardMixin):
     #: ``SPACE_REMOTE_ADMIN_ACTION``. Whitelisted so an unexpected wire
     #: key can never become an ``update_config`` keyword (collision with
     #: ``actor_username`` / unknown kwarg → ``TypeError``).
+    #:
+    #: ``space_type`` is intentionally absent — the publication tier
+    #: (public / global) is gated behind multi-admin approval (v_16,
+    #: :class:`SpaceApprovalService`), so it is never applied via a direct
+    #: config forward. The host drops it here even if an old / forged client
+    #: includes it; a remote admin changes it through the ``propose`` verb.
     _REMOTE_CONFIG_FIELDS = frozenset(
         {
             "name",
@@ -1208,7 +1214,6 @@ class SpaceService(SpaceMemberGuardMixin):
             "emoji",
             "features",
             "join_mode",
-            "space_type",
             "retention_days",
             "retention_exempt_types",
             "about_markdown",

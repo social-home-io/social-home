@@ -6,12 +6,17 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 15
+    assert fc.OURS == 16
 
 
 def test_remote_admin_action_capability_threshold():
     assert fc.FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION == 15
     assert fc.FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION <= fc.OURS
+
+
+def test_admin_proposals_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_ADMIN_PROPOSALS == 16
+    assert fc.FederationCapability.MIN_FOR_ADMIN_PROPOSALS <= fc.OURS
 
 
 def test_media_channel_capability_threshold():
