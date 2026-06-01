@@ -75,6 +75,7 @@ async def test_create_event_creates_feed_post(env):
         start=now.isoformat(),
         end=(now + timedelta(hours=4)).isoformat(),
         created_by="uid-alice",
+        announce_in_feed=True,
     )
     # Bridge fires synchronously on the bus.
     feed = await env.post_repo.list_feed("sp-feed")
@@ -83,6 +84,22 @@ async def test_create_event_creates_feed_post(env):
     assert feed[0].content == "Summer party"
     assert feed[0].linked_event_id == event.id
     assert feed[0].author == "uid-alice"
+
+
+async def test_event_without_announce_makes_no_feed_post(env):
+    """§23.15 — the feed mirror is opt-in. An event created without
+    announce_in_feed lives only in the Calendar tab; the bridge skips it."""
+    now = datetime(2026, 6, 1, 18, 0, tzinfo=timezone.utc)
+    await env.cal_svc.create_event(
+        space_id="sp-feed",
+        summary="Quiet event",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="uid-alice",
+        # announce_in_feed defaults False
+    )
+    feed = await env.post_repo.list_feed("sp-feed")
+    assert feed == []
 
 
 async def test_event_update_rewrites_post_body(env):
@@ -94,6 +111,7 @@ async def test_event_update_rewrites_post_body(env):
         start=now.isoformat(),
         end=now.isoformat(),
         created_by="uid-alice",
+        announce_in_feed=True,
     )
     await env.cal_svc.update_event(event.id, summary="New title")
     feed = await env.post_repo.list_feed("sp-feed")
@@ -111,6 +129,7 @@ async def test_event_update_no_body_change_is_noop(env):
         start=now.isoformat(),
         end=now.isoformat(),
         created_by="uid-alice",
+        announce_in_feed=True,
     )
     pre = (await env.post_repo.list_feed("sp-feed"))[0]
     await env.cal_svc.update_event(event.id, summary="Same title")
@@ -127,6 +146,7 @@ async def test_event_delete_soft_deletes_post(env):
         start=now.isoformat(),
         end=now.isoformat(),
         created_by="uid-alice",
+        announce_in_feed=True,
     )
     await env.cal_svc.delete_event(event.id)
     # list_feed filters out deleted posts; the row still exists with deleted=1.
@@ -148,6 +168,7 @@ async def test_duplicate_create_is_idempotent(env):
         start=now,
         end=now,
         created_by="uid-alice",
+        announce_in_feed=True,
     )
     await env.cal_repo.save_event("sp-feed", ev)
     # Fire two CalendarEventCreated bus events with the same event id —
@@ -171,6 +192,7 @@ async def test_recurring_event_creates_one_post(env):
         start=seed.isoformat(),
         end=(seed + timedelta(minutes=30)).isoformat(),
         created_by="uid-alice",
+        announce_in_feed=True,
         rrule="FREQ=WEEKLY;COUNT=10",
     )
     feed = await env.post_repo.list_feed("sp-feed")

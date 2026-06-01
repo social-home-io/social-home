@@ -85,6 +85,9 @@ const attendees = signal<Set<string>>(new Set())
  *  invitee), but the user can still flip it off — e.g. an FYI invite
  *  that doesn't need a yes/no. */
 const rsvpEnabled = signal(true)
+// §23.15 — opt-in feed mirror for space events. Off by default: the
+// event lives in the Calendar tab unless the creator announces it.
+const announceInFeed = signal(false)
 const submitting = signal(false)
 
 /** Open the dialog for a personal calendar.
@@ -234,6 +237,7 @@ function reset() {
   capacity.value = ''
   attendees.value = new Set()
   rsvpEnabled.value = false
+  announceInFeed.value = false
   coverUrl.value = ''
   coverPreview.value = ''
   coverUploading.value = false
@@ -307,6 +311,10 @@ export function CalendarEventDialog({ onCreated }: {
       }
       if (limitAttendance.value && capacity.value) {
         body.capacity = parseInt(capacity.value, 10)
+      }
+      // §23.15 — opt-in feed mirror, space events only, at create time.
+      if (isSpace && !editingEventId.value) {
+        body.announce_in_feed = announceInFeed.value
       }
       // Household-event invitees. Spaces broadcast to the membership
       // implicitly so this field is unused on the space variant.
@@ -610,6 +618,17 @@ export function CalendarEventDialog({ onCreated }: {
                 <small class="sh-form-help">
                   {t('event.dialog.capacity_help')}
                 </small>
+              </label>
+            )}
+            {!editingEventId.value && (
+              <label class="sh-form-row-cap">
+                <input
+                  type="checkbox"
+                  checked={announceInFeed.value}
+                  onChange={() =>
+                    (announceInFeed.value = !announceInFeed.value)}
+                />{' '}
+                Also announce this event in the space feed
               </label>
             )}
           </>

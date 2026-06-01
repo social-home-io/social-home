@@ -68,6 +68,8 @@ def _event_dict(event) -> dict:
         # it on every POST in the batch so :func:`groupSharedEvents`
         # can merge the resulting rows by intent.
         "client_event_uuid": getattr(event, "client_event_uuid", None),
+        # §23.15 — whether this event also mirrors to the space feed.
+        "announce_in_feed": getattr(event, "announce_in_feed", False),
     }
 
 
@@ -524,6 +526,7 @@ class SpaceCalendarEventsView(BaseView):
                 cover_url=strip_signature_query(body.get("cover_url")),
                 location=body.get("location"),
                 tz=body.get("tz"),
+                announce_in_feed=bool(body.get("announce_in_feed", False)),
             )
         except ValueError as exc:
             return error_response(422, "UNPROCESSABLE", str(exc))

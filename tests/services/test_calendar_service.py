@@ -1306,7 +1306,10 @@ async def test_rsvp_publishes_federation_event(space_cal_env):
 
     fed = _FakeFed()
     env.space_cal_svc.attach_federation(fed)
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # Future-relative so the RSVP isn't rejected by the past-occurrence
+    # lock — a fixed calendar date silently rots into the past and flakes
+    # once the wall clock catches up to it (hit on 2026-06-01).
+    now = datetime.now(timezone.utc) + timedelta(days=1)
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Anniversary",

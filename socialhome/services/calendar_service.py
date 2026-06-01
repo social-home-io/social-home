@@ -1040,6 +1040,7 @@ class SpaceCalendarService(BusPublisherMixin):
         cover_url: str | None = None,
         location: str | None = None,
         tz: str | None = None,
+        announce_in_feed: bool = False,
     ) -> CalendarEvent:
         """Create a space-scoped calendar event.
 
@@ -1047,6 +1048,10 @@ class SpaceCalendarService(BusPublisherMixin):
         approval and overflow lands on a waitlist. The creator is
         auto-RSVP'd as ``going`` for the first occurrence and counts
         toward capacity.
+
+        ``announce_in_feed`` (§23.15): when False (default) the event
+        lives only in the Calendar tab; when True the bridge also mirrors
+        it as a ``PostType.EVENT`` post in the feed.
         """
         summary = (summary or "").strip()
         if not summary:
@@ -1076,6 +1081,7 @@ class SpaceCalendarService(BusPublisherMixin):
             cover_url=_clean_cover_url(cover_url),
             location=_clean_location(location),
             tz=event_tz,
+            announce_in_feed=announce_in_feed,
         )
         saved = await self._repo.save_event(space_id, event)
         await self._emit(CalendarEventCreated(event=saved))
@@ -1785,6 +1791,11 @@ class SpaceCalendarService(BusPublisherMixin):
             # IANA wall-clock anchor — additive on the wire. Old peers
             # without this field ignore it on the inbound side.
             "tz": event.tz,
+            # §23.15 opt-in feed mirror. The receiver's CalendarFeedBridge
+            # reads this to decide whether to mint a feed post. Absent on
+            # an older sender → the receiver defaults to True (the historic
+            # always-mirror behaviour) so events still surface there.
+            "announce_in_feed": event.announce_in_feed,
         }
         await self._federation.broadcast_to_space_members(
             space_id,

@@ -83,6 +83,11 @@ class CalendarFeedBridge:
         if result is None:
             return
         space_id, event = result
+        # §23.15 — the feed mirror is opt-in. An event that wasn't flagged
+        # to announce lives only in the Calendar tab; skip the post. (The
+        # event still federates + renders on every member's calendar.)
+        if not event.announce_in_feed:
+            return
         # Cross-household calendar events arrive on peer households
         # that mirror the calendar row but don't own the parent
         # ``spaces`` row (the §D1b invitee-side mirror). The
