@@ -763,3 +763,105 @@ async def test_missing_media_file_yields_error_frame(repos):
     assert framing.KIND_ERROR in kinds
     assert kinds[0] == framing.KIND_MOMENT_INDEX_META
     assert kinds[-1] == framing.KIND_STREAM_END
+
+
+# ─── Error / edge branch coverage ─────────────────────────────────────────
+
+
+class _ErrSession(_StubSession):
+    """Answer POST returns HTTP 500 so the error-log branch is hit."""
+
+    def post(self, url, *, json=None, **_kw):
+        self.posts.append((url, json or {}))
+        return _StubResp(500, {"error": "down"})
+
+
+class _ErrRelayPost:
+    def __init__(self, data):
+        self._data = data
+
+    async def __aenter__(self):
+        if hasattr(self._data, "__aiter__"):
+            async for _chunk in self._data:
+                pass
+        return _StubResp(500, {"error": "down"})
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _ErrRelaySession:
+    """Relay streaming POST returns HTTP 500 → error-log branch."""
+
+    def post(self, url, *, data=None, headers=None, **_kw):
+        return _ErrRelayPost(data)
+
+
+async def test_post_answer_logs_on_http_error(repos, public_moments):
+    handler, _ = _make_handler(repos)
+    handler._http_client = _ErrSession()  # type: ignore[assignment]
+    await handler.handle_signal(
+        {
+            "kind": "offer",
+            "session_id": "s-1",
+            "user_id": "u1",
+            "gfs_id": "gfs-abc",
+            "sdp": "v=0",
+        }
+    )
+    await _drain(handler)
+    assert handler._sessions == {}
+
+
+async def test_relay_offer_logs_on_http_error(repos, public_moments):
+    handler, _ = _make_handler(repos)
+    handler._http_client = _ErrRelaySession()  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "relay_offer", "relay_id": "r-1", "user_id": "u1", "gfs_id": "gfs-abc"}
+    )
+    await _drain_relay(handler)
+    # No exception escaped; relay task drained cleanly.
+    assert handler._relay_tasks == set()
+
+
+async def test_relay_offer_unknown_gfs_posts_nothing(repos, public_moments):
+    handler, _ = _make_handler(repos)
+    sess = _RecordingSession()
+    handler._http_client = sess  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "relay_offer", "relay_id": "r-1", "user_id": "u1", "gfs_id": "nope"}
+    )
+    await _drain_relay(handler)
+    assert sess.relay_calls == []
+
+
+async def test_ice_with_failing_peer_is_swallowed(repos, public_moments):
+    open_event = asyncio.Event()
+
+    class _SlowPeer(_StubPeer):
+        async def wait_open(self) -> None:
+            await open_event.wait()
+
+        async def add_ice_candidate(self, candidate: dict) -> None:
+            raise RuntimeError("bad candidate")
+
+    def _factory(_ice):
+        return _SlowPeer()
+
+    handler, _ = _make_handler(repos, peer_factory=_factory)
+    await handler.handle_signal(
+        {
+            "kind": "offer",
+            "session_id": "s-1",
+            "user_id": "u1",
+            "gfs_id": "gfs-abc",
+            "sdp": "v=0",
+        }
+    )
+    await asyncio.sleep(0)
+    # Must not raise despite the peer rejecting the candidate.
+    await handler.handle_signal(
+        {"kind": "ice", "session_id": "s-1", "candidate": {"candidate": "x"}}
+    )
+    open_event.set()
+    await _drain(handler)

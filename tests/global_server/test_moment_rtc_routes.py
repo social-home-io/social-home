@@ -425,3 +425,38 @@ async def test_relay_upload_missing_auth_headers_returns_422(client):
     )
     resp = await client.post(f"/gfs/moment_rtc/relay-stream/{relay_id}", data=b"bytes")
     assert resp.status == 422
+
+
+async def test_author_ice_invalid_payload_returns_422(client):
+    body = _sign(client._seed, {"instance_id": "inst-author"})
+    r = await client.post("/gfs/moment_rtc/ice/author", json=body)
+    assert r.status == 422
+
+
+async def test_author_ice_wrong_instance_returns_403(client):
+    offer = await (
+        await client.post(
+            "/gfs/moment_rtc/offer",
+            json={"user_id": "u-1", "sdp": "v=0"},
+        )
+    ).json()
+    other_seed, other_pk = _make_keypair()
+    await client._app[gfs_fed_repo_key].upsert_instance(
+        ClientInstance(
+            instance_id="inst-other",
+            display_name="Other",
+            public_key=other_pk,
+            inbox_url="http://other/wh",
+            status="active",
+        )
+    )
+    body = _sign(
+        other_seed,
+        {
+            "instance_id": "inst-other",
+            "session_id": offer["session_id"],
+            "candidate": {"candidate": "x"},
+        },
+    )
+    r = await client.post("/gfs/moment_rtc/ice/author", json=body)
+    assert r.status == 403

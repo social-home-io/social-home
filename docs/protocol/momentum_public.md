@@ -80,7 +80,7 @@ verifies the author's signature directly.
 | GET    | `/gfs/moments/users/{user_id}` | Public JSON per-user detail. |
 | GET    | `/gfs/moments/users/{user_id}/picture` | Public avatar bytes. |
 | GET    | `/moments` | Public HTML directory. |
-| GET    | `/moments/{user_id}` | Per-user public HTML landing. |
+| GET    | `/moments/{user_id}` | Per-user public HTML landing; mounts the live public-moments index viewer (see "Public moments index"). |
 
 ### SH-side (auth-gated)
 
@@ -229,6 +229,92 @@ identical bytes-for-bytes to the sender's canonical encoding.
   in v1. What's in `users.{display_name, bio, picture_hash}` is
   what every paired GFS sees.
 
+## Public moments index
+
+A guest visiting `GET /moments/{user_id}` on the GFS sees the author's
+**current public moments**, streamed live from the author's SH the same
+way a public highlight is — a direct WebRTC DataChannel first, with the
+GFS-relay fallback when WebRTC can't connect. The transport mechanism is
+shared verbatim with Highlights; see
+[highlights_public.md → GFS-relay fallback](highlights_public.md#gfs-relay-fallback)
+for the bridge details rather than repeating them here.
+
+Access is gated by the user's **active public-directory registration** —
+no token. Only moments with `is_public = 1` that have not expired are
+ever streamed; the filter is enforced in
+`moment_repo.list_public_for` (the privacy invariant). The GFS stores
+**zero** moment bytes — like the highlight relay, the bridge is a
+transient in-memory pipe.
+
+### Framing
+
+The moments index reuses the highlights framing module
+(`highlight_public_framing.py`) — same `[u32 header_len][header][u32
+payload_len][payload]` shape, label `moment-public-v1`:
+
+| `kind` | Direction | Header fields | Payload |
+|---|---|---|---|
+| `moment_index_meta` | author → viewer (first frame) | `moments` (manifest: `[{id, content, created_at, media_type, has_media, media_frame_id, byte_length?, content_type?}, …]`) | empty |
+| `frame_chunk` | author → viewer | `frame_id`, `chunk_index`, `is_last_chunk`, `byte_length` | up to `CHUNK_SIZE` bytes — one stream per moment that has media |
+| `stream_end` | author → viewer (terminator) | `kind` only | empty |
+
+### Wire endpoints (GFS)
+
+These mirror the public-highlight `/gfs/highlight_rtc/*` endpoints.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/gfs/moment_rtc/offer` | Anonymous. Body `{user_id, sdp}`. `404` if the user isn't registered / is suspended, `503` if the author is offline. Pushes a `moment_signal` WS frame (`kind:"offer"`, carrying `user_id` + `gfs_id`) to the author. Returns `{session_id}`. |
+| GET | `/gfs/moment_rtc/session/{session_id}` | Anonymous poll for `answer_sdp` + author ICE. |
+| POST | `/gfs/moment_rtc/ice/viewer` | Anonymous. Trickle the viewer's ICE candidate. |
+| POST | `/gfs/moment_rtc/answer` | Author SH only (Ed25519-signed). Authority guard: `session.initiator_id` must match the signer. |
+| POST | `/gfs/moment_rtc/ice/author` | Author SH only (signed). Same authority guard. |
+| GET | `/gfs/moment_rtc/relay/{user_id}` | Anonymous chunked relay fallback (registration-gated). `404` unregistered, `503` author offline / never connects. |
+| POST | `/gfs/moment_rtc/relay-stream/{relay_id}` | Author SH only. Header-auth (`X-SH-Instance` + `X-SH-Signature` over canonical `{"instance_id","relay_id"}`) — same scheme as the highlight relay-stream. Body is the raw framed byte stream. |
+
+The author SH handles a new `moment_signal` WS frame with `kind` ∈
+`offer` / `ice` / `relay_offer`, dispatched in
+`moment_public_signaling_handler.py`. The viewer DataChannel label is
+`moment-public-v1`; the bundle is `moment_public_viewer.js` (built from
+`client/gfs/public_moments.tsx`) and mounts into `#moments-root` on the
+per-user landing page.
+
+### Sequence: guest reads a user's public moments
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant V as Viewer<br/>(browser)
+  participant G as GFS
+  participant A as Author SH
+
+  V->>G: GET /moments/{user_id}
+  G->>G: check active registration
+  G-->>V: 200 SSR landing + moment_public_viewer.js
+  V->>G: POST /gfs/moment_rtc/offer {user_id, sdp}
+  G->>A: WS push { type:"moment_signal", kind:"offer", session_id, user_id, gfs_id }
+  G-->>V: 201 { session_id }
+  A->>G: POST /gfs/moment_rtc/answer (signed)
+  A->>G: POST /gfs/moment_rtc/ice/author (signed) (xN)
+  V->>G: POST /gfs/moment_rtc/ice/viewer (xN)
+  V->>G: GET /gfs/moment_rtc/session/{id} (poll)
+  G-->>V: { answer_sdp, ice_candidates }
+  alt direct DataChannel connects
+    V-->>A: DataChannel "moment-public-v1" opens (direct, no GFS)
+    A->>V: moment_index_meta → frame_chunk × N → stream_end
+  else WebRTC fails — GFS-relay fallback
+    V->>G: GET /gfs/moment_rtc/relay/{user_id}
+    G->>A: WS push { kind:"relay_offer", relay_id }
+    A->>G: POST /gfs/moment_rtc/relay-stream/{relay_id} (header-signed)
+    Note over G: GFS pipes byte-identical frames<br/>(stores nothing)
+    G-->>V: chunked octet-stream (same framing)
+  end
+```
+
+Only `is_public = 1`, non-expired moments cross the wire — a stranger
+visiting the page sees exactly the author's current public set, never a
+private or expired moment, and the GFS never holds a copy.
+
 ## Implementation pointers
 
 * SH author orchestration:
@@ -244,6 +330,14 @@ identical bytes-for-bytes to the sender's canonical encoding.
   `socialhome/routes/moments_public.py`.
 * Relay guard:
   `socialhome/services/moment_federation_outbound.py:relay_inbound`.
+* Public moments index (author-side answerer / relay):
+  `socialhome/services/moment_public_signaling_handler.py`.
+* Public moments index (GFS RTC + relay routes):
+  `socialhome/global_server/routes/moment_rtc.py`.
+* Public moments index viewer bundle:
+  `client/gfs/public_moments.tsx` → `moment_public_viewer.js`.
+* Privacy filter:
+  `socialhome/repositories/moment_repo.py:list_public_for`.
 
 ## Spec refs
 

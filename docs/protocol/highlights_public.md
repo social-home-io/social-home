@@ -63,8 +63,17 @@ Public-viewer WebRTC signalling (added in PR2):
 | POST | `/gfs/highlight_rtc/answer` | Author SH only (Ed25519-signed). Body: `{instance_id, session_id, sdp, signature}`. Authority guard: `session.initiator_id` must match the signing instance. |
 | POST | `/gfs/highlight_rtc/ice/author` | Author SH only (signed). Same authority guard; appends to `ice_candidates` so the next viewer poll sees it. |
 
+GFS-relay fallback (used when the direct DataChannel can't connect — see
+"GFS-relay fallback" below):
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}?token=...` | Anonymous, token-gated (same token as the offer flow). Chunked `application/octet-stream`: the GFS pushes a `highlight_signal kind=relay_offer` to the author and pipes the framed bytes the author streams back. `503` (author offline or never connects), `410` (bad / expired token), `422` (missing token). |
+| POST | `/gfs/highlight_rtc/relay-stream/{relay_id}` | Author SH only. Header-auth: `X-SH-Instance` + `X-SH-Signature` (Ed25519 over canonical `{"instance_id","relay_id"}`); body is the raw framed byte stream. `403` (relay's target instance != signer), `404` (unknown relay), `401` (bad signature), `422` (missing headers). |
+
 The viewer DataChannel has label `highlight-public-v1` and uses the
-length-prefixed JSON-header / binary-payload framing detailed below.
+length-prefixed JSON-header / binary-payload framing detailed below. The
+GFS-relay fallback streams the **identical** framed bytes over HTTP.
 
 ## Retention
 
@@ -86,6 +95,30 @@ live SH↔GFS WebSocket. The landing-page handler queries
 `GfsWebSocketRegistry.is_connected(instance_id)`; offline author →
 503 with a 10-second auto-refresh meta tag. PR2 needs the live WS
 anyway because it pushes the public viewer's WebRTC offer over it.
+
+## GFS-relay fallback
+
+The direct DataChannel is always tried first. When WebRTC can't connect
+(symmetric NAT, blocked UDP, a browser that never gathers a usable
+candidate) the viewer bootstrap falls back to a chunked HTTP GET against
+`/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}`:
+
+1. The GFS resolves the token, confirms the author's SH↔GFS WS is live,
+   and registers a transient in-memory `RelayBridge` keyed by a fresh
+   `relay_id`.
+2. It pushes a `highlight_signal` WS frame `kind: "relay_offer"`
+   (`{relay_id, highlight_id, token}`) to the author.
+3. The author opens `POST /gfs/highlight_rtc/relay-stream/{relay_id}` and
+   streams the **byte-identical** framed payload (same
+   `highlight-public-v1` framing as the DataChannel) back to the GFS.
+4. The GFS pipes those bytes straight through to the still-open viewer
+   GET and tears the bridge down at `stream_end`.
+
+The GFS stores **zero** content bytes — the `RelayBridge` is purely an
+in-memory pipe between the inbound author POST and the outbound viewer
+GET. If the author is offline (no live WS) or never connects the
+relay-stream, the viewer GET returns `503` — author-offline still means
+"unavailable", exactly as the direct path does.
 
 ## DataChannel framing
 
@@ -136,10 +169,19 @@ sequenceDiagram
     G->>A: WS push { kind:"ice", candidate } (xN)
     V->>G: GET /gfs/highlight_rtc/session/{id} (poll)
     G-->>V: { answer_sdp, ice_candidates }
-    V-->>A: DataChannel "highlight-public-v1" opens (direct, no GFS)
-    A->>V: highlight_meta frame
-    A->>V: frame_chunk × N (per frame)
-    A->>V: stream_end
+    alt direct DataChannel connects
+        V-->>A: DataChannel "highlight-public-v1" opens (direct, no GFS)
+        A->>V: highlight_meta frame
+        A->>V: frame_chunk × N (per frame)
+        A->>V: stream_end
+    else WebRTC fails — GFS-relay fallback
+        V->>G: GET /gfs/highlight_rtc/relay/{i}/{s}?token={t}
+        G->>G: register transient RelayBridge {relay_id}
+        G->>A: WS push { kind:"relay_offer", relay_id, highlight_id, token }
+        A->>G: POST /gfs/highlight_rtc/relay-stream/{relay_id} (header-signed)
+        Note over G: GFS pipes byte-identical frames<br/>(stores nothing)
+        G-->>V: chunked octet-stream (highlight_meta → frame_chunk × N → stream_end)
+    end
 ```
 
 ## Public viewer bundle
@@ -196,3 +238,10 @@ GFS bundle alone, or `pnpm build` for both.
   `build_listing_rate_limit()` middleware (30/min/IP).
 - Author can pull every token instantly via `unpublish`. There's no
   revoke-key-rotation step — the row's deletion is the revoke.
+- GFS-relay carries **plaintext** framed bytes — but only of content the
+  author has already opted into public sharing, so the relay sees nothing
+  the public URL doesn't already expose. The GFS is a transient in-memory
+  pipe (`RelayBridge`) and **persists nothing**; there is no at-rest copy
+  to leak. The relay-stream POST is still Ed25519 header-signed and the
+  bridge rejects a signer whose instance != the relay's target, so a
+  third party can't inject bytes into someone else's stream.

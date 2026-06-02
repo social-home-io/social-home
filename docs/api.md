@@ -640,11 +640,37 @@ Bearer auth (the integration holds the auto-provisioned token).
 | GET | `/gfs/moments/users/{user_id}` | Single-user JSON detail incl. `follower_count`. |
 | GET | `/gfs/moments/users/{user_id}/picture` | Anon avatar fetch with `Cache-Control: public, max-age=86400, immutable` and ETag = digest. |
 
+**Public-content RTC + relay fallback** (highlights §highlights_public, moments §Momentum-public)
+
+Public highlights and the public moments index both stream live from the
+author's SH — a direct WebRTC DataChannel first, with a GFS-relay HTTP
+fallback when WebRTC can't connect. The GFS stores **zero** content bytes
+for either; the relay is a transient in-memory pipe of the byte-identical
+framed stream. Author-offline → `503`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/gfs/highlights/ice-servers` | Anon STUN/TURN list for the browser bootstrap. |
+| POST | `/gfs/highlight_rtc/offer` | Anon. Body `{instance_id, highlight_id, token, sdp}`; pushes a `highlight_signal kind=offer` WS frame to the author. Returns `{session_id}`. |
+| GET | `/gfs/highlight_rtc/session/{session_id}` | Anon poll for `answer_sdp` + author ICE. |
+| POST | `/gfs/highlight_rtc/ice/viewer` | Anon. Trickle the viewer's ICE candidate. |
+| POST | `/gfs/highlight_rtc/answer` | Author SH (Ed25519-signed). Authority guard: `session.initiator_id` == signer. |
+| POST | `/gfs/highlight_rtc/ice/author` | Author SH (signed). Same guard. |
+| GET | `/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}?token=...` | Anon, token-gated. Chunked `application/octet-stream`; pushes a `highlight_signal kind=relay_offer` and pipes the author's framed bytes. `503` author offline, `410` bad/expired token, `422` missing token. |
+| POST | `/gfs/highlight_rtc/relay-stream/{relay_id}` | Author SH. Header-auth `X-SH-Instance` + `X-SH-Signature` (Ed25519 over canonical `{"instance_id","relay_id"}`); body is the raw framed stream. `403` target != signer, `404` unknown relay, `401` bad sig, `422` missing headers. |
+| POST | `/gfs/moment_rtc/offer` | Anon. Body `{user_id, sdp}`; pushes a `moment_signal kind=offer` (carries `user_id` + `gfs_id`) to the author. `404` unregistered/suspended, `503` author offline. Returns `{session_id}`. |
+| GET | `/gfs/moment_rtc/session/{session_id}` | Anon poll for `answer_sdp` + author ICE. |
+| POST | `/gfs/moment_rtc/ice/viewer` | Anon. Trickle the viewer's ICE candidate. |
+| POST | `/gfs/moment_rtc/answer` | Author SH (signed). Authority guard: `session.initiator_id` == signer. |
+| POST | `/gfs/moment_rtc/ice/author` | Author SH (signed). Same guard. |
+| GET | `/gfs/moment_rtc/relay/{user_id}` | Anon chunked relay fallback (registration-gated). `404` unregistered, `503` author offline. |
+| POST | `/gfs/moment_rtc/relay-stream/{relay_id}` | Author SH. Header-auth (same scheme as the highlight relay-stream); body is the raw framed stream. |
+
 ## GFS — Push WebSocket (GFS → SH)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET (Upgrade) | `/gfs/ws` | Persistent push channel. SH opens this once paired; the GFS pushes `{type:"relay", space_id, event_type, payload, from_instance}` frames as space events fan out. First client frame must be a signed hello `{type:"hello", instance_id, ts, sig}` within 5 s — see spec §24.12. WebSocket close codes: 4400 protocol violation, 4401 auth failure, 4408 hello timeout, 4409 replaced. Heartbeat is the WS-protocol-level ping (30 s). |
+| GET (Upgrade) | `/gfs/ws` | Persistent push channel. SH opens this once paired; the GFS pushes `{type:"relay", space_id, event_type, payload, from_instance}` frames as space events fan out. It also pushes public-content RTC signalling to the author: `{type:"highlight_signal", kind}` with `kind` ∈ `offer` / `ice` / `relay_offer` (the `relay_offer` carries `{relay_id, highlight_id, token}` for the GFS-relay fallback), and `{type:"moment_signal", kind}` with `kind` ∈ `offer` / `ice` / `relay_offer` (the `offer` carries `user_id` + `gfs_id`). First client frame must be a signed hello `{type:"hello", instance_id, ts, sig}` within 5 s — see spec §24.12. WebSocket close codes: 4400 protocol violation, 4401 auth failure, 4408 hello timeout, 4409 replaced. Heartbeat is the WS-protocol-level ping (30 s). |
 
 ## GFS — SH↔SH RTC signalling rendezvous (§4.2.3)
 
