@@ -57,13 +57,18 @@ household's server. Three mitigations gate this before any code executes:
    unpacked only when their resolved path stays within
    `media_path/apps/<app_id>/<version>/`. Any entry that would escape
    that directory is rejected and the whole install is rolled back.
-3. **Sandboxed-iframe runtime (PR3).** App JavaScript is loaded into
-   a sandboxed `<iframe>` with an opaque origin and a
-   `Content-Security-Policy` of `connect-src 'none'`. All host
-   interaction goes through a postMessage bridge that withholds the
-   bearer token and limits surface to documented app APIs. The runtime
-   sandbox is the layer that makes executing fetched code tolerable;
-   until PR3 ships, installed apps are registered but not yet executed.
+3. **Sandboxed-iframe runtime (shipped in PR3).** App JavaScript is
+   loaded into `<iframe sandbox="allow-scripts">`. The absence of
+   `allow-same-origin` gives the frame an opaque origin so it cannot
+   touch the parent's DOM, localStorage, cookies, or identity. A strict
+   `Content-Security-Policy` (`connect-src 'none'`, `worker-src 'none'`,
+   `frame-ancestors 'self'`, etc.) on every bundle response prevents
+   app code from reaching the network. The host SPA validates
+   `event.origin` before processing postMessage frames; the bridge is
+   the only host interface and never exposes the bearer token — store
+   reads/writes are proxied as per-user, server-scoped KV operations.
+   The bundle is served via a signed-URL + HttpOnly path-scoped-cookie
+   scheme so no credential leaks into the iframe via URL or header.
 
 Reviewers authorising a change to `AppService` install flow, the
 sandbox policy, or the postMessage bridge MUST treat any weakening of
