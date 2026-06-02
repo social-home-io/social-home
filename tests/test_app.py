@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from socialhome.app import create_app
 from socialhome.config import Config
+from socialhome.services.app_federation_service import AppFederationService
 
 
 @pytest.fixture
@@ -101,3 +102,51 @@ async def test_create_app_without_config_uses_env_defaults():
         finally:
             os.environ.pop("SH_DATA_DIR", None)
             os.environ.pop("SH_DB_PATH", None)
+
+
+async def test_app_federation_service_wired_into_app(tmp_dir):
+    """AppFederationService is registered in the app dict and handlers are live.
+
+    After startup:
+    - ``app[app_federation_service_key]`` is an ``AppFederationService``.
+    - The federation event registry has handlers for APP_SESSION and APP_MESSAGE
+      (registered by ``federation_service.attach_apps(...)``).
+    - The FederationTransport was constructed with a non-None app_inbound_handler
+      (federation_service._app_inbound_handler bound method).
+    """
+    from socialhome.app_keys import (
+        app_federation_service_key,
+        federation_service_key,
+        federation_transport_key,
+    )
+    from socialhome.domain.federation import FederationEventType
+
+    cfg = Config(
+        data_dir=str(tmp_dir),
+        db_path=str(tmp_dir / "test.db"),
+        media_path=str(tmp_dir / "media"),
+        mode="standalone",
+        log_level="WARNING",
+    )
+    app = create_app(cfg)
+    async with TestClient(TestServer(app)):
+        # 1. Service is registered under its key.
+        app_fed = app[app_federation_service_key]
+        assert isinstance(app_fed, AppFederationService)
+
+        # 2. federation_service event registry has handlers for both event types.
+        fed_svc = app[federation_service_key]
+        registry = fed_svc._event_registry  # noqa: SLF001
+        assert registry.handler_count(FederationEventType.APP_SESSION) >= 1, (
+            "APP_SESSION handler not registered — attach_apps() not called"
+        )
+        assert registry.handler_count(FederationEventType.APP_MESSAGE) >= 1, (
+            "APP_MESSAGE handler not registered — attach_apps() not called"
+        )
+
+        # 3. The transport was built with the binary inbound handler threaded in.
+        fed_transport = app[federation_transport_key]
+        assert fed_transport._app_inbound_handler is not None, (  # noqa: SLF001
+            "FederationTransport._app_inbound_handler is None — "
+            "app_inbound_handler= kwarg missing from FederationTransport()"
+        )
