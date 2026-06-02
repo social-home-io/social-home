@@ -84,6 +84,8 @@ unauthenticated claim.
 |---|---|
 | **WebRTC DataChannel** (`fed-v1`) | Primary: routine envelopes once the peer-to-peer channel is up. |
 | **WebRTC DataChannel** (`sync-v1`) | Bulk content sync chunks. Distinct label from `fed-v1` so routine + sync traffic don't interfere. |
+| **WebRTC DataChannel** (`fed-media-v1`) | Binary media chunks (DM + space) — capability v14. No base64. |
+| **WebRTC DataChannel** (`fed-app-v1`) | Binary app messages (chess moves, whiteboard ops, mini-app payloads) — capability v17. 1 MiB payload cap; JSON `APP_MESSAGE` fallback for sub-v17 peers. |
 | **HTTPS inbox** | Fallback: before the DataChannel is negotiated, when it's closed or failing, and for peers behind a blocked UDP path. |
 
 ## Encryption-first rule (§25.8.21)
@@ -123,6 +125,8 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
   - [Highlights — public sharing](./highlights_public.md) — GFS-brokered public URL for a single highlight; data flows author → viewer over WebRTC, GFS holds zero highlight data.
   - [Momentum](./momentum.md) — short-lived household-broadcast posts with 3-hop relay.
   - [Momentum — public sharing](./momentum_public.md) — GFS-brokered follow graph for public moment fan-out beyond the household mesh; recipients dedupe with the household relay path.
+- **Apps**
+  - [Social Home Apps](./apps.md) — cross-household app-to-app federation via a dedicated `fed-app-v1` binary DataChannel (v_17) with JSON event fallback; AES-256-GCM sealed payloads delivered as `app.message` WS frames.
 - **Relay**
   - [Push & RTC relay](./push-relay.md) — GFS-mediated push fan-out and RTC signalling bootstrap.
 

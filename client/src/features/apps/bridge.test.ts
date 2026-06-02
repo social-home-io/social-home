@@ -29,6 +29,7 @@ vi.mock('@/ws', () => ({
 
 // ── mock @/api ─────────────────────────────────────────────────────────────
 const mockApiGet = vi.fn()
+const mockApiPost = vi.fn()
 const mockApiPut = vi.fn()
 const mockApiDelete = vi.fn()
 
@@ -47,6 +48,7 @@ vi.mock('@/api', () => {
     ApiError,
     api: {
       get: (...args: unknown[]) => mockApiGet(...args),
+      post: (...args: unknown[]) => mockApiPost(...args),
       put: (...args: unknown[]) => mockApiPut(...args),
       delete: (...args: unknown[]) => mockApiDelete(...args),
     },
@@ -99,6 +101,7 @@ describe('mountBridge', () => {
 
   beforeEach(() => {
     mockApiGet.mockReset()
+    mockApiPost.mockReset()
     mockApiPut.mockReset()
     mockApiDelete.mockReset()
     Object.keys(wsHandlers).forEach(k => delete wsHandlers[k])
@@ -250,20 +253,81 @@ describe('mountBridge', () => {
 
   // ── app.send ──────────────────────────────────────────────────────────────
 
-  it('app.send: replies ok:false with code "unavailable"', async () => {
+  it('app.send: POSTs to /messages with session_id, peer_instance_id, payload; replies ok:true', async () => {
+    mockApiPost.mockResolvedValueOnce({ ok: true })
     const handler = captureMessageHandler()
 
     await handler({
       source: iframe.contentWindow as unknown as Window,
-      data: { id: 40, method: 'app.send', params: { target: 'peer', data: {} } },
+      data: {
+        id: 40,
+        method: 'app.send',
+        params: {
+          session_id: 'sess-abc',
+          peer_instance_id: 'peer.example.com',
+          payload: { move: 'e4' },
+        },
+      },
     })
 
+    expect(mockApiPost).toHaveBeenCalledWith(
+      `/api/apps/${APP_ID}/messages`,
+      {
+        session_id: 'sess-abc',
+        peer_instance_id: 'peer.example.com',
+        payload: { move: 'e4' },
+      },
+    )
     expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 40, ok: false }),
+      expect.objectContaining({ id: 40, ok: true }),
       '*',
     )
-    const call = (iframe.contentWindow!.postMessage as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(call[0].error.code).toBe('unavailable')
+  })
+
+  // ── peers.list ──────────────────────────────────────────────────────────
+
+  it('peers.list: GETs /peers and returns peers array', async () => {
+    const peers = [
+      { instance_id: 'peer.example.com', display_name: 'Example Peer' },
+    ]
+    mockApiGet.mockResolvedValueOnce({ peers })
+    const handler = captureMessageHandler()
+
+    await handler({
+      source: iframe.contentWindow as unknown as Window,
+      data: { id: 41, method: 'peers.list' },
+    })
+
+    expect(mockApiGet).toHaveBeenCalledWith(`/api/apps/${APP_ID}/peers`)
+    expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 41, ok: true, result: peers }),
+      '*',
+    )
+  })
+
+  // ── app.openSession ────────────────────────────────────────────────────
+
+  it('app.openSession: POSTs to /sessions with peer_instance_id; returns session_id', async () => {
+    mockApiPost.mockResolvedValueOnce({ session_id: 'sess-xyz' })
+    const handler = captureMessageHandler()
+
+    await handler({
+      source: iframe.contentWindow as unknown as Window,
+      data: {
+        id: 42,
+        method: 'app.openSession',
+        params: { peer_instance_id: 'peer.example.com' },
+      },
+    })
+
+    expect(mockApiPost).toHaveBeenCalledWith(
+      `/api/apps/${APP_ID}/sessions`,
+      { peer_instance_id: 'peer.example.com' },
+    )
+    expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 42, ok: true, result: 'sess-xyz' }),
+      '*',
+    )
   })
 
   // ── WS relay ──────────────────────────────────────────────────────────────

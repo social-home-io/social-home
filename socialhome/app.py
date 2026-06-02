@@ -256,6 +256,7 @@ from .services.system_album_bridge import SystemAlbumBridge
 from .services.pairing_relay_queue import PairingRelayQueue
 from .services.alias_service import AliasResolver, AliasService
 from .services.app_catalog_service import AppCatalogService
+from .services.app_federation_service import AppFederationService
 from .services.app_service import AppService
 from .services.preferences_service import PreferencesService
 from .services.page_conflict_service import PageConflictService
@@ -2271,6 +2272,7 @@ def create_app(config: Config | None = None) -> web.Application:
             ice_servers=fed_ice_servers,
             inbound_handler=federation_service.handle_inbound_rtc,
             media_inbound_handler=federation_service.handle_inbound_media_frame,
+            app_inbound_handler=federation_service._app_inbound_handler,
             bus=bus,
         )
         federation_service.attach_transport(fed_transport)
@@ -2311,6 +2313,22 @@ def create_app(config: Config | None = None) -> web.Application:
         call_signaling.attach_push_service(push_service)
         app[K.call_signaling_service_key] = call_signaling
         app[K.call_repo_key] = repos.call
+
+        # AppFederationService — bridges inbound APP_SESSION / APP_MESSAGE
+        # federation events and binary fed-app-v1 DataChannel frames into
+        # WebSocket pushes for local users. Constructed after FederationService
+        # and FederationTransport so it can call attach_apps() which registers
+        # both the JSON event-registry handlers and the binary-channel path
+        # (already threaded into the transport via app_inbound_handler above).
+        app_federation_service = AppFederationService(
+            app_repo=repos.app,
+            user_repo=user_repo,
+            ws=ws_manager,
+            federation=federation_service,
+            federation_repo=federation_repo,
+        )
+        federation_service.attach_apps(app_federation_service)
+        app[K.app_federation_service_key] = app_federation_service
 
         # Stale-call cleanup scheduler (§26.8).
         nonlocal stale_call_scheduler

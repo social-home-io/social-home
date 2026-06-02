@@ -76,3 +76,15 @@ def test_pairing_events_subset():
 def test_structural_events_subset():
     """STRUCTURAL_EVENTS contains SPACE_CREATED."""
     assert FederationEventType.SPACE_CREATED in STRUCTURAL_EVENTS
+
+
+def test_app_session_event_type_round_trip():
+    """APP_SESSION wire value round-trips through the str enum."""
+    assert FederationEventType("app_session") == FederationEventType.APP_SESSION
+    assert FederationEventType.APP_SESSION == "app_session"
+
+
+def test_app_message_event_type_round_trip():
+    """APP_MESSAGE wire value round-trips through the str enum."""
+    assert FederationEventType("app_message") == FederationEventType.APP_MESSAGE
+    assert FederationEventType.APP_MESSAGE == "app_message"

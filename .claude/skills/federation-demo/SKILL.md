@@ -286,10 +286,11 @@ The canonical ``all`` sequence runs ``up → pair → traffic →
 calendar → verify → relay-pair → visibility → invite-redeem →
 invite-redeem-routed → remote-invite-routed → space-post-routed →
 space-media-blob → space-gallery-media-blob →
-space-sync-catchup-media → admin-promote-kick →
-remote-invite-decline → replay`` in that order. ``gfs-up`` / ``gfs-pair`` / ``gfs-down``
-stay opt-in (they spin up a separate GFS process and aren't
-required to validate the HFS↔HFS surface).
+space-sync-catchup-media → sync-https-fallback → admin-promote-kick →
+app-session → remote-invite-decline → replay`` in that order.
+``gfs-up`` / ``gfs-pair`` / ``gfs-down`` stay opt-in (they spin up
+a separate GFS process and aren't required to validate the HFS↔HFS
+surface).
 
 Phases added after the initial publish are documented inline in
 ``harness.py`` (each ``cmd_*`` has its own docstring):
@@ -310,6 +311,12 @@ Phases added after the initial publish are documented inline in
   joiner's media path.
 * ``admin-promote-kick`` — cross-household role promotion lands on
   the affected member's household via SPACE_MEMBER_ROLE_CHANGED.
+* ``app-session`` — PR4 app-to-app federation (v_17): opens an
+  ``APP_SESSION`` from a to b, sends an ``APP_MESSAGE``, asserts
+  both REST calls return 2xx.  Skips gracefully when no common
+  installed app is present in the demo environment (unit tests in
+  ``tests/services/test_app_federation_service.py`` cover the
+  full delivery path with a WS mock).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
@@ -317,7 +324,8 @@ harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
 ``invite-redeem-routed`` / ``remote-invite-routed`` /
 ``space-post-routed`` / ``space-media-blob`` /
 ``space-gallery-media-blob`` / ``space-sync-catchup-media`` /
-``admin-promote-kick`` / ``remote-invite-decline`` / ``replay``);
+``sync-https-fallback`` / ``admin-promote-kick`` / ``app-session`` /
+``remote-invite-decline`` / ``replay``);
 state is persisted to ``/tmp/sh-demo/state.json`` between calls.
 
 ## GFS (Global Federation Server) — opt-in subcommands

@@ -339,13 +339,11 @@ with the service/repo pair `AppService` / `SqliteAppRepo`
 `socialhome/repositories/app_repo.py`). Routes are under
 `socialhome/routes/apps.py`.
 
-**PR2** adds `app_kv` (per-user key/value storage per app).
-**PR4** introduces the `fed-app-v1` federation channel so apps can
-exchange state across paired households.
+**PR2** adds `app_kv` (per-user key-value storage per app).
 
 ### Sandbox runtime (PR3)
 
-Two new routes power the sandbox execution path:
+Two routes power the sandbox execution path:
 
 - `GET /api/apps/{app_id}/runtime` — bearer-authed member endpoint.
   Returns `{app_id, name, entry_url, self_user_id, capabilities}` where
@@ -377,11 +375,35 @@ bridge exposes only the documented per-user store API — never the raw bearer
 token.
 
 Real-time events are delivered via the existing `/api/ws` WebSocket: the server
-routes `app.message` frames (`{type:"app.message", app_id, payload}`) to the
-SPA connection that has the matching app launched. The host bridge forwards
-qualifying frames into the iframe as `MessageEvent`s. The first producer is
-the PR4 federation app-to-app channel (`fed-app-v1`); PR3 defines the
-host-side relay and the frame contract.
+routes `app.message` frames to the SPA connection that has the matching app
+launched.  The host bridge forwards qualifying frames into the iframe as
+`MessageEvent`s.
+
+### App-to-app federation (PR4, capability v_17)
+
+`AppFederationService` (`socialhome/services/app_federation_service.py`)
+bridges between the federation layer and the SPA:
+
+- **Session control** (`APP_SESSION`, verb `"open"/"accept"/"close"`) always
+  rides the JSON federation event path over `fed-v1` or the HTTPS inbox, so
+  sessions open and close correctly even against pre-v17 peers.
+- **App messages** take the fast path when the peer is v_17+ CONFIRMED with an
+  open `fed-app-v1` DataChannel: AES-256-GCM-sealed binary frames with a
+  `payload_sha256` binding (same security model as the v_14 media channel).
+  Otherwise `FederationService.send_app_message` falls back transparently to
+  an `APP_MESSAGE` JSON event.
+- **Inbound delivery** (both paths): after §24.11 validation and decryption,
+  `_deliver` fans the `app.message` WS frame to every local user whose
+  WebSocket is open and the matching app is enabled.  The app's `session_id`
+  scopes the semantics in the SPA; per-user routing is a documented follow-up.
+- **Privacy:** `APP_SESSION` carries no per-user identifier — only `session_id`
+  and `from_instance` — to avoid cross-household user tracking.
+- **REST:** `GET /api/apps/{app_id}/peers`, `POST /api/apps/{app_id}/sessions`,
+  `POST /api/apps/{app_id}/messages`.
+
+See [`protocol/apps.md`](./protocol/apps.md) for the wire protocol and
+sequence diagram, and [`docs/crypto.md`](./crypto.md) for the `fed-app-v1`
+AEAD suite details.
 
 ## Where things live
 

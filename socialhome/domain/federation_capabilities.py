@@ -229,7 +229,19 @@ from __future__ import annotations
 #:   UI (best-effort mirror) but the host still collects votes from peers
 #:   that do. Operators must upgrade the host before remote admins can
 #:   propose / vote.
-OURS: int = 16
+#: * **v_17** (2026-06-02) — Social Home Apps federation bridge:
+#:   :data:`FederationEventType.APP_SESSION` (session lifecycle) and
+#:   :data:`FederationEventType.APP_MESSAGE` (application-layer message).
+#:   On v_17+ CONFIRMED direct peers a dedicated ``fed-app-v1`` binary
+#:   DataChannel carries ``APP_MESSAGE`` as binary frames (same multiplexing
+#:   pattern as the v_14 media channel). **Fallback.** Sub-v_17 peers
+#:   transparently receive ``APP_MESSAGE`` as a standard JSON federation
+#:   event over ``fed-v1`` / HTTPS — the same degraded-but-correct path
+#:   the v_14 media channel uses for non-CONFIRMED / older peers. Session
+#:   control (``APP_SESSION``) always rides the event path, so an app
+#:   session degrades gracefully on older peers; only the binary fast-path
+#:   is lost.
+OURS: int = 17
 
 
 class FederationCapability:
@@ -360,6 +372,15 @@ class FederationCapability:
     #: admin's :class:`SpaceApprovalService` gates the forward on this and
     #: raises against an older host rather than dropping the proposal.
     MIN_FOR_ADMIN_PROPOSALS = 16
+
+    #: Minimum proto_version where the peer accepts ``APP_SESSION`` /
+    #: ``APP_MESSAGE`` and runs a Social Home App federation bridge. The
+    #: dedicated ``fed-app-v1`` binary DataChannel is the fast path;
+    #: sub-v_17 peers transparently receive the ``APP_MESSAGE`` JSON event
+    #: over ``fed-v1`` / HTTPS instead (same fallback shape as the v_14
+    #: media channel). Session control (``APP_SESSION``) always rides the
+    #: event path, so an app session degrades gracefully to older peers.
+    MIN_FOR_APP_CHANNEL = 17
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

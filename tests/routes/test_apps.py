@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import pytest
 from unittest.mock import AsyncMock
 
+from socialhome.app_keys import app_federation_service_key
 from socialhome.auth import sha256_token_hash
 from socialhome.domain.apps import (
     AppAlreadyInstalledError,
@@ -16,6 +18,7 @@ from socialhome.domain.apps import (
 )
 from socialhome.repositories.app_repo import SqliteAppRepo
 from socialhome.services.app_service import AppService
+from socialhome.services.app_federation_service import AppFederationService
 
 from .conftest import _auth
 
@@ -698,3 +701,242 @@ async def test_store_key_too_long_413(client):
     assert r.status == 413
     body = await r.json()
     assert body["error"]["code"] == "QUOTA_EXCEEDED"
+
+
+# ── App federation routes ─────────────────────────────────────────────────
+#
+# AppFederationService is wired in Task 6.  For these route tests we inject a
+# stub AsyncMock directly into the test app dict so the views can resolve the
+# service key without a real federation layer.
+
+
+@pytest.fixture
+def fed_svc(client):
+    """Inject a stub AppFederationService into the test app and return it."""
+    stub = AsyncMock(spec=AppFederationService)
+    client.app[app_federation_service_key] = stub
+    return stub
+
+
+# ── GET /api/apps/{app_id}/peers ──────────────────────────────────────────
+
+
+async def test_peers_requires_auth(client):
+    r = await client.get("/api/apps/com.example.hello/peers")
+    assert r.status == 401
+
+
+async def test_peers_returns_peer_list(client, fed_svc):
+    peers = [
+        {"instance_id": "peer.example.com", "display_name": "Example Peer"},
+        {"instance_id": "other.example.net", "display_name": "Other"},
+    ]
+    fed_svc.list_peers.return_value = peers
+
+    r = await client.get(
+        "/api/apps/com.example.hello/peers",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"peers": peers}
+    fed_svc.list_peers.assert_awaited_once()
+
+
+async def test_peers_member_can_list(client, fed_svc):
+    """Non-admin members can also list peers."""
+    fed_svc.list_peers.return_value = []
+    member_tok = await _seed_member(client._db)
+
+    r = await client.get(
+        "/api/apps/com.example.hello/peers",
+        headers=_auth(member_tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"peers": []}
+
+
+# ── POST /api/apps/{app_id}/sessions ─────────────────────────────────────
+
+
+async def test_sessions_requires_auth(client):
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"peer_instance_id": "peer.example.com"},
+    )
+    assert r.status == 401
+
+
+async def test_sessions_returns_session_id_201(client, fed_svc):
+    fed_svc.open_session.return_value = "deadbeef01234567"
+
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"peer_instance_id": "peer.example.com"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body == {"session_id": "deadbeef01234567"}
+    fed_svc.open_session.assert_awaited_once_with(
+        app_id="com.example.hello",
+        peer_instance_id="peer.example.com",
+        actor_user_id=client._uid,
+    )
+
+
+async def test_sessions_rejects_missing_peer(client, fed_svc):
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_sessions_rejects_empty_peer(client, fed_svc):
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"peer_instance_id": ""},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_sessions_app_not_found_404(client, fed_svc):
+    fed_svc.open_session.side_effect = AppNotFoundError("not installed")
+
+    r = await client.post(
+        "/api/apps/com.example.missing/sessions",
+        json={"peer_instance_id": "peer.example.com"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+
+
+async def test_sessions_app_not_enabled_403(client, fed_svc):
+    fed_svc.open_session.side_effect = AppNotEnabledError("disabled")
+
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"peer_instance_id": "peer.example.com"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+
+
+# ── POST /api/apps/{app_id}/messages ─────────────────────────────────────
+
+
+async def test_messages_requires_auth(client):
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "s1",
+            "peer_instance_id": "peer.example.com",
+            "payload": {},
+        },
+    )
+    assert r.status == 401
+
+
+async def test_messages_returns_ok(client, fed_svc):
+    fed_svc.send_message.return_value = None
+
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "sess-abc",
+            "peer_instance_id": "peer.example.com",
+            "payload": {"move": "e4"},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"ok": True}
+    fed_svc.send_message.assert_awaited_once_with(
+        app_id="com.example.hello",
+        session_id="sess-abc",
+        peer_instance_id="peer.example.com",
+        payload={"move": "e4"},
+        actor_user_id=client._uid,
+    )
+
+
+async def test_messages_rejects_missing_session_id(client, fed_svc):
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={"peer_instance_id": "peer.example.com", "payload": {}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_messages_rejects_missing_peer(client, fed_svc):
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={"session_id": "s1", "payload": {}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_messages_rejects_missing_payload(client, fed_svc):
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={"session_id": "s1", "peer_instance_id": "peer.example.com"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_messages_rejects_oversized_payload(client, fed_svc):
+    # Build a payload that exceeds 256 KiB when JSON-encoded.
+    big_payload = {"data": "x" * (256 * 1024 + 1)}
+
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "s1",
+            "peer_instance_id": "peer.example.com",
+            "payload": big_payload,
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 413
+    body = await r.json()
+    assert body["error"]["code"] == "PAYLOAD_TOO_LARGE"
+
+
+async def test_messages_app_not_found_404(client, fed_svc):
+    fed_svc.send_message.side_effect = AppNotFoundError("not installed")
+
+    r = await client.post(
+        "/api/apps/com.example.missing/messages",
+        json={"session_id": "s1", "peer_instance_id": "p.example.com", "payload": {}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+
+
+async def test_messages_app_not_enabled_403(client, fed_svc):
+    fed_svc.send_message.side_effect = AppNotEnabledError("disabled")
+
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={"session_id": "s1", "peer_instance_id": "p.example.com", "payload": {}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403

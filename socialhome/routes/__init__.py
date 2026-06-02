@@ -130,6 +130,9 @@ from .apps import (
     AppCatalogView,
     AppCollectionView,
     AppDetailView,
+    AppMessagesView,
+    AppPeersView,
+    AppSessionsView,
     AppStoreCollectionView,
     AppStoreItemView,
 )
@@ -1039,6 +1042,9 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/apps/{app_id}/store/{key}", AppStoreItemView)
     app.router.add_view("/api/apps/{app_id}/runtime", AppRuntimeView)
     app.router.add_view("/api/apps/{app_id}/bundle/{tail:.*}", AppBundleView)
+    app.router.add_view("/api/apps/{app_id}/peers", AppPeersView)
+    app.router.add_view("/api/apps/{app_id}/sessions", AppSessionsView)
+    app.router.add_view("/api/apps/{app_id}/messages", AppMessagesView)
 
     # ── Backup (adapter-agnostic) ────────────────────────────────────────
     app.router.add_view("/api/backup/pre_backup", BackupPreView)

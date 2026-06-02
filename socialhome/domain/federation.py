@@ -372,6 +372,20 @@ class FederationEventType(str, enum.Enum):
     FEDERATION_RTC_ANSWER = "federation_rtc_answer"
     FEDERATION_RTC_ICE = "federation_rtc_ice"
 
+    # ── Social Home Apps (§Apps) — cross-household app federation bridge ──
+    #: Session lifecycle for a Social Home App federation session. Controls
+    #: the per-pair ``fed-app-v1`` DataChannel (v_17+ fast path) or falls
+    #: back gracefully to the ``fed-v1`` / HTTPS JSON event path for older
+    #: peers. Session setup / teardown always rides the event path regardless
+    #: of peer version.
+    APP_SESSION = "app_session"
+    #: Application-layer message between Social Home App instances on paired
+    #: households. On v_17+ CONFIRMED direct peers the binary ``fed-app-v1``
+    #: DataChannel is the fast path; sub-v_17 peers receive this as a standard
+    #: JSON federation event on ``fed-v1`` / HTTPS (same fallback shape as the
+    #: v_14 media channel). Payload is fully encrypted per §25.8.21.
+    APP_MESSAGE = "app_message"
+
 
 # Subsets used throughout the service layer ────────────────────────────────
 
