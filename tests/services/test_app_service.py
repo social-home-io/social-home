@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from socialhome.domain.apps import (
+    AppAlreadyInstalledError,
     AppCatalogEntry,
     AppIntegrityError,
     AppNotFoundError,
@@ -634,3 +635,99 @@ async def test_get_passthrough(
 
     # A different id still returns None
     assert await svc.get("nonexistent") is None
+
+
+@pytest.mark.asyncio
+async def test_install_rejects_malicious_app_id(
+    tmp_path: Path,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """install() must raise AppIntegrityError when catalog app_id escapes media_path.
+
+    A catalog entry with app_id='../../etc' would compute a dest path that
+    resolves outside media_path.  The containment check must catch this BEFORE
+    any directory is created outside the media root.
+    """
+    bundle_bytes, sha = chess_bundle
+    malicious_entry = AppCatalogEntry(
+        app_id="../../etc",
+        name="Evil",
+        latest_version="1.0.0",
+        description="escape attempt",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/evil.tgz",
+        bundle_sha256=sha,
+    )
+    svc, repo = make_service(tmp_path, [malicious_entry], bundle_bytes)
+
+    with pytest.raises(AppIntegrityError, match="escapes media root"):
+        await svc.install(
+            "../../etc",
+            actor_is_admin=True,
+            actor_user_id="admin1",
+        )
+
+    # Nothing written to repo
+    assert await repo.list_installed() == []
+    # Nothing created outside tmp_path (the resolved etc dir must not exist due
+    # to us; we just verify the dest inside tmp_path was not created)
+    assert (
+        not (tmp_path / "apps").exists()
+        or not (tmp_path / "apps" / "../../etc").exists()
+    )
+
+
+@pytest.mark.asyncio
+async def test_install_twice_raises(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """A second install() for the same app_id must raise AppAlreadyInstalledError."""
+    bundle_bytes, _ = chess_bundle
+    svc, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    # First install succeeds
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    assert await repo.get("chess") is not None
+
+    # Second install must fail immediately without touching disk again
+    with pytest.raises(AppAlreadyInstalledError):
+        await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # Still exactly one row
+    installed = await repo.list_installed()
+    assert len(installed) == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_dir_removed_after_failed_install(
+    tmp_path: Path,
+) -> None:
+    """A failed extraction must not leave a partial bundle dir on disk.
+
+    Uses a path-traversal tarball (raises AppIntegrityError mid-extraction)
+    and asserts that dest is gone after the exception propagates.
+    """
+    raw, sha = make_tarball_with_member("../evil.txt")
+    entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="1.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-1.0.0.tgz",
+        bundle_sha256=sha,
+    )
+    svc, repo = make_service(tmp_path, [entry], raw)
+
+    with pytest.raises(AppIntegrityError):
+        await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # The partial dest dir must have been cleaned up
+    dest = tmp_path / "apps" / "chess" / "1.0.0"
+    assert not dest.exists(), f"partial bundle dir was not cleaned up: {dest}"
+    # Nothing in repo
+    assert await repo.list_installed() == []

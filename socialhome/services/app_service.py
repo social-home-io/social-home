@@ -6,6 +6,9 @@ Security invariants:
   symlinks, and device/FIFO/block-device members.  Any violation raises
   :class:`AppIntegrityError` and the partially-extracted directory (if any)
   is cleaned up.
+- Destination directory is checked to be inside ``media_path`` before
+  creation (catalog-supplied ``app_id`` / ``version`` path components are
+  untrusted and could contain ``../../`` sequences).
 - CPU-bound work (sha256, tarfile extraction, shutil.rmtree) runs via
   ``asyncio.to_thread`` so the event loop is never blocked.
 - Filesystem mutations use ``aiofiles.os`` for async makedirs; the tar
@@ -23,13 +26,15 @@ import json
 import logging
 import shutil
 import tarfile
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import aiofiles.os
 
 from ..domain.apps import (
+    AppAlreadyInstalledError,
     AppCatalogEntry,
     AppIntegrityError,
     AppManifest,
@@ -40,6 +45,7 @@ from ..domain.events import AppInstalled, AppUninstalled
 from ..domain.space import SpacePermissionError
 from ..repositories.app_repo import AbstractAppRepo
 from .app_catalog_service import AppCatalogService
+from .bus_publisher import BusPublisherMixin
 
 if TYPE_CHECKING:
     from ..infrastructure.event_bus import EventBus
@@ -47,7 +53,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class AppService:
+class AppService(BusPublisherMixin):
     """Install, uninstall, and toggle Social Home Apps.
 
     Parameters
@@ -69,6 +75,10 @@ class AppService:
         :class:`AppUninstalled`.  ``None`` silently skips publication.
     """
 
+    # NOTE: SpacePermissionError is intentionally used for admin-gate failures
+    # in PR1 (it maps correctly to HTTP 403 via BaseView._map_exc and matches
+    # the PR1 plan).  A dedicated AppPermissionError is deferred to PR2.
+
     __slots__ = ("_repo", "_catalog", "_media_path", "_downloader", "_bus")
 
     def __init__(
@@ -77,7 +87,7 @@ class AppService:
         repo: AbstractAppRepo,
         catalog: AppCatalogService | None,
         media_path: Path,
-        downloader: Callable,
+        downloader: Callable[[str], bytes | Awaitable[bytes]],
         bus: "EventBus | None" = None,
     ) -> None:
         self._repo = repo
@@ -116,15 +126,24 @@ class AppService:
 
         Steps:
         1. Admin gate.
-        2. Catalog lookup → :class:`AppNotFoundError` if absent.
-        3. Download bundle bytes via ``self._downloader``.
-        4. SHA-256 verify; raise :class:`AppIntegrityError` on mismatch.
-        5. Safe tar extraction into ``<media_path>/apps/<app_id>/<version>/``.
-        6. Parse ``manifest.json`` from the unpacked dir.
-        7. Build :class:`InstalledApp`, persist, publish :class:`AppInstalled`.
+        2. Double-install guard → :class:`AppAlreadyInstalledError` if already
+           installed.
+        3. Catalog lookup → :class:`AppNotFoundError` if absent.
+        4. Download bundle bytes via ``self._downloader``.
+        5. SHA-256 verify; raise :class:`AppIntegrityError` on mismatch.
+        6. Media-root containment check on the computed ``dest`` path.
+        7. Safe tar extraction into ``<media_path>/apps/<app_id>/<version>/``.
+        8. Parse ``manifest.json`` from the unpacked dir.
+        9. Build :class:`InstalledApp`, persist, publish :class:`AppInstalled`.
         """
         if not actor_is_admin:
             raise SpacePermissionError("Only admins may install apps")
+
+        # Guard against double-install
+        if await self._repo.get(app_id) is not None:
+            raise AppAlreadyInstalledError(
+                f"App {app_id!r} is already installed; uninstall first to reinstall"
+            )
 
         if self._catalog is None:
             raise AppIntegrityError("No app catalog configured")
@@ -136,6 +155,7 @@ class AppService:
             raise AppNotFoundError(f"App {app_id!r} not found in catalog")
 
         # Download
+        # TODO(PR-followup): MAX_BUNDLE_BYTES cap to prevent zip-bomb / OOM
         result = self._downloader(entry.bundle_url)
         if inspect.isawaitable(result):
             data: bytes = await result
@@ -150,8 +170,16 @@ class AppService:
                 f"expected {entry.bundle_sha256!r}, got {actual_sha!r}"
             )
 
-        # Destination directory (create parent asynchronously)
+        # Destination directory — validate containment BEFORE creating it so a
+        # malicious catalog with app_id="../../etc" can't escape media_path.
         dest = self._media_path / "apps" / app_id / entry.latest_version
+        media_root = self._media_path.resolve()
+        if not dest.resolve().is_relative_to(media_root):
+            raise AppIntegrityError(
+                f"catalog path escapes media root: "
+                f"app_id={app_id!r}, version={entry.latest_version!r}"
+            )
+
         await aiofiles.os.makedirs(str(dest), exist_ok=True)
 
         # Safe extraction (CPU + I/O-bound; runs in thread).
@@ -161,10 +189,12 @@ class AppService:
             manifest_dict = await asyncio.to_thread(
                 self._extract_bundle_sync, data, dest
             )
-        except AppIntegrityError:
+        except (AppIntegrityError, OSError) as exc:
             # Clean up the partially-extracted directory before re-raising
             await asyncio.to_thread(self._rmtree_sync, dest)
-            raise
+            raise AppIntegrityError(
+                f"Bundle extraction failed for {app_id!r}: {exc}"
+            ) from exc if not isinstance(exc, AppIntegrityError) else exc
 
         try:
             manifest = AppManifest.from_dict(manifest_dict)
@@ -188,12 +218,7 @@ class AppService:
             installed_at=datetime.now(timezone.utc).isoformat(),
         )
         await self._repo.install(app)
-
-        if self._bus is not None:
-            try:
-                await self._bus.publish(AppInstalled(app_id=app_id, name=entry.name))
-            except Exception as exc:  # pragma: no cover
-                log.debug("app_installed publish failed: %s", exc)
+        await self._emit(AppInstalled(app_id=app_id, name=entry.name))
 
         return app
 
@@ -212,16 +237,20 @@ class AppService:
 
         await self._repo.uninstall(app_id)
 
-        # Remove the bundle dir from disk (CPU/I/O-bound → thread)
+        # Remove the bundle dir from disk (CPU/I/O-bound → thread).
+        # Validate containment before rmtree — stored bundle_path is trusted
+        # (written by install()), but defence-in-depth against DB tampering.
         bundle_dir = self._media_path / existing.bundle_path
-        if await aiofiles.os.path.isdir(str(bundle_dir)):
+        media_root = self._media_path.resolve()
+        if not bundle_dir.resolve().is_relative_to(media_root):
+            log.warning(
+                "uninstall: bundle_path %r escapes media root — skipping rmtree",
+                existing.bundle_path,
+            )
+        elif await aiofiles.os.path.isdir(str(bundle_dir)):
             await asyncio.to_thread(self._rmtree_sync, bundle_dir)
 
-        if self._bus is not None:
-            try:
-                await self._bus.publish(AppUninstalled(app_id=app_id))
-            except Exception as exc:  # pragma: no cover
-                log.debug("app_uninstalled publish failed: %s", exc)
+        await self._emit(AppUninstalled(app_id=app_id))
 
     async def set_enabled(
         self,
@@ -270,12 +299,13 @@ class AppService:
         - Non-regular-file / non-directory members (symlinks, devices, FIFOs)
 
         After extraction, reads and returns the parsed ``manifest.json`` dict
-        so the caller never needs a blocking filesystem read on the event loop.
+        so the caller never needs a blocking Path.read_text on the event loop.
 
         Raises :class:`AppIntegrityError` on any violation or a missing /
         invalid manifest.  Extraction is member-by-member so we validate
         *before* writing each file.
         """
+        dest_resolved = dest.resolve()
         try:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
                 for member in tar.getmembers():
@@ -296,7 +326,7 @@ class AppService:
                     # that the result stays inside dest.
                     member_path = (dest / member.name).resolve()
                     try:
-                        member_path.relative_to(dest.resolve())
+                        member_path.relative_to(dest_resolved)
                     except ValueError:
                         raise AppIntegrityError(
                             f"Bundle path traversal detected: {member.name!r} "
@@ -327,6 +357,19 @@ class AppService:
 
     @staticmethod
     def _rmtree_sync(path: Path) -> None:
-        """Remove ``path`` and all its contents (synchronous, run in thread)."""
+        """Remove ``path`` and all its contents (synchronous, run in thread).
+
+        Logs a warning if the removal fails so a cleanup error is never
+        silently swallowed.
+        """
         if path.exists():
-            shutil.rmtree(path, ignore_errors=True)
+
+            def _on_error(func: object, failing_path: object, exc_info: object) -> None:
+                log.warning(
+                    "_rmtree_sync: failed to remove %s via %s: %s",
+                    failing_path,
+                    func,
+                    exc_info,
+                )
+
+            shutil.rmtree(path, onerror=_on_error)
