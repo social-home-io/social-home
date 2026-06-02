@@ -595,7 +595,11 @@ unpacked (path-traversal-guarded) under `media_path/apps/<app_id>/<version>/`.
 | POST | `/api/apps` | Admin | Install an app from the catalog. Body: `{app_id}`. 201 on success; 409 if already installed; 400 on bad id or failed sha256 integrity check. |
 | GET | `/api/apps/{app_id}` | Any member | One installed app. 404 when missing or disabled (non-admin). |
 | PATCH | `/api/apps/{app_id}` | Admin | Enable or disable an app. Body: `{enabled}`. |
-| DELETE | `/api/apps/{app_id}` | Admin | Uninstall an app — removes the bundle from disk; PR2 cascades per-user app data. |
+| DELETE | `/api/apps/{app_id}` | Admin | Uninstall an app — removes the bundle from disk; cascades all per-user `app_kv` rows. |
+| GET | `/api/apps/{app_id}/store` | Any member | List the caller's per-user KV entries for this app. Returns `{"items": {key: value}}`. |
+| GET | `/api/apps/{app_id}/store/{key}` | Any member | Read one KV entry. Returns `{"key", "value"}`. 404 if the key does not exist. |
+| PUT | `/api/apps/{app_id}/store/{key}` | Any member | Upsert a KV entry. Body: `{"value": <any JSON>}`. 413 if quota exceeded (500 keys / user, 64 KiB per value, 256-char key). 403 if the app is disabled. 404 if the app is not installed. |
+| DELETE | `/api/apps/{app_id}/store/{key}` | Any member | Delete one KV entry. Returns `{"status": "ok"}`. |
 
 ## HFS — Storage, backup, misc
 

@@ -20,10 +20,14 @@ committed row — no extra flush or sleep is needed.
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from socialhome.domain.apps import AppManifest, InstalledApp
+from socialhome.domain.user import User
 from socialhome.repositories.app_repo import SqliteAppRepo
+from socialhome.repositories.user_repo import SqliteUserRepo
 
 
 def _app(
@@ -41,6 +45,15 @@ def _app(
         installed_by=None,  # FK enforcement is ON; no real user row available
         installed_at="2026-06-02T00:00:00+00:00",
     )
+
+
+async def _seed_user(db) -> str:
+    """Insert a minimal local user row and return its user_id."""
+    user_id = uuid.uuid4().hex
+    username = f"testuser_{user_id[:8]}"
+    user = User(user_id=user_id, username=username, display_name="Test User")
+    await SqliteUserRepo(db).save(user)
+    return user_id
 
 
 @pytest.mark.asyncio
@@ -77,3 +90,77 @@ async def test_set_enabled_and_uninstall(db):
     assert (await repo.get("chess")).enabled is False
     await repo.uninstall("chess")
     assert await repo.get("chess") is None
+
+
+# ── KV store tests ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_kv_set_get_roundtrip(db):
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    await repo.kv_set(
+        "chess", uid, "game:1", '{"turn":"w"}', "2026-06-02T00:00:00+00:00"
+    )
+    got = await repo.kv_get("chess", uid, "game:1")
+    assert got is not None and got.value_json == '{"turn":"w"}'
+
+
+@pytest.mark.asyncio
+async def test_kv_set_upserts(db):
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    await repo.kv_set("chess", uid, "k", '"a"', "2026-06-02T00:00:00+00:00")
+    await repo.kv_set("chess", uid, "k", '"b"', "2026-06-02T00:01:00+00:00")
+    assert (await repo.kv_get("chess", uid, "k")).value_json == '"b"'
+    assert await repo.kv_count("chess", uid) == 1
+
+
+@pytest.mark.asyncio
+async def test_kv_list_and_delete(db):
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    await repo.kv_set("chess", uid, "a", "1", "2026-06-02T00:00:00+00:00")
+    await repo.kv_set("chess", uid, "b", "2", "2026-06-02T00:00:00+00:00")
+    assert [e.key for e in await repo.kv_list("chess", uid)] == ["a", "b"]
+    await repo.kv_delete("chess", uid, "a")
+    assert {e.key for e in await repo.kv_list("chess", uid)} == {"b"}
+
+
+@pytest.mark.asyncio
+async def test_kv_cascades_on_uninstall(db):
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    await repo.kv_set("chess", uid, "k", "1", "2026-06-02T00:00:00+00:00")
+    await repo.uninstall("chess")
+    assert await repo.kv_get("chess", uid, "k") is None
+    assert await repo.kv_count("chess", uid) == 0
+
+
+@pytest.mark.asyncio
+async def test_kv_cascades_on_user_delete(db):
+    """Deleting a user row must cascade-delete all their app_kv entries.
+
+    Proves the ``FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE`` constraint on the ``app_kv`` table.
+    """
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    await repo.kv_set(
+        "chess", uid, "game:1", '{"turn":"w"}', "2026-06-02T00:00:00+00:00"
+    )
+    # Confirm the row is there before deletion.
+    assert await repo.kv_count("chess", uid) == 1
+
+    # Hard-delete the user row; no user_repo.delete method exists so we use
+    # direct SQL (acceptable: this is a repo-layer test probing the DB schema).
+    await db.enqueue("DELETE FROM users WHERE user_id = ?", (uid,))
+
+    # The cascade must have removed the kv row.
+    assert await repo.kv_count("chess", uid) == 0
+    assert await repo.kv_get("chess", uid, "game:1") is None

@@ -55,7 +55,13 @@ from ..services.space_zone_service import (
     SpaceZoneNotFoundError,
 )
 from ..services.storage_quota_service import StorageQuotaExceeded
-from ..domain.apps import AppAlreadyInstalledError, AppIntegrityError, AppNotFoundError
+from ..domain.apps import (
+    AppAlreadyInstalledError,
+    AppIntegrityError,
+    AppNotEnabledError,
+    AppNotFoundError,
+    AppQuotaExceededError,
+)
 from ..services.moment_service import MomentNotFoundError, MomentRateLimitError
 from ..services.highlight_publication_service import (
     HighlightNotFoundError as HighlightPublicationNotFoundError,
@@ -186,6 +192,10 @@ class BaseView(web.View):
             # request (bad app_id, tampered catalog) — 400 UNPROCESSABLE
             # mirrors the existing ValueError convention.
             return error_response(400, "UNPROCESSABLE", str(exc))
+        except AppNotEnabledError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
+        except AppQuotaExceededError as exc:
+            return error_response(413, "QUOTA_EXCEEDED", str(exc))
         except HighlightPublicationError as exc:
             return error_response(502, "GFS_UNAVAILABLE", str(exc))
         except HighlightFrameLimitError as exc:

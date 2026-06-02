@@ -11,8 +11,10 @@ from socialhome.domain.apps import (
     AppIntegrityError,
     AppManifest,
     AppNotFoundError,
+    AppNotEnabledError,
     InstalledApp,
 )
+from socialhome.repositories.app_repo import SqliteAppRepo
 from socialhome.services.app_service import AppService
 
 from .conftest import _auth
@@ -422,3 +424,277 @@ async def test_delete_success_returns_ok(client, monkeypatch):
     assert r.status == 200
     body = await r.json()
     assert body == {"status": "ok"}
+
+
+# ── Store helpers ─────────────────────────────────────────────────────────
+
+
+def _make_installed_no_installer(
+    app_id: str = "com.example.hello",
+    enabled: bool = True,
+) -> InstalledApp:
+    """Like ``_make_installed`` but with ``installed_by=None`` to avoid FK issues."""
+    manifest = AppManifest(entry="index.js", icon="icon.png", capabilities=("read",))
+    return InstalledApp(
+        app_id=app_id,
+        name="Hello App",
+        version="1.0.0",
+        enabled=enabled,
+        manifest=manifest,
+        bundle_path=f"apps/{app_id}/1.0.0",
+        bundle_sha256="abc123",
+        source_url="https://example.com/hello.tgz",
+        installed_by=None,
+        installed_at="2026-06-01T00:00:00+00:00",
+    )
+
+
+async def _seed_installed_enabled_app(db, app_id: str = "com.example.hello") -> None:
+    """Insert an installed+enabled app row directly via SqliteAppRepo.
+
+    Uses ``installed_by=None`` to avoid a FK constraint on the users table
+    (the installer user may not have been seeded yet at call time).
+    """
+    repo = SqliteAppRepo(db)
+    app = _make_installed_no_installer(app_id=app_id, enabled=True)
+    await repo.install(app)
+
+
+async def _seed_second_user(
+    db, username: str = "carol", user_id: str = "carol-id"
+) -> str:
+    """Seed a second non-admin user and return their raw token."""
+    return await _seed_member(db, username=username, user_id=user_id)
+
+
+# ── GET /api/apps/{app_id}/store ────────────────────────────────────────
+
+
+async def test_store_list_empty_for_new_user(client):
+    """GET /store returns empty items dict when no keys have been set."""
+    await _seed_installed_enabled_app(client._db)
+    r = await client.get(
+        "/api/apps/com.example.hello/store",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"items": {}}
+
+
+async def test_store_list_requires_auth(client):
+    await _seed_installed_enabled_app(client._db)
+    r = await client.get("/api/apps/com.example.hello/store")
+    assert r.status == 401
+
+
+# ── PUT + GET /api/apps/{app_id}/store/{key} ────────────────────────────
+
+
+async def test_store_put_then_get(client):
+    """PUT a value then GET it back → 200 with the same value."""
+    await _seed_installed_enabled_app(client._db)
+
+    value = {"turn": "w"}
+    r = await client.put(
+        "/api/apps/com.example.hello/store/game1",
+        json={"value": value},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    put_body = await r.json()
+    assert put_body == {"key": "game1", "value": value}
+
+    r2 = await client.get(
+        "/api/apps/com.example.hello/store/game1",
+        headers=_auth(client._tok),
+    )
+    assert r2.status == 200
+    get_body = await r2.json()
+    assert get_body == {"key": "game1", "value": value}
+
+
+async def test_store_get_missing_key_404(client):
+    """GET a key that was never set → 404 NOT_FOUND."""
+    await _seed_installed_enabled_app(client._db)
+    r = await client.get(
+        "/api/apps/com.example.hello/store/no-such-key",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+    body = await r.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+async def test_store_on_uninstalled_app_404(client):
+    """Store op on an app_id not installed → 404 via AppNotFoundError."""
+    r = await client.get(
+        "/api/apps/com.example.not-installed/store/key",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+
+
+async def test_store_list_scoped_to_caller(client):
+    """User A's PUT does NOT appear in user B's GET /store.
+
+    We seed a second user (carol) and verify that after user A (admin) PUTs
+    a key, user B's store list is empty — store data is per-user-scoped.
+    """
+    await _seed_installed_enabled_app(client._db)
+
+    # User A (admin) puts a key
+    r = await client.put(
+        "/api/apps/com.example.hello/store/shared-key",
+        json={"value": "user-a-data"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+
+    # User B (carol) lists their own store — must be empty
+    carol_tok = await _seed_second_user(client._db)
+    r2 = await client.get(
+        "/api/apps/com.example.hello/store",
+        headers=_auth(carol_tok),
+    )
+    assert r2.status == 200
+    body = await r2.json()
+    # carol's store has no keys — user A's data is invisible
+    assert body == {"items": {}}
+
+
+async def test_store_value_too_large_413(client):
+    """PUT a value exceeding the byte quota → 413 QUOTA_EXCEEDED."""
+    await _seed_installed_enabled_app(client._db)
+
+    big_value = {"x": "a" * 70000}
+    r = await client.put(
+        "/api/apps/com.example.hello/store/big-key",
+        json={"value": big_value},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 413
+    body = await r.json()
+    assert body["error"]["code"] == "QUOTA_EXCEEDED"
+
+
+async def test_store_delete(client):
+    """PUT then DELETE then GET → 404 NOT_FOUND."""
+    await _seed_installed_enabled_app(client._db)
+
+    # PUT the key
+    await client.put(
+        "/api/apps/com.example.hello/store/temp-key",
+        json={"value": "to-be-deleted"},
+        headers=_auth(client._tok),
+    )
+
+    # DELETE
+    r_del = await client.delete(
+        "/api/apps/com.example.hello/store/temp-key",
+        headers=_auth(client._tok),
+    )
+    assert r_del.status == 200
+    body = await r_del.json()
+    assert body == {"status": "ok"}
+
+    # GET after delete → 404
+    r_get = await client.get(
+        "/api/apps/com.example.hello/store/temp-key",
+        headers=_auth(client._tok),
+    )
+    assert r_get.status == 404
+
+
+async def test_store_on_disabled_app_403(client, monkeypatch):
+    """Store op on a disabled app → 403 FORBIDDEN (AppNotEnabledError)."""
+    await _seed_installed_enabled_app(client._db)
+    monkeypatch.setattr(
+        AppService,
+        "store_get",
+        AsyncMock(side_effect=AppNotEnabledError("App disabled")),
+    )
+    r = await client.get(
+        "/api/apps/com.example.hello/store/any-key",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_store_put_missing_value_field_400(client):
+    """PUT without a 'value' field → 400 UNPROCESSABLE."""
+    await _seed_installed_enabled_app(client._db)
+    r = await client.put(
+        "/api/apps/com.example.hello/store/some-key",
+        json={"not_value": 42},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_store_preserves_sensitive_like_keys(client):
+    """PUT a value dict whose keys overlap SENSITIVE_FIELDS — GET must round-trip intact.
+
+    ``sanitise_for_api`` strips keys such as ``signature`` and ``endpoint`` from
+    any nested dict.  App KV values are opaque user data — stripping them silently
+    corrupts reads.  The store views must bypass sanitisation and pass the value
+    through untouched (web.json_response instead of self._json).
+    """
+    await _seed_installed_enabled_app(client._db)
+
+    # Use two SENSITIVE_FIELDS members so the test is robust.
+    payload = {
+        "signature": "abc123",
+        "endpoint": "https://push.example.com",
+        "score": 5,
+    }
+
+    r_put = await client.put(
+        "/api/apps/com.example.hello/store/prefs",
+        json={"value": payload},
+        headers=_auth(client._tok),
+    )
+    assert r_put.status == 200
+    put_body = await r_put.json()
+    assert put_body["value"] == payload, (
+        "PUT response must not strip sensitive-like keys from the value"
+    )
+
+    r_get = await client.get(
+        "/api/apps/com.example.hello/store/prefs",
+        headers=_auth(client._tok),
+    )
+    assert r_get.status == 200
+    get_body = await r_get.json()
+    assert get_body["value"] == payload, (
+        "GET response must not strip sensitive-like keys from the value"
+    )
+
+    # Verify the collection view also preserves the full value.
+    r_list = await client.get(
+        "/api/apps/com.example.hello/store",
+        headers=_auth(client._tok),
+    )
+    assert r_list.status == 200
+    list_body = await r_list.json()
+    assert list_body["items"]["prefs"] == payload, (
+        "GET /store (collection) must not strip sensitive-like keys from values"
+    )
+
+
+async def test_store_key_too_long_413(client):
+    """PUT to a key longer than 256 chars → 413 QUOTA_EXCEEDED."""
+    await _seed_installed_enabled_app(client._db)
+    long_key = "k" * 257
+    r = await client.put(
+        f"/api/apps/com.example.hello/store/{long_key}",
+        json={"value": {"ok": True}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 413
+    body = await r.json()
+    assert body["error"]["code"] == "QUOTA_EXCEEDED"

@@ -38,7 +38,9 @@ from ..domain.apps import (
     AppCatalogEntry,
     AppIntegrityError,
     AppManifest,
+    AppNotEnabledError,
     AppNotFoundError,
+    AppQuotaExceededError,
     InstalledApp,
 )
 from ..domain.events import AppInstalled, AppUninstalled
@@ -51,6 +53,10 @@ if TYPE_CHECKING:
     from ..infrastructure.event_bus import EventBus
 
 log = logging.getLogger(__name__)
+
+APP_KV_MAX_KEYS = 500
+APP_KV_MAX_VALUE_BYTES = 64 * 1024
+APP_KV_MAX_KEY_LEN = 256
 
 
 class AppService(BusPublisherMixin):
@@ -279,6 +285,92 @@ class AppService(BusPublisherMixin):
         updated = await self._repo.get(app_id)
         assert updated is not None  # just set it
         return updated
+
+    # ─── Per-user KV store ───────────────────────────────────────────────────
+
+    async def _require_enabled_app(self, app_id: str) -> InstalledApp:
+        """Return the installed app or raise AppNotFoundError / AppNotEnabledError."""
+        app = await self._repo.get(app_id)
+        if app is None:
+            raise AppNotFoundError(f"App {app_id!r} is not installed")
+        if not app.enabled:
+            raise AppNotEnabledError(f"App {app_id!r} is disabled")
+        return app
+
+    async def store_get(self, app_id: str, user_id: str, key: str) -> object:
+        """Return the parsed value for ``key`` in the per-user store.
+
+        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the
+        app is absent or disabled, and :class:`KeyError` if the key has not
+        been set.
+        """
+        await self._require_enabled_app(app_id)
+        entry = await self._repo.kv_get(app_id, user_id, key)
+        if entry is None:
+            raise KeyError(key)
+        return json.loads(entry.value_json)
+
+    async def store_list(self, app_id: str, user_id: str) -> dict[str, object]:
+        """Return all key→value pairs in the per-user store as a parsed dict.
+
+        Returns an empty dict when no keys have been set.  Raises
+        :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the app is
+        absent or disabled.
+        """
+        await self._require_enabled_app(app_id)
+        return {
+            e.key: json.loads(e.value_json)
+            for e in await self._repo.kv_list(app_id, user_id)
+        }
+
+    async def store_set(
+        self, app_id: str, user_id: str, key: str, value: object
+    ) -> None:
+        """Persist ``value`` under ``key`` in the per-user store.
+
+        Quota checks (enforced before any write):
+        - ``len(key) <= APP_KV_MAX_KEY_LEN`` — else :class:`AppQuotaExceededError`
+        - JSON-encoded ``value`` ≤ ``APP_KV_MAX_VALUE_BYTES`` bytes — else
+          :class:`AppQuotaExceededError`
+        - Adding a **new** key when the user already has ``APP_KV_MAX_KEYS``
+          keys → :class:`AppQuotaExceededError`.  Updating an existing key at
+          the cap is allowed.
+
+        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the
+        app is absent or disabled.
+        """
+        await self._require_enabled_app(app_id)
+
+        if len(key) > APP_KV_MAX_KEY_LEN:
+            raise AppQuotaExceededError(
+                f"Key length {len(key)} exceeds maximum {APP_KV_MAX_KEY_LEN}"
+            )
+
+        value_json = json.dumps(value)
+        if len(value_json.encode("utf-8")) > APP_KV_MAX_VALUE_BYTES:
+            raise AppQuotaExceededError(
+                f"Serialised value size exceeds maximum {APP_KV_MAX_VALUE_BYTES} bytes"
+            )
+
+        # Only check the key count when inserting a NEW key
+        if await self._repo.kv_get(app_id, user_id, key) is None:
+            if await self._repo.kv_count(app_id, user_id) >= APP_KV_MAX_KEYS:
+                raise AppQuotaExceededError(
+                    f"Per-user key count limit {APP_KV_MAX_KEYS} reached for app {app_id!r}"
+                )
+
+        await self._repo.kv_set(
+            app_id, user_id, key, value_json, datetime.now(timezone.utc).isoformat()
+        )
+
+    async def store_delete(self, app_id: str, user_id: str, key: str) -> None:
+        """Remove ``key`` from the per-user store (no-op if the key is absent).
+
+        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the
+        app is absent or disabled.
+        """
+        await self._require_enabled_app(app_id)
+        await self._repo.kv_delete(app_id, user_id, key)
 
     # ─── Sync helpers (run inside asyncio.to_thread) ─────────────────────────
 
