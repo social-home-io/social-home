@@ -23,6 +23,7 @@ import { CardSkeleton } from '@/components/SkeletonScreen'
 import { FollowedSpacesPicker } from '@/components/FollowedSpacesPicker'
 import { LocationMap } from '@/components/LocationMap'
 import NetworkMap from './NetworkMap'
+import { installedApps, loadInstalled } from '@/store/apps'
 import {
   AllClearCard,
   CatchUpCard,
@@ -96,6 +97,7 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
+    void loadInstalled()
     void refresh()
     let timer: ReturnType<typeof setTimeout> | null = null
     const debouncedRefresh = () => {
@@ -207,6 +209,7 @@ export default function DashboardPage() {
           followedCount={b.followed_space_ids.length}
           onManage={() => setPickerOpen(true)}
         />
+        <AppsCard />
         <QuickActionsCard />
         <NetworkCard />
 
@@ -405,5 +408,34 @@ function NetworkCard() {
     <section class="sh-welcome-card sh-welcome-card--network">
       <NetworkMap />
     </section>
+  )
+}
+
+/** Apps snapshot card — up to 4 enabled installed apps with a link
+ *  to the full Apps page. Hidden when no apps are installed so the
+ *  corner doesn't show an empty card on fresh installs. */
+function AppsCard() {
+  const apps = installedApps.value.filter(a => a.enabled).slice(0, 4)
+  if (apps.length === 0) return null
+  return (
+    <a class="sh-welcome-card" href="/apps">
+      <h2 class="sh-welcome-card__title">
+        <span aria-hidden="true">📦</span> Apps
+      </h2>
+      <ul class="sh-welcome-card__list">
+        {apps.map(app => (
+          <li key={app.app_id} class="sh-apps-corner-row">
+            {app.icon ? (
+              <img src={app.icon} alt="" class="sh-apps-corner-icon" aria-hidden="true" />
+            ) : (
+              <span class="sh-apps-corner-icon-placeholder" aria-hidden="true">📦</span>
+            )}
+            <span>{app.name}</span>
+            <span class="sh-muted sh-apps-corner-version">v{app.version}</span>
+          </li>
+        ))}
+      </ul>
+      <span class="sh-welcome-card__more">Open Apps →</span>
+    </a>
   )
 }

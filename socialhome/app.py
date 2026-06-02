@@ -116,6 +116,7 @@ from .repositories.space_media_outbox_repo import SqliteSpaceMediaOutboxRepo
 from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
 from .repositories.alias_repo import SqliteAliasRepo
+from .repositories.app_repo import SqliteAppRepo
 from .repositories.preferences_repo import SqlitePreferencesRepo
 from .repositories.pairing_relay_repo import SqlitePairingRelayRepo
 from .repositories.password_reset_repo import SqlitePasswordResetRepo
@@ -254,6 +255,8 @@ from .services.gallery_service import GalleryService
 from .services.system_album_bridge import SystemAlbumBridge
 from .services.pairing_relay_queue import PairingRelayQueue
 from .services.alias_service import AliasResolver, AliasService
+from .services.app_catalog_service import AppCatalogService
+from .services.app_service import AppService
 from .services.preferences_service import PreferencesService
 from .services.page_conflict_service import PageConflictService
 from .services.poll_service import PollService
@@ -278,6 +281,20 @@ from .services.typing_service import TypingService
 from .services.call_service import CallSignalingService, StaleCallCleanupScheduler
 
 log = logging.getLogger(__name__)
+
+
+async def _download_bytes(url: str) -> bytes:
+    """GET *url* and return the raw response body.
+
+    Opens a short-lived :class:`aiohttp.ClientSession` per call so it can be
+    used before the shared app session is available (e.g. during catalog
+    fetches in ``AppCatalogService``).  Calls ``raise_for_status()`` so any
+    non-2xx response surfaces as an :class:`aiohttp.ClientResponseError`.
+    """
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            return await resp.read()
 
 
 async def _redeliver_envelope(
@@ -465,6 +482,7 @@ def _build_repos(db: AsyncDatabase):
         dm_contact=SqliteDmContactRepo(db),
         dm_media_outbox=SqliteDmMediaOutboxRepo(db),
         space_media_outbox=SqliteSpaceMediaOutboxRepo(db),
+        app=SqliteAppRepo(db),
         preferences=SqlitePreferencesRepo(db),
         presence=SqlitePresenceRepo(db),
         public_space=SqlitePublicSpaceRepo(db),
@@ -1419,6 +1437,18 @@ def create_app(config: Config | None = None) -> web.Application:
         bus=bus,
     )
 
+    # ── App service (Social Home Apps install / uninstall / enable) ──────
+    app_service = AppService(
+        repo=repos.app,
+        catalog=AppCatalogService(
+            session_factory=lambda: aiohttp.ClientSession(),
+            catalog_url=config.apps_catalog_url,
+        ),
+        media_path=pathlib.Path(config.media_path),
+        downloader=_download_bytes,
+        bus=bus,
+    )
+
     # Feature gating for §18: wire household toggle enforcement into
     # every service that owns a toggleable surface. Disabling
     # ``feat_tasks`` immediately makes POST /api/tasks return 403.
@@ -1759,6 +1789,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.child_protection_service_key] = child_protection_service
     app[K.typing_service_key] = typing_service
     app[K.preferences_service_key] = preferences_service
+    app[K.app_service_key] = app_service
     app[K.alias_service_key] = alias_service
     app[K.alias_resolver_key] = alias_resolver
     app[K.data_export_service_key] = data_export_service

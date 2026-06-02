@@ -141,6 +141,7 @@ const BROWSE_GROUP: SideNavGroup = {
     { key: 'bazaar',  label: 'Bazaar', href: '/bazaar',  icon: 'bazaar',
       gate: s => !s.hide_bazaar },
     { key: 'corner',  label: 'Corner', href: '/corner',  icon: 'corner' },
+    { key: 'apps',    label: 'Apps',   href: '/apps',    icon: 'apps' },
   ],
 }
 

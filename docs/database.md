@@ -247,6 +247,12 @@ themselves moments and link to the conversation root via
 |---|---|
 | `search_index` (FTS5 virtual) | Unified contentless full-text index across posts, space posts, DM messages, and pages. `scope` discriminates the source table; `ref_id` is the source-row id. Tokenizer is `unicode61 remove_diacritics 2`. |
 
+## Apps
+
+| Table | Purpose |
+|---|---|
+| `installed_apps` | Registry of admin-installed embedded JS apps. One row per installed app: `app_id` (PK, catalog slug e.g. `'chess'`), `name`, `version` (semver of the installed bundle), `enabled` (0/1 — non-admins only see enabled apps), `manifest_json` (capabilities, entry file, icon — validated at install), `bundle_path` (relative dir under `media_path/apps/` where the bundle was unpacked), `bundle_sha256` (hex digest verified against the catalog before unpack; rejects if mismatched), `source_url` (the GitHub release asset URL the bundle came from), `installed_by` (FK `users.user_id` ON DELETE SET NULL — NULL when the installing admin's account is removed), and `installed_at` (UTC ISO 8601). PR2 will add `app_kv` (per-user key/value storage) with a FK CASCADE on `app_id`. Added in `0020_installed_apps.sql`. |
+
 ## Schema source
 
 - **File**: `socialhome/migrations/0001_initial.sql`
@@ -265,3 +271,4 @@ section above and the `Sqlite*Repo` that owns it. See `CLAUDE.md` →
 | `0004_calendar_client_event_uuid.sql` | Adds nullable `client_event_uuid TEXT` to `calendar_events`. The SPA composer mints one v4 UUID before a multi-target fan-out and stamps it on every POST in the batch so the resulting rows can be grouped back into one agenda card by intent (issue #327). Pre-existing rows stay NULL; the SPA's content-key fallback in `groupSharedEvents` covers them. A partial index on the column powers cross-household lookups when the federation envelope arrives with a uuid. |
 | `0006_share_home.sql` | Adds `share_home INTEGER NOT NULL DEFAULT 1` to `remote_instances`. Controls per-pair home-coordinate sharing: `1` (default) includes the peer in `LOCAL_HOME_LOCATION_CHANGED` fan-out; `0` excludes it and fires a one-shot null-coord revoke envelope on the flip. Pre-existing confirmed pairs backfill to `1` (sharing on, matching prior behaviour). See `docs/protocol/home-location.md` — Revoking access. |
 | `0007_preferences_rename.sql` | Renames `household_features` to `preferences` and extends it into a polymorphic table. Adds `feat_presence`, `feat_gallery` (default 1), `hide_highlights`, `hide_momentum`, `hide_bazaar` (default 0), and the `id` primary key is repurposed to hold `'household'` for the household row and a literal `user_id` for per-user rows. The old `feat_highlights` / `feat_momentum` household-gate columns are dropped — those features are now always enabled at the household level and can only be hidden per-user via the new `hide_*` columns. |
+| `0020_installed_apps.sql` | Creates `installed_apps` — the registry of admin-installed embedded JS apps. See the **Apps** domain section above. |

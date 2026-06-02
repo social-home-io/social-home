@@ -12,7 +12,7 @@ export type SideNavIconName =
   | 'feed' | 'calendar' | 'tasks' | 'shopping' | 'presence'
   | 'gallery' | 'pages' | 'stickies'
   | 'messages' | 'calls' | 'highlights' | 'momentum'
-  | 'spaces' | 'bazaar' | 'corner'
+  | 'spaces' | 'bazaar' | 'corner' | 'apps'
   | 'parent-control' | 'connections' | 'admin' | 'person'
 
 interface Props {
@@ -169,6 +169,18 @@ const GLYPHS: Record<SideNavIconName, JSX.Element> = {
     <svg {...COMMON}>
       <circle cx="12" cy="8" r="3.6" />
       <path d="M5 20a7 7 0 0 1 14 0" />
+    </svg>
+  ),
+  apps: (
+    /* Four rounded tiles arranged in a 2×2 grid — universally
+     * recognised as "app launcher / installed apps". Matches the
+     * Spaces icon's grid shape but uses rounder corners (rx=3)
+     * to signal "app" not "space category". */
+    <svg {...COMMON}>
+      <rect x="3"  y="3"  width="8" height="8" rx="2" />
+      <rect x="13" y="3"  width="8" height="8" rx="2" />
+      <rect x="3"  y="13" width="8" height="8" rx="2" />
+      <rect x="13" y="13" width="8" height="8" rx="2" />
     </svg>
   ),
 }

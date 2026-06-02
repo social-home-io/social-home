@@ -41,6 +41,35 @@ instance's Ed25519 key (with optional ML-DSA-65 hybrid). A compromised
 or malicious GFS can disrupt discovery and push, but cannot read or
 forge content.
 
+### Sign-off: Social Home Apps execute fetched third-party JavaScript
+
+Social Home Apps (PR1 and later) represent an **explicit, bounded
+exception** to the "no third-party trust" posture: an admin may install
+an app bundle that originates from the `socialhome-apps` GitHub
+releases and is therefore third-party code that runs on the
+household's server. Three mitigations gate this before any code executes:
+
+1. **sha256 pinning.** The catalog entry for every app includes a
+   `sha256` hex digest. `AppService` downloads the bundle tarball and
+   verifies the digest before touching the filesystem — a mismatch
+   aborts with an error and the bundle is never unpacked.
+2. **Path-traversal guard + media containment.** Bundle entries are
+   unpacked only when their resolved path stays within
+   `media_path/apps/<app_id>/<version>/`. Any entry that would escape
+   that directory is rejected and the whole install is rolled back.
+3. **Sandboxed-iframe runtime (PR3).** App JavaScript is loaded into
+   a sandboxed `<iframe>` with an opaque origin and a
+   `Content-Security-Policy` of `connect-src 'none'`. All host
+   interaction goes through a postMessage bridge that withholds the
+   bearer token and limits surface to documented app APIs. The runtime
+   sandbox is the layer that makes executing fetched code tolerable;
+   until PR3 ships, installed apps are registered but not yet executed.
+
+Reviewers authorising a change to `AppService` install flow, the
+sandbox policy, or the postMessage bridge MUST treat any weakening of
+these three mitigations as a §2-principle change requiring explicit
+sign-off.
+
 ## Plaintext locally, encrypted on the wire
 
 Local SQLite stores plaintext rows — that is your data, on your disk,
