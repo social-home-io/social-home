@@ -65,7 +65,6 @@ function joinModeChip(mode: DirectoryEntry['join_mode']) {
       return { cls: 'sh-join-mode-chip sh-join-mode-chip--open', icon: '🔓', label: 'Open to join' }
     case 'request':
       return { cls: 'sh-join-mode-chip sh-join-mode-chip--request', icon: '✉', label: 'Approval required' }
-    case 'link':
     case 'invite_only':
       return { cls: 'sh-join-mode-chip sh-join-mode-chip--invite', icon: '🎟', label: 'Invite-only' }
   }
@@ -74,7 +73,7 @@ function joinModeChip(mode: DirectoryEntry['join_mode']) {
 function decidePrimary(entry: DirectoryEntry): SpaceCardAction {
   if (entry.already_member) return { kind: 'open' }
   if (entry.request_pending) return { kind: 'pending' }
-  if (entry.join_mode === 'invite_only' || entry.join_mode === 'link') return { kind: 'invite-only' }
+  if (entry.join_mode === 'invite_only') return { kind: 'invite-only' }
   // Remote + unpaired = must pair first before joining / requesting.
   if (entry.scope === 'global' && !entry.host_is_paired) return { kind: 'pair-first' }
   if (entry.scope === 'public' && !entry.host_is_paired) return { kind: 'pair-first' }

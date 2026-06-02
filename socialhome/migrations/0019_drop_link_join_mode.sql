@@ -1,0 +1,24 @@
+-- Drop the unused ``link`` join mode.
+--
+-- ``JoinMode.LINK`` was defined and offered in the SPA, but the backend
+-- never branched on it: ``request_join`` only gated ``invite_only``, and the
+-- invite-token redeem path ignores ``join_mode`` entirely, so ``link`` behaved
+-- identically to ``invite_only`` for the join-request button (the SPA already
+-- badged ``link`` spaces as "Invite required"). Removing the enum value means
+-- any surviving ``join_mode = 'link'`` row would fail ``JoinMode(...)`` parse,
+-- so rewrite those rows to the mode they were already presented as.
+--
+-- Migration audit (CLAUDE.md):
+--   1. Audited every join path — ``request_join`` (space_service.py),
+--      ``redeem_invite_token``/``accept_invite_token``, and the SPA badge
+--      logic (SpaceCard / SpacePublicDetailPage). None enforced ``link`` as a
+--      distinct mode; all treated it as invite-only or ignored it.
+--   2. Alternative rejected — keeping the enum value and merely hiding it from
+--      the UI leaves a dead, selectable-via-API mode and a parse value with no
+--      behaviour. The user asked to drop it; tolerant parsing would only hide
+--      the data-shape debt.
+--   3. Smallest change — a single targeted UPDATE of the (typically zero)
+--      ``link`` rows to ``invite_only`` (the mode they already displayed as);
+--      no schema/column change, no table rewrite.
+
+UPDATE spaces SET join_mode = 'invite_only' WHERE join_mode = 'link';
