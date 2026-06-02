@@ -128,6 +128,12 @@ class AppFederationService:
         """
         await self._require_enabled(app_id)
         session_id = uuid4().hex
+        # NOTE: actor_user_id is intentionally NOT included in the wire payload.
+        # A stable per-user identifier sent cross-household is a tracking vector
+        # (§FIX-I2).  The peer already gets from_instance (the household) and
+        # session_id, which fully scope the session.  If an app needs to show
+        # who initiated, it should exchange that identity in-band as app data.
+        _ = actor_user_id  # kept in signature so routes don't need to change
         await self._federation.send_event(
             to_instance_id=peer_instance_id,
             event_type=FederationEventType.APP_SESSION,
@@ -135,7 +141,6 @@ class AppFederationService:
                 "app_id": app_id,
                 "session_id": session_id,
                 "verb": "open",
-                "from_user": actor_user_id,
             },
         )
         return session_id

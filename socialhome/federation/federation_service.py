@@ -590,6 +590,17 @@ class FederationService:
             raw = self._encoder.decrypt_bytes(payload_bytes, session_key)
         except Exception as exc:
             raise ValueError(f"Failed to decrypt app payload: {exc}") from exc
+        # Verify payload integrity: sha256(plaintext) must match the hash inside
+        # the signed+encrypted metadata — same constant-time check as the media
+        # handler's chunk_sha256, preventing payload-splice attacks by a relay.
+        expected_sha = str(meta.get("payload_sha256") or "")
+        actual_sha = b64url_encode(hashlib.sha256(raw).digest())
+        if not expected_sha or not hmac.compare_digest(expected_sha, actual_sha):
+            log.warning(
+                "app frame payload_sha256 mismatch from %s — dropping",
+                instance_id,
+            )
+            return
         try:
             decoded_payload = _loads(raw)
         except Exception as exc:
@@ -1154,10 +1165,17 @@ class FederationService:
                 instance.id,
             )
             return None
+        # Serialize the plaintext payload before encrypting so we can hash it.
+        payload_plaintext = _dumps(payload).encode("utf-8")
+        payload_sha256 = b64url_encode(hashlib.sha256(payload_plaintext).digest())
         metadata = {
             "app_id": app_id,
             "session_id": session_id,
             "app_aead_suite": APP_AEAD_SUITE_AESGCM_256,
+            # Integrity binding: ties the binary payload to the signed envelope.
+            # Mirror of _send_media_binary's chunk_sha256 — prevents a relay from
+            # splicing payload_2 under header_1 (signature covers the hash).
+            "payload_sha256": payload_sha256,
         }
         encrypted_payload = self._encrypt_payload(_dumps(metadata), session_key)
         msg_id = str(uuid.uuid4())
@@ -1171,6 +1189,7 @@ class FederationService:
             "timestamp": timestamp,
             "encrypted_payload": encrypted_payload,
             "space_id": None,
+            # Envelope wire-shape version (not the peer capability proto_version).
             "proto_version": 1,
             "sig_suite": effective_suite,
         }
@@ -1180,9 +1199,7 @@ class FederationService:
             suite=effective_suite,
         )
         # Seal the app payload as binary (not inside the JSON envelope).
-        payload_bytes = self._encoder.encrypt_bytes(
-            _dumps(payload).encode("utf-8"), session_key
-        )
+        payload_bytes = self._encoder.encrypt_bytes(payload_plaintext, session_key)
         sent = await self._transport.send_app(
             instance=instance,
             header_dict=envelope_dict,

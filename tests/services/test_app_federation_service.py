@@ -242,7 +242,12 @@ async def test_list_peers_empty_when_no_confirmed():
 
 @pytest.mark.asyncio
 async def test_open_session_sends_app_session_event():
-    """open_session fires APP_SESSION with app_id, session_id, verb, from_user."""
+    """open_session fires APP_SESSION with app_id, session_id, verb.
+
+    from_user is deliberately absent from the wire payload — sending a
+    stable per-user identifier cross-household is a tracking vector (FIX-I2).
+    The peer receives from_instance (the household) + session_id instead.
+    """
     app = _make_installed_app("chess")
     svc, federation, _ = _make_svc(apps={"chess": app})
     session_id = await svc.open_session(
@@ -257,7 +262,8 @@ async def test_open_session_sends_app_session_event():
     assert ev["payload"]["app_id"] == "chess"
     assert ev["payload"]["session_id"] == session_id
     assert ev["payload"]["verb"] == "open"
-    assert ev["payload"]["from_user"] == "user-1"
+    # from_user MUST NOT appear on the wire (tracking vector).
+    assert "from_user" not in ev["payload"]
     # session_id is a non-empty hex string
     assert len(session_id) == 32
     assert all(c in "0123456789abcdef" for c in session_id)
@@ -390,7 +396,14 @@ async def test_inbound_app_message_delivers_to_local_users():
 
 @pytest.mark.asyncio
 async def test_inbound_app_session_delivers_full_payload():
-    """APP_SESSION event → entire payload dict forwarded (verb, from_user, …)."""
+    """APP_SESSION event → entire payload dict forwarded (verb, …).
+
+    from_user is no longer included in the APP_SESSION wire payload (FIX-I2).
+    The inbound handler passes whatever fields arrive through to the SPA —
+    that is fine, the SPA is the appropriate place to decide what to display.
+    We verify that the mandatory fields (verb, app_id, session_id) are
+    forwarded and that a compliant sender does NOT put from_user on the wire.
+    """
     app = _make_installed_app("chess")
     users = [_make_user("u1")]
     svc, _, ws = _make_svc(apps={"chess": app}, users=users)
@@ -401,7 +414,7 @@ async def test_inbound_app_session_delivers_full_payload():
             "app_id": "chess",
             "session_id": "sess-2",
             "verb": "open",
-            "from_user": "remote-user-x",
+            # Compliant sender does NOT include from_user.
         },
     )
     await svc.on_inbound_event(event)
@@ -410,9 +423,10 @@ async def test_inbound_app_session_delivers_full_payload():
     frame = ws.calls[0]["payload"]
     assert frame["type"] == "app.message"
     assert frame["session_id"] == "sess-2"
-    # Entire session payload forwarded
+    # Mandatory fields forwarded.
     assert frame["payload"]["verb"] == "open"
-    assert frame["payload"]["from_user"] == "remote-user-x"
+    # from_user must NOT be present in a compliant APP_SESSION payload.
+    assert "from_user" not in frame["payload"]
 
 
 @pytest.mark.asyncio

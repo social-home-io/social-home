@@ -2094,16 +2094,27 @@ async def test_send_app_message_uses_binary_when_peer_supports():
     assert header["from_instance"] == p.a_id
     assert header["proto_version"] == 1
     assert "signatures" in header
-    # Decrypt the metadata — should have app_id / session_id / aead_suite.
+    # Decrypt the metadata — should have app_id / session_id / aead_suite /
+    # payload_sha256 (integrity binding — FIX-I1).
     meta = orjson.loads(
         p.svc_b._encoder.decrypt_payload(header["encrypted_payload"], p.session)
     )
     assert meta["app_id"] == "chess"
     assert meta["session_id"] == "sess-1"
     assert meta["app_aead_suite"] == APP_AEAD_SUITE_AESGCM_256
+    # payload_sha256 must be present and match the decrypted plaintext.
+    assert "payload_sha256" in meta
     # Application payload is sealed — decrypt binary payload.
     raw = p.svc_b._encoder.decrypt_bytes(payload_bytes, p.session)
     assert orjson.loads(raw) == app_payload
+    # Verify the sha256 binding.
+    import base64 as _b64
+    import hashlib as _hashlib
+
+    expected_sha = (
+        _b64.urlsafe_b64encode(_hashlib.sha256(raw).digest()).rstrip(b"=").decode()
+    )
+    assert meta["payload_sha256"] == expected_sha
 
 
 @pytest.mark.asyncio
@@ -2252,6 +2263,53 @@ async def test_app_inbound_handler_rejects_unknown_aead_suite():
         await p.svc_b._app_inbound_handler(
             p.a_id, orjson.dumps(envelope), payload_bytes
         )
+
+
+@pytest.mark.asyncio
+async def test_app_inbound_handler_rejects_tampered_payload():
+    """_app_inbound_handler drops frames whose payload doesn't match payload_sha256.
+
+    This verifies FIX-I1: a relay that splices payload_2 under header_1 is
+    rejected because sha256(tampered_payload) != payload_sha256 in the
+    signed+encrypted metadata.  The handler logs a warning and returns without
+    calling on_inbound_message (i.e. the frame is silently dropped).
+    """
+    import orjson as _orjson
+
+    p = _paired_app()
+
+    inbound_calls: list[tuple] = []
+
+    class _FakeAppFed:
+        async def on_inbound_message(self, instance_id, app_id, session_id, payload):
+            inbound_calls.append((instance_id, app_id, session_id, payload))
+
+    p.svc_b.attach_apps(_FakeAppFed())
+
+    # Send a legitimate frame from A so we get a valid signed header.
+    await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-tamper",
+        payload={"move": "e2e4"},
+    )
+    assert p.cap.app is not None
+    header, _orig_payload_bytes = p.cap.app
+
+    # Tamper: encrypt a DIFFERENT payload using the same session key, but feed
+    # it together with the original signed header whose payload_sha256 binds the
+    # original plaintext.  The sha256 of the tampered payload won't match.
+    from socialhome.federation.encoder import FederationEncoder
+
+    enc_a = FederationEncoder(p.a_kp.private_key)
+    tampered_plaintext = b'{"move": "INJECTED"}'
+    tampered_payload_bytes = enc_a.encrypt_bytes(tampered_plaintext, p.session)
+
+    # Feed tampered frame to svc_b — must NOT reach on_inbound_message.
+    await p.svc_b._app_inbound_handler(
+        p.a_id, _orjson.dumps(header), tampered_payload_bytes
+    )
+    assert inbound_calls == [], "tampered payload must be dropped, not delivered"
 
 
 @pytest.mark.asyncio
