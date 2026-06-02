@@ -82,7 +82,6 @@ export function SpaceCreateDialog() {
               onChange={(e) => joinMode.value = (e.target as HTMLSelectElement).value}>
               <option value="invite_only">Invite only</option>
               <option value="open">Open (anyone can join)</option>
-              <option value="link">Link (join via invite link)</option>
               <option value="request">Request (admin approves)</option>
             </select>
           </label>

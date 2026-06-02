@@ -555,7 +555,6 @@ class SpaceType(StrEnum):
 class JoinMode(StrEnum):
     INVITE_ONLY = "invite_only"
     OPEN = "open"
-    LINK = "link"
     REQUEST = "request"
 
 

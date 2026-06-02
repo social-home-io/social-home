@@ -260,7 +260,7 @@ export interface Space {
   description: string | null
   emoji: string | null
   space_type: 'private' | 'household' | 'public' | 'global'
-  join_mode: 'invite_only' | 'open' | 'link' | 'request'
+  join_mode: 'invite_only' | 'open' | 'request'
   features: SpaceFeatures
   retention_days: number | null
   /** When true, HA automations may post into this space via the
@@ -539,7 +539,7 @@ export interface DirectoryEntry {
   /** Local/household spaces use the same shape — scope tells us which
    *  browser tab / chip to surface the card in. */
   scope: 'household' | 'public' | 'global'
-  join_mode: 'invite_only' | 'open' | 'link' | 'request'
+  join_mode: 'invite_only' | 'open' | 'request'
   min_age: number
   target_audience: string
   /** Present only on `scope === 'household'` rows built from your own

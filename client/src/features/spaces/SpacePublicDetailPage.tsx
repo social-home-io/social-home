@@ -169,7 +169,7 @@ export default function SpacePublicDetailPage() {
   const primaryLabel =
     entry.already_member ? 'Open space'
       : entry.request_pending ? 'Request pending'
-      : entry.join_mode === 'invite_only' || entry.join_mode === 'link'
+      : entry.join_mode === 'invite_only'
         ? 'Invite required'
       : entry.scope !== 'household' && !entry.host_is_paired
         ? `Pair with ${entry.host_display_name} first`
@@ -179,7 +179,6 @@ export default function SpacePublicDetailPage() {
   const primaryDisabled =
     entry.request_pending
     || entry.join_mode === 'invite_only'
-    || entry.join_mode === 'link'
     || (entry.scope !== 'household' && !entry.host_is_paired)
 
   return (

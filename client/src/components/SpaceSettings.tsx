@@ -315,7 +315,6 @@ export function SpaceSettings({
           <select value={joinMode.value} onChange={(e) => joinMode.value = (e.target as HTMLSelectElement).value as any}>
             <option value="invite_only">Invite only</option>
             <option value="open">Open</option>
-            <option value="link">Link</option>
             <option value="request">Request</option>
           </select>
         </label>
