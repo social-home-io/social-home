@@ -76,6 +76,18 @@ export async function setEnabled(appId: string, enabled: boolean): Promise<void>
   installedApps.value = installedApps.value.map(a => a.app_id === appId ? updated : a)
 }
 
+export interface AppRuntime {
+  app_id:       string
+  name:         string
+  entry_url:    string
+  self_user_id: string
+  capabilities: string[]
+}
+
+export async function getRuntime(appId: string): Promise<AppRuntime> {
+  return await api.get(`/api/apps/${encodeURIComponent(appId)}/runtime`) as AppRuntime
+}
+
 /** Test helper — reset signals without hitting the API. */
 export function _resetAppsForTest(): void {
   installedApps.value   = []

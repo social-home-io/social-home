@@ -29,6 +29,7 @@ import { Button } from '@/components/Button'
 import { Modal } from '@/components/Modal'
 import { showToast } from '@/components/Toast'
 import { ApiError } from '@/api'
+import { addBase } from '@/baseUrl'
 
 export default function AppsPage() {
   useTitle('Apps')
@@ -168,16 +169,24 @@ function AppCard({ app, isAdmin }: { app: InstalledApp; isAdmin: boolean }) {
         </div>
       )}
 
-      {isAdmin && (
-        <div class="sh-app-card__actions">
+      <div class="sh-app-card__actions">
+        {app.enabled && (
+          <Button
+            variant="primary"
+            onClick={() => { window.location.href = addBase(`/apps/${encodeURIComponent(app.app_id)}`) }}
+          >
+            Open
+          </Button>
+        )}
+        {isAdmin && (
           <Button
             variant="danger"
             onClick={() => setUninstallOpen(true)}
           >
             Uninstall
           </Button>
-        </div>
-      )}
+        )}
+      </div>
 
       <Modal
         open={uninstallOpen}
