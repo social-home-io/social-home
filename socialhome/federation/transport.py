@@ -42,6 +42,7 @@ import aiolibdatachannel as rtc
 import orjson
 from aiohttp import ClientTimeout
 
+from . import app_framing
 from . import media_framing
 from ..domain.events import PeerTransportChanged
 from ..domain.federation import DeliveryResult, FederationEventType, RemoteInstance
@@ -147,6 +148,13 @@ _InboundCallback = Callable[[dict], Awaitable[None]]
 # loop discards it, so the return type is intentionally ``Any``.
 _MediaInboundCallback = Callable[[str, bytes, bytes], Awaitable[Any]]
 
+# Inbound binary app frames on ``fed-app-v1`` follow the same signature
+# as the media callback — ``(instance_id, header_bytes, payload_bytes)``.
+# The payload is an AES-256-GCM-sealed app message; the header is the
+# signed federation envelope verbatim so the §24.11 pipeline can
+# re-validate the exact signed bytes.
+_AppInboundCallback = Callable[[str, bytes, bytes], Awaitable[Any]]
+
 
 def _build_rtc_config(ice_servers: list[dict]) -> rtc.RTCConfiguration:
     """Flatten a Chrome-style ``ice_servers`` list into an
@@ -219,6 +227,10 @@ class _RtcPeer:
         "_media_channel",
         "_media_open",
         "_media_buf",
+        "_app_inbound",
+        "_app_channel",
+        "_app_open",
+        "_app_buf",
     )
 
     def __init__(
@@ -233,6 +245,7 @@ class _RtcPeer:
         polite: bool = False,
         on_failed: Callable[[str], Awaitable[None]] | None = None,
         media_inbound: _MediaInboundCallback | None = None,
+        app_inbound: _AppInboundCallback | None = None,
     ) -> None:
         self.instance_id = instance_id
         self._ice_servers = ice_servers or []
@@ -252,6 +265,15 @@ class _RtcPeer:
         self._media_channel: Any | None = None
         self._media_open = asyncio.Event()
         self._media_buf = bytearray()
+        # Third DataChannel — ``fed-app-v1`` — carries small app-to-app
+        # messages (chess moves, whiteboard ops, custom mini-app payloads)
+        # as binary frames. Mirrors the media channel: created in the same
+        # offer so no extra ICE/DTLS/TURN handshake is needed. ``_app_buf``
+        # reassembles frames split/coalesced across SCTP messages.
+        self._app_inbound = app_inbound
+        self._app_channel: Any | None = None
+        self._app_open = asyncio.Event()
+        self._app_buf = bytearray()
         self._loop: asyncio.AbstractEventLoop | None = None
         # Notified when the PC transitions to ``RTCState.FAILED`` so the
         # parent transport can evict this peer from its registry and
@@ -328,9 +350,19 @@ class _RtcPeer:
             media_framing.CHANNEL_LABEL,
         )
         self._media_channel.set_buffered_amount_low_threshold(self._send_hwm // 2)
+        # Third channel for binary app messages, created up-front (not lazily)
+        # so it negotiates as part of this single offer — adding a channel
+        # after the PC is established would force a renegotiation the
+        # perfect-negotiation glare logic isn't tuned for. One idle channel
+        # on a peering that never sends app messages is cheap.
+        self._app_channel = await self._pc.create_data_channel(
+            app_framing.CHANNEL_LABEL,
+        )
+        self._app_channel.set_buffered_amount_low_threshold(self._send_hwm // 2)
         # Tasks bound to the pc: auto-cancelled on pc.close().
         self._pc.spawn_task(self._drain_channel(self._channel))
         self._pc.spawn_task(self._drain_media_channel(self._media_channel))
+        self._pc.spawn_task(self._drain_app_channel(self._app_channel))
         self._pc.spawn_task(self._drain_events())
 
         local = await self._pc.set_local_description("offer")
@@ -641,13 +673,12 @@ class _RtcPeer:
     async def _drain_incoming_channel(self) -> None:
         """Answerer path: latch the provider's DataChannels as they arrive.
 
-        Two channels ride this one PeerConnection — ``fed-v1`` (control
-        + routine JSON) and ``fed-media-v1`` (binary media). We must keep
-        iterating until both have arrived; returning after the first (the
-        old single-channel behaviour) would strand the media channel and
-        silently force media onto the JSON fallback forever. Unknown
-        labels are ignored. The iterator ends naturally when the PC
-        closes.
+        Three channels ride this one PeerConnection — ``fed-v1`` (control
+        + routine JSON), ``fed-media-v1`` (binary media), and ``fed-app-v1``
+        (binary app messages). We must keep iterating until all have arrived;
+        returning after the first would strand the remaining channels and
+        silently force their traffic onto the JSON fallback forever. Unknown
+        labels are ignored. The iterator ends naturally when the PC closes.
         """
         pc = self._pc
         assert pc is not None  # spawned from accept_offer
@@ -661,6 +692,10 @@ class _RtcPeer:
                     self._media_channel = ch
                     ch.set_buffered_amount_low_threshold(self._send_hwm // 2)
                     pc.spawn_task(self._drain_media_channel(ch))
+                elif ch.label == app_framing.CHANNEL_LABEL:
+                    self._app_channel = ch
+                    ch.set_buffered_amount_low_threshold(self._send_hwm // 2)
+                    pc.spawn_task(self._drain_app_channel(ch))
                 else:
                     log.debug(
                         "fed RTC peer %s: ignoring incoming channel %r",
@@ -782,6 +817,78 @@ class _RtcPeer:
         log.info("fed RTC media channel closed to %s", self.instance_id)
         self._media_open.clear()
 
+    async def _drain_app_channel(self, channel) -> None:
+        """Consume inbound binary app frames on ``fed-app-v1``.
+
+        Mirrors :meth:`_drain_media_channel` but the wire carries app-to-app
+        messages (:mod:`app_framing`). SCTP preserves message boundaries so
+        one ``send`` is normally one whole frame; the running ``_app_buf``
+        nonetheless tolerates a peer that coalesced/split frames across
+        messages. Each ``APP_MSG`` frame's header (the signed envelope) +
+        payload (encrypted app message) is handed to ``_app_inbound`` for
+        §24.11 re-validation — nothing is trusted here on the strength of
+        the channel alone.
+        """
+        try:
+            await channel.wait_open()
+        except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
+            log.warning(
+                "fed RTC app channel never opened to %s: %s",
+                self.instance_id,
+                exc,
+            )
+            return
+        log.info("fed RTC app channel open to %s", self.instance_id)
+        self._app_open.set()
+        try:
+            async for msg in channel:
+                if isinstance(msg, str):
+                    # A string on the binary app channel is a protocol
+                    # violation; coerce so framing rejects it cleanly.
+                    raw = msg.encode("utf-8")
+                elif isinstance(msg, (bytes, bytearray)):
+                    raw = bytes(msg)
+                else:
+                    raw = bytes(msg)
+                self._app_buf.extend(raw)
+                try:
+                    frames, leftover = app_framing.iter_complete_frames(
+                        bytes(self._app_buf),
+                    )
+                except app_framing.AppFramingError as exc:
+                    log.warning(
+                        "fed RTC app frame from %s malformed (%s) — resetting buffer",
+                        self.instance_id,
+                        exc,
+                    )
+                    self._app_buf.clear()
+                    continue
+                self._app_buf = bytearray(leftover)
+                for frame in frames:
+                    if frame.frame_type != app_framing.FRAME_TYPE_APP_MSG:
+                        # Forward-compat: a newer peer may ship frame
+                        # types we don't know yet — skip, don't error.
+                        log.debug(
+                            "fed RTC app: skipping unknown frame_type=%d from %s",
+                            frame.frame_type,
+                            self.instance_id,
+                        )
+                        continue
+                    if self._app_inbound is not None:
+                        await self._app_inbound(
+                            self.instance_id,
+                            frame.header,
+                            frame.payload,
+                        )
+        except asyncio.CancelledError:
+            raise
+        except rtc.ConnectionClosedError:
+            pass
+        except rtc.RTCError as exc:
+            log.debug("fed RTC app recv loop to %s ended: %s", self.instance_id, exc)
+        log.info("fed RTC app channel closed to %s", self.instance_id)
+        self._app_open.clear()
+
     # ─── Sending ──────────────────────────────────────────────────────────
 
     @property
@@ -795,6 +902,15 @@ class _RtcPeer:
         return (
             self._media_open.is_set()
             and self._media_channel is not None
+            and not self._closed
+        )
+
+    @property
+    def is_app_ready(self) -> bool:
+        """Whether the binary app DataChannel is currently open."""
+        return (
+            self._app_open.is_set()
+            and self._app_channel is not None
             and not self._closed
         )
 
@@ -861,6 +977,43 @@ class _RtcPeer:
             log.warning("fed RTC media send to %s failed: %s", self.instance_id, exc)
             return False
 
+    async def send_app(self, header: bytes, payload: bytes) -> bool:
+        """Push one binary app frame over ``fed-app-v1``.
+
+        ``header`` is the signed federation envelope JSON (bytes,
+        verbatim so the receiver re-validates the exact signed bytes);
+        ``payload`` is the AES-256-GCM-sealed app message. Returns ``True``
+        on success, ``False`` when the channel isn't open, the send
+        buffer is over the HWM, or the SCTP layer rejects the frame —
+        the caller then falls back to the JSON app path.
+        """
+        if not self.is_app_ready or self._app_channel is None:
+            return False
+        buffered = self._app_channel.buffered_amount
+        if buffered >= self._send_hwm:
+            log.warning(
+                "fed RTC app peer %s: buffered %d ≥ HWM %d — dropping frame",
+                self.instance_id,
+                buffered,
+                self._send_hwm,
+            )
+            return False
+        try:
+            frame = app_framing.encode(header, payload)
+        except app_framing.AppFramingError as exc:
+            log.warning(
+                "fed RTC app frame encode failed for %s: %s",
+                self.instance_id,
+                exc,
+            )
+            return False
+        try:
+            await self._app_channel.send(frame)
+            return True
+        except (rtc.RTCError, rtc.ConnectionClosedError) as exc:
+            log.warning("fed RTC app send to %s failed: %s", self.instance_id, exc)
+            return False
+
     async def _close_pc(self) -> None:
         """Close and discard the current PeerConnection, resetting negotiation state.
 
@@ -878,6 +1031,9 @@ class _RtcPeer:
         self._media_channel = None
         self._media_open.clear()
         self._media_buf.clear()
+        self._app_channel = None
+        self._app_open.clear()
+        self._app_buf.clear()
         # Wake any coroutines parked in ``add_ice_candidate`` on the OLD
         # event before swapping in a fresh one. Without this they sit on
         # the old (never-set) event until the 30-second buffer timeout
@@ -917,6 +1073,9 @@ class _RtcPeer:
         self._media_channel = None
         self._media_open.clear()
         self._media_buf.clear()
+        self._app_channel = None
+        self._app_open.clear()
+        self._app_buf.clear()
         if self._published_open and self._bus is not None and self._loop is not None:
             self._published_open = False
             # Stash the task on the instance so asyncio doesn't garbage-
@@ -966,6 +1125,7 @@ class FederationTransport:
         "_lock",
         "_inbound_handler",
         "_media_inbound_handler",
+        "_app_inbound_handler",
         "_bus",
         "_rtc_suppressed_until",
         "_rtc_retry_backoff_s",
@@ -982,6 +1142,7 @@ class FederationTransport:
         ice_servers: list[dict] | None = None,
         inbound_handler: Callable[[str, bytes], Awaitable[dict]] | None = None,
         media_inbound_handler: _MediaInboundCallback | None = None,
+        app_inbound_handler: _AppInboundCallback | None = None,
         bus: "EventBus | None" = None,
         rtc_retry_backoff_s: float = RTC_RETRY_BACKOFF_S,
     ) -> None:
@@ -999,6 +1160,10 @@ class FederationTransport:
         # §24.11 pipeline + per-chunk decrypt. Signature:
         # ``async (instance_id, header_bytes, payload_bytes) -> None``.
         self._media_inbound_handler = media_inbound_handler
+        # Callback for inbound binary app frames on ``fed-app-v1`` →
+        # §24.11 pipeline + app-message decrypt. Signature:
+        # ``async (instance_id, header_bytes, payload_bytes) -> None``.
+        self._app_inbound_handler = app_inbound_handler
         self._bus = bus
         #: ``instance_id`` → monotonic-time UNTIL we'll attempt
         #: another RTC handshake to that peer. Set when a peer's
@@ -1126,6 +1291,43 @@ class FederationTransport:
         peer = self._peers.get(instance_id)
         return peer is not None and peer.is_media_ready
 
+    async def send_app(
+        self,
+        *,
+        instance: RemoteInstance,
+        header_dict: dict,
+        payload_bytes: bytes,
+    ) -> bool:
+        """Deliver one binary app frame over ``fed-app-v1``.
+
+        ``header_dict`` is the signed federation envelope (serialised to
+        JSON verbatim so the receiver re-validates the exact signed
+        bytes); ``payload_bytes`` is the AES-256-GCM-sealed app message.
+
+        Returns ``True`` only when the app channel was open and the
+        frame was queued. Returns ``False`` for every other case (no
+        peer, channel not yet negotiated, over HWM, send error) — the
+        caller then falls back to the JSON app path. This method never
+        initiates the handshake itself: app delivery is opportunistic
+        over an already-open channel.
+        """
+        peer = self._peers.get(instance.id)
+        if peer is None or not peer.is_app_ready:
+            return False
+        try:
+            return await peer.send_app(orjson.dumps(header_dict), payload_bytes)
+        except Exception as exc:  # noqa: BLE001 — defensive: any RTC error → fallback
+            log.warning(
+                "fed RTC app send to %s raised (%s) — falling back to JSON",
+                instance.id,
+                exc,
+            )
+            return False
+
+    def is_app_ready(self, instance_id: str) -> bool:
+        peer = self._peers.get(instance_id)
+        return peer is not None and peer.is_app_ready
+
     async def _ensure_handshake(self, instance: RemoteInstance) -> None:
         async with self._lock:
             if instance.id in self._peers:
@@ -1139,6 +1341,7 @@ class FederationTransport:
                 polite=self._own_instance_id > instance.id,
                 on_failed=self._evict_peer,
                 media_inbound=self._media_inbound_handler,
+                app_inbound=self._app_inbound_handler,
             )
             self._peers[instance.id] = peer
         # Release lock before the network call — the signalling round
@@ -1207,6 +1410,7 @@ class FederationTransport:
                     polite=self._own_instance_id > from_instance,
                     on_failed=self._evict_peer,
                     media_inbound=self._media_inbound_handler,
+                    app_inbound=self._app_inbound_handler,
                 )
                 self._peers[from_instance] = peer
         sdp = str(payload.get("sdp") or "")
@@ -1266,6 +1470,7 @@ class FederationTransport:
                     polite=self._own_instance_id > from_instance,
                     on_failed=self._evict_peer,
                     media_inbound=self._media_inbound_handler,
+                    app_inbound=self._app_inbound_handler,
                 )
                 self._peers[from_instance] = peer
         await peer.add_ice_candidate(
