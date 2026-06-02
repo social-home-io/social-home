@@ -24,6 +24,7 @@ export const routes: Record<string, ReturnType<typeof lazy>> = {
   '/notifications':  lazy(() => import('@/features/notifications/NotificationsPage')),
   '/pages':          lazy(() => import('@/features/pages/PagesPage')),
   '/bazaar':         lazy(() => import('@/features/bazaar/BazaarPage')),
+  '/apps':           lazy(() => import('@/features/apps/AppsPage')),
   '/admin':          lazy(() => import('@/features/admin/AdminPage')),
   '/connections':    lazy(() => import('@/features/connections/ConnectionsPage')),
   '/friends':        lazy(() => import('@/features/friends/FriendsPage')),
