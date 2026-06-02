@@ -35,6 +35,12 @@ class _FakeSession:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
 
+    async def __aenter__(self) -> "_FakeSession":
+        return self
+
+    async def __aexit__(self, *a: Any) -> bool:
+        return False
+
     def get(self, url: str, **kw: Any) -> _FakeResp:
         return _FakeResp(self._payload)
 

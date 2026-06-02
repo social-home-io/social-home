@@ -192,9 +192,11 @@ class AppService(BusPublisherMixin):
         except (AppIntegrityError, OSError) as exc:
             # Clean up the partially-extracted directory before re-raising
             await asyncio.to_thread(self._rmtree_sync, dest)
+            if isinstance(exc, AppIntegrityError):
+                raise
             raise AppIntegrityError(
                 f"Bundle extraction failed for {app_id!r}: {exc}"
-            ) from exc if not isinstance(exc, AppIntegrityError) else exc
+            ) from exc
 
         try:
             manifest = AppManifest.from_dict(manifest_dict)
@@ -364,12 +366,14 @@ class AppService(BusPublisherMixin):
         """
         if path.exists():
 
-            def _on_error(func: object, failing_path: object, exc_info: object) -> None:
+            def _on_error(
+                func: object, failing_path: object, exc: BaseException
+            ) -> None:
                 log.warning(
                     "_rmtree_sync: failed to remove %s via %s: %s",
                     failing_path,
                     func,
-                    exc_info,
+                    exc,
                 )
 
-            shutil.rmtree(path, onerror=_on_error)
+            shutil.rmtree(path, onexc=_on_error)

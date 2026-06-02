@@ -47,10 +47,10 @@ class AppCatalogService:
         Returns:
             List of valid AppCatalogEntry objects.
         """
-        session = self._session_factory()
-        async with session.get(self._catalog_url) as resp:
-            resp.raise_for_status()
-            raw = await resp.text()
+        async with self._session_factory() as session:
+            async with session.get(self._catalog_url) as resp:
+                resp.raise_for_status()
+                raw = await resp.text()
         doc = json.loads(raw)
         out: list[AppCatalogEntry] = []
         for item in doc.get("apps", []):
