@@ -133,6 +133,7 @@ from .apps import (
     AppStoreCollectionView,
     AppStoreItemView,
 )
+from .app_bundle import AppBundleView, AppRuntimeView
 from .me_preferences import MePreferencesView
 from .me_space_location import MeSpaceLocationSharingView
 from .media import MediaServeView, MediaUploadView
@@ -1036,6 +1037,8 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/apps/{app_id}", AppDetailView)
     app.router.add_view("/api/apps/{app_id}/store", AppStoreCollectionView)
     app.router.add_view("/api/apps/{app_id}/store/{key}", AppStoreItemView)
+    app.router.add_view("/api/apps/{app_id}/runtime", AppRuntimeView)
+    app.router.add_view("/api/apps/{app_id}/bundle/{tail:.*}", AppBundleView)
 
     # ── Backup (adapter-agnostic) ────────────────────────────────────────
     app.router.add_view("/api/backup/pre_backup", BackupPreView)

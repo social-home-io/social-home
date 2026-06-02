@@ -1,0 +1,304 @@
+"""Integration tests for /api/apps/{app_id}/runtime and
+/api/apps/{app_id}/bundle/{tail:.*}.
+
+These tests exercise:
+- AppRuntimeView (bearer-authed, returns signed entry URL)
+- AppBundleView  (self-authorizing via query sig or path-scoped cookie)
+
+Bundle seeding: we write real files to the app's media_path so the file-serve
+path exercises real aiofiles I/O.  The signer is read directly from the running
+app via ``client.app[media_signer_key]`` (the TestClient exposes ``.app``).
+
+Cookie persistence: aiohttp's TestClient keeps a ``CookieJar`` on the
+underlying session, so cookies set by one response are automatically sent on
+subsequent requests **to the same URL prefix** — we verify this in the
+sub-resource test and also test manual extraction for explicitness.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import urllib.parse
+
+from socialhome.app_keys import media_signer_key
+from socialhome.domain.apps import AppManifest, InstalledApp
+from socialhome.repositories.app_repo import SqliteAppRepo
+from socialhome.routes.app_bundle import BUNDLE_COOKIE_PREFIX, BUNDLE_TTL_SECONDS
+
+from .conftest import _auth
+
+# ── Constants for test app ────────────────────────────────────────────────
+
+_APP_ID = "com.example.chess"
+_APP_VERSION = "1.0.0"
+_BUNDLE_REL = f"apps/{_APP_ID}/{_APP_VERSION}"
+_INDEX_CONTENT = b"<html>chess app</html>"
+_JS_CONTENT = b"console.log('chess');"
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────
+
+
+def _make_app(app_id: str = _APP_ID, enabled: bool = True) -> InstalledApp:
+    """Build an InstalledApp domain object for seeding."""
+    manifest = AppManifest(
+        entry="index.html",
+        icon=None,
+        capabilities=("read",),
+    )
+    return InstalledApp(
+        app_id=app_id,
+        name="Chess App",
+        version=_APP_VERSION,
+        enabled=enabled,
+        manifest=manifest,
+        bundle_path=_BUNDLE_REL,
+        bundle_sha256="deadbeef",
+        source_url="https://example.com/chess.tgz",
+        installed_by=None,
+        installed_at="2026-06-01T00:00:00+00:00",
+    )
+
+
+async def _seed_app(db, *, app_id: str = _APP_ID, enabled: bool = True) -> InstalledApp:
+    """Insert the app row via the real SqliteAppRepo."""
+    repo = SqliteAppRepo(db)
+    app = _make_app(app_id=app_id, enabled=enabled)
+    await repo.install(app)
+    return app
+
+
+def _write_bundle(media_path: str, app_id: str = _APP_ID) -> None:
+    """Write index.html + app.js into <media_path>/apps/<id>/<ver>/."""
+    bundle_dir = pathlib.Path(media_path) / "apps" / app_id / _APP_VERSION
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "index.html").write_bytes(_INDEX_CONTENT)
+    (bundle_dir / "app.js").write_bytes(_JS_CONTENT)
+
+
+def _parse_sig_from_url(url: str) -> tuple[str, str]:
+    """Extract (exp, sig) from a signed URL's query string."""
+    qs = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+    return qs["exp"][0], qs["sig"][0]
+
+
+# ── AppRuntimeView tests ──────────────────────────────────────────────────
+
+
+async def test_runtime_returns_signed_entry_url(client):
+    """GET /runtime with a bearer token returns 200 with a signed entry_url."""
+    config = client.app[media_signer_key]  # just checking the signer exists
+    assert config is not None
+
+    media_path = client.app.get(
+        __import__("socialhome.app_keys", fromlist=["config_key"]).config_key
+    ).media_path
+    _write_bundle(media_path)
+    await _seed_app(client._db)
+
+    r = await client.get(
+        f"/api/apps/{_APP_ID}/runtime",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["app_id"] == _APP_ID
+    assert body["name"] == "Chess App"
+    assert "entry_url" in body
+    entry_url = body["entry_url"]
+    assert "exp=" in entry_url
+    assert "sig=" in entry_url
+    assert "index.html" in entry_url
+    assert body["capabilities"] == ["read"]
+    assert "self_user_id" in body
+
+
+async def test_runtime_404_uninstalled(client):
+    """GET /runtime for an unknown app_id → 404 NOT_FOUND."""
+    r = await client.get(
+        "/api/apps/com.example.notinstalled/runtime",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+    body = await r.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+async def test_runtime_403_disabled(client):
+    """GET /runtime for a disabled app → 403 FORBIDDEN."""
+    config_obj = client.app[
+        __import__("socialhome.app_keys", fromlist=["config_key"]).config_key
+    ]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db, enabled=False)
+
+    r = await client.get(
+        f"/api/apps/{_APP_ID}/runtime",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_runtime_requires_auth(client):
+    """GET /runtime without a bearer token → 401."""
+    r = await client.get(f"/api/apps/{_APP_ID}/runtime")
+    assert r.status == 401
+
+
+# ── AppBundleView tests ───────────────────────────────────────────────────
+
+
+async def test_bundle_entry_served_with_valid_sig(client):
+    """GET entry URL (from /runtime) with no Authorization header → 200.
+
+    Asserts:
+    - body == index.html bytes
+    - Content-Security-Policy contains connect-src 'none'
+    - X-Frame-Options: SAMEORIGIN (overrides the global DENY)
+    - Set-Cookie with sh_app_bundle_{id} is present
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    # Get entry_url via /runtime
+    r_runtime = await client.get(
+        f"/api/apps/{_APP_ID}/runtime",
+        headers=_auth(client._tok),
+    )
+    assert r_runtime.status == 200
+    entry_url = (await r_runtime.json())["entry_url"]
+
+    # Fetch the bundle entry WITHOUT an Authorization header
+    r = await client.get(entry_url)
+    assert r.status == 200
+    body = await r.read()
+    assert body == _INDEX_CONTENT
+
+    # Security headers
+    assert "connect-src 'none'" in r.headers.get("Content-Security-Policy", "")
+    assert r.headers.get("X-Frame-Options") == "SAMEORIGIN"
+
+    # Cookie presence
+    cookie_name = f"{BUNDLE_COOKIE_PREFIX}{_APP_ID}"
+    set_cookie = r.headers.get("Set-Cookie", "")
+    assert cookie_name in set_cookie
+
+
+async def test_bundle_rejects_without_sig_or_cookie(client):
+    """GET a bundle file with no query sig and no cookie → 403 FORBIDDEN."""
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    r = await client.get(f"/api/apps/{_APP_ID}/bundle/app.js")
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_bundle_subresource_via_cookie(client):
+    """After the entry load sets a cookie, app.js is served via cookie auth.
+
+    aiohttp's TestClient persists cookies in its session CookieJar, so the
+    cookie from the entry response is automatically sent on subsequent requests
+    to the same path prefix.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    # Step 1: get entry_url
+    r_runtime = await client.get(
+        f"/api/apps/{_APP_ID}/runtime",
+        headers=_auth(client._tok),
+    )
+    entry_url = (await r_runtime.json())["entry_url"]
+
+    # Step 2: load the entry (sets cookie)
+    r_entry = await client.get(entry_url)
+    assert r_entry.status == 200
+
+    # Step 3: load app.js WITHOUT any query sig — cookie should authorize
+    r_js = await client.get(f"/api/apps/{_APP_ID}/bundle/app.js")
+    assert r_js.status == 200
+    js_body = await r_js.read()
+    assert js_body == _JS_CONTENT
+
+
+async def test_bundle_path_traversal_blocked(client):
+    """A traversal attempt is rejected — never 200 serving outside the bundle dir.
+
+    Two traversal surfaces tested:
+
+    1. URL-path ``..`` sequences — aiohttp normalises these at the router level,
+       so ``/api/apps/{id}/bundle/../../secret`` resolves to ``/api/apps/secret``,
+       which doesn't match the bundle public-path pattern and the auth middleware
+       returns 401 before the handler is reached.  Safe: the outside file is never
+       served.
+
+    2. URL-percent-encoded traversal (``%2e%2e``) — the path is passed as-is to
+       the handler; our ``pathlib.Path.resolve() + is_relative_to()`` guard blocks
+       it with 403 FORBIDDEN before any file is opened.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    # Write a "secret" file above the bundle root to verify it's never served.
+    secret_path = pathlib.Path(config_obj.media_path) / "secret.txt"
+    secret_path.write_bytes(b"secret data")
+    await _seed_app(client._db)
+
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    # Case 1: bare ``..`` in URL — aiohttp normalises it; we get anything != 200.
+    r1 = await client.get(
+        f"/api/apps/{_APP_ID}/bundle/../../secret?exp={exp}&sig={sig}"
+    )
+    assert r1.status != 200, (
+        f"traversal via '..' must not serve a file (got {r1.status})"
+    )
+
+    # Case 2: percent-encoded traversal hits the handler's resolve() guard.
+    # aiohttp passes the decoded path to match_info so the handler sees "../../secret.txt"
+    # as the tail; pathlib.resolve() + is_relative_to() blocks it.
+    r2 = await client.get(
+        f"/api/apps/{_APP_ID}/bundle/%2e%2e%2fsecret.txt?exp={exp}&sig={sig}"
+    )
+    assert r2.status in (403, 404), (
+        f"percent-encoded traversal must be blocked (got {r2.status})"
+    )
+
+
+async def test_bundle_expired_sig_rejected(client):
+    """A sig with a TTL in the past is rejected with 403."""
+    from socialhome.app_keys import config_key
+    import time
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    # Sign with a negative TTL so the expiry is already in the past
+    signed = signer.sign(prefix, ttl=-10, now=int(time.time()) - 100)
+    exp, sig = _parse_sig_from_url(signed)
+
+    entry_url = f"{prefix}index.html?exp={exp}&sig={sig}"
+    r = await client.get(entry_url)
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
