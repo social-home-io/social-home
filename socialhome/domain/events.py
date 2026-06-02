@@ -1738,6 +1738,34 @@ class UserUnblocked(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+# ─── Apps (§Social Home Apps) ────────────────────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class AppInstalled(DomainEvent):
+    """An app bundle was downloaded, verified, unpacked, and recorded.
+
+    Published by :class:`AppService.install` after the repo row is committed
+    so subscribers can react to a new app being available.
+    """
+
+    app_id: str
+    name: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
+@dataclass(slots=True, frozen=True)
+class AppUninstalled(DomainEvent):
+    """An installed app was removed from disk and the registry.
+
+    Published by :class:`AppService.uninstall` after the repo row and bundle
+    directory are gone.
+    """
+
+    app_id: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
 # ─── Momentum (§Momentum) ─────────────────────────────────────────────────
 
 
