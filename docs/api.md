@@ -580,6 +580,23 @@ Bearer auth (the integration holds the auto-provisioned token).
 | GET | `/api/ha/integration/ice-servers` | Current operator-pushed STUN/TURN list. Returns `{"ice_servers": [...]}` (empty list when unset). |
 | PUT | `/api/ha/integration/ice-servers` | Upsert `{"ice_servers": [{"urls": [...], "username"?, "credential"?}]}`. Schemes restricted to `stun:`, `stuns:`, `turn:`, `turns:`. Persisted to `instance_config` (replayed on reboot) and pushed live to `FederationService` so future DataChannel handshakes pick up the new list. Returns `{ok, ice_servers, changed}`. |
 
+## HFS — Apps
+
+Admin-installed embedded JS apps from the Social Home Apps catalog.
+The catalog is fetched from the `socialhome-apps` GitHub releases
+(`apps_catalog_url` / `SH_APPS_CATALOG_URL`). On install the bundle
+tarball is downloaded, its `sha256` verified against the catalog, and
+unpacked (path-traversal-guarded) under `media_path/apps/<app_id>/<version>/`.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/apps` | Any member | List installed apps. Non-admins see enabled apps only; admins see all. |
+| GET | `/api/apps/catalog` | Admin | Browse the remote app catalog (fetches `catalog.json` from the configured release URL). |
+| POST | `/api/apps` | Admin | Install an app from the catalog. Body: `{app_id}`. 201 on success; 409 if already installed; 400 on bad id or failed sha256 integrity check. |
+| GET | `/api/apps/{app_id}` | Any member | One installed app. 404 when missing or disabled (non-admin). |
+| PATCH | `/api/apps/{app_id}` | Admin | Enable or disable an app. Body: `{enabled}`. |
+| DELETE | `/api/apps/{app_id}` | Admin | Uninstall an app — removes the bundle from disk; PR2 cascades per-user app data. |
+
 ## HFS — Storage, backup, misc
 
 | Method | Path | Purpose |

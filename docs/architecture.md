@@ -322,6 +322,30 @@ allowed. Lives in `socialhome/services/page_conflict_service.py`.
 - `socialhome/infrastructure/reconnect_queue.py`.
 - `socialhome/services/page_conflict_service.py`.
 
+## Social Home Apps
+
+Social Home supports admin-installed embedded JS apps sourced from the
+separate `socialhome-apps` GitHub repository. The catalog and bundles
+are **release-fetched**: `AppService` downloads `catalog.json` from the
+configured release URL (`apps_catalog_url` / `SH_APPS_CATALOG_URL`),
+and on install downloads the bundle tarball, verifies its `sha256`
+against the catalog entry, and unpacks it with a path-traversal guard
+under `media_path/apps/<app_id>/<version>/`. A mismatch aborts the
+install — a bundle is never unpacked until its digest is confirmed.
+
+The registry lives in `installed_apps` (see `database.md` → **Apps**)
+with the service/repo pair `AppService` / `SqliteAppRepo`
+(`socialhome/services/app_service.py`,
+`socialhome/repositories/app_repo.py`). Routes are under
+`socialhome/routes/apps.py`.
+
+The runtime sandbox — a sandboxed `<iframe>` with an opaque origin and
+`connect-src 'none'`, communicating with the host only via a
+postMessage bridge that withholds the bearer token — lands in **PR3**.
+**PR2** adds `app_kv` (per-user key/value storage per app).
+**PR4** introduces the `fed-app-v1` federation channel so apps can
+exchange state across paired households.
+
 ## Where things live
 
 | Concern | Path |
