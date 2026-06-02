@@ -169,6 +169,13 @@ class Config:
     #: reachability at the cost of more discovery traffic.
     max_route_hops: int = 3
 
+    #: URL of the Social Home Apps catalog JSON.  Operators can point this at
+    #: a self-hosted mirror; the empty string disables catalog fetches.
+    apps_catalog_url: str = (
+        "https://github.com/social-home-io/socialhome-apps"
+        "/releases/latest/download/catalog.json"
+    )
+
     # Per-platform TOML sections — opaque to the core. Each adapter reads
     # its own section (e.g. config.platform_options["homeassistant"]).
     platform_options: Mapping[str, Mapping[str, Any]] = field(
@@ -346,6 +353,14 @@ class Config:
                 "max_route_hops",
                 "SH_MAX_ROUTE_HOPS",
                 3,
+            ),
+            apps_catalog_url=_str_opt(
+                "apps_catalog_url",
+                "SH_APPS_CATALOG_URL",
+                (
+                    "https://github.com/social-home-io/socialhome-apps"
+                    "/releases/latest/download/catalog.json"
+                ),
             ),
             db_write_batch_max=_int_opt(
                 "db_write_batch_max",
