@@ -359,6 +359,7 @@ _USER_DETAIL_HTML = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{display_name} — Public Momentum</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">

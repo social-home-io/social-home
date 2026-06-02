@@ -264,8 +264,8 @@ ul.cards {
 }
 
 .moment-card {
-  background: var(--card, rgba(0, 0, 0, 0.03));
-  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.08));
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 14px 16px;
 }
