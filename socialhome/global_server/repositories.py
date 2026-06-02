@@ -1008,12 +1008,6 @@ class AbstractGfsHighlightPublicationRepo(Protocol):
         self,
         instance_id: str,
     ) -> list[GfsHighlightPublication]: ...
-    async def set_og_thumbnail(
-        self,
-        highlight_id: str,
-        instance_id: str,
-        filename: str | None,
-    ) -> int: ...
 
 
 class SqliteGfsHighlightPublicationRepo:
@@ -1025,23 +1019,19 @@ class SqliteGfsHighlightPublicationRepo:
         self._db = db
 
     async def upsert(self, pub: GfsHighlightPublication) -> None:
-        # Re-publishing keeps the existing OG thumbnail filename if the
-        # caller didn't include one — operators can swap GFSes (or
-        # republish to bump expires_at) without losing the cached
-        # social-preview image.
+        # Re-publishing (e.g. to bump expires_at, or to swap GFSes)
+        # overwrites the routing metadata in place — the GFS stores no
+        # content, only the signed publish record.
         await self._db.enqueue(
             """
             INSERT INTO gfs_highlight_publications(
                 highlight_id, instance_id, expires_at, published_at,
-                publish_signature, og_thumbnail_filename
-            ) VALUES(?,?,?,?,?,?)
+                publish_signature
+            ) VALUES(?,?,?,?,?)
             ON CONFLICT(highlight_id, instance_id) DO UPDATE SET
                 expires_at            = excluded.expires_at,
                 published_at          = excluded.published_at,
-                publish_signature     = excluded.publish_signature,
-                og_thumbnail_filename =
-                    COALESCE(excluded.og_thumbnail_filename,
-                             gfs_highlight_publications.og_thumbnail_filename)
+                publish_signature     = excluded.publish_signature
             """,
             (
                 pub.highlight_id,
@@ -1049,7 +1039,6 @@ class SqliteGfsHighlightPublicationRepo:
                 pub.expires_at,
                 pub.published_at,
                 pub.publish_signature,
-                pub.og_thumbnail_filename,
             ),
         )
 
@@ -1060,7 +1049,7 @@ class SqliteGfsHighlightPublicationRepo:
     ) -> GfsHighlightPublication | None:
         row = await self._db.fetchone(
             "SELECT highlight_id, instance_id, expires_at, published_at, "
-            "publish_signature, og_thumbnail_filename "
+            "publish_signature "
             "FROM gfs_highlight_publications "
             "WHERE highlight_id=? AND instance_id=?",
             (highlight_id, instance_id),
@@ -1089,38 +1078,13 @@ class SqliteGfsHighlightPublicationRepo:
 
         return await self._db.transact(_run)
 
-    async def set_og_thumbnail(
-        self,
-        highlight_id: str,
-        instance_id: str,
-        filename: str | None,
-    ) -> int:
-        """Stamp the cached OG thumbnail filename onto a publication.
-
-        Returns the rowcount so the caller can return 404 if the
-        publication has already been removed (e.g. unpublish + re-
-        upload race). ``filename`` may be ``None`` to clear the
-        cache.
-        """
-
-        def _run(conn) -> int:
-            cur = conn.execute(
-                "UPDATE gfs_highlight_publications "
-                "SET og_thumbnail_filename=? "
-                "WHERE highlight_id=? AND instance_id=?",
-                (filename, highlight_id, instance_id),
-            )
-            return int(cur.rowcount or 0)
-
-        return await self._db.transact(_run)
-
     async def list_for_instance(
         self,
         instance_id: str,
     ) -> list[GfsHighlightPublication]:
         rows = await self._db.fetchall(
             "SELECT highlight_id, instance_id, expires_at, published_at, "
-            "publish_signature, og_thumbnail_filename "
+            "publish_signature "
             "FROM gfs_highlight_publications "
             "WHERE instance_id=? ORDER BY published_at DESC",
             (instance_id,),
@@ -1196,8 +1160,7 @@ class SqliteGfsHighlightTokenRepo:
             """
             SELECT t.token, t.highlight_id, t.instance_id, t.label,
                    t.created_at AS t_created_at, t.revoked_at AS t_revoked_at,
-                   p.expires_at, p.published_at, p.publish_signature,
-                   p.og_thumbnail_filename
+                   p.expires_at, p.published_at, p.publish_signature
               FROM gfs_highlight_tokens AS t
               JOIN gfs_highlight_publications AS p
                 ON p.highlight_id = t.highlight_id AND p.instance_id = t.instance_id
@@ -1226,7 +1189,6 @@ class SqliteGfsHighlightTokenRepo:
             expires_at=int(d["expires_at"]),
             published_at=int(d["published_at"]),
             publish_signature=d["publish_signature"],
-            og_thumbnail_filename=d.get("og_thumbnail_filename"),
         )
         return tok, pub
 
@@ -1301,7 +1263,6 @@ def _row_to_highlight_pub(row: dict) -> GfsHighlightPublication | None:
         expires_at=int(row["expires_at"]),
         published_at=int(row["published_at"]),
         publish_signature=row["publish_signature"],
-        og_thumbnail_filename=row.get("og_thumbnail_filename"),
     )
 
 

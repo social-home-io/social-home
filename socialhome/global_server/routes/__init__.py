@@ -72,8 +72,6 @@ from .rtc import (
     RtcSessionView,
 )
 from .highlights import (
-    HighlightOgImageView,
-    HighlightOgUploadView,
     HighlightPublicLandingView,
     HighlightPublishView,
     HighlightTokenMintView,
@@ -82,11 +80,22 @@ from .highlights import (
 )
 from .highlight_rtc import (
     HighlightIceServersView,
+    HighlightRelayStreamView,
+    HighlightRelayUploadView,
     HighlightRtcAnswerView,
     HighlightRtcAuthorIceView,
     HighlightRtcOfferView,
     HighlightRtcSessionView,
     HighlightRtcViewerIceView,
+)
+from .moment_rtc import (
+    MomentRelayStreamView,
+    MomentRelayUploadView,
+    MomentRtcAnswerView,
+    MomentRtcAuthorIceView,
+    MomentRtcOfferView,
+    MomentRtcSessionView,
+    MomentRtcViewerIceView,
 )
 from .moments_public import (
     GfsMomentPublicDeleteView,
@@ -191,19 +200,6 @@ def register_routes(
         HighlightUnpublishView,
     )
     app.router.add_view(
-        "/gfs/highlights/{highlight_id}/og",
-        HighlightOgUploadView,
-    )
-    # Public OG image — fetched by anonymous social-card crawlers.
-    # Path is stable per (instance, highlight) so a token rotation
-    # doesn't invalidate the cached preview on Twitter / Slack /
-    # iMessage. Mounted before the ``{token}`` route so aiohttp's
-    # routing table picks the literal ``og.jpg`` first.
-    app.router.add_view(
-        "/highlight/{instance_id}/{highlight_id}/og.jpg",
-        HighlightOgImageView,
-    )
-    app.router.add_view(
         "/highlight/{instance_id}/{highlight_id}/{token}",
         HighlightPublicLandingView,
     )
@@ -220,6 +216,15 @@ def register_routes(
     app.router.add_view("/gfs/highlight_rtc/ice/viewer", HighlightRtcViewerIceView)
     app.router.add_view("/gfs/highlight_rtc/answer", HighlightRtcAnswerView)
     app.router.add_view("/gfs/highlight_rtc/ice/author", HighlightRtcAuthorIceView)
+    # GFS-relay fallback: anon guest stream (token-gated) + signed author upload.
+    app.router.add_view(
+        "/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}",
+        HighlightRelayStreamView,
+    )
+    app.router.add_view(
+        "/gfs/highlight_rtc/relay-stream/{relay_id}",
+        HighlightRelayUploadView,
+    )
 
     # Public Momentum (§Momentum-public). Signed wire endpoints for
     # registration / follow + unsigned discovery for households. The
@@ -238,6 +243,31 @@ def register_routes(
     app.router.add_view("/gfs/moments/users/{user_id}", GfsUserDetailView)
     app.router.add_view("/moments", GfsUserDirectoryHtmlView)
     app.router.add_view("/moments/{user_id}", GfsUserDetailHtmlView)
+
+    # Public-viewer signalling for the public-moments live index
+    # (§Momentum-public). The offer endpoint is anonymous (gated by the
+    # user's live directory registration); the answer endpoints are
+    # Ed25519-signed by the author SH like the rest of /gfs/rtc/*. The
+    # GFS stores zero moment bytes — it brokers signalling and, on the
+    # fallback path, pipes the framed bytes straight through.
+    app.router.add_view("/gfs/moment_rtc/offer", MomentRtcOfferView)
+    app.router.add_view(
+        "/gfs/moment_rtc/session/{session_id}",
+        MomentRtcSessionView,
+    )
+    app.router.add_view("/gfs/moment_rtc/ice/viewer", MomentRtcViewerIceView)
+    app.router.add_view("/gfs/moment_rtc/answer", MomentRtcAnswerView)
+    app.router.add_view("/gfs/moment_rtc/ice/author", MomentRtcAuthorIceView)
+    # GFS-relay fallback: anon guest stream (registration-gated) + signed
+    # author upload.
+    app.router.add_view(
+        "/gfs/moment_rtc/relay/{user_id}",
+        MomentRelayStreamView,
+    )
+    app.router.add_view(
+        "/gfs/moment_rtc/relay-stream/{relay_id}",
+        MomentRelayUploadView,
+    )
 
     # Admin portal — login/logout stay as module-level functions in
     # ``global_server.admin`` since they wire cookie lifecycle.

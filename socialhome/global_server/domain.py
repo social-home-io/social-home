@@ -144,13 +144,6 @@ class GfsHighlightPublication:
     expires_at: int
     published_at: int
     publish_signature: str
-    #: Filename of the OG-card thumbnail under
-    #: :attr:`GfsConfig.og_thumbnail_dir`. ``None`` until the author
-    #: uploads one. Anonymous OG crawlers fetch the image directly
-    #: from the GFS — no token required, since social previews need
-    #: to render in clients (Twitter, iMessage, Slack) that don't
-    #: pass query strings.
-    og_thumbnail_filename: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

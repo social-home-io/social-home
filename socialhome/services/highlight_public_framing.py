@@ -1,8 +1,15 @@
-"""Framing protocol for the public-highlight DataChannel (§highlights_public).
+"""Framing protocol for public-content DataChannels.
+
+This module serves BOTH the public-highlight flow (§highlights_public)
+and the public-moments live index (§Momentum-public): the wire format,
+chunking, and decoder are content-agnostic, so the only per-feature
+difference is the opening meta frame's ``kind`` (``highlight_meta`` vs
+``moment_index_meta``). The viewer's decoder is transport-blind and
+feature-blind — it reassembles length-prefixed frames the same way no
+matter which producer streamed them.
 
 The public viewer talks to the author's instance over a single ordered
-WebRTC DataChannel labelled ``highlight-public-v1``. Each frame on the
-wire is:
+WebRTC DataChannel. Each frame on the wire is:
 
 ```
 [u32 header_len BE][header_json][u32 payload_len BE][payload_bytes]
@@ -58,12 +65,19 @@ CHANNEL_LABEL: str = "highlight-public-v1"
 
 
 KIND_HIGHLIGHT_META: str = "highlight_meta"
+KIND_MOMENT_INDEX_META: str = "moment_index_meta"
 KIND_FRAME_CHUNK: str = "frame_chunk"
 KIND_STREAM_END: str = "stream_end"
 KIND_ERROR: str = "error"
 
 VALID_KINDS: frozenset[str] = frozenset(
-    {KIND_HIGHLIGHT_META, KIND_FRAME_CHUNK, KIND_STREAM_END, KIND_ERROR}
+    {
+        KIND_HIGHLIGHT_META,
+        KIND_MOMENT_INDEX_META,
+        KIND_FRAME_CHUNK,
+        KIND_STREAM_END,
+        KIND_ERROR,
+    }
 )
 
 
@@ -188,6 +202,16 @@ def highlight_meta(highlight: dict, frames: list[dict]) -> bytes:
     return encode(
         {"kind": KIND_HIGHLIGHT_META, "highlight": highlight, "frames": frames}
     )
+
+
+def moment_index_meta(moments: list[dict]) -> bytes:
+    """Build the opening ``moment_index_meta`` frame for §Momentum-public.
+
+    Mirrors :func:`highlight_meta`: the header carries the per-moment
+    manifest (one dict per public moment) and the payload is empty. An
+    empty ``moments`` list is valid — the viewer renders an empty index.
+    """
+    return encode({"kind": KIND_MOMENT_INDEX_META, "moments": moments})
 
 
 def frame_chunk(

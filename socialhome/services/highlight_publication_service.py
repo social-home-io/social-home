@@ -190,57 +190,6 @@ class HighlightPublicationService:
                 f"GFS revoke request failed: {exc}"
             ) from exc
 
-    async def upload_og_thumbnail(
-        self,
-        highlight_id: str,
-        author_user_id: str,
-        *,
-        jpeg_bytes: bytes,
-    ) -> str:
-        """Cache a JPEG thumbnail on the GFS for OG-card previews.
-
-        The thumbnail is intentionally public — anonymous social-card
-        crawlers (Twitter, Slack, iMessage) need to fetch it without
-        the share token. Author opts in per-highlight by uploading; the
-        absence of a thumbnail keeps the share link rendering as a
-        generic OG card.
-
-        Returns the public OG URL on success.
-        """
-        import base64
-
-        highlight = await self._require_owned(highlight_id, author_user_id)
-        gfs_id = highlight.public_gfs_id
-        if gfs_id is None:
-            raise HighlightPublicationError("Highlight is not currently published.")
-        conn = await self._require_active_gfs(gfs_id)
-        body = self._sign_body(
-            {
-                "instance_id": self._require_instance_id(),
-                "highlight_id": highlight.id,
-                "image_b64": base64.b64encode(jpeg_bytes).decode("ascii"),
-            }
-        )
-        try:
-            async with self._client().post(
-                f"{conn.inbox_url}/gfs/highlights/{highlight.id}/og",
-                json=body,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                payload = await resp.json()
-                if resp.status >= 300:
-                    raise HighlightPublicationError(
-                        f"GFS rejected OG upload: HTTP {resp.status} {payload}"
-                    )
-        except aiohttp.ClientError as exc:
-            raise HighlightPublicationError(
-                f"GFS OG upload request failed: {exc}",
-            ) from exc
-        url = str(payload.get("url") or "")
-        if not url:
-            raise HighlightPublicationError("GFS OG response missing url.")
-        return url
-
     async def unpublish(self, highlight_id: str, author_user_id: str) -> None:
         """Pull the publication entirely. CASCADE on the GFS side wipes
         every token under it; the local flag clears regardless of GFS

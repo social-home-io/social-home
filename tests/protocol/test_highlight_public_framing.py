@@ -20,6 +20,7 @@ from socialhome.services.highlight_public_framing import (
     KIND_ERROR,
     KIND_FRAME_CHUNK,
     KIND_HIGHLIGHT_META,
+    KIND_MOMENT_INDEX_META,
     KIND_STREAM_END,
     SEND_HWM_BYTES,
     Frame,
@@ -29,6 +30,7 @@ from socialhome.services.highlight_public_framing import (
     error_frame,
     frame_chunk,
     iter_frames,
+    moment_index_meta,
     stream_end,
     highlight_meta,
 )
@@ -44,9 +46,34 @@ def test_wire_constants_are_locked():
     assert CHUNK_SIZE == 64 * 1024
     assert SEND_HWM_BYTES == 1 << 20
     assert KIND_HIGHLIGHT_META == "highlight_meta"
+    assert KIND_MOMENT_INDEX_META == "moment_index_meta"
     assert KIND_FRAME_CHUNK == "frame_chunk"
     assert KIND_STREAM_END == "stream_end"
     assert KIND_ERROR == "error"
+
+
+def test_moment_index_meta_carries_moment_manifest():
+    """``moment_index_meta`` mirrors ``highlight_meta``: the header
+    carries the per-moment manifest, the payload is empty, and it
+    round-trips through ``decode``."""
+    moments = [
+        {"id": "m-1", "content": "hi", "has_media": False},
+        {"id": "m-2", "content": "pic", "has_media": True, "byte_length": 10},
+    ]
+    raw = moment_index_meta(moments)
+    decoded = decode(raw)
+    assert decoded.header["kind"] == KIND_MOMENT_INDEX_META
+    assert decoded.header["moments"] == moments
+    assert decoded.payload == b""
+
+
+def test_moment_index_meta_empty_index_is_valid():
+    """An empty index is a valid frame — the guest renders an empty
+    list rather than an error."""
+    raw = moment_index_meta([])
+    decoded = decode(raw)
+    assert decoded.header == {"kind": KIND_MOMENT_INDEX_META, "moments": []}
+    assert decoded.payload == b""
 
 
 # ─── Encoder shape ───────────────────────────────────────────────────────

@@ -6,7 +6,6 @@ Author-only HTTP surface that drives :class:`HighlightPublicationService`:
 * ``GET    /api/highlights/{id}/publish``        local read of the cached flag
 * ``DELETE /api/highlights/{id}/publish``        full unpublish (drops every token)
 * ``DELETE /api/highlights/{id}/publish/{token}`` revoke a single share token
-* ``POST   /api/highlights/{id}/publish/og``     upload an OG-card thumbnail
 
 Errors flow through :class:`BaseView._iter` — the service raises
 :class:`HighlightNotFoundError` (→ 404) on author mismatches and
@@ -14,9 +13,6 @@ Errors flow through :class:`BaseView._iter` — the service raises
 """
 
 from __future__ import annotations
-
-import base64
-import binascii
 
 from aiohttp import web
 
@@ -95,36 +91,3 @@ class HighlightPublishTokenView(BaseView):
             token=self.match("token"),
         )
         return self._json({"revoked": True})
-
-
-class HighlightPublishOgView(BaseView):
-    """``POST /api/highlights/{id}/publish/og`` — author uploads a cached
-    thumbnail for the public OG card.
-
-    Body: ``{image_b64: str}``. The SPA reads the first frame's blob
-    and base64-encodes it. Forwarded to the publishing GFS via
-    :meth:`HighlightPublicationService.upload_og_thumbnail`. Returns the
-    canonical OG URL the SPA can show alongside the share link.
-    """
-
-    async def post(self) -> web.Response:
-        ctx = self.user
-        if ctx is None:
-            return error_response(401, "UNAUTHENTICATED", "Login required.")
-        body = await self.body()
-        b64 = str(body.get("image_b64") or "")
-        if not b64:
-            return error_response(422, "UNPROCESSABLE", "image_b64 is required.")
-        try:
-            jpeg = base64.b64decode(b64, validate=True)
-        except ValueError, binascii.Error:
-            return error_response(
-                422, "UNPROCESSABLE", "image_b64 is not valid base64."
-            )
-        svc = self.svc(highlight_publication_service_key)
-        url = await svc.upload_og_thumbnail(
-            self.match("id"),
-            ctx.user_id,
-            jpeg_bytes=jpeg,
-        )
-        return self._json({"url": url})

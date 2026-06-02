@@ -1,64 +1,56 @@
-/* Public-highlight viewer for the GFS landing page (§highlights_public).
+/* Public-moments index viewer for the GFS landing page (§Momentum-public).
  *
- * Preact bootstrap. The GFS-side SSR landing renders an empty
- * ``<div id="root">`` and a ``<script id="boot">`` JSON payload with
- * ``{instanceId, highlightId, token}``; this module mounts the viewer
- * into that root.
+ * Mirrors the public-highlight viewer's transport: the guest's browser
+ * opens a WebRTC DataChannel directly to the author's SH and reads the
+ * author's CURRENT PUBLIC moments live; if WebRTC can't connect (NAT /
+ * TURN / P2P blocked) but the author is online, it falls back to a
+ * chunked GET proxied through the GFS. The GFS stores no moment bytes.
  *
  * Wire framing must stay in lockstep with
- * ``socialhome/services/highlight_public_framing.py`` — see the
- * golden-bytes test in ``tests/protocol/test_highlight_public_framing.py``.
+ * ``socialhome/services/highlight_public_framing.py`` (shared by
+ * highlights + moments) — same length-prefixed records, with a
+ * ``moment_index_meta`` header carrying the moment manifest, followed by
+ * ``frame_chunk`` records for each moment that has media.
  *
- * No SPA dependencies (signals, router, design tokens) — keeps the
- * bundle small enough to inline in the SSR page if we ever want to.
+ * Renders a simple scrollable list of moment cards (text + optional
+ * image/video) — not a story player. No SPA dependencies.
  */
 import { render } from 'preact'
 import { useEffect, useMemo, useState } from 'preact/hooks'
 
-const CHANNEL_LABEL = 'highlight-public-v1'
-const FRAME_DURATION_MS = 6000
+const CHANNEL_LABEL = 'moment-public-v1'
 const POLL_INTERVAL_MS = 1000
 const POLL_MAX_ATTEMPTS = 30
 
 
 interface BootPayload {
+  userId: string
   instanceId: string
-  highlightId: string
-  token: string
 }
 
 interface IceServer { urls: string[] | string; username?: string; credential?: string }
 
-interface FrameMeta {
-  frame_id: string
-  sequence: number
-  content_type: string
-  byte_length: number
-  caption_text?: string | null
-  caption_emoji?: string | null
-  duration_ms?: number | null
-}
-
-interface HighlightMeta {
+interface MomentMeta {
   id: string
-  author_user_id: string
-  highlight_date: string
-  expires_at: string
+  content: string
+  created_at: string
+  media_type?: string | null
+  has_media?: boolean
+  media_frame_id?: string
+  byte_length?: number
+  content_type?: string
 }
 
 interface ViewerState {
-  status: 'connecting' | 'loading' | 'playing' | 'ended' | 'error'
+  status: 'connecting' | 'loading' | 'ready' | 'error'
   message: string | null
-  manifest: FrameMeta[]
-  highlight: HighlightMeta | null
-  frameUrls: Record<string, string>
-  currentIndex: number
+  moments: MomentMeta[]
+  mediaUrls: Record<string, string>
 }
 
 interface FramingHeader {
-  kind: 'highlight_meta' | 'frame_chunk' | 'stream_end' | 'error'
-  highlight?: HighlightMeta
-  frames?: FrameMeta[]
+  kind: 'moment_index_meta' | 'frame_chunk' | 'stream_end' | 'error'
+  moments?: MomentMeta[]
   frame_id?: string
   sequence?: number
   chunk_index?: number
@@ -68,7 +60,6 @@ interface FramingHeader {
 }
 
 
-/* Decode one length-prefixed framing record. Returns header + payload bytes. */
 function decodeFrame(buf: Uint8Array): { header: FramingHeader; payload: Uint8Array } | null {
   if (buf.length < 8) return null
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
@@ -83,10 +74,9 @@ function decodeFrame(buf: Uint8Array): { header: FramingHeader; payload: Uint8Ar
 }
 
 
-/* Pop one complete frame off the front of an accumulating byte buffer
- * (the GFS-relay fallback reads a chunked stream whose chunk boundaries
- * don't align to frames). Returns the decoded frame + the unconsumed
- * tail, or null when a whole frame isn't buffered yet. */
+/* Pop one complete frame off an accumulating byte buffer (the relay
+ * fallback reads a chunked stream whose chunk boundaries don't align to
+ * frames). Returns the decoded frame + the unconsumed tail, or null. */
 function takeFrame(
   buf: Uint8Array,
 ): { header: FramingHeader; payload: Uint8Array; rest: Uint8Array } | null {
@@ -100,24 +90,25 @@ function takeFrame(
 }
 
 
-function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
+function PublicMomentsViewer({ boot }: { boot: BootPayload }) {
   const [state, setState] = useState<ViewerState>({
     status: 'connecting',
     message: 'Connecting…',
-    manifest: [],
-    highlight: null,
-    frameUrls: {},
-    currentIndex: 0,
+    moments: [],
+    mediaUrls: {},
   })
 
-  // Per-frame chunk buffer — kept in a ref-like store so the message
-  // handler captured at mount keeps appending into the same Map.
   const buffers = useMemo(() => new Map<string, Uint8Array[]>(), [])
+  // Manifest mirror the message handler can read synchronously (the
+  // effect closure captures the initial state otherwise).
+  const manifest = useMemo(() => new Map<string, MomentMeta>(), [])
 
   useEffect(() => {
     let pc: RTCPeerConnection | null = null
     let pollTimer: ReturnType<typeof setInterval> | null = null
     let cancelled = false
+    let channelOpened = false
+    let relayStarted = false
 
     function setStatus(status: ViewerState['status'], message: string | null = null) {
       if (cancelled) return
@@ -125,46 +116,32 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
     }
 
     function appendChunk(frameId: string, payload: Uint8Array, isLast: boolean, contentType: string) {
-      const slice = payload.slice() // copy out of the WS read buffer
       const bucket = buffers.get(frameId) ?? []
-      bucket.push(slice)
+      bucket.push(payload.slice())
       buffers.set(frameId, bucket)
       if (!isLast) return
-      // Cast to ``BlobPart[]`` — TS 5.7 narrowed `Uint8Array<ArrayBufferLike>`
-      // away from `BlobPart`, but each element here is in fact a normal
-      // ``Uint8Array<ArrayBuffer>`` (we built it via ``.slice()``).
       const blob = new Blob(bucket as unknown as BlobPart[], { type: contentType })
       const url = URL.createObjectURL(blob)
       buffers.delete(frameId)
-      setState((s) => ({ ...s, frameUrls: { ...s.frameUrls, [frameId]: url } }))
+      setState((s) => ({ ...s, mediaUrls: { ...s.mediaUrls, [frameId]: url } }))
     }
 
     function handleHeader(header: FramingHeader, payload: Uint8Array) {
-      if (header.kind === 'highlight_meta') {
-        setState((s) => ({
-          ...s,
-          status: 'playing',
-          message: null,
-          manifest: header.frames ?? [],
-          highlight: header.highlight ?? null,
-        }))
+      if (header.kind === 'moment_index_meta') {
+        const moments = header.moments ?? []
+        moments.forEach((m) => manifest.set(m.media_frame_id ?? m.id, m))
+        setState((s) => ({ ...s, status: 'ready', message: null, moments }))
       } else if (header.kind === 'frame_chunk' && header.frame_id) {
-        const meta = state.manifest.find((f) => f.frame_id === header.frame_id)
+        const meta = manifest.get(header.frame_id)
         const ct = meta?.content_type ?? 'application/octet-stream'
         appendChunk(header.frame_id, payload, !!header.is_last_chunk, ct)
       } else if (header.kind === 'stream_end') {
-        // Streaming complete. Playback continues from already-buffered urls.
+        // Index fully streamed.
       } else if (header.kind === 'error') {
         setStatus('error', humanizeError(header.error ?? 'unknown'))
       }
     }
 
-    let channelOpened = false
-    let relayStarted = false
-
-    // GFS-relay fallback: direct WebRTC couldn't connect (NAT/TURN/P2P
-    // blocked) but the author is online. Pull the identical framed stream
-    // proxied through the GFS over a plain chunked GET.
     async function startRelayFallback() {
       if (relayStarted || cancelled || channelOpened) return
       relayStarted = true
@@ -172,9 +149,7 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
       if (pc) { try { pc.close() } catch { /* tolerated */ } }
       setStatus('loading', 'Connecting via server…')
       try {
-        const url =
-          `/gfs/highlight_rtc/relay/${encodeURIComponent(boot.instanceId)}` +
-          `/${encodeURIComponent(boot.highlightId)}?token=${encodeURIComponent(boot.token)}`
+        const url = `/gfs/moment_rtc/relay/${encodeURIComponent(boot.userId)}`
         const r = await fetch(_rel(url))
         if (!r.ok || !r.body) {
           setStatus('error', humanizeError(`HTTP ${r.status}`))
@@ -210,8 +185,6 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
         let sessionId: string | null = null
         let ackedCandidates = 0
 
-        // A failed/closed ICE transport before the channel ever opened is
-        // the canonical "WebRTC won't work here" signal → fall back.
         pc.addEventListener('iceconnectionstatechange', () => {
           const st = pc?.iceConnectionState
           if ((st === 'failed' || st === 'closed') && !channelOpened) {
@@ -221,7 +194,7 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
 
         pc.addEventListener('icecandidate', (ev) => {
           if (!ev.candidate || !sessionId) return
-          void postJson('/gfs/highlight_rtc/ice/viewer', {
+          void postJson('/gfs/moment_rtc/ice/viewer', {
             session_id: sessionId,
             candidate: ev.candidate.toJSON ? ev.candidate.toJSON() : {
               candidate: ev.candidate.candidate,
@@ -232,7 +205,7 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
 
         const ch = pc.createDataChannel(CHANNEL_LABEL, { ordered: true })
         ch.binaryType = 'arraybuffer'
-        ch.onopen = () => { channelOpened = true; setStatus('loading', 'Loading highlight…') }
+        ch.onopen = () => { channelOpened = true; setStatus('loading', 'Loading moments…') }
         ch.onmessage = (ev) => {
           const buf = new Uint8Array(ev.data instanceof ArrayBuffer ? ev.data : new ArrayBuffer(0))
           const decoded = decodeFrame(buf)
@@ -242,13 +215,8 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
         const offer = await pc.createOffer()
         await pc.setLocalDescription(offer)
         const offerResp = await postJson<{ session_id: string }>(
-          '/gfs/highlight_rtc/offer',
-          {
-            instance_id: boot.instanceId,
-            highlight_id: boot.highlightId,
-            token: boot.token,
-            sdp: offer.sdp,
-          },
+          '/gfs/moment_rtc/offer',
+          { user_id: boot.userId, sdp: offer.sdp },
         )
         sessionId = offerResp.session_id
 
@@ -257,7 +225,6 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
           attempts += 1
           if (attempts > POLL_MAX_ATTEMPTS) {
             if (pollTimer) clearInterval(pollTimer)
-            // Author online but no direct channel within budget → relay.
             if (!channelOpened) void startRelayFallback()
             return
           }
@@ -265,7 +232,7 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
             const session = await fetchJson<{
               answer_sdp: string | null
               ice_candidates: RTCIceCandidateInit[]
-            }>(`/gfs/highlight_rtc/session/${encodeURIComponent(sessionId!)}`)
+            }>(`/gfs/moment_rtc/session/${encodeURIComponent(sessionId!)}`)
             if (session.answer_sdp && pc!.remoteDescription === null) {
               await pc!.setRemoteDescription({ type: 'answer', sdp: session.answer_sdp })
             }
@@ -290,92 +257,49 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
       cancelled = true
       if (pollTimer) clearInterval(pollTimer)
       if (pc) try { pc.close() } catch { /* tolerated */ }
-      // Release all blob URLs.
-      Object.values(state.frameUrls).forEach((u) => URL.revokeObjectURL(u))
+      Object.values(state.mediaUrls).forEach((u) => URL.revokeObjectURL(u))
     }
-  }, [boot.instanceId, boot.highlightId, boot.token])
-
-  // Auto-advance once we have a renderable frame.
-  useEffect(() => {
-    if (state.status !== 'playing') return
-    if (state.currentIndex >= state.manifest.length) return
-    const cur = state.manifest[state.currentIndex]
-    if (!state.frameUrls[cur.frame_id]) return
-    const dur = (cur.duration_ms && cur.duration_ms > 0)
-      ? cur.duration_ms : FRAME_DURATION_MS
-    const t = setTimeout(() => {
-      setState((s) => {
-        if (s.currentIndex < s.manifest.length - 1) {
-          return { ...s, currentIndex: s.currentIndex + 1 }
-        }
-        return { ...s, status: 'ended' }
-      })
-    }, dur)
-    return () => clearTimeout(t)
-  }, [state.status, state.currentIndex, state.manifest, state.frameUrls])
+  }, [boot.userId, boot.instanceId])
 
   if (state.status === 'error') {
-    return (
-      <div class="highlight-error">
-        {state.message || 'Couldn’t connect.'}
-      </div>
-    )
+    return <div class="moments-error">{state.message || 'Couldn’t connect.'}</div>
   }
-
-  if (state.status === 'ended') {
-    return <div class="highlight-end">Highlight finished.</div>
+  if (state.status !== 'ready') {
+    return <div class="moments-status">{state.message ?? 'Loading…'}</div>
   }
-
-  const total = state.manifest.length
-  const cur = total > 0 ? state.manifest[state.currentIndex] : null
-  const url = cur ? state.frameUrls[cur.frame_id] : null
+  if (state.moments.length === 0) {
+    return <div class="moments-empty">No public moments right now.</div>
+  }
 
   return (
-    <div class="highlight-viewer">
-      <div class="progress">
-        {state.manifest.map((_, i) => (
-          <span
-            key={i}
-            class={
-              i < state.currentIndex ? 'seg done' :
-              i === state.currentIndex ? 'seg active' : 'seg'
-            }
-          />
-        ))}
-      </div>
-      <div class="stage">
-        {url && cur && cur.content_type.startsWith('video/') && (
-          <video src={url} autoPlay playsInline />
-        )}
-        {url && cur && !cur.content_type.startsWith('video/') && (
-          <img src={url} alt="" />
-        )}
-        {!url && <div class="status">{state.message ?? 'Buffering…'}</div>}
-        {cur?.caption_text && (
-          <div class="caption">{cur.caption_text}</div>
-        )}
-      </div>
-    </div>
+    <ul class="moments-list">
+      {state.moments.map((m) => {
+        const url = m.media_frame_id ? state.mediaUrls[m.media_frame_id] : undefined
+        const isVideo = (m.media_type ?? m.content_type ?? '').includes('video')
+        return (
+          <li key={m.id} class="moment-card">
+            {m.content && <p class="moment-text">{m.content}</p>}
+            {m.has_media && !url && <div class="moment-media-loading">Loading media…</div>}
+            {url && isVideo && <video class="moment-media" src={url} controls playsInline />}
+            {url && !isVideo && <img class="moment-media" src={url} alt="" />}
+            <time class="moment-time" dateTime={m.created_at}>{m.created_at}</time>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
 
 function humanizeError(msg: string | null | undefined): string {
   if (!msg) return 'Couldn’t connect.'
-  if (/HTTP 410/.test(msg)) return 'This highlight has ended.'
+  if (/HTTP 404/.test(msg)) return 'This person isn’t sharing public moments.'
   if (/HTTP 503/.test(msg)) return 'Currently unavailable.'
   if (/HTTP 429/.test(msg)) return 'Too many viewers — try again in a minute.'
-  if (/expired/i.test(msg)) return 'This highlight has ended.'
-  if (/backpressure/i.test(msg)) return 'Too many viewers — try again in a minute.'
   return msg
 }
 
 
-// Strip a leading ``/`` so caller paths like ``/gfs/highlights/...`` look
-// natural at the call site while the actual fetch resolves against
-// ``<base href>`` — keeping the public viewer portable to any
-// path-prefixed deployment instead of pinning the request to the
-// document origin.
 const _rel = (p: string): string => p.replace(/^\/+/, '')
 
 
@@ -397,10 +321,11 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
 }
 
 
-// Bootstrap entry — read ``<script id="boot">`` and mount.
+// Bootstrap — read ``<script id="moments-boot">`` and mount into
+// ``#moments-root`` (the SSR user-detail page renders both).
 (function bootstrap(): void {
-  const bootEl = document.getElementById('boot')
-  const root = document.getElementById('root')
+  const bootEl = document.getElementById('moments-boot')
+  const root = document.getElementById('moments-root')
   if (!bootEl || !root) return
   let boot: BootPayload
   try {
@@ -409,9 +334,9 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
     root.textContent = 'Couldn’t parse boot payload.'
     return
   }
-  if (!boot.instanceId || !boot.highlightId || !boot.token) {
+  if (!boot.userId || !boot.instanceId) {
     root.textContent = 'Missing boot context.'
     return
   }
-  render(<PublicHighlightViewer boot={boot} />, root)
+  render(<PublicMomentsViewer boot={boot} />, root)
 })()

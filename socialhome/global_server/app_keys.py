@@ -22,6 +22,7 @@ from .repositories import (
     AbstractGfsUserRegistrationRepo,
 )
 from .rtc_transport import GfsRtcSession
+from .relay_bridge import RelayBridge
 from .highlight_publications import HighlightPublicationRegistry
 from .moment_public_registry import MomentPublicRegistry
 from .ws_registry import GfsWebSocketRegistry
@@ -36,6 +37,7 @@ gfs_admin_service_key: AppKey[GfsAdminService] = AppKey("gfs_admin_service")
 gfs_cluster_key: AppKey[ClusterService] = AppKey("gfs_cluster")
 gfs_cluster_repo_key: AppKey[AbstractClusterRepo] = AppKey("gfs_cluster_repo")
 gfs_rtc_key: AppKey[GfsRtcSession] = AppKey("gfs_rtc")
+gfs_relay_bridge_key: AppKey[RelayBridge] = AppKey("gfs_relay_bridge")
 gfs_ws_registry_key: AppKey[GfsWebSocketRegistry] = AppKey("gfs_ws_registry")
 gfs_http_session_key: AppKey[aiohttp.ClientSession] = AppKey("gfs_http_session")
 gfs_highlight_pub_repo_key: AppKey[AbstractGfsHighlightPublicationRepo] = AppKey(

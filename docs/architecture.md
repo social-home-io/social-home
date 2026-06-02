@@ -19,6 +19,17 @@ genuinely need a meeting point: public-space discovery, push fan-out
 to offline peers, and WebRTC signalling bootstrap. The GFS sees
 routing metadata only — never plaintext content.
 
+For public-content delivery (public highlights and the public moments
+index) the GFS adds a **lazy-relay fallback tier**: a guest browser
+always tries a direct WebRTC DataChannel to the author's SH first, and
+only when that can't connect does the GFS proxy the framed stream over
+HTTP — pushing a `relay_offer` to the still-online author, who streams
+the byte-identical frames back through the GFS to the guest. The fallback
+is author-online only; an offline author still yields "unavailable". One
+framing module and one transient in-memory `RelayBridge` serve both
+highlights and moments, and **the GFS stores zero highlight/moment
+content bytes** — the bridge is a pure pipe, never an at-rest copy.
+
 ```mermaid
 flowchart LR
     subgraph HFS_A["HFS (household A)"]
@@ -39,7 +50,9 @@ flowchart LR
         G_dir["public-space directory"]
         G_rtc["RTC signalling"]
         G_push["push fan-out"]
+        G_bridge["RelayBridge<br/>(transient, stores nothing)"]
     end
+    V_pub["Public guest<br/>(browser)"]
 
     A_pc -- "WebRTC DataChannel" --> B_pc
     A_app -- "HTTPS inbox<br/>(fallback)" --> B_app
@@ -49,6 +62,10 @@ flowchart LR
     A_app -. "SDP/ICE" .-> G_rtc
     G_rtc -. "relay" .-> B_app
     A_app -. "offline push" .-> G_push
+
+    V_pub -- "WebRTC DataChannel (direct)" --> A_pc
+    V_pub -. "relay fallback (HTTP)" .-> G_bridge
+    A_app -. "framed stream" .-> G_bridge
 ```
 
 A single HFS can run in three platform modes, selected by `SH_MODE`:

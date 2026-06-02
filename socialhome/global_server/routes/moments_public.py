@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 
 from aiohttp import web
@@ -358,6 +359,7 @@ _USER_DETAIL_HTML = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<base href="/">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{display_name} — Public Momentum</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -380,7 +382,13 @@ _USER_DETAIL_HTML = """<!doctype html>
     Follow on your Social Home
   </a>
 </article>
+<section class="moments-index" aria-label="Current moments">
+  <h2>Current moments</h2>
+  <div id="moments-root"></div>
+</section>
 </main>
+<script id="moments-boot" type="application/json">{boot_json}</script>
+<script type="module" src="/static/moment_public_viewer.js"></script>
 </body>
 </html>"""
 
@@ -419,6 +427,7 @@ class GfsUserDetailHtmlView(GfsBaseView):
             bio=_html_escape(bio),
             follower_count=int(followers),
             gfs_id=_html_escape(str(gfs_id)),
+            boot_json=json.dumps({"userId": user_id, "instanceId": reg.instance_id}),
         )
         return web.Response(text=body, content_type="text/html")
 

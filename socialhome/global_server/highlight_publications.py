@@ -21,7 +21,6 @@ signalling offer to the author when a viewer arrives.
 from __future__ import annotations
 
 import logging
-import pathlib
 import secrets
 from dataclasses import dataclass
 from time import time
@@ -44,16 +43,10 @@ class ResolvedToken:
     publication: GfsHighlightPublication
 
 
-#: Hard cap on the bytes of an uploaded OG thumbnail. Twitter/iMessage/
-#: Slack render at most ~1MB; we settle for 200 KB so abuse can't fill
-#: the GFS disk and a malformed JPEG can't bury the operator's storage.
-MAX_OG_THUMBNAIL_BYTES: int = 200 * 1024
-
-
 class HighlightPublicationRegistry:
     """Records publish rows + mints / revokes share tokens."""
 
-    __slots__ = ("_pubs", "_tokens", "_ws", "_base_url", "_og_dir")
+    __slots__ = ("_pubs", "_tokens", "_ws", "_base_url")
 
     def __init__(
         self,
@@ -62,18 +55,12 @@ class HighlightPublicationRegistry:
         ws: GfsWebSocketRegistry,
         *,
         base_url: str,
-        og_thumbnail_dir: pathlib.Path,
     ) -> None:
         self._pubs = pubs
         self._tokens = tokens
         self._ws = ws
         # Trim a trailing slash so URL building stays a single template.
         self._base_url = base_url.rstrip("/")
-        self._og_dir = og_thumbnail_dir
-        try:
-            self._og_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:  # pragma: no cover — ops issue, log on first use
-            pass
 
     # ── Publish flow ─────────────────────────────────────────────────────
 
@@ -140,12 +127,7 @@ class HighlightPublicationRegistry:
 
     async def remove_publish(self, highlight_id: str, instance_id: str) -> bool:
         """Drop the publication row. CASCADE drops every token under it.
-        Returns True if a row was actually deleted. Also wipes the
-        cached OG thumbnail file so a re-publish doesn't accidentally
-        keep showing the previous social-card image."""
-        await self.remove_og_thumbnail(
-            highlight_id=highlight_id, instance_id=instance_id
-        )
+        Returns True if a row was actually deleted."""
         n = await self._pubs.delete(highlight_id, instance_id)
         return n > 0
 
@@ -171,10 +153,9 @@ class HighlightPublicationRegistry:
     ) -> GfsHighlightPublication | None:
         """Read-only fetch of the publication row.
 
-        Routes that need the OG thumbnail filename or the absolute
-        ``expires_at`` query through this rather than poking the
-        repo directly so the registry stays the single point of
-        truth for the §highlights_public storage state.
+        Routes that need the absolute ``expires_at`` query through this
+        rather than poking the repo directly so the registry stays the
+        single point of truth for the §highlights_public storage state.
         """
         return await self._pubs.get(highlight_id, instance_id)
 
@@ -188,94 +169,13 @@ class HighlightPublicationRegistry:
         """
         return self._ws.is_connected(instance_id)
 
-    # ── OG thumbnail cache ───────────────────────────────────────────────
-
-    async def store_og_thumbnail(
-        self,
-        *,
-        highlight_id: str,
-        instance_id: str,
-        jpeg_bytes: bytes,
-    ) -> str:
-        """Persist a JPEG thumbnail for the publication's OG card.
-
-        Returns the filename so route handlers can echo it back. The
-        filename is deterministic from ``(instance_id, highlight_id)`` so
-        a re-upload overwrites in place — no orphan files. Caller is
-        responsible for verifying the publication exists.
-        """
-        if len(jpeg_bytes) > MAX_OG_THUMBNAIL_BYTES:
-            raise ValueError(
-                f"OG thumbnail exceeds {MAX_OG_THUMBNAIL_BYTES} bytes",
-            )
-        if not _looks_like_jpeg(jpeg_bytes):
-            raise ValueError("Uploaded body is not a JPEG image")
-        filename = _og_filename(instance_id, highlight_id)
-        path = self._og_dir / filename
-        path.write_bytes(jpeg_bytes)
-        await self._pubs.set_og_thumbnail(highlight_id, instance_id, filename)
-        return filename
-
-    async def remove_og_thumbnail(
-        self,
-        *,
-        highlight_id: str,
-        instance_id: str,
-    ) -> None:
-        """Drop the cached OG thumbnail. Called from
-        :meth:`remove_publish` so a re-publish doesn't keep serving an
-        old preview, and exposed for the standalone unpublish route."""
-        existing = await self._pubs.get(highlight_id, instance_id)
-        if existing is None or not existing.og_thumbnail_filename:
-            return
-        path = self._og_dir / existing.og_thumbnail_filename
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:  # pragma: no cover - defensive
-            pass
-        await self._pubs.set_og_thumbnail(highlight_id, instance_id, None)
-
-    def og_thumbnail_path(self, filename: str) -> pathlib.Path:
-        """Resolve a stored thumbnail filename back to its on-disk path.
-
-        Defends against directory traversal: ``filename`` must be a
-        bare filename (no path segments). Returns the joined path
-        regardless of whether the file exists — callers stat to
-        decide.
-        """
-        if "/" in filename or "\\" in filename or filename.startswith("."):
-            raise ValueError("invalid filename")
-        return self._og_dir / filename
-
     # ── URL helper ───────────────────────────────────────────────────────
 
     def _build_url(self, instance_id: str, highlight_id: str, token: str) -> str:
         return f"{self._base_url}/highlight/{instance_id}/{highlight_id}/{token}"
-
-    def og_image_url(self, instance_id: str, highlight_id: str) -> str:
-        """Return the public URL for the OG image. Stable per highlight so
-        social-card crawlers can cache it across token rotations."""
-        return f"{self._base_url}/highlight/{instance_id}/{highlight_id}/og.jpg"
 
 
 def _new_token() -> str:
     """32-byte urlsafe-base64 token. Roughly the same entropy a peer
     pairing token carries."""
     return secrets.token_urlsafe(32)
-
-
-def _og_filename(instance_id: str, highlight_id: str) -> str:
-    """Deterministic ``{instance}_{highlight}.jpg`` so re-upload overwrites."""
-    safe_inst = "".join(c if c.isalnum() else "_" for c in instance_id)
-    safe_highlight = "".join(c if c.isalnum() else "_" for c in highlight_id)
-    return f"{safe_inst}_{safe_highlight}.jpg"
-
-
-def _looks_like_jpeg(data: bytes) -> bool:
-    """Magic-byte check — ``FF D8 FF`` for any JPEG variant.
-
-    Cheap defence against an attacker uploading non-image bytes that
-    a browser might mis-interpret. The author SH side should already
-    have run the bytes through the image processor.
-    """
-    return len(data) >= 3 and data[:3] == b"\xff\xd8\xff"

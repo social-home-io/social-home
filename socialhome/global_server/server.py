@@ -60,6 +60,7 @@ from .repositories import (
 )
 from .routes import register_routes
 from .rtc_transport import GfsRtcSession
+from .relay_bridge import RelayBridge
 from .highlight_publications import HighlightPublicationRegistry
 from .moment_public_registry import MomentPublicRegistry
 from .ws_registry import GfsWebSocketRegistry
@@ -183,13 +184,11 @@ class GfsApp:
             enabled=config.cluster_enabled,
         )
         admin.attach_cluster(cluster)
-        og_dir = Path(config.data_dir) / "og_thumbnails"
         highlight_pubs = HighlightPublicationRegistry(
             repos.highlight_pubs,
             repos.highlight_tokens,
             ws_registry,
             base_url=config.base_url,
-            og_thumbnail_dir=og_dir,
         )
         moment_public = MomentPublicRegistry(
             repos.moment_public_users,
@@ -203,6 +202,7 @@ class GfsApp:
             admin=admin,
             tokens=PairingTokenService(repos.admin),
             rtc=GfsRtcSession(),
+            relay_bridge=RelayBridge(),
             ws_registry=ws_registry,
             highlight_pubs=highlight_pubs,
             moment_public=moment_public,
@@ -229,6 +229,7 @@ class GfsApp:
         a[K.gfs_admin_auth_key] = self.services.admin_auth
         a[K.gfs_admin_service_key] = self.services.admin
         a[K.gfs_rtc_key] = self.services.rtc
+        a[K.gfs_relay_bridge_key] = self.services.relay_bridge
         a[K.gfs_ws_registry_key] = self.services.ws_registry
         a[K.gfs_highlight_pub_repo_key] = self.repos.highlight_pubs
         a[K.gfs_highlight_token_repo_key] = self.repos.highlight_tokens

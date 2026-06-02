@@ -153,7 +153,7 @@ GFS-side tables (in `socialhome/global_server/migrations/0001_initial.sql`):
 
 | Table | Purpose |
 |---|---|
-| `gfs_highlight_publications` | One row per `(highlight_id, instance_id)` opted into public sharing. `expires_at` mirrors the author's retention so a publication can never outlive the highlight it advertises. `publish_signature` caches the Ed25519 over the publish body for audit. |
+| `gfs_highlight_publications` | One row per `(highlight_id, instance_id)` opted into public sharing. `expires_at` mirrors the author's retention so a publication can never outlive the highlight it advertises. `publish_signature` caches the Ed25519 over the publish body for audit. The OG-thumbnail filename column was **dropped** in GFS migration `0003` — the GFS no longer caches OG thumbnails and now stores zero highlight content bytes. |
 | `gfs_highlight_tokens` | Revocable share-link tokens under a publication (composite FK CASCADE on the publication PK). `revoked_at` is `NULL` while active; ``label`` is the author-supplied "for-twitter" hint. |
 
 ## Momentum

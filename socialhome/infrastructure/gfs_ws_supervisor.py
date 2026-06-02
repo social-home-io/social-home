@@ -42,6 +42,7 @@ class GfsWebSocketSupervisor:
         "_session_factory",
         "_on_relay",
         "_on_highlight_signal",
+        "_on_moment_signal",
         "_on_moment_public",
         "_on_follow_changed",
         "_interval",
@@ -60,6 +61,7 @@ class GfsWebSocketSupervisor:
         session_factory: Callable[[], aiohttp.ClientSession],
         on_relay: Callable[[dict], Awaitable[None]],
         on_highlight_signal: Callable[[dict], Awaitable[None]] | None = None,
+        on_moment_signal: Callable[[dict], Awaitable[None]] | None = None,
         on_moment_public: Callable[..., Awaitable[None]] | None = None,
         on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
         reconcile_interval_seconds: float = DEFAULT_RECONCILE_INTERVAL_SECONDS,
@@ -70,6 +72,7 @@ class GfsWebSocketSupervisor:
         self._session_factory = session_factory
         self._on_relay = on_relay
         self._on_highlight_signal = on_highlight_signal
+        self._on_moment_signal = on_moment_signal
         self._on_moment_public = on_moment_public
         self._on_follow_changed = on_follow_changed
         self._interval = reconcile_interval_seconds
@@ -191,6 +194,7 @@ class GfsWebSocketSupervisor:
             session_factory=self._session_factory,
             on_relay=self._on_relay,
             on_highlight_signal=self._on_highlight_signal,
+            on_moment_signal=self._on_moment_signal,
             on_moment_public=wrapped_moment_public,
             on_follow_changed=self._on_follow_changed,
         )

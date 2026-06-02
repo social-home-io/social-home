@@ -40,6 +40,12 @@ class AbstractMomentRepo(Protocol):
         tag: str | None = None,
         max_hops: int = 3,
     ) -> list[Moment]: ...
+    async def list_public_for(
+        self,
+        author_user_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[Moment]: ...
     async def list_replies(self, parent_moment_id: str) -> list[Moment]: ...
     async def count_recent_for_author(
         self,
@@ -297,6 +303,34 @@ class SqliteMomentRepo:
             (author_user_id, int(hop_count)),
         )
         return row is not None
+
+    async def list_public_for(
+        self,
+        author_user_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[Moment]:
+        """The author's current PUBLIC, non-expired moments, newest-first.
+
+        Drives the §Momentum-public live index a guest reads through the
+        GFS over WebRTC (or the GFS-relay fallback). The predicate is the
+        privacy invariant: ONLY ``is_public=1`` rows whose ``expires_at``
+        is still in the future are ever returned — private / household
+        moments and expired rows are excluded at the query layer so no
+        non-public byte can leak onto the public stream.
+        """
+        limit = max(1, min(int(limit), 100))
+        rows = await self._db.fetchall(
+            """
+            SELECT * FROM moments
+             WHERE author_user_id = ? AND is_public = 1
+               AND expires_at > datetime('now')
+             ORDER BY created_at DESC
+             LIMIT ?
+            """,
+            (author_user_id, limit),
+        )
+        return [m for m in (_row_to_moment(d) for d in rows_to_dicts(rows)) if m]
 
     async def list_replies(self, parent_moment_id: str) -> list[Moment]:
         """Replies in chronological order so the thread reads top-down."""

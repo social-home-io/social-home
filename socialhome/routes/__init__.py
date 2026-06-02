@@ -283,7 +283,6 @@ from .highlights import (
     HighlightShareView,
 )
 from .highlight_publications import (
-    HighlightPublishOgView,
     HighlightPublishTokenView,
     HighlightPublishView,
 )
@@ -792,12 +791,6 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/highlights/{id}/report", HighlightReportView)
     # Public-publish surface — author-only; the GFS holds the tokens.
     app.router.add_view("/api/highlights/{id}/publish", HighlightPublishView)
-    # OG-thumbnail upload — declared before ``{token}`` so aiohttp's
-    # literal-prefix matcher doesn't capture ``og`` as a token id.
-    app.router.add_view(
-        "/api/highlights/{id}/publish/og",
-        HighlightPublishOgView,
-    )
     app.router.add_view(
         "/api/highlights/{id}/publish/{token}",
         HighlightPublishTokenView,

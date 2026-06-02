@@ -41,13 +41,12 @@ def ws_registry():
 
 
 @pytest.fixture
-def registry(repos, ws_registry, tmp_dir):
+def registry(repos, ws_registry):
     return HighlightPublicationRegistry(
         repos["pubs"],
         repos["tokens"],
         ws_registry,
         base_url="https://gfs.example",
-        og_thumbnail_dir=tmp_dir / "og",
     )
 
 
@@ -293,98 +292,3 @@ async def test_author_online_reads_ws_registry(registry, ws_registry):
 
     ws_registry._by_instance["inst-author"] = _StubWs()  # type: ignore[assignment]
     assert await registry.author_online("inst-author") is True
-
-
-# ── OG-thumbnail cache (§highlights_public OG card) ────────────────────────
-
-
-_JPEG_HEADER = b"\xff\xd8\xff"  # any JPEG variant
-
-
-async def test_store_og_thumbnail_writes_file_and_sets_filename(registry):
-    await registry.record_publish(
-        highlight_id="s-1",
-        instance_id="inst-author",
-        expires_at=10_000_000_000,
-        publish_signature="sig",
-    )
-    filename = await registry.store_og_thumbnail(
-        highlight_id="s-1",
-        instance_id="inst-author",
-        jpeg_bytes=_JPEG_HEADER + b"\x00" * 64,
-    )
-    assert filename.endswith(".jpg")
-    pub = await registry.get_publication("s-1", "inst-author")
-    assert pub is not None
-    assert pub.og_thumbnail_filename == filename
-    on_disk = registry.og_thumbnail_path(filename)
-    assert on_disk.is_file()
-
-
-async def test_store_og_thumbnail_rejects_non_jpeg(registry):
-    await registry.record_publish(
-        highlight_id="s-1",
-        instance_id="inst-author",
-        expires_at=10_000_000_000,
-        publish_signature="sig",
-    )
-    with pytest.raises(ValueError):
-        await registry.store_og_thumbnail(
-            highlight_id="s-1",
-            instance_id="inst-author",
-            jpeg_bytes=b"\x00" * 16,  # missing FF D8 FF magic
-        )
-
-
-async def test_store_og_thumbnail_rejects_oversize(registry):
-    from socialhome.global_server.highlight_publications import MAX_OG_THUMBNAIL_BYTES
-
-    await registry.record_publish(
-        highlight_id="s-1",
-        instance_id="inst-author",
-        expires_at=10_000_000_000,
-        publish_signature="sig",
-    )
-    huge = _JPEG_HEADER + b"x" * (MAX_OG_THUMBNAIL_BYTES + 1)
-    with pytest.raises(ValueError):
-        await registry.store_og_thumbnail(
-            highlight_id="s-1",
-            instance_id="inst-author",
-            jpeg_bytes=huge,
-        )
-
-
-async def test_remove_publish_wipes_og_thumbnail(registry):
-    await registry.record_publish(
-        highlight_id="s-1",
-        instance_id="inst-author",
-        expires_at=10_000_000_000,
-        publish_signature="sig",
-    )
-    await registry.store_og_thumbnail(
-        highlight_id="s-1",
-        instance_id="inst-author",
-        jpeg_bytes=_JPEG_HEADER + b"\x00" * 32,
-    )
-    pub = await registry.get_publication("s-1", "inst-author")
-    assert pub is not None
-    path = registry.og_thumbnail_path(pub.og_thumbnail_filename)  # type: ignore[arg-type]
-    assert path.is_file()
-    await registry.remove_publish("s-1", "inst-author")
-    assert not path.is_file()
-
-
-async def test_og_thumbnail_path_rejects_traversal(registry):
-    with pytest.raises(ValueError):
-        registry.og_thumbnail_path("../etc/passwd")
-    with pytest.raises(ValueError):
-        registry.og_thumbnail_path(".hidden")
-
-
-async def test_og_image_url_is_stable_per_highlight(registry):
-    """The OG URL must be deterministic per (instance, highlight) so social
-    crawlers can cache it across token rotations."""
-    url1 = registry.og_image_url("inst-author", "s-1")
-    url2 = registry.og_image_url("inst-author", "s-1")
-    assert url1 == url2
-    assert url1.endswith("/highlight/inst-author/s-1/og.jpg")
