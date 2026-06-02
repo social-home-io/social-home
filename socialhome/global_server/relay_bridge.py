@@ -37,6 +37,13 @@ log = logging.getLogger(__name__)
 #: timeout; this is the backstop for the post-connect path.
 RELAY_TTL_SECONDS: float = 120.0
 
+#: Hard cap on concurrently-live relay channels. The guest GET is
+#: anonymous, so without a ceiling a flood of requests would create
+#: unbounded queues *and* fan a WS-push to each author. Over the cap,
+#: ``create`` returns ``None`` and the route answers 503 — no channel,
+#: no push.
+MAX_LIVE_CHANNELS: int = 256
+
 
 @dataclass(slots=True)
 class _Channel:
@@ -59,13 +66,17 @@ class RelayBridge:
     def __init__(self) -> None:
         self._channels: dict[str, _Channel] = {}
 
-    def create(self, *, target_instance_id: str, scope: str = "") -> str:
+    def create(self, *, target_instance_id: str, scope: str = "") -> str | None:
         """Open a channel the author ``target_instance_id`` may stream into.
 
         Returns the ``relay_id`` the GFS pushes to the author over the WS
-        and the guest's GET holds open. Bounded queue → backpressure: a
-        slow guest reader throttles the author's upload.
+        and the guest's GET holds open — or ``None`` when the live-channel
+        ceiling is hit, so the anonymous route sheds load with a 503
+        instead of growing memory unbounded. Bounded queue → backpressure:
+        a slow guest reader throttles the author's upload.
         """
+        if len(self._channels) >= MAX_LIVE_CHANNELS:
+            return None
         relay_id = uuid.uuid4().hex
         self._channels[relay_id] = _Channel(
             relay_id=relay_id,

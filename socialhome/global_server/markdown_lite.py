@@ -26,6 +26,13 @@ from __future__ import annotations
 
 import re
 
+#: Hard cap on the source length we will render. ``about_markdown`` is a
+#: short space blurb; without a bound, a paired instance could publish a
+#: large blob of pathological metacharacters and the (worst-case
+#: super-linear) inline passes would block the GFS event loop on every
+#: anonymous page view. Anything longer is truncated before rendering.
+MAX_SOURCE_CHARS: int = 4000
+
 _ESCAPE = {
     "&": "&amp;",
     "<": "&lt;",
@@ -63,7 +70,11 @@ def _render_link(m: re.Match[str]) -> str:
 
 def _inline(text: str) -> str:
     text = _CODE_RE.sub(lambda m: f"<code>{m.group(1)}</code>", text)
-    text = _LINK_RE.sub(_render_link, text)
+    # Skip the (super-linear-on-bracket-runs) link pass entirely unless the
+    # ``](`` that a link requires is actually present — cheap guard that
+    # flattens the common case to linear.
+    if "](" in text:
+        text = _LINK_RE.sub(_render_link, text)
     text = _BOLD_RE.sub(lambda m: f"<strong>{m.group(2)}</strong>", text)
     text = _ITALIC_RE.sub(lambda m: f"<em>{m.group(2)}</em>", text)
     return text
@@ -73,6 +84,8 @@ def render_markdown(src: str | None) -> str:
     """Render a safe HTML subset of ``src``. Returns ``""`` for empty input."""
     if not src or not src.strip():
         return ""
+    if len(src) > MAX_SOURCE_CHARS:
+        src = src[:MAX_SOURCE_CHARS] + "…"
     escaped = _escape(src.replace("\r\n", "\n").replace("\r", "\n"))
     out: list[str] = []
     for block in re.split(r"\n[ \t]*\n", escaped.strip()):

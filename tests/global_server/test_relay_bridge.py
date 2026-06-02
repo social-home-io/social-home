@@ -97,6 +97,23 @@ async def test_target_instance_recorded():
     assert channel.scope == "s-9"
 
 
+async def test_create_returns_none_over_capacity(monkeypatch):
+    """Anonymous relay GETs can't exhaust GFS memory — over the live cap,
+    create sheds load with None (the route answers 503)."""
+    import socialhome.global_server.relay_bridge as rb
+
+    monkeypatch.setattr(rb, "MAX_LIVE_CHANNELS", 2)
+    bridge = rb.RelayBridge()
+    assert bridge.create(target_instance_id="a") is not None
+    assert bridge.create(target_instance_id="a") is not None
+    # Third is over the cap.
+    assert bridge.create(target_instance_id="a") is None
+    # Freeing one makes room again.
+    first = next(iter(bridge._channels))
+    bridge.close(first)
+    assert bridge.create(target_instance_id="a") is not None
+
+
 @pytest.mark.parametrize("n", [1, 5, 50])
 async def test_backpressure_does_not_drop_chunks(n):
     """The bounded queue throttles but never loses chunks."""
