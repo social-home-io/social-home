@@ -23,7 +23,10 @@ from socialhome.domain.apps import (
     AppAlreadyInstalledError,
     AppCatalogEntry,
     AppIntegrityError,
+    AppKvEntry,
+    AppNotEnabledError,
     AppNotFoundError,
+    AppQuotaExceededError,
     InstalledApp,
 )
 from socialhome.domain.events import AppInstalled, AppUninstalled
@@ -115,6 +118,7 @@ class _FakeAppRepo:
 
     def __init__(self) -> None:
         self._apps: dict[str, InstalledApp] = {}
+        self._kv: dict[tuple[str, str, str], AppKvEntry] = {}
 
     async def list_installed(self) -> list[InstalledApp]:
         return list(self._apps.values())
@@ -143,6 +147,40 @@ class _FakeAppRepo:
 
     async def uninstall(self, app_id: str) -> None:
         self._apps.pop(app_id, None)
+
+    # ─── KV store ────────────────────────────────────────────────────────────
+
+    async def kv_get(self, app_id: str, user_id: str, key: str) -> AppKvEntry | None:
+        return self._kv.get((app_id, user_id, key))
+
+    async def kv_list(self, app_id: str, user_id: str) -> list[AppKvEntry]:
+        return [
+            entry
+            for (a, u, _k), entry in self._kv.items()
+            if a == app_id and u == user_id
+        ]
+
+    async def kv_set(
+        self,
+        app_id: str,
+        user_id: str,
+        key: str,
+        value_json: str,
+        updated_at: str,
+    ) -> None:
+        self._kv[(app_id, user_id, key)] = AppKvEntry(
+            app_id=app_id,
+            user_id=user_id,
+            key=key,
+            value_json=value_json,
+            updated_at=updated_at,
+        )
+
+    async def kv_delete(self, app_id: str, user_id: str, key: str) -> None:
+        self._kv.pop((app_id, user_id, key), None)
+
+    async def kv_count(self, app_id: str, user_id: str) -> int:
+        return sum(1 for (a, u, _k) in self._kv if a == app_id and u == user_id)
 
 
 class _StubCatalog:
@@ -731,3 +769,179 @@ async def test_partial_dir_removed_after_failed_install(
     assert not dest.exists(), f"partial bundle dir was not cleaned up: {dest}"
     # Nothing in repo
     assert await repo.list_installed() == []
+
+
+# ─── Per-user KV store tests ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_store_set_get_roundtrip(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """store_set then store_get returns the original parsed value."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    await svc.store_set("chess", "user1", "prefs", {"turn": "w"})
+    result = await svc.store_get("chess", "user1", "prefs")
+
+    assert result == {"turn": "w"}
+
+
+@pytest.mark.asyncio
+async def test_store_requires_installed(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """store_set on an unknown app_id raises AppNotFoundError."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    with pytest.raises(AppNotFoundError):
+        await svc.store_set("unknown_app", "user1", "k", {"v": 1})
+
+
+@pytest.mark.asyncio
+async def test_store_requires_enabled(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """store_set and store_get raise AppNotEnabledError when the app is disabled."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    await svc.set_enabled("chess", enabled=False, actor_is_admin=True)
+
+    with pytest.raises(AppNotEnabledError):
+        await svc.store_set("chess", "user1", "k", {"v": 1})
+
+    with pytest.raises(AppNotEnabledError):
+        await svc.store_get("chess", "user1", "k")
+
+
+@pytest.mark.asyncio
+async def test_store_get_missing_key_raises_keyerror(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """store_get on a key that doesn't exist raises KeyError."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    with pytest.raises(KeyError):
+        await svc.store_get("chess", "user1", "nonexistent")
+
+
+@pytest.mark.asyncio
+async def test_store_value_too_large_raises_quota(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """A value whose JSON exceeds 64 KiB raises AppQuotaExceededError; nothing stored."""
+    bundle_bytes, _ = chess_bundle
+    svc, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # Build a value whose json representation is > 64 KiB
+    big_value = {"x": "a" * 70_000}
+
+    with pytest.raises(AppQuotaExceededError):
+        await svc.store_set("chess", "user1", "big", big_value)
+
+    # Nothing should have been stored
+    with pytest.raises(KeyError):
+        await svc.store_get("chess", "user1", "big")
+
+
+@pytest.mark.asyncio
+async def test_store_too_many_keys_raises_quota(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After APP_KV_MAX_KEYS keys, adding a NEW key raises AppQuotaExceededError.
+
+    Updating an existing key at the cap must still succeed.
+    """
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # Lower the cap to 2 for this test
+    import socialhome.services.app_service as app_svc_mod
+
+    monkeypatch.setattr(app_svc_mod, "APP_KV_MAX_KEYS", 2)
+
+    await svc.store_set("chess", "user1", "k1", 1)
+    await svc.store_set("chess", "user1", "k2", 2)
+
+    # 3rd NEW key must fail
+    with pytest.raises(AppQuotaExceededError):
+        await svc.store_set("chess", "user1", "k3", 3)
+
+    # Updating an existing key at the cap must still work
+    await svc.store_set("chess", "user1", "k1", 999)
+    assert await svc.store_get("chess", "user1", "k1") == 999
+
+
+@pytest.mark.asyncio
+async def test_store_list_returns_parsed_map(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """store_list returns a dict with all keys parsed from JSON."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    await svc.store_set("chess", "user1", "a", 1)
+    await svc.store_set("chess", "user1", "b", [2, 3])
+    await svc.store_set("chess", "user1", "c", "hello")
+
+    result = await svc.store_list("chess", "user1")
+
+    assert result == {"a": 1, "b": [2, 3], "c": "hello"}
+
+
+@pytest.mark.asyncio
+async def test_store_delete(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """store_delete removes the key; subsequent store_get raises KeyError."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    await svc.store_set("chess", "user1", "key_to_delete", {"data": True})
+    # Confirm it's there
+    assert await svc.store_get("chess", "user1", "key_to_delete") == {"data": True}
+
+    # Delete it
+    await svc.store_delete("chess", "user1", "key_to_delete")
+
+    # Now it's gone
+    with pytest.raises(KeyError):
+        await svc.store_get("chess", "user1", "key_to_delete")
+
+    # store_list should also not include it
+    listing = await svc.store_list("chess", "user1")
+    assert "key_to_delete" not in listing
