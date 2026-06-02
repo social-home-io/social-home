@@ -610,3 +610,27 @@ async def test_browse_catalog_no_catalog_returns_empty(
         downloader=downloader,
     )
     assert await svc.browse_catalog() == []
+
+
+@pytest.mark.asyncio
+async def test_get_passthrough(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """get() returns the installed app after install and None for unknown ids."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+
+    # Before install — unknown id returns None
+    assert await svc.get("chess") is None
+    assert await svc.get("nonexistent") is None
+
+    # After install — returns the installed app
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    result = await svc.get("chess")
+    assert result is not None
+    assert result.app_id == "chess"
+
+    # A different id still returns None
+    assert await svc.get("nonexistent") is None

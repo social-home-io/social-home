@@ -154,23 +154,24 @@ class AppService:
         dest = self._media_path / "apps" / app_id / entry.latest_version
         await aiofiles.os.makedirs(str(dest), exist_ok=True)
 
-        # Safe extraction (CPU + I/O-bound; runs in thread)
+        # Safe extraction (CPU + I/O-bound; runs in thread).
+        # _extract_bundle_sync also reads and returns the parsed manifest.json
+        # dict so no blocking filesystem call is needed on the event loop.
         try:
-            await asyncio.to_thread(self._extract_bundle_sync, data, dest)
+            manifest_dict = await asyncio.to_thread(
+                self._extract_bundle_sync, data, dest
+            )
         except AppIntegrityError:
             # Clean up the partially-extracted directory before re-raising
             await asyncio.to_thread(self._rmtree_sync, dest)
             raise
 
-        # Parse manifest.json from the unpacked dir
-        manifest_path = dest / "manifest.json"
         try:
-            manifest_text = manifest_path.read_text(encoding="utf-8")
-            manifest = AppManifest.from_dict(json.loads(manifest_text))
-        except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+            manifest = AppManifest.from_dict(manifest_dict)
+        except (ValueError, KeyError, TypeError) as exc:
             await asyncio.to_thread(self._rmtree_sync, dest)
             raise AppIntegrityError(
-                f"Invalid or missing manifest.json in bundle for {app_id!r}: {exc}"
+                f"Invalid manifest.json in bundle for {app_id!r}: {exc}"
             ) from exc
 
         bundle_rel = f"apps/{app_id}/{entry.latest_version}"
@@ -260,7 +261,7 @@ class AppService:
         return hashlib.sha256(data).hexdigest()
 
     @staticmethod
-    def _extract_bundle_sync(data: bytes, dest: Path) -> None:
+    def _extract_bundle_sync(data: bytes, dest: Path) -> dict:
         """Extract a .tgz bundle into ``dest`` with path-traversal protection.
 
         Rejects:
@@ -268,8 +269,12 @@ class AppService:
         - Members whose resolved path would escape ``dest`` (``../`` etc.)
         - Non-regular-file / non-directory members (symlinks, devices, FIFOs)
 
-        Raises :class:`AppIntegrityError` on any violation.  Extraction is
-        member-by-member so we validate *before* writing each file.
+        After extraction, reads and returns the parsed ``manifest.json`` dict
+        so the caller never needs a blocking filesystem read on the event loop.
+
+        Raises :class:`AppIntegrityError` on any violation or a missing /
+        invalid manifest.  Extraction is member-by-member so we validate
+        *before* writing each file.
         """
         try:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
@@ -308,6 +313,17 @@ class AppService:
                             member_path.write_bytes(fobj.read())
         except (tarfile.TarError, EOFError) as exc:
             raise AppIntegrityError(f"Corrupt or unreadable bundle: {exc}") from exc
+
+        # Read manifest.json here (we're already off the event loop) so the
+        # caller never needs a blocking Path.read_text on the event loop.
+        manifest_path = dest / "manifest.json"
+        try:
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            return json.loads(manifest_text)
+        except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+            raise AppIntegrityError(
+                f"Invalid or missing manifest.json in bundle: {exc}"
+            ) from exc
 
     @staticmethod
     def _rmtree_sync(path: Path) -> None:
