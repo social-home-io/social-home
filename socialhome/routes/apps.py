@@ -11,12 +11,17 @@ Four resource groups:
 
 from __future__ import annotations
 
+import json
+
 from aiohttp import web
 
-from ..app_keys import app_service_key
+from ..app_keys import app_federation_service_key, app_service_key
 from ..domain.apps import InstalledApp
 from ..security import error_response
 from .base import BaseView
+
+# Maximum encoded payload size for app federation messages (256 KiB).
+_MAX_APP_PAYLOAD_BYTES = 256 * 1024
 
 
 def _serialize(app: InstalledApp) -> dict:
@@ -175,3 +180,79 @@ class AppStoreItemView(BaseView):
         svc = self.svc(app_service_key)
         await svc.store_delete(app_id, self.user.user_id, key)
         return web.json_response({"status": "ok"})
+
+
+class AppPeersView(BaseView):
+    """``GET /api/apps/{app_id}/peers`` — list confirmed federation peers."""
+
+    async def get(self) -> web.Response:
+        svc = self.svc(app_federation_service_key)
+        peers = await svc.list_peers()
+        return self._json({"peers": peers})
+
+
+class AppSessionsView(BaseView):
+    """``POST /api/apps/{app_id}/sessions`` — open a cross-household app session."""
+
+    async def post(self) -> web.Response:
+        app_id = self.match("app_id")
+        body = await self.body()
+        peer_instance_id = body.get("peer_instance_id")
+        if not isinstance(peer_instance_id, str) or not peer_instance_id:
+            return error_response(
+                400, "UNPROCESSABLE", "peer_instance_id must be a non-empty string."
+            )
+        svc = self.svc(app_federation_service_key)
+        session_id = await svc.open_session(
+            app_id=app_id,
+            peer_instance_id=peer_instance_id,
+            actor_user_id=self.user.user_id,
+        )
+        return self._json({"session_id": session_id}, status=201)
+
+
+class AppMessagesView(BaseView):
+    """``POST /api/apps/{app_id}/messages`` — send an app-layer message to a peer."""
+
+    async def post(self) -> web.Response:
+        app_id = self.match("app_id")
+        body = await self.body()
+        session_id = body.get("session_id")
+        peer_instance_id = body.get("peer_instance_id")
+        payload = body.get("payload")
+
+        if not isinstance(session_id, str) or not session_id:
+            return error_response(
+                400, "UNPROCESSABLE", "session_id must be a non-empty string."
+            )
+        if not isinstance(peer_instance_id, str) or not peer_instance_id:
+            return error_response(
+                400, "UNPROCESSABLE", "peer_instance_id must be a non-empty string."
+            )
+        if payload is None:
+            return error_response(400, "UNPROCESSABLE", "payload is required.")
+
+        # Guard against excessively large payloads before forwarding to
+        # the federation layer.  JSON-encode to get a byte-accurate count.
+        try:
+            encoded_size = len(json.dumps(payload).encode())
+        except TypeError, ValueError:
+            return error_response(
+                400, "UNPROCESSABLE", "payload must be JSON-serialisable."
+            )
+        if encoded_size > _MAX_APP_PAYLOAD_BYTES:
+            return error_response(
+                413,
+                "PAYLOAD_TOO_LARGE",
+                f"payload exceeds the {_MAX_APP_PAYLOAD_BYTES // 1024} KiB limit.",
+            )
+
+        svc = self.svc(app_federation_service_key)
+        await svc.send_message(
+            app_id=app_id,
+            session_id=session_id,
+            peer_instance_id=peer_instance_id,
+            payload=payload,
+            actor_user_id=self.user.user_id,
+        )
+        return web.json_response({"ok": True})

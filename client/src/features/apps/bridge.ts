@@ -113,12 +113,31 @@ export function mountBridge(
         }
 
         case 'app.send': {
-          // PR4 wires cross-app/federation delivery; stub for now.
-          reply({
-            id,
-            ok: false,
-            error: { code: 'unavailable', message: 'federation not available' },
+          const { session_id, peer_instance_id, payload } = params ?? {}
+          await api.post(`/api/apps/${encodeURIComponent(appId)}/messages`, {
+            session_id,
+            peer_instance_id,
+            payload,
           })
+          reply({ id, ok: true, result: { ok: true } })
+          break
+        }
+
+        case 'peers.list': {
+          const resp = await api.get<{ peers: unknown[] }>(
+            `/api/apps/${encodeURIComponent(appId)}/peers`,
+          )
+          reply({ id, ok: true, result: resp.peers })
+          break
+        }
+
+        case 'app.openSession': {
+          const { peer_instance_id } = params ?? {}
+          const resp = await api.post<{ session_id: string }>(
+            `/api/apps/${encodeURIComponent(appId)}/sessions`,
+            { peer_instance_id },
+          )
+          reply({ id, ok: true, result: resp.session_id })
           break
         }
 
