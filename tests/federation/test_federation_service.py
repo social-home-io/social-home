@@ -1990,3 +1990,301 @@ async def test_media_frame_idempotency_short_circuits_before_assembly():
     assert r1 == {"status": "ok"}
     assert r2.get("deduped") is True
     assert len(p.received) == 1  # only the first dispatched
+
+
+# ─── Binary app channel (fed-app-v1) ───────────────────────────────────────────
+#
+# These exercise send_app_message (sender) + _app_inbound_handler
+# (receiver) end-to-end, plus the gating logic (binary vs JSON fallback).
+
+
+import types as _types  # noqa: E402
+
+
+class _CaptureAppTransport(_CaptureMediaTransport):
+    """Extends the media stub to also capture app frames."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.app: tuple[dict, bytes] | None = None
+        self.app_ready = True
+        self.app_returns = True
+
+    def is_app_ready(self, instance_id: str) -> bool:
+        return self.app_ready
+
+    async def send_app(self, *, instance, header_dict, payload_bytes) -> bool:
+        self.app = (header_dict, payload_bytes)
+        return self.app_returns
+
+
+def _paired_app(*, peer_proto_version: int = FederationCapability.MIN_FOR_APP_CHANNEL):
+    """Two services A and B paired for the app-channel tests."""
+    import os
+
+    a_kp = generate_identity_keypair()
+    b_kp = generate_identity_keypair()
+    a_id = derive_instance_id(a_kp.public_key)
+    b_id = derive_instance_id(b_kp.public_key)
+    session = os.urandom(32)
+    km_a = _make_kek_manager()
+    km_b = _make_kek_manager()
+    repo_a = InMemoryFederationRepo()
+    repo_b = InMemoryFederationRepo()
+
+    inst_b_for_a, _ = _make_remote_instance(km_a, peer_kp=b_kp, session_key=session)
+    repo_a._instances[b_id] = dataclasses.replace(
+        inst_b_for_a, proto_version=peer_proto_version
+    )
+    inst_a_for_b, _ = _make_remote_instance(km_b, peer_kp=a_kp, session_key=session)
+    repo_b._instances[a_id] = inst_a_for_b
+
+    svc_a = _svc_with(a_kp, repo_a, km_a)
+    svc_b = _svc_with(b_kp, repo_b, km_b)
+    cap = _CaptureAppTransport()
+    svc_a.attach_transport(cap)
+
+    captured: list = []
+
+    async def _record(event):
+        captured.append(event)
+
+    svc_b._event_registry.register(FederationEventType.APP_MESSAGE, _record)
+    svc_b._event_registry.register(FederationEventType.APP_SESSION, _record)
+
+    return _types.SimpleNamespace(
+        a_kp=a_kp,
+        b_kp=b_kp,
+        a_id=a_id,
+        b_id=b_id,
+        session=session,
+        svc_a=svc_a,
+        svc_b=svc_b,
+        repo_a=repo_a,
+        repo_b=repo_b,
+        cap=cap,
+        received=captured,
+    )
+
+
+from socialhome.federation.app_framing import (  # noqa: E402
+    APP_AEAD_SUITE_AESGCM_256,
+    UnsupportedAppAeadSuite,
+)
+
+
+@pytest.mark.asyncio
+async def test_send_app_message_uses_binary_when_peer_supports():
+    """CONFIRMED v_17 peer with an open app channel → binary frame, not JSON."""
+    p = _paired_app()
+    app_payload = {"move": "e2e4", "clock": 90}
+    result = await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-1",
+        payload=app_payload,
+    )
+    assert result.ok
+    # JSON path NOT used.
+    assert p.cap.json_envelopes == []
+    # Binary path was used.
+    assert p.cap.app is not None
+    header, payload_bytes = p.cap.app
+    assert header["event_type"] == "app_message"
+    assert header["from_instance"] == p.a_id
+    assert header["proto_version"] == 1
+    assert "signatures" in header
+    # Decrypt the metadata — should have app_id / session_id / aead_suite.
+    meta = orjson.loads(
+        p.svc_b._encoder.decrypt_payload(header["encrypted_payload"], p.session)
+    )
+    assert meta["app_id"] == "chess"
+    assert meta["session_id"] == "sess-1"
+    assert meta["app_aead_suite"] == APP_AEAD_SUITE_AESGCM_256
+    # Application payload is sealed — decrypt binary payload.
+    raw = p.svc_b._encoder.decrypt_bytes(payload_bytes, p.session)
+    assert orjson.loads(raw) == app_payload
+
+
+@pytest.mark.asyncio
+async def test_send_app_message_falls_back_to_json_when_peer_unsupported():
+    """Sub-v_17 peer → JSON APP_MESSAGE event, payload nested under 'data'."""
+    p = _paired_app(peer_proto_version=1)
+    app_payload = {"move": "d7d5"}
+    result = await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-2",
+        payload=app_payload,
+    )
+    assert result.ok
+    # Binary path NOT used.
+    assert p.cap.app is None
+    # JSON path used.
+    assert len(p.cap.json_envelopes) == 1
+    env = p.cap.json_envelopes[0]
+    assert env["event_type"] == "app_message"
+    # Decrypt the envelope payload — must contain app_id + session_id + data.
+    meta = orjson.loads(
+        p.svc_b._encoder.decrypt_payload(env["encrypted_payload"], p.session)
+    )
+    assert meta["app_id"] == "chess"
+    assert meta["session_id"] == "sess-2"
+    assert meta["data"] == app_payload
+    # ENCRYPTION-FIRST: the raw payload dict must NOT appear in plaintext in
+    # the envelope dict itself.
+    assert "move" not in str(env.get("encrypted_payload", ""))
+    # The key fields that the caller passed must not be in any top-level field
+    # of the envelope (they should only be inside the ciphertext).
+    assert env.get("app_id") is None
+    assert env.get("data") is None
+
+
+@pytest.mark.asyncio
+async def test_send_app_message_falls_back_when_channel_not_ready():
+    """Channel down → JSON fallback even though peer supports v_17."""
+    p = _paired_app()
+    p.cap.app_ready = False
+    result = await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-3",
+        payload={"move": "f4"},
+    )
+    assert result.ok
+    assert p.cap.app is None  # binary not attempted
+    assert len(p.cap.json_envelopes) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_app_message_falls_back_when_binary_send_returns_false():
+    """transport.send_app returns False → JSON fallback."""
+    p = _paired_app()
+    p.cap.app_returns = False
+    result = await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-4",
+        payload={"x": 1},
+    )
+    assert result.ok
+    assert p.cap.app is not None  # binary was attempted
+    assert len(p.cap.json_envelopes) == 1  # then fell back
+
+
+@pytest.mark.asyncio
+async def test_app_inbound_handler_dispatches_to_app_fed():
+    """_app_inbound_handler: valid binary frame → on_inbound_message called."""
+    import orjson as _orjson
+
+    p = _paired_app()
+
+    # Set up a fake app_fed attached to svc_b.
+    inbound_calls: list[tuple] = []
+
+    class _FakeAppFed:
+        async def on_inbound_message(self, instance_id, app_id, session_id, payload):
+            inbound_calls.append((instance_id, app_id, session_id, payload))
+
+    p.svc_b.attach_apps(_FakeAppFed())
+
+    # Build a valid binary-channel frame from A's perspective.
+    await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-bin",
+        payload={"move": "g1f3"},
+    )
+    assert p.cap.app is not None
+    header, payload_bytes = p.cap.app
+
+    # Feed to svc_b's binary inbound handler.
+    await p.svc_b._app_inbound_handler(p.a_id, _orjson.dumps(header), payload_bytes)
+    assert len(inbound_calls) == 1
+    inst_id, app_id, session_id, payload = inbound_calls[0]
+    assert inst_id == p.a_id
+    assert app_id == "chess"
+    assert session_id == "sess-bin"
+    assert payload == {"move": "g1f3"}
+
+
+@pytest.mark.asyncio
+async def test_app_inbound_handler_rejects_unknown_aead_suite():
+    """_app_inbound_handler raises UnsupportedAppAeadSuite for unknown suite."""
+    import orjson as _orjson
+
+    p = _paired_app()
+
+    class _FakeAppFed:
+        async def on_inbound_message(self, *args): ...
+
+    p.svc_b.attach_apps(_FakeAppFed())
+
+    # Build a frame with a bogus suite directly (bypass the normal sender).
+    # Reuse the media _make_frame helper structure but for app messages.
+    from socialhome.federation.encoder import FederationEncoder
+
+    enc_a = FederationEncoder(p.a_kp.private_key)
+    bad_meta = {
+        "app_id": "chess",
+        "session_id": "s",
+        "app_aead_suite": "chacha-bogus",
+    }
+    encrypted_payload = enc_a.encrypt_payload(
+        _orjson.dumps(bad_meta).decode(), p.session
+    )
+    envelope = {
+        "msg_id": str(uuid.uuid4()),
+        "event_type": FederationEventType.APP_MESSAGE.value,
+        "from_instance": p.a_id,
+        "to_instance": p.b_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "encrypted_payload": encrypted_payload,
+        "space_id": None,
+        "proto_version": 1,
+        "sig_suite": "ed25519",
+    }
+    env_bytes = orjson.dumps(envelope)
+    envelope["signatures"] = enc_a.sign_envelope_all(env_bytes, suite="ed25519")
+
+    payload_bytes = enc_a.encrypt_bytes(b"{}", p.session)
+    with pytest.raises(UnsupportedAppAeadSuite):
+        await p.svc_b._app_inbound_handler(
+            p.a_id, orjson.dumps(envelope), payload_bytes
+        )
+
+
+@pytest.mark.asyncio
+async def test_attach_apps_registers_event_handlers():
+    """attach_apps registers APP_SESSION + APP_MESSAGE in the event registry."""
+    svc, _ = _make_service()
+
+    dispatched: list = []
+
+    class _FakeAppFed:
+        async def on_inbound_event(self, event):
+            dispatched.append(event)
+
+    svc.attach_apps(_FakeAppFed())
+
+    # Fire a synthetic APP_MESSAGE via _dispatch_event — it should reach app_fed.
+    fake_event = MagicMock()
+    fake_event.event_type = FederationEventType.APP_MESSAGE
+    await svc._event_registry.dispatch(fake_event)
+    assert len(dispatched) == 1
+
+    # Fire APP_SESSION.
+    fake_event2 = MagicMock()
+    fake_event2.event_type = FederationEventType.APP_SESSION
+    await svc._event_registry.dispatch(fake_event2)
+    assert len(dispatched) == 2
+
+
+@pytest.mark.asyncio
+async def test_app_inbound_handler_no_op_when_no_app_fed_attached():
+    """_app_inbound_handler is a no-op when app_fed is not attached."""
+    p = _paired_app()
+    # svc_b has no attach_apps called
+    # Should complete without error.
+    await p.svc_b._app_inbound_handler(p.a_id, b"{}", b"")
+    # No dispatch raised

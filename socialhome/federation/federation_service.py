@@ -60,6 +60,11 @@ from ..infrastructure.key_manager import KeyManager
 from ..repositories.federation_repo import AbstractFederationRepo
 from ..repositories.outbox_repo import AbstractOutboxRepo
 from .encoder import FederationEncoder
+from .app_framing import (
+    APP_AEAD_SUITE_AESGCM_256,
+    SUPPORTED_APP_AEAD_SUITES,
+    UnsupportedAppAeadSuite,
+)
 from .media_framing import (
     MEDIA_AEAD_SUITE_AESGCM_256,
     SUPPORTED_MEDIA_AEAD_SUITES,
@@ -171,6 +176,7 @@ class FederationService:
         "_user_repo",
         "_route_service",
         "_routed_handler",
+        "_app_fed",
     )
 
     def __init__(
@@ -229,6 +235,10 @@ class FederationService:
         # surfaces a failed DeliveryResult for non-CONFIRMED peers.
         self._route_service: RouteDiscoveryService | None = None
         self._routed_handler: SpaceRoutedHandler | None = None
+        # Social Home Apps federation bridge — set via :meth:`attach_apps`.
+        # When unset, inbound APP_SESSION / APP_MESSAGE events are silently
+        # dropped (no app bridge wired on this instance).
+        self._app_fed = None
         # Envelope crypto delegate (encrypt/decrypt/sign/verify). Keeps the
         # AES-256-GCM + Ed25519 surface unit-testable in isolation. When
         # the hybrid suite is configured the PQ signer is attached so
@@ -512,6 +522,90 @@ class FederationService:
             FederationEventType.CALL_QUALITY,
         ):
             self._event_registry.register(event_type, self._handle_call_signal)
+
+    def attach_apps(self, app_fed) -> None:
+        """Attach an :class:`AppFederationService` after construction.
+
+        Once wired, inbound ``APP_SESSION`` and ``APP_MESSAGE`` events
+        are forwarded to ``app_fed.on_inbound_event``. Also registers the
+        binary-channel handler used by the ``fed-app-v1`` DataChannel when
+        the transport is a v_17+ peer.
+        """
+        self._app_fed = app_fed
+        for event_type in (
+            FederationEventType.APP_SESSION,
+            FederationEventType.APP_MESSAGE,
+        ):
+            self._event_registry.register(event_type, self._handle_app_inbound_event)
+
+    async def _handle_app_inbound_event(self, event: FederationEvent) -> None:
+        """Delegate an inbound APP_SESSION / APP_MESSAGE event to the app bridge."""
+        if self._app_fed is None:
+            return
+        await self._app_fed.on_inbound_event(event)
+
+    async def _app_inbound_handler(
+        self,
+        instance_id: str,
+        header_bytes: bytes,
+        payload_bytes: bytes,
+    ) -> None:
+        """Binary-channel inbound for ``fed-app-v1`` frames.
+
+        Called by the transport when a complete ``FRAME_TYPE_APP_MSG``
+        frame arrives on the ``fed-app-v1`` DataChannel.  Mirrors
+        :meth:`handle_inbound_media_frame`:
+
+        1. Run the full §24.11 pipeline on the header (origin auth via
+           Ed25519, replay, timestamp, ban, decrypt metadata).
+        2. Validate ``app_aead_suite`` against the supported set — no
+           default fallback (CLAUDE.md crypto-suite rule).
+        3. Decrypt the app payload under the directional receive key.
+        4. Extract ``app_id`` and ``session_id`` from the validated
+           envelope metadata.
+        5. Hand ``(instance_id, app_id, session_id, decoded_payload)``
+           to :meth:`AppFederationService.on_inbound_message`.
+
+        Raises :class:`ValueError` (or
+        :class:`~socialhome.federation.app_framing.UnsupportedAppAeadSuite`)
+        on any validation failure so the transport logs + drops the frame.
+        """
+        if self._app_fed is None:
+            return
+        ctx = await self.validate_inbound_rtc(instance_id, header_bytes)
+        if ctx.early_response is not None:
+            return
+        event = ctx.event
+        if event is None:  # pragma: no cover
+            return
+        meta = event.payload if isinstance(event.payload, dict) else {}
+        suite = meta.get("app_aead_suite")
+        if suite not in SUPPORTED_APP_AEAD_SUITES:
+            raise UnsupportedAppAeadSuite(
+                f"unknown app_aead_suite: {suite!r}",
+            )
+        # Decrypt the app payload using the directional receive key.
+        session_key = self._key_manager.decrypt(ctx.instance.key_remote_to_self)
+        try:
+            raw = self._encoder.decrypt_bytes(payload_bytes, session_key)
+        except Exception as exc:
+            raise ValueError(f"Failed to decrypt app payload: {exc}") from exc
+        try:
+            decoded_payload = _loads(raw)
+        except Exception as exc:
+            raise ValueError(f"Failed to parse app payload JSON: {exc}") from exc
+        app_id = meta.get("app_id")
+        session_id = meta.get("session_id")
+        if not app_id or not session_id:
+            raise ValueError(
+                f"app frame missing app_id or session_id: {meta!r}",
+            )
+        await self._app_fed.on_inbound_message(
+            instance_id,
+            app_id,
+            session_id,
+            decoded_payload,
+        )
 
     def set_ice_servers(self, servers: list[dict]) -> None:
         """Update the WebRTC ICE-server config served to peers.
@@ -967,6 +1061,129 @@ class FederationService:
         )
         payload_bytes = self._encoder.encrypt_bytes(raw_chunk, session_key)
         sent = await self._transport.send_media(
+            instance=instance,
+            header_dict=envelope_dict,
+            payload_bytes=payload_bytes,
+        )
+        if not sent:
+            return None
+        await self._federation_repo.mark_reachable(instance.id)
+        return DeliveryResult(instance_id=instance.id, ok=True, status_code=None)
+
+    async def send_app_message(
+        self,
+        *,
+        to_instance_id: str,
+        app_id: str,
+        session_id: str,
+        payload: dict,
+    ) -> DeliveryResult:
+        """Ship one app message, preferring the binary ``fed-app-v1`` channel.
+
+        The binary channel is used iff **all** hold: the transport is
+        attached, the peer is CONFIRMED, ``fed-app-v1`` is currently open
+        (``is_app_ready``), and the peer advertises
+        :data:`FederationCapability.MIN_FOR_APP_CHANNEL`. Otherwise falls
+        back to the JSON event path: :meth:`send_event` with
+        ``event_type=APP_MESSAGE`` and the payload nested inside the
+        encrypted envelope — encryption-first invariant maintained on both
+        paths.
+
+        ``payload`` is the app-specific data dict (chess move, whiteboard
+        delta, game-state patch, …). It MUST NOT appear in plaintext in any
+        envelope field; both paths place it inside the AES-256-GCM-sealed
+        layer.
+        """
+        instance = await self._federation_repo.get_instance(to_instance_id)
+        if (
+            self._transport is not None
+            and instance is not None
+            and instance.status is PairingStatus.CONFIRMED
+            and self._transport.is_app_ready(to_instance_id)
+            and await self.peer_supports(
+                to_instance_id,
+                min_version=FederationCapability.MIN_FOR_APP_CHANNEL,
+            )
+        ):
+            result = await self._send_app_binary(
+                instance=instance,
+                app_id=app_id,
+                session_id=session_id,
+                payload=payload,
+            )
+            if result is not None:
+                return result
+            # Binary send didn't land — fall through to the JSON path.
+
+        return await self.send_event(
+            to_instance_id=to_instance_id,
+            event_type=FederationEventType.APP_MESSAGE,
+            payload={
+                "app_id": app_id,
+                "session_id": session_id,
+                "data": payload,
+            },
+        )
+
+    async def _send_app_binary(
+        self,
+        *,
+        instance: RemoteInstance,
+        app_id: str,
+        session_id: str,
+        payload: dict,
+    ) -> DeliveryResult | None:
+        """Build + sign the app envelope and ship it as a binary frame.
+
+        Returns :class:`DeliveryResult` on success, ``None`` when the
+        binary send didn't land (caller falls back to JSON). Mirrors
+        :meth:`_send_media_binary` — same envelope construction, same
+        ``_dumps`` + suite-aware signing, same §24.11 guarantees. The
+        ``payload`` dict is AES-256-GCM-sealed as the binary payload;
+        ``app_id`` / ``session_id`` / ``app_aead_suite`` travel inside
+        the signed+encrypted metadata so no plaintext application data
+        ever appears in the envelope.
+        """
+        if self._transport is None:  # pragma: no cover — caller gates on transport
+            return None
+        try:
+            session_key = self._key_manager.decrypt(instance.key_self_to_remote)
+        except Exception:
+            log.warning(
+                "send_app_message: failed to decrypt session key for %s",
+                instance.id,
+            )
+            return None
+        metadata = {
+            "app_id": app_id,
+            "session_id": session_id,
+            "app_aead_suite": APP_AEAD_SUITE_AESGCM_256,
+        }
+        encrypted_payload = self._encrypt_payload(_dumps(metadata), session_key)
+        msg_id = str(uuid.uuid4())
+        timestamp = datetime.now(timezone.utc).isoformat()
+        effective_suite = instance.sig_suite or self._encoder.sig_suite
+        envelope_dict: dict = {
+            "msg_id": msg_id,
+            "event_type": FederationEventType.APP_MESSAGE.value,
+            "from_instance": self._own_instance_id,
+            "to_instance": instance.id,
+            "timestamp": timestamp,
+            "encrypted_payload": encrypted_payload,
+            "space_id": None,
+            "proto_version": 1,
+            "sig_suite": effective_suite,
+        }
+        envelope_bytes = _dumps(envelope_dict).encode("utf-8")
+        envelope_dict["signatures"] = self._encoder.sign_envelope_all(
+            envelope_bytes,
+            suite=effective_suite,
+        )
+        # Seal the app payload as binary (not inside the JSON envelope).
+        payload_bytes = self._encoder.encrypt_bytes(
+            _dumps(payload).encode("utf-8"), session_key
+        )
+        sent = await self._transport.send_app(
             instance=instance,
             header_dict=envelope_dict,
             payload_bytes=payload_bytes,
