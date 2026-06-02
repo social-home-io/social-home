@@ -110,3 +110,14 @@ def test_app_kv_entry_is_frozen():
 
 def test_app_quota_exceeded_is_app_error():
     assert issubclass(AppQuotaExceededError, AppError)
+
+
+def test_manifest_entry_rejects_dotdot_segment():
+    for bad in ("a/../b", "../x", "foo/../../etc", "a\\b", "/abs"):
+        with pytest.raises(ValueError):
+            AppManifest.from_dict({"entry": bad, "capabilities": []})
+
+
+def test_manifest_entry_accepts_nested_relative():
+    m = AppManifest.from_dict({"entry": "sub/index.html", "capabilities": []})
+    assert m.entry == "sub/index.html"
