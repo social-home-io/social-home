@@ -78,6 +78,10 @@ _DEFAULT_PUBLIC_PATHS: tuple[str, ...] = (
 #: prefix matcher from turning every URL public.
 _DEFAULT_PUBLIC_PATH_PATTERNS: tuple[str, ...] = (
     r"^/api/spaces/[^/]+/calendar/export\.ics$",
+    # App bundle files bypass bearer-auth; the view self-authorizes via a
+    # prefix HMAC signature (entry load) or a path-scoped cookie (sub-resources).
+    # ``/runtime`` is intentionally NOT public — it requires a bearer token.
+    r"^/api/apps/[^/]+/bundle/",
     r"^/$",
     # SPA catchall — any non-``/api``, non-``/healthz``,
     # non-``/federation``, non-``/.well-known``, non-``/assets``,

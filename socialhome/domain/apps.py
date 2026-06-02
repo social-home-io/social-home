@@ -49,7 +49,11 @@ class AppManifest:
         entry = data.get("entry")
         if not isinstance(entry, str) or not entry:
             raise ValueError("manifest.entry must be a non-empty string")
-        if entry.startswith(("/", "..")):
+        if (
+            entry.startswith("/")
+            or "\\" in entry
+            or any(seg in ("", "..") for seg in entry.split("/"))
+        ):
             raise ValueError("manifest.entry must be a relative path inside the bundle")
         caps = data.get("capabilities", [])
         if not isinstance(caps, list) or not all(isinstance(c, str) for c in caps):

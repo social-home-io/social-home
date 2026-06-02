@@ -17629,3 +17629,185 @@ a.sh-btn--ghost:hover {
 .sh-transport-icon--https {
   color: var(--sh-warning);
 }
+
+/* ───── Apps page (§Apps) ────────────────────────────────────────────────── */
+
+/* Grid of installed app cards */
+.sh-apps-page { padding-bottom: var(--sh-space-xl); }
+.sh-apps-section { margin-top: var(--sh-space-lg); }
+.sh-apps-section__title {
+  font-size: var(--sh-font-size-md);
+  font-weight: 600;
+  margin: 0 0 var(--sh-space-sm);
+}
+.sh-apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sh-space-md);
+}
+.sh-apps-catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-sm);
+}
+.sh-apps-loading,
+.sh-apps-empty { color: var(--sh-text-muted); }
+.sh-apps-error { color: var(--sh-danger); }
+
+/* Individual installed-app card */
+.sh-app-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+}
+.sh-app-card__icon {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: var(--sh-radius-sm);
+  flex-shrink: 0;
+}
+.sh-app-card__icon-placeholder {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+.sh-app-card__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sh-app-card__name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sh-app-card__version { font-size: var(--sh-font-size-xs); }
+.sh-app-card__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-xxs);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sh-app-card__toggle-label { font-size: var(--sh-font-size-xs); }
+.sh-app-card__caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xxs);
+  margin-top: var(--sh-space-xs);
+}
+.sh-app-card__actions {
+  display: flex;
+  gap: var(--sh-space-xs);
+  margin-top: var(--sh-space-sm);
+  flex-wrap: wrap;
+}
+
+/* Catalog row */
+.sh-catalog-row__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+}
+.sh-catalog-row__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sh-catalog-row__name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sh-catalog-row__desc {
+  margin: var(--sh-space-xs) 0 0;
+  font-size: var(--sh-font-size-sm);
+  line-height: 1.4;
+}
+
+/* chip variants used by apps UI */
+.sh-chip--success {
+  background: color-mix(in srgb, var(--sh-success) 15%, transparent);
+  color: var(--sh-success);
+  border-color: color-mix(in srgb, var(--sh-success) 30%, transparent);
+}
+.sh-chip--muted {
+  background: color-mix(in srgb, var(--sh-text-muted) 10%, transparent);
+  color: var(--sh-text-muted);
+}
+
+/* ───── AppHost — sandboxed iframe launcher (§Apps) ─────────────────────── */
+
+.sh-app-host {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* flex children must not overflow */
+}
+
+.sh-app-host__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xs) var(--sh-space-md);
+  border-bottom: 1px solid var(--sh-border);
+  flex-shrink: 0;
+}
+
+.sh-app-host__title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sh-app-host__status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-xl);
+  flex: 1 1 auto;
+}
+
+.sh-app-host__status--error { color: var(--sh-danger); }
+
+/*
+ * .sh-app-frame — the sandboxed app iframe.
+ *
+ * CRITICAL: the sandbox attribute on the element MUST remain
+ * "allow-scripts" only — never add "allow-same-origin".
+ * See AppHost.tsx for the security rationale.
+ *
+ * Uses min-height so the frame is usable on short viewports while
+ * filling the available space in taller ones via flex-grow.
+ */
+.sh-app-frame {
+  border: 0;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 70vh;
+  display: block;
+}
+
+@media (max-width: 480px) {
+  .sh-apps-grid {
+    grid-template-columns: 1fr;
+  }
+  .sh-app-host__bar {
+    padding: var(--sh-space-xs) var(--sh-space-sm);
+  }
+  .sh-app-frame {
+    min-height: 60vh;
+  }
+}

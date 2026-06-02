@@ -339,12 +339,49 @@ with the service/repo pair `AppService` / `SqliteAppRepo`
 `socialhome/repositories/app_repo.py`). Routes are under
 `socialhome/routes/apps.py`.
 
-The runtime sandbox — a sandboxed `<iframe>` with an opaque origin and
-`connect-src 'none'`, communicating with the host only via a
-postMessage bridge that withholds the bearer token — lands in **PR3**.
 **PR2** adds `app_kv` (per-user key/value storage per app).
 **PR4** introduces the `fed-app-v1` federation channel so apps can
 exchange state across paired households.
+
+### Sandbox runtime (PR3)
+
+Two new routes power the sandbox execution path:
+
+- `GET /api/apps/{app_id}/runtime` — bearer-authed member endpoint.
+  Returns `{app_id, name, entry_url, self_user_id, capabilities}` where
+  `entry_url` is a short-lived signed bundle URL. 404 when not installed;
+  403 when disabled.
+- `GET /api/apps/{app_id}/bundle/{tail}` — serves the bundle's static
+  files. Authorization uses the media-signer signature baked into the
+  `entry_url` (`?exp=&sig=`); on first access those query parameters are
+  exchanged for a short-lived HttpOnly path-scoped cookie so relative
+  sub-resources load without carrying credentials. No bearer token is
+  required or accepted. Every response carries a strict Content-Security-Policy
+  (`connect-src 'none'`, `worker-src 'none'`, `frame-ancestors 'self'`, etc.)
+  and `X-Frame-Options: SAMEORIGIN`. Path traversal is guarded and the route
+  re-checks that the app is still enabled on every request.
+
+The `secure_cookies` config key (`SH_SECURE_COOKIES`, default `false`) adds
+the `Secure` attribute to the bundle cookie — set it true whenever the server
+is behind TLS.
+
+The SPA loads the app bundle inside `<iframe sandbox="allow-scripts">`. The
+absence of `allow-same-origin` gives the iframe an opaque origin so it cannot
+read the parent's DOM, localStorage, or cookies. App code can't reach the
+network because of the `connect-src 'none'` CSP, and the bearer token is never
+passed into the iframe. The only host interface is a postMessage bridge: the
+SPA host validates `event.source === iframe.contentWindow` before relaying
+messages (origin checking is unreliable — sandboxed iframes expose an opaque
+`"null"` origin, so only the source reference identifies our iframe), and the
+bridge exposes only the documented per-user store API — never the raw bearer
+token.
+
+Real-time events are delivered via the existing `/api/ws` WebSocket: the server
+routes `app.message` frames (`{type:"app.message", app_id, payload}`) to the
+SPA connection that has the matching app launched. The host bridge forwards
+qualifying frames into the iframe as `MessageEvent`s. The first producer is
+the PR4 federation app-to-app channel (`fed-app-v1`); PR3 defines the
+host-side relay and the frame contract.
 
 ## Where things live
 

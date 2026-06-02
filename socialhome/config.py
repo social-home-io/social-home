@@ -176,6 +176,15 @@ class Config:
         "/releases/latest/download/catalog.json"
     )
 
+    #: Set ``True`` in TLS (HTTPS) deployments to mark session cookies
+    #: and the app-bundle path-scoped cookie as ``Secure`` so they are
+    #: never transmitted over plain HTTP.  Defaults to ``False`` so that
+    #: local ``http://`` development works out of the box without any
+    #: extra configuration.  Enable via ``SH_SECURE_COOKIES=true`` (or
+    #: ``secure_cookies = true`` under ``[server]`` in the TOML file)
+    #: whenever Social Home is reachable over HTTPS.
+    secure_cookies: bool = False
+
     # Per-platform TOML sections — opaque to the core. Each adapter reads
     # its own section (e.g. config.platform_options["homeassistant"]).
     platform_options: Mapping[str, Mapping[str, Any]] = field(
@@ -259,6 +268,14 @@ class Config:
         def _int_opt(key: str, env: str, default: int) -> int:
             v = _opt(key, env, default)
             return int(v) if isinstance(v, (int, str)) else default
+
+        def _bool_opt(key: str, env: str, default: bool) -> bool:
+            v = _opt(key, env, default)
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                return v.lower() in ("1", "true", "yes")
+            return bool(v)
 
         def _str_opt(key: str, env: str, default: str) -> str:
             v = _opt(key, env, default)
@@ -371,6 +388,11 @@ class Config:
                 "db_write_batch_timeout_ms",
                 "SH_DB_WRITE_BATCH_TIMEOUT_MS",
                 500,
+            ),
+            secure_cookies=_bool_opt(
+                "secure_cookies",
+                "SH_SECURE_COOKIES",
+                False,
             ),
             platform_options=MappingProxyType(platform_options),
         )

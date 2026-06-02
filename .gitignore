@@ -69,3 +69,7 @@ socialhome/global_server/static/hooks.module-*.js
 # conversation turns. The artefacts are scratch-only and not meant
 # to be tracked.
 .superpowers/
+
+# Superpowers implementation plans — agent scratch kept local to the
+# working copy, never committed upstream.
+docs/superpowers/

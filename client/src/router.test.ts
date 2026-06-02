@@ -22,7 +22,8 @@ describe('router', () => {
     //   /organize        — replaces standalone /tasks /shopping /stickies
     //                      (3 routes collapsed into 1 hub).
     //   /apps            — Social Home Apps browse/install page (§Apps)
-    expect(Object.keys(routes).length).toBe(42)
+    //   /apps/:appId     — sandboxed AppHost iframe launcher (§Apps)
+    expect(Object.keys(routes).length).toBe(43)
   })
 
   it('has feed route at /', () => {
