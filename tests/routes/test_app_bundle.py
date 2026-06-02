@@ -180,7 +180,10 @@ async def test_bundle_entry_served_with_valid_sig(client):
     assert body == _INDEX_CONTENT
 
     # Security headers
-    assert "connect-src 'none'" in r.headers.get("Content-Security-Policy", "")
+    csp = r.headers.get("Content-Security-Policy", "")
+    assert "connect-src 'none'" in csp
+    assert "worker-src 'none'" in csp
+    assert "frame-ancestors 'self'" in csp
     assert r.headers.get("X-Frame-Options") == "SAMEORIGIN"
 
     # Cookie presence
@@ -302,3 +305,103 @@ async def test_bundle_expired_sig_rejected(client):
     assert r.status == 403
     body = await r.json()
     assert body["error"]["code"] == "FORBIDDEN"
+
+
+# ── Adversarial / security tests ─────────────────────────────────────────
+
+
+async def test_bundle_403_when_app_disabled_even_with_sig(client):
+    """A valid sig is rejected with 403 if the app is disabled after minting.
+
+    Disabling an app must take effect immediately, not after the 300-second
+    sig TTL expires.  This validates that AppBundleView re-checks ``enabled``
+    after the auth check rather than trusting the signed URL alone.
+    """
+    from socialhome.app_keys import config_key
+    from socialhome.repositories.app_repo import SqliteAppRepo
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    # Mint a valid prefix signature directly (bypasses /runtime auth).
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    # Disable the app *after* minting the signature.
+    repo = SqliteAppRepo(client._db)
+    await repo.set_enabled(_APP_ID, enabled=False)
+
+    # The signed URL must now be rejected.
+    r = await client.get(f"{prefix}index.html?exp={exp}&sig={sig}")
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_bundle_cross_app_sig_rejected(client):
+    """A valid sig minted for app A is rejected when used on app B's bundle URL.
+
+    The HMAC covers the full prefix ``/api/apps/{app_id}/bundle/``, so a
+    signature for one app must never authorize access to a different app's
+    files.
+    """
+    from socialhome.app_keys import config_key
+
+    _APP_B_ID = "com.example.checkers"
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.media_path, app_id=_APP_B_ID)
+    await _seed_app(client._db)
+    await _seed_app(client._db, app_id=_APP_B_ID)
+
+    # Mint a valid sig for app A's prefix.
+    signer = client.app[media_signer_key]
+    prefix_a = f"/api/apps/{_APP_ID}/bundle/"
+    signed_a = signer.sign(prefix_a, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed_a)
+
+    # Use that sig on app B's bundle URL — must be rejected.
+    prefix_b = f"/api/apps/{_APP_B_ID}/bundle/"
+    r = await client.get(f"{prefix_b}index.html?exp={exp}&sig={sig}")
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_bundle_absolute_path_tail_blocked(client):
+    """A percent-encoded absolute or traversal tail is blocked (no escape).
+
+    Complements test_bundle_path_traversal_blocked with a broader set of
+    percent-encoded traversal patterns (%2F-separated absolute path,
+    %2e%2e sequences) to confirm the pathlib.resolve() + is_relative_to()
+    guard catches them all.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    traversal_tails = [
+        # %2F-separated absolute path (decoded: /etc/passwd)
+        "%2Fetc%2Fpasswd",
+        # double-dot with %2F (decoded: ../secret.txt)
+        "%2e%2e%2fsecret.txt",
+        # mixed: decoded as ../../secret
+        "%2e%2e%2F%2e%2e%2Fsecret",
+    ]
+
+    for tail in traversal_tails:
+        r = await client.get(f"{prefix}{tail}?exp={exp}&sig={sig}")
+        assert r.status in (403, 404), (
+            f"Traversal tail {tail!r} must be blocked; got status {r.status}"
+        )

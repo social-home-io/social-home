@@ -10,6 +10,25 @@ Two views:
   prefix signature on the entry load, or a short-lived path-scoped
   cookie for sub-resources. Served inside a sandboxed iframe via
   strict CSP + ``X-Frame-Options: SAMEORIGIN``.
+
+MANDATORY IFRAME EMBEDDING CONTRACT
+====================================
+Bundles are served same-origin with the SH backend.  The SPA MUST embed
+them as::
+
+    <iframe sandbox="allow-scripts" src="...">
+
+WITHOUT ``allow-same-origin``.  If ``allow-same-origin`` is present the
+iframe shares the document origin and can read ``window.parent.localStorage``
+(where the bearer token lives), call ``window.parent.fetch`` to bypass
+``connect-src 'none'``, and exfiltrate credentials.
+
+``connect-src 'none'`` alone is NOT sufficient — a same-origin iframe
+ignores the parent's CSP for its own requests.  The ``sandbox`` attribute
+without ``allow-same-origin`` is the *only* reliable boundary.
+
+Never add ``allow-same-origin`` to the iframe sandbox — it voids the
+entire security model of the apps surface.
 """
 
 from __future__ import annotations
@@ -37,11 +56,17 @@ BUNDLE_COOKIE_PREFIX: str = "sh_app_bundle_"
 #: CSP applied to every bundle response.  ``connect-src 'none'`` is the
 #: key security invariant — the sandboxed app may NOT make outbound network
 #: requests that would bypass the SPA's API layer.
+#: ``worker-src 'none'`` blocks service-worker registration; without it a
+#: service worker would inherit ``script-src`` and escape ``connect-src
+#: 'none'`` by intercepting fetch events.
+#: ``frame-ancestors 'self'`` is belt-and-suspenders with X-Frame-Options to
+#: prevent embedding by third-party origins.
 APP_CSP: str = (
     "default-src 'none'; script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
     "font-src 'self' data:; media-src 'self' data:; "
-    "connect-src 'none'; base-uri 'none'; form-action 'none'"
+    "connect-src 'none'; worker-src 'none'; base-uri 'none'; "
+    "form-action 'none'; frame-ancestors 'self'"
 )
 
 
@@ -140,6 +165,12 @@ class AppBundleView(BaseView):
         app = await self.svc(app_service_key).get(app_id)
         if app is None:
             return error_response(404, "NOT_FOUND", "App not found.")
+        # Recheck enabled here (not just at runtime-mint time) so a disabled
+        # app's residual access window is zero — a valid sig from before the
+        # disable is immediately invalidated rather than lasting the 300-second
+        # TTL.
+        if not app.enabled:
+            return error_response(403, "FORBIDDEN", "App is disabled.")
 
         # ── File resolution + path-traversal guard ───────────────────────
         config = self.svc(config_key)
@@ -169,6 +200,10 @@ class AppBundleView(BaseView):
 
         # Drop entry cookie BEFORE prepare() so it is included in the
         # response headers (StreamResponse headers are frozen post-prepare).
+        # ``secure`` is derived from ``config.secure_cookies`` (set via
+        # ``SH_SECURE_COOKIES=true`` or ``[server] secure_cookies = true`` in
+        # the TOML) so that local plain-http dev keeps the cookie working while
+        # HTTPS deployments get the Secure attribute.
         if from_query:
             response.set_cookie(
                 f"{BUNDLE_COOKIE_PREFIX}{app_id}",
@@ -177,6 +212,7 @@ class AppBundleView(BaseView):
                 path=prefix,
                 httponly=True,
                 samesite="Lax",
+                secure=config.secure_cookies,
             )
 
         await response.prepare(self.request)
