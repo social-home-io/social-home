@@ -1,10 +1,12 @@
-"""App-registry routes — install, uninstall, enable/disable, and catalog.
+"""App-registry routes — install, uninstall, enable/disable, catalog, and per-user store.
 
-Three resource groups:
+Four resource groups:
 
-* ``AppCollectionView`` — ``GET /api/apps`` (list) + ``POST /api/apps`` (install)
-* ``AppCatalogView``    — ``GET /api/apps/catalog`` (browse remote catalog)
-* ``AppDetailView``     — ``GET /api/apps/{app_id}`` + ``PATCH`` (toggle) + ``DELETE``
+* ``AppCollectionView``      — ``GET /api/apps`` (list) + ``POST /api/apps`` (install)
+* ``AppCatalogView``         — ``GET /api/apps/catalog`` (browse remote catalog)
+* ``AppDetailView``          — ``GET /api/apps/{app_id}`` + ``PATCH`` (toggle) + ``DELETE``
+* ``AppStoreCollectionView`` — ``GET /api/apps/{app_id}/store`` (list all KV pairs)
+* ``AppStoreItemView``       — ``GET/PUT/DELETE /api/apps/{app_id}/store/{key}``
 """
 
 from __future__ import annotations
@@ -126,3 +128,41 @@ class AppDetailView(BaseView):
         svc = self.svc(app_service_key)
         await svc.uninstall(app_id, actor_is_admin=True)
         return self._json({"status": "ok"})
+
+
+class AppStoreCollectionView(BaseView):
+    """``GET /api/apps/{app_id}/store`` — list all KV pairs for the caller."""
+
+    async def get(self) -> web.Response:
+        app_id = self.match("app_id")
+        svc = self.svc(app_service_key)
+        items = await svc.store_list(app_id, self.user.user_id)
+        return self._json({"items": items})
+
+
+class AppStoreItemView(BaseView):
+    """``GET/PUT/DELETE /api/apps/{app_id}/store/{key}`` — single KV entry."""
+
+    async def get(self) -> web.Response:
+        app_id, key = self.match("app_id"), self.match("key")
+        svc = self.svc(app_service_key)
+        try:
+            value = await svc.store_get(app_id, self.user.user_id, key)
+        except KeyError:
+            return error_response(404, "NOT_FOUND", "Key not found.")
+        return self._json({"key": key, "value": value})
+
+    async def put(self) -> web.Response:
+        app_id, key = self.match("app_id"), self.match("key")
+        body = await self.body()
+        if "value" not in body:
+            return error_response(400, "UNPROCESSABLE", "value is required.")
+        svc = self.svc(app_service_key)
+        await svc.store_set(app_id, self.user.user_id, key, body["value"])
+        return self._json({"key": key, "value": body["value"]})
+
+    async def delete(self) -> web.Response:
+        app_id, key = self.match("app_id"), self.match("key")
+        svc = self.svc(app_service_key)
+        await svc.store_delete(app_id, self.user.user_id, key)
+        return web.json_response({"status": "ok"})

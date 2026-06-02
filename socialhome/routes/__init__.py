@@ -126,7 +126,13 @@ from .gallery import (
 )
 from .health import HealthView
 from .household import HouseholdPreferencesView
-from .apps import AppCatalogView, AppCollectionView, AppDetailView
+from .apps import (
+    AppCatalogView,
+    AppCollectionView,
+    AppDetailView,
+    AppStoreCollectionView,
+    AppStoreItemView,
+)
 from .me_preferences import MePreferencesView
 from .me_space_location import MeSpaceLocationSharingView
 from .media import MediaServeView, MediaUploadView
@@ -1028,6 +1034,8 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/apps", AppCollectionView)
     app.router.add_view("/api/apps/catalog", AppCatalogView)
     app.router.add_view("/api/apps/{app_id}", AppDetailView)
+    app.router.add_view("/api/apps/{app_id}/store", AppStoreCollectionView)
+    app.router.add_view("/api/apps/{app_id}/store/{key}", AppStoreItemView)
 
     # ── Backup (adapter-agnostic) ────────────────────────────────────────
     app.router.add_view("/api/backup/pre_backup", BackupPreView)
