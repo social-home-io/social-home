@@ -25,6 +25,7 @@ import qrcode  # type: ignore[import-untyped]
 from aiohttp import web
 
 from . import app_keys as K
+from .markdown_lite import render_markdown
 
 if TYPE_CHECKING:
     from .repositories import AbstractGfsAdminRepo
@@ -486,7 +487,14 @@ def _render_space_page(
                      object-fit: cover; border: 3px solid var(--warm-bg);
                      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
                      margin: -52px 0 8px; background: var(--paper); }}
-    .about-md {{ white-space: pre-wrap; }}
+    .about-md {{ margin-top: 8px; }}
+    .about-md h1, .about-md h2, .about-md h3 {{ font-size: 1.05rem; margin: 12px 0 4px; }}
+    .about-md ul {{ margin: 6px 0; padding-left: 20px; }}
+    .about-md blockquote {{ margin: 8px 0; padding-left: 12px;
+                            border-left: 3px solid var(--hair); color: var(--ink-soft); }}
+    .about-md code {{ background: var(--paper); padding: 1px 5px; border-radius: 4px;
+                      font-size: 0.92em; }}
+    .about-md a {{ color: var(--primary); }}
     h1, h2 {{
       font-family: 'Fraunces', 'Iowan Old Style', 'Palatino Linotype', serif;
       font-feature-settings: "ss01" on, "salt" on;
@@ -539,7 +547,7 @@ def _render_space_page(
       {
         (
             '<div class="about-md">'
-            + _escape(space.get("about_markdown") or "")
+            + render_markdown(space.get("about_markdown"))
             + "</div>"
         )
         if space.get("about_markdown")

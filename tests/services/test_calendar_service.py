@@ -17,6 +17,17 @@ from socialhome.repositories.calendar_repo import (
 from socialhome.services.calendar_service import CalendarService
 
 
+# Event seeds are anchored in the near future so the service's
+# past-occurrence RSVP lock (``cannot RSVP to an occurrence that has
+# already ended``) never trips once the wall clock advances — a fixed
+# calendar literal silently rots into the past and flakes the suite on
+# that date. Each test runs against its own isolated env, so a single
+# shared anchor is safe; within-test offsets stay relative to it.
+_SEED = (datetime.now(timezone.utc) + timedelta(days=30)).replace(
+    hour=9, minute=0, second=0, microsecond=0
+)
+
+
 @pytest.fixture
 async def env(tmp_dir):
     """Env with calendar repos and service over a real SQLite database."""
@@ -844,7 +855,7 @@ async def test_rsvp_non_recurring_defaults_occurrence_to_event_start(space_cal_e
 async def test_rsvp_recurring_requires_occurrence_at(space_cal_env):
     """RSVP without occurrence_at on a recurring event → ValueError."""
     env = space_cal_env
-    seed = datetime(2026, 6, 8, 9, 0, tzinfo=timezone.utc)
+    seed = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Weekly standup",
@@ -864,7 +875,7 @@ async def test_rsvp_recurring_requires_occurrence_at(space_cal_env):
 async def test_rsvp_recurring_rejects_invalid_occurrence(space_cal_env):
     """RSVP with occurrence_at that doesn't match the rrule → ValueError."""
     env = space_cal_env
-    seed = datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc)
+    seed = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Weekly standup",
@@ -873,7 +884,7 @@ async def test_rsvp_recurring_rejects_invalid_occurrence(space_cal_env):
         created_by="uid-alice",
         rrule="FREQ=WEEKLY;COUNT=4",
     )
-    bad_occ = datetime(2026, 6, 16, 9, 0, tzinfo=timezone.utc)  # Tuesday, not Monday
+    bad_occ = seed + timedelta(days=1)  # one day off the weekly cadence
     with pytest.raises(ValueError, match="not a valid occurrence"):
         await env.space_cal_svc.rsvp(
             event_id=event.id,
@@ -886,7 +897,7 @@ async def test_rsvp_recurring_rejects_invalid_occurrence(space_cal_env):
 async def test_rsvp_recurring_separate_occurrences(space_cal_env):
     """RSVPs on two different occurrences yield two distinct rows."""
     env = space_cal_env
-    seed = datetime(2026, 7, 6, 9, 0, tzinfo=timezone.utc)
+    seed = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Weekly standup",
@@ -918,7 +929,7 @@ async def test_rsvp_recurring_separate_occurrences(space_cal_env):
 async def test_rsvp_status_must_be_user_settable(space_cal_env):
     """User-driven RSVP can't set host-controlled statuses (requested/waitlist)."""
     env = space_cal_env
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Birthday",
@@ -939,7 +950,7 @@ async def test_rsvp_status_must_be_user_settable(space_cal_env):
 
 async def test_create_event_auto_rsvps_creator_as_going(space_cal_env):
     env = space_cal_env
-    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Birthday party",
@@ -959,7 +970,7 @@ async def test_capped_event_member_rsvp_becomes_requested(space_cal_env):
         "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
         ("bob", "uid-bob", "Bob"),
     )
-    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Capped event",
@@ -980,7 +991,7 @@ async def test_capped_event_member_rsvp_becomes_requested(space_cal_env):
 
 async def test_creator_skips_approval_even_when_capped(space_cal_env):
     env = space_cal_env
-    now = datetime(2026, 9, 8, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Capped event",
@@ -1001,7 +1012,7 @@ async def test_approve_promotes_requested_to_going(space_cal_env):
         "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
         ("bob", "uid-bob", "Bob"),
     )
-    now = datetime(2026, 9, 12, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Capped event",
@@ -1032,7 +1043,7 @@ async def test_approve_lands_on_waitlist_when_full(space_cal_env):
             "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
             (u, f"uid-{u}", u.title()),
         )
-    now = datetime(2026, 9, 15, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Tiny event",
@@ -1061,7 +1072,7 @@ async def test_decline_promotes_waitlist(space_cal_env):
             "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
             (u, f"uid-{u}", u.title()),
         )
-    now = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Limited",
@@ -1094,7 +1105,7 @@ async def test_deny_removes_request(space_cal_env):
         "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
         ("bob", "uid-bob", "Bob"),
     )
-    now = datetime(2026, 10, 5, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Capped",
@@ -1120,7 +1131,7 @@ async def test_list_pending_only_returns_requested(space_cal_env):
         "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
         ("bob", "uid-bob", "Bob"),
     )
-    now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Capped",
@@ -1147,7 +1158,7 @@ async def test_capacity_raise_promotes_waitlist(space_cal_env):
             "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
             (u, f"uid-{u}", u.title()),
         )
-    now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Capped",
@@ -1181,7 +1192,7 @@ async def test_uncapped_event_keeps_old_behaviour(space_cal_env):
         "INSERT INTO users(username, user_id, display_name) VALUES(?,?,?)",
         ("bob", "uid-bob", "Bob"),
     )
-    now = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Open event",
@@ -1250,7 +1261,7 @@ async def test_rsvp_during_event_window_allowed(space_cal_env):
 
 async def test_negative_capacity_rejected(space_cal_env):
     env = space_cal_env
-    now = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    now = _SEED
     with pytest.raises(ValueError, match="capacity"):
         await env.space_cal_svc.create_event(
             space_id="sp-cal",
@@ -1358,7 +1369,7 @@ async def test_create_event_publishes_federation_event(space_cal_env):
 
     fed = _FakeFed()
     env.space_cal_svc.attach_federation(fed)
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Anniversary",
@@ -1390,7 +1401,7 @@ async def test_create_event_publishes_federation_event(space_cal_env):
 
 async def test_update_event_clears_location_on_explicit_none(space_cal_env):
     env = space_cal_env
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Drinks",
@@ -1417,7 +1428,7 @@ async def test_update_event_publishes_federation_event(space_cal_env):
 
     fed = _FakeFed()
     env.space_cal_svc.attach_federation(fed)
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Old",
@@ -1446,7 +1457,7 @@ async def test_delete_event_publishes_federation_event(space_cal_env):
 
     fed = _FakeFed()
     env.space_cal_svc.attach_federation(fed)
-    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    now = _SEED
     event = await env.space_cal_svc.create_event(
         space_id="sp-cal",
         summary="Bye",
