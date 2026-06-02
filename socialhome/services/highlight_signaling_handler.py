@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import pathlib
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -380,22 +381,26 @@ class HighlightSignalingHandler:
         """Header-based Ed25519 auth for the binary relay upload.
 
         The body is the raw framed stream, so the signature can't ride
-        inside it — sign the canonical ``{instance_id, relay_id}`` dict
+        inside it — sign the canonical ``{instance_id, relay_id, ts}`` dict
         (same scheme as :meth:`_sign`) and carry it in headers the GFS
-        verifies via ``authenticate_relay_stream``.
+        verifies via ``authenticate_relay_stream``. The ``ts`` binds the
+        signature to a short time window so a captured header can't be
+        replayed against a future relay id.
         """
         if self._signing_key is None:
             raise RuntimeError(
                 "HighlightSignalingHandler used before attach_identity",
             )
         instance_id = self._require_instance_id()
-        body = {"instance_id": instance_id, "relay_id": relay_id}
+        ts = int(time.time())
+        body = {"instance_id": instance_id, "relay_id": relay_id, "ts": ts}
         canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode(
             "utf-8"
         )
         sig = b64url_encode(sign_ed25519(self._signing_key, canonical))
         return {
             "X-SH-Instance": instance_id,
+            "X-SH-Timestamp": str(ts),
             "X-SH-Signature": sig,
         }
 

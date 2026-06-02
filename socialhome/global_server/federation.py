@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Storage cap for a published space's ``about_markdown``. Generous for a
+#: real "about" blurb; bounds DB growth + the public-page render cost from
+#: an oversized publish. The public renderer applies its own (smaller) cap.
+MAX_ABOUT_MARKDOWN_CHARS: int = 8000
+
 
 class GfsFederationService:
     """Lightweight federation relay for the GFS process.
@@ -261,6 +266,13 @@ class GfsFederationService:
             raw_sig = b64url_decode(signature)
             if not verify_ed25519(raw_key, canonical, raw_sig):
                 raise PermissionError("Invalid Ed25519 signature")
+        # Bound the stored ``about_markdown`` (verified above against the
+        # full value, so the signature still holds). The public page caps
+        # rendering too; capping at storage avoids DB bloat from a paired
+        # instance publishing an oversized blob. Truncate rather than
+        # reject so a slightly-long About still publishes.
+        if about_markdown and len(about_markdown) > MAX_ABOUT_MARKDOWN_CHARS:
+            about_markdown = about_markdown[:MAX_ABOUT_MARKDOWN_CHARS]
         existing = await self._repo.get_space(space_id)
         # Preserve subscriber_count / posts_per_week / published_at from
         # the existing row — those are GFS-side bookkeeping, not the

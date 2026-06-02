@@ -651,20 +651,20 @@ framed stream. Author-offline → `503`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/gfs/highlights/ice-servers` | Anon STUN/TURN list for the browser bootstrap. |
-| POST | `/gfs/highlight_rtc/offer` | Anon. Body `{instance_id, highlight_id, token, sdp}`; pushes a `highlight_signal kind=offer` WS frame to the author. Returns `{session_id}`. |
+| POST | `/gfs/highlight_rtc/offer` | Anon (rate-limited 20/min per IP). Body `{instance_id, highlight_id, token, sdp}`; pushes a `highlight_signal kind=offer` WS frame to the author. Returns `{session_id}`. |
 | GET | `/gfs/highlight_rtc/session/{session_id}` | Anon poll for `answer_sdp` + author ICE. |
 | POST | `/gfs/highlight_rtc/ice/viewer` | Anon. Trickle the viewer's ICE candidate. |
 | POST | `/gfs/highlight_rtc/answer` | Author SH (Ed25519-signed). Authority guard: `session.initiator_id` == signer. |
 | POST | `/gfs/highlight_rtc/ice/author` | Author SH (signed). Same guard. |
-| GET | `/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}?token=...` | Anon, token-gated. Chunked `application/octet-stream`; pushes a `highlight_signal kind=relay_offer` and pipes the author's framed bytes. `503` author offline, `410` bad/expired token, `422` missing token. |
-| POST | `/gfs/highlight_rtc/relay-stream/{relay_id}` | Author SH. Header-auth `X-SH-Instance` + `X-SH-Signature` (Ed25519 over canonical `{"instance_id","relay_id"}`); body is the raw framed stream. `403` target != signer, `404` unknown relay, `401` bad sig, `422` missing headers. |
-| POST | `/gfs/moment_rtc/offer` | Anon. Body `{user_id, sdp}`; pushes a `moment_signal kind=offer` (carries `user_id` + `gfs_id`) to the author. `404` unregistered/suspended, `503` author offline. Returns `{session_id}`. |
+| GET | `/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}?token=...` | Anon, token-gated (rate-limited 20/min per IP). Chunked `application/octet-stream`; pushes a `highlight_signal kind=relay_offer` and pipes the author's framed bytes. `503` author offline / relay capacity, `410` bad/expired token, `422` missing token. |
+| POST | `/gfs/highlight_rtc/relay-stream/{relay_id}` | Author SH. Header-auth `X-SH-Instance` + `X-SH-Timestamp` (±300 s) + `X-SH-Signature` (Ed25519 over canonical `{"instance_id","relay_id","ts"}`); body is the raw framed stream. `403` target != signer, `404` unknown relay, `401` bad sig / stale ts, `422` missing headers. |
+| POST | `/gfs/moment_rtc/offer` | Anon (rate-limited 20/min per IP). Body `{user_id, sdp}`; pushes a `moment_signal kind=offer` (carries `user_id` + `gfs_id`) to the author. `404` unregistered/suspended, `503` author offline. Returns `{session_id}`. |
 | GET | `/gfs/moment_rtc/session/{session_id}` | Anon poll for `answer_sdp` + author ICE. |
 | POST | `/gfs/moment_rtc/ice/viewer` | Anon. Trickle the viewer's ICE candidate. |
 | POST | `/gfs/moment_rtc/answer` | Author SH (signed). Authority guard: `session.initiator_id` == signer. |
 | POST | `/gfs/moment_rtc/ice/author` | Author SH (signed). Same guard. |
-| GET | `/gfs/moment_rtc/relay/{user_id}` | Anon chunked relay fallback (registration-gated). `404` unregistered, `503` author offline. |
-| POST | `/gfs/moment_rtc/relay-stream/{relay_id}` | Author SH. Header-auth (same scheme as the highlight relay-stream); body is the raw framed stream. |
+| GET | `/gfs/moment_rtc/relay/{user_id}` | Anon chunked relay fallback (registration-gated, rate-limited 20/min per IP). `404` unregistered, `503` author offline / relay capacity. |
+| POST | `/gfs/moment_rtc/relay-stream/{relay_id}` | Author SH. Header-auth (same `X-SH-Instance`/`X-SH-Timestamp`/`X-SH-Signature` scheme as the highlight relay-stream); body is the raw framed stream. |
 
 ## GFS — Push WebSocket (GFS → SH)
 
@@ -749,6 +749,8 @@ These pages are server-rendered HTML and require no auth.
 | `POST /api/calls/{id}/decline` | 10 / min / user |
 | `POST /api/calls/{id}/hangup` | 30 / min / user |
 | `POST /cluster/signaling-session{,/release}` | 60 / min / paired instance |
+| `GET /` + `GET /spaces/{id}` (GFS public listing) | 30 / min / IP |
+| `POST /gfs/{highlight,moment}_rtc/offer` + the anon `/relay/*` GETs | 20 / min / IP — bounds the WS-push amplification from the anonymous RTC entry points |
 | Federation inbound (per signing instance) | Rolling window; see §24.11. |
 | `POST /federation/inbox/{inbox_id}` (per remote IP) | 1000 / min — defends against unauthenticated floods that the per-user limiter would otherwise miss. |
 

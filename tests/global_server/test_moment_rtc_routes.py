@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -70,14 +71,22 @@ def _sign(seed: bytes, body: dict) -> dict:
     return {**body, "signature": sig}
 
 
-def _relay_headers(seed: bytes, instance_id: str, relay_id: str) -> dict[str, str]:
-    body = {"instance_id": instance_id, "relay_id": relay_id}
+def _relay_headers(
+    seed: bytes, instance_id: str, relay_id: str, *, ts: int | None = None
+) -> dict[str, str]:
+    if ts is None:
+        ts = int(time.time())
+    body = {"instance_id": instance_id, "relay_id": relay_id, "ts": ts}
     canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     sk = Ed25519PrivateKey.from_private_bytes(seed)
     import base64
 
     sig = base64.urlsafe_b64encode(sk.sign(canonical)).rstrip(b"=").decode("ascii")
-    return {"X-SH-Instance": instance_id, "X-SH-Signature": sig}
+    return {
+        "X-SH-Instance": instance_id,
+        "X-SH-Timestamp": str(ts),
+        "X-SH-Signature": sig,
+    }
 
 
 async def _await_relay_offer(client, timeout: float = 2.0) -> str:
