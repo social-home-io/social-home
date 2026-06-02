@@ -71,7 +71,7 @@ export function mountBridge(
           const key = String(params?.key ?? '')
           try {
             const resp = await api.get<{ key: string; value: unknown }>(
-              `/api/apps/${appId}/store/${encodeURIComponent(key)}`,
+              `/api/apps/${encodeURIComponent(appId)}/store/${encodeURIComponent(key)}`,
             )
             reply({ id, ok: true, result: resp.value })
           } catch (err) {
@@ -87,20 +87,20 @@ export function mountBridge(
         case 'store.set': {
           const key = String(params?.key ?? '')
           const value = params?.value
-          await api.put(`/api/apps/${appId}/store/${encodeURIComponent(key)}`, { value })
+          await api.put(`/api/apps/${encodeURIComponent(appId)}/store/${encodeURIComponent(key)}`, { value })
           reply({ id, ok: true, result: { ok: true } })
           break
         }
 
         case 'store.delete': {
           const key = String(params?.key ?? '')
-          await api.delete(`/api/apps/${appId}/store/${encodeURIComponent(key)}`)
+          await api.delete(`/api/apps/${encodeURIComponent(appId)}/store/${encodeURIComponent(key)}`)
           reply({ id, ok: true, result: { ok: true } })
           break
         }
 
         case 'store.list': {
-          const resp = await api.get<{ items: unknown[] }>(`/api/apps/${appId}/store`)
+          const resp = await api.get<{ items: unknown[] }>(`/api/apps/${encodeURIComponent(appId)}/store`)
           reply({ id, ok: true, result: resp.items })
           break
         }

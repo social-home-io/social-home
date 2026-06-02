@@ -315,3 +315,31 @@ async def test_facade_send_app_false_when_peer_raises():
         payload_bytes=b"p",
     )
     assert ok is False
+
+
+async def test_drain_app_channel_survives_bad_callback_and_delivers_next():
+    """A callback that raises on one frame (e.g. ValueError from bad sha256
+    or UnsupportedAppAeadSuite) must NOT kill the drain task — a subsequent
+    good frame on the same channel must still be delivered (I1 fix).
+    """
+    received: list = []
+    call_count = 0
+
+    async def cb(instance_id, header, payload):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            # Simulate a validation error on the first frame.
+            raise ValueError("bad payload_sha256 on forged frame")
+        received.append((instance_id, header, payload))
+
+    peer = _peer(app_inbound=cb)
+    good_frame = af.encode(b"header-ok", b"payload-ok")
+    # Two valid binary frames; the callback raises on the first, succeeds on
+    # the second.  Both frames are parsed correctly by iter_complete_frames —
+    # the exception lives inside the callback, not in framing.
+    ch = _ScriptedChannel([good_frame, good_frame])
+    await peer._drain_app_channel(ch)
+    # The second frame must have reached the callback despite the first raising.
+    assert len(received) == 1
+    assert received[0] == ("peer-1", b"header-ok", b"payload-ok")

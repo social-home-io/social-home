@@ -77,6 +77,8 @@ sequenceDiagram
 | `session_id` | yes | Hex UUID allocated by the initiator.  Scopes all subsequent `APP_MESSAGE` frames for this session. |
 | `verb` | yes | `"open"` / `"accept"` / `"close"`. |
 
+**v1 session lifecycle note:** the host initiates `open`; other verbs (`accept`, `close`) are passed through to the app layer — the iframe app owns session lifecycle.  The server does not enforce session state.
+
 **Privacy note:** `APP_SESSION` deliberately carries **no** per-user
 identifier — only `session_id` and `from_instance` (the household).  A
 stable user identifier sent cross-household is a tracking vector; if an app

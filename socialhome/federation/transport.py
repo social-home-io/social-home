@@ -803,11 +803,19 @@ class _RtcPeer:
                         )
                         continue
                     if self._media_inbound is not None:
-                        await self._media_inbound(
-                            self.instance_id,
-                            frame.header,
-                            frame.payload,
-                        )
+                        try:
+                            await self._media_inbound(
+                                self.instance_id,
+                                frame.header,
+                                frame.payload,
+                            )
+                        except Exception as exc:  # noqa: BLE001 — one bad frame must not kill the channel
+                            log.warning(
+                                "fed RTC media frame dropped from %s: %s",
+                                self.instance_id,
+                                exc,
+                            )
+                            continue
         except asyncio.CancelledError:
             raise
         except rtc.ConnectionClosedError:
@@ -875,11 +883,19 @@ class _RtcPeer:
                         )
                         continue
                     if self._app_inbound is not None:
-                        await self._app_inbound(
-                            self.instance_id,
-                            frame.header,
-                            frame.payload,
-                        )
+                        try:
+                            await self._app_inbound(
+                                self.instance_id,
+                                frame.header,
+                                frame.payload,
+                            )
+                        except Exception as exc:  # noqa: BLE001 — one bad frame must not kill the channel
+                            log.warning(
+                                "fed RTC app frame dropped from %s: %s",
+                                self.instance_id,
+                                exc,
+                            )
+                            continue
         except asyncio.CancelledError:
             raise
         except rtc.ConnectionClosedError:
