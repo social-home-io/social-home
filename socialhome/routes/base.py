@@ -55,6 +55,7 @@ from ..services.space_zone_service import (
     SpaceZoneNotFoundError,
 )
 from ..services.storage_quota_service import StorageQuotaExceeded
+from ..domain.apps import AppAlreadyInstalledError, AppIntegrityError, AppNotFoundError
 from ..services.moment_service import MomentNotFoundError, MomentRateLimitError
 from ..services.highlight_publication_service import (
     HighlightNotFoundError as HighlightPublicationNotFoundError,
@@ -175,8 +176,16 @@ class BaseView(web.View):
             MomentNotFoundError,
             PresenceUserNotFoundError,
             CpUserNotFoundError,
+            AppNotFoundError,
         ) as exc:
             return error_response(404, "NOT_FOUND", str(exc))
+        except AppAlreadyInstalledError as exc:
+            return error_response(409, "CONFLICT", str(exc))
+        except AppIntegrityError as exc:
+            # §App-integrity: bundle download/verify failure is a bad
+            # request (bad app_id, tampered catalog) — 400 UNPROCESSABLE
+            # mirrors the existing ValueError convention.
+            return error_response(400, "UNPROCESSABLE", str(exc))
         except HighlightPublicationError as exc:
             return error_response(502, "GFS_UNAVAILABLE", str(exc))
         except HighlightFrameLimitError as exc:

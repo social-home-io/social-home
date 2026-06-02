@@ -126,6 +126,7 @@ from .gallery import (
 )
 from .health import HealthView
 from .household import HouseholdPreferencesView
+from .apps import AppCatalogView, AppCollectionView, AppDetailView
 from .me_preferences import MePreferencesView
 from .me_space_location import MeSpaceLocationSharingView
 from .media import MediaServeView, MediaUploadView
@@ -1020,6 +1021,13 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         "/api/me/space-location-sharing",
         MeSpaceLocationSharingView,
     )
+
+    # ── Social Home Apps (§SHApps) ────────────────────────────────────────
+    # Register ``/api/apps/catalog`` BEFORE ``/api/apps/{app_id}`` so the
+    # literal segment "catalog" is matched first and never captured as an app_id.
+    app.router.add_view("/api/apps", AppCollectionView)
+    app.router.add_view("/api/apps/catalog", AppCatalogView)
+    app.router.add_view("/api/apps/{app_id}", AppDetailView)
 
     # ── Backup (adapter-agnostic) ────────────────────────────────────────
     app.router.add_view("/api/backup/pre_backup", BackupPreView)
