@@ -173,6 +173,8 @@ class HighlightRelayStreamView(GfsBaseView):
 
         bridge = self.svc(K.gfs_relay_bridge_key)
         relay_id = bridge.create(target_instance_id=instance_id, scope=highlight_id)
+        if relay_id is None:
+            return web.json_response({"error": "unavailable"}, status=503)
         channel = bridge.get(relay_id)
         assert channel is not None  # just created
 

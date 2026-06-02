@@ -162,6 +162,8 @@ class MomentRelayStreamView(GfsBaseView):
 
         bridge = self.svc(K.gfs_relay_bridge_key)
         relay_id = bridge.create(target_instance_id=author_instance_id, scope=user_id)
+        if relay_id is None:
+            return web.json_response({"error": "unavailable"}, status=503)
         channel = bridge.get(relay_id)
         assert channel is not None  # just created
 

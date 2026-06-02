@@ -17,12 +17,12 @@ GFS only relays SDP/ICE later.
 
 from __future__ import annotations
 
-import json
 import logging
 
 from aiohttp import web
 
 from .. import app_keys as K
+from ..safe_embed import script_json
 from .base import GfsBaseView
 from .rtc import _rtc_authenticate
 
@@ -177,7 +177,10 @@ class HighlightPublicLandingView(GfsBaseView):
         # tag for the (instance_id, highlight_id, token) triple it needs to
         # POST /gfs/highlight_rtc/offer. Keeping the values inline lets the
         # JS bundle stay zero-state — no URL parsing on the client side.
-        boot = json.dumps(
+        # ``script_json`` (not bare ``json.dumps``) so an instance_id /
+        # highlight_id containing ``</script>`` can't break out of the
+        # inline <script> block — stored XSS on this anonymous page.
+        boot = script_json(
             {"instanceId": instance_id, "highlightId": highlight_id, "token": token}
         )
         body = (

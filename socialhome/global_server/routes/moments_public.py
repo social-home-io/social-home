@@ -24,13 +24,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
 
 from aiohttp import web
 
 from .. import app_keys as K
 from ..domain import GfsUserPicture
+from ..safe_embed import script_json
 from .base import GfsBaseView
 from .rtc import _rtc_authenticate
 
@@ -427,7 +427,10 @@ class GfsUserDetailHtmlView(GfsBaseView):
             bio=_html_escape(bio),
             follower_count=int(followers),
             gfs_id=_html_escape(str(gfs_id)),
-            boot_json=json.dumps({"userId": user_id, "instanceId": reg.instance_id}),
+            # ``script_json`` so a registration's user_id / instance_id
+            # containing ``</script>`` can't break out of the inline
+            # <script> block — stored XSS on this anonymous page.
+            boot_json=script_json({"userId": user_id, "instanceId": reg.instance_id}),
         )
         return web.Response(text=body, content_type="text/html")
 

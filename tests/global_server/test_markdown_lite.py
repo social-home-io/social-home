@@ -104,3 +104,15 @@ def test_heading_content_is_escaped():
     assert "<h1>" in out
     assert "<b>" not in out
     assert "&lt;b&gt;" in out
+
+
+def test_oversize_source_is_truncated():
+    """Pathological metacharacter blobs are bounded so the render can't
+    block the GFS event loop (super-linear inline passes)."""
+    from socialhome.global_server.markdown_lite import MAX_SOURCE_CHARS
+
+    out = render_markdown("*_`[" * (MAX_SOURCE_CHARS))  # 4× over the cap
+    # Truncation marker present; output stays proportional to the cap, not
+    # to the (much larger) input.
+    assert "…" in out
+    assert len(out) < MAX_SOURCE_CHARS * 6
