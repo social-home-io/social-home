@@ -1925,17 +1925,25 @@ def create_app(config: Config | None = None) -> web.Application:
         # will receive ``highlight_signal`` frames once the supervisor
         # gets ``attach_highlight_signal_handler`` — see below where the
         # supervisor is constructed.
+        # Author-side answerers need the operator's STUN/TURN so a guest
+        # behind NAT can complete the direct DataChannel; without them the
+        # peer offers host candidates only and most cross-NAT viewers fall
+        # back to the GFS relay. Use the same per-instance HMAC TURN identity
+        # the federation transport uses.
+        public_ice_servers = _default_ice_servers(config, hmac_user_id=real_instance_id)
         highlight_signaling_handler.attach_session(http_session)
         highlight_signaling_handler.attach_identity(
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
+        highlight_signaling_handler.attach_ice_servers(public_ice_servers)
         # Matching wiring for the public-moments answerer side.
         moment_public_signaling_handler.attach_session(http_session)
         moment_public_signaling_handler.attach_identity(
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
+        moment_public_signaling_handler.attach_ice_servers(public_ice_servers)
         # Public-Momentum service + outbound subscriber. Same shape as
         # ``highlight_publication_service``: shared session + signing
         # key wired up after federation identity loads.
