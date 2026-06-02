@@ -350,7 +350,6 @@ in-process retention scheduler prunes expired and over-quota rows.
 | GET    | `/api/highlights/{id}/publish` | Local publication snapshot: `{published, gfs_id, published_at}`. Token list lives on the GFS. |
 | DELETE | `/api/highlights/{id}/publish` | Drop the publication; CASCADE on the GFS revokes every token. |
 | DELETE | `/api/highlights/{id}/publish/{token}` | Revoke a single share token; other tokens under the same publication keep working. |
-| POST   | `/api/highlights/{id}/publish/og` | Upload an optional preview thumbnail for the OG card. Body: `{image_b64}`. Forwarded to the publishing GFS; cached at the stable URL `https://{gfs}/highlight/{i}/{s}/og.jpg` for anonymous social-card crawlers. ≤200 KB JPEG. |
 
 Audience kinds:
 

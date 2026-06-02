@@ -17,8 +17,6 @@ GFS only relays SDP/ICE later.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import logging
 
@@ -142,80 +140,6 @@ class HighlightUnpublishView(GfsBaseView):
         return web.json_response({"status": "ok"})
 
 
-class HighlightOgUploadView(GfsBaseView):
-    """``POST /gfs/highlights/{highlight_id}/og`` — author SH uploads the cached
-    OG-card thumbnail for an existing publication.
-
-    Body is the same Ed25519-signed JSON envelope the rest of
-    ``/gfs/highlights/*`` uses; the JPEG is base64-encoded into the
-    ``image_b64`` field so we can re-use the canonical-body signing
-    helper without juggling multipart boundaries.
-    """
-
-    async def post(self) -> web.Response:
-        result = await _rtc_authenticate(self)
-        if isinstance(result, web.Response):
-            return result
-        body, instance_id = result
-        highlight_id = self.match("highlight_id")
-        b64 = str(body.get("image_b64") or "")
-        if not b64:
-            return web.json_response({"error": "missing_image"}, status=422)
-        try:
-            raw = base64.b64decode(b64, validate=True)
-        except ValueError, binascii.Error:
-            return web.json_response({"error": "invalid_b64"}, status=422)
-        registry = self.svc(K.gfs_highlight_pub_service_key)
-        # Publication must already exist — author publishes first, then
-        # uploads the preview. Avoids leaking storage to anyone with
-        # an instance key.
-        pub = await registry.get_publication(highlight_id, instance_id)
-        if pub is None:
-            return web.json_response({"error": "not_published"}, status=404)
-        try:
-            filename = await registry.store_og_thumbnail(
-                highlight_id=highlight_id,
-                instance_id=instance_id,
-                jpeg_bytes=raw,
-            )
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=422)
-        return web.json_response(
-            {
-                "status": "ok",
-                "url": registry.og_image_url(instance_id, highlight_id),
-                "filename": filename,
-            }
-        )
-
-
-class HighlightOgImageView(GfsBaseView):
-    """``GET /highlight/{instance_id}/{highlight_id}/og.jpg`` — public, no token.
-
-    Anonymous social-card crawlers (Twitter, Slack, iMessage, etc.)
-    can fetch this directly without the share token. Returns 404 when
-    the author hasn't uploaded a thumbnail or the publication is gone.
-    """
-
-    async def get(self) -> web.StreamResponse:
-        instance_id = self.match("instance_id")
-        highlight_id = self.match("highlight_id")
-        registry = self.svc(K.gfs_highlight_pub_service_key)
-        pub = await registry.get_publication(highlight_id, instance_id)
-        if pub is None or pub.og_thumbnail_filename is None:
-            return web.Response(status=404, text="not_found")
-        try:
-            path = registry.og_thumbnail_path(pub.og_thumbnail_filename)
-        except ValueError:  # pragma: no cover - DB stored garbage
-            return web.Response(status=404, text="not_found")
-        if not path.is_file():
-            return web.Response(status=404, text="not_found")
-        return web.FileResponse(
-            path,
-            headers={"Cache-Control": "public, max-age=300"},
-        )
-
-
 # ─── Public landing page ─────────────────────────────────────────────────
 
 
@@ -256,18 +180,6 @@ class HighlightPublicLandingView(GfsBaseView):
         boot = json.dumps(
             {"instanceId": instance_id, "highlightId": highlight_id, "token": token}
         )
-        # Author may have opted into a cached social-preview thumbnail
-        # (§highlights_public OG card). Only emit ``og:image`` when we
-        # know the file is on disk — empty meta tags break some
-        # crawlers' fallback logic.
-        og_image_tag = ""
-        if pub.og_thumbnail_filename:
-            og_url = registry.og_image_url(instance_id, highlight_id)
-            og_image_tag = (
-                f"<meta property='og:image' content='{og_url}'>"
-                f"<meta name='twitter:card' content='summary_large_image'>"
-                f"<meta name='twitter:image' content='{og_url}'>"
-            )
         body = (
             "<!doctype html><html lang='en'><head>"
             "<meta charset='utf-8'>"
@@ -280,7 +192,6 @@ class HighlightPublicLandingView(GfsBaseView):
             "<title>Highlight</title>"
             "<meta property='og:title' content='A highlight shared with you'>"
             "<meta property='og:type' content='website'>"
-            f"{og_image_tag}"
             "<style>"
             "html,body{margin:0;padding:0;background:#111;color:#eee;"
             "font-family:system-ui,sans-serif;height:100%;}"

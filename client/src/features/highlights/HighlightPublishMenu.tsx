@@ -9,16 +9,11 @@
  * a copy button. Author can also tap "Unpublish all" to revoke every
  * token under this highlight.
  *
- * Once the link is minted, the modal exposes an optional preview-
- * thumbnail upload (§highlights_public OG card). The thumbnail is
- * cached on the GFS so anonymous social-card crawlers (Twitter,
- * Slack, iMessage) render a real preview alongside the share link.
- *
  * Token list lives on the GFS — listing existing tokens is intentional
  * future work; v1 surface is "publish (mints a token), unpublish (drops
  * them all)".
  */
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect } from 'preact/hooks'
 import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { Modal } from '@/components/Modal'
@@ -186,7 +181,6 @@ export function HighlightPublishMenu() {
           <div class="sh-modal-actions">
             <Button onClick={copy}>Copy</Button>
           </div>
-          <OgThumbnailUpload highlightId={highlightId.value} />
         </div>
       )}
 
@@ -203,103 +197,4 @@ export function HighlightPublishMenu() {
       )}
     </Modal>
   )
-}
-
-
-/**
- * OgThumbnailUpload — optional preview image for the public link.
- *
- * Shown after a successful publish. Author picks a JPEG / PNG; we
- * decode it to a JPEG via canvas (so we always upload the same wire
- * format the GFS expects), base64-encode, and POST to
- * ``/api/highlights/{id}/publish/og``. The GFS caches the bytes for
- * anonymous OG crawlers — no token needed to fetch the preview.
- */
-function OgThumbnailUpload({ highlightId }: { highlightId: string }) {
-  const [busy, setBusy] = useState(false)
-  const [uploaded, setUploaded] = useState<string | null>(null)
-
-  const onFile = async (file: File) => {
-    setBusy(true)
-    try {
-      const b64 = await fileToJpegBase64(file)
-      const res = await api.post<{ url: string }>(
-        `/api/highlights/${highlightId}/publish/og`,
-        { image_b64: b64 },
-      )
-      setUploaded(res.url)
-      showToast('Preview image uploaded', 'success')
-    } catch (err: unknown) {
-      showToast(
-        `Couldn't upload preview: ${(err as Error)?.message ?? err}`,
-        'error',
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div class="sh-highlight-publish-og">
-      <p class="sh-muted">
-        Optional: upload a preview image to show on Twitter / iMessage /
-        Slack when someone shares this link. The image is cached on
-        the relay (the rest of the highlight still streams from your home
-        server). 200 KB max.
-      </p>
-      <input
-        type="file"
-        accept="image/*"
-        disabled={busy}
-        onChange={(e) => {
-          const file = (e.currentTarget as HTMLInputElement).files?.[0]
-          if (file) void onFile(file)
-        }}
-      />
-      {busy && <span class="sh-muted"> Uploading…</span>}
-      {uploaded && (
-        <p class="sh-muted">
-          Preview live at <a href={uploaded}>{uploaded}</a>.
-        </p>
-      )}
-    </div>
-  )
-}
-
-
-/**
- * Decode the user's image, render to a 1200×630 canvas (the size
- * Twitter / iMessage cards prefer), encode as JPEG, return the
- * base64 payload. Keeps the wire format predictable on the GFS side
- * regardless of what the author picked locally.
- */
-async function fileToJpegBase64(file: File): Promise<string> {
-  const bitmap = await createImageBitmap(file)
-  const W = 1200, H = 630
-  const canvas = document.createElement('canvas')
-  canvas.width = W
-  canvas.height = H
-  const ctx = canvas.getContext('2d')!
-  // Cover-fit: scale so the source covers the canvas, then centre-crop.
-  const scale = Math.max(W / bitmap.width, H / bitmap.height)
-  const dw = bitmap.width * scale
-  const dh = bitmap.height * scale
-  const dx = (W - dw) / 2
-  const dy = (H - dh) / 2
-  ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, W, H)
-  ctx.drawImage(bitmap, dx, dy, dw, dh)
-  const blob: Blob = await new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error('JPEG encode failed'))),
-      'image/jpeg',
-      0.85,
-    )
-  })
-  const buf = await blob.arrayBuffer()
-  // Base64-encode the bytes.
-  const bytes = new Uint8Array(buf)
-  let bin = ''
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
-  return btoa(bin)
 }

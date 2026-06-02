@@ -183,13 +183,11 @@ class GfsApp:
             enabled=config.cluster_enabled,
         )
         admin.attach_cluster(cluster)
-        og_dir = Path(config.data_dir) / "og_thumbnails"
         highlight_pubs = HighlightPublicationRegistry(
             repos.highlight_pubs,
             repos.highlight_tokens,
             ws_registry,
             base_url=config.base_url,
-            og_thumbnail_dir=og_dir,
         )
         moment_public = MomentPublicRegistry(
             repos.moment_public_users,

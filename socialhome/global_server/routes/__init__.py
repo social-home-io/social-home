@@ -72,8 +72,6 @@ from .rtc import (
     RtcSessionView,
 )
 from .highlights import (
-    HighlightOgImageView,
-    HighlightOgUploadView,
     HighlightPublicLandingView,
     HighlightPublishView,
     HighlightTokenMintView,
@@ -189,19 +187,6 @@ def register_routes(
     app.router.add_view(
         "/gfs/highlights/{highlight_id}/unpublish",
         HighlightUnpublishView,
-    )
-    app.router.add_view(
-        "/gfs/highlights/{highlight_id}/og",
-        HighlightOgUploadView,
-    )
-    # Public OG image — fetched by anonymous social-card crawlers.
-    # Path is stable per (instance, highlight) so a token rotation
-    # doesn't invalidate the cached preview on Twitter / Slack /
-    # iMessage. Mounted before the ``{token}`` route so aiohttp's
-    # routing table picks the literal ``og.jpg`` first.
-    app.router.add_view(
-        "/highlight/{instance_id}/{highlight_id}/og.jpg",
-        HighlightOgImageView,
     )
     app.router.add_view(
         "/highlight/{instance_id}/{highlight_id}/{token}",
