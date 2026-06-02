@@ -213,7 +213,10 @@ export default function MomentumDetailPage() {
         <div class="sh-momentum-detail-meta">
           <strong>{isAuthor ? 'You' : householdDisplayName(m.author_user_id)}</strong>
           <span class="sh-muted">
-            {new Date(m.created_at).toLocaleString()}
+            {new Date(m.created_at).toLocaleString(undefined, {
+              dateStyle: 'medium',
+              timeStyle: 'short',
+            })}
           </span>
         </div>
         {!isAuthor && (
@@ -306,7 +309,10 @@ export default function MomentumDetailPage() {
           <Button variant="ghost" onClick={report}>🚩 Report</Button>
         )}
         {isAuthor && (
-          <Button variant="danger" onClick={remove}>Delete</Button>
+          // Ghost (not filled-danger) so the destructive action doesn't
+          // compete with the primary Reply — the confirm dialog carries
+          // the "are you sure" weight. Matches the ghost Report above.
+          <Button variant="ghost" onClick={remove}>Delete</Button>
         )}
       </footer>
 
