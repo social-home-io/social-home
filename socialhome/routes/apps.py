@@ -137,7 +137,10 @@ class AppStoreCollectionView(BaseView):
         app_id = self.match("app_id")
         svc = self.svc(app_service_key)
         items = await svc.store_list(app_id, self.user.user_id)
-        return self._json({"items": items})
+        # Do NOT use self._json here: sanitise_for_api strips keys in
+        # SENSITIVE_FIELDS (e.g. "signature", "endpoint") from nested dicts,
+        # which would silently corrupt opaque user-supplied KV values.
+        return web.json_response({"items": items})
 
 
 class AppStoreItemView(BaseView):
@@ -150,7 +153,10 @@ class AppStoreItemView(BaseView):
             value = await svc.store_get(app_id, self.user.user_id, key)
         except KeyError:
             return error_response(404, "NOT_FOUND", "Key not found.")
-        return self._json({"key": key, "value": value})
+        # Do NOT use self._json here: sanitise_for_api strips keys in
+        # SENSITIVE_FIELDS (e.g. "signature", "endpoint") from nested dicts,
+        # which would silently corrupt opaque user-supplied KV values.
+        return web.json_response({"key": key, "value": value})
 
     async def put(self) -> web.Response:
         app_id, key = self.match("app_id"), self.match("key")
@@ -159,7 +165,10 @@ class AppStoreItemView(BaseView):
             return error_response(400, "UNPROCESSABLE", "value is required.")
         svc = self.svc(app_service_key)
         await svc.store_set(app_id, self.user.user_id, key, body["value"])
-        return self._json({"key": key, "value": body["value"]})
+        # Do NOT use self._json here: sanitise_for_api strips keys in
+        # SENSITIVE_FIELDS (e.g. "signature", "endpoint") from nested dicts,
+        # which would silently corrupt opaque user-supplied KV values.
+        return web.json_response({"key": key, "value": body["value"]})
 
     async def delete(self) -> web.Response:
         app_id, key = self.match("app_id"), self.match("key")

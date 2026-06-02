@@ -634,3 +634,67 @@ async def test_store_put_missing_value_field_400(client):
     assert r.status == 400
     body = await r.json()
     assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_store_preserves_sensitive_like_keys(client):
+    """PUT a value dict whose keys overlap SENSITIVE_FIELDS — GET must round-trip intact.
+
+    ``sanitise_for_api`` strips keys such as ``signature`` and ``endpoint`` from
+    any nested dict.  App KV values are opaque user data — stripping them silently
+    corrupts reads.  The store views must bypass sanitisation and pass the value
+    through untouched (web.json_response instead of self._json).
+    """
+    await _seed_installed_enabled_app(client._db)
+
+    # Use two SENSITIVE_FIELDS members so the test is robust.
+    payload = {
+        "signature": "abc123",
+        "endpoint": "https://push.example.com",
+        "score": 5,
+    }
+
+    r_put = await client.put(
+        "/api/apps/com.example.hello/store/prefs",
+        json={"value": payload},
+        headers=_auth(client._tok),
+    )
+    assert r_put.status == 200
+    put_body = await r_put.json()
+    assert put_body["value"] == payload, (
+        "PUT response must not strip sensitive-like keys from the value"
+    )
+
+    r_get = await client.get(
+        "/api/apps/com.example.hello/store/prefs",
+        headers=_auth(client._tok),
+    )
+    assert r_get.status == 200
+    get_body = await r_get.json()
+    assert get_body["value"] == payload, (
+        "GET response must not strip sensitive-like keys from the value"
+    )
+
+    # Verify the collection view also preserves the full value.
+    r_list = await client.get(
+        "/api/apps/com.example.hello/store",
+        headers=_auth(client._tok),
+    )
+    assert r_list.status == 200
+    list_body = await r_list.json()
+    assert list_body["items"]["prefs"] == payload, (
+        "GET /store (collection) must not strip sensitive-like keys from values"
+    )
+
+
+async def test_store_key_too_long_413(client):
+    """PUT to a key longer than 256 chars → 413 QUOTA_EXCEEDED."""
+    await _seed_installed_enabled_app(client._db)
+    long_key = "k" * 257
+    r = await client.put(
+        f"/api/apps/com.example.hello/store/{long_key}",
+        json={"value": {"ok": True}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 413
+    body = await r.json()
+    assert body["error"]["code"] == "QUOTA_EXCEEDED"

@@ -139,3 +139,28 @@ async def test_kv_cascades_on_uninstall(db):
     await repo.uninstall("chess")
     assert await repo.kv_get("chess", uid, "k") is None
     assert await repo.kv_count("chess", uid) == 0
+
+
+@pytest.mark.asyncio
+async def test_kv_cascades_on_user_delete(db):
+    """Deleting a user row must cascade-delete all their app_kv entries.
+
+    Proves the ``FOREIGN KEY (user_id) REFERENCES users(user_id)
+    ON DELETE CASCADE`` constraint on the ``app_kv`` table.
+    """
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    await repo.kv_set(
+        "chess", uid, "game:1", '{"turn":"w"}', "2026-06-02T00:00:00+00:00"
+    )
+    # Confirm the row is there before deletion.
+    assert await repo.kv_count("chess", uid) == 1
+
+    # Hard-delete the user row; no user_repo.delete method exists so we use
+    # direct SQL (acceptable: this is a repo-layer test probing the DB schema).
+    await db.enqueue("DELETE FROM users WHERE user_id = ?", (uid,))
+
+    # The cascade must have removed the kv row.
+    assert await repo.kv_count("chess", uid) == 0
+    assert await repo.kv_get("chess", uid, "game:1") is None
