@@ -41,6 +41,13 @@ PAIR_TOKEN_MIN_INTERVAL: int = 30
 #: Public-listing rate limit per IP (spec §24.7.3).
 LISTING_MAX_PER_MINUTE: int = 30
 
+#: Per-IP/minute cap on the anonymous public-content RTC entry points
+#: (offer + relay). Each request fans a WS push to the author, so this
+#: bounds that amplification while leaving headroom for a guest's normal
+#: connect + a retry or two. The session-poll / ICE endpoints are NOT
+#: gated here — the viewer polls them ~1/s by design.
+PUBLIC_RTC_MAX_PER_MINUTE: int = 20
+
 
 # ─── Token service ──────────────────────────────────────────────────────
 
@@ -95,6 +102,42 @@ def build_listing_rate_limit():
                 {"error": "rate_limited"},
                 status=429,
             )
+            resp.headers["Retry-After"] = "60"
+            return resp
+        hits.append(now)
+        counters[ip] = hits
+        return await handler(request)
+
+    return _rate_limit
+
+
+def _is_public_rtc_entry(path: str) -> bool:
+    """The anonymous, WS-amplifying RTC entry points: the offers and the
+    relay-stream GETs (not the signed author uploads at ``/relay-stream/``,
+    not the high-frequency session/ICE polls)."""
+    return (
+        path in ("/gfs/highlight_rtc/offer", "/gfs/moment_rtc/offer")
+        or path.startswith("/gfs/highlight_rtc/relay/")
+        or path.startswith("/gfs/moment_rtc/relay/")
+    )
+
+
+def build_public_rtc_rate_limit():
+    """Per-IP rate limiter for the anonymous public-content RTC entry
+    points. Each offer/relay request pushes a WS frame to the author, so a
+    flood is an amplification vector; cap it per IP. Mirrors
+    :func:`build_listing_rate_limit`'s in-memory sliding window."""
+    counters: dict[str, list[float]] = {}
+
+    @web.middleware
+    async def _rate_limit(request: web.Request, handler):
+        if not _is_public_rtc_entry(request.rel_url.path):
+            return await handler(request)
+        now = time.monotonic()
+        ip = _client_ip(request)
+        hits = [t for t in counters.get(ip, []) if now - t < 60.0]
+        if len(hits) >= PUBLIC_RTC_MAX_PER_MINUTE:
+            resp = web.json_response({"error": "rate_limited"}, status=429)
             resp.headers["Retry-After"] = "60"
             return resp
         hits.append(now)

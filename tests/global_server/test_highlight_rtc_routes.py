@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import time
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -68,13 +69,21 @@ def _sign(seed: bytes, body: dict) -> dict:
     return {**body, "signature": sig}
 
 
-def _relay_headers(seed: bytes, instance_id: str, relay_id: str) -> dict[str, str]:
+def _relay_headers(
+    seed: bytes, instance_id: str, relay_id: str, *, ts: int | None = None
+) -> dict[str, str]:
     """Header-based auth the author uses for the relay byte-stream upload."""
-    body = {"instance_id": instance_id, "relay_id": relay_id}
+    if ts is None:
+        ts = int(time.time())
+    body = {"instance_id": instance_id, "relay_id": relay_id, "ts": ts}
     canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     sk = Ed25519PrivateKey.from_private_bytes(seed)
     sig = base64.urlsafe_b64encode(sk.sign(canonical)).rstrip(b"=").decode("ascii")
-    return {"X-SH-Instance": instance_id, "X-SH-Signature": sig}
+    return {
+        "X-SH-Instance": instance_id,
+        "X-SH-Timestamp": str(ts),
+        "X-SH-Signature": sig,
+    }
 
 
 async def _await_relay_offer(client, timeout: float = 2.0) -> str:
@@ -568,3 +577,46 @@ async def test_relay_upload_missing_auth_headers_returns_422(client):
         f"/gfs/highlight_rtc/relay-stream/{relay_id}", data=b"bytes"
     )
     assert resp.status == 422
+
+
+async def test_relay_upload_stale_timestamp_returns_401(client):
+    relay_id = client._app[gfs_relay_bridge_key].create(
+        target_instance_id="inst-author", scope="s-1"
+    )
+    headers = _relay_headers(
+        client._seed, "inst-author", relay_id, ts=int(time.time()) - 1000
+    )
+    resp = await client.post(
+        f"/gfs/highlight_rtc/relay-stream/{relay_id}", data=b"bytes", headers=headers
+    )
+    assert resp.status == 401
+
+
+async def test_relay_upload_missing_timestamp_returns_422(client):
+    relay_id = client._app[gfs_relay_bridge_key].create(
+        target_instance_id="inst-author", scope="s-1"
+    )
+    headers = _relay_headers(client._seed, "inst-author", relay_id)
+    del headers["X-SH-Timestamp"]
+    resp = await client.post(
+        f"/gfs/highlight_rtc/relay-stream/{relay_id}", data=b"bytes", headers=headers
+    )
+    assert resp.status == 422
+
+
+async def test_offer_endpoint_is_rate_limited(client):
+    """The anonymous offer entry point sheds a per-IP flood with 429."""
+    body = {
+        "instance_id": "inst-author",
+        "highlight_id": "s-1",
+        "token": client._token,
+        "sdp": "v=0",
+    }
+    saw_429 = False
+    for _ in range(40):
+        r = await client.post("/gfs/highlight_rtc/offer", json=body)
+        if r.status == 429:
+            saw_429 = True
+            assert r.headers.get("Retry-After") == "60"
+            break
+    assert saw_429, "offer endpoint was never rate-limited"

@@ -388,3 +388,34 @@ async def test_unpublish_space_post_method_also_works(gfs_client):
     )
     resp = await gfs_client.post("/gfs/spaces/sp-bye-2/unpublish")
     assert resp.status == 200
+
+
+async def test_publish_space_caps_about_markdown(gfs_client):
+    """An oversized about_markdown is truncated at storage (DB-bloat /
+    render-cost guard) — the signature still validates the full value."""
+    from socialhome.global_server.federation import MAX_ABOUT_MARKDOWN_CHARS
+
+    app = gfs_client.server.app
+    seed, _pk = await _register_owner(app, auto_accept=True)
+    big = "x" * (MAX_ABOUT_MARKDOWN_CHARS + 5000)
+    body = _sign_publish_body(
+        {
+            "space_id": "sp-big",
+            "owning_instance": "owner.home",
+            "name": "Big",
+            "description": "",
+            "about_markdown": big,
+            "cover_url": "",
+            "min_age": 0,
+            "target_audience": "all",
+            "accent_color": "#D2542A",
+            "icon_url": "",
+            "primary_color": "#D2542A",
+        },
+        seed=seed,
+    )
+    resp = await gfs_client.post("/gfs/spaces/sp-big/publish", json=body)
+    assert resp.status == 200
+    stored = await app[gfs_fed_repo_key].get_space("sp-big")
+    assert stored is not None
+    assert len(stored.about_markdown) == MAX_ABOUT_MARKDOWN_CHARS

@@ -47,7 +47,11 @@ from .config import (
     write_example_config,
 )
 from .federation import GfsFederationService
-from .public import PairingTokenService, build_listing_rate_limit
+from .public import (
+    PairingTokenService,
+    build_listing_rate_limit,
+    build_public_rtc_rate_limit,
+)
 from .repositories import (
     SqliteClusterRepo,
     SqliteGfsAdminRepo,
@@ -212,6 +216,7 @@ class GfsApp:
         middlewares = [
             build_admin_middleware(self.services.admin_auth),
             build_listing_rate_limit(),
+            build_public_rtc_rate_limit(),
         ]
         return web.Application(middlewares=middlewares)
 

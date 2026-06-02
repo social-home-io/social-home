@@ -15,6 +15,7 @@ the ``signature`` field, same scheme as ``/gfs/report``.
 from __future__ import annotations
 
 import logging
+import time
 
 from aiohttp import web
 
@@ -23,6 +24,11 @@ from ..admin_service import verify_report_signature
 from .base import GfsBaseView
 
 log = logging.getLogger(__name__)
+
+#: Accepted clock skew on the relay-stream auth timestamp. Matches the
+#: §24.11 inbound-envelope window so a captured ``X-SH-Signature`` header
+#: can't be replayed once the relay id is reused / forgotten.
+RELAY_AUTH_MAX_SKEW_SECONDS: int = 300
 
 
 async def _rtc_authenticate(view: GfsBaseView) -> tuple[dict, str] | web.Response:
@@ -51,23 +57,33 @@ async def _rtc_authenticate(view: GfsBaseView) -> tuple[dict, str] | web.Respons
 async def authenticate_relay_stream(view: GfsBaseView) -> str | web.Response:
     """Header-based Ed25519 check for the author's relay-stream upload.
 
-    The relay ``POST .../relay/{relay_id}/stream`` body is the raw framed
+    The relay ``POST .../relay-stream/{relay_id}`` body is the raw framed
     byte stream, so the signature can't ride inside it. Instead the author
-    signs the canonical ``{"instance_id", "relay_id"}`` dict (same scheme
-    as :func:`_rtc_authenticate`) and ships ``instance_id`` + signature in
-    ``X-SH-Instance`` / ``X-SH-Signature`` headers. Returns the verified
-    sender instance_id or a ready-to-return error Response.
+    signs the canonical ``{"instance_id", "relay_id", "ts"}`` dict (same
+    scheme as :func:`_rtc_authenticate`) and ships ``instance_id`` /
+    ``ts`` / signature in ``X-SH-Instance`` / ``X-SH-Timestamp`` /
+    ``X-SH-Signature`` headers. The ``ts`` must be within
+    :data:`RELAY_AUTH_MAX_SKEW_SECONDS` of now, so a captured header can't
+    be replayed later. Returns the verified sender instance_id or a
+    ready-to-return error Response.
     """
     fed_repo = view.svc(K.gfs_fed_repo_key)
     instance_id = view.request.headers.get("X-SH-Instance", "")
     signature = view.request.headers.get("X-SH-Signature", "")
+    ts_raw = view.request.headers.get("X-SH-Timestamp", "")
     relay_id = view.match("relay_id")
-    if not instance_id or not signature:
+    if not instance_id or not signature or not ts_raw:
         return web.json_response({"error": "missing_auth_headers"}, status=422)
+    try:
+        ts = int(ts_raw)
+    except ValueError:
+        return web.json_response({"error": "invalid_timestamp"}, status=422)
+    if abs(int(time.time()) - ts) > RELAY_AUTH_MAX_SKEW_SECONDS:
+        return web.json_response({"error": "stale_timestamp"}, status=401)
     sender = await fed_repo.get_instance(instance_id)
     if sender is None or sender.status != "active":
         return web.json_response({"error": "forbidden"}, status=403)
-    body = {"instance_id": instance_id, "relay_id": relay_id}
+    body = {"instance_id": instance_id, "relay_id": relay_id, "ts": ts}
     if not verify_report_signature(body, signature, sender.public_key):
         return web.json_response({"error": "invalid_signature"}, status=401)
     return instance_id

@@ -404,10 +404,11 @@ async def test_relay_offer_signature_verifies_against_instance_key(repos):
         )
         .hex()
     )
-    body = {"instance_id": "inst-self", "relay_id": "r-42"}
+    ts = int(headers["X-SH-Timestamp"])
+    body = {"instance_id": "inst-self", "relay_id": "r-42", "ts": ts}
     assert verify_report_signature(body, headers["X-SH-Signature"], pk_hex)
     assert not verify_report_signature(
-        {"instance_id": "inst-self", "relay_id": "r-OTHER"},
+        {"instance_id": "inst-self", "relay_id": "r-OTHER", "ts": ts},
         headers["X-SH-Signature"],
         pk_hex,
     )
