@@ -168,6 +168,7 @@ from .repositories.moment_public_repo import (
 )
 from .services.highlight_service import HighlightService
 from .services.highlight_signaling_handler import HighlightSignalingHandler
+from .services.moment_public_signaling_handler import MomentPublicSignalingHandler
 from .services.bot_bridge_service import BotBridgeService
 from .services.space_bot_service import SpaceBotService
 from .services.calendar_import_service import CalendarImportService
@@ -1547,6 +1548,15 @@ def create_app(config: Config | None = None) -> web.Application:
         repos.gfs_connection,
         media_dir=str(config.media_path),
     )
+    # Author-side signalling answerer for the public-moments live index
+    # (§Momentum-public). Same shape as ``highlight_signaling_handler``:
+    # ``attach_session`` + ``attach_identity`` happen in the startup hook,
+    # and the WS supervisor forwards every ``moment_signal`` frame here.
+    moment_public_signaling_handler = MomentPublicSignalingHandler(
+        moment_repo,
+        repos.gfs_connection,
+        media_dir=str(config.media_path),
+    )
 
     # ── Momentum (§Momentum) ───────────────────────────────────────────
     # ``own_instance_id`` is bound after federation identity is loaded
@@ -1920,6 +1930,12 @@ def create_app(config: Config | None = None) -> web.Application:
             own_instance_id=real_instance_id,
             signing_key=identity_seed,
         )
+        # Matching wiring for the public-moments answerer side.
+        moment_public_signaling_handler.attach_session(http_session)
+        moment_public_signaling_handler.attach_identity(
+            own_instance_id=real_instance_id,
+            signing_key=identity_seed,
+        )
         # Public-Momentum service + outbound subscriber. Same shape as
         # ``highlight_publication_service``: shared session + signing
         # key wired up after federation identity loads.
@@ -2283,6 +2299,7 @@ def create_app(config: Config | None = None) -> web.Application:
             session_factory=lambda: http_session,
             on_relay=_on_gfs_relay,
             on_highlight_signal=highlight_signaling_handler.handle_signal,
+            on_moment_signal=moment_public_signaling_handler.handle_signal,
             on_moment_public=moment_public_inbound.handle,
         )
         await gfs_ws_supervisor.start()
@@ -2512,6 +2529,7 @@ def create_app(config: Config | None = None) -> web.Application:
         # Wind down any in-flight public-viewer sessions before
         # closing the shared aiohttp client below.
         await highlight_signaling_handler.stop()
+        await moment_public_signaling_handler.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
         if dm_relay_seen_scheduler is not None:

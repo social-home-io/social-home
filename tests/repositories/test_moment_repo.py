@@ -238,3 +238,98 @@ async def test_prune_expired_drops_past_cap(db, repo):
     assert pruned == 1
     assert await repo.get("m-fresh") is not None
     assert await repo.get("m-expired") is None
+
+
+# ─── list_public_for (§Momentum-public live index) ──────────────────────
+
+
+def _public_moment(
+    *,
+    id: str,
+    author: str = "u-author",
+    is_public: bool = True,
+    created_offset_min: int = 0,
+    expires_days: int = 7,
+) -> Moment:
+    return Moment(
+        id=id,
+        author_user_id=author,
+        content="public",
+        media_url=None,
+        media_type=None,
+        duration_ms=None,
+        parent_moment_id=None,
+        origin_instance_id="self",
+        created_at=_now_iso(created_offset_min),
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(days=expires_days)
+        ).isoformat(),
+        is_public=is_public,
+    )
+
+
+async def test_list_public_for_returns_only_public_unexpired(db, repo):
+    await repo.save(_public_moment(id="m-pub", is_public=True))
+    got = await repo.list_public_for("u-author")
+    assert [m.id for m in got] == ["m-pub"]
+    assert all(m.is_public for m in got)
+
+
+async def test_list_public_for_excludes_private(db, repo):
+    """PRIVACY INVARIANT: is_public=0 moments are never returned."""
+    await repo.save(_public_moment(id="m-pub", is_public=True))
+    await repo.save(_public_moment(id="m-priv", is_public=False))
+    got = await repo.list_public_for("u-author")
+    ids = {m.id for m in got}
+    assert "m-pub" in ids
+    assert "m-priv" not in ids
+
+
+async def test_list_public_for_excludes_expired(db, repo):
+    await repo.save(_public_moment(id="m-pub", is_public=True))
+    expired = Moment(
+        id="m-old",
+        author_user_id="u-author",
+        content="old",
+        media_url=None,
+        media_type=None,
+        duration_ms=None,
+        parent_moment_id=None,
+        origin_instance_id="self",
+        created_at=_now_iso(-9 * 24 * 60),
+        expires_at=(datetime.now(timezone.utc) - timedelta(days=2)).isoformat(),
+        is_public=True,
+    )
+    await repo.save(expired)
+    got = await repo.list_public_for("u-author")
+    ids = {m.id for m in got}
+    assert "m-pub" in ids
+    assert "m-old" not in ids
+
+
+async def test_list_public_for_orders_newest_first(db, repo):
+    await repo.save(_public_moment(id="m-old", created_offset_min=-30))
+    await repo.save(_public_moment(id="m-new", created_offset_min=-1))
+    got = await repo.list_public_for("u-author")
+    assert [m.id for m in got] == ["m-new", "m-old"]
+
+
+async def test_list_public_for_respects_limit(db, repo):
+    for i in range(5):
+        await repo.save(_public_moment(id=f"m-{i}", created_offset_min=-i))
+    got = await repo.list_public_for("u-author", limit=2)
+    assert len(got) == 2
+
+
+async def test_list_public_for_clamps_limit(db, repo):
+    """Limit clamps to [1, 100] — a 0 or huge value is coerced."""
+    await repo.save(_public_moment(id="m-1"))
+    assert len(await repo.list_public_for("u-author", limit=0)) == 1
+    assert len(await repo.list_public_for("u-author", limit=10_000)) == 1
+
+
+async def test_list_public_for_scopes_to_author(db, repo):
+    await repo.save(_public_moment(id="m-a", author="u-a"))
+    await repo.save(_public_moment(id="m-b", author="u-b"))
+    got = await repo.list_public_for("u-a")
+    assert [m.id for m in got] == ["m-a"]

@@ -297,6 +297,126 @@ async def test_client_dispatches_moment_public_frames(fake_gfs, http_session):
         await client.stop()
 
 
+async def test_client_dispatches_moment_signal_frames(fake_gfs, http_session):
+    """``moment_signal`` frames (the §Momentum-public answerer) go to the
+    dedicated handler, mirroring the highlight_signal branch."""
+    seed, _pub = _gen_keypair()
+    signals: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    async def on_moment_signal(frame: dict) -> None:
+        signals.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ms",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        on_moment_signal=on_moment_signal,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {
+                "type": "moment_signal",
+                "kind": "offer",
+                "session_id": "s-1",
+                "user_id": "u-1",
+                "gfs_id": "gfs-1",
+                "sdp": "v=0",
+            },
+        )
+        for _ in range(100):
+            if signals:
+                break
+            await asyncio.sleep(0.02)
+        assert len(signals) == 1
+        assert signals[0]["type"] == "moment_signal"
+        assert signals[0]["kind"] == "offer"
+        assert signals[0]["user_id"] == "u-1"
+    finally:
+        await client.stop()
+
+
+async def test_client_attach_moment_signal_handler_late_binds(fake_gfs, http_session):
+    """``attach_moment_signal_handler`` wires the answerer after construction."""
+    seed, _pub = _gen_keypair()
+    signals: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    async def handler(frame: dict) -> None:
+        signals.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ms2",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+    )
+    client.attach_moment_signal_handler(handler)
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {"type": "moment_signal", "kind": "ice", "session_id": "s"},
+        )
+        for _ in range(100):
+            if signals:
+                break
+            await asyncio.sleep(0.02)
+        assert len(signals) == 1
+    finally:
+        await client.stop()
+
+
+async def test_client_drops_moment_signal_when_no_handler(fake_gfs, http_session):
+    """No-handler path is a debug log, not a crash."""
+    seed, _pub = _gen_keypair()
+    relays: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        relays.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ms-noop",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {"type": "moment_signal", "kind": "offer", "session_id": "s"},
+        )
+        await fake_gfs.outbound.put({"type": "relay", "space_id": "s", "payload": {}})
+        for _ in range(100):
+            if relays:
+                break
+            await asyncio.sleep(0.02)
+        # Relay still dispatched, moment_signal dropped silently.
+        assert len(relays) == 1
+    finally:
+        await client.stop()
+
+
 async def test_client_drops_moment_public_when_no_handler(fake_gfs, http_session):
     """No-handler path is a debug log, not a crash."""
     seed, _pub = _gen_keypair()
