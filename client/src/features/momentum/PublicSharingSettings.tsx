@@ -17,6 +17,7 @@ import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { useTitle } from '@/store/pageTitle'
+import { currentUser } from '@/store/auth'
 import {
   deregisterFromGfs,
   loadRegistrations,
@@ -25,6 +26,22 @@ import {
   setDefaultShare,
 } from '@/store/momentPublic'
 import type { GfsConnection } from '@/types'
+
+/** Public, guest-readable index of the caller's current public moments. */
+function shareUrl(conn: GfsConnection): string | null {
+  const uid = currentUser.value?.user_id
+  if (!uid) return null
+  return `${conn.inbox_url.replace(/\/+$/, '')}/moments/${encodeURIComponent(uid)}`
+}
+
+async function copyShareUrl(url: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(url)
+    showToast('Share link copied', 'success')
+  } catch {
+    showToast(url, 'info')
+  }
+}
 
 const gfses = signal<GfsConnection[]>([])
 const loading = signal(true)
@@ -142,6 +159,15 @@ export default function PublicSharingSettings() {
                   >
                     Unregister
                   </Button>
+                  {shareUrl(g) && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => void copyShareUrl(shareUrl(g)!)}
+                      title="Copy a public link anyone can open to read your current public moments"
+                    >
+                      Copy share link
+                    </Button>
+                  )}
                 </>
               ) : (
                 <Button onClick={() => void onRegister(g.id)}>Register</Button>
