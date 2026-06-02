@@ -8,10 +8,13 @@ import pytest
 
 from socialhome.domain.apps import (
     AppAlreadyInstalledError,
+    AppError,
     AppIntegrityError,
+    AppKvEntry,
     AppManifest,
     AppNotEnabledError,
     AppNotFoundError,
+    AppQuotaExceededError,
     AppCatalogEntry,
     InstalledApp,
 )
@@ -90,3 +93,20 @@ def test_app_manifest_from_dict_rejects_parent_traversal():
 def test_app_manifest_from_dict_requires_entry():
     with pytest.raises(ValueError, match="entry must be"):
         AppManifest.from_dict({})
+
+
+def test_app_kv_entry_is_frozen():
+    e = AppKvEntry(
+        app_id="chess",
+        user_id="u1",
+        key="game:1",
+        value_json='{"turn":"w"}',
+        updated_at="2026-06-02T00:00:00+00:00",
+    )
+    assert e.key == "game:1"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        e.key = "x"  # type: ignore[misc]
+
+
+def test_app_quota_exceeded_is_app_error():
+    assert issubclass(AppQuotaExceededError, AppError)

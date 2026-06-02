@@ -32,6 +32,10 @@ class AppIntegrityError(AppError):
     """Downloaded bundle failed sha256 / manifest / path validation."""
 
 
+class AppQuotaExceededError(AppError):
+    """A per-(app, user) storage quota (key count / value size) was exceeded."""
+
+
 @dataclass(slots=True, frozen=True)
 class AppManifest:
     """Parsed ``manifest.json`` from an app bundle."""
@@ -70,6 +74,17 @@ class InstalledApp:
     source_url: str
     installed_by: str | None
     installed_at: str
+
+
+@dataclass(slots=True, frozen=True)
+class AppKvEntry:
+    """One row of the per-user ``app_kv`` store."""
+
+    app_id: str
+    user_id: str
+    key: str
+    value_json: str
+    updated_at: str
 
 
 @dataclass(slots=True, frozen=True)
