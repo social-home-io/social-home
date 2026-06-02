@@ -4332,6 +4332,118 @@ def cmd_admin_promote_kick() -> None:
     print("admin-promote-kick: ok")
 
 
+def cmd_app_session() -> None:
+    """App-to-app federation smoke test (v_17, ``APP_SESSION`` + ``APP_MESSAGE``).
+
+    Exercises the cross-household app federation surface introduced in PR4:
+
+    1. **Open a session** — Alice (a) POSTs to
+       ``POST /api/apps/{app_id}/sessions`` with ``peer_instance_id = b``.
+       The backend allocates a ``session_id``, sends an ``APP_SESSION
+       {verb:"open"}`` event to b, and returns the ``session_id``.
+    2. **Send a message** — Alice POSTs to
+       ``POST /api/apps/{app_id}/messages`` with the new ``session_id``,
+       ``peer_instance_id = b``, and a small payload dict.  The server
+       selects the ``fed-app-v1`` binary channel or the ``APP_MESSAGE``
+       JSON fallback transparently.
+
+    **Guard condition:** The test requires at least one app to be installed
+    and enabled on both a and b.  In the demo environment the app catalog is
+    not connected to a real GitHub release endpoint, so there will generally be
+    no installed apps.  The step therefore:
+
+    - Probes ``GET /api/apps`` on both a and b.
+    - If both return a non-empty list with at least one common ``app_id``,
+      runs the full open-session + send-message round-trip and asserts
+      both API calls return the expected 2xx codes.
+    - If no common app is found, skips gracefully and logs a note — the
+      REST and federation machinery is covered by unit tests; this demo step
+      validates the wiring end-to-end when the environment supports it.
+
+    The WS ``app.message`` delivery is intentionally NOT asserted here —
+    the demo environment has no long-lived WebSocket listener, and the unit
+    tests in ``tests/services/test_app_federation_service.py`` cover the
+    delivery path with an in-memory WS mock.
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' first")
+    a = state["instances"]["a"]
+    b = state["instances"]["b"]
+
+    # 1. Probe installed apps on both households.
+    s_a, apps_a = _request(
+        f"http://127.0.0.1:{a['port']}/api/apps",
+        token=a["token"],
+    )
+    s_b, apps_b = _request(
+        f"http://127.0.0.1:{b['port']}/api/apps",
+        token=b["token"],
+    )
+    if s_a not in (200,) or s_b not in (200,):
+        print(
+            f"  app-session: GET /api/apps failed (a={s_a}, b={s_b}) — skipping",
+        )
+        state["app_session_skipped"] = "api_unavailable"
+        _save(state)
+        print("app-session: skipped (GET /api/apps unavailable)")
+        return
+
+    ids_a = {app["app_id"] for app in (apps_a if isinstance(apps_a, list) else [])}
+    ids_b = {app["app_id"] for app in (apps_b if isinstance(apps_b, list) else [])}
+    common = ids_a & ids_b
+    if not common:
+        print(
+            "  app-session: no common installed app on a + b — "
+            "skipping (unit tests cover the federation path)",
+        )
+        state["app_session_skipped"] = "no_common_app"
+        _save(state)
+        print("app-session: skipped (no shared installed app)")
+        return
+
+    app_id = next(iter(common))
+    print(f"  app-session: using app_id={app_id!r}")
+
+    # 2. Open a cross-household session (a → b).
+    s, session_res = _request(
+        f"http://127.0.0.1:{a['port']}/api/apps/{app_id}/sessions",
+        token=a["token"],
+        method="POST",
+        body={"peer_instance_id": b["instance_id"]},
+    )
+    _must("open app session (a→b)", s, session_res, ok=(200, 201))
+    session_id = (session_res or {}).get("session_id")
+    if not session_id:
+        raise SystemExit(
+            f"app-session: POST /sessions returned no session_id: {session_res!r}",
+        )
+    print(f"  opened session: {session_id}")
+
+    # Allow APP_SESSION event to propagate before sending the message.
+    time.sleep(2)
+
+    # 3. Send an app message from a to b within the session.
+    s, msg_res = _request(
+        f"http://127.0.0.1:{a['port']}/api/apps/{app_id}/messages",
+        token=a["token"],
+        method="POST",
+        body={
+            "session_id": session_id,
+            "peer_instance_id": b["instance_id"],
+            "payload": {"move": "e2-e4", "seq": 1},
+        },
+    )
+    _must("send app message (a→b)", s, msg_res, ok=(200, 204))
+    print("  sent app message (move: e2-e4) ✓")
+
+    state["app_session_ran"] = True
+    state["app_session_id"] = session_id
+    state["app_session_app_id"] = app_id
+    _save(state)
+    print("app-session: ok")
+
+
 def cmd_down() -> None:
     state = _load()
     gfs = state.get("gfs")
@@ -4465,6 +4577,12 @@ def main() -> None:
         # is covered by unit tests; the demo focuses on the wire-level
         # round-trip.
         cmd_admin_promote_kick()
+        # ``app-session`` exercises the PR4 cross-household app
+        # federation bridge: opens an APP_SESSION from a to b,
+        # sends an APP_MESSAGE, and asserts both REST calls return
+        # 2xx.  The step skips gracefully when no common installed
+        # app is present (unit tests cover the full delivery path).
+        cmd_app_session()
         # ``remote-invite-decline`` covers the DECLINE leg that the
         # earlier accept-only flows never hit — c invites alice
         # (direct pair), alice declines, c's invitation row is

@@ -179,6 +179,20 @@ realistic peer lifetime — never introduce a deterministic/counter nonce
 that could collide with this random-nonce stream. See
 [`protocol/media.md`](protocol/media.md).
 
+**Binary app frames** (`federation/app_framing.py`) — app messages on the
+`fed-app-v1` DataChannel (capability v_17) follow the same binary wire layout
+as the media channel: `nonce(12) ‖ AES-256-GCM(ct+tag)` in the payload bytes,
+wrapping header is a signed federation envelope, payload is bound to the header
+by a `payload_sha256` field carried inside the encrypted envelope metadata
+(identical pattern to `chunk_sha256` on the media channel).  Constants:
+`APP_AEAD_SUITE_AESGCM_256 = "aesgcm-256"`, validated against
+`SUPPORTED_APP_AEAD_SUITES`; unknown suites raise `UnsupportedAppAeadSuite`
+with no default fallback.  Payload ceiling: 1 MiB (tighter than the 4 MiB
+media ceiling — app messages are chess moves and whiteboard deltas, not media
+blobs).  The JSON `APP_MESSAGE` event fallback uses the same per-pair AES-256-GCM
+session key as every other federation envelope (no additional symmetric key
+material is needed).  See [`protocol/apps.md`](protocol/apps.md).
+
 **WebRTC SDP signing** (`federation/sdp_signing.py`) — Ed25519
 signature over `<sdp_type>:<sdp>` so a MITM can't swap DTLS endpoints.
 
