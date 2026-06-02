@@ -64,9 +64,12 @@ household's server. Three mitigations gate this before any code executes:
    `Content-Security-Policy` (`connect-src 'none'`, `worker-src 'none'`,
    `frame-ancestors 'self'`, etc.) on every bundle response prevents
    app code from reaching the network. The host SPA validates
-   `event.origin` before processing postMessage frames; the bridge is
-   the only host interface and never exposes the bearer token — store
-   reads/writes are proxied as per-user, server-scoped KV operations.
+   `event.source === iframe.contentWindow` before processing postMessage
+   frames (sandboxed iframes expose an opaque `"null"` origin so origin
+   checking is bypassable — only the source reference identifies our
+   iframe); the bridge is the only host interface and never exposes the
+   bearer token — store reads/writes are proxied as per-user,
+   server-scoped KV operations.
    The bundle is served via a signed-URL + HttpOnly path-scoped-cookie
    scheme so no credential leaks into the iframe via URL or header.
 

@@ -370,8 +370,11 @@ absence of `allow-same-origin` gives the iframe an opaque origin so it cannot
 read the parent's DOM, localStorage, or cookies. App code can't reach the
 network because of the `connect-src 'none'` CSP, and the bearer token is never
 passed into the iframe. The only host interface is a postMessage bridge: the
-SPA host validates `event.origin` before relaying messages, and the bridge
-exposes only the documented per-user store API — never the raw bearer token.
+SPA host validates `event.source === iframe.contentWindow` before relaying
+messages (origin checking is unreliable — sandboxed iframes expose an opaque
+`"null"` origin, so only the source reference identifies our iframe), and the
+bridge exposes only the documented per-user store API — never the raw bearer
+token.
 
 Real-time events are delivered via the existing `/api/ws` WebSocket: the server
 routes `app.message` frames (`{type:"app.message", app_id, payload}`) to the

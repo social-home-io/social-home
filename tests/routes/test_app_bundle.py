@@ -405,3 +405,75 @@ async def test_bundle_absolute_path_tail_blocked(client):
         assert r.status in (403, 404), (
             f"Traversal tail {tail!r} must be blocked; got status {r.status}"
         )
+
+
+# ── Ingress-prefix cookie path tests ─────────────────────────────────────
+
+
+async def test_bundle_cookie_path_prefixed_under_haos_ingress(client):
+    """When X-Ingress-Path is present the Set-Cookie Path includes the prefix.
+
+    Under HA Supervisor Ingress the browser sees all bundle sub-resource
+    URLs prefixed with the ingress path (e.g.
+    ``/api/hassio_ingress/TOKEN/api/apps/…``). Without the prefix on the
+    cookie's Path attribute the browser would not send the cookie on those
+    sub-resource requests, breaking multi-file bundles in haos mode.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    # Mint a valid sig directly so we control the headers on the bundle request.
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    ingress_token = "TESTTOKEN123"
+    ingress_prefix = f"/api/hassio_ingress/{ingress_token}"
+
+    r = await client.get(
+        f"{prefix}index.html?exp={exp}&sig={sig}",
+        headers={"X-Ingress-Path": ingress_prefix},
+    )
+    assert r.status == 200
+
+    set_cookie = r.headers.get("Set-Cookie", "")
+    # The Path directive must start with the ingress prefix so the
+    # browser sends the cookie on sub-resource requests.
+    assert f"Path={ingress_prefix}{prefix}" in set_cookie, (
+        f"Expected cookie Path to include ingress prefix; got: {set_cookie!r}"
+    )
+
+
+async def test_bundle_cookie_path_unprefixed_without_ingress_header(client):
+    """Without X-Ingress-Path the cookie Path is the bare bundle prefix.
+
+    Standalone and ha modes don't receive the ingress header, so the
+    cookie must use the unprefixed ``/api/apps/{id}/bundle/`` path as
+    before.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.media_path)
+    await _seed_app(client._db)
+
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    # No X-Ingress-Path header.
+    r = await client.get(f"{prefix}index.html?exp={exp}&sig={sig}")
+    assert r.status == 200
+
+    set_cookie = r.headers.get("Set-Cookie", "")
+    # Path must be the bare prefix — no ingress segment prepended.
+    assert f"Path={prefix}" in set_cookie, (
+        f"Expected unprefixed cookie Path; got: {set_cookie!r}"
+    )
+    # And must NOT accidentally include a stale ingress prefix.
+    assert "hassio_ingress" not in set_cookie

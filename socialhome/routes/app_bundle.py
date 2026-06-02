@@ -205,11 +205,21 @@ class AppBundleView(BaseView):
         # the TOML) so that local plain-http dev keeps the cookie working while
         # HTTPS deployments get the Secure attribute.
         if from_query:
+            # Under HA Supervisor Ingress the browser sees all URLs
+            # prefixed with the ingress path (e.g.
+            # ``/api/hassio_ingress/TOKEN/api/apps/…``).  The Supervisor
+            # injects ``X-Ingress-Path`` on every request so the app can
+            # reconstruct the full prefix.  Without this adjustment the
+            # cookie's ``Path`` would not match the sub-resource URLs the
+            # browser actually sees, causing multi-file bundle loads to
+            # fail in haos mode.
+            ingress_prefix = self.request.headers.get("X-Ingress-Path", "").rstrip("/")
+            cookie_path = f"{ingress_prefix}{prefix}" if ingress_prefix else prefix
             response.set_cookie(
                 f"{BUNDLE_COOKIE_PREFIX}{app_id}",
                 f"{exp}.{sig}",
                 max_age=BUNDLE_TTL_SECONDS,
-                path=prefix,
+                path=cookie_path,
                 httponly=True,
                 samesite="Lax",
                 secure=config.secure_cookies,
