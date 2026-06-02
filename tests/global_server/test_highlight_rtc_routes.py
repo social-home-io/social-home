@@ -9,6 +9,7 @@ to the author.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 
@@ -19,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from socialhome.global_server.app_keys import (
     gfs_fed_repo_key,
+    gfs_relay_bridge_key,
     gfs_rtc_key,
     gfs_highlight_pub_service_key,
     gfs_ws_registry_key,
@@ -64,6 +66,26 @@ def _sign(seed: bytes, body: dict) -> dict:
     sk = Ed25519PrivateKey.from_private_bytes(seed)
     sig = base64.urlsafe_b64encode(sk.sign(canonical)).rstrip(b"=").decode("ascii")
     return {**body, "signature": sig}
+
+
+def _relay_headers(seed: bytes, instance_id: str, relay_id: str) -> dict[str, str]:
+    """Header-based auth the author uses for the relay byte-stream upload."""
+    body = {"instance_id": instance_id, "relay_id": relay_id}
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    sk = Ed25519PrivateKey.from_private_bytes(seed)
+    sig = base64.urlsafe_b64encode(sk.sign(canonical)).rstrip(b"=").decode("ascii")
+    return {"X-SH-Instance": instance_id, "X-SH-Signature": sig}
+
+
+async def _await_relay_offer(client, timeout: float = 2.0) -> str:
+    """Poll the author's stub WS for the pushed ``relay_offer`` frame."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        for frame in client._author_ws.sent:
+            if frame.get("kind") == "relay_offer":
+                return frame["relay_id"]
+        await asyncio.sleep(0.01)
+    raise AssertionError("no relay_offer frame pushed to author")
 
 
 class _StubWs:
@@ -433,3 +455,116 @@ async def test_ice_servers_includes_turn_when_configured(client):
     data = await resp.json()
     urls = [s["urls"][0] for s in data["servers"]]
     assert any("turn:" in u for u in urls)
+
+
+# ─── GFS-relay fallback ──────────────────────────────────────────────────
+
+
+async def test_relay_round_trip_pipes_author_bytes_to_guest(client):
+    """Guest GET ⇄ signed author upload pipes the framed bytes verbatim."""
+    framed = b"\x00\x00\x00\x04meta" + b"x" * 5000  # opaque to the bridge
+    get_task = asyncio.create_task(
+        client.get(
+            f"/gfs/highlight_rtc/relay/inst-author/s-1?token={client._token}",
+        )
+    )
+    relay_id = await _await_relay_offer(client)
+    # Author streams the framed bytes back over the signed upload.
+    up = await client.post(
+        f"/gfs/highlight_rtc/relay-stream/{relay_id}",
+        data=framed,
+        headers=_relay_headers(client._seed, "inst-author", relay_id),
+    )
+    assert up.status == 200
+    resp = await get_task
+    assert resp.status == 200
+    assert resp.headers["Content-Type"] == "application/octet-stream"
+    body = await resp.read()
+    assert body == framed
+
+
+async def test_relay_missing_token_returns_422(client):
+    resp = await client.get("/gfs/highlight_rtc/relay/inst-author/s-1")
+    assert resp.status == 422
+
+
+async def test_relay_bad_token_returns_410(client):
+    resp = await client.get("/gfs/highlight_rtc/relay/inst-author/s-1?token=bogus")
+    assert resp.status == 410
+
+
+async def test_relay_author_offline_returns_503(client):
+    client._app[gfs_ws_registry_key]._by_instance.pop("inst-author", None)
+    resp = await client.get(
+        f"/gfs/highlight_rtc/relay/inst-author/s-1?token={client._token}",
+    )
+    assert resp.status == 503
+
+
+async def test_relay_author_never_connects_times_out_503(client, monkeypatch):
+    # Shrink the author-connect budget so the test doesn't wait 30s. The
+    # author WS is "online" but no upload ever arrives.
+    import socialhome.global_server.routes.highlight_rtc as hr
+
+    monkeypatch.setattr(hr, "RELAY_AUTHOR_CONNECT_TIMEOUT_SECONDS", 0.1)
+    resp = await client.get(
+        f"/gfs/highlight_rtc/relay/inst-author/s-1?token={client._token}",
+    )
+    assert resp.status == 503
+
+
+async def test_relay_upload_unknown_relay_id_returns_404(client):
+    resp = await client.post(
+        "/gfs/highlight_rtc/relay-stream/missing",
+        data=b"bytes",
+        headers=_relay_headers(client._seed, "inst-author", "missing"),
+    )
+    assert resp.status == 404
+
+
+async def test_relay_upload_wrong_instance_returns_403(client):
+    # A live relay targeting inst-author; a different signed instance can't
+    # feed it.
+    relay_id = client._app[gfs_relay_bridge_key].create(
+        target_instance_id="inst-author", scope="s-1"
+    )
+    other_seed, other_pk = _make_keypair()
+    await client._app[gfs_fed_repo_key].upsert_instance(
+        ClientInstance(
+            instance_id="inst-other",
+            display_name="Other",
+            public_key=other_pk,
+            inbox_url="http://other/wh",
+            status="active",
+        )
+    )
+    resp = await client.post(
+        f"/gfs/highlight_rtc/relay-stream/{relay_id}",
+        data=b"bytes",
+        headers=_relay_headers(other_seed, "inst-other", relay_id),
+    )
+    assert resp.status == 403
+
+
+async def test_relay_upload_bad_signature_returns_401(client):
+    relay_id = client._app[gfs_relay_bridge_key].create(
+        target_instance_id="inst-author", scope="s-1"
+    )
+    headers = _relay_headers(client._seed, "inst-author", relay_id)
+    headers["X-SH-Signature"] = "tampered"
+    resp = await client.post(
+        f"/gfs/highlight_rtc/relay-stream/{relay_id}",
+        data=b"bytes",
+        headers=headers,
+    )
+    assert resp.status == 401
+
+
+async def test_relay_upload_missing_auth_headers_returns_422(client):
+    relay_id = client._app[gfs_relay_bridge_key].create(
+        target_instance_id="inst-author", scope="s-1"
+    )
+    resp = await client.post(
+        f"/gfs/highlight_rtc/relay-stream/{relay_id}", data=b"bytes"
+    )
+    assert resp.status == 422

@@ -80,6 +80,8 @@ from .highlights import (
 )
 from .highlight_rtc import (
     HighlightIceServersView,
+    HighlightRelayStreamView,
+    HighlightRelayUploadView,
     HighlightRtcAnswerView,
     HighlightRtcAuthorIceView,
     HighlightRtcOfferView,
@@ -205,6 +207,15 @@ def register_routes(
     app.router.add_view("/gfs/highlight_rtc/ice/viewer", HighlightRtcViewerIceView)
     app.router.add_view("/gfs/highlight_rtc/answer", HighlightRtcAnswerView)
     app.router.add_view("/gfs/highlight_rtc/ice/author", HighlightRtcAuthorIceView)
+    # GFS-relay fallback: anon guest stream (token-gated) + signed author upload.
+    app.router.add_view(
+        "/gfs/highlight_rtc/relay/{instance_id}/{highlight_id}",
+        HighlightRelayStreamView,
+    )
+    app.router.add_view(
+        "/gfs/highlight_rtc/relay-stream/{relay_id}",
+        HighlightRelayUploadView,
+    )
 
     # Public Momentum (§Momentum-public). Signed wire endpoints for
     # registration / follow + unsigned discovery for households. The

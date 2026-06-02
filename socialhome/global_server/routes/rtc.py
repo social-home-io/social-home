@@ -48,6 +48,31 @@ async def _rtc_authenticate(view: GfsBaseView) -> tuple[dict, str] | web.Respons
     return body, instance_id
 
 
+async def authenticate_relay_stream(view: GfsBaseView) -> str | web.Response:
+    """Header-based Ed25519 check for the author's relay-stream upload.
+
+    The relay ``POST .../relay/{relay_id}/stream`` body is the raw framed
+    byte stream, so the signature can't ride inside it. Instead the author
+    signs the canonical ``{"instance_id", "relay_id"}`` dict (same scheme
+    as :func:`_rtc_authenticate`) and ships ``instance_id`` + signature in
+    ``X-SH-Instance`` / ``X-SH-Signature`` headers. Returns the verified
+    sender instance_id or a ready-to-return error Response.
+    """
+    fed_repo = view.svc(K.gfs_fed_repo_key)
+    instance_id = view.request.headers.get("X-SH-Instance", "")
+    signature = view.request.headers.get("X-SH-Signature", "")
+    relay_id = view.match("relay_id")
+    if not instance_id or not signature:
+        return web.json_response({"error": "missing_auth_headers"}, status=422)
+    sender = await fed_repo.get_instance(instance_id)
+    if sender is None or sender.status != "active":
+        return web.json_response({"error": "forbidden"}, status=403)
+    body = {"instance_id": instance_id, "relay_id": relay_id}
+    if not verify_report_signature(body, signature, sender.public_key):
+        return web.json_response({"error": "invalid_signature"}, status=401)
+    return instance_id
+
+
 class RtcOfferView(GfsBaseView):
     """``POST /gfs/rtc/offer`` — create a new signalling session."""
 

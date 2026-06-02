@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import pathlib
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -104,6 +104,7 @@ class HighlightSignalingHandler:
         "_ice_servers",
         "_media_dir",
         "_sessions",
+        "_relay_tasks",
         "_lock",
     )
 
@@ -125,6 +126,9 @@ class HighlightSignalingHandler:
         self._ice_servers: list[dict[str, Any]] = list(ice_servers or [])
         self._media_dir = media_dir
         self._sessions: dict[str, _Session] = {}
+        #: In-flight GFS-relay fallback streams (no PeerConnection — the
+        #: framed bytes go out over a signed streaming POST instead).
+        self._relay_tasks: set[asyncio.Task[None]] = set()
         self._lock = asyncio.Lock()
 
     # ── Late-bound wiring ────────────────────────────────────────────────
@@ -154,6 +158,8 @@ class HighlightSignalingHandler:
             await self._on_offer(frame)
         elif kind == "ice":
             await self._on_ice(frame)
+        elif kind == "relay_offer":
+            await self._on_relay_offer(frame)
         else:
             log.debug("highlight_signal: unknown kind %r — dropped", kind)
 
@@ -241,12 +247,27 @@ class HighlightSignalingHandler:
                 self._sessions.pop(session_id, None)
 
     async def _stream_highlight(self, session_id: str) -> None:
+        """WebRTC sink: drive the shared frame generator onto the peer."""
         sess = self._sessions[session_id]
-        highlight = await self._highlights.get_highlight(sess.highlight_id)
+        async for chunk in self._iter_highlight_frames(sess.highlight_id):
+            await sess.peer.send(chunk)
+
+    async def _iter_highlight_frames(
+        self,
+        highlight_id: str,
+    ) -> AsyncIterator[bytes]:
+        """Yield the framed highlight byte stream (meta → chunks → end).
+
+        Single source of truth for both transports: the WebRTC path sends
+        each chunk on the DataChannel; the GFS-relay fallback pipes the
+        identical bytes into the signed streaming POST. The framing is
+        byte-for-byte the same, so the viewer's decoder is transport-blind.
+        """
+        highlight = await self._highlights.get_highlight(highlight_id)
         if highlight is None:
-            await sess.peer.send(framing.error_frame("expired"))
+            yield framing.error_frame("expired")
             return
-        frames = await self._highlights.list_frames(sess.highlight_id)
+        frames = await self._highlights.list_frames(highlight_id)
         manifest = []
         for f in frames:
             byte_length = await self._media_size(f.media_url)
@@ -267,21 +288,20 @@ class HighlightSignalingHandler:
             "highlight_date": highlight.highlight_date,
             "expires_at": highlight.expires_at,
         }
-        await sess.peer.send(framing.highlight_meta(highlight_dict, manifest))
-
+        yield framing.highlight_meta(highlight_dict, manifest)
         for f in frames:
-            await self._stream_frame(session_id, f)
-        await sess.peer.send(framing.stream_end())
+            async for chunk in self._iter_frame_chunks(f):
+                yield chunk
+        yield framing.stream_end()
 
-    async def _stream_frame(self, session_id: str, frame_row) -> None:
-        sess = self._sessions[session_id]
+    async def _iter_frame_chunks(self, frame_row) -> AsyncIterator[bytes]:
         path = self._resolve_media_path(frame_row.media_url)
         if path is None or not await aiofiles.os.path.isfile(path):
             log.warning(
                 "highlight_signal: missing media for frame %s, sending error",
                 frame_row.id,
             )
-            await sess.peer.send(framing.error_frame("expired"))
+            yield framing.error_frame("expired")
             return
         size = (await aiofiles.os.stat(path)).st_size
         chunk_index = 0
@@ -293,17 +313,91 @@ class HighlightSignalingHandler:
                     break
                 sent += len(buf)
                 is_last = sent >= size
-                await sess.peer.send(
-                    framing.frame_chunk(
-                        frame_id=frame_row.id,
-                        sequence=frame_row.sequence,
-                        chunk_index=chunk_index,
-                        byte_length=size,
-                        is_last_chunk=is_last,
-                        payload=buf,
-                    )
+                yield framing.frame_chunk(
+                    frame_id=frame_row.id,
+                    sequence=frame_row.sequence,
+                    chunk_index=chunk_index,
+                    byte_length=size,
+                    is_last_chunk=is_last,
+                    payload=buf,
                 )
                 chunk_index += 1
+
+    # ── GFS-relay fallback ──────────────────────────────────────────────
+
+    async def _on_relay_offer(self, frame: dict) -> None:
+        """Stream a published highlight to the GFS for proxy delivery.
+
+        The guest couldn't reach us over WebRTC; the GFS pushed this
+        ``relay_offer`` so we stream the framed bytes back over a signed
+        POST and the GFS pipes them to the waiting guest. Same publish
+        guard as the WebRTC offer — never relay an unpublished highlight.
+        """
+        relay_id = str(frame.get("relay_id") or "")
+        highlight_id = str(frame.get("highlight_id") or "")
+        if not (relay_id and highlight_id):
+            log.debug("highlight_signal relay_offer: missing fields — dropped")
+            return
+        highlight = await self._highlights.get_highlight(highlight_id)
+        if highlight is None or highlight.public_gfs_id is None:
+            log.debug(
+                "highlight_signal relay_offer: %s not published — dropped",
+                highlight_id,
+            )
+            return
+        task = asyncio.create_task(
+            self._serve_relay(relay_id, highlight_id),
+            name=f"highlight-relay[{relay_id}]",
+        )
+        self._relay_tasks.add(task)
+        task.add_done_callback(self._relay_tasks.discard)
+
+    async def _serve_relay(self, relay_id: str, highlight_id: str) -> None:
+        url = await self._gfs_url(
+            f"/gfs/highlight_rtc/relay-stream/{relay_id}",
+            highlight_id,
+        )
+        if url is None or self._http_client is None:
+            return
+        headers = self._relay_auth_headers(relay_id)
+        try:
+            async with self._http_client.post(
+                url,
+                data=self._iter_highlight_frames(highlight_id),
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=600, sock_connect=15),
+            ) as resp:
+                if resp.status >= 300:
+                    log.warning(
+                        "highlight relay POST %s returned HTTP %s",
+                        url,
+                        resp.status,
+                    )
+        except aiohttp.ClientError as exc:
+            log.warning("highlight relay POST %s failed: %s", url, exc)
+
+    def _relay_auth_headers(self, relay_id: str) -> dict[str, str]:
+        """Header-based Ed25519 auth for the binary relay upload.
+
+        The body is the raw framed stream, so the signature can't ride
+        inside it — sign the canonical ``{instance_id, relay_id}`` dict
+        (same scheme as :meth:`_sign`) and carry it in headers the GFS
+        verifies via ``authenticate_relay_stream``.
+        """
+        if self._signing_key is None:
+            raise RuntimeError(
+                "HighlightSignalingHandler used before attach_identity",
+            )
+        instance_id = self._require_instance_id()
+        body = {"instance_id": instance_id, "relay_id": relay_id}
+        canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+        sig = b64url_encode(sign_ed25519(self._signing_key, canonical))
+        return {
+            "X-SH-Instance": instance_id,
+            "X-SH-Signature": sig,
+        }
 
     def _resolve_media_path(self, media_url: str | None) -> pathlib.Path | None:
         """Resolve ``/api/media/{filename}`` to the on-disk path.
@@ -428,7 +522,7 @@ class HighlightSignalingHandler:
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     async def stop(self) -> None:
-        """Cancel every in-flight session. Called from app cleanup."""
+        """Cancel every in-flight session + relay. Called from app cleanup."""
         async with self._lock:
             sessions = list(self._sessions.values())
             self._sessions.clear()
@@ -439,6 +533,10 @@ class HighlightSignalingHandler:
                 await sess.peer.close()
             except Exception:  # defensive
                 pass
+        for task in list(self._relay_tasks):
+            if not task.done():
+                task.cancel()
+        self._relay_tasks.clear()
 
 
 # ─── Defaults ──────────────────────────────────────────────────────────

@@ -84,6 +84,37 @@ class _StubSession:
         return _StubResp(200, {"status": "ok"})
 
 
+class _RecordingRelayPost:
+    """Async-CM that drains the streamed ``data`` body into bytes."""
+
+    def __init__(self, sess, url, data, headers):
+        self._sess = sess
+        self._url = url
+        self._data = data
+        self._headers = headers
+
+    async def __aenter__(self):
+        body = b""
+        if hasattr(self._data, "__aiter__"):
+            async for chunk in self._data:
+                body += chunk
+        self._sess.relay_calls.append((self._url, dict(self._headers), body))
+        return _StubResp(200, {"status": "ok"})
+
+    async def __aexit__(self, *a):
+        return False
+
+
+class _RecordingSession:
+    """Captures the relay streaming POST (url, headers, drained body)."""
+
+    def __init__(self):
+        self.relay_calls: list[tuple[str, dict, bytes]] = []
+
+    def post(self, url, *, data=None, headers=None, **_kw):
+        return _RecordingRelayPost(self, url, data, headers or {})
+
+
 # ─── Fixtures ────────────────────────────────────────────────────────────
 
 
@@ -174,6 +205,13 @@ async def _drain(handler) -> None:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _drain_relay(handler) -> None:
+    """Wait for every in-flight relay-stream task to drain."""
+    tasks = list(handler._relay_tasks)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 # ─── Happy path ─────────────────────────────────────────────────────────
 
 
@@ -256,6 +294,141 @@ async def test_handler_posts_signed_answer_to_correct_gfs(repos, published_highl
     assert body["session_id"] == "s-1"
     assert body["instance_id"] == "inst-self"
     assert "signature" in body
+
+
+# ─── GFS-relay fallback ──────────────────────────────────────────────────
+
+
+async def test_relay_offer_posts_framed_stream_with_signed_headers(
+    repos,
+    published_highlight,
+):
+    """relay_offer → the identical framed stream is POSTed to the GFS
+    relay-stream URL with header-based Ed25519 auth."""
+    highlight_id, f1, f2 = published_highlight
+    handler, _peers = _make_handler(repos)
+    sess = _RecordingSession()
+    handler._http_client = sess  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "relay_offer", "relay_id": "r-1", "highlight_id": highlight_id}
+    )
+    await _drain_relay(handler)
+
+    assert len(sess.relay_calls) == 1
+    url, headers, body = sess.relay_calls[0]
+    assert url == "https://gfs.example/gfs/highlight_rtc/relay-stream/r-1"
+    assert headers["X-SH-Instance"] == "inst-self"
+    assert headers["X-SH-Signature"]
+
+    # The streamed body is the same framing as the WebRTC path.
+    import struct
+
+    rest = body
+    decoded = []
+    while rest:
+        hlen = struct.unpack(">I", rest[:4])[0]
+        plen = struct.unpack(">I", rest[4 + hlen : 4 + hlen + 4])[0]
+        total = 4 + hlen + 4 + plen
+        decoded.append(framing.decode(rest[:total]))
+        rest = rest[total:]
+    kinds = [d.header["kind"] for d in decoded]
+    assert kinds[0] == framing.KIND_HIGHLIGHT_META
+    assert kinds[-1] == framing.KIND_STREAM_END
+    chunk_ids = {
+        d.header["frame_id"]
+        for d in decoded
+        if d.header["kind"] == framing.KIND_FRAME_CHUNK
+    }
+    assert chunk_ids == {f1, f2}
+
+
+async def test_relay_offer_signature_verifies_against_instance_key(
+    repos,
+    published_highlight,
+):
+    """The relay auth headers verify under the handler's own public key,
+    using the same canonical-dict scheme the GFS checks."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from socialhome.global_server.admin_service import verify_report_signature
+
+    highlight_id, *_ = published_highlight
+    handler, _ = _make_handler(repos)
+    headers = handler._relay_auth_headers("r-42")
+
+    pk_hex = (
+        Ed25519PrivateKey.from_private_bytes(b"\x00" * 32)
+        .public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        .hex()
+    )
+    body = {"instance_id": "inst-self", "relay_id": "r-42"}
+    assert verify_report_signature(body, headers["X-SH-Signature"], pk_hex)
+    # A different relay_id must not verify under the same signature.
+    assert not verify_report_signature(
+        {"instance_id": "inst-self", "relay_id": "r-OTHER"},
+        headers["X-SH-Signature"],
+        pk_hex,
+    )
+
+
+async def test_relay_offer_unpublished_highlight_posts_nothing(repos):
+    handler, _ = _make_handler(repos)
+    sess = _RecordingSession()
+    handler._http_client = sess  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "relay_offer", "relay_id": "r-1", "highlight_id": "missing"}
+    )
+    await _drain_relay(handler)
+    assert sess.relay_calls == []
+
+
+async def test_relay_offer_missing_fields_is_no_op(repos):
+    handler, _ = _make_handler(repos)
+    sess = _RecordingSession()
+    handler._http_client = sess  # type: ignore[assignment]
+    await handler.handle_signal({"kind": "relay_offer", "relay_id": ""})
+    await _drain_relay(handler)
+    assert sess.relay_calls == []
+
+
+async def test_stop_cancels_in_flight_relay_tasks(repos, published_highlight):
+    """A relay stream in flight is cancelled by stop()."""
+    highlight_id, *_ = published_highlight
+    handler, _ = _make_handler(repos)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BlockingSession:
+        def post(self, url, *, data=None, headers=None, **_kw):
+            return _BlockingPost(data)
+
+    class _BlockingPost:
+        def __init__(self, data):
+            self._data = data
+
+        async def __aenter__(self):
+            started.set()
+            await release.wait()  # hold the stream open
+            return _StubResp(200, {"status": "ok"})
+
+        async def __aexit__(self, *a):
+            return False
+
+    handler._http_client = _BlockingSession()  # type: ignore[assignment]
+    await handler.handle_signal(
+        {"kind": "relay_offer", "relay_id": "r-1", "highlight_id": highlight_id}
+    )
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    assert handler._relay_tasks
+    await handler.stop()
+    assert handler._relay_tasks == set()
+    release.set()
 
 
 # ─── ICE plumbing ───────────────────────────────────────────────────────

@@ -16,15 +16,25 @@ via the signed :class:`HighlightRtcAnswerView`; the browser polls
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from aiohttp import web
 
 from .. import app_keys as K
 from .base import GfsBaseView
-from .rtc import _rtc_authenticate
+from .rtc import _rtc_authenticate, authenticate_relay_stream
 
 log = logging.getLogger(__name__)
+
+#: How long the guest's relay GET waits for the author SH to start
+#: streaming before giving up with 503. Matches the viewer's WebRTC
+#: poll budget so the fallback doesn't hang far longer than the primary.
+RELAY_AUTHOR_CONNECT_TIMEOUT_SECONDS: float = 30.0
+
+#: Author body is read in chunks this size and piped straight to the
+#: guest — independent of the framing chunk size (pure byte passthrough).
+RELAY_READ_CHUNK_BYTES: int = 64 * 1024
 
 
 # ─── Public viewer surface (anonymous) ───────────────────────────────────
@@ -126,6 +136,116 @@ class HighlightRtcViewerIceView(GfsBaseView):
                     "candidate": candidate,
                 },
             )
+        return web.json_response({"status": "ok"})
+
+
+# ─── GFS-relay fallback (anon guest GET ⇄ signed author stream) ───────────
+
+
+class HighlightRelayStreamView(GfsBaseView):
+    """``GET /gfs/highlight_rtc/relay/{instance_id}/{highlight_id}`` — anon.
+
+    Fallback for when the guest can't open a direct WebRTC DataChannel.
+    Auth is the same share ``token`` (query param) the offer flow uses.
+    We register a transient relay channel, push a ``relay_offer`` to the
+    author over the WS, wait for the author to start streaming, then pipe
+    the author's framed bytes straight to this chunked response. The GFS
+    stores nothing — it is a pure passthrough for already-public content.
+    """
+
+    async def get(self) -> web.StreamResponse:
+        instance_id = self.match("instance_id")
+        highlight_id = self.match("highlight_id")
+        token = self.request.query.get("token", "")
+        if not token:
+            return web.json_response({"error": "missing_token"}, status=422)
+
+        registry = self.svc(K.gfs_highlight_pub_service_key)
+        resolved = await registry.resolve_token(token)
+        if (
+            resolved is None
+            or resolved.publication.instance_id != instance_id
+            or resolved.publication.highlight_id != highlight_id
+        ):
+            return web.json_response({"error": "gone"}, status=410)
+        if not await registry.author_online(instance_id):
+            return web.json_response({"error": "unavailable"}, status=503)
+
+        bridge = self.svc(K.gfs_relay_bridge_key)
+        relay_id = bridge.create(target_instance_id=instance_id, scope=highlight_id)
+        channel = bridge.get(relay_id)
+        assert channel is not None  # just created
+
+        ws_registry = self.svc(K.gfs_ws_registry_key)
+        await ws_registry.send(
+            instance_id,
+            {
+                "type": "highlight_signal",
+                "kind": "relay_offer",
+                "relay_id": relay_id,
+                "highlight_id": highlight_id,
+                "token": token,
+            },
+        )
+
+        # Hold the request until the author actually starts streaming, so a
+        # stalled author yields a clean 503 rather than an empty 200 body.
+        try:
+            await asyncio.wait_for(
+                channel.connected.wait(),
+                timeout=RELAY_AUTHOR_CONNECT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError, TimeoutError:
+            bridge.close(relay_id)
+            return web.json_response({"error": "unavailable"}, status=503)
+
+        resp = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Cache-Control": "no-store",
+            },
+        )
+        await resp.prepare(self.request)
+        try:
+            async for chunk in bridge.consume(relay_id):
+                await resp.write(chunk)
+        finally:
+            bridge.close(relay_id)
+        await resp.write_eof()
+        return resp
+
+
+class HighlightRelayUploadView(GfsBaseView):
+    """``POST /gfs/highlight_rtc/relay-stream/{relay_id}`` — author streams.
+
+    Signed via the header-based :func:`authenticate_relay_stream`; the
+    request body is the raw framed byte stream. We feed it chunk-by-chunk
+    into the bridge channel the guest GET is draining. Authority guard:
+    the relay's target instance must equal the authenticated signer.
+    """
+
+    async def post(self) -> web.Response:
+        result = await authenticate_relay_stream(self)
+        if isinstance(result, web.Response):
+            return result
+        instance_id = result
+        relay_id = self.match("relay_id")
+        bridge = self.svc(K.gfs_relay_bridge_key)
+        channel = bridge.get(relay_id)
+        if channel is None:
+            return web.json_response({"error": "not_found"}, status=404)
+        if channel.target_instance_id != instance_id:
+            return web.json_response({"error": "forbidden"}, status=403)
+        try:
+            async for chunk in self.request.content.iter_chunked(
+                RELAY_READ_CHUNK_BYTES
+            ):
+                if not await bridge.feed(relay_id, chunk):
+                    # Guest hung up — stop reading the upload early.
+                    break
+        finally:
+            await bridge.finish(relay_id)
         return web.json_response({"status": "ok"})
 
 

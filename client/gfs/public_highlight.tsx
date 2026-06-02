@@ -83,6 +83,23 @@ function decodeFrame(buf: Uint8Array): { header: FramingHeader; payload: Uint8Ar
 }
 
 
+/* Pop one complete frame off the front of an accumulating byte buffer
+ * (the GFS-relay fallback reads a chunked stream whose chunk boundaries
+ * don't align to frames). Returns the decoded frame + the unconsumed
+ * tail, or null when a whole frame isn't buffered yet. */
+function takeFrame(
+  buf: Uint8Array,
+): { header: FramingHeader; payload: Uint8Array; rest: Uint8Array } | null {
+  const decoded = decodeFrame(buf)
+  if (!decoded) return null
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const headerLen = view.getUint32(0)
+  const payloadLen = view.getUint32(4 + headerLen)
+  const consumed = 4 + headerLen + 4 + payloadLen
+  return { header: decoded.header, payload: decoded.payload, rest: buf.subarray(consumed) }
+}
+
+
 function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
   const [state, setState] = useState<ViewerState>({
     status: 'connecting',
@@ -142,12 +159,65 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
       }
     }
 
+    let channelOpened = false
+    let relayStarted = false
+
+    // GFS-relay fallback: direct WebRTC couldn't connect (NAT/TURN/P2P
+    // blocked) but the author is online. Pull the identical framed stream
+    // proxied through the GFS over a plain chunked GET.
+    async function startRelayFallback() {
+      if (relayStarted || cancelled || channelOpened) return
+      relayStarted = true
+      if (pollTimer) clearInterval(pollTimer)
+      if (pc) { try { pc.close() } catch { /* tolerated */ } }
+      setStatus('loading', 'Connecting via server…')
+      try {
+        const url =
+          `/gfs/highlight_rtc/relay/${encodeURIComponent(boot.instanceId)}` +
+          `/${encodeURIComponent(boot.highlightId)}?token=${encodeURIComponent(boot.token)}`
+        const r = await fetch(_rel(url))
+        if (!r.ok || !r.body) {
+          setStatus('error', humanizeError(`HTTP ${r.status}`))
+          return
+        }
+        const reader = r.body.getReader()
+        let buf: Uint8Array = new Uint8Array(0)
+        while (!cancelled) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (value && value.length) {
+            const next = new Uint8Array(buf.length + value.length)
+            next.set(buf)
+            next.set(value, buf.length)
+            buf = next
+          }
+          for (;;) {
+            const taken = takeFrame(buf)
+            if (!taken) break
+            buf = taken.rest
+            handleHeader(taken.header, taken.payload)
+          }
+        }
+      } catch (err) {
+        setStatus('error', humanizeError((err as Error)?.message))
+      }
+    }
+
     async function main() {
       try {
         const ice = await fetchJson<{ servers: IceServer[] }>('/gfs/highlights/ice-servers')
         pc = new RTCPeerConnection({ iceServers: ice.servers })
         let sessionId: string | null = null
         let ackedCandidates = 0
+
+        // A failed/closed ICE transport before the channel ever opened is
+        // the canonical "WebRTC won't work here" signal → fall back.
+        pc.addEventListener('iceconnectionstatechange', () => {
+          const st = pc?.iceConnectionState
+          if ((st === 'failed' || st === 'closed') && !channelOpened) {
+            void startRelayFallback()
+          }
+        })
 
         pc.addEventListener('icecandidate', (ev) => {
           if (!ev.candidate || !sessionId) return
@@ -162,7 +232,7 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
 
         const ch = pc.createDataChannel(CHANNEL_LABEL, { ordered: true })
         ch.binaryType = 'arraybuffer'
-        ch.onopen = () => setStatus('loading', 'Loading highlight…')
+        ch.onopen = () => { channelOpened = true; setStatus('loading', 'Loading highlight…') }
         ch.onmessage = (ev) => {
           const buf = new Uint8Array(ev.data instanceof ArrayBuffer ? ev.data : new ArrayBuffer(0))
           const decoded = decodeFrame(buf)
@@ -187,7 +257,8 @@ function PublicHighlightViewer({ boot }: { boot: BootPayload }) {
           attempts += 1
           if (attempts > POLL_MAX_ATTEMPTS) {
             if (pollTimer) clearInterval(pollTimer)
-            setStatus('error', 'Timed out waiting for the host.')
+            // Author online but no direct channel within budget → relay.
+            if (!channelOpened) void startRelayFallback()
             return
           }
           try {
