@@ -41,8 +41,8 @@ sequenceDiagram
     participant B as HFS B<br/>(receiver)
     participant WS_B as B local users<br/>(WebSocket)
 
-    A->>A: AppFederationService.open_session(app_id, peer=B)<br/>→ allocate session_id, _require_enabled check
-    A->>B: APP_SESSION event<br/>{app_id, session_id, verb:"open"}<br/>encrypted + Ed25519-signed<br/>over fed-v1 / HTTPS inbox
+    A->>A: AppFederationService.open_session(app_id, target={instance,user_ref,is_local})<br/>→ allocate session_id, _require_enabled check
+    A->>B: APP_SESSION event<br/>{app_id, session_id, verb:"open",<br/>to_user, from_user (v_18+ peers)}<br/>encrypted + Ed25519-signed<br/>over fed-v1 / HTTPS inbox
 
     B->>B: §24.11 pipeline:<br/>parse → timestamp → instance → ban<br/>→ sig verify → replay → decrypt → dispatch
     B->>B: AppFederationService.on_inbound_event()<br/>→ _deliver(app_id, session_id, …)
@@ -76,14 +76,20 @@ sequenceDiagram
 | `app_id` | yes | Installed app identifier. Must match a locally-enabled app on the receiver or the inbound is silently dropped. |
 | `session_id` | yes | Hex UUID allocated by the initiator.  Scopes all subsequent `APP_MESSAGE` frames for this session. |
 | `verb` | yes | `"open"` / `"accept"` / `"close"`. |
+| `to_user` | no (v_18+) | The addressed person's local `user_id` on the receiving household. Lets the receiver route the open to a specific user instead of fanning out to every local user. Omitted for sub-v_18 peers (legacy household fan-out). |
+| `from_user` | no (v_18+) | The initiator's username — a display hint so the recipient's SPA can show who challenged them. Omitted for sub-v_18 peers. |
 
 **v1 session lifecycle note:** the host initiates `open`; other verbs (`accept`, `close`) are passed through to the app layer — the iframe app owns session lifecycle.  The server does not enforce session state.
 
-**Privacy note:** `APP_SESSION` deliberately carries **no** per-user
-identifier — only `session_id` and `from_instance` (the household).  A
-stable user identifier sent cross-household is a tracking vector; if an app
-needs to show who initiated a session, it should exchange that identity
-in-band as application data after the session opens.
+**Privacy note (§FIX-I2, relaxed for proto v_18):** `APP_SESSION` now carries
+per-user identity (`to_user` / `from_user`) to v_18+ peers because the
+challengeable roster is exactly the pairing-scoped DM / `/friends` set — a
+consensual, not covert, audience.  Both fields are gated on
+`FederationCapability.MIN_FOR_APP_USER_ROUTING` and omitted for sub-v_18
+peers, which fall back to the legacy household-addressed fan-out (no
+`to_user`).  A local-loopback open (target on the initiator's own household)
+is delivered straight over WebSocket to the target and initiator only — no
+federation event leaves the host.
 
 All fields above are inside the **encrypted payload** (AES-256-GCM).  Only
 `event_type`, `from_instance`, `to_instance`, `msg_id`, and `timestamp` are

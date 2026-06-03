@@ -867,7 +867,32 @@ async def test_sessions_requires_auth(client):
 
 
 async def test_sessions_returns_session_id_201(client, fed_svc):
+    """A ``target`` body opens a person-addressed session and returns 201."""
     fed_svc.open_session.return_value = "deadbeef01234567"
+
+    target = {
+        "instance_id": "peer.example.com",
+        "user_ref": "bob",
+        "is_local": False,
+    }
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"target": target},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body == {"session_id": "deadbeef01234567"}
+    fed_svc.open_session.assert_awaited_once_with(
+        app_id="com.example.hello",
+        target=target,
+        actor_user_id=client._uid,
+    )
+
+
+async def test_sessions_legacy_peer_instance_id_still_works(client, fed_svc):
+    """A legacy ``peer_instance_id`` body maps to a remote household target."""
+    fed_svc.open_session.return_value = "cafebabe89abcdef"
 
     r = await client.post(
         "/api/apps/com.example.hello/sessions",
@@ -876,12 +901,28 @@ async def test_sessions_returns_session_id_201(client, fed_svc):
     )
     assert r.status == 201
     body = await r.json()
-    assert body == {"session_id": "deadbeef01234567"}
+    assert body == {"session_id": "cafebabe89abcdef"}
     fed_svc.open_session.assert_awaited_once_with(
         app_id="com.example.hello",
-        peer_instance_id="peer.example.com",
+        target={
+            "instance_id": "peer.example.com",
+            "user_ref": "",
+            "is_local": False,
+        },
         actor_user_id=client._uid,
     )
+
+
+async def test_sessions_rejects_malformed_target(client, fed_svc):
+    """A target missing is_local / user_ref is rejected with 400."""
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"target": {"instance_id": "peer.example.com"}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
 
 
 async def test_sessions_rejects_missing_peer(client, fed_svc):
