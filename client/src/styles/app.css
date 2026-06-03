@@ -17634,19 +17634,8 @@ a.sh-btn--ghost:hover {
 
 /* Grid of installed app cards */
 .sh-apps-page { padding-bottom: var(--sh-space-xl); }
-.sh-apps-section { margin-top: var(--sh-space-lg); }
-.sh-apps-section__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--sh-space-sm);
-  margin-bottom: var(--sh-space-sm);
-}
-.sh-apps-section__title {
-  font-size: var(--sh-font-size-md);
-  font-weight: 600;
-  margin: 0;
-}
+/* Tab-panel content sits just under the sticky TabHeader. */
+.sh-apps-page [role="tabpanel"] { margin-top: var(--sh-space-md); }
 .sh-apps-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -17696,14 +17685,31 @@ a.sh-btn--ghost:hover {
   text-overflow: ellipsis;
 }
 .sh-app-card__version { font-size: var(--sh-font-size-xs); }
-.sh-app-card__toggle {
+.sh-app-card__disabled-chip { flex-shrink: 0; }
+.sh-app-card__disabled-hint { font-size: var(--sh-font-size-sm); }
+
+/* Per-card admin ⋯ menu — reuses .sh-post-overflow / .sh-post-menu. */
+.sh-app-card__menu { flex-shrink: 0; }
+.sh-app-menu { min-width: 200px; }
+.sh-app-menu__label {
+  padding: var(--sh-space-xs) var(--sh-space-md) var(--sh-space-xxs);
+  font-size: var(--sh-font-size-xs);
+  font-weight: 600;
+  color: var(--sh-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sh-app-menu__sep {
+  height: 1px;
+  background: var(--sh-border);
+  margin: var(--sh-space-xxs) 0;
+}
+.sh-app-menu__radio {
   display: flex;
   align-items: center;
-  gap: var(--sh-space-xxs);
-  cursor: pointer;
-  flex-shrink: 0;
+  gap: var(--sh-space-sm);
 }
-.sh-app-card__toggle-label { font-size: var(--sh-font-size-xs); }
+.sh-app-menu__radio-mark { font-size: 0.75em; line-height: 1; }
 .sh-app-card__caps {
   display: flex;
   flex-wrap: wrap;
