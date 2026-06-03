@@ -44,6 +44,23 @@ export const catalogLoading  = signal(false)
 export const updatesChecking = signal(false)
 export const appsError       = signal<string | null>(null)
 export const catalogError    = signal<string | null>(null)
+/** True when at least one household member has child protection enabled —
+ *  gates the per-app age-gate admin control (no point configuring a gate
+ *  nobody is subject to). Loaded by an admin via ``GET /api/cp/protection``. */
+export const householdHasProtectedMinor = signal(false)
+
+export async function loadProtectionStatus(): Promise<void> {
+  try {
+    const data = await api.get('/api/cp/protection') as {
+      users: Array<{ is_minor: boolean }>
+    }
+    householdHasProtectedMinor.value = (data.users ?? []).some(u => u.is_minor)
+  } catch {
+    // Non-admins 403 here; the control is admin-only anyway, so fail closed
+    // (hide the age setting) rather than surface an error.
+    householdHasProtectedMinor.value = false
+  }
+}
 
 export async function loadInstalled(): Promise<void> {
   appsLoading.value = true
@@ -134,4 +151,5 @@ export function _resetAppsForTest(): void {
   updatesChecking.value  = false
   appsError.value        = null
   catalogError.value     = null
+  householdHasProtectedMinor.value = false
 }

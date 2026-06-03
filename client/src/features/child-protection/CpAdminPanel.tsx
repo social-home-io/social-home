@@ -219,6 +219,18 @@ export default function CpAdminPanel() {
   )
 }
 
+/** Whole years from an ISO ``YYYY-MM-DD`` birth date to today, or null if
+ *  unparseable. Used to auto-fill the declared age from a birthday. */
+export function ageFromDob(dob: string): number | null {
+  const d = new Date(dob)
+  if (Number.isNaN(d.getTime())) return null
+  const today = new Date()
+  let age = today.getFullYear() - d.getFullYear()
+  const m = today.getMonth() - d.getMonth()
+  if (m < 0 || (m === 0 && today.getDate() < d.getDate())) age -= 1
+  return age
+}
+
 function EnableForm({ state, onChange, onSubmit, onCancel }: {
   state: MinorFormState
   onChange: (s: MinorFormState) => void
@@ -243,10 +255,19 @@ function EnableForm({ state, onChange, onSubmit, onCancel }: {
         Date of birth (optional)
         <input type="date"
           value={state.date_of_birth}
-          onInput={(e) => onChange({
-            ...state,
-            date_of_birth: (e.target as HTMLInputElement).value,
-          })} />
+          onInput={(e) => {
+            const dob = (e.target as HTMLInputElement).value
+            // Auto-fill the age from the birthday (clamped to the field's
+            // 0–17 minor range). The admin can still adjust it afterwards.
+            const age = dob ? ageFromDob(dob) : null
+            onChange({
+              ...state,
+              date_of_birth: dob,
+              declared_age: age === null
+                ? state.declared_age
+                : Math.max(0, Math.min(17, age)),
+            })
+          }} />
       </label>
       <div class="sh-row">
         <Button onClick={onSubmit}>Enable</Button>

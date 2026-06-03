@@ -1372,6 +1372,35 @@ async def test_set_min_age_valid_updates_and_returns(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_set_min_age_admin_authoritative_can_lower(tmp_path: Path) -> None:
+    """Admin-authoritative — the admin can set min_age to any valid value,
+    including below the manifest's declared rating (the manifest is only the
+    install-time default, not a floor)."""
+    from socialhome.domain.apps import AppManifest, InstalledApp
+
+    svc, repo = make_service(tmp_path, [], b"")
+    # Publisher declared 13+ in the manifest, app currently at 13.
+    repo._apps["chess"] = InstalledApp(
+        app_id="chess",
+        name="Chess",
+        version="1.0.0",
+        enabled=True,
+        manifest=AppManifest(
+            entry="index.html", icon=None, capabilities=(), min_age=13
+        ),
+        bundle_path="apps/chess/1.0.0",
+        bundle_sha256="ab" * 32,
+        source_url="https://example.com/chess.tgz",
+        installed_by="admin",
+        installed_at="2026-06-02T00:00:00+00:00",
+        min_age=13,
+    )
+    # Admin may lower it below the manifest value.
+    result = await svc.set_min_age("chess", min_age=0, actor_is_admin=True)
+    assert result.min_age == 0
+
+
+@pytest.mark.asyncio
 async def test_list_visible_admin_sees_all(tmp_path: Path) -> None:
     """Admins see all installed apps regardless of enabled or age restriction."""
     cp = _FakeCpRepo()

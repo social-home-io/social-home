@@ -13,6 +13,8 @@ import {
   uninstallApp,
   setEnabled,
   setMinAge,
+  loadProtectionStatus,
+  householdHasProtectedMinor,
   _resetAppsForTest,
 } from './apps'
 
@@ -36,6 +38,37 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe('apps store', () => {
+  // ── loadProtectionStatus ────────────────────────────────────────
+
+  it('loadProtectionStatus sets the signal true when any user is a minor', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        users: [
+          { user_id: 'u1', username: 'a', is_minor: false, declared_age: 0 },
+          { user_id: 'u2', username: 'b', is_minor: true, declared_age: 8 },
+        ],
+      }),
+    )
+    await loadProtectionStatus()
+    expect(householdHasProtectedMinor.value).toBe(true)
+  })
+
+  it('loadProtectionStatus stays false when no minors (and fails closed on error)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        users: [{ user_id: 'u1', username: 'a', is_minor: false, declared_age: 0 }],
+      }),
+    )
+    await loadProtectionStatus()
+    expect(householdHasProtectedMinor.value).toBe(false)
+
+    // A 403 (non-admin) → fail closed (hide the age setting).
+    fetchMock.mockResolvedValueOnce(jsonResponse({}, { status: 403 }))
+    householdHasProtectedMinor.value = true
+    await loadProtectionStatus()
+    expect(householdHasProtectedMinor.value).toBe(false)
+  })
+
   // ── loadInstalled ───────────────────────────────────────────────
 
   it('loadInstalled calls GET /api/apps and populates installedApps', async () => {

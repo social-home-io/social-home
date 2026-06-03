@@ -12,6 +12,7 @@ const h = vi.hoisted(() => ({
   catalogLoading: { value: false },
   appsError: { value: null as string | null },
   catalogError: { value: null as string | null },
+  householdHasProtectedMinor: { value: true },
   currentUser: { value: { is_admin: true } as { is_admin: boolean } | null },
   setEnabled: vi.fn().mockResolvedValue(undefined),
   setMinAge: vi.fn().mockResolvedValue(undefined),
@@ -20,14 +21,16 @@ const h = vi.hoisted(() => ({
 const {
   installedApps, catalog, updates, updatesChecking,
   appsLoading, catalogLoading, appsError, catalogError,
-  currentUser, setEnabled, setMinAge,
+  householdHasProtectedMinor, currentUser, setEnabled, setMinAge,
 } = h
 
 vi.mock('@/store/apps', () => ({
   installedApps: h.installedApps, catalog: h.catalog, updates: h.updates,
   updatesChecking: h.updatesChecking, appsLoading: h.appsLoading,
   catalogLoading: h.catalogLoading, appsError: h.appsError, catalogError: h.catalogError,
+  householdHasProtectedMinor: h.householdHasProtectedMinor,
   loadInstalled: vi.fn(), loadCatalog: vi.fn(), loadUpdates: vi.fn(),
+  loadProtectionStatus: vi.fn(),
   updateApp: vi.fn(), installApp: vi.fn(),
   uninstallApp: h.uninstallApp, setEnabled: h.setEnabled, setMinAge: h.setMinAge,
 }))
@@ -77,6 +80,7 @@ beforeEach(() => {
   updatesChecking.value = false
   appsLoading.value = false; catalogLoading.value = false
   appsError.value = null; catalogError.value = null
+  householdHasProtectedMinor.value = true
   currentUser.value = { is_admin: true }
 })
 
@@ -158,6 +162,16 @@ describe('AppCard admin overflow menu', () => {
     fireEvent.click(getByRole('button', { name: 'Chess settings' }))
     fireEvent.click(getByRole('menuitem', { name: 'Disable app' }))
     expect(setEnabled).toHaveBeenCalledWith('chess', false)
+  })
+
+  it('hides the minimum-age group when the household has no protected minor', () => {
+    householdHasProtectedMinor.value = false
+    const { getByRole, queryByRole } = render(<AppsPage />)
+    fireEvent.click(getByRole('button', { name: 'Chess settings' }))
+    // Enable/disable + Uninstall still present; age radios are gone.
+    expect(getByRole('menuitem', { name: 'Disable app' })).toBeTruthy()
+    expect(getByRole('menuitem', { name: 'Uninstall…' })).toBeTruthy()
+    expect(queryByRole('menuitemradio')).toBeNull()
   })
 
   it('a disabled app shows a Disabled chip and no Open button', () => {

@@ -557,6 +557,9 @@ class AppService(BusPublisherMixin):
         existing = await self._repo.get(app_id)
         if existing is None:
             raise AppNotFoundError(f"App {app_id!r} is not installed")
+        # Admin-authoritative: the household admin has full control of the
+        # gate in both directions. The manifest's ``min_age`` is only the
+        # install-time default (and an update-time ratchet) — not a floor.
         await self._repo.set_min_age(app_id, min_age)
         updated = await self._repo.get(app_id)
         assert updated is not None  # just set it

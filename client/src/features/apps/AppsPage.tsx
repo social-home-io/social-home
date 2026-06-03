@@ -31,6 +31,8 @@ import {
   uninstallApp,
   setEnabled,
   setMinAge,
+  loadProtectionStatus,
+  householdHasProtectedMinor,
   type InstalledApp,
   type AppUpdate,
   type CatalogEntry,
@@ -68,7 +70,10 @@ export default function AppsPage() {
   useEffect(() => {
     void loadInstalled()
     void loadUpdates()
-    if (isAdmin) void loadCatalog()
+    if (isAdmin) {
+      void loadCatalog()
+      void loadProtectionStatus()
+    }
   }, [])
 
   // Non-admins have no catalog and a single view — skip the tab chrome.
@@ -413,29 +418,36 @@ function AppCardMenu({
             {app.enabled ? 'Disable app' : 'Enable app'}
           </button>
 
-          <div class="sh-app-menu__sep" role="separator" />
-          <div class="sh-app-menu__label" id={`minage-label-${app.app_id}`}>
-            Minimum age
-          </div>
-          <div role="group" aria-labelledby={`minage-label-${app.app_id}`}>
-            {MIN_AGE_OPTIONS.map(opt => (
-              <button
-                key={opt.value}
-                type="button"
-                role="menuitemradio"
-                aria-checked={app.min_age === opt.value}
-                disabled={settingMinAge}
-                class="sh-app-menu__radio"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => { onSetMinAge(opt.value); close() }}
-              >
-                <span class="sh-app-menu__radio-mark" aria-hidden="true">
-                  {app.min_age === opt.value ? '●' : '○'}
-                </span>
-                {opt.label}
-              </button>
-            ))}
-          </div>
+          {/* Age gate — only when the household actually has a protected
+           *  minor (matches #536: no point configuring a gate nobody is
+           *  subject to). Admin-authoritative value. */}
+          {householdHasProtectedMinor.value && (
+            <>
+              <div class="sh-app-menu__sep" role="separator" />
+              <div class="sh-app-menu__label" id={`minage-label-${app.app_id}`}>
+                Minimum age
+              </div>
+              <div role="group" aria-labelledby={`minage-label-${app.app_id}`}>
+                {MIN_AGE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={app.min_age === opt.value}
+                    disabled={settingMinAge}
+                    class="sh-app-menu__radio"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { onSetMinAge(opt.value); close() }}
+                  >
+                    <span class="sh-app-menu__radio-mark" aria-hidden="true">
+                      {app.min_age === opt.value ? '●' : '○'}
+                    </span>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
           <div class="sh-app-menu__sep" role="separator" />
           <button
