@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock
 
-from socialhome.app_keys import app_federation_service_key
+from socialhome.app_keys import app_federation_service_key, instance_id_key
 from socialhome.auth import sha256_token_hash
 from socialhome.domain.apps import (
     AppAgeRestrictedError,
@@ -1442,3 +1442,42 @@ async def test_update_app_integrity_error_returns_400(client, monkeypatch):
     assert r.status == 400
     body = await r.json()
     assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+# ── E2E: bus wired into AppFederationService (challenge → notification) ───
+
+
+async def test_local_challenge_creates_notification(client):
+    """POST /api/apps/{id}/sessions with a local target fires an AppChallengeReceived
+    event on the bus, which notification_service translates into a bell row for the
+    challenged user.  This test is intentionally a failing test until app.py passes
+    bus= to AppFederationService.
+    """
+    await _seed_installed_enabled_app(client._db)
+    carol_tok = await _seed_member(client._db, username="carol", user_id="carol-id")
+
+    own_instance_id = client.app[instance_id_key]
+
+    target = {
+        "instance_id": own_instance_id,
+        "user_ref": "carol-id",
+        "is_local": True,
+    }
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"target": target},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+
+    # Carol should now have an app_challenge notification row.
+    notif_r = await client.get(
+        "/api/notifications",
+        headers=_auth(carol_tok),
+    )
+    assert notif_r.status == 200
+    notifs = await notif_r.json()
+    types = [n["type"] for n in notifs]
+    assert "app_challenge" in types, (
+        f"expected app_challenge notification, got: {notifs}"
+    )
