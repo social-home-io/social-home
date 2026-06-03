@@ -586,7 +586,8 @@ Admin-installed embedded JS apps from the Social Home Apps catalog.
 The catalog is fetched from the `socialhome-apps` GitHub releases
 (`apps_catalog_url` / `SH_APPS_CATALOG_URL`). On install the bundle
 tarball is downloaded, its `sha256` verified against the catalog, and
-unpacked (path-traversal-guarded) under `media_path/apps/<app_id>/<version>/`.
+unpacked (path-traversal-guarded) under `apps_path/<app_id>/<version>/`
+(`apps_path` / `SH_APPS_PATH`, default `<data_dir>/apps`).
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|

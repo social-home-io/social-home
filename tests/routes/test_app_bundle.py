@@ -5,7 +5,7 @@ These tests exercise:
 - AppRuntimeView (bearer-authed, returns signed entry URL)
 - AppBundleView  (self-authorizing via query sig or path-scoped cookie)
 
-Bundle seeding: we write real files to the app's media_path so the file-serve
+Bundle seeding: we write real files to the app's apps_path so the file-serve
 path exercises real aiofiles I/O.  The signer is read directly from the running
 app via ``client.app[media_signer_key]`` (the TestClient exposes ``.app``).
 
@@ -31,7 +31,7 @@ from .conftest import _auth
 
 _APP_ID = "com.example.chess"
 _APP_VERSION = "1.0.0"
-_BUNDLE_REL = f"apps/{_APP_ID}/{_APP_VERSION}"
+_BUNDLE_REL = f"{_APP_ID}/{_APP_VERSION}"
 _INDEX_CONTENT = b"<html>chess app</html>"
 _JS_CONTENT = b"console.log('chess');"
 
@@ -68,9 +68,9 @@ async def _seed_app(db, *, app_id: str = _APP_ID, enabled: bool = True) -> Insta
     return app
 
 
-def _write_bundle(media_path: str, app_id: str = _APP_ID) -> None:
-    """Write index.html + app.js into <media_path>/apps/<id>/<ver>/."""
-    bundle_dir = pathlib.Path(media_path) / "apps" / app_id / _APP_VERSION
+def _write_bundle(apps_path: str, app_id: str = _APP_ID) -> None:
+    """Write index.html + app.js into <apps_path>/<id>/<ver>/."""
+    bundle_dir = pathlib.Path(apps_path) / app_id / _APP_VERSION
     bundle_dir.mkdir(parents=True, exist_ok=True)
     (bundle_dir / "index.html").write_bytes(_INDEX_CONTENT)
     (bundle_dir / "app.js").write_bytes(_JS_CONTENT)
@@ -90,10 +90,10 @@ async def test_runtime_returns_signed_entry_url(client):
     config = client.app[media_signer_key]  # just checking the signer exists
     assert config is not None
 
-    media_path = client.app.get(
+    apps_path = client.app.get(
         __import__("socialhome.app_keys", fromlist=["config_key"]).config_key
-    ).media_path
-    _write_bundle(media_path)
+    ).apps_path
+    _write_bundle(apps_path)
     await _seed_app(client._db)
 
     r = await client.get(
@@ -129,7 +129,7 @@ async def test_runtime_403_disabled(client):
     config_obj = client.app[
         __import__("socialhome.app_keys", fromlist=["config_key"]).config_key
     ]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db, enabled=False)
 
     r = await client.get(
@@ -162,7 +162,7 @@ async def test_bundle_entry_served_with_valid_sig(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     # Get entry_url via /runtime
@@ -197,7 +197,7 @@ async def test_bundle_rejects_without_sig_or_cookie(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     r = await client.get(f"/api/apps/{_APP_ID}/bundle/app.js")
@@ -216,7 +216,7 @@ async def test_bundle_subresource_via_cookie(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     # Step 1: get entry_url
@@ -255,9 +255,9 @@ async def test_bundle_path_traversal_blocked(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     # Write a "secret" file above the bundle root to verify it's never served.
-    secret_path = pathlib.Path(config_obj.media_path) / "secret.txt"
+    secret_path = pathlib.Path(config_obj.apps_path) / "secret.txt"
     secret_path.write_bytes(b"secret data")
     await _seed_app(client._db)
 
@@ -291,7 +291,7 @@ async def test_bundle_expired_sig_rejected(client):
     import time
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     signer = client.app[media_signer_key]
@@ -321,7 +321,7 @@ async def test_bundle_403_when_app_disabled_even_with_sig(client):
     from socialhome.repositories.app_repo import SqliteAppRepo
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     # Mint a valid prefix signature directly (bypasses /runtime auth).
@@ -353,8 +353,8 @@ async def test_bundle_cross_app_sig_rejected(client):
     _APP_B_ID = "com.example.checkers"
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
-    _write_bundle(config_obj.media_path, app_id=_APP_B_ID)
+    _write_bundle(config_obj.apps_path)
+    _write_bundle(config_obj.apps_path, app_id=_APP_B_ID)
     await _seed_app(client._db)
     await _seed_app(client._db, app_id=_APP_B_ID)
 
@@ -383,7 +383,7 @@ async def test_bundle_absolute_path_tail_blocked(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     signer = client.app[media_signer_key]
@@ -422,7 +422,7 @@ async def test_bundle_cookie_path_prefixed_under_haos_ingress(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     # Mint a valid sig directly so we control the headers on the bundle request.
@@ -458,7 +458,7 @@ async def test_bundle_cookie_path_unprefixed_without_ingress_header(client):
     from socialhome.app_keys import config_key
 
     config_obj = client.app[config_key]
-    _write_bundle(config_obj.media_path)
+    _write_bundle(config_obj.apps_path)
     await _seed_app(client._db)
 
     signer = client.app[media_signer_key]
@@ -477,3 +477,49 @@ async def test_bundle_cookie_path_unprefixed_without_ingress_header(client):
     )
     # And must NOT accidentally include a stale ingress prefix.
     assert "hassio_ingress" not in set_cookie
+
+
+async def test_bundle_tampered_bundle_path_returns_403(client):
+    """A tampered DB ``bundle_path`` that escapes apps_root is blocked with 403.
+
+    If a DB write (direct SQL injection, migration bug, etc.) stores
+    ``bundle_path = "../../escape"`` for an installed app, the serve route
+    must detect that the resolved ``base`` directory escapes ``apps_root``
+    and return 403 before attempting any file I/O.
+    """
+    from socialhome.app_keys import config_key
+    from socialhome.repositories.app_repo import SqliteAppRepo
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.apps_path)
+    app = await _seed_app(client._db)
+
+    # Tamper the stored bundle_path so it escapes apps_root.
+    repo = SqliteAppRepo(client._db)
+    tampered = app.__class__(
+        app_id=app.app_id,
+        name=app.name,
+        version=app.version,
+        enabled=app.enabled,
+        manifest=app.manifest,
+        bundle_path="../../escape",
+        bundle_sha256=app.bundle_sha256,
+        source_url=app.source_url,
+        installed_by=app.installed_by,
+        installed_at=app.installed_at,
+    )
+    await repo.update_installed(tampered)
+
+    # Mint a valid prefix signature.
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    # The bundle GET must be rejected — the base dir escapes apps_root.
+    r = await client.get(f"{prefix}index.html?exp={exp}&sig={sig}")
+    assert r.status == 403, (
+        f"tampered bundle_path escaping apps_root must return 403 (got {r.status})"
+    )
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"

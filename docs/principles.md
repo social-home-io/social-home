@@ -53,10 +53,11 @@ household's server. Three mitigations gate this before any code executes:
    `sha256` hex digest. `AppService` downloads the bundle tarball and
    verifies the digest before touching the filesystem — a mismatch
    aborts with an error and the bundle is never unpacked.
-2. **Path-traversal guard + media containment.** Bundle entries are
+2. **Path-traversal guard + apps-dir containment.** Bundle entries are
    unpacked only when their resolved path stays within
-   `media_path/apps/<app_id>/<version>/`. Any entry that would escape
-   that directory is rejected and the whole install is rolled back.
+   `apps_path/<app_id>/<version>/` (the dedicated `apps_path`, default
+   `<data_dir>/apps`). Any entry that would escape that directory is
+   rejected and the whole install is rolled back.
 3. **Sandboxed-iframe runtime (shipped in PR3).** App JavaScript is
    loaded into `<iframe sandbox="allow-scripts">`. The absence of
    `allow-same-origin` gives the frame an opaque origin so it cannot

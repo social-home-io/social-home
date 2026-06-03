@@ -6,7 +6,7 @@ Security invariants:
   symlinks, and device/FIFO/block-device members.  Any violation raises
   :class:`AppIntegrityError` and the partially-extracted directory (if any)
   is cleaned up.
-- Destination directory is checked to be inside ``media_path`` before
+- Destination directory is checked to be inside ``apps_path`` before
   creation (catalog-supplied ``app_id`` / ``version`` path components are
   untrusted and could contain ``../../`` sequences).
 - CPU-bound work (sha256, tarfile extraction, shutil.rmtree) runs via
@@ -70,9 +70,11 @@ class AppService(BusPublisherMixin):
         The catalog service used to browse available apps.  ``None`` means
         no catalog is configured — ``install`` and ``browse_catalog`` will
         signal the absence appropriately.
-    media_path:
-        Root directory for user-generated media.  App bundles are unpacked
-        under ``<media_path>/apps/<app_id>/<version>/``.
+    apps_path:
+        Dedicated root directory for app bundles.  Bundles are unpacked
+        under ``<apps_path>/<app_id>/<version>/`` (e.g.
+        ``<apps_path>/chess/2.0.0``).  The stored ``bundle_path`` value is
+        relative to ``apps_path`` (e.g. ``chess/2.0.0``).
     downloader:
         Callable ``(url: str) -> bytes | Awaitable[bytes]`` that fetches the
         raw bundle bytes.  Injected so unit tests never hit the network.
@@ -85,20 +87,20 @@ class AppService(BusPublisherMixin):
     # in PR1 (it maps correctly to HTTP 403 via BaseView._map_exc and matches
     # the PR1 plan).  A dedicated AppPermissionError is deferred to PR2.
 
-    __slots__ = ("_repo", "_catalog", "_media_path", "_downloader", "_bus")
+    __slots__ = ("_repo", "_catalog", "_apps_path", "_downloader", "_bus")
 
     def __init__(
         self,
         *,
         repo: AbstractAppRepo,
         catalog: AppCatalogService | None,
-        media_path: Path,
+        apps_path: Path,
         downloader: Callable[[str], bytes | Awaitable[bytes]],
         bus: "EventBus | None" = None,
     ) -> None:
         self._repo = repo
         self._catalog = catalog
-        self._media_path = Path(media_path)
+        self._apps_path = Path(apps_path)
         self._downloader = downloader
         self._bus = bus
 
@@ -165,12 +167,12 @@ class AppService(BusPublisherMixin):
         """Download, SHA-256-verify, and unpack a catalog bundle.
 
         Shared by :meth:`install` and :meth:`update_app` so the full security
-        pipeline (sha256 + media-root containment + path-traversal guard) runs
+        pipeline (sha256 + apps-root containment + path-traversal guard) runs
         on both code paths.
 
         Returns ``(manifest, bundle_rel_path, actual_sha256)`` where
-        ``bundle_rel_path`` is the relative path under ``media_path``
-        (e.g. ``"apps/chess/2.0.0"``) and ``actual_sha256`` is the verified
+        ``bundle_rel_path`` is the relative path under ``apps_path``
+        (e.g. ``"chess/2.0.0"``) and ``actual_sha256`` is the verified
         hex digest.
 
         Raises:
@@ -196,12 +198,12 @@ class AppService(BusPublisherMixin):
             )
 
         # Destination directory — validate containment BEFORE creating it so a
-        # malicious catalog with app_id="../../etc" can't escape media_path.
-        dest = self._media_path / "apps" / app_id / entry.latest_version
-        media_root = self._media_path.resolve()
-        if not dest.resolve().is_relative_to(media_root):
+        # malicious catalog with app_id="../../etc" can't escape apps_path.
+        dest = self._apps_path / app_id / entry.latest_version
+        apps_root = self._apps_path.resolve()
+        if not dest.resolve().is_relative_to(apps_root):
             raise AppIntegrityError(
-                f"catalog path escapes media root: "
+                f"catalog path escapes apps root: "
                 f"app_id={app_id!r}, version={entry.latest_version!r}"
             )
 
@@ -231,7 +233,7 @@ class AppService(BusPublisherMixin):
                 f"Invalid manifest.json in bundle for {app_id!r}: {exc}"
             ) from exc
 
-        bundle_rel = f"apps/{app_id}/{entry.latest_version}"
+        bundle_rel = f"{app_id}/{entry.latest_version}"
         return manifest, bundle_rel, actual_sha
 
     async def install(
@@ -369,12 +371,12 @@ class AppService(BusPublisherMixin):
         await self._repo.update_installed(updated)
 
         # Remove old bundle directory if it differs from the new one
-        old_bundle_dir = self._media_path / existing.bundle_path
-        new_bundle_dir = self._media_path / bundle_rel
-        media_root = self._media_path.resolve()
+        old_bundle_dir = self._apps_path / existing.bundle_path
+        new_bundle_dir = self._apps_path / bundle_rel
+        apps_root = self._apps_path.resolve()
         if (
             old_bundle_dir.resolve() != new_bundle_dir.resolve()
-            and old_bundle_dir.resolve().is_relative_to(media_root)
+            and old_bundle_dir.resolve().is_relative_to(apps_root)
             and await aiofiles.os.path.isdir(str(old_bundle_dir))
         ):
             await asyncio.to_thread(self._rmtree_sync, old_bundle_dir)
@@ -407,11 +409,11 @@ class AppService(BusPublisherMixin):
         # Remove the bundle dir from disk (CPU/I/O-bound → thread).
         # Validate containment before rmtree — stored bundle_path is trusted
         # (written by install()), but defence-in-depth against DB tampering.
-        bundle_dir = self._media_path / existing.bundle_path
-        media_root = self._media_path.resolve()
-        if not bundle_dir.resolve().is_relative_to(media_root):
+        bundle_dir = self._apps_path / existing.bundle_path
+        apps_root = self._apps_path.resolve()
+        if not bundle_dir.resolve().is_relative_to(apps_root):
             log.warning(
-                "uninstall: bundle_path %r escapes media root — skipping rmtree",
+                "uninstall: bundle_path %r escapes apps root — skipping rmtree",
                 existing.bundle_path,
             )
         elif await aiofiles.os.path.isdir(str(bundle_dir)):

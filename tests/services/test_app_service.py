@@ -259,7 +259,7 @@ def make_service(
     svc = AppService(
         repo=repo,
         catalog=stub_catalog,  # type: ignore[arg-type]
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
         bus=bus,
     )
@@ -325,7 +325,7 @@ async def test_install_rejects_sha_mismatch(
     # Nothing in repo
     assert await repo.list_installed() == []
     # Nothing on disk
-    assert not (tmp_path / "apps" / "chess").exists()
+    assert not (tmp_path / "chess").exists()
 
 
 @pytest.mark.asyncio
@@ -346,7 +346,7 @@ async def test_install_unpacks_and_records(
     )
 
     # File on disk
-    index_path = tmp_path / "apps" / "chess" / "1.0.0" / "index.html"
+    index_path = tmp_path / "chess" / "1.0.0" / "index.html"
     assert index_path.exists(), f"expected {index_path} to exist"
 
     # Repo row
@@ -355,7 +355,7 @@ async def test_install_unpacks_and_records(
     assert installed.bundle_sha256 == expected_sha
     assert installed.enabled is True
     assert installed.app_id == "chess"
-    assert installed.bundle_path == "apps/chess/1.0.0"
+    assert installed.bundle_path == "chess/1.0.0"
 
     # Return value
     assert app.app_id == "chess"
@@ -475,7 +475,7 @@ async def test_uninstall_removes_row_and_bundle(
 
     # First install
     await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
-    bundle_dir = tmp_path / "apps" / "chess" / "1.0.0"
+    bundle_dir = tmp_path / "chess" / "1.0.0"
     assert bundle_dir.exists()
 
     # Now uninstall
@@ -595,7 +595,7 @@ async def test_install_no_catalog_raises_integrity_error(
     svc = AppService(
         repo=repo,
         catalog=None,
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
     )
 
@@ -662,7 +662,7 @@ async def test_browse_catalog_no_catalog_returns_empty(
     svc = AppService(
         repo=repo,
         catalog=None,
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
     )
     assert await svc.browse_catalog() == []
@@ -697,11 +697,11 @@ async def test_install_rejects_malicious_app_id(
     tmp_path: Path,
     chess_bundle: tuple[bytes, str],
 ) -> None:
-    """install() must raise AppIntegrityError when catalog app_id escapes media_path.
+    """install() must raise AppIntegrityError when catalog app_id escapes apps_path.
 
     A catalog entry with app_id='../../etc' would compute a dest path that
-    resolves outside media_path.  The containment check must catch this BEFORE
-    any directory is created outside the media root.
+    resolves outside apps_path.  The containment check must catch this BEFORE
+    any directory is created outside the apps root.
     """
     bundle_bytes, sha = chess_bundle
     malicious_entry = AppCatalogEntry(
@@ -716,7 +716,7 @@ async def test_install_rejects_malicious_app_id(
     )
     svc, repo = make_service(tmp_path, [malicious_entry], bundle_bytes)
 
-    with pytest.raises(AppIntegrityError, match="escapes media root"):
+    with pytest.raises(AppIntegrityError, match="escapes apps root"):
         await svc.install(
             "../../etc",
             actor_is_admin=True,
@@ -727,10 +727,7 @@ async def test_install_rejects_malicious_app_id(
     assert await repo.list_installed() == []
     # Nothing created outside tmp_path (the resolved etc dir must not exist due
     # to us; we just verify the dest inside tmp_path was not created)
-    assert (
-        not (tmp_path / "apps").exists()
-        or not (tmp_path / "apps" / "../../etc").exists()
-    )
+    assert not (tmp_path / "../../etc").exists()
 
 
 @pytest.mark.asyncio
@@ -782,7 +779,7 @@ async def test_partial_dir_removed_after_failed_install(
         await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
 
     # The partial dest dir must have been cleaned up
-    dest = tmp_path / "apps" / "chess" / "1.0.0"
+    dest = tmp_path / "chess" / "1.0.0"
     assert not dest.exists(), f"partial bundle dir was not cleaned up: {dest}"
     # Nothing in repo
     assert await repo.list_installed() == []
@@ -1009,7 +1006,7 @@ async def test_list_updates_returns_updatable_app(
     svc2 = AppService(
         repo=repo,
         catalog=stub,  # type: ignore[arg-type]
-        media_path=tmp_path / "svc2",
+        apps_path=tmp_path / "svc2",
         downloader=downloader,
     )
 
@@ -1048,7 +1045,7 @@ async def test_list_updates_no_catalog_returns_empty(
     svc = AppService(
         repo=repo,
         catalog=None,
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
     )
     assert await svc.list_updates() == []
@@ -1090,7 +1087,7 @@ async def test_update_app_requires_admin(
     svc2 = AppService(
         repo=repo,
         catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=svc._downloader,
     )
 
@@ -1114,7 +1111,7 @@ async def test_update_app_raises_not_found_when_not_installed(
     svc = AppService(
         repo=repo,
         catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
     )
 
@@ -1141,17 +1138,17 @@ async def test_update_app_upgrades_to_new_version(
     )
     await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
 
-    old_bundle_dir = tmp_path / "install" / "apps" / "chess" / "1.0.0"
+    old_bundle_dir = tmp_path / "install" / "chess" / "1.0.0"
     assert old_bundle_dir.exists()
 
-    # Now build a service with the v2 catalog, same repo, same media_path
+    # Now build a service with the v2 catalog, same repo, same apps_path
     async def downloader(url: str) -> bytes:
         return bundle_bytes
 
     svc_v2 = AppService(
         repo=repo,
         catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
-        media_path=tmp_path / "install",
+        apps_path=tmp_path / "install",
         downloader=downloader,
         bus=bus,
     )
@@ -1161,10 +1158,10 @@ async def test_update_app_upgrades_to_new_version(
     # Version updated in return value and repo
     assert updated.version == "2.0.0"
     assert updated.bundle_sha256 == sha
-    assert updated.bundle_path == "apps/chess/2.0.0"
+    assert updated.bundle_path == "chess/2.0.0"
 
     # New bundle dir unpacked
-    new_bundle_dir = tmp_path / "install" / "apps" / "chess" / "2.0.0"
+    new_bundle_dir = tmp_path / "install" / "chess" / "2.0.0"
     assert new_bundle_dir.exists()
     assert (new_bundle_dir / "index.html").exists()
 
@@ -1219,7 +1216,7 @@ async def test_update_app_preserves_enabled_and_installed_by(
     svc_v2 = AppService(
         repo=repo,
         catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
     )
 
@@ -1261,7 +1258,7 @@ async def test_update_app_sha_mismatch_raises_integrity_error(
     svc_v2 = AppService(
         repo=repo,
         catalog=_StubCatalog([entry_v2_bad]),  # type: ignore[arg-type]
-        media_path=tmp_path,
+        apps_path=tmp_path,
         downloader=downloader,
     )
 
