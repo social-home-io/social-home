@@ -13,6 +13,7 @@ describe('visibleSettingsTabs', () => {
       'about',
       'theme',
       'links',
+      'age',
       'bots',
     ])
   })
@@ -24,5 +25,8 @@ describe('visibleSettingsTabs', () => {
     expect(tabs).toEqual(['general', 'about', 'bots'])
     expect(tabs).not.toContain('theme')
     expect(tabs).not.toContain('links')
+    // Age & safety is host-local (the host enforces the gate on join), so a
+    // remote stub must not offer a control that would only mutate the stub.
+    expect(tabs).not.toContain('age')
   })
 })

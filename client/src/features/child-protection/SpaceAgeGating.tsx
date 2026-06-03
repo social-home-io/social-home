@@ -84,9 +84,10 @@ export function SpaceAgeGating({ spaceId }: { spaceId: string }) {
     <div class="sh-age-gating sh-card">
       <h4>Age gate</h4>
       <p class="sh-muted">
-        Minors whose declared age is below <code>min_age</code> are
-        blocked from joining this space. The audience label drives how
-        the space appears in public discovery (§24.7).
+        Children with child protection enabled are blocked from joining
+        this space when their age is below the minimum you set here. The
+        audience label is a hint for how the space appears in public
+        discovery — it doesn't block anyone on its own.
       </p>
       <div class="sh-form-row">
         <label>
