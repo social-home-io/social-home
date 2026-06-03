@@ -382,10 +382,24 @@ emoji, features, ban/unban, archive/unarchive) remain single-admin.
 
 ## Age gate
 
-`SPACE_AGE_GATE_UPDATED` propagates changes to a space's minimum-age
-requirement (§child-protection). Members below the threshold on any
-federated HFS are removed; the event carries the new threshold and a
-reason code.
+A space's `min_age` (§CP.F1 child-protection) is enforced on **every**
+member-seating path so a protected minor below the threshold can't be
+seated — locally (`add_member`, `approve_join_request`, `accept_invite_token`,
+`accept_local_invite`, `subscribe`) **and** cross-household
+(`accept_remote_invite`).
+
+For a member household to enforce the host's gate locally it must know
+`min_age`, so the gate **federates** two ways (the same additive/fail-soft
+pattern as `allowed_post_types` — an older sender omitting the field →
+`min_age` 0 → no restriction):
+
+- **Join time:** `min_age` + `target_audience` ride in the `space_meta`
+  snapshot (`_space_metadata_for_federation`) carried by the §D1b invite, so
+  a joiner's stub knows the gate before it seats anyone.
+- **Ongoing changes:** when the host changes the gate, `SPACE_AGE_GATE_UPDATED`
+  broadcasts the new `{min_age, target_audience}` to member households, which
+  update their stub (`space_membership._on_age_gate`). The host is the only
+  authority that broadcasts it; a member stub never does.
 
 ## Mesh routing (SPACE_ROUTED)
 

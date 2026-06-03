@@ -1931,17 +1931,10 @@ class SpaceService(SpaceMemberGuardMixin):
             raise ValueError("not a cross-household invite")
         # §CP.F1 — block an under-age protected minor BEFORE we send the
         # ACCEPT envelope, so the host never sees a join the invitee's
-        # household refuses to seat (no split-brain).
-        #
-        # KNOWN LIMITATION (tracked follow-up): for a *remote-hosted* space
-        # the local stub's ``min_age`` is currently 0 because the host's age
-        # gate is NOT yet federated into ``_space_metadata_for_federation``
-        # — so this check no-ops for cross-household spaces today. It is
-        # correct and ready for when ``min_age`` joins the federated metadata
-        # (same additive/fail-soft pattern as ``allowed_post_types``). The
-        # locally-hosted seating paths (add_member / approve_join_request /
-        # accept_invite_token / accept_local_invite / subscribe) ARE fully
-        # enforced.
+        # household refuses to seat (no split-brain). The host's ``min_age``
+        # rides in the invite's ``space_meta`` and is persisted on the stub
+        # (see ``_space_metadata_for_federation`` / ``stub_space_from_metadata``),
+        # so the gate is effective for cross-household spaces too.
         if self._child_protection is not None:
             await self._child_protection.check_space_age_gate(
                 invite["space_id"],
@@ -3285,6 +3278,12 @@ def _space_metadata_for_federation(space: Space) -> dict:
             "allowed_post_types": list(space.features.allowed_post_types),
         },
         "tz": space.tz,
+        # §CP.F1 — federate the host's age gate so member households enforce
+        # it on their own join paths (a protected minor below ``min_age`` is
+        # refused locally). Missing on an older sender → stub defaults to
+        # min_age=0 (no restriction), so this is additive + fail-soft.
+        "min_age": space.min_age,
+        "target_audience": space.target_audience,
         "cover_hash": space.cover_hash,
         "icon_hash": space.icon_hash,
         "about_markdown": space.about_markdown,
@@ -3511,6 +3510,11 @@ def stub_space_from_metadata(
         icon_hash=meta.get("icon_hash"),
         about_markdown=meta.get("about_markdown"),
         archived=bool(meta.get("archived", False)),
+        # §CP.F1 — carry the host's age gate into the stub so the joiner
+        # household enforces it locally. Fail-soft: older sender omits it
+        # → min_age 0 (no restriction).
+        min_age=int(meta.get("min_age") or 0),
+        target_audience=str(meta.get("target_audience") or "all"),
     )
 
 

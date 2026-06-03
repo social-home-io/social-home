@@ -1824,6 +1824,58 @@ async def test_archive_federates_via_space_meta(stack):
     assert stub.archived is True
 
 
+async def test_min_age_federates_via_space_meta_and_persists(stack):
+    """§CP.F1 — the host's age gate rides the federation metadata, the stub
+    carries it, and a save()/get() round-trip persists it (so a member
+    household's join paths can enforce the host's gate locally)."""
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_repo.update_age_gate(
+        space.id,
+        min_age=18,
+        target_audience="adult",
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.min_age == 18  # _row_to_space reads the column
+
+    meta = _space_metadata_for_federation(refreshed)
+    assert meta["min_age"] == 18
+    assert meta["target_audience"] == "adult"
+
+    stub = stub_space_from_metadata(
+        "remote-sp",
+        host_instance_id="remote-host",
+        meta=meta,
+    )
+    assert stub.min_age == 18
+    assert stub.target_audience == "adult"
+    # Persist the stub and confirm save()/get() round-trips min_age (the
+    # gate reads it from the DB, so it must survive the upsert).
+    await stack.space_repo.save(stub)
+    seated = await stack.space_repo.get("remote-sp")
+    assert seated.min_age == 18
+    assert seated.target_audience == "adult"
+
+
+async def test_min_age_missing_from_meta_defaults_to_zero(stack):
+    """Fail-soft: an older sender omits min_age → stub defaults to 0 (no
+    restriction), matching the pre-federation behaviour."""
+    from socialhome.services.space_service import stub_space_from_metadata
+
+    stub = stub_space_from_metadata(
+        "sp-x",
+        host_instance_id="h",
+        meta={"name": "Legacy"},
+    )
+    assert stub.min_age == 0
+    assert stub.target_audience == "all"
+
+
 async def test_icon_hash_federates_via_space_meta(stack):
     """icon_hash rides the federation metadata + the stub carries it, so a
     member household renders the host's icon (after the bytes arrive via
