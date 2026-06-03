@@ -17635,10 +17635,17 @@ a.sh-btn--ghost:hover {
 /* Grid of installed app cards */
 .sh-apps-page { padding-bottom: var(--sh-space-xl); }
 .sh-apps-section { margin-top: var(--sh-space-lg); }
+.sh-apps-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sh-space-sm);
+  margin-bottom: var(--sh-space-sm);
+}
 .sh-apps-section__title {
   font-size: var(--sh-font-size-md);
   font-weight: 600;
-  margin: 0 0 var(--sh-space-sm);
+  margin: 0;
 }
 .sh-apps-grid {
   display: grid;
@@ -17743,6 +17750,18 @@ a.sh-btn--ghost:hover {
 .sh-chip--muted {
   background: color-mix(in srgb, var(--sh-text-muted) 10%, transparent);
   color: var(--sh-text-muted);
+}
+.sh-chip--update {
+  background: color-mix(in srgb, var(--sh-warning, #f59e0b) 15%, transparent);
+  color: color-mix(in srgb, var(--sh-warning, #f59e0b) 80%, var(--sh-text));
+  border-color: color-mix(in srgb, var(--sh-warning, #f59e0b) 35%, transparent);
+}
+.sh-app-card__update-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  flex-wrap: wrap;
+  margin: var(--sh-space-xs) 0;
 }
 
 /* ───── AppHost — sandboxed iframe launcher (§Apps) ─────────────────────── */

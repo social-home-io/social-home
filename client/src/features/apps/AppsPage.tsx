@@ -13,16 +13,21 @@ import { currentUser } from '@/store/auth'
 import {
   installedApps,
   catalog,
+  updates,
+  updatesChecking,
   appsLoading,
   catalogLoading,
   appsError,
   catalogError,
   loadInstalled,
   loadCatalog,
+  loadUpdates,
+  updateApp,
   installApp,
   uninstallApp,
   setEnabled,
   type InstalledApp,
+  type AppUpdate,
   type CatalogEntry,
 } from '@/store/apps'
 import { Button } from '@/components/Button'
@@ -49,6 +54,7 @@ export default function AppsPage() {
 
   useEffect(() => {
     void loadInstalled()
+    void loadUpdates()
     if (isAdmin) void loadCatalog()
   }, [])
 
@@ -67,9 +73,22 @@ export default function AppsPage() {
 // ─── Installed section ───────────────────────────────────────────────────────
 
 function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
-  const loading = appsLoading.value
-  const error   = appsError.value
-  const apps    = installedApps.value
+  const loading      = appsLoading.value
+  const error        = appsError.value
+  const apps         = installedApps.value
+  const updateList   = updates.value
+  const checking     = updatesChecking.value
+
+  const handleCheckUpdates = async () => {
+    await loadUpdates(isAdmin)
+    const count = updates.value.length
+    showToast(
+      count > 0
+        ? `${count} update${count === 1 ? '' : 's'} available`
+        : 'All apps are up to date',
+      'info',
+    )
+  }
 
   if (loading) {
     return (
@@ -93,10 +112,23 @@ function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
   }
 
   const visible = isAdmin ? apps : apps.filter(a => a.enabled)
+  // Build a lookup map: app_id → AppUpdate (only for apps that have updates)
+  const updateMap = new Map<string, AppUpdate>(updateList.map(u => [u.app_id, u]))
 
   return (
     <section class="sh-apps-section">
-      <h2 class="sh-apps-section__title">Installed</h2>
+      <div class="sh-apps-section__header">
+        <h2 class="sh-apps-section__title">Installed</h2>
+        {isAdmin && (
+          <Button
+            variant="secondary"
+            loading={checking}
+            onClick={() => { void handleCheckUpdates() }}
+          >
+            Check for updates
+          </Button>
+        )}
+      </div>
       {visible.length === 0 ? (
         <div class="sh-apps-empty">
           <p class="sh-muted">No apps installed yet.</p>
@@ -109,7 +141,12 @@ function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
       ) : (
         <div class="sh-apps-grid">
           {visible.map(app => (
-            <AppCard key={app.app_id} app={app} isAdmin={isAdmin} />
+            <AppCard
+              key={app.app_id}
+              app={app}
+              isAdmin={isAdmin}
+              update={updateMap.get(app.app_id) ?? null}
+            />
           ))}
         </div>
       )}
@@ -117,10 +154,19 @@ function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
   )
 }
 
-function AppCard({ app, isAdmin }: { app: InstalledApp; isAdmin: boolean }) {
+function AppCard({
+  app,
+  isAdmin,
+  update,
+}: {
+  app: InstalledApp
+  isAdmin: boolean
+  update: AppUpdate | null
+}) {
   const [uninstallOpen, setUninstallOpen] = useState(false)
   const [togglingEnabled, setTogglingEnabled] = useState(false)
   const [uninstalling, setUninstalling]   = useState(false)
+  const [updating, setUpdating]           = useState(false)
 
   const handleToggle = async () => {
     setTogglingEnabled(true)
@@ -143,6 +189,19 @@ function AppCard({ app, isAdmin }: { app: InstalledApp; isAdmin: boolean }) {
       showToast((err as Error).message ?? 'Could not uninstall app.', 'error')
     } finally {
       setUninstalling(false)
+    }
+  }
+
+  const handleUpdate = async () => {
+    if (!update) return
+    setUpdating(true)
+    try {
+      await updateApp(app.app_id)
+      showToast(`Updated ${app.name} to v${update.latest_version}`, 'success')
+    } catch (err: unknown) {
+      showToast((err as Error).message ?? 'Could not update app.', 'error')
+    } finally {
+      setUpdating(false)
     }
   }
 
@@ -178,6 +237,23 @@ function AppCard({ app, isAdmin }: { app: InstalledApp; isAdmin: boolean }) {
           {app.capabilities.map(cap => (
             <span key={cap} class="sh-chip sh-chip--muted">{cap}</span>
           ))}
+        </div>
+      )}
+
+      {update && (
+        <div class="sh-app-card__update-row">
+          <span class="sh-chip sh-chip--update" aria-label={`Update available: v${update.latest_version}`}>
+            Update available → v{update.latest_version}
+          </span>
+          {isAdmin && (
+            <Button
+              variant="primary"
+              loading={updating}
+              onClick={() => { void handleUpdate() }}
+            >
+              Update
+            </Button>
+          )}
         </div>
       )}
 

@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   installedApps,
   catalog,
+  updates,
+  updatesChecking,
   loadInstalled,
   loadCatalog,
+  loadUpdates,
+  updateApp,
   installApp,
   uninstallApp,
   setEnabled,
@@ -125,5 +129,77 @@ describe('apps store', () => {
     expect(opts.method).toBe('PATCH')
     expect(JSON.parse(opts.body as string)).toEqual({ enabled: false })
     expect(installedApps.value[0].enabled).toBe(false)
+  })
+
+  // ── loadUpdates ─────────────────────────────────────────────────
+
+  it('loadUpdates calls GET /api/apps/updates and populates updates signal', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        updates: [
+          { app_id: 'a1', name: 'Alpha', current_version: '1.0', latest_version: '1.1' },
+        ],
+      }),
+    )
+    await loadUpdates()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('api/apps/updates')
+    expect(updates.value).toHaveLength(1)
+    expect(updates.value[0].app_id).toBe('a1')
+    expect(updates.value[0].latest_version).toBe('1.1')
+  })
+
+  it('loadUpdates(true) calls GET /api/apps/updates?refresh=1', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ updates: [] }))
+    await loadUpdates(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('api/apps/updates?refresh=1')
+  })
+
+  it('loadUpdates sets updates to [] on API error and does not throw', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'SERVER_ERROR', detail: 'boom' } }, { status: 500 }),
+    )
+    await expect(loadUpdates()).resolves.toBeUndefined()
+    expect(updates.value).toHaveLength(0)
+  })
+
+  it('loadUpdates clears updatesChecking after completion', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ updates: [] }))
+    await loadUpdates()
+    expect(updatesChecking.value).toBe(false)
+  })
+
+  // ── updateApp ───────────────────────────────────────────────────
+
+  it('updateApp calls POST /api/apps/{id}/update then refreshes installed + updates', async () => {
+    const orig = { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null }
+    const patched = { ...orig, version: '1.1' }
+    installedApps.value = [orig]
+
+    // POST /api/apps/a1/update → updated app
+    fetchMock.mockResolvedValueOnce(jsonResponse(patched))
+    // loadInstalled
+    fetchMock.mockResolvedValueOnce(jsonResponse({ apps: [patched] }))
+    // loadUpdates
+    fetchMock.mockResolvedValueOnce(jsonResponse({ updates: [] }))
+
+    await updateApp('a1')
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('api/apps/a1/update')
+    expect(opts.method).toBe('POST')
+    expect(installedApps.value[0].version).toBe('1.1')
+    expect(updates.value).toHaveLength(0)
+  })
+
+  it('updateApp rethrows ApiError for the caller to handle', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'NOT_FOUND', detail: 'app not found' } }, { status: 404 }),
+    )
+    await expect(updateApp('missing')).rejects.toThrow()
   })
 })

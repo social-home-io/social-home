@@ -1,8 +1,9 @@
 /**
- * Apps store — installed apps and catalog browsing.
+ * Apps store — installed apps, catalog browsing, and update checks.
  *
- * Mirrors ``GET /api/apps`` (installed) and ``GET /api/apps/catalog``
- * (admin-only browse surface) so the AppsPage and the dashboard card
+ * Mirrors ``GET /api/apps`` (installed), ``GET /api/apps/catalog``
+ * (admin-only browse surface), and ``GET /api/apps/updates`` (any member,
+ * ≤24 h cache; admin ``?refresh=1`` forces a live re-fetch) so the AppsPage
  * can render without a per-render fetch round-trip.
  */
 import { signal } from '@preact/signals'
@@ -27,10 +28,19 @@ export interface CatalogEntry {
   capabilities: string[]
 }
 
+export interface AppUpdate {
+  app_id:          string
+  name:            string
+  current_version: string
+  latest_version:  string
+}
+
 export const installedApps   = signal<InstalledApp[]>([])
 export const catalog         = signal<CatalogEntry[]>([])
+export const updates         = signal<AppUpdate[]>([])
 export const appsLoading     = signal(false)
 export const catalogLoading  = signal(false)
+export const updatesChecking = signal(false)
 export const appsError       = signal<string | null>(null)
 export const catalogError    = signal<string | null>(null)
 
@@ -58,6 +68,26 @@ export async function loadCatalog(): Promise<void> {
   } finally {
     catalogLoading.value = false
   }
+}
+
+export async function loadUpdates(force = false): Promise<void> {
+  updatesChecking.value = true
+  try {
+    const url = '/api/apps/updates' + (force ? '?refresh=1' : '')
+    const data = await api.get(url) as { updates: AppUpdate[] }
+    updates.value = data.updates ?? []
+  } catch {
+    updates.value = []
+  } finally {
+    updatesChecking.value = false
+  }
+}
+
+export async function updateApp(appId: string): Promise<void> {
+  const updated = await api.post(`/api/apps/${encodeURIComponent(appId)}/update`) as InstalledApp
+  installedApps.value = installedApps.value.map(a => a.app_id === appId ? updated : a)
+  await loadInstalled()
+  await loadUpdates()
 }
 
 export async function installApp(appId: string): Promise<void> {
@@ -90,10 +120,12 @@ export async function getRuntime(appId: string): Promise<AppRuntime> {
 
 /** Test helper — reset signals without hitting the API. */
 export function _resetAppsForTest(): void {
-  installedApps.value   = []
-  catalog.value         = []
-  appsLoading.value     = false
-  catalogLoading.value  = false
-  appsError.value       = null
-  catalogError.value    = null
+  installedApps.value    = []
+  catalog.value          = []
+  updates.value          = []
+  appsLoading.value      = false
+  catalogLoading.value   = false
+  updatesChecking.value  = false
+  appsError.value        = null
+  catalogError.value     = null
 }

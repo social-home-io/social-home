@@ -940,3 +940,136 @@ async def test_messages_app_not_enabled_403(client, fed_svc):
         headers=_auth(client._tok),
     )
     assert r.status == 403
+
+
+# ── GET /api/apps/updates ─────────────────────────────────────────────────
+
+
+async def test_updates_requires_auth(client):
+    r = await client.get("/api/apps/updates")
+    assert r.status == 401
+
+
+async def test_updates_member_gets_200_force_false(client, monkeypatch):
+    """Non-admin member → 200; list_updates called with force=False."""
+    updates = [
+        {
+            "app_id": "com.example.hello",
+            "name": "Hello App",
+            "current_version": "1.0.0",
+            "latest_version": "2.0.0",
+        }
+    ]
+    mock = AsyncMock(return_value=updates)
+    monkeypatch.setattr(AppService, "list_updates", mock)
+
+    member_tok = await _seed_member(client._db)
+    r = await client.get("/api/apps/updates", headers=_auth(member_tok))
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"updates": updates}
+    mock.assert_awaited_once_with(force=False)
+
+
+async def test_updates_member_refresh_param_ignored(client, monkeypatch):
+    """Non-admin member with ?refresh=1 still calls list_updates(force=False)."""
+    mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(AppService, "list_updates", mock)
+
+    member_tok = await _seed_member(client._db)
+    r = await client.get("/api/apps/updates?refresh=1", headers=_auth(member_tok))
+    assert r.status == 200
+    mock.assert_awaited_once_with(force=False)
+
+
+async def test_updates_admin_refresh_forces_network_fetch(client, monkeypatch):
+    """Admin with ?refresh=1 calls list_updates(force=True)."""
+    mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(AppService, "list_updates", mock)
+
+    r = await client.get("/api/apps/updates?refresh=1", headers=_auth(client._tok))
+    assert r.status == 200
+    mock.assert_awaited_once_with(force=True)
+
+
+async def test_updates_admin_no_refresh_uses_cache(client, monkeypatch):
+    """Admin without ?refresh → list_updates(force=False) (uses cache)."""
+    mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(AppService, "list_updates", mock)
+
+    r = await client.get("/api/apps/updates", headers=_auth(client._tok))
+    assert r.status == 200
+    mock.assert_awaited_once_with(force=False)
+
+
+# ── POST /api/apps/{app_id}/update ───────────────────────────────────────
+
+
+async def test_update_app_requires_auth(client):
+    r = await client.post("/api/apps/com.example.hello/update")
+    assert r.status == 401
+
+
+async def test_update_app_requires_admin(client, monkeypatch):
+    """Non-admin POST → 403 before update_app is called."""
+    mock = AsyncMock(return_value=_make_installed())
+    monkeypatch.setattr(AppService, "update_app", mock)
+
+    member_tok = await _seed_member(client._db)
+    r = await client.post(
+        "/api/apps/com.example.hello/update",
+        headers=_auth(member_tok),
+    )
+    assert r.status == 403
+    mock.assert_not_awaited()
+
+
+async def test_update_app_admin_success_returns_serialized_app(client, monkeypatch):
+    """Admin POST → 200 with the serialized InstalledApp."""
+    app = _make_installed()
+    mock = AsyncMock(return_value=app)
+    monkeypatch.setattr(AppService, "update_app", mock)
+
+    r = await client.post(
+        "/api/apps/com.example.hello/update",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["app_id"] == "com.example.hello"
+    assert body["name"] == "Hello App"
+    assert body["version"] == "1.0.0"
+    assert body["enabled"] is True
+    assert body["capabilities"] == ["read"]
+    assert body["icon"] == "icon.png"
+    mock.assert_awaited_once_with("com.example.hello", actor_is_admin=True)
+
+
+async def test_update_app_not_found_returns_404(client, monkeypatch):
+    monkeypatch.setattr(
+        AppService,
+        "update_app",
+        AsyncMock(side_effect=AppNotFoundError("not installed")),
+    )
+    r = await client.post(
+        "/api/apps/com.example.missing/update",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 404
+    body = await r.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+async def test_update_app_integrity_error_returns_400(client, monkeypatch):
+    monkeypatch.setattr(
+        AppService,
+        "update_app",
+        AsyncMock(side_effect=AppIntegrityError("sha256 mismatch")),
+    )
+    r = await client.post(
+        "/api/apps/com.example.hello/update",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"

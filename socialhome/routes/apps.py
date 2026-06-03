@@ -182,6 +182,43 @@ class AppStoreItemView(BaseView):
         return web.json_response({"status": "ok"})
 
 
+class AppUpdatesView(BaseView):
+    """``GET /api/apps/updates`` — list installed apps with a newer catalog version.
+
+    Any authenticated member may call this endpoint.  Forcing a re-fetch of
+    the remote catalog (``?refresh=1`` or ``?refresh=true``) is restricted to
+    admins because it hits the external network; non-admin callers silently
+    fall back to the ≤24 h cache.
+    """
+
+    async def get(self) -> web.Response:
+        user = self.user
+        refresh = self.request.query.get("refresh")
+        # Force-refresh hits the external catalog — admins only.
+        force = bool(refresh) and user.is_admin
+        svc = self.svc(app_service_key)
+        updates = await svc.list_updates(force=force)
+        return self._json({"updates": updates})
+
+
+class AppUpdateView(BaseView):
+    """``POST /api/apps/{app_id}/update`` — upgrade an app to its latest catalog version.
+
+    Admin-only.  Raises :class:`~socialhome.domain.apps.AppNotFoundError` if
+    the app is not installed; :class:`~socialhome.domain.apps.AppIntegrityError`
+    on bundle-integrity failure (both are mapped centrally by
+    :meth:`~socialhome.routes.base.BaseView._iter`).
+    """
+
+    async def post(self) -> web.Response:
+        user = self.user
+        if not user.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        svc = self.svc(app_service_key)
+        app = await svc.update_app(self.match("app_id"), actor_is_admin=True)
+        return self._json(_serialize(app))
+
+
 class AppPeersView(BaseView):
     """``GET /api/apps/{app_id}/peers`` — list confirmed federation peers."""
 

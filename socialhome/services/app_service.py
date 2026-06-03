@@ -43,7 +43,7 @@ from ..domain.apps import (
     AppQuotaExceededError,
     InstalledApp,
 )
-from ..domain.events import AppInstalled, AppUninstalled
+from ..domain.events import AppInstalled, AppUninstalled, AppUpdated
 from ..domain.space import SpacePermissionError
 from ..repositories.app_repo import AbstractAppRepo
 from .app_catalog_service import AppCatalogService
@@ -119,47 +119,66 @@ class AppService(BusPublisherMixin):
             return []
         return await self._catalog.fetch_catalog()
 
+    async def list_updates(self, *, force: bool = False) -> list[dict]:
+        """Return a list of installed apps that have a newer version in the catalog.
+
+        Each entry is a dict with keys ``app_id``, ``name``,
+        ``current_version``, and ``latest_version``.
+
+        If no catalog is configured, returns an empty list.
+
+        Args:
+            force: Passed through to :meth:`AppCatalogService.fetch_catalog`
+                to bypass the 24-hour cache when ``True``.
+        """
+        if self._catalog is None:
+            return []
+
+        installed = await self._repo.list_installed()
+        if not installed:
+            return []
+
+        entries = await self._catalog.fetch_catalog(force=force)
+        entry_map: dict[str, AppCatalogEntry] = {e.app_id: e for e in entries}
+
+        updates: list[dict] = []
+        for app in installed:
+            entry = entry_map.get(app.app_id)
+            if entry is not None and entry.latest_version != app.version:
+                updates.append(
+                    {
+                        "app_id": app.app_id,
+                        "name": app.name,
+                        "current_version": app.version,
+                        "latest_version": entry.latest_version,
+                    }
+                )
+        return updates
+
     # ─── Mutations ───────────────────────────────────────────────────────────
 
-    async def install(
+    async def _download_verify_unpack(
         self,
         app_id: str,
-        *,
-        actor_is_admin: bool,
-        actor_user_id: str,
-    ) -> InstalledApp:
-        """Download, verify, unpack, and register an app.
+        entry: AppCatalogEntry,
+    ) -> tuple[AppManifest, str, str]:
+        """Download, SHA-256-verify, and unpack a catalog bundle.
 
-        Steps:
-        1. Admin gate.
-        2. Double-install guard → :class:`AppAlreadyInstalledError` if already
-           installed.
-        3. Catalog lookup → :class:`AppNotFoundError` if absent.
-        4. Download bundle bytes via ``self._downloader``.
-        5. SHA-256 verify; raise :class:`AppIntegrityError` on mismatch.
-        6. Media-root containment check on the computed ``dest`` path.
-        7. Safe tar extraction into ``<media_path>/apps/<app_id>/<version>/``.
-        8. Parse ``manifest.json`` from the unpacked dir.
-        9. Build :class:`InstalledApp`, persist, publish :class:`AppInstalled`.
+        Shared by :meth:`install` and :meth:`update_app` so the full security
+        pipeline (sha256 + media-root containment + path-traversal guard) runs
+        on both code paths.
+
+        Returns ``(manifest, bundle_rel_path, actual_sha256)`` where
+        ``bundle_rel_path`` is the relative path under ``media_path``
+        (e.g. ``"apps/chess/2.0.0"``) and ``actual_sha256`` is the verified
+        hex digest.
+
+        Raises:
+            :class:`AppIntegrityError` on sha mismatch, path traversal, or
+            invalid manifest.
+            :class:`OSError` on unrecoverable I/O errors (callers should
+            wrap or re-raise with context).
         """
-        if not actor_is_admin:
-            raise SpacePermissionError("Only admins may install apps")
-
-        # Guard against double-install
-        if await self._repo.get(app_id) is not None:
-            raise AppAlreadyInstalledError(
-                f"App {app_id!r} is already installed; uninstall first to reinstall"
-            )
-
-        if self._catalog is None:
-            raise AppIntegrityError("No app catalog configured")
-
-        # Catalog lookup
-        entries = await self.browse_catalog()
-        entry = next((e for e in entries if e.app_id == app_id), None)
-        if entry is None:
-            raise AppNotFoundError(f"App {app_id!r} not found in catalog")
-
         # Download
         # TODO(PR-followup): MAX_BUNDLE_BYTES cap to prevent zip-bomb / OOM
         result = self._downloader(entry.bundle_url)
@@ -213,6 +232,48 @@ class AppService(BusPublisherMixin):
             ) from exc
 
         bundle_rel = f"apps/{app_id}/{entry.latest_version}"
+        return manifest, bundle_rel, actual_sha
+
+    async def install(
+        self,
+        app_id: str,
+        *,
+        actor_is_admin: bool,
+        actor_user_id: str,
+    ) -> InstalledApp:
+        """Download, verify, unpack, and register an app.
+
+        Steps:
+        1. Admin gate.
+        2. Double-install guard → :class:`AppAlreadyInstalledError` if already
+           installed.
+        3. Catalog lookup → :class:`AppNotFoundError` if absent.
+        4. Download + SHA-256 verify + safe extraction via
+           :meth:`_download_verify_unpack`.
+        5. Build :class:`InstalledApp`, persist, publish :class:`AppInstalled`.
+        """
+        if not actor_is_admin:
+            raise SpacePermissionError("Only admins may install apps")
+
+        # Guard against double-install
+        if await self._repo.get(app_id) is not None:
+            raise AppAlreadyInstalledError(
+                f"App {app_id!r} is already installed; uninstall first to reinstall"
+            )
+
+        if self._catalog is None:
+            raise AppIntegrityError("No app catalog configured")
+
+        # Catalog lookup
+        entries = await self.browse_catalog()
+        entry = next((e for e in entries if e.app_id == app_id), None)
+        if entry is None:
+            raise AppNotFoundError(f"App {app_id!r} not found in catalog")
+
+        manifest, bundle_rel, actual_sha = await self._download_verify_unpack(
+            app_id, entry
+        )
+
         app = InstalledApp(
             app_id=app_id,
             name=entry.name,
@@ -229,6 +290,104 @@ class AppService(BusPublisherMixin):
         await self._emit(AppInstalled(app_id=app_id, name=entry.name))
 
         return app
+
+    async def update_app(
+        self,
+        app_id: str,
+        *,
+        actor_is_admin: bool,
+    ) -> InstalledApp:
+        """Update an installed app to the latest version from the catalog.
+
+        Steps:
+        1. Admin gate.
+        2. Lookup installed app → :class:`AppNotFoundError` if absent.
+        3. Fetch the catalog (force refresh so the check is current).
+        4. If already at the latest version, return the existing row unchanged.
+        5. Download + SHA-256 verify + safe extraction via
+           :meth:`_download_verify_unpack` (same security pipeline as install).
+        6. Update the repo row, preserving ``enabled`` and ``installed_by``.
+        7. Remove the OLD bundle directory from disk.
+        8. Publish :class:`AppUpdated`.
+
+        Args:
+            app_id: The app to update.
+            actor_is_admin: Must be ``True``; raises
+                :class:`SpacePermissionError` otherwise.
+
+        Returns:
+            The updated :class:`InstalledApp` (or the unchanged existing row
+            if already at the latest version).
+
+        Raises:
+            :class:`SpacePermissionError` — caller is not an admin.
+            :class:`AppNotFoundError` — app is not installed.
+            :class:`AppIntegrityError` — sha mismatch, path traversal,
+                or invalid manifest in the new bundle.
+        """
+        if not actor_is_admin:
+            raise SpacePermissionError("Only admins may update apps")
+
+        existing = await self._repo.get(app_id)
+        if existing is None:
+            raise AppNotFoundError(f"App {app_id!r} is not installed")
+
+        if self._catalog is None:
+            log.warning("update_app: no catalog configured, cannot check for updates")
+            return existing
+
+        # Force-fetch so we always use a fresh catalog for an explicit update
+        entries = await self._catalog.fetch_catalog(force=True)
+        entry = next((e for e in entries if e.app_id == app_id), None)
+        if entry is None:
+            raise AppNotFoundError(f"App {app_id!r} not found in catalog")
+
+        if entry.latest_version == existing.version:
+            log.info(
+                "update_app: %r is already at latest version %r",
+                app_id,
+                existing.version,
+            )
+            return existing
+
+        manifest, bundle_rel, actual_sha = await self._download_verify_unpack(
+            app_id, entry
+        )
+
+        updated = InstalledApp(
+            app_id=app_id,
+            name=entry.name,
+            version=entry.latest_version,
+            enabled=existing.enabled,
+            manifest=manifest,
+            bundle_path=bundle_rel,
+            bundle_sha256=actual_sha,
+            source_url=entry.bundle_url,
+            installed_by=existing.installed_by,
+            installed_at=existing.installed_at,
+        )
+        await self._repo.update_installed(updated)
+
+        # Remove old bundle directory if it differs from the new one
+        old_bundle_dir = self._media_path / existing.bundle_path
+        new_bundle_dir = self._media_path / bundle_rel
+        media_root = self._media_path.resolve()
+        if (
+            old_bundle_dir.resolve() != new_bundle_dir.resolve()
+            and old_bundle_dir.resolve().is_relative_to(media_root)
+            and await aiofiles.os.path.isdir(str(old_bundle_dir))
+        ):
+            await asyncio.to_thread(self._rmtree_sync, old_bundle_dir)
+
+        await self._emit(
+            AppUpdated(
+                app_id=app_id,
+                name=entry.name,
+                old_version=existing.version,
+                new_version=entry.latest_version,
+            )
+        )
+        return updated
 
     async def uninstall(self, app_id: str, *, actor_is_admin: bool) -> None:
         """Remove an installed app from disk and the registry.

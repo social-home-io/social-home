@@ -29,7 +29,7 @@ from socialhome.domain.apps import (
     AppQuotaExceededError,
     InstalledApp,
 )
-from socialhome.domain.events import AppInstalled, AppUninstalled
+from socialhome.domain.events import AppInstalled, AppUninstalled, AppUpdated
 from socialhome.domain.space import SpacePermissionError
 from socialhome.services.app_service import AppService
 
@@ -145,6 +145,21 @@ class _FakeAppRepo:
             installed_at=existing.installed_at,
         )
 
+    async def update_installed(self, app: InstalledApp) -> None:
+        existing = self._apps[app.app_id]
+        self._apps[app.app_id] = InstalledApp(
+            app_id=app.app_id,
+            name=app.name,
+            version=app.version,
+            enabled=existing.enabled,
+            manifest=app.manifest,
+            bundle_path=app.bundle_path,
+            bundle_sha256=app.bundle_sha256,
+            source_url=app.source_url,
+            installed_by=existing.installed_by,
+            installed_at=existing.installed_at,
+        )
+
     async def uninstall(self, app_id: str) -> None:
         self._apps.pop(app_id, None)
 
@@ -188,8 +203,10 @@ class _StubCatalog:
 
     def __init__(self, entries: list[AppCatalogEntry]) -> None:
         self._entries = entries
+        self.fetch_call_count: int = 0
 
-    async def fetch_catalog(self) -> list[AppCatalogEntry]:
+    async def fetch_catalog(self, *, force: bool = False) -> list[AppCatalogEntry]:
+        self.fetch_call_count += 1
         return list(self._entries)
 
 
@@ -945,3 +962,313 @@ async def test_store_delete(
     # store_list should also not include it
     listing = await svc.store_list("chess", "user1")
     assert "key_to_delete" not in listing
+
+
+# ─── list_updates + update_app tests ─────────────────────────────────────────
+
+
+def chess_catalog_entry_v2(chess_bundle_v1: tuple[bytes, str]) -> AppCatalogEntry:
+    """Return a catalog entry with version 2.0.0 pointing at the chess bundle."""
+    _, sha = chess_bundle_v1
+    return AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="2.0.0",
+        description="Play chess v2",
+        icon_url=None,
+        capabilities=("storage",),
+        bundle_url="https://example.com/chess-2.0.0.tgz",
+        bundle_sha256=sha,
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_updates_returns_updatable_app(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """list_updates() returns apps whose catalog version is newer than installed."""
+    bundle_bytes, sha = chess_bundle
+    # Catalog has version 2.0.0 but we install 1.0.0
+    entry_v2 = chess_catalog_entry_v2(chess_bundle)
+    svc, _ = make_service(tmp_path, [entry_v2], bundle_bytes)
+
+    # Install via the v1 entry so the installed version is 1.0.0
+    svc_v1, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # Build a service whose repo already has chess@1.0.0 but catalog says 2.0.0
+    repo = _FakeAppRepo()
+    repo._apps["chess"] = await svc_v1._repo.get("chess")  # type: ignore[attr-defined]
+    stub = _StubCatalog([entry_v2])
+
+    async def downloader(url: str) -> bytes:
+        return bundle_bytes
+
+    svc2 = AppService(
+        repo=repo,
+        catalog=stub,  # type: ignore[arg-type]
+        media_path=tmp_path / "svc2",
+        downloader=downloader,
+    )
+
+    updates = await svc2.list_updates()
+    assert len(updates) == 1
+    assert updates[0]["app_id"] == "chess"
+    assert updates[0]["current_version"] == "1.0.0"
+    assert updates[0]["latest_version"] == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_list_updates_returns_empty_when_up_to_date(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """list_updates() returns [] when all installed apps are at the latest version."""
+    bundle_bytes, _ = chess_bundle
+    svc, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    updates = await svc.list_updates()
+    assert updates == []
+
+
+@pytest.mark.asyncio
+async def test_list_updates_no_catalog_returns_empty(
+    tmp_path: Path,
+) -> None:
+    """list_updates() returns [] when no catalog is configured."""
+    repo = _FakeAppRepo()
+
+    async def downloader(url: str) -> bytes:
+        return b""
+
+    svc = AppService(
+        repo=repo,
+        catalog=None,
+        media_path=tmp_path,
+        downloader=downloader,
+    )
+    assert await svc.list_updates() == []
+
+
+@pytest.mark.asyncio
+async def test_list_updates_force_passes_through(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """list_updates(force=True) passes force=True to the catalog."""
+    bundle_bytes, _ = chess_bundle
+    svc, _ = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    # Install an app so list_updates actually calls the catalog
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # Reset the counter after install (which calls browse_catalog internally)
+    stub: _StubCatalog = svc._catalog  # type: ignore[assignment]
+    stub.fetch_call_count = 0
+
+    await svc.list_updates(force=True)
+    assert stub.fetch_call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_update_app_requires_admin(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """update_app() with actor_is_admin=False must raise SpacePermissionError."""
+    bundle_bytes, _ = chess_bundle
+    entry_v2 = chess_catalog_entry_v2(chess_bundle)
+    svc, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # Swap in a v2 catalog
+    svc2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
+        media_path=tmp_path,
+        downloader=svc._downloader,
+    )
+
+    with pytest.raises(SpacePermissionError):
+        await svc2.update_app("chess", actor_is_admin=False)
+
+
+@pytest.mark.asyncio
+async def test_update_app_raises_not_found_when_not_installed(
+    tmp_path: Path,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """update_app() on a non-installed app raises AppNotFoundError."""
+    bundle_bytes, sha = chess_bundle
+    entry_v2 = chess_catalog_entry_v2(chess_bundle)
+    repo = _FakeAppRepo()
+
+    async def downloader(url: str) -> bytes:
+        return bundle_bytes
+
+    svc = AppService(
+        repo=repo,
+        catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
+        media_path=tmp_path,
+        downloader=downloader,
+    )
+
+    with pytest.raises(AppNotFoundError):
+        await svc.update_app("chess", actor_is_admin=True)
+
+
+@pytest.mark.asyncio
+async def test_update_app_upgrades_to_new_version(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """Happy path: update_app installs new version, removes old dir, publishes event."""
+    bundle_bytes, sha = chess_bundle
+    bus = _RecordingBus()
+
+    # Build a v2 entry — same bundle bytes/sha so the sha check passes
+    entry_v2 = chess_catalog_entry_v2(chess_bundle)
+
+    # Install v1 first using original entry
+    svc_v1, repo = make_service(
+        tmp_path / "install", [catalog_entry], bundle_bytes, bus=bus
+    )
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    old_bundle_dir = tmp_path / "install" / "apps" / "chess" / "1.0.0"
+    assert old_bundle_dir.exists()
+
+    # Now build a service with the v2 catalog, same repo, same media_path
+    async def downloader(url: str) -> bytes:
+        return bundle_bytes
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
+        media_path=tmp_path / "install",
+        downloader=downloader,
+        bus=bus,
+    )
+
+    updated = await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # Version updated in return value and repo
+    assert updated.version == "2.0.0"
+    assert updated.bundle_sha256 == sha
+    assert updated.bundle_path == "apps/chess/2.0.0"
+
+    # New bundle dir unpacked
+    new_bundle_dir = tmp_path / "install" / "apps" / "chess" / "2.0.0"
+    assert new_bundle_dir.exists()
+    assert (new_bundle_dir / "index.html").exists()
+
+    # Old bundle dir removed
+    assert not old_bundle_dir.exists()
+
+    # AppUpdated event published
+    updated_events = [e for e in bus.published if isinstance(e, AppUpdated)]
+    assert len(updated_events) == 1
+    evt = updated_events[0]
+    assert evt.app_id == "chess"
+    assert evt.old_version == "1.0.0"
+    assert evt.new_version == "2.0.0"
+
+
+@pytest.mark.asyncio
+async def test_update_app_returns_existing_when_already_latest(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """update_app() returns existing app unchanged when already at latest version."""
+    bundle_bytes, _ = chess_bundle
+    svc, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    result = await svc.update_app("chess", actor_is_admin=True)
+    assert result.version == "1.0.0"
+    assert result.app_id == "chess"
+
+
+@pytest.mark.asyncio
+async def test_update_app_preserves_enabled_and_installed_by(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """update_app() preserves the enabled flag and installed_by from the existing row."""
+    bundle_bytes, sha = chess_bundle
+    entry_v2 = chess_catalog_entry_v2(chess_bundle)
+
+    # Install v1 as admin1 and then disable the app
+    svc_v1, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    await svc_v1.set_enabled("chess", enabled=False, actor_is_admin=True)
+
+    assert (await repo.get("chess")).enabled is False  # type: ignore[union-attr]
+
+    async def downloader(url: str) -> bytes:
+        return bundle_bytes
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([entry_v2]),  # type: ignore[arg-type]
+        media_path=tmp_path,
+        downloader=downloader,
+    )
+
+    updated = await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # enabled and installed_by are preserved
+    assert updated.enabled is False
+    assert updated.installed_by == "admin1"
+
+
+@pytest.mark.asyncio
+async def test_update_app_sha_mismatch_raises_integrity_error(
+    tmp_path: Path,
+    catalog_entry: AppCatalogEntry,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """update_app() raises AppIntegrityError if the downloaded bundle sha256 doesn't match."""
+    bundle_bytes, _ = chess_bundle
+
+    # Install v1
+    svc_v1, repo = make_service(tmp_path, [catalog_entry], bundle_bytes)
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+
+    # v2 entry with wrong sha
+    entry_v2_bad = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="2.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-2.0.0.tgz",
+        bundle_sha256="a" * 64,  # wrong hash
+    )
+
+    async def downloader(url: str) -> bytes:
+        return bundle_bytes
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([entry_v2_bad]),  # type: ignore[arg-type]
+        media_path=tmp_path,
+        downloader=downloader,
+    )
+
+    with pytest.raises(AppIntegrityError):
+        await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # Repo row still has old version
+    app = await repo.get("chess")
+    assert app is not None
+    assert app.version == "1.0.0"
