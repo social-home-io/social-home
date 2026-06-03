@@ -107,6 +107,11 @@ class Config:
     data_dir: str = DEFAULT_DATA_DIR
     db_path: str = f"{DEFAULT_DATA_DIR}/{DEFAULT_DB_FILENAME}"
     media_path: str = f"{DEFAULT_DATA_DIR}/{DEFAULT_MEDIA_DIR}"
+    # Dedicated directory for app bundles — separate from user media so
+    # backups, quotas, and filesystem permissions can be scoped per concern.
+    # Default: ``<data_dir>/apps``.  Override with ``SH_APPS_PATH`` or
+    # ``apps_path`` in the TOML (same shape as ``media_path``).
+    apps_path: str = f"{DEFAULT_DATA_DIR}/apps"
 
     # Display / identification
     instance_name: str = "My Home"
@@ -296,6 +301,13 @@ class Config:
                     "media_path",
                     "SH_MEDIA_PATH",
                     f"{data_dir}/{DEFAULT_MEDIA_DIR}",
+                )
+            ),
+            apps_path=str(
+                _opt(
+                    "apps_path",
+                    "SH_APPS_PATH",
+                    f"{data_dir}/apps",
                 )
             ),
             instance_name=_str_opt("instance_name", "SH_INSTANCE_NAME", "My Home"),

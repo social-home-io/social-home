@@ -174,7 +174,7 @@ class AppBundleView(BaseView):
 
         # ── File resolution + path-traversal guard ───────────────────────
         config = self.svc(config_key)
-        base = (pathlib.Path(config.media_path) / app.bundle_path).resolve()
+        base = (pathlib.Path(config.apps_path) / app.bundle_path).resolve()
         rel = tail if tail else app.manifest.entry
         target = (base / rel).resolve()
 

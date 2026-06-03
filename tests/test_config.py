@@ -155,3 +155,28 @@ def test_ha_env_overrides_toml(tmp_path, monkeypatch):
     assert cfg.ha_url == "http://env:8123"
     # Env didn't set token → TOML value wins.
     assert cfg.ha_token == "toml-tok"
+
+
+# ── apps_path ─────────────────────────────────────────────────────────────
+
+
+def test_apps_path_default():
+    """apps_path defaults to <data_dir>/apps."""
+    cfg = Config.from_env()
+    assert cfg.apps_path == f"{cfg.data_dir}/apps"
+
+
+def test_apps_path_env_override(monkeypatch, tmp_path):
+    """SH_APPS_PATH overrides the default apps_path."""
+    custom = str(tmp_path / "custom_apps")
+    monkeypatch.setenv("SH_APPS_PATH", custom)
+    cfg = Config.from_env()
+    assert cfg.apps_path == custom
+
+
+def test_apps_path_data_dir_follows_data_dir(monkeypatch, tmp_path):
+    """When SH_DATA_DIR is set, apps_path default tracks it."""
+    data_dir = str(tmp_path / "mydata")
+    monkeypatch.setenv("SH_DATA_DIR", data_dir)
+    cfg = Config.from_env()
+    assert cfg.apps_path == f"{data_dir}/apps"

@@ -1446,7 +1446,7 @@ def create_app(config: Config | None = None) -> web.Application:
             session_factory=lambda: aiohttp.ClientSession(),
             catalog_url=config.apps_catalog_url,
         ),
-        media_path=pathlib.Path(config.media_path),
+        apps_path=pathlib.Path(config.apps_path),
         downloader=_download_bytes,
         bus=bus,
     )
