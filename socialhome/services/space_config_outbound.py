@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..domain.events import SpaceConfigChanged
+from ..domain.events import CpSpaceAgeGateChanged, SpaceConfigChanged
 from ..domain.federation import FederationEventType
 from ..domain.space import SpaceConfigEventType
 from ..infrastructure.event_bus import EventBus
@@ -58,6 +58,39 @@ class SpaceConfigOutbound:
 
     def wire(self) -> None:
         self._bus.subscribe(SpaceConfigChanged, self._on_config_changed)
+        self._bus.subscribe(CpSpaceAgeGateChanged, self._on_age_gate_changed)
+
+    async def _on_age_gate_changed(self, event: CpSpaceAgeGateChanged) -> None:
+        """§CP.F1 — federate an age-gate change to member households so
+        their stubs stay current (the inbound counterpart is
+        ``space_membership._on_age_gate``). Host-only: a stub on a
+        non-host household has no authority to push the gate around.
+
+        Join-time propagation rides in ``space_meta`` (see
+        ``_space_metadata_for_federation``); this covers the case where the
+        host changes the gate *after* members already hold a stub.
+        """
+        space = await self._space_repo.get(event.space_id)
+        if space is None:
+            return
+        own = getattr(self._federation, "_own_instance_id", "") or ""
+        if space.owner_instance_id != own:
+            return
+        try:
+            await self._federation.broadcast_to_space_members(
+                space.id,
+                FederationEventType.SPACE_AGE_GATE_UPDATED,
+                {
+                    "space_id": space.id,
+                    "min_age": event.min_age,
+                    "target_audience": event.target_audience,
+                },
+            )
+        except Exception:
+            log.exception(
+                "SPACE_AGE_GATE_UPDATED broadcast failed for space=%s",
+                space.id,
+            )
 
     async def _on_config_changed(self, event: SpaceConfigChanged) -> None:
         # The bus event carries the changed-fields ``payload`` dict;

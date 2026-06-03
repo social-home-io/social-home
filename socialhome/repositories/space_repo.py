@@ -289,9 +289,10 @@ class SqliteSpaceRepo:
                 allow_post_file, allow_post_bazaar,
                 allow_post_event, allow_post_location, allow_post_highlight_share,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
-                dissolved, archived, about_markdown, cover_hash, tz
+                dissolved, archived, about_markdown, cover_hash, tz,
+                min_age, target_audience
             ) VALUES(
-                -- 48 placeholders, one per column listed above.
+                -- 50 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
@@ -306,7 +307,8 @@ class SqliteSpaceRepo:
                 ?, ?,                         -- allow_post_file, allow_post_bazaar
                 ?, ?, ?,                      -- allow_post_event, allow_post_location, allow_post_highlight_share
                 ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
-                ?, ?, ?, ?, ?                 -- dissolved, archived, about_markdown, cover_hash, tz
+                ?, ?, ?, ?, ?,                -- dissolved, archived, about_markdown, cover_hash, tz
+                ?, ?                          -- min_age, target_audience
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -353,7 +355,9 @@ class SqliteSpaceRepo:
                 archived=excluded.archived,
                 about_markdown=excluded.about_markdown,
                 cover_hash=excluded.cover_hash,
-                tz=excluded.tz
+                tz=excluded.tz,
+                min_age=excluded.min_age,
+                target_audience=excluded.target_audience
             """,
             (
                 space.id,
@@ -405,6 +409,8 @@ class SqliteSpaceRepo:
                 space.about_markdown,
                 space.cover_hash,
                 space.tz,
+                int(space.min_age or 0),
+                space.target_audience or "all",
             ),
         )
         return space
@@ -1395,6 +1401,8 @@ def _row_to_space(row: dict | None) -> Space | None:
         cover_hash=row.get("cover_hash"),
         icon_hash=row.get("icon_hash"),
         tz=row.get("tz") or "UTC",
+        min_age=int(row.get("min_age") or 0),
+        target_audience=row.get("target_audience") or "all",
     )
 
 
