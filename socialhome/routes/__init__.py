@@ -135,6 +135,8 @@ from .apps import (
     AppSessionsView,
     AppStoreCollectionView,
     AppStoreItemView,
+    AppUpdateView,
+    AppUpdatesView,
 )
 from .app_bundle import AppBundleView, AppRuntimeView
 from .me_preferences import MePreferencesView
@@ -1033,15 +1035,17 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     )
 
     # ── Social Home Apps (§SHApps) ────────────────────────────────────────
-    # Register ``/api/apps/catalog`` BEFORE ``/api/apps/{app_id}`` so the
-    # literal segment "catalog" is matched first and never captured as an app_id.
+    # Register literal-segment paths BEFORE ``/api/apps/{app_id}`` so that
+    # "catalog" and "updates" are never captured as an app_id.
     app.router.add_view("/api/apps", AppCollectionView)
     app.router.add_view("/api/apps/catalog", AppCatalogView)
+    app.router.add_view("/api/apps/updates", AppUpdatesView)
     app.router.add_view("/api/apps/{app_id}", AppDetailView)
     app.router.add_view("/api/apps/{app_id}/store", AppStoreCollectionView)
     app.router.add_view("/api/apps/{app_id}/store/{key}", AppStoreItemView)
     app.router.add_view("/api/apps/{app_id}/runtime", AppRuntimeView)
     app.router.add_view("/api/apps/{app_id}/bundle/{tail:.*}", AppBundleView)
+    app.router.add_view("/api/apps/{app_id}/update", AppUpdateView)
     app.router.add_view("/api/apps/{app_id}/peers", AppPeersView)
     app.router.add_view("/api/apps/{app_id}/sessions", AppSessionsView)
     app.router.add_view("/api/apps/{app_id}/messages", AppMessagesView)
