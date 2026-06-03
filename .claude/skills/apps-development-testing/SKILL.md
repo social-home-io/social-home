@@ -87,13 +87,13 @@ Adding a new app needs no workflow edits — drop `apps/<new-id>/` with a `manif
 
 ## Age gating
 
-An app may declare `"min_age": 13` (one of `0/13/16/18`) in `manifest.json`. This becomes the install-time default — Social Home reads it when installing the app and sets `installed_apps.min_age` accordingly. An admin may later change it via `PATCH /api/apps/{id}` (the admin age-restriction select in the Apps page). The `update` action raises `min_age` if the catalog declares a higher value but **never lowers** an admin's explicit choice.
+An app may declare `"min_age": 13` (one of `0/13/16/18`) in `manifest.json`. This becomes the install-time default — Social Home reads it when installing and sets `installed_apps.min_age` accordingly. The gate is **admin-authoritative**: a household admin may then set it to any valid value via `PATCH /api/apps/{id}` (the admin age-restriction select), in either direction. The `update` action raises `min_age` if the catalog declares a higher value but **never lowers** an admin's explicit choice.
 
 Social Home blocks protected minors from launching or using age-restricted apps:
 - `GET /api/apps` filters out apps with `min_age > 0` from the response for protected minor accounts — they simply don't appear in the list.
 - `GET /api/apps/{id}/runtime` returns **403** for an under-age protected minor. The SPA (`AppHost`) catches this and renders "This app isn't available for your account." without leaking the exact age.
 
-The SPA does **no** client-side age logic — the server enforces all gates. Non-minor users see all enabled apps and no age-restricted behaviour. Admins see a `Minimum age` select control on each app card (options: Everyone / 13+ / 16+ / 18+).
+The SPA does **no** client-side age *enforcement* — the server enforces all gates. Non-minor users see all enabled apps and no age-restricted behaviour. Admins see a `Minimum age` select on each app card (options Everyone / 13+ / 16+ / 18+), but **only when the household has at least one member with child protection enabled** (`GET /api/cp/protection` → any `is_minor`); otherwise the setting is hidden (no point configuring a gate nobody is subject to). The rating chip (`13+`) still shows regardless, as the app's declared rating.
 
 ## Quick failure triage
 - **Iframe blank, only the header shows** → bundle isn't inlined (external script/CSS blocked by sandbox CORS/CSP). Inline it.

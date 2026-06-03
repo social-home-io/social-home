@@ -27,6 +27,8 @@ import {
   uninstallApp,
   setEnabled,
   setMinAge,
+  loadProtectionStatus,
+  householdHasProtectedMinor,
   type InstalledApp,
   type AppUpdate,
   type CatalogEntry,
@@ -56,7 +58,10 @@ export default function AppsPage() {
   useEffect(() => {
     void loadInstalled()
     void loadUpdates()
-    if (isAdmin) void loadCatalog()
+    if (isAdmin) {
+      void loadCatalog()
+      void loadProtectionStatus()
+    }
   }, [])
 
   return (
@@ -267,7 +272,10 @@ function AppCard({
         </div>
       )}
 
-      {isAdmin && (
+      {/* Age-gate setting — admin-only, and only when the household has a
+       *  protected minor (no point configuring a gate nobody is subject to).
+       *  The admin has full control of the value (admin-authoritative). */}
+      {isAdmin && householdHasProtectedMinor.value && (
         <div class="sh-app-card__min-age-row">
           <label class="sh-app-card__min-age-label" htmlFor={`min-age-${app.app_id}`}>
             Minimum age
