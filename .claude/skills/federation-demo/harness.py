@@ -4333,19 +4333,30 @@ def cmd_admin_promote_kick() -> None:
 
 
 def cmd_app_session() -> None:
-    """App-to-app federation smoke test (v_17, ``APP_SESSION`` + ``APP_MESSAGE``).
+    """App-to-app federation smoke test (v_17+/v_18, ``APP_SESSION`` + ``APP_MESSAGE``).
 
-    Exercises the cross-household app federation surface introduced in PR4:
+    Exercises the cross-household app federation surface introduced in PR4
+    and extended in the chess-p2p branch (per-user routing, v_18):
 
-    1. **Open a session** — Alice (a) POSTs to
-       ``POST /api/apps/{app_id}/sessions`` with ``peer_instance_id = b``.
-       The backend allocates a ``session_id``, sends an ``APP_SESSION
-       {verb:"open"}`` event to b, and returns the ``session_id``.
-    2. **Send a message** — Alice POSTs to
+    1. **Open a session (legacy path)** — Alice (a) POSTs to
+       ``POST /api/apps/{app_id}/sessions`` with ``peer_instance_id = b``
+       (back-compat household-addressed open).  The backend allocates a
+       ``session_id``, sends an ``APP_SESSION {verb:"open"}`` event to b,
+       and returns the ``session_id``.
+    2. **Send a message (legacy path)** — Alice POSTs to
        ``POST /api/apps/{app_id}/messages`` with the new ``session_id``,
        ``peer_instance_id = b``, and a small payload dict.  The server
        selects the ``fed-app-v1`` binary channel or the ``APP_MESSAGE``
        JSON fallback transparently.
+    3. **Contacts endpoint (v_18)** — Alice fetches
+       ``GET /api/apps/{app_id}/contacts`` and asserts the response is
+       ``{contacts: [...]}`` with ``is_local`` / ``instance_id`` /
+       ``user_ref`` / ``display_name`` / ``online`` fields present.
+    4. **Person-routed session (v_18, when a v_18 contact is available)** —
+       If the contacts list contains at least one remote contact on b, Alice
+       opens a person-addressed session via
+       ``POST /api/apps/{app_id}/sessions`` with a ``target`` body and asserts
+       the 201 response carries a ``session_id``.
 
     **Guard condition:** The test requires at least one app to be installed
     and enabled on both a and b.  In the demo environment the app catalog is
@@ -4364,6 +4375,14 @@ def cmd_app_session() -> None:
     the demo environment has no long-lived WebSocket listener, and the unit
     tests in ``tests/services/test_app_federation_service.py`` cover the
     delivery path with an in-memory WS mock.
+
+    NOTE (v_18 runtime validation): steps 3 and 4 use the real instances booted
+    by ``cmd_up``/``cmd_pair`` in this session.  The person-routed send (step 4)
+    is only attempted when the contacts list actually contains a remote contact
+    on b; when no contacts are present (e.g. because USERS_SYNC hasn't settled)
+    it is skipped with a note — the unit tests in
+    ``tests/services/test_app_federation_service.py`` cover the full delivery
+    path with a WS mock.
     """
     state = _load()
     if not state:
@@ -4405,25 +4424,25 @@ def cmd_app_session() -> None:
     app_id = next(iter(common))
     print(f"  app-session: using app_id={app_id!r}")
 
-    # 2. Open a cross-household session (a → b).
+    # 2. Open a cross-household session (a → b) via the legacy path.
     s, session_res = _request(
         f"http://127.0.0.1:{a['port']}/api/apps/{app_id}/sessions",
         token=a["token"],
         method="POST",
         body={"peer_instance_id": b["instance_id"]},
     )
-    _must("open app session (a→b)", s, session_res, ok=(200, 201))
+    _must("open app session (a→b, legacy)", s, session_res, ok=(200, 201))
     session_id = (session_res or {}).get("session_id")
     if not session_id:
         raise SystemExit(
             f"app-session: POST /sessions returned no session_id: {session_res!r}",
         )
-    print(f"  opened session: {session_id}")
+    print(f"  opened session (legacy): {session_id}")
 
     # Allow APP_SESSION event to propagate before sending the message.
     time.sleep(2)
 
-    # 3. Send an app message from a to b within the session.
+    # 3. Send an app message from a to b within the session (legacy path).
     s, msg_res = _request(
         f"http://127.0.0.1:{a['port']}/api/apps/{app_id}/messages",
         token=a["token"],
@@ -4434,8 +4453,62 @@ def cmd_app_session() -> None:
             "payload": {"move": "e2-e4", "seq": 1},
         },
     )
-    _must("send app message (a→b)", s, msg_res, ok=(200, 204))
-    print("  sent app message (move: e2-e4) ✓")
+    _must("send app message (a→b, legacy)", s, msg_res, ok=(200, 204))
+    print("  sent app message (move: e2-e4) via legacy path ✓")
+
+    # 4. v_18: probe the contacts endpoint (GET /api/apps/{id}/contacts).
+    s_c, contacts_res = _request(
+        f"http://127.0.0.1:{a['port']}/api/apps/{app_id}/contacts",
+        token=a["token"],
+    )
+    if s_c != 200:
+        print(f"  app-session: GET /contacts returned {s_c} — skipping v_18 assertions")
+    else:
+        contacts = (contacts_res or {}).get("contacts", [])
+        print(f"  contacts: {len(contacts)} entries")
+        # Validate contact shape.
+        for c in contacts[:3]:  # spot-check first few
+            assert "instance_id" in c, f"contact missing instance_id: {c!r}"
+            assert "user_ref" in c, f"contact missing user_ref: {c!r}"
+            assert "display_name" in c, f"contact missing display_name: {c!r}"
+            assert "is_local" in c, f"contact missing is_local: {c!r}"
+            assert "online" in c, f"contact missing online: {c!r}"
+        print("  contacts shape ok ✓")
+
+        # 5. v_18: person-routed session — pick a remote contact on b if available.
+        b_contacts = [
+            c for c in contacts
+            if not c.get("is_local") and c.get("instance_id") == b.get("instance_id")
+        ]
+        if b_contacts:
+            target_contact = b_contacts[0]
+            target = {
+                "instance_id": target_contact["instance_id"],
+                "user_ref": target_contact["user_ref"],
+                "is_local": False,
+            }
+            s_pr, pr_res = _request(
+                f"http://127.0.0.1:{a['port']}/api/apps/{app_id}/sessions",
+                token=a["token"],
+                method="POST",
+                body={"target": target},
+            )
+            _must("open person-routed session (a→b user, v_18)", s_pr, pr_res, ok=(200, 201))
+            pr_session_id = (pr_res or {}).get("session_id")
+            if not pr_session_id:
+                raise SystemExit(
+                    f"app-session: person-routed POST /sessions returned no "
+                    f"session_id: {pr_res!r}",
+                )
+            print(f"  person-routed session opened: {pr_session_id} ✓")
+            state["app_session_person_routed_ran"] = True
+            state["app_session_person_routed_id"] = pr_session_id
+        else:
+            print(
+                "  app-session: no remote contacts on b yet "
+                "(USERS_SYNC may not have settled) — skipping person-routed open; "
+                "unit tests cover the full delivery path"
+            )
 
     state["app_session_ran"] = True
     state["app_session_id"] = session_id

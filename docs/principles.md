@@ -41,6 +41,36 @@ instance's Ed25519 key (with optional ML-DSA-65 hybrid). A compromised
 or malicious GFS can disrupt discovery and push, but cannot read or
 forge content.
 
+### Sign-off: per-user routing on the app channel (§FIX-I2 relaxed, v_18)
+
+`APP_SESSION` and `APP_MESSAGE` events may carry `to_user` (the target user's
+username on the receiving household) and `from_user` (the initiator's
+username) since capability v_18.  This is a bounded relaxation of the
+§FIX-I2 rule that formerly prohibited any stable per-user identifier from
+crossing household boundaries on the app channel.
+
+The relaxation is justified by three constraints:
+
+1. **Roster-gating.** Both `open_session` and `send_message` call
+   `_assert_target_allowed`, which checks the caller's contact roster —
+   the same block-aware pairing-scoped set as `/api/friends` and DMs.
+   Targets outside that roster are rejected with `AppContactNotFoundError`
+   (HTTP 403).
+2. **Consensual relationship.** The roster is built from households that the
+   local instance has explicitly paired with through the §11 QR handshake.
+   Every person in it is already reachable via DM; surfacing their username
+   on the app channel exposes nothing beyond what DMs already expose.
+3. **Fallback for older peers.** Sub-v_18 peers receive the legacy
+   household-addressed shape (no `to_user`/`from_user`); the receiver fans
+   out to all local users as before — the §FIX-I2 posture is preserved for
+   any peer that has not upgraded.
+
+**This was an explicit §2 sign-off.**  Reviewers authorising a change that
+widens the audience eligible for per-user routing beyond the pairing-scoped
+roster (e.g. adding unauthenticated guest channels, GFS-relayed routing, or
+any path that bypasses `_assert_target_allowed`) MUST treat it as a §2
+principle change requiring a new sign-off.
+
 ### Sign-off: Social Home Apps execute fetched third-party JavaScript
 
 Social Home Apps (PR1 and later) represent an **explicit, bounded

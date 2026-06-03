@@ -311,12 +311,17 @@ Phases added after the initial publish are documented inline in
   joiner's media path.
 * ``admin-promote-kick`` — cross-household role promotion lands on
   the affected member's household via SPACE_MEMBER_ROLE_CHANGED.
-* ``app-session`` — PR4 app-to-app federation (v_17): opens an
-  ``APP_SESSION`` from a to b, sends an ``APP_MESSAGE``, asserts
-  both REST calls return 2xx.  Skips gracefully when no common
-  installed app is present in the demo environment (unit tests in
-  ``tests/services/test_app_federation_service.py`` cover the
-  full delivery path with a WS mock).
+* ``app-session`` — app-to-app federation (v_17+/v_18): opens an
+  ``APP_SESSION`` from a to b via the legacy ``peer_instance_id``
+  path, sends an ``APP_MESSAGE``, and asserts both REST calls return
+  2xx.  Also exercises the v_18 additions: probes
+  ``GET /api/apps/{id}/contacts`` and validates the contact shape;
+  when remote contacts on b are present, opens a person-routed
+  session via the new ``target`` body and asserts the 201 response.
+  Skips gracefully when no common installed app is present in the
+  demo environment (unit tests in
+  ``tests/services/test_app_federation_service.py`` cover the full
+  delivery path with a WS mock).
 
 To iterate faster you can run the steps individually (``python
 harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
