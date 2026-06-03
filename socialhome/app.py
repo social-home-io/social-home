@@ -1449,6 +1449,7 @@ def create_app(config: Config | None = None) -> web.Application:
         apps_path=pathlib.Path(config.apps_path),
         downloader=_download_bytes,
         bus=bus,
+        cp_repo=repos.cp,
     )
 
     # Feature gating for §18: wire household toggle enforcement into
@@ -2328,6 +2329,7 @@ def create_app(config: Config | None = None) -> web.Application:
             ws=ws_manager,
             federation=federation_service,
             federation_repo=federation_repo,
+            cp_repo=repos.cp,
         )
         federation_service.attach_apps(app_federation_service)
         app[K.app_federation_service_key] = app_federation_service

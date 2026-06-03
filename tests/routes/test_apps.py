@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from socialhome.app_keys import app_federation_service_key
 from socialhome.auth import sha256_token_hash
 from socialhome.domain.apps import (
+    AppAgeRestrictedError,
     AppAlreadyInstalledError,
     AppCatalogEntry,
     AppIntegrityError,
@@ -97,10 +98,10 @@ async def test_list_apps_requires_auth(client):
 
 
 async def test_list_apps_admin_sees_disabled(client, monkeypatch):
-    """Admin sees all apps including disabled ones."""
+    """Admin sees all apps including disabled ones via list_visible."""
     disabled_app = _make_installed(enabled=False)
     monkeypatch.setattr(
-        AppService, "list_installed", AsyncMock(return_value=[disabled_app])
+        AppService, "list_visible", AsyncMock(return_value=[disabled_app])
     )
 
     r = await client.get("/api/apps", headers=_auth(client._tok))
@@ -111,13 +112,13 @@ async def test_list_apps_admin_sees_disabled(client, monkeypatch):
 
 
 async def test_list_apps_member_filters_disabled(client, monkeypatch):
-    """Non-admin can see only enabled apps."""
+    """Non-admin only sees apps list_visible returns (enabled + age-allowed)."""
     enabled_app = _make_installed(app_id="com.example.enabled", enabled=True)
-    disabled_app = _make_installed(app_id="com.example.disabled", enabled=False)
+    # list_visible already filters disabled — only enabled_app is returned
     monkeypatch.setattr(
         AppService,
-        "list_installed",
-        AsyncMock(return_value=[enabled_app, disabled_app]),
+        "list_visible",
+        AsyncMock(return_value=[enabled_app]),
     )
 
     member_tok = await _seed_member(client._db)
@@ -348,7 +349,8 @@ async def test_patch_rejects_non_bool_enabled(client):
     assert body["error"]["code"] == "UNPROCESSABLE"
 
 
-async def test_patch_missing_enabled_returns_400(client):
+async def test_patch_missing_fields_returns_400(client):
+    """PATCH with neither enabled nor min_age returns 400."""
     r = await client.patch(
         "/api/apps/com.example.hello",
         json={},
@@ -940,6 +942,144 @@ async def test_messages_app_not_enabled_403(client, fed_svc):
         headers=_auth(client._tok),
     )
     assert r.status == 403
+
+
+# ── Age gate route tests ──────────────────────────────────────────────────────
+
+
+async def test_patch_set_min_age_admin_success(client, monkeypatch):
+    """PATCH {min_age: 13} as admin → 200 with min_age in response."""
+    updated = _make_installed()
+    # Use a version that carries min_age=13
+    updated_with_age = InstalledApp(
+        app_id=updated.app_id,
+        name=updated.name,
+        version=updated.version,
+        enabled=updated.enabled,
+        manifest=updated.manifest,
+        bundle_path=updated.bundle_path,
+        bundle_sha256=updated.bundle_sha256,
+        source_url=updated.source_url,
+        installed_by=updated.installed_by,
+        installed_at=updated.installed_at,
+        min_age=13,
+    )
+    monkeypatch.setattr(
+        AppService, "set_min_age", AsyncMock(return_value=updated_with_age)
+    )
+
+    r = await client.patch(
+        "/api/apps/com.example.hello",
+        json={"min_age": 13},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["min_age"] == 13
+
+
+async def test_patch_set_min_age_non_admin_403(client):
+    """PATCH {min_age: 13} as member → 403."""
+    member_tok = await _seed_member(client._db)
+    r = await client.patch(
+        "/api/apps/com.example.hello",
+        json={"min_age": 13},
+        headers=_auth(member_tok),
+    )
+    assert r.status == 403
+
+
+async def test_patch_set_min_age_invalid_value_422(client, monkeypatch):
+    """PATCH {min_age: 15} (invalid) → 422 via ValueError in BaseView._iter."""
+    monkeypatch.setattr(
+        AppService,
+        "set_min_age",
+        AsyncMock(side_effect=ValueError("min_age must be one of [0, 13, 16, 18]")),
+    )
+    r = await client.patch(
+        "/api/apps/com.example.hello",
+        json={"min_age": 15},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_patch_set_min_age_non_integer_400(client):
+    """PATCH {min_age: 'adult'} → 400 UNPROCESSABLE (not an integer)."""
+    r = await client.patch(
+        "/api/apps/com.example.hello",
+        json={"min_age": "adult"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_serialize_includes_min_age(client, monkeypatch):
+    """GET /api/apps serialized response includes min_age field."""
+    app_with_age = InstalledApp(
+        app_id="com.example.hello",
+        name="Hello App",
+        version="1.0.0",
+        enabled=True,
+        manifest=AppManifest(entry="index.js", icon="icon.png", capabilities=("read",)),
+        bundle_path="apps/com.example.hello/1.0.0",
+        bundle_sha256="abc123",
+        source_url="https://example.com/hello.tgz",
+        installed_by="admin",
+        installed_at="2026-06-01T00:00:00+00:00",
+        min_age=16,
+    )
+    monkeypatch.setattr(
+        AppService,
+        "list_visible",
+        AsyncMock(return_value=[app_with_age]),
+    )
+    r = await client.get("/api/apps", headers=_auth(client._tok))
+    assert r.status == 200
+    body = await r.json()
+    assert len(body["apps"]) == 1
+    assert body["apps"][0]["min_age"] == 16
+
+
+async def test_list_apps_minor_filtered_by_age(client, monkeypatch):
+    """GET /api/apps as under-age minor omits the restricted app (via list_visible)."""
+    unrestricted = _make_installed(app_id="com.example.free")
+    # Mock list_visible to simulate it already filtered the restricted app
+    monkeypatch.setattr(
+        AppService,
+        "list_visible",
+        AsyncMock(return_value=[unrestricted]),
+    )
+    member_tok = await _seed_member(client._db)
+    r = await client.get("/api/apps", headers=_auth(member_tok))
+    assert r.status == 200
+    body = await r.json()
+    ids = [a["app_id"] for a in body["apps"]]
+    assert "com.example.free" in ids
+    assert "com.example.hello" not in ids  # filtered by age gate
+
+
+async def test_age_restricted_error_returns_403(client, monkeypatch):
+    """AppAgeRestrictedError from any service method → 403 FORBIDDEN."""
+    monkeypatch.setattr(
+        AppService,
+        "store_get",
+        AsyncMock(
+            side_effect=AppAgeRestrictedError("This app is restricted to ages 13+.")
+        ),
+    )
+    await _seed_installed_enabled_app(client._db)
+    r = await client.get(
+        "/api/apps/com.example.hello/store/key",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
 
 
 # ── GET /api/apps/updates ─────────────────────────────────────────────────

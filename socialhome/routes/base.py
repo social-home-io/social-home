@@ -56,6 +56,7 @@ from ..services.space_zone_service import (
 )
 from ..services.storage_quota_service import StorageQuotaExceeded
 from ..domain.apps import (
+    AppAgeRestrictedError,
     AppAlreadyInstalledError,
     AppIntegrityError,
     AppNotEnabledError,
@@ -192,6 +193,8 @@ class BaseView(web.View):
             # request (bad app_id, tampered catalog) — 400 UNPROCESSABLE
             # mirrors the existing ValueError convention.
             return error_response(400, "UNPROCESSABLE", str(exc))
+        except AppAgeRestrictedError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
         except AppNotEnabledError as exc:
             return error_response(403, "FORBIDDEN", str(exc))
         except AppQuotaExceededError as exc:

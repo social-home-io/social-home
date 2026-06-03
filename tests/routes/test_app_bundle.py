@@ -20,10 +20,13 @@ from __future__ import annotations
 import pathlib
 import urllib.parse
 
+from unittest.mock import AsyncMock
+
 from socialhome.app_keys import media_signer_key
-from socialhome.domain.apps import AppManifest, InstalledApp
+from socialhome.domain.apps import AppAgeRestrictedError, AppManifest, InstalledApp
 from socialhome.repositories.app_repo import SqliteAppRepo
 from socialhome.routes.app_bundle import BUNDLE_COOKIE_PREFIX, BUNDLE_TTL_SECONDS
+from socialhome.services.app_service import AppService
 
 from .conftest import _auth
 
@@ -39,7 +42,11 @@ _JS_CONTENT = b"console.log('chess');"
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 
-def _make_app(app_id: str = _APP_ID, enabled: bool = True) -> InstalledApp:
+def _make_app(
+    app_id: str = _APP_ID,
+    enabled: bool = True,
+    min_age: int = 0,
+) -> InstalledApp:
     """Build an InstalledApp domain object for seeding."""
     manifest = AppManifest(
         entry="index.html",
@@ -57,6 +64,7 @@ def _make_app(app_id: str = _APP_ID, enabled: bool = True) -> InstalledApp:
         source_url="https://example.com/chess.tgz",
         installed_by=None,
         installed_at="2026-06-01T00:00:00+00:00",
+        min_age=min_age,
     )
 
 
@@ -523,3 +531,67 @@ async def test_bundle_tampered_bundle_path_returns_403(client):
     )
     body = await r.json()
     assert body["error"]["code"] == "FORBIDDEN"
+
+
+# ── Age gate tests for /runtime ────────────────────────────────────────────
+
+
+async def test_runtime_403_for_age_restricted_minor(client, monkeypatch):
+    """/runtime returns 403 FORBIDDEN for a protected minor below the app's min_age.
+
+    The age check in AppRuntimeView.get calls svc.assert_age_allowed(app,
+    user.user_id) which raises AppAgeRestrictedError when the minor's
+    declared_age < app.min_age.  BaseView._iter maps it to 403 FORBIDDEN.
+    A blocked minor must never receive the signed entry URL.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.apps_path)
+    await _seed_app(client._db)
+
+    # Patch assert_age_allowed on the running AppService instance to raise.
+    monkeypatch.setattr(
+        AppService,
+        "assert_age_allowed",
+        AsyncMock(
+            side_effect=AppAgeRestrictedError("This app is restricted to ages 13+.")
+        ),
+    )
+
+    r = await client.get(
+        f"/api/apps/{_APP_ID}/runtime",
+        headers={"Authorization": f"Bearer {client._tok}"},
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+    assert "13+" in body["error"]["detail"]
+
+
+async def test_runtime_200_for_unprotected_user_with_age_gate(client, monkeypatch):
+    """/runtime returns 200 for an unprotected user even when the app has min_age set.
+
+    When assert_age_allowed does NOT raise (unprotected user), the runtime
+    endpoint must proceed normally and return the signed entry URL.
+    """
+    from socialhome.app_keys import config_key
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.apps_path)
+    await _seed_app(client._db)
+
+    # assert_age_allowed returns None (no-op) for unprotected user.
+    monkeypatch.setattr(
+        AppService,
+        "assert_age_allowed",
+        AsyncMock(return_value=None),
+    )
+
+    r = await client.get(
+        f"/api/apps/{_APP_ID}/runtime",
+        headers={"Authorization": f"Bearer {client._tok}"},
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert "entry_url" in body

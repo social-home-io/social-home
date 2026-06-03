@@ -83,11 +83,16 @@ class AppRuntimeView(BaseView):
         user = self.user  # bearer auth check
 
         app_id = self.match("app_id")
-        app = await self.svc(app_service_key).get(app_id)
+        svc = self.svc(app_service_key)
+        app = await svc.get(app_id)
         if app is None:
             return error_response(404, "NOT_FOUND", "App not found.")
         if not app.enabled:
             return error_response(403, "FORBIDDEN", "App is disabled.")
+
+        # Age gate — a protected minor must not receive the signed entry URL.
+        # Raises AppAgeRestrictedError which maps to 403 via BaseView._iter.
+        await svc.assert_age_allowed(app, user.user_id)
 
         prefix = f"/api/apps/{app_id}/bundle/"
         signer = self.request.app[media_signer_key]

@@ -36,6 +36,13 @@ class AppQuotaExceededError(AppError):
     """A per-(app, user) storage quota (key count / value size) was exceeded."""
 
 
+class AppAgeRestrictedError(AppError):
+    """A protected minor is below the app's minimum age requirement."""
+
+
+_VALID_MIN_AGES: frozenset[int] = frozenset({0, 13, 16, 18})
+
+
 @dataclass(slots=True, frozen=True)
 class AppManifest:
     """Parsed ``manifest.json`` from an app bundle."""
@@ -43,6 +50,7 @@ class AppManifest:
     entry: str
     icon: str | None
     capabilities: tuple[str, ...]
+    min_age: int = 0
 
     @classmethod
     def from_dict(cls, data: dict) -> AppManifest:
@@ -61,7 +69,18 @@ class AppManifest:
         icon = data.get("icon")
         if icon is not None and not isinstance(icon, str):
             raise ValueError("manifest.icon must be a string or null")
-        return cls(entry=entry, icon=icon, capabilities=tuple(caps))
+        raw_min_age = data.get("min_age", 0)
+        try:
+            min_age = int(raw_min_age)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"manifest.min_age must be an integer, got {raw_min_age!r}"
+            ) from exc
+        if min_age not in _VALID_MIN_AGES:
+            raise ValueError(
+                f"manifest.min_age must be one of {sorted(_VALID_MIN_AGES)}, got {min_age!r}"
+            )
+        return cls(entry=entry, icon=icon, capabilities=tuple(caps), min_age=min_age)
 
 
 @dataclass(slots=True, frozen=True)
@@ -78,6 +97,7 @@ class InstalledApp:
     source_url: str
     installed_by: str | None
     installed_at: str
+    min_age: int = 0
 
 
 @dataclass(slots=True, frozen=True)

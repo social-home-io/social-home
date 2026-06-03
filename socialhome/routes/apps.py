@@ -33,6 +33,7 @@ def _serialize(app: InstalledApp) -> dict:
         "enabled": app.enabled,
         "capabilities": list(app.manifest.capabilities),
         "icon": app.manifest.icon,
+        "min_age": app.min_age,
     }
 
 
@@ -42,9 +43,7 @@ class AppCollectionView(BaseView):
     async def get(self) -> web.Response:
         user = self.user
         svc = self.svc(app_service_key)
-        apps = await svc.list_installed()
-        if not user.is_admin:
-            apps = [a for a in apps if a.enabled]
+        apps = await svc.list_visible(user_id=user.user_id, is_admin=user.is_admin)
         return self._json({"apps": [_serialize(a) for a in apps]})
 
     async def post(self) -> web.Response:
@@ -114,14 +113,40 @@ class AppDetailView(BaseView):
 
         app_id = self.match("app_id")
         body = await self.body()
-        if "enabled" not in body:
-            return error_response(400, "UNPROCESSABLE", "enabled field is required.")
-        enabled = body["enabled"]
-        if not isinstance(enabled, bool):
-            return error_response(400, "UNPROCESSABLE", "enabled must be a boolean.")
+
+        # Must provide at least one recognised field.
+        if "enabled" not in body and "min_age" not in body:
+            return error_response(
+                400,
+                "UNPROCESSABLE",
+                "At least one of 'enabled' or 'min_age' is required.",
+            )
 
         svc = self.svc(app_service_key)
-        app = await svc.set_enabled(app_id, enabled=enabled, actor_is_admin=True)
+        app: InstalledApp | None = None
+
+        if "enabled" in body:
+            enabled = body["enabled"]
+            if not isinstance(enabled, bool):
+                return error_response(
+                    400, "UNPROCESSABLE", "enabled must be a boolean."
+                )
+            app = await svc.set_enabled(app_id, enabled=enabled, actor_is_admin=True)
+
+        if "min_age" in body:
+            raw_min_age = body["min_age"]
+            if not isinstance(raw_min_age, int):
+                return error_response(
+                    400, "UNPROCESSABLE", "min_age must be an integer."
+                )
+            # Delegate validation (allowed set + not found) to the service;
+            # ValueError maps to 422 via BaseView._iter.
+            app = await svc.set_min_age(
+                app_id, min_age=raw_min_age, actor_is_admin=True
+            )
+
+        # app is guaranteed non-None — at least one branch ran.
+        assert app is not None
         return self._json(_serialize(app))
 
     async def delete(self) -> web.Response:

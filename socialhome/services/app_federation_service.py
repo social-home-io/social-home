@@ -29,11 +29,12 @@ import logging
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any
 
-from ..domain.apps import AppNotEnabledError, AppNotFoundError
+from ..domain.apps import AppAgeRestrictedError, AppNotEnabledError, AppNotFoundError
 from ..domain.federation import FederationEvent, FederationEventType, PairingStatus
 
 if TYPE_CHECKING:
     from ..repositories.app_repo import AbstractAppRepo
+    from ..repositories.cp_repo import AbstractCpRepo
     from ..repositories.federation_repo import AbstractFederationRepo
     from ..repositories.user_repo import AbstractUserRepo
     from ..infrastructure.ws_manager import WebSocketManager
@@ -72,6 +73,7 @@ class AppFederationService:
         "_ws",
         "_federation",
         "_federation_repo",
+        "_cp_repo",
     )
 
     def __init__(
@@ -82,12 +84,14 @@ class AppFederationService:
         ws: WebSocketManager,
         federation: Any,
         federation_repo: AbstractFederationRepo,
+        cp_repo: "AbstractCpRepo | None" = None,
     ) -> None:
         self._app_repo = app_repo
         self._user_repo = user_repo
         self._ws = ws
         self._federation = federation
         self._federation_repo = federation_repo
+        self._cp_repo = cp_repo
 
     # ─── Public API ───────────────────────────────────────────────────────────
 
@@ -127,6 +131,7 @@ class AppFederationService:
         to the SPA.
         """
         await self._require_enabled(app_id)
+        await self._assert_age_allowed(app_id, actor_user_id)
         session_id = uuid4().hex
         # NOTE: actor_user_id is intentionally NOT included in the wire payload.
         # A stable per-user identifier sent cross-household is a tracking vector
@@ -166,6 +171,7 @@ class AppFederationService:
         not forwarded in the current v1 wire shape.
         """
         await self._require_enabled(app_id)
+        await self._assert_age_allowed(app_id, actor_user_id)
         await self._federation.send_app_message(
             to_instance_id=peer_instance_id,
             app_id=app_id,
@@ -239,6 +245,30 @@ class AppFederationService:
             raise AppNotFoundError(app_id)
         if not app.enabled:
             raise AppNotEnabledError(app_id)
+
+    async def _assert_age_allowed(self, app_id: str, actor_user_id: str) -> None:
+        """Raise :class:`AppAgeRestrictedError` for protected minors below min_age.
+
+        Fail-closed: if the app is not found or has no age restriction,
+        this is a no-op.  Only blocks when the app exists, has a min_age > 0,
+        cp_repo is configured, and the user's protection record shows a
+        declared_age below the threshold.
+        """
+        if self._cp_repo is None:
+            return
+        app = await self._app_repo.get(app_id)
+        if app is None or app.min_age <= 0:
+            return
+        p = await self._cp_repo.get_user_protection(actor_user_id)
+        if p is None:
+            return
+        if not p.get("child_protection_enabled"):
+            return
+        declared = int(p.get("declared_age") or 0)
+        if declared < app.min_age:
+            raise AppAgeRestrictedError(
+                f"This app is restricted to ages {app.min_age}+."
+            )
 
     async def _deliver(
         self,

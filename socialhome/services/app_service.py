@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 import aiofiles.os
 
 from ..domain.apps import (
+    AppAgeRestrictedError,
     AppAlreadyInstalledError,
     AppCatalogEntry,
     AppIntegrityError,
@@ -42,10 +43,12 @@ from ..domain.apps import (
     AppNotFoundError,
     AppQuotaExceededError,
     InstalledApp,
+    _VALID_MIN_AGES,
 )
 from ..domain.events import AppInstalled, AppUninstalled, AppUpdated
 from ..domain.space import SpacePermissionError
 from ..repositories.app_repo import AbstractAppRepo
+from ..repositories.cp_repo import AbstractCpRepo
 from .app_catalog_service import AppCatalogService
 from .bus_publisher import BusPublisherMixin
 
@@ -87,7 +90,7 @@ class AppService(BusPublisherMixin):
     # in PR1 (it maps correctly to HTTP 403 via BaseView._map_exc and matches
     # the PR1 plan).  A dedicated AppPermissionError is deferred to PR2.
 
-    __slots__ = ("_repo", "_catalog", "_apps_path", "_downloader", "_bus")
+    __slots__ = ("_repo", "_catalog", "_apps_path", "_downloader", "_bus", "_cp_repo")
 
     def __init__(
         self,
@@ -97,12 +100,14 @@ class AppService(BusPublisherMixin):
         apps_path: Path,
         downloader: Callable[[str], bytes | Awaitable[bytes]],
         bus: "EventBus | None" = None,
+        cp_repo: AbstractCpRepo | None = None,
     ) -> None:
         self._repo = repo
         self._catalog = catalog
         self._apps_path = Path(apps_path)
         self._downloader = downloader
         self._bus = bus
+        self._cp_repo = cp_repo
 
     # ─── Read-side passthroughs ──────────────────────────────────────────────
 
@@ -287,6 +292,7 @@ class AppService(BusPublisherMixin):
             source_url=entry.bundle_url,
             installed_by=actor_user_id,
             installed_at=datetime.now(timezone.utc).isoformat(),
+            min_age=manifest.min_age,
         )
         await self._repo.install(app)
         await self._emit(AppInstalled(app_id=app_id, name=entry.name))
@@ -367,6 +373,7 @@ class AppService(BusPublisherMixin):
             source_url=entry.bundle_url,
             installed_by=existing.installed_by,
             installed_at=existing.installed_at,
+            min_age=existing.min_age,
         )
         await self._repo.update_installed(updated)
 
@@ -447,25 +454,119 @@ class AppService(BusPublisherMixin):
         assert updated is not None  # just set it
         return updated
 
+    # ─── Child protection age gate ───────────────────────────────────────────
+
+    async def assert_age_allowed(self, app: InstalledApp, user_id: str) -> None:
+        """Raise :class:`AppAgeRestrictedError` if a protected minor is below
+        the app's minimum age.
+
+        Gate semantics (mirrors ``ChildProtectionService.check_space_age_gate``):
+        - ``app.min_age <= 0`` → no restriction → always allowed.
+        - ``cp_repo`` not configured → allowed (no protection data available).
+        - User has no protection record (``get_user_protection`` returns ``None``)
+          → unprotected account → allowed.
+        - ``child_protection_enabled`` is falsy → unprotected → allowed.
+        - ``declared_age < app.min_age`` → blocked → :class:`AppAgeRestrictedError`.
+        """
+        if app.min_age <= 0:
+            return
+        if self._cp_repo is None:
+            return
+        p = await self._cp_repo.get_user_protection(user_id)
+        if p is None:
+            return
+        if not p.get("child_protection_enabled"):
+            return
+        declared = int(p.get("declared_age") or 0)
+        if declared < app.min_age:
+            raise AppAgeRestrictedError(
+                f"This app is restricted to ages {app.min_age}+."
+            )
+
+    async def _age_allowed(self, app: InstalledApp, user_id: str) -> bool:
+        """Non-raising predicate for use in list filtering."""
+        try:
+            await self.assert_age_allowed(app, user_id)
+            return True
+        except AppAgeRestrictedError:
+            return False
+
     # ─── Per-user KV store ───────────────────────────────────────────────────
 
-    async def _require_enabled_app(self, app_id: str) -> InstalledApp:
-        """Return the installed app or raise AppNotFoundError / AppNotEnabledError."""
+    async def _require_enabled_app(self, app_id: str, user_id: str) -> InstalledApp:
+        """Return the installed app or raise AppNotFoundError / AppNotEnabledError
+        / AppAgeRestrictedError.
+
+        The age check is the final step — only applied when the app exists and
+        is enabled, so the gate always fails closed.
+        """
         app = await self._repo.get(app_id)
         if app is None:
             raise AppNotFoundError(f"App {app_id!r} is not installed")
         if not app.enabled:
             raise AppNotEnabledError(f"App {app_id!r} is disabled")
+        await self.assert_age_allowed(app, user_id)
         return app
+
+    async def list_visible(self, *, user_id: str, is_admin: bool) -> list[InstalledApp]:
+        """Return apps visible to the caller.
+
+        Admins see all installed apps.  Non-admins see only *enabled* apps
+        whose age restriction the caller passes.  A protected minor whose
+        declared age is below an app's ``min_age`` does not see that app in
+        the list — they must not discover gated content through enumeration.
+        """
+        apps = await self._repo.list_installed()
+        if is_admin:
+            return apps
+        result: list[InstalledApp] = []
+        for app in apps:
+            if not app.enabled:
+                continue
+            if await self._age_allowed(app, user_id):
+                result.append(app)
+        return result
+
+    async def set_min_age(
+        self,
+        app_id: str,
+        *,
+        min_age: int,
+        actor_is_admin: bool,
+    ) -> InstalledApp:
+        """Set the minimum age requirement for an installed app.
+
+        Admin-only.  Validates that ``min_age`` is one of ``{0, 13, 16, 18}``.
+        Returns the updated :class:`InstalledApp`.
+
+        Raises:
+            :class:`SpacePermissionError` — caller is not an admin.
+            :class:`AppNotFoundError` — app is not installed.
+            :class:`ValueError` — ``min_age`` is not a valid value.
+        """
+        if not actor_is_admin:
+            raise SpacePermissionError("Only admins may set the age restriction")
+        if min_age not in _VALID_MIN_AGES:
+            raise ValueError(
+                f"min_age must be one of {sorted(_VALID_MIN_AGES)}, got {min_age!r}"
+            )
+        existing = await self._repo.get(app_id)
+        if existing is None:
+            raise AppNotFoundError(f"App {app_id!r} is not installed")
+        await self._repo.set_min_age(app_id, min_age)
+        updated = await self._repo.get(app_id)
+        assert updated is not None  # just set it
+        return updated
 
     async def store_get(self, app_id: str, user_id: str, key: str) -> object:
         """Return the parsed value for ``key`` in the per-user store.
 
-        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the
-        app is absent or disabled, and :class:`KeyError` if the key has not
-        been set.
+        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` /
+        :class:`AppAgeRestrictedError` if the app is absent, disabled, or
+        age-restricted for this user; and :class:`KeyError` if the key has
+        not been set.
         """
-        await self._require_enabled_app(app_id)
+        await self._require_enabled_app(app_id, user_id)
         entry = await self._repo.kv_get(app_id, user_id, key)
         if entry is None:
             raise KeyError(key)
@@ -475,10 +576,11 @@ class AppService(BusPublisherMixin):
         """Return all key→value pairs in the per-user store as a parsed dict.
 
         Returns an empty dict when no keys have been set.  Raises
-        :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the app is
-        absent or disabled.
+        :class:`AppNotFoundError` / :class:`AppNotEnabledError` /
+        :class:`AppAgeRestrictedError` if the app is absent, disabled, or
+        age-restricted for this user.
         """
-        await self._require_enabled_app(app_id)
+        await self._require_enabled_app(app_id, user_id)
         return {
             e.key: json.loads(e.value_json)
             for e in await self._repo.kv_list(app_id, user_id)
@@ -497,10 +599,11 @@ class AppService(BusPublisherMixin):
           keys → :class:`AppQuotaExceededError`.  Updating an existing key at
           the cap is allowed.
 
-        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the
-        app is absent or disabled.
+        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` /
+        :class:`AppAgeRestrictedError` if the app is absent, disabled, or
+        age-restricted for this user.
         """
-        await self._require_enabled_app(app_id)
+        await self._require_enabled_app(app_id, user_id)
 
         if len(key) > APP_KV_MAX_KEY_LEN:
             raise AppQuotaExceededError(
@@ -527,10 +630,11 @@ class AppService(BusPublisherMixin):
     async def store_delete(self, app_id: str, user_id: str, key: str) -> None:
         """Remove ``key`` from the per-user store (no-op if the key is absent).
 
-        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` if the
-        app is absent or disabled.
+        Raises :class:`AppNotFoundError` / :class:`AppNotEnabledError` /
+        :class:`AppAgeRestrictedError` if the app is absent, disabled, or
+        age-restricted for this user.
         """
-        await self._require_enabled_app(app_id)
+        await self._require_enabled_app(app_id, user_id)
         await self._repo.kv_delete(app_id, user_id, key)
 
     # ─── Sync helpers (run inside asyncio.to_thread) ─────────────────────────
