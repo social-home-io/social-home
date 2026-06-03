@@ -97,6 +97,7 @@ class SpaceInviteTokenRedeemCoordinator:
         "_cover_repo",
         "_icon_repo",
         "_space_crypto",
+        "_child_protection",
         "_pending",
         "_timeout",
         "_route_service",
@@ -118,6 +119,7 @@ class SpaceInviteTokenRedeemCoordinator:
         cover_repo: "AbstractSpaceCoverRepo | None" = None,
         icon_repo=None,
         space_crypto_service=None,
+        child_protection_service=None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
@@ -135,6 +137,11 @@ class SpaceInviteTokenRedeemCoordinator:
         #: epoch's space content key in the ACK and the receiver
         #: imports it into its local space_keys (#117).
         self._space_crypto = space_crypto_service
+        #: Optional — when wired, §CP.F1 age-gates the redeemer before
+        #: seating them locally, so a protected minor can't redeem an
+        #: invite link into a remote-hosted age-restricted space. The
+        #: host's ``min_age`` rides the ACK's ``space_meta``.
+        self._child_protection = child_protection_service
         #: ``redeem_nonce`` → in-flight Future awaiting the ACK / DENY.
         self._pending: dict[str, asyncio.Future[dict]] = {}
         self._timeout = timeout
@@ -295,6 +302,32 @@ class SpaceInviteTokenRedeemCoordinator:
         space_id = str(result.get("space_id") or "")
         role_str = str(result.get("role") or SpaceRole.MEMBER.value)
         if space_id:
+            meta = result.get("space_meta")
+            meta_dict = meta if isinstance(meta, dict) else None
+            # §CP.F1 — refuse to seat an under-age protected minor in a
+            # remote-hosted age-restricted space. Checked BEFORE any local
+            # persistence (no space_instance mapping, no stub, no content
+            # key, no membership) so a blocked minor gains nothing — not
+            # even the ability to decrypt fan-out. The host's min_age rides
+            # the ACK's space_meta; an older issuer that ships none → 0 →
+            # allowed (the historical behaviour). The host may have seated
+            # us as a remote member on the valid token; without our
+            # space_instance + content key that residue is inert (it can
+            # only ever receive undecryptable ciphertext).
+            min_age = int(meta_dict.get("min_age") or 0) if meta_dict else 0
+            if self._child_protection is not None and not (
+                await self._child_protection.is_age_allowed(viewer_user_id, min_age)
+            ):
+                log.warning(
+                    "CP.F1: refusing invite-link redeem seat for under-age "
+                    "user=%s in space=%s (min_age=%d)",
+                    viewer_user_id,
+                    space_id,
+                    min_age,
+                )
+                raise SpacePermissionError(
+                    f"This space is restricted to users aged {min_age}+."
+                )
             await self._spaces.add_space_instance(
                 space_id,
                 issuer_instance_id,
@@ -305,8 +338,8 @@ class SpaceInviteTokenRedeemCoordinator:
             # don't ship it fall through to today's mapping-only
             # behaviour. SpaceMember is keyed on (space_id, user_id)
             # so a repeat redeem is a no-op via INSERT OR REPLACE.
-            meta = result.get("space_meta")
-            if isinstance(meta, dict):
+            if meta_dict is not None:
+                meta = meta_dict
                 stub = stub_space_from_metadata(
                     space_id,
                     host_instance_id=issuer_instance_id,
@@ -563,6 +596,12 @@ class SpaceInviteTokenRedeemCoordinator:
             {
                 "space_id": str(p.get("space_id") or ""),
                 "role": str(p.get("role") or SpaceRole.MEMBER.value),
+                # Forward the host's snapshot so request_redeem can seat the
+                # local stub + membership + roster. Dropping it here was why
+                # a cross-household invite-link redeem never surfaced the
+                # space on the redeemer's side (the seating block keyed on
+                # result["space_meta"] which was always absent).
+                "space_meta": p.get("space_meta"),
             }
         )
 

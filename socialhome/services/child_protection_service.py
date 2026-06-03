@@ -621,6 +621,24 @@ class ChildProtectionService:
         await self._require_admin(actor_user_id)
         return await self._repo.list_protection_status()
 
+    async def is_age_allowed(self, user_id: str, min_age: int) -> bool:
+        """§CP.F1 core check — may *user_id* access content gated at
+        *min_age*?
+
+        ``True`` for everyone when ``min_age <= 0``; ``True`` for any user
+        without child-protection enabled; otherwise ``True`` iff their
+        ``declared_age >= min_age``. Use this when the gate value is known
+        directly (e.g. from a federated ``space_meta`` snapshot before the
+        local stub row exists). :meth:`check_space_age_gate` is the
+        space-row-backed variant that raises.
+        """
+        if min_age <= 0:
+            return True
+        protection = await self._repo.get_user_protection(user_id)
+        if protection is None or not protection["child_protection_enabled"]:
+            return True
+        return int(protection["declared_age"] or 0) >= min_age
+
     async def check_space_age_gate(
         self,
         space_id: str,
@@ -632,15 +650,9 @@ class ChildProtectionService:
         ``declared_age`` is below the space's ``min_age``. No-op for
         non-protected users.
         """
-        protection = await self._repo.get_user_protection(user_id)
-        if protection is None or not protection["child_protection_enabled"]:
-            return
         gate = await self.get_space_age_gate(space_id)
         min_age = int(gate["min_age"] or 0)
-        if min_age == 0:
-            return
-        declared = int(protection["declared_age"] or 0)
-        if declared < min_age:
+        if not await self.is_age_allowed(user_id, min_age):
             raise SpacePermissionError(
                 f"This space is restricted to users aged {min_age}+."
             )
