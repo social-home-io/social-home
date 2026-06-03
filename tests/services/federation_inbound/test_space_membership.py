@@ -160,6 +160,25 @@ async def test_space_created_persists_and_publishes(bus, repo, handlers):
     assert captured[0].space_id == "sp-1"
 
 
+async def test_space_created_refused_when_owned_by_another_host(repo, handlers):
+    """§D1b anti-hijack — a SPACE_CREATED for an id we already hold under a
+    DIFFERENT host must not clobber our row (no save)."""
+    repo.spaces["sp-1"] = _host_space("sp-1", owner_instance_id="the-real-host")
+    await handlers._on_created(
+        _event(
+            FederationEventType.SPACE_CREATED,
+            {
+                "name": "Spoof",
+                "owner_username": "x",
+                "identity_public_key": "aa" * 32,
+            },
+            from_instance="peer-a",  # not the owner
+            space_id="sp-1",
+        )
+    )
+    assert repo.saved == []  # existing row untouched
+
+
 async def test_space_created_missing_identity_key_drops(repo, handlers):
     await handlers._on_created(
         _event(

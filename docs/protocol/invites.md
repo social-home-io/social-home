@@ -66,6 +66,20 @@ redeemer's household is the only party that knows the redeemer's declared
 age, so it must run this check; the host's per-token seat of the remote
 member is inert without the receiver's mapping + key.
 
+**§D1b anti-hijack:** before seating, the receiver refuses any ACK (and any
+``SPACE_PRIVATE_INVITE``) whose ``space_id`` collides with a space it
+**already holds under a different host** — otherwise a malicious issuer
+could ship a snapshot that clobbers that space's config + imports a foreign
+content key. The check (``can_seat_remote_stub``) compares the
+**authenticated** envelope sender against the existing row's
+``owner_instance_id``, never the issuer-controlled ``meta.owner_instance_id``
+(which a malicious host could spoof). A brand-new space, or a re-seat by the
+same owning host, is always allowed. Mirrors the host-authority guard on the
+``SPACE_CONFIG_CHANGED`` inbound path. The stub's stored ``owner_instance_id``
+is likewise the authenticated sender, **not** the snapshot's claimed owner
+(``stub_space_from_metadata`` ignores ``meta.owner_instance_id``) — so a
+forged owner can't be stamped on a new stub and later trusted by the guard.
+
 When the receiving HFS is **not** directly paired with the issuer
 (the user pasted a code from a friend-of-a-friend), the redeem flows
 through the federation mesh — see [`spaces.md` → "Mesh routing

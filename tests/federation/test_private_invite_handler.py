@@ -47,6 +47,10 @@ def handler():
     space_repo.save_remote_invitation = AsyncMock()
     space_repo.get_invitation_by_token = AsyncMock()
     space_repo.update_invitation_status = AsyncMock()
+    # No pre-existing local space row by default (the normal first-invite
+    # case) so the §D1b anti-hijack guard (can_seat_remote_stub) allows the
+    # stub. Tests that exercise a collision override this per-test.
+    space_repo.get = AsyncMock(return_value=None)
     remote_members = AsyncMock()
     remote_members.add = AsyncMock()
     remote_members.remove = AsyncMock()
@@ -354,6 +358,34 @@ async def test_invite_with_space_meta_seats_local_stub(handler):
     assert saved.owner_username == "pascal"
     assert saved.features.calendar is True
     assert saved.features.gallery is True
+
+
+async def test_invite_refuses_stub_when_space_owned_by_another_host(handler):
+    """§D1b anti-hijack — if we already hold this space_id under a DIFFERENT
+    host, a SPACE_PRIVATE_INVITE for it must NOT overwrite our row. The
+    guard compares the authenticated sender (from_instance='peer-1') against
+    the existing owner ('the-real-host'); a spoofed meta.owner_instance_id
+    that matches the existing owner does NOT help the attacker."""
+    handler.space_repo.get = AsyncMock(
+        return_value=SimpleNamespace(owner_instance_id="the-real-host"),
+    )
+    ev = _event(  # from_instance defaults to 'peer-1' (the malicious inviter)
+        "SPACE_PRIVATE_INVITE",
+        {
+            "space_id": "sp-collide",
+            "invite_token": "tkn",
+            "invitee_user_id": "u-self",
+            "inviter_user_id": "u-evil",
+            "space_meta": {
+                "name": "Spoofed",
+                "owner_instance_id": "the-real-host",  # spoofed to match
+                "owner_username": "x",
+                "identity_public_key": "abc",
+            },
+        },
+    )
+    await handler.h._on_invite(ev)
+    handler.space_repo.save.assert_not_awaited()
 
 
 async def test_invite_without_space_meta_skips_stub_creation(handler):
