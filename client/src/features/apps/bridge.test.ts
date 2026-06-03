@@ -332,22 +332,63 @@ describe('mountBridge', () => {
 
   // ── WS relay ──────────────────────────────────────────────────────────────
 
-  it('WS relay: forwards app.message frames matching the appId into the iframe', () => {
+  it('WS relay: forwards app.message frames matching the appId into the iframe with full identity', () => {
     expect(wsHandlers['app.message']).toBeDefined()
 
     wsHandlers['app.message']({
-      data: { app_id: APP_ID, payload: { move: 'e4' } },
+      data: {
+        app_id: APP_ID,
+        session_id: 'sess-abc',
+        from_instance: 'peer.example.com',
+        kind: 'message',
+        payload: { move: 'e4' },
+      },
     })
 
     expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
-      { type: 'app:event', payload: { move: 'e4' } },
+      {
+        type: 'app:event',
+        kind: 'message',
+        sessionId: 'sess-abc',
+        fromInstance: 'peer.example.com',
+        payload: { move: 'e4' },
+      },
+      '*',
+    )
+  })
+
+  it('WS relay: forwards session kind frames with kind="session"', () => {
+    wsHandlers['app.message']({
+      data: {
+        app_id: APP_ID,
+        session_id: 'sess-invite',
+        from_instance: 'peer.example.com',
+        kind: 'session',
+        payload: { verb: 'open' },
+      },
+    })
+
+    expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
+      {
+        type: 'app:event',
+        kind: 'session',
+        sessionId: 'sess-invite',
+        fromInstance: 'peer.example.com',
+        payload: { verb: 'open' },
+      },
       '*',
     )
   })
 
   it('WS relay: does NOT forward frames for a different app_id', () => {
     wsHandlers['app.message']({
-      data: { app_id: 'other-app', payload: { move: 'd5' } },
+      data: {
+        app_id: 'other-app',
+        session_id: 'sess-x',
+        from_instance: 'peer.example.com',
+        kind: 'message',
+        payload: { move: 'd5' },
+      },
     })
 
     expect(iframe.contentWindow!.postMessage).not.toHaveBeenCalled()

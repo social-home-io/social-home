@@ -196,15 +196,18 @@ class AppFederationService:
         if event.event_type is FederationEventType.APP_SESSION:
             # Pass the whole payload as the session info dict.
             app_payload: dict = dict(event.payload)
+            kind = "session"
         else:
             # APP_MESSAGE: the application data is nested under "data".
             app_payload = event.payload.get("data") or {}
+            kind = "message"
 
         await self._deliver(
             app_id,
             session_id,
             from_instance=event.from_instance,
             payload=app_payload,
+            kind=kind,
         )
 
     async def on_inbound_message(
@@ -224,6 +227,7 @@ class AppFederationService:
             session_id,
             from_instance=instance_id,
             payload=payload,
+            kind="message",
         )
 
     # ─── Internal helpers ─────────────────────────────────────────────────────
@@ -243,11 +247,21 @@ class AppFederationService:
         *,
         from_instance: str,
         payload: dict,
+        kind: str,
     ) -> None:
         """Fan an app message out to all local users via WebSocket.
 
         Silently drops (debug log) if the app is not installed or disabled —
         the peer doesn't need to know we don't have this app.
+
+        Parameters
+        ----------
+        kind:
+            ``"session"`` for ``APP_SESSION`` control events,
+            ``"message"`` for ``APP_MESSAGE`` and binary ``fed-app-v1``
+            data frames.  Forwarded to the SPA so the bridge can relay
+            it into the iframe, letting apps distinguish invites from
+            in-game moves and route by session.
         """
         app = await self._app_repo.get(app_id)
         if app is None or not app.enabled:
@@ -267,6 +281,7 @@ class AppFederationService:
                 "app_id": app_id,
                 "session_id": session_id,
                 "from_instance": from_instance,
+                "kind": kind,
                 "payload": payload,
             },
         )

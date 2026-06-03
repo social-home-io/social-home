@@ -168,10 +168,18 @@ export function mountBridge(
   }
 
   // WS relay: push app-specific real-time frames into the iframe.
+  // Forwards the full identity so multi-game / multi-friend apps can route
+  // a message to the right session and distinguish invites from in-game moves.
   const offWs = ws.on('app.message', (evt: WsEvent) => {
     if (evt.data?.app_id === appId) {
       iframe.contentWindow?.postMessage(
-        { type: 'app:event', payload: evt.data.payload },
+        {
+          type: 'app:event',
+          kind: evt.data.kind,            // 'session' | 'message'
+          sessionId: evt.data.session_id,
+          fromInstance: evt.data.from_instance,
+          payload: evt.data.payload,
+        },
         '*',
       )
     }
