@@ -58,6 +58,7 @@ from ..domain.federation_capabilities import FederationCapability
 
 if TYPE_CHECKING:
     from ..domain.events import DomainEvent
+    from ..domain.user import RemoteUser
     from ..infrastructure.event_bus import EventBus
     from ..repositories.app_repo import AbstractAppRepo
     from ..repositories.cp_repo import AbstractCpRepo
@@ -202,7 +203,7 @@ class AppFederationService:
 
         out: list[dict] = []
 
-        for u in await self._user_repo.list_all():
+        for u in await self._user_repo.list_active():
             if u.user_id == self_user_id:
                 continue
             if u.user_id in blocked_ids:
@@ -515,22 +516,41 @@ class AppFederationService:
             self._seen_open_sessions.popitem(last=False)
         return False
 
-    async def _remote_open_display(
+    async def _resolve_remote_initiator(
         self, from_instance: str, from_user: str | None
+    ) -> "RemoteUser | None":
+        """Resolve the remote challenge initiator's local ``RemoteUser`` row.
+
+        Returns ``None`` when ``from_user`` is absent or the remote can't be
+        found (legacy/unknown sender) — callers treat that as "can't enforce a
+        block, deliver as before" (fail-soft).
+        """
+        if not from_user:
+            return None
+        return await self._user_repo.get_remote_by_member(from_instance, from_user)
+
+    async def _remote_open_display(
+        self,
+        from_instance: str,
+        from_user: str | None,
+        *,
+        remote: "RemoteUser | None" = None,
     ) -> str:
         """Resolve a human label for a remote challenge initiator.
 
         Order: the remote user's federated ``display_name`` (when ``from_user``
         is known) → the peer instance's display name → the raw
         ``from_instance`` id as a last resort. Never a stable cross-household
-        id beyond the fallback.
+        id beyond the fallback. ``remote`` lets a caller that already resolved
+        the initiator (e.g. for a block check) pass the row to avoid a second
+        lookup.
         """
-        if from_user:
+        if remote is None and from_user:
             remote = await self._user_repo.get_remote_by_member(
                 from_instance, from_user
             )
-            if remote is not None and remote.display_name:
-                return remote.display_name
+        if remote is not None and remote.display_name:
+            return remote.display_name
         inst = await self._federation_repo.get_instance(from_instance)
         if inst is not None:
             return inst.effective_display_name
@@ -735,6 +755,27 @@ class AppFederationService:
         if to_user is not None:
             recipient = await self._user_repo.get(to_user)
             if recipient is not None:
+                # Recipient block enforcement (symmetric with DMs,
+                # ``dm_service._guard_block_pair``): if the recipient has
+                # blocked the remote initiator, drop both the WS delivery and
+                # the challenge notification. Fail-soft — when the initiator
+                # can't be resolved (no ``from_user`` / unknown remote) we
+                # deliver as before (legacy/unknown sender).
+                initiator = await self._resolve_remote_initiator(
+                    from_instance, from_user
+                )
+                if initiator is not None and await self._user_repo.is_blocked(
+                    recipient.user_id, initiator.user_id
+                ):
+                    log.info(
+                        "app_federation: dropping inbound %s for blocked initiator "
+                        "(recipient=%s initiator=%s session=%s)",
+                        kind,
+                        recipient.user_id,
+                        initiator.user_id,
+                        session_id,
+                    )
+                    return
                 allowed = await self._age_filter_recipients(app_id, [recipient.user_id])
                 log.info(
                     "app_federation deliver app=%s session=%s kind=%s routed=%s recipients=%d",
@@ -748,7 +789,7 @@ class AppFederationService:
                     await self._ws.broadcast_to_user(recipient.user_id, frame)
                     if notify_open:
                         from_display = await self._remote_open_display(
-                            from_instance, from_user
+                            from_instance, from_user, remote=initiator
                         )
                         await self._emit(
                             AppChallengeReceived(
@@ -760,8 +801,9 @@ class AppFederationService:
                         )
                 return
 
-        # Legacy / best-effort fan-out to every age-eligible local user.
-        users = await self._user_repo.list_all()
+        # Legacy / best-effort fan-out to every active, age-eligible local user
+        # (soft-deleted/inactive accounts are excluded — same as /friends).
+        users = await self._user_repo.list_active()
         user_ids = [u.user_id for u in users]
         if not user_ids:
             return

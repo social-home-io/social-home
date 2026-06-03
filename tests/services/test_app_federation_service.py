@@ -138,13 +138,19 @@ class _FakeUserRepo:
         users: list[User] | None = None,
         remote_users: list[RemoteUser] | None = None,
         blocked_ids: set[str] | None = None,
+        block_pairs: set[tuple[str, str]] | None = None,
     ) -> None:
         self._users: list[User] = users or []
         self._remote_users: list[RemoteUser] = remote_users or []
         self._blocked_ids: set[str] = blocked_ids or set()
+        #: Directed (blocker_user_id, blocked_user_id) pairs for is_blocked.
+        self._block_pairs: set[tuple[str, str]] = block_pairs or set()
 
     async def list_all(self) -> list[User]:
         return list(self._users)
+
+    async def list_active(self) -> list[User]:
+        return [u for u in self._users if u.state == "active" and not u.deleted_at]
 
     async def get_by_user_id(self, user_id: str) -> User | None:
         for u in self._users:
@@ -164,6 +170,9 @@ class _FakeUserRepo:
     async def list_blocked(self, blocker_user_id: str) -> list[tuple[str, str]]:
         """Return ``[(blocked_user_id, blocked_at), ...]`` for the blocker."""
         return [(uid, "2026-01-01T00:00:00+00:00") for uid in self._blocked_ids]
+
+    async def is_blocked(self, blocker_user_id: str, blocked_user_id: str) -> bool:
+        return (blocker_user_id, blocked_user_id) in self._block_pairs
 
     async def get_remote_by_member(
         self, instance_id: str, remote_username: str
@@ -292,6 +301,7 @@ def _make_svc(
     online_user_ids: set[str] | None = None,
     own_instance_id: str = "own-inst-id",
     blocked_ids: set[str] | None = None,
+    block_pairs: set[tuple[str, str]] | None = None,
     peer_version: int = 18,
     bus: _FakeBus | None = None,
 ) -> tuple[AppFederationService, _FakeFederation, _FakeWs]:
@@ -302,7 +312,10 @@ def _make_svc(
     svc = AppFederationService(
         app_repo=_FakeAppRepo(apps),
         user_repo=_FakeUserRepo(
-            users, remote_users=remote_users, blocked_ids=blocked_ids
+            users,
+            remote_users=remote_users,
+            blocked_ids=blocked_ids,
+            block_pairs=block_pairs,
         ),
         ws=ws,
         federation=federation,
@@ -1560,3 +1573,131 @@ async def test_duplicate_inbound_open_delivers_and_publishes_once():
     assert len(challenges) == 1
     delivered = [c for c in ws.user_calls if c["user_id"] == "u-bob"]
     assert len(delivered) == 1
+
+
+# ─── Recipient block enforcement on inbound challenge (Fix 1) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_inbound_challenge_blocked_by_recipient_is_dropped():
+    """A challenge from a remote initiator the recipient has BLOCKED is dropped:
+    no WS delivery, no AppChallengeReceived publish (symmetric with DMs)."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    bus = _FakeBus()
+    svc, _, ws = _make_svc(
+        apps={"chess": app},
+        users=[bob],
+        remote_users=[remote],
+        # bob (recipient) has blocked carol (remote initiator).
+        block_pairs={("u-bob", "ru-carol")},
+        bus=bus,
+    )
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "bob",
+            "from_user": "carol",
+        },
+    )
+    await svc.on_inbound_event(event)
+    # No delivery and no challenge — the block is honoured.
+    assert ws.user_calls == []
+    assert ws.calls == []
+    assert not [e for e in bus.published if isinstance(e, AppChallengeReceived)]
+
+
+@pytest.mark.asyncio
+async def test_inbound_challenge_not_blocked_is_delivered():
+    """Control: an unblocked remote initiator's challenge still delivers + publishes."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    bus = _FakeBus()
+    svc, _, ws = _make_svc(
+        apps={"chess": app},
+        users=[bob],
+        remote_users=[remote],
+        bus=bus,
+    )
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "bob",
+            "from_user": "carol",
+        },
+    )
+    await svc.on_inbound_event(event)
+    assert any(c["user_id"] == "u-bob" for c in ws.user_calls)
+    assert len([e for e in bus.published if isinstance(e, AppChallengeReceived)]) == 1
+
+
+@pytest.mark.asyncio
+async def test_inbound_message_blocked_by_recipient_is_dropped():
+    """An in-session move from a blocked remote initiator is also dropped."""
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    svc, _, ws = _make_svc(
+        apps={"chess": app},
+        users=[bob],
+        remote_users=[remote],
+        block_pairs={("u-bob", "ru-carol")},
+    )
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "to_user": "bob",
+            "from_user": "carol",
+            "data": {"move": "e4"},
+        },
+    )
+    await svc.on_inbound_event(event)
+    assert ws.user_calls == []
+    assert ws.calls == []
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_uses_active_users():
+    """A soft-deleted/inactive local user is not surfaced as a contact."""
+    alice = _make_user("u-alice", "alice", "Alice")
+    inactive = dataclasses.replace(
+        _make_user("u-gone", "gone", "Gone"),
+        state="inactive",
+        deleted_at="2026-01-01T00:00:00+00:00",
+    )
+    svc, _, _ = _make_svc(
+        users=[alice, inactive],
+        own_instance_id="own-inst",
+    )
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    refs = {c["user_ref"] for c in contacts}
+    assert "u-gone" not in refs
