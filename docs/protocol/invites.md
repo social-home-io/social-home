@@ -41,14 +41,30 @@ and the receiving user's identity. The issuer validates the token
 (exists, not expired, ``uses_remaining > 0``), atomically decrements,
 seats the receiver as a ``SpaceRemoteMember`` + records the
 ``(space, instance)`` mapping, then sends ``SPACE_INVITE_TOKEN_REDEEM_ACK``
-back with ``{space_id, role}``. Any failure (token unknown, expired,
+back with ``{space_id, role, space_meta}`` — where ``space_meta`` is the
+full ``build_space_snapshot_for_federation`` blob (config + cover/icon
+bytes + content key + member roster). Any failure (token unknown, expired,
 exhausted, banned, persistence error) → ``SPACE_INVITE_TOKEN_REDEEM_DENY``
 with a string ``reason``.
 
 The receiver awaits the ACK on a nonce-keyed Future inside the
-``POST /api/spaces/join`` handler (10 s timeout). On success the
-endpoint returns ``{space_id, role}`` like the local path; on DENY
-returns 422 with the reason; on timeout returns 504.
+``POST /api/spaces/join`` handler (10 s timeout). On success it seats the
+join **locally** from the ACK's ``space_meta``: a stub ``spaces`` row
+(``stub_space_from_metadata``), the cover/icon bytes, the content key, its
+own ``space_members`` row, the ``(space, instance)`` mapping, and the rest
+of the roster as ``SpaceRemoteMember`` rows — so ``/api/spaces`` shows the
+space immediately. (An older issuer that ships no ``space_meta`` falls back
+to the mapping-only behaviour.) The endpoint returns ``{space_id, role}``
+like the local path; on DENY returns 422 with the reason; on timeout 504.
+
+**§CP.F1 age gate:** the receiver enforces the host's ``min_age`` (carried
+in ``space_meta``) against the redeeming user **before** persisting
+anything — a protected minor below the bar is refused locally (nothing
+seated: no stub, content key, membership, or mapping) and the handler
+returns 403 ``"This space is restricted to users aged N+."`` The
+redeemer's household is the only party that knows the redeemer's declared
+age, so it must run this check; the host's per-token seat of the remote
+member is inert without the receiver's mapping + key.
 
 When the receiving HFS is **not** directly paired with the issuer
 (the user pasted a code from a friend-of-a-friend), the redeem flows

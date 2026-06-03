@@ -382,6 +382,25 @@ async def test_check_age_gate_no_op_when_min_age_zero(env):
     await svc.check_space_age_gate("sp-adult", "lila-id")
 
 
+async def test_is_age_allowed_direct_check(env):
+    """is_age_allowed gates against an explicit min_age (used by the
+    federated invite-link redeem path before the local stub exists)."""
+    svc, _ = env
+    await svc.enable_protection(
+        minor_username="lila",
+        declared_age=8,
+        actor_user_id="admin-id",
+    )
+    # min_age 0 → everyone allowed (even the protected minor).
+    assert await svc.is_age_allowed("lila-id", 0) is True
+    # protected minor below the bar → blocked.
+    assert await svc.is_age_allowed("lila-id", 18) is False
+    # protected minor at/above the bar → allowed.
+    assert await svc.is_age_allowed("lila-id", 8) is True
+    # unprotected user → always allowed, even for an 18+ bar.
+    assert await svc.is_age_allowed("mom-id", 18) is True
+
+
 # ─── §CP.F3 DM enforcement ──────────────────────────────────────────────
 
 

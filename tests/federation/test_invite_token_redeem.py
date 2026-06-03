@@ -29,7 +29,13 @@ from socialhome.domain.federation import (
     FederationEventType,
     PairingStatus,
 )
-from socialhome.domain.space import SpacePermissionError
+from socialhome.domain.space import (
+    JoinMode,
+    Space,
+    SpaceFeatures,
+    SpacePermissionError,
+    SpaceType,
+)
 from socialhome.federation.invite_token_redeem import (
     SpaceInviteTokenRedeemCoordinator,
 )
@@ -61,6 +67,9 @@ class _FakeUserRepo:
 
     async def get_by_user_id(self, user_id):
         return self._users.get(user_id)
+
+    async def list_by_ids(self, ids):
+        return [self._users[i] for i in ids if i in self._users]
 
 
 class _FakeSpaceRepo:
@@ -121,6 +130,9 @@ class _FakeSpaceRepo:
     async def save_member(self, member):
         self.members.append(member)
 
+    async def list_members(self, space_id):
+        return [m for m in self.members if getattr(m, "space_id", None) == space_id]
+
 
 class _FakeRemoteMemberRepo:
     def __init__(self):
@@ -132,6 +144,9 @@ class _FakeRemoteMemberRepo:
 
     async def remove(self, space_id, instance_id, user_id):
         self.removed.append((space_id, instance_id, user_id))
+
+    async def list_for_space(self, space_id):
+        return []
 
 
 class _FakeFederationService:
@@ -235,6 +250,7 @@ def _make_coordinator(
     user_repo=None,
     federation_repo=None,
     timeout: float = 10.0,
+    child_protection=None,
 ):
     bus = AsyncMock()
     bus.publish = AsyncMock()
@@ -246,6 +262,23 @@ def _make_coordinator(
         user_repo=user_repo or _FakeUserRepo({"u-local": _make_user()}),
         federation_repo=federation_repo or _FakeFederationRepo(),
         timeout=timeout,
+        child_protection_service=child_protection,
+    )
+
+
+def _a_space(space_id, *, owner_instance_id="issuer-1", min_age=0):
+    """A minimal host space the issuer ships in the ACK's space_meta."""
+    return Space(
+        id=space_id,
+        name="Shared",
+        owner_instance_id=owner_instance_id,
+        owner_username="owner",
+        identity_public_key="aa" * 32,
+        config_sequence=1,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        min_age=min_age,
     )
 
 
@@ -296,7 +329,12 @@ async def test_redeem_missing_local_user_raises():
 # ── Round-trip tests ──────────────────────────────────────────────────
 
 
-def _wire_pair(token_row: dict, *, redeemer_banned: bool = False):
+def _wire_pair(
+    token_row: dict,
+    *,
+    redeemer_banned: bool = False,
+    sender_child_protection=None,
+):
     """Create a sender + issuer coordinator pair linked through
     ``_LinkedFederationService`` so the round-trip runs in-memory.
 
@@ -315,6 +353,7 @@ def _wire_pair(token_row: dict, *, redeemer_banned: bool = False):
         federation_repo=_FakeFederationRepo(
             {"issuer-1": _FakeInstance("issuer-1")},
         ),
+        child_protection=sender_child_protection,
     )
     issuer = _make_coordinator(
         federation=issuer_fed,
@@ -383,6 +422,89 @@ async def test_redeem_round_trip_persists_local_space_instance():
         issuer_instance_id="issuer-1",
     )
     assert ("sp-2", "issuer-1") in sender_repo.space_instances
+
+
+async def test_redeem_seats_local_stub_and_membership_from_ack_meta():
+    """Core §D1b fix: when the issuer's ACK carries space_meta, the
+    redeemer's side seats a local stub + membership so /api/spaces shows
+    the space. Regression — _on_redeem_ack used to drop space_meta, so this
+    block never ran and a cross-household invite-link redeem surfaced
+    nothing locally."""
+    sender, _issuer, *_rest, issuer_repo, _im = _wire_pair(
+        {"space_id": "sp-meta", "created_by": "owner", "uses_remaining": 1},
+    )
+    # Seed the issuer's space so its ACK ships a space_meta snapshot.
+    issuer_repo.space_rows_for_get["sp-meta"] = _a_space("sp-meta")
+    await sender.request_redeem(
+        "good-token",
+        viewer_user_id="u-local",
+        issuer_instance_id="issuer-1",
+    )
+    sender_repo = sender._spaces  # type: ignore[attr-defined]
+    # Stub + membership now seated locally (were never created before).
+    assert "sp-meta" in sender_repo.spaces
+    assert any(
+        m.space_id == "sp-meta" and m.user_id == "u-local" for m in sender_repo.members
+    )
+    assert ("sp-meta", "issuer-1") in sender_repo.space_instances
+
+
+async def test_redeem_blocks_underage_minor_and_seats_nothing():
+    """§CP.F1 — a protected minor redeeming a link to a remote 18+ space is
+    refused locally: nothing is seated (no stub, membership, or
+    space_instance) and a SpacePermissionError (→ 403) propagates."""
+    cp = SimpleNamespace(is_age_allowed=AsyncMock(return_value=False))
+    sender, _issuer, *_rest, issuer_repo, _im = _wire_pair(
+        {"space_id": "sp-18", "created_by": "owner", "uses_remaining": 1},
+        sender_child_protection=cp,
+    )
+    issuer_repo.space_rows_for_get["sp-18"] = _a_space("sp-18", min_age=18)
+    with pytest.raises(SpacePermissionError, match="18"):
+        await sender.request_redeem(
+            "good-token",
+            viewer_user_id="u-local",
+            issuer_instance_id="issuer-1",
+        )
+    sender_repo = sender._spaces  # type: ignore[attr-defined]
+    assert sender_repo.spaces == {}
+    assert sender_repo.members == []
+    assert sender_repo.space_instances == []  # not even the routing mapping
+    cp.is_age_allowed.assert_awaited_once_with("u-local", 18)
+
+
+async def test_redeem_coerces_out_of_set_min_age_no_crash():
+    """A malicious issuer shipping a non-conforming min_age (e.g. 15) must
+    not crash the redeemer — it coerces to 0 (no restriction) and seats."""
+    cp = SimpleNamespace(is_age_allowed=AsyncMock(return_value=True))
+    sender, _issuer, *_rest, issuer_repo, _im = _wire_pair(
+        {"space_id": "sp-bad", "created_by": "owner", "uses_remaining": 1},
+        sender_child_protection=cp,
+    )
+    issuer_repo.space_rows_for_get["sp-bad"] = _a_space("sp-bad", min_age=15)
+    await sender.request_redeem(
+        "good-token",
+        viewer_user_id="u-local",
+        issuer_instance_id="issuer-1",
+    )
+    # Coerced to 0 before the gate — is_age_allowed called with 0, seated.
+    cp.is_age_allowed.assert_awaited_once_with("u-local", 0)
+    assert "sp-bad" in sender._spaces.spaces  # type: ignore[attr-defined]
+
+
+async def test_redeem_allows_old_enough_minor():
+    """A 16-year-old minor IS seated into a 13+ space — is_age_allowed True."""
+    cp = SimpleNamespace(is_age_allowed=AsyncMock(return_value=True))
+    sender, _issuer, *_rest, issuer_repo, _im = _wire_pair(
+        {"space_id": "sp-13", "created_by": "owner", "uses_remaining": 1},
+        sender_child_protection=cp,
+    )
+    issuer_repo.space_rows_for_get["sp-13"] = _a_space("sp-13", min_age=13)
+    await sender.request_redeem(
+        "good-token",
+        viewer_user_id="u-local",
+        issuer_instance_id="issuer-1",
+    )
+    assert "sp-13" in sender._spaces.spaces  # type: ignore[attr-defined]
 
 
 async def test_redeem_with_expired_token_sends_deny():

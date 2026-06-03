@@ -2188,6 +2188,7 @@ def create_app(config: Config | None = None) -> web.Application:
             cover_repo=space_cover_repo,
             icon_repo=space_icon_repo,
             space_crypto_service=space_crypto,
+            child_protection_service=child_protection_service,
         )
         invite_redeem_coordinator.attach_to(federation_service)
         real_space_service.attach_redeem_coordinator(invite_redeem_coordinator)
