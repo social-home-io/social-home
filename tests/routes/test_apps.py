@@ -796,6 +796,65 @@ async def test_peers_member_can_list(client, fed_svc):
     assert body == {"peers": []}
 
 
+# ── GET /api/apps/{app_id}/contacts ──────────────────────────────────────
+
+
+async def test_contacts_requires_auth(client):
+    r = await client.get("/api/apps/com.example.hello/contacts")
+    assert r.status == 401
+
+
+async def test_get_contacts_returns_contact_shape(client, fed_svc):
+    contacts = [
+        {
+            "instance_id": "peer.example.com",
+            "user_ref": "alice@peer.example.com",
+            "display_name": "Alice",
+            "is_local": False,
+            "online": True,
+        },
+        {
+            "instance_id": "local",
+            "user_ref": "bob@local",
+            "display_name": "Bob",
+            "is_local": True,
+            "online": False,
+        },
+    ]
+    fed_svc.list_contacts.return_value = contacts
+
+    r = await client.get(
+        "/api/apps/com.example.hello/contacts",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert isinstance(body["contacts"], list)
+    for c in body["contacts"]:
+        assert set(c.keys()) == {
+            "instance_id",
+            "user_ref",
+            "display_name",
+            "is_local",
+            "online",
+        }
+    fed_svc.list_contacts.assert_awaited_once()
+
+
+async def test_contacts_member_can_list(client, fed_svc):
+    """Non-admin members can also list contacts."""
+    fed_svc.list_contacts.return_value = []
+    member_tok = await _seed_member(client._db)
+
+    r = await client.get(
+        "/api/apps/com.example.hello/contacts",
+        headers=_auth(member_tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"contacts": []}
+
+
 # ── POST /api/apps/{app_id}/sessions ─────────────────────────────────────
 
 

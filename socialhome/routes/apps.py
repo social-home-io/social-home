@@ -260,6 +260,15 @@ class AppPeersView(BaseView):
         return self._json({"peers": peers})
 
 
+class AppContactsView(BaseView):
+    """``GET /api/apps/{app_id}/contacts`` — people this user can challenge."""
+
+    async def get(self) -> web.Response:
+        svc = self.svc(app_federation_service_key)
+        contacts = await svc.list_contacts(self_user_id=self.user.user_id)
+        return self._json({"contacts": contacts})
+
+
 class AppSessionsView(BaseView):
     """``POST /api/apps/{app_id}/sessions`` — open a cross-household app session."""
 
