@@ -330,7 +330,9 @@ are **release-fetched**: `AppService` downloads `catalog.json` from the
 configured release URL (`apps_catalog_url` / `SH_APPS_CATALOG_URL`),
 and on install downloads the bundle tarball, verifies its `sha256`
 against the catalog entry, and unpacks it with a path-traversal guard
-under `media_path/apps/<app_id>/<version>/`. A mismatch aborts the
+under `apps_path/<app_id>/<version>/` (`apps_path` / `SH_APPS_PATH`,
+default `<data_dir>/apps` — a dedicated app directory separate from user
+media, so on HAOS it persists at `/data/apps`). A mismatch aborts the
 install — a bundle is never unpacked until its digest is confirmed.
 
 The registry lives in `installed_apps` (see `database.md` → **Apps**)
