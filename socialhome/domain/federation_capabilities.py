@@ -241,7 +241,14 @@ from __future__ import annotations
 #:   control (``APP_SESSION``) always rides the event path, so an app
 #:   session degrades gracefully on older peers; only the binary fast-path
 #:   is lost.
-OURS: int = 17
+#: * **v_18** (2026-06-03) — per-user app session/message routing
+#:   (``to_user`` / ``from_user``). ``APP_SESSION`` and ``APP_MESSAGE``
+#:   events may now carry a ``to_user`` field (target user's local_id on
+#:   the receiving household) and a ``from_user`` display hint. Sub-v_18
+#:   peers receive the legacy household-addressed shape (no ``to_user``)
+#:   and the local bridge fans the event to all local users (the prior
+#:   behaviour). §FIX-I2 relaxed for shared-space co-members.
+OURS: int = 18
 
 
 class FederationCapability:
@@ -381,6 +388,13 @@ class FederationCapability:
     #: media channel). Session control (``APP_SESSION``) always rides the
     #: event path, so an app session degrades gracefully to older peers.
     MIN_FOR_APP_CHANNEL = 17
+
+    #: Minimum proto_version where the peer routes ``APP_SESSION`` /
+    #: ``APP_MESSAGE`` to a *specific* user via the ``to_user`` field and
+    #: accepts the ``from_user`` display hint. Sub-v_18 peers receive the
+    #: legacy household-addressed shape (no ``to_user``) and the local
+    #: bridge fans the event to all local users (the prior behaviour).
+    MIN_FOR_APP_USER_ROUTING = 18
 
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so

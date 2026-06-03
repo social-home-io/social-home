@@ -6,7 +6,7 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 17
+    assert fc.OURS == 18
 
 
 def test_remote_admin_action_capability_threshold():
@@ -22,6 +22,13 @@ def test_admin_proposals_capability_threshold():
 def test_app_channel_capability_threshold():
     assert fc.FederationCapability.MIN_FOR_APP_CHANNEL == 17
     assert fc.FederationCapability.MIN_FOR_APP_CHANNEL <= fc.OURS
+
+
+def test_ours_is_at_least_18_and_app_user_routing_constant():
+    from socialhome.domain.federation_capabilities import OURS, FederationCapability
+
+    assert OURS >= 18
+    assert FederationCapability.MIN_FOR_APP_USER_ROUTING == 18
 
 
 def test_media_channel_capability_threshold():
