@@ -66,6 +66,7 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 from ..media.cleanup import unlink_media
+from .child_protection_service import _VALID_MIN_AGES
 from .space_purge import purge_space_and_media
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
@@ -3513,9 +3514,25 @@ def stub_space_from_metadata(
         # §CP.F1 — carry the host's age gate into the stub so the joiner
         # household enforces it locally. Fail-soft: older sender omits it
         # → min_age 0 (no restriction).
-        min_age=int(meta.get("min_age") or 0),
+        min_age=_coerce_min_age(meta.get("min_age")),
         target_audience=str(meta.get("target_audience") or "all"),
     )
+
+
+def _coerce_min_age(value: object) -> int:
+    """Clamp a federated ``min_age`` to the allowed set ({0,13,16,18}).
+
+    A non-conforming / malicious peer shipping e.g. ``15`` must not reach
+    the ``spaces.min_age`` CHECK (it would raise and abort the join) — fall
+    back to 0 (no restriction, the fail-soft default).
+    """
+    if not isinstance(value, (int, str)):
+        return 0
+    try:
+        coerced = int(value)
+    except TypeError, ValueError:
+        return 0
+    return coerced if coerced in _VALID_MIN_AGES else 0
 
 
 def _coerce_space_type(value: SpaceType | str) -> SpaceType:
