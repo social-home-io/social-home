@@ -18,15 +18,25 @@ The ``session_id`` returned by :meth:`open_session` is the de-facto game /
 whiteboard / mini-app session namespace.  All messages carry it so the SPA can
 dispatch to the correct in-page component without any server-side state.
 
-Person-addressed sessions: :meth:`open_session` targets a specific person
-(local or remote).  A local-loopback open delivers a ``kind="session"`` frame
+Person-addressed sessions: :meth:`open_session` and :meth:`send_message` both
+target a specific person (local or remote).  A local-loopback delivers a frame
 straight to the target and initiator over WebSocket (no federation send); a
-remote open sends an ``APP_SESSION`` event, carrying ``to_user`` / ``from_user``
-to v_18+ peers (gated on
-:data:`FederationCapability.MIN_FOR_APP_USER_ROUTING`) so the peer can route to
-the addressed person.  Inbound ``APP_MESSAGE`` delivery still fans out to every
-local user whose WebSocket is open (per-user inbound routing is a follow-up);
-the app's ``session_id`` scopes the semantics for the SPA.
+remote open sends an ``APP_SESSION`` event and a remote message goes via
+``send_app_message``, both carrying ``to_user`` / ``from_user`` to v_18+ peers
+(gated on :data:`FederationCapability.MIN_FOR_APP_USER_ROUTING`) so the peer
+can route to the addressed person.
+
+Inbound routing: when an inbound JSON event carries a non-empty ``to_user``
+that resolves to a local user, :meth:`_deliver` delivers only to that user;
+otherwise (legacy/empty/unresolvable, and the binary ``fed-app-v1`` path which
+carries no routing slot in v1) it falls back to the household fan-out and the
+app's ``session_id`` scopes the semantics for the SPA.
+
+Authorization: both outbound entry points call :meth:`_assert_target_allowed`,
+which rejects (``AppContactNotFoundError``) any target that is not in the
+actor's challengeable roster (the same block-aware set as
+:meth:`list_contacts`).  Legacy household-addressed sends (``user_ref == ""``)
+are exempt for back-compat.
 """
 
 from __future__ import annotations
@@ -35,7 +45,12 @@ import logging
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any
 
-from ..domain.apps import AppAgeRestrictedError, AppNotEnabledError, AppNotFoundError
+from ..domain.apps import (
+    AppAgeRestrictedError,
+    AppContactNotFoundError,
+    AppNotEnabledError,
+    AppNotFoundError,
+)
 from ..domain.federation import FederationEvent, FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 
@@ -225,6 +240,7 @@ class AppFederationService:
         """
         await self._require_enabled(app_id)
         await self._assert_age_allowed(app_id, actor_user_id)
+        await self._assert_target_allowed(actor_user_id, target)
         session_id = uuid4().hex
         own = self._federation.own_instance_id
 
@@ -234,12 +250,18 @@ class AppFederationService:
             recipients = await self._age_filter_recipients(
                 app_id, [target["user_ref"], actor_user_id]
             )
-            await self._emit_session_open(
+            await self._emit_frame(
                 recipients,
                 app_id=app_id,
                 session_id=session_id,
                 from_instance=own,
                 from_user=actor_user_id,
+                kind="session",
+                payload={
+                    "app_id": app_id,
+                    "session_id": session_id,
+                    "verb": "open",
+                },
             )
             return session_id
 
@@ -270,29 +292,73 @@ class AppFederationService:
         self,
         *,
         app_id: str,
+        target: dict,
         session_id: str,
-        peer_instance_id: str,
         payload: dict,
         actor_user_id: str,
     ) -> None:
-        """Send an app-layer message to a peer household.
+        """Send an app-layer message to a specific *person* (local or remote).
 
-        Validates that the app is installed and enabled, then delegates to
-        :meth:`FederationService.send_app_message` which selects the binary
-        ``fed-app-v1`` channel (v_17+ confirmed peers) or falls back to the
-        JSON ``APP_MESSAGE`` federation event path — in both cases the
-        ``payload`` dict is AES-256-GCM-sealed and never sent in plaintext.
+        Mirrors :meth:`open_session`: ``target`` is
+        ``{"instance_id": str, "user_ref": str, "is_local": bool}`` as
+        returned by :meth:`list_contacts`.
 
-        ``actor_user_id`` is recorded for audit / rate-limiting hooks; it is
-        not forwarded in the current v1 wire shape.
+        * ``is_local`` — the target lives on this household; ``user_ref`` is a
+          local ``user_id``.  We deliver a ``kind="message"`` frame straight
+          to the target *and* the initiator over WebSocket (age-filtered,
+          de-duped) — no federation send, no fan-out to every local user.
+        * remote — delegate to :meth:`FederationService.send_app_message`,
+          which selects the binary ``fed-app-v1`` channel (v_17+ confirmed
+          peers) or falls back to the JSON ``APP_MESSAGE`` federation event
+          path — in both cases the ``payload`` dict is AES-256-GCM-sealed and
+          never sent in plaintext.
+
+        Per-user routing (``to_user`` / ``from_user``) is gated on
+        :data:`FederationCapability.MIN_FOR_APP_USER_ROUTING` (v_18) and rides
+        the JSON ``APP_MESSAGE`` path only — the binary fast-path frame format
+        (v1) has no routing slot, so a binary send stays household-scoped and
+        the receiver disambiguates by ``session_id`` (documented v1
+        limitation; see :meth:`FederationService.send_app_message`).
         """
         await self._require_enabled(app_id)
         await self._assert_age_allowed(app_id, actor_user_id)
+        await self._assert_target_allowed(actor_user_id, target)
+        own = self._federation.own_instance_id
+
+        if target.get("is_local"):
+            # Local loopback — deliver the message frame to the addressed
+            # person and the initiator only, never a fan-out to all local users.
+            recipients = await self._age_filter_recipients(
+                app_id, [target["user_ref"], actor_user_id]
+            )
+            await self._emit_frame(
+                recipients,
+                app_id=app_id,
+                session_id=session_id,
+                from_instance=own,
+                from_user=actor_user_id,
+                kind="message",
+                payload=payload,
+            )
+            return
+
+        # Remote — include per-user routing fields only for v_18+ peers.
+        to_user: str | None = None
+        from_user: str | None = None
+        if await self._federation.peer_supports(
+            target["instance_id"],
+            min_version=FederationCapability.MIN_FOR_APP_USER_ROUTING,
+        ):
+            me = await self._user_repo.get_by_user_id(actor_user_id)
+            from_user = me.username if me is not None else actor_user_id
+            to_user = target["user_ref"]
         await self._federation.send_app_message(
-            to_instance_id=peer_instance_id,
+            to_instance_id=target["instance_id"],
             app_id=app_id,
             session_id=session_id,
             payload=payload,
+            to_user=to_user,
+            from_user=from_user,
         )
 
     # ─── Inbound federation dispatch ─────────────────────────────────────────
@@ -324,12 +390,20 @@ class AppFederationService:
             app_payload = event.payload.get("data") or {}
             kind = "message"
 
+        # Per-user routing (v_18+): a non-empty ``to_user`` addresses one local
+        # user.  An empty string is the legacy household-addressed open (a
+        # back-compat open maps ``user_ref`` → "") — treat it as absent so it
+        # falls back to the household fan-out and is never looked up.
+        raw_to_user = event.payload.get("to_user")
+        to_user = raw_to_user if isinstance(raw_to_user, str) and raw_to_user else None
+
         await self._deliver(
             app_id,
             session_id,
             from_instance=event.from_instance,
             payload=app_payload,
             kind=kind,
+            to_user=to_user,
         )
 
     async def on_inbound_message(
@@ -344,12 +418,16 @@ class AppFederationService:
         Called by :meth:`FederationService._app_inbound_handler` after the
         §24.11 pipeline validates the envelope and the payload is decrypted.
         """
+        # The binary ``fed-app-v1`` frame format (v1) carries no ``to_user``
+        # routing slot, so binary inbound always uses the household fan-out;
+        # the receiver disambiguates by ``session_id``.
         await self._deliver(
             app_id,
             session_id,
             from_instance=instance_id,
             payload=payload,
             kind="message",
+            to_user=None,
         )
 
     # ─── Internal helpers ─────────────────────────────────────────────────────
@@ -396,7 +474,35 @@ class AppFederationService:
                 f"This app is restricted to ages {app.min_age}+."
             )
 
-    async def _emit_session_open(
+    async def _assert_target_allowed(self, actor_user_id: str, target: dict) -> None:
+        """Raise :class:`AppContactNotFoundError` if ``target`` is not a contact.
+
+        Closes the Task-5 authorization gap: without this check a crafted
+        ``target`` could address an arbitrary local user or remote household
+        the actor has no relationship with.  The allowed set is built from the
+        *same* source as :meth:`list_contacts` — paired-household members minus
+        personal blocks — so the block-list is honoured for free.
+
+        A legacy household-addressed send carries ``user_ref == ""`` (the
+        back-compat mapping in the route layer); it predates per-person
+        addressing and is allowed through so sub-v_18 peers keep working — the
+        household fan-out on the receiver side already scopes by membership.
+        """
+        if not target.get("user_ref"):
+            # Legacy household-addressed path (user_ref == "") — exempt.
+            return
+        contacts = await self.list_contacts(self_user_id=actor_user_id)
+        key = (
+            target.get("instance_id"),
+            target.get("user_ref"),
+            bool(target.get("is_local")),
+        )
+        for c in contacts:
+            if (c["instance_id"], c["user_ref"], c["is_local"]) == key:
+                return
+        raise AppContactNotFoundError("target is not a contact of the requesting user")
+
+    async def _emit_frame(
         self,
         recipient_user_ids: list[str],
         *,
@@ -404,27 +510,27 @@ class AppFederationService:
         session_id: str,
         from_instance: str,
         from_user: str,
+        kind: str,
+        payload: dict,
     ) -> None:
-        """Push a ``kind="session"`` open frame to each recipient.
+        """Push an ``app.message`` frame to each recipient over WebSocket.
 
         Builds the frame once and delivers it per-user via
         :meth:`WebSocketManager.broadcast_to_user` — never a fan-out to all
-        local users.  ``from_user`` rides the frame so the recipient's SPA
-        can show who initiated the session.  Reused by both the local
-        loopback path and (Task 6) inbound person-addressed delivery.
+        local users.  ``from_user`` rides the frame so the recipient's SPA can
+        show who initiated the session / sent the message.  ``kind`` is
+        ``"session"`` for an open frame, ``"message"`` for an in-session
+        message; ``payload`` is the app-specific dict the SPA relays into the
+        iframe.  Reused by the local-loopback open and message paths.
         """
         frame = {
             "type": "app.message",
             "app_id": app_id,
             "session_id": session_id,
             "from_instance": from_instance,
-            "kind": "session",
+            "kind": kind,
             "from_user": from_user,
-            "payload": {
-                "app_id": app_id,
-                "session_id": session_id,
-                "verb": "open",
-            },
+            "payload": payload,
         }
         for uid in recipient_user_ids:
             await self._ws.broadcast_to_user(uid, frame)
@@ -469,8 +575,9 @@ class AppFederationService:
         from_instance: str,
         payload: dict,
         kind: str,
+        to_user: str | None = None,
     ) -> None:
-        """Fan an app message out to all local users via WebSocket.
+        """Route an inbound app message to local users via WebSocket.
 
         Silently drops (debug log) if the app is not installed or disabled —
         the peer doesn't need to know we don't have this app.
@@ -483,6 +590,13 @@ class AppFederationService:
             data frames.  Forwarded to the SPA so the bridge can relay
             it into the iframe, letting apps distinguish invites from
             in-game moves and route by session.
+        to_user:
+            Per-user routing hint (v_18+).  When a non-empty string that
+            resolves to a local user (by username — the recipient's local
+            username equals their ``remote_username`` on their home instance),
+            deliver **only** to that user.  When ``None``, empty, or
+            unresolvable, fall back to the legacy/best-effort household
+            fan-out to every (age-eligible) local user.
         """
         app = await self._app_repo.get(app_id)
         if app is None or not app.enabled:
@@ -491,6 +605,28 @@ class AppFederationService:
                 app_id,
             )
             return
+
+        frame = {
+            "type": "app.message",
+            "app_id": app_id,
+            "session_id": session_id,
+            "from_instance": from_instance,
+            "kind": kind,
+            "payload": payload,
+        }
+
+        # Per-user routing: deliver only to the addressed local user when it
+        # resolves.  An empty/absent to_user is already mapped to None by the
+        # caller (legacy household fan-out) and is never looked up.
+        if to_user is not None:
+            recipient = await self._user_repo.get(to_user)
+            if recipient is not None:
+                allowed = await self._age_filter_recipients(app_id, [recipient.user_id])
+                if allowed:
+                    await self._ws.broadcast_to_user(recipient.user_id, frame)
+                return
+
+        # Legacy / best-effort fan-out to every age-eligible local user.
         users = await self._user_repo.list_all()
         user_ids = [u.user_id for u in users]
         if not user_ids:
@@ -503,14 +639,4 @@ class AppFederationService:
         if not user_ids:
             return
 
-        await self._ws.broadcast_to_users(
-            user_ids,
-            {
-                "type": "app.message",
-                "app_id": app_id,
-                "session_id": session_id,
-                "from_instance": from_instance,
-                "kind": kind,
-                "payload": payload,
-            },
-        )
+        await self._ws.broadcast_to_users(user_ids, frame)

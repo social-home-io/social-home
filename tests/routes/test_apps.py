@@ -11,6 +11,7 @@ from socialhome.domain.apps import (
     AppAgeRestrictedError,
     AppAlreadyInstalledError,
     AppCatalogEntry,
+    AppContactNotFoundError,
     AppIntegrityError,
     AppManifest,
     AppNotFoundError,
@@ -985,6 +986,37 @@ async def test_messages_requires_auth(client):
 
 
 async def test_messages_returns_ok(client, fed_svc):
+    """A ``target`` body sends a person-addressed message and returns ok."""
+    fed_svc.send_message.return_value = None
+
+    target = {
+        "instance_id": "peer.example.com",
+        "user_ref": "bob",
+        "is_local": False,
+    }
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "sess-abc",
+            "target": target,
+            "payload": {"move": "e4"},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"ok": True}
+    fed_svc.send_message.assert_awaited_once_with(
+        app_id="com.example.hello",
+        target=target,
+        session_id="sess-abc",
+        payload={"move": "e4"},
+        actor_user_id=client._uid,
+    )
+
+
+async def test_messages_legacy_peer_instance_id_still_works(client, fed_svc):
+    """A legacy ``peer_instance_id`` body maps to a household-addressed target."""
     fed_svc.send_message.return_value = None
 
     r = await client.post(
@@ -997,15 +1029,75 @@ async def test_messages_returns_ok(client, fed_svc):
         headers=_auth(client._tok),
     )
     assert r.status == 200
-    body = await r.json()
-    assert body == {"ok": True}
     fed_svc.send_message.assert_awaited_once_with(
         app_id="com.example.hello",
+        target={
+            "instance_id": "peer.example.com",
+            "user_ref": "",
+            "is_local": False,
+        },
         session_id="sess-abc",
-        peer_instance_id="peer.example.com",
         payload={"move": "e4"},
         actor_user_id=client._uid,
     )
+
+
+async def test_messages_rejects_malformed_target(client, fed_svc):
+    """A target missing is_local / user_ref is rejected with 400."""
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "s1",
+            "target": {"instance_id": "peer.example.com"},
+            "payload": {},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_sessions_non_contact_target_forbidden(client, fed_svc):
+    """Opening a session with a non-contact target → 403 FORBIDDEN."""
+    fed_svc.open_session.side_effect = AppContactNotFoundError("not a contact")
+
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={
+            "target": {
+                "instance_id": "peer.example.com",
+                "user_ref": "stranger",
+                "is_local": False,
+            }
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_messages_non_contact_target_forbidden(client, fed_svc):
+    """Sending a message to a non-contact target → 403 FORBIDDEN."""
+    fed_svc.send_message.side_effect = AppContactNotFoundError("not a contact")
+
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "s1",
+            "target": {
+                "instance_id": "peer.example.com",
+                "user_ref": "stranger",
+                "is_local": False,
+            },
+            "payload": {"move": "e4"},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
 
 
 async def test_messages_rejects_missing_session_id(client, fed_svc):

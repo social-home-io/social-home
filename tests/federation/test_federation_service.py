@@ -2152,6 +2152,47 @@ async def test_send_app_message_falls_back_to_json_when_peer_unsupported():
 
 
 @pytest.mark.asyncio
+async def test_send_app_message_json_carries_to_user_from_user_routing():
+    """to_user/from_user ride the JSON APP_MESSAGE path (binary has no slot)."""
+    p = _paired_app(peer_proto_version=1)  # forces JSON path
+    result = await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-r",
+        payload={"move": "e7e5"},
+        to_user="bob",
+        from_user="alice",
+    )
+    assert result.ok
+    assert p.cap.app is None
+    assert len(p.cap.json_envelopes) == 1
+    env = p.cap.json_envelopes[0]
+    meta = orjson.loads(
+        p.svc_b._encoder.decrypt_payload(env["encrypted_payload"], p.session)
+    )
+    assert meta["to_user"] == "bob"
+    assert meta["from_user"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_send_app_message_json_omits_routing_when_none():
+    """No to_user/from_user supplied → those keys absent from the JSON payload."""
+    p = _paired_app(peer_proto_version=1)
+    await p.svc_a.send_app_message(
+        to_instance_id=p.b_id,
+        app_id="chess",
+        session_id="sess-r2",
+        payload={"move": "e7e5"},
+    )
+    env = p.cap.json_envelopes[0]
+    meta = orjson.loads(
+        p.svc_b._encoder.decrypt_payload(env["encrypted_payload"], p.session)
+    )
+    assert "to_user" not in meta
+    assert "from_user" not in meta
+
+
+@pytest.mark.asyncio
 async def test_send_app_message_falls_back_when_channel_not_ready():
     """Channel down → JSON fallback even though peer supports v_17."""
     p = _paired_app()

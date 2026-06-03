@@ -21,6 +21,7 @@ import pytest
 
 from socialhome.domain.apps import (
     AppAgeRestrictedError,
+    AppContactNotFoundError,
     AppManifest,
     AppNotEnabledError,
     AppNotFoundError,
@@ -151,6 +152,12 @@ class _FakeUserRepo:
                 return u
         return None
 
+    async def get(self, username: str) -> User | None:
+        for u in self._users:
+            if u.username == username:
+                return u
+        return None
+
     async def list_all_known_remote(self) -> list[RemoteUser]:
         return list(self._remote_users)
 
@@ -214,6 +221,8 @@ class _FakeFederation:
         app_id: str,
         session_id: str,
         payload: dict,
+        to_user: str | None = None,
+        from_user: str | None = None,
     ):
         self.sent_app_messages.append(
             {
@@ -221,6 +230,8 @@ class _FakeFederation:
                 "app_id": app_id,
                 "session_id": session_id,
                 "payload": payload,
+                "to_user": to_user,
+                "from_user": from_user,
             }
         )
         return MagicMock(ok=True)
@@ -343,7 +354,9 @@ async def test_open_session_sends_app_session_event():
     """open_session fires APP_SESSION with app_id, session_id, verb."""
     app = _make_installed_app("chess")
     svc, federation, _ = _make_svc(
-        apps={"chess": app}, users=[_make_user("user-1", "alice")]
+        apps={"chess": app},
+        users=[_make_user("user-1", "alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
     )
     session_id = await svc.open_session(
         app_id="chess",
@@ -391,7 +404,11 @@ async def test_open_session_raises_for_disabled_app():
 async def test_open_session_returns_unique_ids():
     """Each call returns a different session_id."""
     app = _make_installed_app("chess")
-    svc, _, _ = _make_svc(apps={"chess": app}, users=[_make_user("u1", "alice")])
+    svc, _, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u1", "alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
+    )
     ids = {
         await svc.open_session(
             app_id="chess",
@@ -448,6 +465,7 @@ async def test_open_session_remote_includes_to_user_and_from_user_when_peer_supp
     svc, federation, _ = _make_svc(
         apps={"chess": app},
         users=[_make_user("u-init", "alice", "Alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
         peer_version=18,
     )
     await svc.open_session(
@@ -468,6 +486,7 @@ async def test_open_session_remote_omits_to_user_for_legacy_peer():
     svc, federation, _ = _make_svc(
         apps={"chess": app},
         users=[_make_user("u-init", "alice", "Alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
         peer_version=17,
     )
     await svc.open_session(
@@ -514,12 +533,16 @@ async def test_open_session_local_loopback_excludes_protected_minor_target():
 async def test_send_message_delegates_to_send_app_message():
     """send_message calls federation.send_app_message — not send_event directly."""
     app = _make_installed_app("chess")
-    svc, federation, _ = _make_svc(apps={"chess": app})
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("user-1", "alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
+    )
     payload = {"move": "e2e4", "clock": 90}
     await svc.send_message(
         app_id="chess",
         session_id="session-abc",
-        peer_instance_id="peer-1",
+        target=_remote_target("peer-1", "bob"),
         payload=payload,
         actor_user_id="user-1",
     )
@@ -538,7 +561,7 @@ async def test_send_message_raises_for_missing_app():
         await svc.send_message(
             app_id="chess",
             session_id="s1",
-            peer_instance_id="peer-1",
+            target=_remote_target("peer-1", "bob"),
             payload={"x": 1},
             actor_user_id="u1",
         )
@@ -553,9 +576,125 @@ async def test_send_message_raises_for_disabled_app():
         await svc.send_message(
             app_id="chess",
             session_id="s1",
-            peer_instance_id="peer-1",
+            target=_remote_target("peer-1", "bob"),
             payload={"x": 1},
             actor_user_id="u1",
+        )
+    assert federation.sent_app_messages == []
+
+
+@pytest.mark.asyncio
+async def test_send_message_local_loopback_per_user():
+    """A local-target send delivers a kind=message frame to the two parties only.
+
+    No federation send, no fan-out to all local users — exactly the
+    initiator and the addressed local user receive the WebSocket frame,
+    carrying ``from_user`` = the initiator.
+    """
+    app = _make_installed_app("chess")
+    initiator = _make_user("u-init", "alice", "Alice")
+    target = _make_user("u-target", "bob", "Bob")
+    bystander = _make_user("u-other", "carol", "Carol")
+    svc, federation, ws = _make_svc(
+        apps={"chess": app},
+        users=[initiator, target, bystander],
+        own_instance_id="own-inst-id",
+    )
+    payload = {"move": "e2e4"}
+    await svc.send_message(
+        app_id="chess",
+        session_id="sess-local",
+        target=_local_target("u-target"),
+        payload=payload,
+        actor_user_id="u-init",
+    )
+    # No federation send for a local loopback.
+    assert federation.sent_app_messages == []
+    assert federation.sent_events == []
+    # Not a fan-out to all local users.
+    assert ws.calls == []
+    # Exactly the two parties get the frame.
+    recipients = {c["user_id"] for c in ws.user_calls}
+    assert recipients == {"u-init", "u-target"}
+    for c in ws.user_calls:
+        frame = c["payload"]
+        assert frame["type"] == "app.message"
+        assert frame["app_id"] == "chess"
+        assert frame["kind"] == "message"
+        assert frame["session_id"] == "sess-local"
+        assert frame["from_instance"] == "own-inst-id"
+        assert frame["from_user"] == "u-init"
+        assert frame["payload"] == payload
+
+
+@pytest.mark.asyncio
+async def test_send_message_remote_includes_to_user_when_peer_supports():
+    """peer_version=18 → send_app_message carries to_user + from_user."""
+    app = _make_installed_app("chess")
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u-init", "alice", "Alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
+        peer_version=18,
+    )
+    await svc.send_message(
+        app_id="chess",
+        session_id="s1",
+        target=_remote_target("peer-1", "bob"),
+        payload={"move": "e2e4"},
+        actor_user_id="u-init",
+    )
+    assert len(federation.sent_app_messages) == 1
+    msg = federation.sent_app_messages[0]
+    assert msg["to_user"] == "bob"
+    assert msg["from_user"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_send_message_remote_omits_to_user_for_legacy_peer():
+    """peer_version=17 → no to_user/from_user passed to send_app_message."""
+    app = _make_installed_app("chess")
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u-init", "alice", "Alice")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
+        peer_version=17,
+    )
+    await svc.send_message(
+        app_id="chess",
+        session_id="s1",
+        target=_remote_target("peer-1", "bob"),
+        payload={"move": "e2e4"},
+        actor_user_id="u-init",
+    )
+    assert len(federation.sent_app_messages) == 1
+    msg = federation.sent_app_messages[0]
+    assert msg["to_user"] is None
+    assert msg["from_user"] is None
+
+
+@pytest.mark.asyncio
+async def test_send_message_rejects_blocked_target():
+    """A blocked remote contact is not in the roster → send_message raises."""
+    app = _make_installed_app("chess")
+    blocked_remote = _make_remote_user(
+        user_id="ru-blocked",
+        instance_id="peer-1",
+        remote_username="bob",
+    )
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u-init", "alice", "Alice")],
+        remote_users=[blocked_remote],
+        blocked_ids={"ru-blocked"},
+    )
+    with pytest.raises(AppContactNotFoundError):
+        await svc.send_message(
+            app_id="chess",
+            session_id="s1",
+            target=_remote_target("peer-1", "bob"),
+            payload={"move": "e2e4"},
+            actor_user_id="u-init",
         )
     assert federation.sent_app_messages == []
 
@@ -723,6 +862,181 @@ async def test_inbound_binary_for_uninstalled_app_not_delivered():
     assert ws.calls == []
 
 
+# ─── Inbound per-user routing (Task 6) ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_inbound_routes_to_resolved_user_when_to_user_present():
+    """A non-empty to_user resolves to a local user → single broadcast_to_user."""
+    app = _make_installed_app("chess")
+    users = [_make_user("u1", "alice"), _make_user("u2", "bob")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users)
+
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "bob",  # bob's local username
+            "from_user": "remote-alice",
+        },
+    )
+    await svc.on_inbound_event(event)
+
+    # Per-user delivery to exactly the resolved user — no fan-out.
+    assert ws.calls == []
+    recipients = {c["user_id"] for c in ws.user_calls}
+    assert recipients == {"u2"}
+    frame = ws.user_calls[0]["payload"]
+    assert frame["type"] == "app.message"
+    assert frame["session_id"] == "sess-1"
+    assert frame["kind"] == "session"
+
+
+@pytest.mark.asyncio
+async def test_inbound_empty_to_user_falls_back_to_broadcast():
+    """An empty-string to_user (legacy household open) falls back to broadcast-all."""
+    app = _make_installed_app("chess")
+    users = [_make_user("u1", "alice"), _make_user("u2", "bob")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users)
+
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "",  # legacy household fan-out
+        },
+    )
+    await svc.on_inbound_event(event)
+
+    # Empty string must never be looked up — broadcast-all.
+    assert ws.user_calls == []
+    assert len(ws.calls) == 1
+    assert set(ws.calls[0]["user_ids"]) == {"u1", "u2"}
+
+
+@pytest.mark.asyncio
+async def test_inbound_absent_to_user_falls_back_to_broadcast():
+    """No to_user key at all → broadcast-all (legacy / binary path)."""
+    app = _make_installed_app("chess")
+    users = [_make_user("u1", "alice"), _make_user("u2", "bob")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "sess-1", "data": {"move": "e4"}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert ws.user_calls == []
+    assert len(ws.calls) == 1
+    assert set(ws.calls[0]["user_ids"]) == {"u1", "u2"}
+
+
+@pytest.mark.asyncio
+async def test_inbound_unresolvable_to_user_falls_back_to_broadcast():
+    """A to_user that resolves to no local user → broadcast-all (best-effort)."""
+    app = _make_installed_app("chess")
+    users = [_make_user("u1", "alice"), _make_user("u2", "bob")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users)
+
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "nobody-here",
+        },
+    )
+    await svc.on_inbound_event(event)
+
+    assert ws.user_calls == []
+    assert len(ws.calls) == 1
+    assert set(ws.calls[0]["user_ids"]) == {"u1", "u2"}
+
+
+@pytest.mark.asyncio
+async def test_inbound_binary_always_broadcasts():
+    """Binary path carries no to_user → broadcast-all even with multiple users."""
+    app = _make_installed_app("chess")
+    users = [_make_user("u1", "alice"), _make_user("u2", "bob")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users)
+
+    await svc.on_inbound_message("peer-inst-id", "chess", "sess-bin", {"move": "d5"})
+
+    assert ws.user_calls == []
+    assert len(ws.calls) == 1
+    assert set(ws.calls[0]["user_ids"]) == {"u1", "u2"}
+
+
+# ─── Target authorization (Task 6 — item C) ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_open_session_rejects_target_not_in_contacts():
+    """A target who is not a contact of the actor → AppContactNotFoundError."""
+    app = _make_installed_app("chess")
+    svc, federation, ws = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u-init", "alice", "Alice")],
+        # No remote users → the remote target is not a contact.
+    )
+    with pytest.raises(AppContactNotFoundError):
+        await svc.open_session(
+            app_id="chess",
+            target=_remote_target("peer-1", "stranger"),
+            actor_user_id="u-init",
+        )
+    assert federation.sent_events == []
+    assert ws.user_calls == []
+
+
+@pytest.mark.asyncio
+async def test_open_session_rejects_blocked_target():
+    """A blocked contact is not in the roster → AppContactNotFoundError."""
+    app = _make_installed_app("chess")
+    blocked_remote = _make_remote_user(
+        user_id="ru-blocked",
+        instance_id="peer-1",
+        remote_username="bob",
+    )
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u-init", "alice", "Alice")],
+        remote_users=[blocked_remote],
+        blocked_ids={"ru-blocked"},
+    )
+    with pytest.raises(AppContactNotFoundError):
+        await svc.open_session(
+            app_id="chess",
+            target=_remote_target("peer-1", "bob"),
+            actor_user_id="u-init",
+        )
+    assert federation.sent_events == []
+
+
+@pytest.mark.asyncio
+async def test_legacy_household_target_is_exempt_from_contact_check():
+    """A legacy household-addressed target (user_ref == "") is allowed through."""
+    app = _make_installed_app("chess")
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("u-init", "alice", "Alice")],
+        peer_version=17,
+    )
+    # No remote contacts, but user_ref="" is the legacy back-compat path.
+    await svc.open_session(
+        app_id="chess",
+        target={"instance_id": "peer-1", "user_ref": "", "is_local": False},
+        actor_user_id="u-init",
+    )
+    assert len(federation.sent_events) == 1
+
+
 # ─── Age gate tests (§CP) ─────────────────────────────────────────────────────
 
 
@@ -752,11 +1066,14 @@ async def test_open_session_allowed_for_unprotected_user():
     svc, federation, _ = _make_svc(
         apps={"chess": app},
         users=[_make_user("adult1", "adult", "Adult")],
+        remote_users=[
+            _make_remote_user(instance_id="peer-inst-id", remote_username="bob")
+        ],
         cp_repo=cp,
     )
     await svc.open_session(
         app_id="chess",
-        target=_remote_target(),
+        target=_remote_target("peer-inst-id", "bob"),
         actor_user_id="adult1",
     )
     assert len(federation.sent_events) == 1
@@ -773,7 +1090,7 @@ async def test_send_message_blocked_for_minor():
         await svc.send_message(
             app_id="chess",
             session_id="s1",
-            peer_instance_id="peer-1",
+            target=_remote_target("peer-1", "bob"),
             payload={"move": "e2e4"},
             actor_user_id="minor1",
         )
@@ -786,11 +1103,16 @@ async def test_send_message_allowed_for_adult_meeting_min_age():
     app = _make_installed_app("chess", min_age=16)
     cp = _FakeCpRepo()
     cp.add("teen1", enabled=True, declared_age=16)  # exactly at threshold
-    svc, federation, _ = _make_svc(apps={"chess": app}, cp_repo=cp)
+    svc, federation, _ = _make_svc(
+        apps={"chess": app},
+        users=[_make_user("teen1", "teen", "Teen")],
+        remote_users=[_make_remote_user(instance_id="peer-1", remote_username="bob")],
+        cp_repo=cp,
+    )
     await svc.send_message(
         app_id="chess",
         session_id="s1",
-        peer_instance_id="peer-1",
+        target=_remote_target("peer-1", "bob"),
         payload={"move": "e2e4"},
         actor_user_id="teen1",
     )

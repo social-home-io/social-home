@@ -324,17 +324,45 @@ class AppMessagesView(BaseView):
         app_id = self.match("app_id")
         body = await self.body()
         session_id = body.get("session_id")
-        peer_instance_id = body.get("peer_instance_id")
+        target = body.get("target")
         payload = body.get("payload")
 
         if not isinstance(session_id, str) or not session_id:
             return error_response(
                 400, "UNPROCESSABLE", "session_id must be a non-empty string."
             )
-        if not isinstance(peer_instance_id, str) or not peer_instance_id:
+
+        if target is None:
+            # Back-compat: a legacy household-addressed body carries
+            # ``peer_instance_id`` instead of a ``target`` object.  Map it to
+            # a remote target with an empty user_ref (household fan-out).
+            peer_instance_id = body.get("peer_instance_id")
+            if not isinstance(peer_instance_id, str) or not peer_instance_id:
+                return error_response(
+                    400,
+                    "UNPROCESSABLE",
+                    "target object or peer_instance_id is required.",
+                )
+            target = {
+                "instance_id": peer_instance_id,
+                "user_ref": "",
+                "is_local": False,
+            }
+        elif (
+            not isinstance(target, dict)
+            or not isinstance(target.get("instance_id"), str)
+            or not target["instance_id"]
+            or not isinstance(target.get("user_ref"), str)
+            or not target["user_ref"]
+            or not isinstance(target.get("is_local"), bool)
+        ):
             return error_response(
-                400, "UNPROCESSABLE", "peer_instance_id must be a non-empty string."
+                400,
+                "UNPROCESSABLE",
+                "target must have non-empty string instance_id, non-empty "
+                "string user_ref, and a bool is_local.",
             )
+
         if payload is None:
             return error_response(400, "UNPROCESSABLE", "payload is required.")
 
@@ -356,8 +384,8 @@ class AppMessagesView(BaseView):
         svc = self.svc(app_federation_service_key)
         await svc.send_message(
             app_id=app_id,
+            target=target,
             session_id=session_id,
-            peer_instance_id=peer_instance_id,
             payload=payload,
             actor_user_id=self.user.user_id,
         )

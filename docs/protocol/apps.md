@@ -57,7 +57,7 @@ sequenceDiagram
         B->>B: AppFederationService.on_inbound_message()
         B->>WS_B: app.message WS frame
     else JSON fallback (sub-v17 or channel unavailable)
-        A->>A: FederationService.send_app_message()<br/>→ APP_MESSAGE JSON event<br/>encrypted + Ed25519-signed
+        A->>A: FederationService.send_app_message()<br/>→ APP_MESSAGE JSON event<br/>{app_id, session_id, data,<br/>to_user, from_user (v_18+)}<br/>encrypted + Ed25519-signed
         A->>B: APP_MESSAGE event over fed-v1 / HTTPS inbox
         B->>B: §24.11 pipeline → AppFederationService.on_inbound_event()
         B->>WS_B: app.message WS frame
@@ -102,10 +102,24 @@ in plaintext for routing.
 | `app_id` | yes | Identifies which app the data belongs to. |
 | `session_id` | yes | Matches the `APP_SESSION` that opened the channel. |
 | `data` | yes | Application-defined dict.  The receiver's `_deliver` passes it as-is to the `app.message` WS frame's `payload` field. |
+| `to_user` | no (v_18+) | The addressed person's local username on the receiving household.  Lets `_deliver` route the message to one user instead of fanning out to every local user.  **JSON path only** — the binary `fed-app-v1` frame (v1) has no routing slot, so binary sends stay household-scoped and the receiver disambiguates by `session_id`.  Omitted for sub-v_18 peers; an empty string is treated as absent (legacy household fan-out). |
+| `from_user` | no (v_18+) | The sender's username — a display hint for the receiving SPA.  JSON path only, same gating as `to_user`. |
 | `app_aead_suite` | yes | Suite used for the binary payload seal (`"aesgcm-256"` today).  **Binary path only** — carried inside the envelope's encrypted metadata.  Receivers reject unknown suites via `UnsupportedAppAeadSuite`; no default fallback. |
 | `payload_sha256` | yes | Base64url SHA-256 of the **plaintext** application payload.  **Binary path only** — carried inside the encrypted envelope metadata.  Binds the binary payload to the signed header; the receiver verifies `sha256(plaintext) == payload_sha256` after decryption. |
 
-All fields are inside the encrypted payload.
+All fields are inside the encrypted payload.  `to_user` / `from_user` are
+plaintext *routing* fields (usernames only, never names/PII) but, because the
+whole `APP_MESSAGE` event payload is encrypted, they ride inside the ciphertext
+here rather than as cleartext envelope fields.
+
+**v1 limitation — binary fast path is household-scoped.** The binary
+`fed-app-v1` frame format carries no `to_user` slot (adding one would break the
+signed-bytes header contract), so a binary `send_app_message` is delivered to
+every local user and the receiver scopes by `session_id` (a non-party local
+user's app ignores an unknown session — harmless).  `APP_SESSION` — the
+challenge/invite that drives notifications — is always JSON and **is** per-user
+routed, so the important guarantee holds.  Per-user binary routing is a v2
+concern.
 
 ## Binary frame format (`fed-app-v1`)
 
@@ -176,17 +190,33 @@ This lets apps:
 - **Distinguish invites from moves** — `kind === "session"` signals a
   lifecycle event (open/close); `kind === "message"` is in-game data.
 
-## Inbound delivery (v1 simplification)
+## Inbound delivery (per-user routing, v_18+)
 
-Inbound app messages (from either transport path) are fanned out to **every
-local user** whose WebSocket is open via `AppFederationService._deliver`.  The
-app's `session_id` scopes the semantics for the SPA; per-user routing (so only
-the user who opened the session sees the moves) is a documented follow-up for
-a future version.
+`AppFederationService._deliver` routes an inbound app message by `to_user`:
+
+- **`to_user` present and resolvable** — a non-empty `to_user` (carried on
+  v_18+ `APP_SESSION` and JSON `APP_MESSAGE`) is resolved to a local user by
+  username; the frame is delivered **only** to that user (still age-filtered).
+- **absent / empty / unresolvable** — fall back to the legacy/best-effort
+  **household fan-out** to every age-eligible local user.  An empty-string
+  `to_user` (the back-compat household-addressed open) is treated as absent and
+  is never looked up.
+- **binary `fed-app-v1` path** — carries no `to_user` (v1 limitation), so it
+  always uses the household fan-out; the receiver disambiguates by
+  `session_id`.
 
 If the app is not installed or not enabled on the receiving household, the
 event is silently dropped with a debug log — the peer does not receive an
 error.
+
+## Target authorization
+
+Both outbound entry points (`open_session`, `send_message`) call
+`_assert_target_allowed`, which rejects any `target` that is not in the actor's
+challengeable roster — the same block-aware set `list_contacts` returns
+(paired-household members minus personal blocks).  A non-contact target raises
+`AppContactNotFoundError`, mapped to **403 FORBIDDEN** by the route layer.
+Legacy household-addressed sends (`user_ref == ""`) are exempt for back-compat.
 
 ## Implementation
 

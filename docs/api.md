@@ -621,8 +621,8 @@ selected transparently by the server.  See [protocol/apps.md](./protocol/apps.md
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/apps/{app_id}/peers` | Any member | List confirmed peer instances as `[{instance_id, display_name}]`. The SPA uses this to populate the peer picker when starting a cross-household app session. |
-| POST | `/api/apps/{app_id}/sessions` | Any member | Open a federation app session with a peer. Body: `{peer_instance_id}`. Returns `{session_id}` — the caller uses this to namespace subsequent messages. Sends an `APP_SESSION {verb:"open"}` event to the peer. 404 when the peer is not a confirmed pair. |
-| POST | `/api/apps/{app_id}/messages` | Any member | Send an app-layer message to a peer. Body: `{session_id, peer_instance_id, payload}` where `payload` is any JSON dict. The payload is AES-256-GCM-sealed inside the signed federation envelope — never sent in plaintext. 404 when the peer is unknown; 403 when the app is disabled. |
+| POST | `/api/apps/{app_id}/sessions` | Any member | Open a federation app session with a specific person. Body: `{target: {instance_id, user_ref, is_local}}` (from `/contacts`); legacy `{peer_instance_id}` still maps to a household-addressed remote target. Returns `{session_id}`. A local target delivers the open frame over WebSocket; a remote target sends an `APP_SESSION {verb:"open"}` event (with `to_user`/`from_user` to v_18+ peers). **403 FORBIDDEN** when the target is not a contact of the caller; 403 when the app is disabled. |
+| POST | `/api/apps/{app_id}/messages` | Any member | Send an app-layer message to a specific person. Body: `{session_id, target: {instance_id, user_ref, is_local}, payload}` (legacy `{session_id, peer_instance_id, payload}` still accepted) where `payload` is any JSON dict. The payload is AES-256-GCM-sealed inside the signed federation envelope — never sent in plaintext; on the JSON path `to_user`/`from_user` route it to one user (v_18+), the binary fast path stays household-scoped (v1). **403 FORBIDDEN** when the target is not a contact; 403 when the app is disabled. |
 
 ## HFS — Storage, backup, misc
 

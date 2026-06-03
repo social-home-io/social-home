@@ -40,6 +40,17 @@ class AppAgeRestrictedError(AppError):
     """A protected minor is below the app's minimum age requirement."""
 
 
+class AppContactNotFoundError(AppError):
+    """The session/message target is not a legitimate contact of the actor.
+
+    Raised when a user tries to open a session with — or send a message to —
+    a person who is not in their challengeable roster (the same set
+    ``list_contacts`` returns: paired-household members minus personal
+    blocks).  Closes the authorization gap where a crafted ``target`` could
+    address an arbitrary user / household the actor has no relationship with.
+    """
+
+
 _VALID_MIN_AGES: frozenset[int] = frozenset({0, 13, 16, 18})
 
 
