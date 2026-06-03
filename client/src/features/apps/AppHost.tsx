@@ -19,6 +19,7 @@ import { useRoute } from 'preact-iso'
 import { getRuntime, type AppRuntime } from '@/store/apps'
 import { mountBridge } from '@/features/apps/bridge'
 import { addBase } from '@/baseUrl'
+import { ApiError } from '@/api'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 
@@ -30,19 +31,26 @@ export default function AppHost() {
 
 /** Exported for overlay / in-page embedding (AppsPage overlay path). */
 export function AppHostInner({ appId }: { appId: string }) {
-  const [runtime, setRuntime] = useState<AppRuntime | null>(null)
-  const [error, setError]     = useState<string | null>(null)
-  const iframeRef             = useRef<HTMLIFrameElement>(null)
+  const [runtime, setRuntime]         = useState<AppRuntime | null>(null)
+  const [error, setError]             = useState<string | null>(null)
+  const [ageRestricted, setAgeRestricted] = useState(false)
+  const iframeRef                     = useRef<HTMLIFrameElement>(null)
 
   // Fetch the signed runtime descriptor on mount / appId change.
   useEffect(() => {
     setRuntime(null)
     setError(null)
+    setAgeRestricted(false)
     let cancelled = false
     getRuntime(appId).then(rt => {
       if (!cancelled) setRuntime(rt)
     }).catch((err: unknown) => {
-      if (!cancelled) setError((err as Error).message ?? 'Could not load app.')
+      if (cancelled) return
+      if (err instanceof ApiError && err.status === 403) {
+        setAgeRestricted(true)
+      } else {
+        setError((err as Error).message ?? 'Could not load app.')
+      }
     })
     return () => { cancelled = true }
   }, [appId])
@@ -77,9 +85,18 @@ export function AppHostInner({ appId }: { appId: string }) {
         )}
       </header>
 
-      {!runtime && !error && (
+      {!runtime && !error && !ageRestricted && (
         <div class="sh-app-host__status" aria-live="polite">
           <Spinner label="Loading app…" />
+        </div>
+      )}
+
+      {ageRestricted && (
+        <div class="sh-app-host__status sh-app-host__status--age-restricted" role="alert">
+          <p>This app isn't available for your account.</p>
+          <Button onClick={() => { window.location.href = addBase('/apps') }}>
+            Back to Apps
+          </Button>
         </div>
       )}
 

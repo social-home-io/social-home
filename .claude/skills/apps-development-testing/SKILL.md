@@ -85,9 +85,20 @@ Chromium is baked into the devcontainer (`/usr/bin/chromium`, `DISPLAY=:99`); se
 
 Adding a new app needs no workflow edits — drop `apps/<new-id>/` with a `manifest.json` + a `build` script that emits an inlined `dist/`, and the catalog script + workflows discover it.
 
+## Age gating
+
+An app may declare `"min_age": 13` (one of `0/13/16/18`) in `manifest.json`. This becomes the install-time default — Social Home reads it when installing the app and sets `installed_apps.min_age` accordingly. An admin may later change it via `PATCH /api/apps/{id}` (the admin age-restriction select in the Apps page). The `update` action raises `min_age` if the catalog declares a higher value but **never lowers** an admin's explicit choice.
+
+Social Home blocks protected minors from launching or using age-restricted apps:
+- `GET /api/apps` filters out apps with `min_age > 0` from the response for protected minor accounts — they simply don't appear in the list.
+- `GET /api/apps/{id}/runtime` returns **403** for an under-age protected minor. The SPA (`AppHost`) catches this and renders "This app isn't available for your account." without leaking the exact age.
+
+The SPA does **no** client-side age logic — the server enforces all gates. Non-minor users see all enabled apps and no age-restricted behaviour. Admins see a `Minimum age` select control on each app card (options: Everyone / 13+ / 16+ / 18+).
+
 ## Quick failure triage
 - **Iframe blank, only the header shows** → bundle isn't inlined (external script/CSS blocked by sandbox CORS/CSP). Inline it.
 - **Broken icon in the app card** → manifest `icon` is a relative path; use a `data:` URI.
 - **`sh` is null** → running outside a browser (tests); use `createClient(targetWindow, parentWindow)` with fakes.
 - **Peer not listed** → households aren't paired/confirmed; redo the pairing handshake.
 - **Move doesn't arrive** → check both are paired + the app enabled on both; the `app.message` WS frame reaches the SPA that has the app open.
+- **Age-restricted app shows "not available"** → the user is a protected minor and `min_age > 0` on that app. Admin can lower/remove the restriction via the Apps page or `PATCH /api/apps/{id}` with `{min_age: 0}`.
