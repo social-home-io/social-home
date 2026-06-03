@@ -75,7 +75,10 @@ content key. The check (``can_seat_remote_stub``) compares the
 ``owner_instance_id``, never the issuer-controlled ``meta.owner_instance_id``
 (which a malicious host could spoof). A brand-new space, or a re-seat by the
 same owning host, is always allowed. Mirrors the host-authority guard on the
-``SPACE_CONFIG_CHANGED`` inbound path.
+``SPACE_CONFIG_CHANGED`` inbound path. The stub's stored ``owner_instance_id``
+is likewise the authenticated sender, **not** the snapshot's claimed owner
+(``stub_space_from_metadata`` ignores ``meta.owner_instance_id``) — so a
+forged owner can't be stamped on a new stub and later trusted by the guard.
 
 When the receiving HFS is **not** directly paired with the issuer
 (the user pasted a code from a friend-of-a-friend), the redeem flows

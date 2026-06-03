@@ -3463,11 +3463,11 @@ def stub_space_from_metadata(
     space show up in their ``/api/spaces`` once they accept and a
     matching ``space_members`` row is inserted.
 
-    ``host_instance_id`` is the envelope's ``from_instance`` and
-    falls back into ``owner_instance_id`` if the payload doesn't
-    carry it (older senders).  Either way, the resulting Space's
-    ``owner_instance_id != my_instance`` is the runtime signal for
-    "this is a remote space" downstream.
+    ``host_instance_id`` is the envelope's authenticated ``from_instance``
+    and becomes the stub's ``owner_instance_id`` (the issuer-supplied
+    ``meta["owner_instance_id"]`` is deliberately ignored — see below). The
+    resulting Space's ``owner_instance_id != my_instance`` is the runtime
+    signal for "this is a remote space" downstream.
     """
     feats_in = meta.get("features") or {}
     raw_mode = feats_in.get("location_mode")
@@ -3499,7 +3499,13 @@ def stub_space_from_metadata(
         name=str(meta.get("name") or "Untitled space"),
         emoji=meta.get("emoji"),
         description=meta.get("description"),
-        owner_instance_id=str(meta.get("owner_instance_id") or host_instance_id),
+        # §D1b — the owner is the AUTHENTICATED envelope sender, never the
+        # issuer-controlled meta["owner_instance_id"]. In every legit flow
+        # the snapshot is built by the owning host itself, so meta's claim
+        # equals host_instance_id; ignoring the claim closes a footgun where
+        # a malicious issuer could stamp a spoofed owner on a brand-new stub
+        # (which the can_seat_remote_stub guard then trusts on later events).
+        owner_instance_id=host_instance_id,
         owner_username=str(meta.get("owner_username") or ""),
         identity_public_key=str(meta.get("identity_public_key") or ""),
         config_sequence=int(meta.get("config_sequence") or 0),

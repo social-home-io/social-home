@@ -2120,3 +2120,18 @@ async def test_can_seat_remote_stub_owner_guard(stack):
     # Same owner re-seats; a different host is refused.
     assert await can_seat_remote_stub(stack.space_repo, "shared", "host-a") is True
     assert await can_seat_remote_stub(stack.space_repo, "shared", "host-b") is False
+
+
+async def test_stub_space_uses_authenticated_sender_as_owner():
+    """§D1b — stub_space_from_metadata stamps the AUTHENTICATED sender
+    (host_instance_id) as owner, ignoring a spoofed meta['owner_instance_id']
+    so a malicious issuer can't forge the owner on a brand-new stub (which
+    can_seat_remote_stub would then trust on later events)."""
+    from socialhome.services.space_service import stub_space_from_metadata
+
+    stub = stub_space_from_metadata(
+        "sp-x",
+        host_instance_id="real-sender",
+        meta={"name": "S", "owner_instance_id": "spoofed-host"},
+    )
+    assert stub.owner_instance_id == "real-sender"
