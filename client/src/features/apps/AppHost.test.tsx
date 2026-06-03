@@ -10,8 +10,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, waitFor } from '@testing-library/preact'
 
 // ── Mock @/store/apps ─────────────────────────────────────────────────────
-// getRuntime is the only export AppHostInner calls. Return a resolved
-// AppRuntime so the component enters the "runtime ready" branch.
+// getRuntime is the only export AppHostInner calls. Default: resolved runtime.
+// Individual tests override with mockRejectedValueOnce for error paths.
 vi.mock('@/store/apps', () => ({
   getRuntime: vi.fn().mockResolvedValue({
     app_id: 'chess',
@@ -48,6 +48,8 @@ vi.mock('@/components/Button', () => ({
 
 import { AppHostInner } from './AppHost'
 import { mountBridge } from '@/features/apps/bridge'
+import { getRuntime } from '@/store/apps'
+import { ApiError } from '@/api'
 
 describe('AppHostInner', () => {
   beforeEach(() => {
@@ -85,5 +87,36 @@ describe('AppHostInner', () => {
     await waitFor(() => {
       expect(vi.mocked(mountBridge)).toHaveBeenCalledOnce()
     })
+  })
+
+  it('shows age-restricted message and no iframe when getRuntime rejects with 403', async () => {
+    vi.mocked(getRuntime).mockRejectedValueOnce(
+      new ApiError(403, '/api/apps/locked/runtime', { code: 'FORBIDDEN', detail: 'Age restricted' }),
+    )
+    const { container, getByText } = render(<AppHostInner appId="locked" />)
+
+    await waitFor(() => {
+      expect(getByText("This app isn't available for your account.")).toBeTruthy()
+    })
+
+    // No iframe must be mounted.
+    expect(container.querySelector('iframe')).toBeNull()
+    // mountBridge must NOT have been called.
+    expect(vi.mocked(mountBridge)).not.toHaveBeenCalled()
+  })
+
+  it('shows generic error and no iframe for non-403 rejections', async () => {
+    vi.mocked(getRuntime).mockRejectedValueOnce(
+      new ApiError(500, '/api/apps/broken/runtime', { code: 'SERVER_ERROR', detail: 'Unexpected error' }),
+    )
+    const { container, getByText } = render(<AppHostInner appId="broken" />)
+
+    await waitFor(() => {
+      expect(getByText('Unexpected error')).toBeTruthy()
+    })
+
+    expect(container.querySelector('iframe')).toBeNull()
+    // Generic error: age-restricted message must NOT appear.
+    expect(container.textContent).not.toContain("This app isn't available for your account.")
   })
 })

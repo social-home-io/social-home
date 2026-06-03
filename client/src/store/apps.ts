@@ -17,6 +17,7 @@ export interface InstalledApp {
   enabled:      boolean
   capabilities: string[]
   icon:         string | null
+  min_age:      number
 }
 
 export interface CatalogEntry {
@@ -104,6 +105,11 @@ export async function uninstallApp(appId: string): Promise<void> {
 export async function setEnabled(appId: string, enabled: boolean): Promise<void> {
   const updated = await api.patch(`/api/apps/${encodeURIComponent(appId)}`, { enabled }) as InstalledApp
   installedApps.value = installedApps.value.map(a => a.app_id === appId ? updated : a)
+}
+
+export async function setMinAge(appId: string, minAge: number): Promise<void> {
+  await api.patch(`/api/apps/${encodeURIComponent(appId)}`, { min_age: minAge })
+  await loadInstalled()
 }
 
 export interface AppRuntime {

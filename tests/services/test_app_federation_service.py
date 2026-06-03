@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from socialhome.domain.apps import (
+    AppAgeRestrictedError,
     AppManifest,
     AppNotEnabledError,
     AppNotFoundError,
@@ -38,7 +39,12 @@ from socialhome.services.app_federation_service import AppFederationService
 # ─── Stubs ────────────────────────────────────────────────────────────────────
 
 
-def _make_installed_app(app_id: str = "chess", *, enabled: bool = True) -> InstalledApp:
+def _make_installed_app(
+    app_id: str = "chess",
+    *,
+    enabled: bool = True,
+    min_age: int = 0,
+) -> InstalledApp:
     return InstalledApp(
         app_id=app_id,
         name="Chess",
@@ -50,7 +56,24 @@ def _make_installed_app(app_id: str = "chess", *, enabled: bool = True) -> Insta
         source_url="https://example.com/chess.tgz",
         installed_by="admin",
         installed_at="2026-01-01T00:00:00+00:00",
+        min_age=min_age,
     )
+
+
+class _FakeCpRepo:
+    """Minimal fake CpRepo for age-gate testing in AppFederationService."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, dict] = {}
+
+    def add(self, user_id: str, *, enabled: bool, declared_age: int) -> None:
+        self._records[user_id] = {
+            "child_protection_enabled": 1 if enabled else 0,
+            "declared_age": declared_age,
+        }
+
+    async def get_user_protection(self, user_id: str) -> dict | None:
+        return self._records.get(user_id)
 
 
 def _make_remote_instance(
@@ -173,6 +196,7 @@ def _make_svc(
     apps: dict[str, InstalledApp] | None = None,
     users: list[User] | None = None,
     instances: list[RemoteInstance] | None = None,
+    cp_repo: _FakeCpRepo | None = None,
 ) -> tuple[AppFederationService, _FakeFederation, _FakeWs]:
     federation = _FakeFederation()
     ws = _FakeWs()
@@ -182,6 +206,7 @@ def _make_svc(
         ws=ws,
         federation=federation,
         federation_repo=_FakeFederationRepo(instances),
+        cp_repo=cp_repo,  # type: ignore[arg-type]
     )
     return svc, federation, ws
 
@@ -524,3 +549,144 @@ async def test_inbound_binary_for_uninstalled_app_not_delivered():
     svc, _, ws = _make_svc(apps={}, users=[_make_user("u1")])
     await svc.on_inbound_message("peer", "unknown-app", "s", {})
     assert ws.calls == []
+
+
+# ─── Age gate tests (§CP) ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_open_session_blocked_for_minor():
+    """open_session raises AppAgeRestrictedError for a protected minor below min_age."""
+    app = _make_installed_app("chess", min_age=13)
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, federation, _ = _make_svc(apps={"chess": app}, cp_repo=cp)
+    with pytest.raises(AppAgeRestrictedError):
+        await svc.open_session(
+            app_id="chess",
+            peer_instance_id="peer-1",
+            actor_user_id="minor1",
+        )
+    # Must not send anything
+    assert federation.sent_events == []
+
+
+@pytest.mark.asyncio
+async def test_open_session_allowed_for_unprotected_user():
+    """open_session is allowed for an unprotected adult account."""
+    app = _make_installed_app("chess", min_age=18)
+    cp = _FakeCpRepo()
+    cp.add("adult1", enabled=False, declared_age=15)  # cp disabled → unprotected
+    svc, federation, _ = _make_svc(apps={"chess": app}, cp_repo=cp)
+    await svc.open_session(
+        app_id="chess",
+        peer_instance_id="peer-1",
+        actor_user_id="adult1",
+    )
+    assert len(federation.sent_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_message_blocked_for_minor():
+    """send_message raises AppAgeRestrictedError for a protected minor below min_age."""
+    app = _make_installed_app("chess", min_age=16)
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=14)
+    svc, federation, _ = _make_svc(apps={"chess": app}, cp_repo=cp)
+    with pytest.raises(AppAgeRestrictedError):
+        await svc.send_message(
+            app_id="chess",
+            session_id="s1",
+            peer_instance_id="peer-1",
+            payload={"move": "e2e4"},
+            actor_user_id="minor1",
+        )
+    assert federation.sent_app_messages == []
+
+
+@pytest.mark.asyncio
+async def test_send_message_allowed_for_adult_meeting_min_age():
+    """send_message is allowed for a protected user at or above min_age."""
+    app = _make_installed_app("chess", min_age=16)
+    cp = _FakeCpRepo()
+    cp.add("teen1", enabled=True, declared_age=16)  # exactly at threshold
+    svc, federation, _ = _make_svc(apps={"chess": app}, cp_repo=cp)
+    await svc.send_message(
+        app_id="chess",
+        session_id="s1",
+        peer_instance_id="peer-1",
+        payload={"move": "e2e4"},
+        actor_user_id="teen1",
+    )
+    assert len(federation.sent_app_messages) == 1
+
+
+# ─── FIX 3: _deliver filters minor recipients from fan-out ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_deliver_excludes_protected_minor_from_fanout():
+    """A protected under-age minor must NOT receive inbound app.message frames.
+
+    Setup: chess app with min_age=13.  Two local users — a protected minor
+    (declared_age=10) and an adult (declared_age=20, protection enabled).
+    Inbound APP_MESSAGE must only reach the adult.
+    """
+    app = _make_installed_app("chess", min_age=13)
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=10)
+    cp.add("adult1", enabled=True, declared_age=20)
+    users = [_make_user("minor1", "minor"), _make_user("adult1", "adult")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, cp_repo=cp)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "s1", "data": {"move": "e2e4"}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert len(ws.calls) == 1
+    recipients = ws.calls[0]["user_ids"]
+    assert "minor1" not in recipients, "minor must be excluded from fan-out"
+    assert "adult1" in recipients, "adult must receive the frame"
+
+
+@pytest.mark.asyncio
+async def test_deliver_includes_unprotected_user_regardless_of_age():
+    """An unprotected user (cp disabled) must receive frames even for min_age apps."""
+    app = _make_installed_app("chess", min_age=18)
+    cp = _FakeCpRepo()
+    cp.add("young1", enabled=False, declared_age=10)  # cp disabled → unprotected
+    users = [_make_user("young1", "young")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, cp_repo=cp)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "s1", "data": {}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert len(ws.calls) == 1
+    assert "young1" in ws.calls[0]["user_ids"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_filtering_when_min_age_zero():
+    """Fast path: when app.min_age == 0 all users receive the frame."""
+    app = _make_installed_app("chess", min_age=0)
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=5)
+    users = [_make_user("minor1", "minor"), _make_user("adult1", "adult")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, cp_repo=cp)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "s1", "data": {}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert len(ws.calls) == 1
+    recipients = ws.calls[0]["user_ids"]
+    # Both users receive the frame — no filtering for unrestricted apps.
+    assert "minor1" in recipients
+    assert "adult1" in recipients

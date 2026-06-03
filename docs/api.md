@@ -591,15 +591,15 @@ unpacked (path-traversal-guarded) under `apps_path/<app_id>/<version>/`
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/apps` | Any member | List installed apps. Non-admins see enabled apps only; admins see all. |
+| GET | `/api/apps` | Any member | List installed apps. Non-admins see enabled apps only; admins see all. Age-restricted apps (those with `min_age > 0`) are filtered out server-side for protected minors — the SPA never performs client-side age filtering. Each entry includes `min_age` (0/13/16/18; 0 = no restriction). |
 | GET | `/api/apps/catalog` | Admin | Browse the remote app catalog (fetches `catalog.json` from the configured release URL). |
 | POST | `/api/apps` | Admin | Install an app from the catalog. Body: `{app_id}`. 201 on success; 409 if already installed; 400 on bad id or failed sha256 integrity check. |
 | GET | `/api/apps/{app_id}` | Any member | One installed app. 404 when missing or disabled (non-admin). |
-| PATCH | `/api/apps/{app_id}` | Admin | Enable or disable an app. Body: `{enabled}`. |
+| PATCH | `/api/apps/{app_id}` | Admin | Update app settings. Body: `{enabled}` and/or `{min_age}`. `min_age` must be one of `0/13/16/18` (0 = no restriction). |
 | DELETE | `/api/apps/{app_id}` | Admin | Uninstall an app — removes the bundle from disk; cascades all per-user `app_kv` rows. |
 | GET | `/api/apps/updates` | Any member | List installed apps that have a newer version in the catalog. Returns `{"updates": [{app_id, name, current_version, latest_version}]}`. Result is served from a server-side cache refreshed at most once per 24 h (a background check also runs daily). `?refresh=1` forces a live catalog re-fetch but is **admin-only** — non-admins always receive the cached result regardless of the query parameter. |
 | POST | `/api/apps/{app_id}/update` | Admin | Pull and install the latest catalog version of the app. Returns the serialised `InstalledApp` (`{app_id, name, version, enabled, capabilities, icon}`) on success. 404 if the app is not installed; 400 if no newer version is available or the integrity check fails. |
-| GET | `/api/apps/{app_id}/runtime` | Any member (bearer) | Launch payload for a running app. Returns `{app_id, name, entry_url, self_user_id, capabilities}` where `entry_url` is a short-lived signed bundle URL. 404 if the app is not installed; 403 if the app is disabled. |
+| GET | `/api/apps/{app_id}/runtime` | Any member (bearer) | Launch payload for a running app. Returns `{app_id, name, entry_url, self_user_id, capabilities}` where `entry_url` is a short-lived signed bundle URL. 404 if the app is not installed; 403 if the app is disabled or the caller is a protected minor and the app has `min_age > 0`. |
 | GET | `/api/apps/{app_id}/bundle/{tail}` | Signed URL / cookie (no bearer) | Serve bundle static files. The `entry_url` carries a media-signer signature over the bundle prefix as `?exp=&sig=` query parameters; on first access those are exchanged for a short-lived HttpOnly path-scoped cookie so relative sub-resources load without re-signing. Every response carries a strict CSP (`connect-src 'none'`, `worker-src 'none'`, `frame-ancestors 'self'`, etc.) and `X-Frame-Options: SAMEORIGIN`. Path traversal is guarded. Re-checks that the app is enabled on every request. |
 | GET | `/api/apps/{app_id}/store` | Any member | List the caller's per-user KV entries for this app. Returns `{"items": {key: value}}`. |
 | GET | `/api/apps/{app_id}/store/{key}` | Any member | Read one KV entry. Returns `{"key", "value"}`. 404 if the key does not exist. |

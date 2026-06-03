@@ -26,6 +26,7 @@ import {
   installApp,
   uninstallApp,
   setEnabled,
+  setMinAge,
   type InstalledApp,
   type AppUpdate,
   type CatalogEntry,
@@ -154,6 +155,13 @@ function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
   )
 }
 
+const MIN_AGE_OPTIONS: { value: number; label: string }[] = [
+  { value: 0,  label: 'Everyone' },
+  { value: 13, label: '13+' },
+  { value: 16, label: '16+' },
+  { value: 18, label: '18+' },
+]
+
 function AppCard({
   app,
   isAdmin,
@@ -167,6 +175,7 @@ function AppCard({
   const [togglingEnabled, setTogglingEnabled] = useState(false)
   const [uninstalling, setUninstalling]   = useState(false)
   const [updating, setUpdating]           = useState(false)
+  const [settingMinAge, setSettingMinAge] = useState(false)
 
   const handleToggle = async () => {
     setTogglingEnabled(true)
@@ -176,6 +185,19 @@ function AppCard({
       showToast((err as Error).message ?? 'Could not update app.', 'error')
     } finally {
       setTogglingEnabled(false)
+    }
+  }
+
+  const handleMinAgeChange = async (value: number) => {
+    setSettingMinAge(true)
+    try {
+      await setMinAge(app.app_id, value)
+      const label = value === 0 ? 'removed' : `set to ${value}+`
+      showToast(`Minimum age ${label}`, 'success')
+    } catch (err: unknown) {
+      showToast((err as Error).message ?? 'Could not update minimum age.', 'error')
+    } finally {
+      setSettingMinAge(false)
     }
   }
 
@@ -232,11 +254,38 @@ function AppCard({
         )}
       </div>
 
-      {app.capabilities.length > 0 && (
+      {(app.capabilities.length > 0 || app.min_age > 0) && (
         <div class="sh-app-card__caps">
           {app.capabilities.map(cap => (
             <span key={cap} class="sh-chip sh-chip--muted">{cap}</span>
           ))}
+          {app.min_age > 0 && (
+            <span class="sh-age-chip" title={`Minimum age ${app.min_age}`}>
+              {app.min_age}+
+            </span>
+          )}
+        </div>
+      )}
+
+      {isAdmin && (
+        <div class="sh-app-card__min-age-row">
+          <label class="sh-app-card__min-age-label" htmlFor={`min-age-${app.app_id}`}>
+            Minimum age
+          </label>
+          <select
+            id={`min-age-${app.app_id}`}
+            class="sh-app-card__min-age-select"
+            value={app.min_age}
+            disabled={settingMinAge}
+            onChange={(e) => {
+              const val = parseInt((e.target as HTMLSelectElement).value, 10)
+              void handleMinAgeChange(val)
+            }}
+          >
+            {MIN_AGE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
         </div>
       )}
 

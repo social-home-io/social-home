@@ -24,6 +24,7 @@ class AbstractAppRepo(Protocol):
     async def install(self, app: InstalledApp) -> None: ...
     async def update_installed(self, app: InstalledApp) -> None: ...
     async def set_enabled(self, app_id: str, *, enabled: bool) -> None: ...
+    async def set_min_age(self, app_id: str, min_age: int) -> None: ...
     async def uninstall(self, app_id: str) -> None: ...
     async def kv_get(
         self, app_id: str, user_id: str, key: str
@@ -52,6 +53,11 @@ def _row_to_kv(row) -> AppKvEntry:
 
 
 def _row_to_app(row) -> InstalledApp:
+    # min_age column added in migration 0022; default to 0 if absent (safety).
+    try:
+        min_age = int(row["min_age"] or 0)
+    except KeyError, TypeError, ValueError:
+        min_age = 0
     return InstalledApp(
         app_id=str(row["app_id"]),
         name=str(row["name"]),
@@ -63,6 +69,7 @@ def _row_to_app(row) -> InstalledApp:
         source_url=str(row["source_url"]),
         installed_by=row["installed_by"],
         installed_at=str(row["installed_at"]),
+        min_age=min_age,
     )
 
 
@@ -91,8 +98,8 @@ class SqliteAppRepo:
         await self._db.enqueue(
             """INSERT INTO installed_apps
                  (app_id, name, version, enabled, manifest_json, bundle_path,
-                  bundle_sha256, source_url, installed_by, installed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  bundle_sha256, source_url, installed_by, installed_at, min_age)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 app.app_id,
                 app.name,
@@ -110,6 +117,7 @@ class SqliteAppRepo:
                 app.source_url,
                 app.installed_by,
                 app.installed_at,
+                app.min_age,
             ),
         )
 
@@ -117,7 +125,8 @@ class SqliteAppRepo:
         await self._db.enqueue(
             """UPDATE installed_apps
                SET name = ?, version = ?, manifest_json = ?,
-                   bundle_path = ?, bundle_sha256 = ?, source_url = ?
+                   bundle_path = ?, bundle_sha256 = ?, source_url = ?,
+                   min_age = ?
                WHERE app_id = ?""",
             (
                 app.name,
@@ -132,6 +141,7 @@ class SqliteAppRepo:
                 app.bundle_path,
                 app.bundle_sha256,
                 app.source_url,
+                app.min_age,
                 app.app_id,
             ),
         )
@@ -140,6 +150,12 @@ class SqliteAppRepo:
         await self._db.enqueue(
             "UPDATE installed_apps SET enabled = ? WHERE app_id = ?",
             (1 if enabled else 0, app_id),
+        )
+
+    async def set_min_age(self, app_id: str, min_age: int) -> None:
+        await self._db.enqueue(
+            "UPDATE installed_apps SET min_age = ? WHERE app_id = ?",
+            (min_age, app_id),
         )
 
     async def uninstall(self, app_id: str) -> None:

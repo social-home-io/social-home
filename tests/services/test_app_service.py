@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from socialhome.domain.apps import (
+    AppAgeRestrictedError,
     AppAlreadyInstalledError,
     AppCatalogEntry,
     AppIntegrityError,
@@ -143,6 +144,23 @@ class _FakeAppRepo:
             source_url=existing.source_url,
             installed_by=existing.installed_by,
             installed_at=existing.installed_at,
+            min_age=existing.min_age,
+        )
+
+    async def set_min_age(self, app_id: str, min_age: int) -> None:
+        existing = self._apps[app_id]
+        self._apps[app_id] = InstalledApp(
+            app_id=existing.app_id,
+            name=existing.name,
+            version=existing.version,
+            enabled=existing.enabled,
+            manifest=existing.manifest,
+            bundle_path=existing.bundle_path,
+            bundle_sha256=existing.bundle_sha256,
+            source_url=existing.source_url,
+            installed_by=existing.installed_by,
+            installed_at=existing.installed_at,
+            min_age=min_age,
         )
 
     async def update_installed(self, app: InstalledApp) -> None:
@@ -158,6 +176,10 @@ class _FakeAppRepo:
             source_url=app.source_url,
             installed_by=existing.installed_by,
             installed_at=existing.installed_at,
+            # min_age is computed by the service (max of existing and manifest)
+            # and stored on the incoming app — honour it rather than overwriting
+            # with the existing value so the FIX 2 semantics are testable.
+            min_age=app.min_age,
         )
 
     async def uninstall(self, app_id: str) -> None:
@@ -210,6 +232,31 @@ class _StubCatalog:
         return list(self._entries)
 
 
+class _FakeCpRepo:
+    """Minimal fake CpRepo that only supports get_user_protection."""
+
+    def __init__(
+        self,
+        protection: dict | None = None,
+    ) -> None:
+        # Maps user_id → protection dict (or None if not registered)
+        self._protection: dict[str, dict | None] = {}
+        if protection is not None:
+            # Default entry for any user_id
+            self._default: dict | None = protection
+        else:
+            self._default = None
+
+    def add(self, user_id: str, *, enabled: bool, declared_age: int) -> None:
+        self._protection[user_id] = {
+            "child_protection_enabled": 1 if enabled else 0,
+            "declared_age": declared_age,
+        }
+
+    async def get_user_protection(self, user_id: str) -> dict | None:
+        return self._protection.get(user_id, self._default)
+
+
 class _RecordingBus:
     """Captures published events for assertion."""
 
@@ -249,6 +296,7 @@ def make_service(
     bundle_bytes: bytes,
     *,
     bus: _RecordingBus | None = None,
+    cp_repo: _FakeCpRepo | None = None,
 ) -> tuple[AppService, _FakeAppRepo]:
     repo = _FakeAppRepo()
     stub_catalog = _StubCatalog(entries)
@@ -262,6 +310,7 @@ def make_service(
         apps_path=tmp_path,
         downloader=downloader,
         bus=bus,
+        cp_repo=cp_repo,  # type: ignore[arg-type]
     )
     return svc, repo
 
@@ -1193,6 +1242,285 @@ async def test_update_app_returns_existing_when_already_latest(
     assert result.app_id == "chess"
 
 
+# ─── Age gate tests (§CP) ─────────────────────────────────────────────────────
+
+
+def _make_age_gated_app(app_id: str = "chess", min_age: int = 13) -> InstalledApp:
+    from socialhome.domain.apps import AppManifest
+
+    return InstalledApp(
+        app_id=app_id,
+        name="Chess",
+        version="1.0.0",
+        enabled=True,
+        manifest=AppManifest(entry="index.html", icon=None, capabilities=()),
+        bundle_path=f"apps/{app_id}/1.0.0",
+        bundle_sha256="ab" * 32,
+        source_url="https://example.com/chess.tgz",
+        installed_by="admin",
+        installed_at="2026-06-02T00:00:00+00:00",
+        min_age=min_age,
+    )
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_min_age_zero_always_passes(tmp_path: Path) -> None:
+    """min_age=0 means no restriction — always allowed."""
+    cp = _FakeCpRepo()
+    cp.add("user1", enabled=True, declared_age=0)
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    app = _make_age_gated_app(min_age=0)
+    await svc.assert_age_allowed(app, "user1")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_no_cp_repo_always_passes(tmp_path: Path) -> None:
+    """When cp_repo is None the gate never blocks."""
+    svc, _ = make_service(tmp_path, [], b"")  # no cp_repo
+    app = _make_age_gated_app(min_age=18)
+    await svc.assert_age_allowed(app, "user1")  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_unprotected_user_always_passes(
+    tmp_path: Path,
+) -> None:
+    """A user without CP enabled is never blocked, even for a high min_age."""
+    cp = _FakeCpRepo()
+    cp.add("user1", enabled=False, declared_age=10)
+    svc, _ = make_service(tmp_path, [], b"", cp_repo=cp)
+    app = _make_age_gated_app(min_age=18)
+    await svc.assert_age_allowed(app, "user1")  # unprotected → allowed
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_unknown_user_passes(tmp_path: Path) -> None:
+    """A user not in the cp_repo is unprotected → allowed."""
+    cp = _FakeCpRepo()  # no entries
+    svc, _ = make_service(tmp_path, [], b"", cp_repo=cp)
+    app = _make_age_gated_app(min_age=13)
+    await svc.assert_age_allowed(app, "unknown-user")  # no protection record → allowed
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_minor_below_min_age_raises(tmp_path: Path) -> None:
+    """Protected minor with declared_age < min_age → AppAgeRestrictedError."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, _ = make_service(tmp_path, [], b"", cp_repo=cp)
+    app = _make_age_gated_app(min_age=13)
+    with pytest.raises(AppAgeRestrictedError, match="13\\+"):
+        await svc.assert_age_allowed(app, "minor1")
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_minor_at_min_age_passes(tmp_path: Path) -> None:
+    """Protected minor with declared_age == min_age → allowed (boundary)."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=13)
+    svc, _ = make_service(tmp_path, [], b"", cp_repo=cp)
+    app = _make_age_gated_app(min_age=13)
+    await svc.assert_age_allowed(app, "minor1")  # at threshold → allowed
+
+
+@pytest.mark.asyncio
+async def test_assert_age_allowed_minor_above_min_age_passes(tmp_path: Path) -> None:
+    """Protected user with declared_age > min_age → allowed."""
+    cp = _FakeCpRepo()
+    cp.add("user1", enabled=True, declared_age=16)
+    svc, _ = make_service(tmp_path, [], b"", cp_repo=cp)
+    app = _make_age_gated_app(min_age=13)
+    await svc.assert_age_allowed(app, "user1")  # 16 >= 13 → allowed
+
+
+@pytest.mark.asyncio
+async def test_set_min_age_admin_gate(tmp_path: Path) -> None:
+    """set_min_age requires actor_is_admin=True."""
+    svc, repo = make_service(tmp_path, [], b"")
+    # Seed a row directly
+    app = _make_age_gated_app(min_age=0)
+    repo._apps["chess"] = app
+    with pytest.raises(SpacePermissionError):
+        await svc.set_min_age("chess", min_age=13, actor_is_admin=False)
+
+
+@pytest.mark.asyncio
+async def test_set_min_age_invalid_value_raises(tmp_path: Path) -> None:
+    """set_min_age raises ValueError for values not in {0,13,16,18}."""
+    svc, repo = make_service(tmp_path, [], b"")
+    repo._apps["chess"] = _make_age_gated_app(min_age=0)
+    with pytest.raises(ValueError, match="min_age"):
+        await svc.set_min_age("chess", min_age=15, actor_is_admin=True)
+
+
+@pytest.mark.asyncio
+async def test_set_min_age_not_found_raises(tmp_path: Path) -> None:
+    """set_min_age raises AppNotFoundError for uninstalled apps."""
+    svc, _ = make_service(tmp_path, [], b"")
+    with pytest.raises(AppNotFoundError):
+        await svc.set_min_age("chess", min_age=13, actor_is_admin=True)
+
+
+@pytest.mark.asyncio
+async def test_set_min_age_valid_updates_and_returns(tmp_path: Path) -> None:
+    """set_min_age updates the row and returns the updated app."""
+    svc, repo = make_service(tmp_path, [], b"")
+    repo._apps["chess"] = _make_age_gated_app(min_age=0)
+    result = await svc.set_min_age("chess", min_age=13, actor_is_admin=True)
+    assert result.min_age == 13
+    assert (await repo.get("chess")).min_age == 13  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_list_visible_admin_sees_all(tmp_path: Path) -> None:
+    """Admins see all installed apps regardless of enabled or age restriction."""
+    cp = _FakeCpRepo()
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess"] = _make_age_gated_app("chess", min_age=18)
+    repo._apps["puzzle"] = _make_age_gated_app("puzzle", min_age=0)
+    result = await svc.list_visible(user_id="admin1", is_admin=True)
+    assert {a.app_id for a in result} == {"chess", "puzzle"}
+
+
+@pytest.mark.asyncio
+async def test_list_visible_member_excludes_disabled(tmp_path: Path) -> None:
+    """Non-admin does not see disabled apps."""
+    svc, repo = make_service(tmp_path, [], b"")
+    from socialhome.domain.apps import AppManifest
+
+    repo._apps["chess"] = InstalledApp(
+        app_id="chess",
+        name="Chess",
+        version="1.0.0",
+        enabled=False,  # disabled
+        manifest=AppManifest(entry="index.html", icon=None, capabilities=()),
+        bundle_path="apps/chess/1.0.0",
+        bundle_sha256="ab" * 32,
+        source_url="https://example.com/chess.tgz",
+        installed_by="admin",
+        installed_at="2026-06-02T00:00:00+00:00",
+    )
+    result = await svc.list_visible(user_id="user1", is_admin=False)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_list_visible_minor_does_not_see_age_restricted_app(
+    tmp_path: Path,
+) -> None:
+    """A protected minor does not see apps whose min_age they fail."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess13"] = _make_age_gated_app("chess13", min_age=13)
+    repo._apps["open"] = _make_age_gated_app("open", min_age=0)
+    result = await svc.list_visible(user_id="minor1", is_admin=False)
+    assert {a.app_id for a in result} == {"open"}
+    assert "chess13" not in {a.app_id for a in result}
+
+
+@pytest.mark.asyncio
+async def test_list_visible_adult_sees_all_enabled(tmp_path: Path) -> None:
+    """An unprotected adult sees all enabled apps."""
+    cp = _FakeCpRepo()
+    cp.add("adult1", enabled=False, declared_age=30)  # protection disabled
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess13"] = _make_age_gated_app("chess13", min_age=13)
+    repo._apps["chess18"] = _make_age_gated_app("chess18", min_age=18)
+    result = await svc.list_visible(user_id="adult1", is_admin=False)
+    assert {a.app_id for a in result} == {"chess13", "chess18"}
+
+
+@pytest.mark.asyncio
+async def test_require_enabled_app_age_blocked_for_minor(tmp_path: Path) -> None:
+    """_require_enabled_app raises AppAgeRestrictedError for under-age protected minor."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess"] = _make_age_gated_app("chess", min_age=13)
+    with pytest.raises(AppAgeRestrictedError):
+        await svc._require_enabled_app("chess", "minor1")
+
+
+@pytest.mark.asyncio
+async def test_store_get_blocked_for_minor(tmp_path: Path) -> None:
+    """store_get raises AppAgeRestrictedError for a protected minor below min_age."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess"] = _make_age_gated_app("chess", min_age=13)
+    with pytest.raises(AppAgeRestrictedError):
+        await svc.store_get("chess", "minor1", "key")
+
+
+@pytest.mark.asyncio
+async def test_store_set_blocked_for_minor(tmp_path: Path) -> None:
+    """store_set raises AppAgeRestrictedError for a protected minor below min_age."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess"] = _make_age_gated_app("chess", min_age=13)
+    with pytest.raises(AppAgeRestrictedError):
+        await svc.store_set("chess", "minor1", "key", {"v": 1})
+
+
+@pytest.mark.asyncio
+async def test_store_delete_blocked_for_minor(tmp_path: Path) -> None:
+    """store_delete raises AppAgeRestrictedError for a protected minor below min_age."""
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=12)
+    svc, repo = make_service(tmp_path, [], b"", cp_repo=cp)
+    repo._apps["chess"] = _make_age_gated_app("chess", min_age=13)
+    with pytest.raises(AppAgeRestrictedError):
+        await svc.store_delete("chess", "minor1", "key")
+
+
+@pytest.mark.asyncio
+async def test_install_sets_min_age_from_manifest(
+    tmp_path: Path,
+    chess_bundle: tuple[bytes, str],
+) -> None:
+    """install() sets min_age from the manifest's min_age field."""
+    # Build a bundle with min_age=13 in manifest.json
+    import gzip
+    import io
+    import json as _json
+    import tarfile
+
+    buf = io.BytesIO()
+    manifest = _json.dumps(
+        {"entry": "index.html", "capabilities": ["storage"], "min_age": 13}
+    ).encode()
+    html = b"<html><body>Chess</body></html>"
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
+        with tarfile.open(fileobj=gz, mode="w|") as tar:
+            for name, data in [("manifest.json", manifest), ("index.html", html)]:
+                info = tarfile.TarInfo(name=name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    bundle_bytes = buf.getvalue()
+    import hashlib
+
+    sha = hashlib.sha256(bundle_bytes).hexdigest()
+
+    entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="1.0.0",
+        description="Play chess",
+        icon_url=None,
+        capabilities=("storage",),
+        bundle_url="https://example.com/chess.tgz",
+        bundle_sha256=sha,
+    )
+    svc, repo = make_service(tmp_path, [entry], bundle_bytes)
+    app = await svc.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    assert app.min_age == 13
+    row = await repo.get("chess")
+    assert row is not None
+    assert row.min_age == 13
+
+
 @pytest.mark.asyncio
 async def test_update_app_preserves_enabled_and_installed_by(
     tmp_path: Path,
@@ -1269,3 +1597,161 @@ async def test_update_app_sha_mismatch_raises_integrity_error(
     app = await repo.get("chess")
     assert app is not None
     assert app.version == "1.0.0"
+
+
+# ─── FIX 2: update_app picks up raised min_age from manifest ─────────────────
+
+
+def _make_bundle_with_min_age(min_age: int) -> tuple[bytes, str]:
+    """Build a minimal .tgz with a manifest declaring the given min_age."""
+    import gzip as _gzip
+    import io as _io
+    import json as _json
+    import tarfile as _tarfile
+
+    buf = _io.BytesIO()
+    manifest = _json.dumps(
+        {"entry": "index.html", "capabilities": [], "min_age": min_age}
+    ).encode()
+    html = b"<html><body>App</body></html>"
+    with _gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
+        with _tarfile.open(fileobj=gz, mode="w|") as tar:
+            for name, data in [("manifest.json", manifest), ("index.html", html)]:
+                info = _tarfile.TarInfo(name=name)
+                info.size = len(data)
+                tar.addfile(info, _io.BytesIO(data))
+    raw = buf.getvalue()
+    import hashlib as _hashlib
+
+    sha = _hashlib.sha256(raw).hexdigest()
+    return raw, sha
+
+
+@pytest.mark.asyncio
+async def test_update_app_raises_min_age_when_manifest_is_stricter(
+    tmp_path: Path,
+) -> None:
+    """update_app auto-raises min_age when the new manifest declares a higher value.
+
+    App installed at min_age 0 (no gate); manifest in v2 declares min_age 13
+    → the updated row must have min_age 13.
+    """
+    # v1 bundle: manifest has min_age 0 (default / not declared)
+    v1_raw, v1_sha = _make_bundle_with_min_age(0)
+    v1_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="1.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-1.0.0.tgz",
+        bundle_sha256=v1_sha,
+    )
+    repo = _FakeAppRepo()
+
+    async def downloader_v1(url: str) -> bytes:
+        return v1_raw
+
+    svc_v1 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v1_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v1",
+        downloader=downloader_v1,
+    )
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    assert (await repo.get("chess")).min_age == 0  # type: ignore[union-attr]
+
+    # v2 bundle: manifest now declares min_age 13
+    v2_raw, v2_sha = _make_bundle_with_min_age(13)
+    v2_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="2.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-2.0.0.tgz",
+        bundle_sha256=v2_sha,
+    )
+
+    async def downloader_v2(url: str) -> bytes:
+        return v2_raw
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v2_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v2",
+        downloader=downloader_v2,
+    )
+    updated = await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # The manifest raised the gate — the row must reflect the stricter value.
+    assert updated.min_age == 13
+    assert (await repo.get("chess")).min_age == 13  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_update_app_preserves_admin_min_age_when_manifest_is_laxer(
+    tmp_path: Path,
+) -> None:
+    """update_app never lowers an admin-configured gate.
+
+    App at admin-set min_age 16; new manifest declares only min_age 13
+    → the updated row must still have min_age 16.
+    """
+    # v1 bundle: manifest has min_age 0
+    v1_raw, v1_sha = _make_bundle_with_min_age(0)
+    v1_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="1.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-1.0.0.tgz",
+        bundle_sha256=v1_sha,
+    )
+    repo = _FakeAppRepo()
+
+    async def downloader_v1(url: str) -> bytes:
+        return v1_raw
+
+    svc_v1 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v1_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v1",
+        downloader=downloader_v1,
+    )
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    # Admin manually raises the gate to 16
+    await svc_v1.set_min_age("chess", min_age=16, actor_is_admin=True)
+    assert (await repo.get("chess")).min_age == 16  # type: ignore[union-attr]
+
+    # v2 bundle: manifest declares min_age 13 (less strict than admin-set 16)
+    v2_raw, v2_sha = _make_bundle_with_min_age(13)
+    v2_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="2.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-2.0.0.tgz",
+        bundle_sha256=v2_sha,
+    )
+
+    async def downloader_v2(url: str) -> bytes:
+        return v2_raw
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v2_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v2",
+        downloader=downloader_v2,
+    )
+    updated = await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # The admin gate must NOT be lowered even though the new manifest is laxer.
+    assert updated.min_age == 16
+    assert (await repo.get("chess")).min_age == 16  # type: ignore[union-attr]

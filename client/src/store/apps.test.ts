@@ -12,6 +12,7 @@ import {
   installApp,
   uninstallApp,
   setEnabled,
+  setMinAge,
   _resetAppsForTest,
 } from './apps'
 
@@ -41,8 +42,8 @@ describe('apps store', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
         apps: [
-          { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null },
-          { app_id: 'a2', name: 'Beta',  version: '2.0', enabled: false, capabilities: ['notify'], icon: null },
+          { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null, min_age: 0 },
+          { app_id: 'a2', name: 'Beta',  version: '2.0', enabled: false, capabilities: ['notify'], icon: null, min_age: 13 },
         ],
       }),
     )
@@ -85,7 +86,7 @@ describe('apps store', () => {
   // ── installApp ──────────────────────────────────────────────────
 
   it('installApp calls POST /api/apps with {app_id} and appends to installedApps', async () => {
-    const newApp = { app_id: 'x1', name: 'Xapp', version: '0.1', enabled: true, capabilities: [], icon: null }
+    const newApp = { app_id: 'x1', name: 'Xapp', version: '0.1', enabled: true, capabilities: [], icon: null, min_age: 0 }
     fetchMock.mockResolvedValueOnce(jsonResponse(newApp, { status: 201 }))
     await installApp('x1')
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -101,8 +102,8 @@ describe('apps store', () => {
 
   it('uninstallApp calls DELETE /api/apps/{id} and removes from installedApps', async () => {
     installedApps.value = [
-      { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null },
-      { app_id: 'a2', name: 'Beta',  version: '2.0', enabled: true, capabilities: [], icon: null },
+      { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null, min_age: 0 },
+      { app_id: 'a2', name: 'Beta',  version: '2.0', enabled: true, capabilities: [], icon: null, min_age: 0 },
     ]
     fetchMock.mockResolvedValueOnce(new Response('{"status":"ok"}', { status: 200, headers: { 'content-type': 'application/json' } }))
     await uninstallApp('a1')
@@ -118,9 +119,9 @@ describe('apps store', () => {
 
   it('setEnabled calls PATCH /api/apps/{id} with {enabled} and updates signal', async () => {
     installedApps.value = [
-      { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null },
+      { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null, min_age: 0 },
     ]
-    const updated = { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: false, capabilities: [], icon: null }
+    const updated = { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: false, capabilities: [], icon: null, min_age: 0 }
     fetchMock.mockResolvedValueOnce(jsonResponse(updated))
     await setEnabled('a1', false)
     expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -175,7 +176,7 @@ describe('apps store', () => {
   // ── updateApp ───────────────────────────────────────────────────
 
   it('updateApp calls POST /api/apps/{id}/update then refreshes installed + updates', async () => {
-    const orig = { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null }
+    const orig = { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null, min_age: 0 }
     const patched = { ...orig, version: '1.1' }
     installedApps.value = [orig]
 
@@ -201,5 +202,40 @@ describe('apps store', () => {
       jsonResponse({ error: { code: 'NOT_FOUND', detail: 'app not found' } }, { status: 404 }),
     )
     await expect(updateApp('missing')).rejects.toThrow()
+  })
+
+  // ── setMinAge ───────────────────────────────────────────────────
+
+  it('setMinAge calls PATCH /api/apps/{id} with {min_age} and refreshes installed', async () => {
+    installedApps.value = [
+      { app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null, min_age: 0 },
+    ]
+    // PATCH response (empty body / 200)
+    fetchMock.mockResolvedValueOnce(
+      new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }),
+    )
+    // loadInstalled refresh — returns app with updated min_age
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        apps: [{ app_id: 'a1', name: 'Alpha', version: '1.0', enabled: true, capabilities: [], icon: null, min_age: 13 }],
+      }),
+    )
+
+    await setMinAge('a1', 13)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [patchUrl, patchOpts] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(patchUrl).toBe('api/apps/a1')
+    expect(patchOpts.method).toBe('PATCH')
+    expect(JSON.parse(patchOpts.body as string)).toEqual({ min_age: 13 })
+    // After the loadInstalled refresh the signal reflects the new value.
+    expect(installedApps.value[0].min_age).toBe(13)
+  })
+
+  it('setMinAge rethrows ApiError for the caller to handle', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ error: { code: 'UNPROCESSABLE', detail: 'Invalid min_age' } }, { status: 422 }),
+    )
+    await expect(setMinAge('a1', 99)).rejects.toThrow()
   })
 })
