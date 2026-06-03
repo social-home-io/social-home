@@ -48,6 +48,7 @@ from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 from ..domain.space import SpaceMember, SpacePermissionError, SpaceRole
 from ..services.space_service import (
+    _coerce_min_age,
     apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
     apply_space_icon_from_metadata,
@@ -314,7 +315,10 @@ class SpaceInviteTokenRedeemCoordinator:
             # us as a remote member on the valid token; without our
             # space_instance + content key that residue is inert (it can
             # only ever receive undecryptable ciphertext).
-            min_age = int(meta_dict.get("min_age") or 0) if meta_dict else 0
+            # Coerce defensively: a malicious issuer could ship a
+            # non-conforming min_age; _coerce_min_age clamps to {0,13,16,18}
+            # (out-of-set / garbage → 0) so int() can't raise here.
+            min_age = _coerce_min_age(meta_dict.get("min_age")) if meta_dict else 0
             if self._child_protection is not None and not (
                 await self._child_protection.is_age_allowed(viewer_user_id, min_age)
             ):

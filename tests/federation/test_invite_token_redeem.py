@@ -472,6 +472,25 @@ async def test_redeem_blocks_underage_minor_and_seats_nothing():
     cp.is_age_allowed.assert_awaited_once_with("u-local", 18)
 
 
+async def test_redeem_coerces_out_of_set_min_age_no_crash():
+    """A malicious issuer shipping a non-conforming min_age (e.g. 15) must
+    not crash the redeemer — it coerces to 0 (no restriction) and seats."""
+    cp = SimpleNamespace(is_age_allowed=AsyncMock(return_value=True))
+    sender, _issuer, *_rest, issuer_repo, _im = _wire_pair(
+        {"space_id": "sp-bad", "created_by": "owner", "uses_remaining": 1},
+        sender_child_protection=cp,
+    )
+    issuer_repo.space_rows_for_get["sp-bad"] = _a_space("sp-bad", min_age=15)
+    await sender.request_redeem(
+        "good-token",
+        viewer_user_id="u-local",
+        issuer_instance_id="issuer-1",
+    )
+    # Coerced to 0 before the gate — is_age_allowed called with 0, seated.
+    cp.is_age_allowed.assert_awaited_once_with("u-local", 0)
+    assert "sp-bad" in sender._spaces.spaces  # type: ignore[attr-defined]
+
+
 async def test_redeem_allows_old_enough_minor():
     """A 16-year-old minor IS seated into a 13+ space — is_age_allowed True."""
     cp = SimpleNamespace(is_age_allowed=AsyncMock(return_value=True))
