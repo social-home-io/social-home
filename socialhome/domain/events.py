@@ -1781,6 +1781,22 @@ class AppUpdated(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+@dataclass(slots=True, frozen=True)
+class AppChallengeReceived(DomainEvent):
+    """A Social Home App session invite ("challenge") arrived for a local user.
+
+    Published by :class:`AppFederationService` when an ``APP_SESSION`` *open*
+    resolves to a specific local recipient (local loopback or remote-routed).
+    Consumed by the notification service to raise a bell row + push.
+    ``from_display`` is a human label only — never a stable cross-household id.
+    """
+
+    app_id: str
+    session_id: str
+    to_user_id: str
+    from_display: str
+
+
 # ─── Momentum (§Momentum) ─────────────────────────────────────────────────
 
 

@@ -9,6 +9,7 @@ import pytest
 from socialhome.domain.apps import (
     AppAgeRestrictedError,
     AppAlreadyInstalledError,
+    AppContactNotFoundError,
     AppError,
     AppIntegrityError,
     AppKvEntry,
@@ -66,6 +67,11 @@ def test_app_not_found_is_exception_subclass():
     assert issubclass(AppNotEnabledError, Exception)
     assert issubclass(AppAlreadyInstalledError, Exception)
     assert issubclass(AppIntegrityError, Exception)
+
+
+def test_app_contact_not_found_is_app_error_subclass():
+    assert issubclass(AppContactNotFoundError, AppError)
+    assert issubclass(AppContactNotFoundError, Exception)
 
 
 def test_app_manifest_from_dict_validates_entry():

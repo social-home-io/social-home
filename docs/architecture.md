@@ -381,7 +381,7 @@ routes `app.message` frames to the SPA connection that has the matching app
 launched.  The host bridge forwards qualifying frames into the iframe as
 `MessageEvent`s.
 
-### App-to-app federation (PR4, capability v_17)
+### App-to-app federation (PR4, capability v_17; person-to-person v_18)
 
 `AppFederationService` (`socialhome/services/app_federation_service.py`)
 bridges between the federation layer and the SPA:
@@ -394,14 +394,25 @@ bridges between the federation layer and the SPA:
   `payload_sha256` binding (same security model as the v_14 media channel).
   Otherwise `FederationService.send_app_message` falls back transparently to
   an `APP_MESSAGE` JSON event.
+- **Person-to-person sessions (v_18):** `open_session` and `send_message`
+  target a specific person (local or remote) via a `target` dict
+  (`{instance_id, user_ref, is_local}`). Local-loopback sessions deliver a
+  frame straight to the target and initiator over WebSocket — no federation
+  send. Remote sessions include `to_user`/`from_user` in the JSON event when
+  the peer is v_18+, so the receiver can route to the addressed person instead
+  of fanning out to all local users. An `AppChallengeReceived` domain event
+  fires for the addressed user (→ bell row + title-only push per §25.3).
+- **Contact roster** (`GET /api/apps/{app_id}/contacts`): the same
+  block-aware, pairing-scoped person set as `/api/friends` and DMs. Both
+  `open_session` and `send_message` gate on `_assert_target_allowed` (→
+  `AppContactNotFoundError`, HTTP 403) — the send cannot address anyone
+  outside this roster.
 - **Inbound delivery** (both paths): after §24.11 validation and decryption,
-  `_deliver` fans the `app.message` WS frame to every local user whose
-  WebSocket is open and the matching app is enabled.  The app's `session_id`
-  scopes the semantics in the SPA; per-user routing is a documented follow-up.
-- **Privacy:** `APP_SESSION` carries no per-user identifier — only `session_id`
-  and `from_instance` — to avoid cross-household user tracking.
-- **REST:** `GET /api/apps/{app_id}/peers`, `POST /api/apps/{app_id}/sessions`,
-  `POST /api/apps/{app_id}/messages`.
+  `_deliver` routes to the addressed user (v_18+ JSON path) or fans the
+  `app.message` WS frame to every local user (legacy / binary path). The
+  binary `fed-app-v1` frame format (v1) carries no routing slot.
+- **REST:** `GET /api/apps/{app_id}/peers`, `GET /api/apps/{app_id}/contacts`,
+  `POST /api/apps/{app_id}/sessions`, `POST /api/apps/{app_id}/messages`.
 
 See [`protocol/apps.md`](./protocol/apps.md) for the wire protocol and
 sequence diagram, and [`docs/crypto.md`](./crypto.md) for the `fed-app-v1`

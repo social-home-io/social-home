@@ -54,3 +54,22 @@ def test_peer_home_changed_shape():
     assert e.latitude == 52.52
     assert e.longitude == 13.40
     assert e.occurred_at is not None
+
+
+def test_app_challenge_received_is_frozen_slots():
+    from socialhome.domain.events import AppChallengeReceived
+
+    e = AppChallengeReceived(
+        app_id="chess",
+        session_id="s1",
+        to_user_id="u-local",
+        from_display="Alice",
+    )
+    assert e.app_id == "chess"
+    assert e.to_user_id == "u-local"
+    assert e.from_display == "Alice"
+    import dataclasses
+    import pytest
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        e.app_id = "x"  # type: ignore[misc]

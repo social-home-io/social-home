@@ -130,6 +130,7 @@ from .household import HouseholdPreferencesView
 from .apps import (
     AppCatalogView,
     AppCollectionView,
+    AppContactsView,
     AppDetailView,
     AppMessagesView,
     AppPeersView,
@@ -1047,6 +1048,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/apps/{app_id}/runtime", AppRuntimeView)
     app.router.add_view("/api/apps/{app_id}/bundle/{tail:.*}", AppBundleView)
     app.router.add_view("/api/apps/{app_id}/update", AppUpdateView)
+    app.router.add_view("/api/apps/{app_id}/contacts", AppContactsView)
     app.router.add_view("/api/apps/{app_id}/peers", AppPeersView)
     app.router.add_view("/api/apps/{app_id}/sessions", AppSessionsView)
     app.router.add_view("/api/apps/{app_id}/messages", AppMessagesView)

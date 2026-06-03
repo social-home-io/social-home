@@ -253,7 +253,7 @@ describe('mountBridge', () => {
 
   // ── app.send ──────────────────────────────────────────────────────────────
 
-  it('app.send: POSTs to /messages with session_id, peer_instance_id, payload; replies ok:true', async () => {
+  it('app.send: POSTs to /messages with session_id, target, payload; replies ok:true', async () => {
     mockApiPost.mockResolvedValueOnce({ ok: true })
     const handler = captureMessageHandler()
 
@@ -264,7 +264,7 @@ describe('mountBridge', () => {
         method: 'app.send',
         params: {
           session_id: 'sess-abc',
-          peer_instance_id: 'peer.example.com',
+          target: 'user-alice',
           payload: { move: 'e4' },
         },
       },
@@ -274,7 +274,7 @@ describe('mountBridge', () => {
       `/api/apps/${APP_ID}/messages`,
       {
         session_id: 'sess-abc',
-        peer_instance_id: 'peer.example.com',
+        target: 'user-alice',
         payload: { move: 'e4' },
       },
     )
@@ -305,9 +305,31 @@ describe('mountBridge', () => {
     )
   })
 
+  // ── contacts.list ───────────────────────────────────────────────────────
+
+  it('contacts.list: GETs /contacts and returns contacts array', async () => {
+    const contacts = [
+      { user_id: 'user-alice', display_name: 'Alice' },
+      { user_id: 'user-bob', display_name: 'Bob' },
+    ]
+    mockApiGet.mockResolvedValueOnce({ contacts })
+    const handler = captureMessageHandler()
+
+    await handler({
+      source: iframe.contentWindow as unknown as Window,
+      data: { id: 43, method: 'contacts.list' },
+    })
+
+    expect(mockApiGet).toHaveBeenCalledWith(`/api/apps/${APP_ID}/contacts`)
+    expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 43, ok: true, result: contacts }),
+      '*',
+    )
+  })
+
   // ── app.openSession ────────────────────────────────────────────────────
 
-  it('app.openSession: POSTs to /sessions with peer_instance_id; returns session_id', async () => {
+  it('app.openSession: POSTs to /sessions with target; returns session_id', async () => {
     mockApiPost.mockResolvedValueOnce({ session_id: 'sess-xyz' })
     const handler = captureMessageHandler()
 
@@ -316,13 +338,13 @@ describe('mountBridge', () => {
       data: {
         id: 42,
         method: 'app.openSession',
-        params: { peer_instance_id: 'peer.example.com' },
+        params: { target: 'user-bob' },
       },
     })
 
     expect(mockApiPost).toHaveBeenCalledWith(
       `/api/apps/${APP_ID}/sessions`,
-      { peer_instance_id: 'peer.example.com' },
+      { target: 'user-bob' },
     )
     expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ id: 42, ok: true, result: 'sess-xyz' }),
@@ -351,18 +373,20 @@ describe('mountBridge', () => {
         kind: 'message',
         sessionId: 'sess-abc',
         fromInstance: 'peer.example.com',
+        fromUser: undefined,
         payload: { move: 'e4' },
       },
       '*',
     )
   })
 
-  it('WS relay: forwards session kind frames with kind="session"', () => {
+  it('WS relay: forwards session kind frames with kind="session" and fromUser when present', () => {
     wsHandlers['app.message']({
       data: {
         app_id: APP_ID,
         session_id: 'sess-invite',
         from_instance: 'peer.example.com',
+        from_user: 'user-alice',
         kind: 'session',
         payload: { verb: 'open' },
       },
@@ -374,6 +398,7 @@ describe('mountBridge', () => {
         kind: 'session',
         sessionId: 'sess-invite',
         fromInstance: 'peer.example.com',
+        fromUser: 'user-alice',
         payload: { verb: 'open' },
       },
       '*',

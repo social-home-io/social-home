@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 
 from ..domain.events import (
+    AppChallengeReceived,
     BazaarBidPlaced,
     BazaarListingExpired,
     BazaarOfferAccepted,
@@ -318,6 +319,11 @@ class NotificationService:
             SpaceLocationFeatureEnabled,
             self.on_space_location_feature_enabled,
         )
+        # Social Home Apps — a challenge (APP_SESSION open) arrived.
+        self._bus.subscribe(
+            AppChallengeReceived,
+            self.on_app_challenge_received,
+        )
 
     # ── Handlers ───────────────────────────────────────────────────────
 
@@ -507,6 +513,40 @@ class NotificationService:
             title=title,
             tag=f"dm-contact:{event.requester_user_id}",
             click_url="/dms",
+        )
+
+    async def on_app_challenge_received(
+        self,
+        event: AppChallengeReceived,
+    ) -> None:
+        """A Social Home App challenge arrived for a local user — bell + push.
+
+        §25.3: title only — the challenger's display name is a human label
+        (not user-generated content) and rides the title; no body on the wire.
+        Chess is the only app today, so the chess wording is fine. The deep
+        link points at the app surface so a tap opens it; the SPA's open frame
+        (delivered separately over WS) seats the live invite.
+        """
+        recipient = await self._users.get_by_user_id(event.to_user_id)
+        title = self._t(
+            "notification.app.challenge",
+            locale=self._locale(recipient),
+            fallback="♟ {name} challenged you to chess",
+            name=event.from_display,
+        )
+        await self._save_notif(
+            new_notification(
+                user_id=event.to_user_id,
+                type="app_challenge",
+                title=title,
+                link_url=f"/apps/{event.app_id}",
+            )
+        )
+        await self._fan_push(
+            [event.to_user_id],
+            title=title,
+            tag=f"app-challenge:{event.app_id}:{event.session_id}",
+            click_url=f"/apps/{event.app_id}",
         )
 
     async def on_bazaar_bid_placed(self, event: BazaarBidPlaced) -> None:

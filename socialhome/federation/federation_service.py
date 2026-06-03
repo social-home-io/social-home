@@ -1088,6 +1088,8 @@ class FederationService:
         app_id: str,
         session_id: str,
         payload: dict,
+        to_user: str | None = None,
+        from_user: str | None = None,
     ) -> DeliveryResult:
         """Ship one app message, preferring the binary ``fed-app-v1`` channel.
 
@@ -1104,6 +1106,20 @@ class FederationService:
         delta, game-state patch, …). It MUST NOT appear in plaintext in any
         envelope field; both paths place it inside the AES-256-GCM-sealed
         layer.
+
+        ``to_user`` / ``from_user`` are plaintext *routing* fields (a local
+        username on each side, never a name/PII) that let the receiver route
+        the message to the addressed person instead of fanning out to every
+        local user. They ride **only** the JSON ``APP_MESSAGE`` event path:
+        the binary ``fed-app-v1`` frame format (v1) carries no routing slot,
+        so a binary send stays household-scoped and the receiver disambiguates
+        by ``session_id`` (a non-party local user's app ignores an unknown
+        session — harmless). Adding routing to the binary fast path is a
+        deliberate v2 concern (a new frame field would break the signed-bytes
+        contract), so when ``to_user`` is set this method MUST still allow the
+        binary path to run — the JSON fallback only carries it when the binary
+        send doesn't land. APP_SESSION (the challenge/invite that drives
+        notifications) is always JSON and IS per-user routed by the caller.
         """
         instance = await self._federation_repo.get_instance(to_instance_id)
         if (
@@ -1126,14 +1142,21 @@ class FederationService:
                 return result
             # Binary send didn't land — fall through to the JSON path.
 
+        event_payload: dict = {
+            "app_id": app_id,
+            "session_id": session_id,
+            "data": payload,
+        }
+        # Per-user routing fields are plaintext (usernames only) and ride the
+        # JSON path exclusively — the binary frame format has no routing slot.
+        if to_user is not None:
+            event_payload["to_user"] = to_user
+        if from_user is not None:
+            event_payload["from_user"] = from_user
         return await self.send_event(
             to_instance_id=to_instance_id,
             event_type=FederationEventType.APP_MESSAGE,
-            payload={
-                "app_id": app_id,
-                "session_id": session_id,
-                "data": payload,
-            },
+            payload=event_payload,
         )
 
     async def _send_app_binary(

@@ -113,10 +113,10 @@ export function mountBridge(
         }
 
         case 'app.send': {
-          const { session_id, peer_instance_id, payload } = params ?? {}
+          const { session_id, target, payload } = params ?? {}
           await api.post(`/api/apps/${encodeURIComponent(appId)}/messages`, {
             session_id,
-            peer_instance_id,
+            target,
             payload,
           })
           reply({ id, ok: true, result: { ok: true } })
@@ -131,11 +131,19 @@ export function mountBridge(
           break
         }
 
+        case 'contacts.list': {
+          const resp = await api.get<{ contacts: unknown[] }>(
+            `/api/apps/${encodeURIComponent(appId)}/contacts`,
+          )
+          reply({ id, ok: true, result: resp.contacts })
+          break
+        }
+
         case 'app.openSession': {
-          const { peer_instance_id } = params ?? {}
+          const { target } = params ?? {}
           const resp = await api.post<{ session_id: string }>(
             `/api/apps/${encodeURIComponent(appId)}/sessions`,
-            { peer_instance_id },
+            { target },
           )
           reply({ id, ok: true, result: resp.session_id })
           break
@@ -178,6 +186,7 @@ export function mountBridge(
           kind: evt.data.kind,            // 'session' | 'message'
           sessionId: evt.data.session_id,
           fromInstance: evt.data.from_instance,
+          fromUser: evt.data.from_user,   // present on session-open frames; undefined otherwise
           payload: evt.data.payload,
         },
         '*',

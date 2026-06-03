@@ -1217,3 +1217,49 @@ async def test_space_location_feature_enabled_notifies_non_actor_members(stack):
     loc_notif = next(n for n in bob_notifs if n.type == "space_location_enabled")
     assert "FamSpace" in loc_notif.title
     assert loc_notif.link_url == "/settings#privacy"
+
+
+# ─── AppChallengeReceived handler (Task 7) ─────────────────────────────────
+
+
+async def test_on_app_challenge_received_creates_row_for_target(stack):
+    """An app challenge raises a bell row for the target, titled with the
+    challenger's display name."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    target = await stack.provision_user("target")
+    await stack.bus.publish(
+        AppChallengeReceived(
+            app_id="chess",
+            session_id="sess-xyz",
+            to_user_id=target.user_id,
+            from_display="Magnus",
+        )
+    )
+    notifs = await stack.notif_repo.list(target.user_id, limit=10)
+    rows = [n for n in notifs if n.type == "app_challenge"]
+    assert len(rows) == 1
+    assert rows[0].user_id == target.user_id
+    assert "Magnus" in rows[0].title
+
+
+async def test_on_app_challenge_received_push_is_title_only(stack):
+    """The challenge push carries only a title — no body / UGC payload."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    target = await stack.provision_user("target")
+    push = _CapturingPush()
+    stack.notif_svc.attach_push_service(push)
+    await stack.bus.publish(
+        AppChallengeReceived(
+            app_id="chess",
+            session_id="sess-xyz",
+            to_user_id=target.user_id,
+            from_display="Magnus",
+        )
+    )
+    assert push.calls
+    payload = push.calls[-1][1]
+    assert "Magnus" in payload.title
+    # PushPayload has no body field — title-only is structural (§25.3).
+    assert not hasattr(payload, "body")

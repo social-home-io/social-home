@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock
 
-from socialhome.app_keys import app_federation_service_key
+from socialhome.app_keys import app_federation_service_key, instance_id_key
 from socialhome.auth import sha256_token_hash
 from socialhome.domain.apps import (
     AppAgeRestrictedError,
     AppAlreadyInstalledError,
     AppCatalogEntry,
+    AppContactNotFoundError,
     AppIntegrityError,
     AppManifest,
     AppNotFoundError,
@@ -796,6 +797,65 @@ async def test_peers_member_can_list(client, fed_svc):
     assert body == {"peers": []}
 
 
+# ── GET /api/apps/{app_id}/contacts ──────────────────────────────────────
+
+
+async def test_contacts_requires_auth(client):
+    r = await client.get("/api/apps/com.example.hello/contacts")
+    assert r.status == 401
+
+
+async def test_get_contacts_returns_contact_shape(client, fed_svc):
+    contacts = [
+        {
+            "instance_id": "peer.example.com",
+            "user_ref": "alice@peer.example.com",
+            "display_name": "Alice",
+            "is_local": False,
+            "online": True,
+        },
+        {
+            "instance_id": "local",
+            "user_ref": "bob@local",
+            "display_name": "Bob",
+            "is_local": True,
+            "online": False,
+        },
+    ]
+    fed_svc.list_contacts.return_value = contacts
+
+    r = await client.get(
+        "/api/apps/com.example.hello/contacts",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert isinstance(body["contacts"], list)
+    for c in body["contacts"]:
+        assert set(c.keys()) == {
+            "instance_id",
+            "user_ref",
+            "display_name",
+            "is_local",
+            "online",
+        }
+    fed_svc.list_contacts.assert_awaited_once()
+
+
+async def test_contacts_member_can_list(client, fed_svc):
+    """Non-admin members can also list contacts."""
+    fed_svc.list_contacts.return_value = []
+    member_tok = await _seed_member(client._db)
+
+    r = await client.get(
+        "/api/apps/com.example.hello/contacts",
+        headers=_auth(member_tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"contacts": []}
+
+
 # ── POST /api/apps/{app_id}/sessions ─────────────────────────────────────
 
 
@@ -808,7 +868,32 @@ async def test_sessions_requires_auth(client):
 
 
 async def test_sessions_returns_session_id_201(client, fed_svc):
+    """A ``target`` body opens a person-addressed session and returns 201."""
     fed_svc.open_session.return_value = "deadbeef01234567"
+
+    target = {
+        "instance_id": "peer.example.com",
+        "user_ref": "bob",
+        "is_local": False,
+    }
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"target": target},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body == {"session_id": "deadbeef01234567"}
+    fed_svc.open_session.assert_awaited_once_with(
+        app_id="com.example.hello",
+        target=target,
+        actor_user_id=client._uid,
+    )
+
+
+async def test_sessions_legacy_peer_instance_id_still_works(client, fed_svc):
+    """A legacy ``peer_instance_id`` body maps to a remote household target."""
+    fed_svc.open_session.return_value = "cafebabe89abcdef"
 
     r = await client.post(
         "/api/apps/com.example.hello/sessions",
@@ -817,12 +902,28 @@ async def test_sessions_returns_session_id_201(client, fed_svc):
     )
     assert r.status == 201
     body = await r.json()
-    assert body == {"session_id": "deadbeef01234567"}
+    assert body == {"session_id": "cafebabe89abcdef"}
     fed_svc.open_session.assert_awaited_once_with(
         app_id="com.example.hello",
-        peer_instance_id="peer.example.com",
+        target={
+            "instance_id": "peer.example.com",
+            "user_ref": "",
+            "is_local": False,
+        },
         actor_user_id=client._uid,
     )
+
+
+async def test_sessions_rejects_malformed_target(client, fed_svc):
+    """A target missing is_local / user_ref is rejected with 400."""
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"target": {"instance_id": "peer.example.com"}},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
 
 
 async def test_sessions_rejects_missing_peer(client, fed_svc):
@@ -885,6 +986,37 @@ async def test_messages_requires_auth(client):
 
 
 async def test_messages_returns_ok(client, fed_svc):
+    """A ``target`` body sends a person-addressed message and returns ok."""
+    fed_svc.send_message.return_value = None
+
+    target = {
+        "instance_id": "peer.example.com",
+        "user_ref": "bob",
+        "is_local": False,
+    }
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "sess-abc",
+            "target": target,
+            "payload": {"move": "e4"},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"ok": True}
+    fed_svc.send_message.assert_awaited_once_with(
+        app_id="com.example.hello",
+        target=target,
+        session_id="sess-abc",
+        payload={"move": "e4"},
+        actor_user_id=client._uid,
+    )
+
+
+async def test_messages_legacy_peer_instance_id_still_works(client, fed_svc):
+    """A legacy ``peer_instance_id`` body maps to a household-addressed target."""
     fed_svc.send_message.return_value = None
 
     r = await client.post(
@@ -897,15 +1029,75 @@ async def test_messages_returns_ok(client, fed_svc):
         headers=_auth(client._tok),
     )
     assert r.status == 200
-    body = await r.json()
-    assert body == {"ok": True}
     fed_svc.send_message.assert_awaited_once_with(
         app_id="com.example.hello",
+        target={
+            "instance_id": "peer.example.com",
+            "user_ref": "",
+            "is_local": False,
+        },
         session_id="sess-abc",
-        peer_instance_id="peer.example.com",
         payload={"move": "e4"},
         actor_user_id=client._uid,
     )
+
+
+async def test_messages_rejects_malformed_target(client, fed_svc):
+    """A target missing is_local / user_ref is rejected with 400."""
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "s1",
+            "target": {"instance_id": "peer.example.com"},
+            "payload": {},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 400
+    body = await r.json()
+    assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+async def test_sessions_non_contact_target_forbidden(client, fed_svc):
+    """Opening a session with a non-contact target → 403 FORBIDDEN."""
+    fed_svc.open_session.side_effect = AppContactNotFoundError("not a contact")
+
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={
+            "target": {
+                "instance_id": "peer.example.com",
+                "user_ref": "stranger",
+                "is_local": False,
+            }
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+
+
+async def test_messages_non_contact_target_forbidden(client, fed_svc):
+    """Sending a message to a non-contact target → 403 FORBIDDEN."""
+    fed_svc.send_message.side_effect = AppContactNotFoundError("not a contact")
+
+    r = await client.post(
+        "/api/apps/com.example.hello/messages",
+        json={
+            "session_id": "s1",
+            "target": {
+                "instance_id": "peer.example.com",
+                "user_ref": "stranger",
+                "is_local": False,
+            },
+            "payload": {"move": "e4"},
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
 
 
 async def test_messages_rejects_missing_session_id(client, fed_svc):
@@ -1250,3 +1442,42 @@ async def test_update_app_integrity_error_returns_400(client, monkeypatch):
     assert r.status == 400
     body = await r.json()
     assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+# ── E2E: bus wired into AppFederationService (challenge → notification) ───
+
+
+async def test_local_challenge_creates_notification(client):
+    """POST /api/apps/{id}/sessions with a local target fires an AppChallengeReceived
+    event on the bus, which notification_service translates into a bell row for the
+    challenged user.  This test is intentionally a failing test until app.py passes
+    bus= to AppFederationService.
+    """
+    await _seed_installed_enabled_app(client._db)
+    carol_tok = await _seed_member(client._db, username="carol", user_id="carol-id")
+
+    own_instance_id = client.app[instance_id_key]
+
+    target = {
+        "instance_id": own_instance_id,
+        "user_ref": "carol-id",
+        "is_local": True,
+    }
+    r = await client.post(
+        "/api/apps/com.example.hello/sessions",
+        json={"target": target},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+
+    # Carol should now have an app_challenge notification row.
+    notif_r = await client.get(
+        "/api/notifications",
+        headers=_auth(carol_tok),
+    )
+    assert notif_r.status == 200
+    notifs = await notif_r.json()
+    types = [n["type"] for n in notifs]
+    assert "app_challenge" in types, (
+        f"expected app_challenge notification, got: {notifs}"
+    )

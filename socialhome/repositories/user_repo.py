@@ -47,6 +47,7 @@ class AbstractUserRepo(Protocol):
     ) -> RemoteUser | None: ...
     async def upsert_remote(self, remote: RemoteUser) -> None: ...
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]: ...
+    async def list_all_known_remote(self) -> list[RemoteUser]: ...
     async def get_instance_for_user(self, user_id: str) -> str | None: ...
     async def mark_remote_deprovisioned(
         self,
@@ -351,6 +352,22 @@ class SqliteUserRepo:
             "WHERE instance_id=? AND deprovisioned_at IS NULL "
             "ORDER BY remote_username",
             (instance_id,),
+        )
+        return [r for r in (_row_to_remote_user(d) for d in rows_to_dicts(rows)) if r]
+
+    async def list_all_known_remote(self) -> list[RemoteUser]:
+        """Return all non-deprovisioned remote users across every instance.
+
+        Used by :meth:`AppFederationService.list_contacts` to build the
+        pairing-scoped roster: members of paired households, the same set
+        DMs and ``/friends`` expose.  The per-peer hide-list is applied
+        upstream at pairing time (hidden members never reach this table).
+        Personal-block filtering is applied by the caller.
+        """
+        rows = await self._db.fetchall(
+            "SELECT * FROM remote_users "
+            "WHERE deprovisioned_at IS NULL "
+            "ORDER BY instance_id, remote_username",
         )
         return [r for r in (_row_to_remote_user(d) for d in rows_to_dicts(rows)) if r]
 

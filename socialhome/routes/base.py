@@ -58,6 +58,7 @@ from ..services.storage_quota_service import StorageQuotaExceeded
 from ..domain.apps import (
     AppAgeRestrictedError,
     AppAlreadyInstalledError,
+    AppContactNotFoundError,
     AppIntegrityError,
     AppNotEnabledError,
     AppNotFoundError,
@@ -196,6 +197,12 @@ class BaseView(web.View):
         except AppAgeRestrictedError as exc:
             return error_response(403, "FORBIDDEN", str(exc))
         except AppNotEnabledError as exc:
+            return error_response(403, "FORBIDDEN", str(exc))
+        except AppContactNotFoundError as exc:
+            # Authorization gap (Task 6): the actor addressed a person who is
+            # not in their challengeable roster. 403 FORBIDDEN matches the
+            # "not allowed" convention used by AppNotEnabledError /
+            # AppAgeRestrictedError above.
             return error_response(403, "FORBIDDEN", str(exc))
         except AppQuotaExceededError as exc:
             return error_response(413, "QUOTA_EXCEEDED", str(exc))
