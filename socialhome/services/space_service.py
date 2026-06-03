@@ -1931,9 +1931,17 @@ class SpaceService(SpaceMemberGuardMixin):
             raise ValueError("not a cross-household invite")
         # §CP.F1 — block an under-age protected minor BEFORE we send the
         # ACCEPT envelope, so the host never sees a join the invitee's
-        # household refuses to seat (no split-brain). The stub space row
-        # carries the host's min_age (delivered via §D1b metadata); no-op
-        # when it's unset or the user isn't a protected minor.
+        # household refuses to seat (no split-brain).
+        #
+        # KNOWN LIMITATION (tracked follow-up): for a *remote-hosted* space
+        # the local stub's ``min_age`` is currently 0 because the host's age
+        # gate is NOT yet federated into ``_space_metadata_for_federation``
+        # — so this check no-ops for cross-household spaces today. It is
+        # correct and ready for when ``min_age`` joins the federated metadata
+        # (same additive/fail-soft pattern as ``allowed_post_types``). The
+        # locally-hosted seating paths (add_member / approve_join_request /
+        # accept_invite_token / accept_local_invite / subscribe) ARE fully
+        # enforced.
         if self._child_protection is not None:
             await self._child_protection.check_space_age_gate(
                 invite["space_id"],
