@@ -736,6 +736,14 @@ class AppFederationService:
             recipient = await self._user_repo.get(to_user)
             if recipient is not None:
                 allowed = await self._age_filter_recipients(app_id, [recipient.user_id])
+                log.info(
+                    "app_federation deliver app=%s session=%s kind=%s routed=%s recipients=%d",
+                    app_id,
+                    session_id,
+                    kind,
+                    "user",
+                    len(allowed),
+                )
                 if allowed:
                     await self._ws.broadcast_to_user(recipient.user_id, frame)
                     if notify_open:
@@ -765,4 +773,12 @@ class AppFederationService:
         if not user_ids:
             return
 
+        log.info(
+            "app_federation deliver app=%s session=%s kind=%s routed=%s recipients=%d",
+            app_id,
+            session_id,
+            kind,
+            "broadcast",
+            len(user_ids),
+        )
         await self._ws.broadcast_to_users(user_ids, frame)

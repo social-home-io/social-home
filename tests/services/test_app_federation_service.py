@@ -1046,6 +1046,49 @@ async def test_open_session_rejects_blocked_target():
 
 
 @pytest.mark.asyncio
+async def test_remote_open_session_does_not_self_echo_locally():
+    """A remote open_session sends exactly one federation event and zero local WS
+    deliveries — the initiator's own household must never self-echo the outbound
+    challenge back to local users.
+
+    This locks the no-self-echo invariant: open_session for a remote target
+    takes only the federation send path and never calls broadcast_to_user or
+    broadcast_to_users for the initiating household.
+    """
+    app = _make_installed_app("chess")
+    actor = _make_user("u-self", "alice", "Alice")
+    bob_remote = _make_remote_user(
+        user_id="ru-bob",
+        instance_id="instanceB",
+        remote_username="bob",
+        display_name="Bob",
+    )
+    svc, federation, ws = _make_svc(
+        apps={"chess": app},
+        users=[actor],
+        remote_users=[bob_remote],
+        own_instance_id="own-inst-id",
+    )
+    sid = await svc.open_session(
+        app_id="chess",
+        target={"instance_id": "instanceB", "user_ref": "bob", "is_local": False},
+        actor_user_id="u-self",
+    )
+    assert sid  # session_id was allocated
+    # No local WS delivery of any kind — no self-echo.
+    assert ws.calls == [], (
+        "broadcast_to_users must not be called on the initiating household"
+    )
+    assert ws.user_calls == [], (
+        "broadcast_to_user must not be called on the initiating household"
+    )
+    # Exactly one outbound federation event was sent.
+    assert len(federation.sent_events) == 1
+    assert federation.sent_events[0]["event_type"] is FederationEventType.APP_SESSION
+    assert federation.sent_events[0]["to_instance_id"] == "instanceB"
+
+
+@pytest.mark.asyncio
 async def test_legacy_household_target_is_exempt_from_contact_check():
     """A legacy household-addressed target (user_ref == "") is allowed through."""
     app = _make_installed_app("chess")
