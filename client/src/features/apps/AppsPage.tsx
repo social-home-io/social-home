@@ -31,6 +31,18 @@ import { showToast } from '@/components/Toast'
 import { ApiError } from '@/api'
 import { addBase } from '@/baseUrl'
 
+/**
+ * Only render an icon `<img>` for a self-contained `data:` URI or an absolute
+ * `https?:` URL. A relative path (e.g. `"icon.svg"`) would resolve against the
+ * SPA origin and 404 — render the placeholder instead of a broken image.
+ * (App bundles are served from a sandboxed opaque origin, so a relative bundle
+ * path is never loadable from a host card anyway.)
+ */
+export function safeIconSrc(icon: string | null | undefined): string | null {
+  if (!icon) return null
+  return /^(data:|https?:\/\/)/i.test(icon) ? icon : null
+}
+
 export default function AppsPage() {
   useTitle('Apps')
   const isAdmin = !!currentUser.value?.is_admin
@@ -137,8 +149,8 @@ function AppCard({ app, isAdmin }: { app: InstalledApp; isAdmin: boolean }) {
   return (
     <div class="sh-welcome-card sh-app-card">
       <div class="sh-app-card__header">
-        {app.icon ? (
-          <img src={app.icon} alt="" class="sh-app-card__icon" aria-hidden="true" />
+        {safeIconSrc(app.icon) ? (
+          <img src={safeIconSrc(app.icon)!} alt="" class="sh-app-card__icon" aria-hidden="true" />
         ) : (
           <span class="sh-app-card__icon-placeholder" aria-hidden="true">📦</span>
         )}
@@ -285,8 +297,8 @@ function CatalogRow({
   return (
     <div class="sh-welcome-card sh-catalog-row">
       <div class="sh-catalog-row__header">
-        {entry.icon_url ? (
-          <img src={entry.icon_url} alt="" class="sh-app-card__icon" aria-hidden="true" />
+        {safeIconSrc(entry.icon_url) ? (
+          <img src={safeIconSrc(entry.icon_url)!} alt="" class="sh-app-card__icon" aria-hidden="true" />
         ) : (
           <span class="sh-app-card__icon-placeholder" aria-hidden="true">📦</span>
         )}
