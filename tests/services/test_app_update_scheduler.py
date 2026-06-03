@@ -1,0 +1,108 @@
+"""Tests for AppUpdateScheduler — daily background update-check loop."""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from socialhome.services.app_update_scheduler import AppUpdateScheduler
+
+
+class _FakeAppService:
+    """Fake AppService that counts list_updates calls and records force arg."""
+
+    def __init__(self, updates: list[dict] | None = None) -> None:
+        self._updates = updates or []
+        self.call_count: int = 0
+        self.last_force: bool | None = None
+
+    async def list_updates(self, *, force: bool = False) -> list[dict]:
+        self.call_count += 1
+        self.last_force = force
+        return list(self._updates)
+
+
+class _FailingAppService:
+    """Fake AppService that always raises on list_updates."""
+
+    async def list_updates(self, *, force: bool = False) -> list[dict]:
+        raise RuntimeError("catalog unavailable")
+
+
+@pytest.mark.asyncio
+async def test_start_calls_list_updates_with_force_true():
+    """start() must call list_updates(force=True) at least once."""
+    svc = _FakeAppService()
+    scheduler = AppUpdateScheduler(svc, interval=0.05)  # type: ignore[arg-type]
+
+    task = asyncio.create_task(scheduler.start())
+    await asyncio.sleep(0.12)
+    await scheduler.stop()
+    await task
+
+    assert svc.call_count >= 1
+    assert svc.last_force is True
+
+
+@pytest.mark.asyncio
+async def test_stop_ends_loop_promptly():
+    """stop() causes the loop to exit without waiting for the full interval."""
+    svc = _FakeAppService()
+    scheduler = AppUpdateScheduler(svc, interval=60.0)  # very long interval
+
+    task = asyncio.create_task(scheduler.start())
+    await asyncio.sleep(0.05)  # let it tick once
+    await scheduler.stop()
+    # Task should finish promptly — if it hangs, the test times out
+    await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_exception_in_list_updates_does_not_crash_loop():
+    """If list_updates raises, the loop continues (logs a warning, doesn't exit)."""
+    svc = _FailingAppService()
+    scheduler = AppUpdateScheduler(svc, interval=0.05)  # type: ignore[arg-type]
+
+    task = asyncio.create_task(scheduler.start())
+    await asyncio.sleep(0.15)
+    await scheduler.stop()
+    await task  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_double_start_is_idempotent():
+    """Calling start() twice doesn't create a second background loop."""
+    svc = _FakeAppService()
+    scheduler = AppUpdateScheduler(svc, interval=60.0)  # type: ignore[arg-type]
+
+    task1 = asyncio.create_task(scheduler.start())
+    await asyncio.sleep(0.05)
+    # Second start should be a no-op (the task is already running)
+    task2 = asyncio.create_task(scheduler.start())
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+    await task1
+    await task2
+
+
+@pytest.mark.asyncio
+async def test_stop_without_start_is_safe():
+    """stop() before start() must not raise."""
+    svc = _FakeAppService()
+    scheduler = AppUpdateScheduler(svc, interval=60.0)  # type: ignore[arg-type]
+    await scheduler.stop()  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_loop_ticks_multiple_times():
+    """With a short interval, the loop ticks more than once."""
+    svc = _FakeAppService()
+    scheduler = AppUpdateScheduler(svc, interval=0.04)  # type: ignore[arg-type]
+
+    task = asyncio.create_task(scheduler.start())
+    await asyncio.sleep(0.20)
+    await scheduler.stop()
+    await task
+
+    assert svc.call_count >= 2

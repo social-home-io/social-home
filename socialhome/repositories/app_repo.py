@@ -22,6 +22,7 @@ class AbstractAppRepo(Protocol):
     async def list_installed(self) -> list[InstalledApp]: ...
     async def get(self, app_id: str) -> InstalledApp | None: ...
     async def install(self, app: InstalledApp) -> None: ...
+    async def update_installed(self, app: InstalledApp) -> None: ...
     async def set_enabled(self, app_id: str, *, enabled: bool) -> None: ...
     async def uninstall(self, app_id: str) -> None: ...
     async def kv_get(
@@ -109,6 +110,29 @@ class SqliteAppRepo:
                 app.source_url,
                 app.installed_by,
                 app.installed_at,
+            ),
+        )
+
+    async def update_installed(self, app: InstalledApp) -> None:
+        await self._db.enqueue(
+            """UPDATE installed_apps
+               SET name = ?, version = ?, manifest_json = ?,
+                   bundle_path = ?, bundle_sha256 = ?, source_url = ?
+               WHERE app_id = ?""",
+            (
+                app.name,
+                app.version,
+                json.dumps(
+                    {
+                        "entry": app.manifest.entry,
+                        "icon": app.manifest.icon,
+                        "capabilities": list(app.manifest.capabilities),
+                    }
+                ),
+                app.bundle_path,
+                app.bundle_sha256,
+                app.source_url,
+                app.app_id,
             ),
         )
 

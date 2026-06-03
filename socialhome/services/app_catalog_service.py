@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -17,11 +18,18 @@ from ..domain.apps import AppCatalogEntry
 
 log = logging.getLogger(__name__)
 
+#: How long (seconds) a cached catalog result is considered fresh.
+CATALOG_TTL_S: float = 24 * 60 * 60
+
 
 class AppCatalogService:
-    """Fetch and parse the remote app catalog."""
+    """Fetch and parse the remote app catalog.
 
-    __slots__ = ("_session_factory", "_catalog_url")
+    Results are cached in memory for :data:`CATALOG_TTL_S` seconds.
+    Pass ``force=True`` to :meth:`fetch_catalog` to bypass the cache.
+    """
+
+    __slots__ = ("_session_factory", "_catalog_url", "_cache", "_cache_ts")
 
     def __init__(
         self,
@@ -37,16 +45,38 @@ class AppCatalogService:
         """
         self._session_factory = session_factory
         self._catalog_url = catalog_url
+        self._cache: list[AppCatalogEntry] | None = None
+        self._cache_ts: float | None = None
 
-    async def fetch_catalog(self) -> list[AppCatalogEntry]:
+    @property
+    def last_fetched_monotonic(self) -> float | None:
+        """Return the ``time.monotonic()`` timestamp of the last fetch, or ``None``."""
+        return self._cache_ts
+
+    async def fetch_catalog(self, *, force: bool = False) -> list[AppCatalogEntry]:
         """GET the catalog and parse it.
 
         Malformed entries are skipped (logged at WARNING) so one bad entry
         can't break Browse.
 
+        The result is cached for :data:`CATALOG_TTL_S` seconds.  Pass
+        ``force=True`` to bypass the cache and re-fetch unconditionally.
+
+        Args:
+            force: If ``True``, ignore the in-memory cache and re-fetch.
+
         Returns:
             List of valid AppCatalogEntry objects.
         """
+        now = time.monotonic()
+        if (
+            not force
+            and self._cache is not None
+            and self._cache_ts is not None
+            and (now - self._cache_ts) < CATALOG_TTL_S
+        ):
+            return self._cache
+
         async with self._session_factory() as session:
             async with session.get(self._catalog_url) as resp:
                 resp.raise_for_status()
@@ -58,4 +88,7 @@ class AppCatalogService:
                 out.append(AppCatalogEntry.from_dict(item))
             except (ValueError, TypeError) as exc:
                 log.warning("skipping malformed catalog entry %r: %s", item, exc)
+
+        self._cache = out
+        self._cache_ts = time.monotonic()
         return out

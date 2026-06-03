@@ -192,6 +192,7 @@ from .services.schedule_calendar_bridge import ScheduleCalendarBridge
 from .services.space_calendar_reminder_scheduler import (
     SpaceCalendarReminderScheduler,
 )
+from .services.app_update_scheduler import AppUpdateScheduler
 from .services.schedule_federation_outbound import ScheduleFederationOutbound
 from .services.corner_service import CornerService
 from .federation.peer_directory_handler import PeerDirectoryHandler
@@ -1763,6 +1764,7 @@ def create_app(config: Config | None = None) -> web.Application:
     calendar_reminder_scheduler: CalendarReminderScheduler | None = None
     task_deadline_scheduler: TaskDeadlineScheduler | None = None
     task_recurrence_scheduler: TaskRecurrenceScheduler | None = None
+    app_update_scheduler: AppUpdateScheduler | None = None
 
     # Store services / repos in app using typed AppKeys (no warnings)
     app[K.config_key] = config
@@ -2519,6 +2521,12 @@ def create_app(config: Config | None = None) -> web.Application:
         task_recurrence_scheduler = TaskRecurrenceScheduler(task_service)
         await task_recurrence_scheduler.start()
 
+        # App-update background checker — polls the app catalog once per day
+        # so the admin can see available updates without a manual refresh.
+        nonlocal app_update_scheduler
+        app_update_scheduler = AppUpdateScheduler(app_service)
+        await app_update_scheduler.start()
+
         # Public-space discovery poller (no-op when no GFS connections).
         await public_space_discovery.start()
 
@@ -2622,6 +2630,8 @@ def create_app(config: Config | None = None) -> web.Application:
             await task_deadline_scheduler.stop()
         if task_recurrence_scheduler is not None:
             await task_recurrence_scheduler.stop()
+        if app_update_scheduler is not None:
+            await app_update_scheduler.stop()
         sync_sched = app.get(K.space_sync_scheduler_key)
         if sync_sched is not None:
             await sync_sched.stop()

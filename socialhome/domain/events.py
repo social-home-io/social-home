@@ -1766,6 +1766,21 @@ class AppUninstalled(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+@dataclass(slots=True, frozen=True)
+class AppUpdated(DomainEvent):
+    """An installed app was updated to a newer version from the catalog.
+
+    Published by :class:`AppService.update_app` after the new bundle is
+    unpacked, the repo row is updated, and the old bundle directory is removed.
+    """
+
+    app_id: str
+    name: str
+    old_version: str
+    new_version: str
+    occurred_at: datetime = field(default_factory=_now)
+
+
 # ─── Momentum (§Momentum) ─────────────────────────────────────────────────
 
 
