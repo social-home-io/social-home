@@ -392,6 +392,8 @@ async def test_inbound_app_message_delivers_to_local_users():
     assert frame["session_id"] == "sess-1"
     assert frame["from_instance"] == "peer-inst-id"
     assert frame["payload"] == {"move": "e2e4"}
+    # kind is "message" for APP_MESSAGE events
+    assert frame["kind"] == "message"
 
 
 @pytest.mark.asyncio
@@ -427,6 +429,8 @@ async def test_inbound_app_session_delivers_full_payload():
     assert frame["payload"]["verb"] == "open"
     # from_user must NOT be present in a compliant APP_SESSION payload.
     assert "from_user" not in frame["payload"]
+    # kind is "session" for APP_SESSION events
+    assert frame["kind"] == "session"
 
 
 @pytest.mark.asyncio
@@ -503,6 +507,8 @@ async def test_inbound_binary_delivers_to_local_users():
     assert frame["session_id"] == "sess-bin"
     assert frame["from_instance"] == "peer-inst-id"
     assert frame["payload"] == {"move": "d7d5"}
+    # Binary path is always "message" kind
+    assert frame["kind"] == "message"
 
 
 @pytest.mark.asyncio

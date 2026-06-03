@@ -46,7 +46,7 @@ sequenceDiagram
 
     B->>B: §24.11 pipeline:<br/>parse → timestamp → instance → ban<br/>→ sig verify → replay → decrypt → dispatch
     B->>B: AppFederationService.on_inbound_event()<br/>→ _deliver(app_id, session_id, …)
-    B->>WS_B: app.message WS frame<br/>{type:"app.message", app_id,<br/>session_id, from_instance, payload}
+    B->>WS_B: app.message WS frame<br/>{type:"app.message", app_id,<br/>session_id, from_instance, kind, payload}
 
     Note over A,B: session open; moves/ops follow
 
@@ -131,6 +131,44 @@ the media channel's `media_aead_suite` / `chunk_sha256` pattern
 (`federation/media_framing.py`) — tampering with the binary payload fails the
 hash check; tampering with the hash fails the GCM tag or the Ed25519
 signature.
+
+## `app.message` WebSocket frame
+
+The `AppFederationService._deliver` method broadcasts a frame to all local
+WebSocket connections when an inbound app event passes the §24.11 pipeline:
+
+| Field | Type | Notes |
+|---|---|---|
+| `type` | `"app.message"` | Constant WS frame type identifier. |
+| `app_id` | `string` | Identifies the installed app. |
+| `session_id` | `string` | Hex UUID that scopes the session — route messages to the correct in-page component using this. |
+| `from_instance` | `string` | Instance ID of the sending household — lets the app show who sent a move or issued an invite. |
+| `kind` | `"session"` \| `"message"` | `"session"` for `APP_SESSION` control events (open/close); `"message"` for `APP_MESSAGE` JSON events and binary `fed-app-v1` data frames. |
+| `payload` | `object` | Application-defined dict. For `APP_SESSION` events this is the full decrypted payload (includes `verb`); for `APP_MESSAGE` events it is the `data` sub-field. |
+
+### Bridge relay into the iframe
+
+The SPA host bridge (`client/src/features/apps/bridge.ts`) listens on
+`app.message` WS frames and, after filtering by `app_id`, relays the full
+identity into the sandboxed iframe as a `MessageEvent`:
+
+```ts
+{
+  type: 'app:event',
+  kind: 'session' | 'message',   // forwarded from the WS frame
+  sessionId: string,              // WS frame's session_id
+  fromInstance: string,           // WS frame's from_instance
+  payload: object,                // WS frame's payload
+}
+```
+
+This lets apps:
+- **Route by session** — use `sessionId` to dispatch a message to the correct
+  game or whiteboard component when multiple sessions are open simultaneously.
+- **Show sender identity** — `fromInstance` names the peer household so the
+  app can display "Invited by Home B" or "Move from Home C".
+- **Distinguish invites from moves** — `kind === "session"` signals a
+  lifecycle event (open/close); `kind === "message"` is in-game data.
 
 ## Inbound delivery (v1 simplification)
 
