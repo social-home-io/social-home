@@ -114,7 +114,10 @@ export function SpaceJoinByCodeDialog() {
           'sender for a fresh one.'
         )
       } else if (e instanceof ApiError && e.status === 403) {
-        errorMsg.value = (
+        // Prefer the backend's specific reason — e.g. the child-protection
+        // age gate's "This space is restricted to users aged 18+." — so a
+        // blocked minor sees WHY, not a misleading "invite revoked".
+        errorMsg.value = e.detail || (
           "You're not allowed to join this space (the issuer may have " +
           'revoked the invite).'
         )

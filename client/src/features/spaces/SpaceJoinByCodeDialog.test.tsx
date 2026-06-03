@@ -6,8 +6,10 @@ import { LocationProvider } from 'preact-iso'
 
 vi.mock('@/api', async () => {
   class ApiError extends Error {
-    constructor(public status: number, msg = 'api error') {
+    detail: string | null
+    constructor(public status: number, msg = 'api error', detail: string | null = null) {
       super(msg)
+      this.detail = detail
     }
   }
   return {
@@ -50,7 +52,9 @@ vi.mock('preact-iso', async () => {
 
 const { api, ApiError } = await import('@/api') as unknown as {
   api: { post: ReturnType<typeof vi.fn> }
-  ApiError: new (status: number, msg?: string) => Error & { status: number }
+  ApiError: new (
+    status: number, msg?: string, detail?: string | null,
+  ) => Error & { status: number; detail: string | null }
 }
 const { showToast } = await import('@/components/Toast') as unknown as {
   showToast: ReturnType<typeof vi.fn>
@@ -199,6 +203,39 @@ describe('SpaceJoinByCodeDialog', () => {
         .toContain('expired or already been used')
     })
     expect(routeSpy).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the backend reason on a 403 (age gate), not a generic message', async () => {
+    // A protected minor blocked by §CP.F1 must see WHY, not a misleading
+    // "invite revoked". The backend's detail carries the real reason.
+    api.post.mockRejectedValueOnce(
+      new ApiError(403, 'forbidden', 'This space is restricted to users aged 18+.'),
+    )
+    const { container, getByText } = await renderAndOpen()
+    const input = container.querySelector('[data-testid="join-by-code-input"]') as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.input(input, { target: { value: 'a1b2c3d4e5f60718' } })
+    })
+    await act(async () => { fireEvent.click(getByText('Join')) })
+    await waitFor(() => {
+      expect(container.querySelector('.sh-scan-error-inline')?.textContent)
+        .toContain('restricted to users aged 18+')
+    })
+    expect(routeSpy).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a generic message on a 403 with no detail', async () => {
+    api.post.mockRejectedValueOnce(new ApiError(403, 'forbidden'))
+    const { container, getByText } = await renderAndOpen()
+    const input = container.querySelector('[data-testid="join-by-code-input"]') as HTMLTextAreaElement
+    await act(async () => {
+      fireEvent.input(input, { target: { value: 'a1b2c3d4e5f60718' } })
+    })
+    await act(async () => { fireEvent.click(getByText('Join')) })
+    await waitFor(() => {
+      expect(container.querySelector('.sh-scan-error-inline')?.textContent)
+        .toContain('not allowed to join')
+    })
   })
 
   // Removed: the SPA no longer pre-flights "wrong instance" with

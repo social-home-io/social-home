@@ -12,7 +12,12 @@ from socialhome.domain.events import (
     RemoteSpaceMemberBanned,
 )
 from socialhome.domain.federation import FederationEvent, FederationEventType
-from socialhome.domain.space import JoinMode, SpaceType
+from socialhome.domain.space import (
+    JoinMode,
+    Space,
+    SpaceFeatures,
+    SpaceType,
+)
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.services.federation_inbound import SpaceMembershipInboundHandlers
 
@@ -68,6 +73,23 @@ class _FakeSpaceRepo:
 
     async def get(self, space_id):
         return self.spaces.get(space_id)
+
+
+def _host_space(space_id="sp-1", owner_instance_id="peer-a"):
+    """A locally-stored space row whose owner is ``owner_instance_id`` —
+    needed so the §CP.F1 host-authority guard on _on_age_gate can confirm
+    the SPACE_AGE_GATE_UPDATED sender is the owning instance."""
+    return Space(
+        id=space_id,
+        name="S",
+        owner_instance_id=owner_instance_id,
+        owner_username="owner",
+        identity_public_key="aa" * 32,
+        config_sequence=1,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
 
 
 def _event(event_type, payload, *, from_instance="peer-a", space_id=None):
@@ -219,6 +241,7 @@ async def test_member_unbanned_removes_ban(repo, handlers):
 
 
 async def test_age_gate_updates_min_age_only(repo, handlers):
+    repo.spaces["sp-1"] = _host_space(owner_instance_id="peer-a")
     await handlers._on_age_gate(
         _event(
             FederationEventType.SPACE_AGE_GATE_UPDATED,
@@ -230,6 +253,7 @@ async def test_age_gate_updates_min_age_only(repo, handlers):
 
 
 async def test_age_gate_updates_target_audience_only(repo, handlers):
+    repo.spaces["sp-1"] = _host_space(owner_instance_id="peer-a")
     await handlers._on_age_gate(
         _event(
             FederationEventType.SPACE_AGE_GATE_UPDATED,
@@ -241,6 +265,7 @@ async def test_age_gate_updates_target_audience_only(repo, handlers):
 
 
 async def test_age_gate_empty_payload_is_noop(repo, handlers):
+    repo.spaces["sp-1"] = _host_space(owner_instance_id="peer-a")
     await handlers._on_age_gate(
         _event(
             FederationEventType.SPACE_AGE_GATE_UPDATED,
@@ -249,6 +274,47 @@ async def test_age_gate_empty_payload_is_noop(repo, handlers):
         )
     )
     assert repo.age_gates == []
+
+
+async def test_age_gate_from_non_host_is_dropped(repo, handlers):
+    """§CP.F1 host authority — a paired peer that doesn't OWN the space
+    must not be able to lower/rewrite our gate (else it could set
+    min_age=0 and disable child protection on a space we host)."""
+    repo.spaces["sp-1"] = _host_space(owner_instance_id="the-real-host")
+    await handlers._on_age_gate(
+        _event(
+            FederationEventType.SPACE_AGE_GATE_UPDATED,
+            {"min_age": 0},
+            from_instance="peer-a",  # not the owner
+            space_id="sp-1",
+        )
+    )
+    assert repo.age_gates == []  # dropped, gate untouched
+
+
+async def test_age_gate_unknown_space_is_dropped(repo, handlers):
+    await handlers._on_age_gate(
+        _event(
+            FederationEventType.SPACE_AGE_GATE_UPDATED,
+            {"min_age": 13},
+            space_id="sp-unknown",
+        )
+    )
+    assert repo.age_gates == []
+
+
+async def test_age_gate_invalid_min_age_is_ignored(repo, handlers):
+    """A non-conforming peer shipping min_age outside {0,13,16,18} must not
+    reach the schema CHECK — the bad value is ignored (fail-soft)."""
+    repo.spaces["sp-1"] = _host_space(owner_instance_id="peer-a")
+    await handlers._on_age_gate(
+        _event(
+            FederationEventType.SPACE_AGE_GATE_UPDATED,
+            {"min_age": 15},  # not in {0,13,16,18}
+            space_id="sp-1",
+        )
+    )
+    assert repo.age_gates == []  # invalid → no update
 
 
 async def test_config_catch_up_logs_when_behind(repo, handlers, caplog):
