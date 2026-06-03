@@ -26,7 +26,7 @@ from ...domain.space import (
 from ...infrastructure.event_bus import EventBus
 from ..child_protection_service import _VALID_MIN_AGES
 from ..space_purge import purge_space_and_media
-from ..space_service import _space_metadata_for_federation
+from ..space_service import _space_metadata_for_federation, can_seat_remote_stub
 
 if TYPE_CHECKING:
     import pathlib
@@ -111,6 +111,22 @@ class SpaceMembershipInboundHandlers:
             join_mode = JoinMode(str(p.get("join_mode") or "invite_only"))
         except ValueError:
             join_mode = JoinMode.INVITE_ONLY
+        # §D1b anti-hijack — don't let a peer's SPACE_CREATED clobber the
+        # config of a space we already hold under a DIFFERENT host (the
+        # save() UPSERT would otherwise rewrite name/features/sequence).
+        # Owner + identity_public_key columns are excluded from the UPSERT
+        # SET, so this is a config-clobber guard, not an ownership change —
+        # but refuse anyway for consistency with the other seating paths.
+        if not await can_seat_remote_stub(
+            self._space_repo, space_id, event.from_instance
+        ):
+            log.warning(
+                "§D1b: dropping SPACE_CREATED for %s — already owned locally "
+                "by another host, sender=%s",
+                space_id,
+                event.from_instance,
+            )
+            return
         space = Space(
             id=space_id,
             name=name,
