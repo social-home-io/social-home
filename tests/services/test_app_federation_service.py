@@ -32,7 +32,7 @@ from socialhome.domain.federation import (
     PairingStatus,
     RemoteInstance,
 )
-from socialhome.domain.user import User
+from socialhome.domain.user import RemoteUser, User
 from socialhome.services.app_federation_service import AppFederationService
 
 
@@ -94,11 +94,29 @@ def _make_remote_instance(
     )
 
 
-def _make_user(user_id: str = "user-1", username: str = "alice") -> User:
+def _make_user(
+    user_id: str = "user-1",
+    username: str = "alice",
+    display_name: str = "Alice",
+) -> User:
     return User(
         user_id=user_id,
         username=username,
-        display_name="Alice",
+        display_name=display_name,
+    )
+
+
+def _make_remote_user(
+    user_id: str = "remote-u1",
+    instance_id: str = "peer-inst-id",
+    remote_username: str = "bob",
+    display_name: str = "Bob",
+) -> RemoteUser:
+    return RemoteUser(
+        user_id=user_id,
+        instance_id=instance_id,
+        remote_username=remote_username,
+        display_name=display_name,
     )
 
 
@@ -114,11 +132,19 @@ class _FakeAppRepo:
 
 
 class _FakeUserRepo:
-    def __init__(self, users: list[User] | None = None) -> None:
+    def __init__(
+        self,
+        users: list[User] | None = None,
+        remote_users: list[RemoteUser] | None = None,
+    ) -> None:
         self._users: list[User] = users or []
+        self._remote_users: list[RemoteUser] = remote_users or []
 
     async def list_all(self) -> list[User]:
         return list(self._users)
+
+    async def list_all_known_remote(self) -> list[RemoteUser]:
+        return list(self._remote_users)
 
 
 class _FakeFederationRepo:
@@ -139,9 +165,10 @@ class _FakeFederationRepo:
 class _FakeFederation:
     """Fake FederationService that captures outbound calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, own_instance_id: str = "own-inst-id") -> None:
         self.sent_events: list[dict] = []
         self.sent_app_messages: list[dict] = []
+        self.own_instance_id = own_instance_id
 
     async def send_event(
         self,
@@ -181,10 +208,14 @@ class _FakeFederation:
 
 
 class _FakeWs:
-    """Captures broadcast_to_users calls."""
+    """Captures broadcast_to_users calls and tracks connected user ids."""
 
-    def __init__(self) -> None:
+    def __init__(self, online_user_ids: set[str] | None = None) -> None:
         self.calls: list[dict] = []
+        self._online: set[str] = online_user_ids or set()
+
+    def connected_users(self) -> set[str]:
+        return set(self._online)
 
     async def broadcast_to_users(self, user_ids: list[str], payload: dict) -> int:
         self.calls.append({"user_ids": list(user_ids), "payload": payload})
@@ -195,14 +226,17 @@ def _make_svc(
     *,
     apps: dict[str, InstalledApp] | None = None,
     users: list[User] | None = None,
+    remote_users: list[RemoteUser] | None = None,
     instances: list[RemoteInstance] | None = None,
     cp_repo: _FakeCpRepo | None = None,
+    online_user_ids: set[str] | None = None,
+    own_instance_id: str = "own-inst-id",
 ) -> tuple[AppFederationService, _FakeFederation, _FakeWs]:
-    federation = _FakeFederation()
-    ws = _FakeWs()
+    federation = _FakeFederation(own_instance_id=own_instance_id)
+    ws = _FakeWs(online_user_ids=online_user_ids)
     svc = AppFederationService(
         app_repo=_FakeAppRepo(apps),
-        user_repo=_FakeUserRepo(users),
+        user_repo=_FakeUserRepo(users, remote_users=remote_users),
         ws=ws,
         federation=federation,
         federation_repo=_FakeFederationRepo(instances),
@@ -690,3 +724,109 @@ async def test_deliver_skips_filtering_when_min_age_zero():
     # Both users receive the frame — no filtering for unrestricted apps.
     assert "minor1" in recipients
     assert "adult1" in recipients
+
+
+# ─── list_contacts ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_excludes_self():
+    """The calling user must not appear in their own contact list."""
+    alice = _make_user("u-alice", "alice", "Alice")
+    bob = _make_user("u-bob", "bob", "Bob")
+    svc, _, _ = _make_svc(users=[alice, bob], own_instance_id="own-inst")
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    ids = [c["user_ref"] for c in contacts]
+    assert "u-alice" not in ids
+    assert "u-bob" in ids
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_local_member_shape():
+    """A local household member appears with is_local=True and the own instance_id."""
+    alice = _make_user("u-alice", "alice", "Alice")
+    bob = _make_user("u-bob", "bob", "Bob")
+    svc, _, ws = _make_svc(
+        users=[alice, bob],
+        online_user_ids={"u-bob"},
+        own_instance_id="own-inst",
+    )
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    assert len(contacts) == 1
+    c = contacts[0]
+    assert c["instance_id"] == "own-inst"
+    assert c["user_ref"] == "u-bob"
+    assert c["display_name"] == "Bob"
+    assert c["is_local"] is True
+    assert c["online"] is True  # bob has a live WS session
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_local_member_offline():
+    """A local member with no WS session is online=False."""
+    alice = _make_user("u-alice", "alice", "Alice")
+    bob = _make_user("u-bob", "bob", "Bob")
+    svc, _, _ = _make_svc(
+        users=[alice, bob],
+        online_user_ids=set(),  # nobody online
+        own_instance_id="own-inst",
+    )
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    assert len(contacts) == 1
+    assert contacts[0]["online"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_remote_user_shape():
+    """A known remote user appears with is_local=False, correct instance_id and user_ref."""
+    local = _make_user("u-alice", "alice", "Alice")
+    remote = _make_remote_user(
+        user_id="ru-1",
+        instance_id="peer-inst",
+        remote_username="bob",
+        display_name="Bob Remote",
+    )
+    svc, _, _ = _make_svc(
+        users=[local],
+        remote_users=[remote],
+        own_instance_id="own-inst",
+    )
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    # one remote, self excluded from local
+    remote_contacts = [c for c in contacts if not c["is_local"]]
+    assert len(remote_contacts) == 1
+    c = remote_contacts[0]
+    assert c["instance_id"] == "peer-inst"
+    assert c["user_ref"] == "bob"
+    assert c["display_name"] == "Bob Remote"
+    assert c["is_local"] is False
+    assert c["online"] is False  # remote presence always False (deferred)
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_remote_falls_back_to_username_when_display_name_empty():
+    """When a remote user has no display_name, user_ref (remote_username) is used."""
+    local = _make_user("u-alice", "alice", "Alice")
+    remote = _make_remote_user(
+        user_id="ru-2",
+        instance_id="peer-inst",
+        remote_username="charlie",
+        display_name="",  # empty — should fall back to remote_username
+    )
+    svc, _, _ = _make_svc(
+        users=[local],
+        remote_users=[remote],
+        own_instance_id="own-inst",
+    )
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    remote_contacts = [c for c in contacts if not c["is_local"]]
+    assert len(remote_contacts) == 1
+    assert remote_contacts[0]["display_name"] == "charlie"
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_empty_when_only_self_and_no_remotes():
+    """Single local user with no remotes → empty contact list."""
+    alice = _make_user("u-alice", "alice", "Alice")
+    svc, _, _ = _make_svc(users=[alice], own_instance_id="own-inst")
+    assert await svc.list_contacts(self_user_id="u-alice") == []

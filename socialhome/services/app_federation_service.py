@@ -112,6 +112,53 @@ class AppFederationService:
             for inst in instances
         ]
 
+    async def list_contacts(self, *, self_user_id: str) -> list[dict]:
+        """Return the set of people a user can challenge to an app session.
+
+        Includes:
+        * All active local household members (excluding the caller).
+        * All known remote users across every paired household
+          (the same population as the DM composer).
+
+        Each contact is a dict with keys:
+        ``instance_id``, ``user_ref``, ``display_name``, ``is_local``,
+        ``online``.
+
+        Remote online presence is not yet wired in — ``online`` is always
+        ``False`` for remote contacts (deferred to a future wiring task).
+        """
+        own = self._federation.own_instance_id
+        connected = self._ws.connected_users()
+        out: list[dict] = []
+
+        for u in await self._user_repo.list_all():
+            if u.user_id == self_user_id:
+                continue
+            out.append(
+                {
+                    "instance_id": own,
+                    "user_ref": u.user_id,
+                    "display_name": u.display_name,
+                    "is_local": True,
+                    "online": u.user_id in connected,
+                }
+            )
+
+        for r in await self._user_repo.list_all_known_remote():
+            out.append(
+                {
+                    "instance_id": r.instance_id,
+                    "user_ref": r.remote_username,
+                    "display_name": r.display_name or r.remote_username,
+                    "is_local": False,
+                    "online": await self._remote_online(
+                        r.instance_id, r.remote_username
+                    ),
+                }
+            )
+
+        return out
+
     async def open_session(
         self,
         *,
@@ -237,6 +284,16 @@ class AppFederationService:
         )
 
     # ─── Internal helpers ─────────────────────────────────────────────────────
+
+    async def _remote_online(self, instance_id: str, remote_username: str) -> bool:
+        """Return whether a remote user has a live session.
+
+        Remote presence is not yet wired into this service — always returns
+        ``False`` (fail-soft).  A future task will plumb the presence service
+        so cross-household online state can be surfaced in the contact picker.
+        """
+        _ = instance_id, remote_username  # reserved for future wiring
+        return False
 
     async def _require_enabled(self, app_id: str) -> None:
         """Raise :class:`AppNotFoundError` or :class:`AppNotEnabledError`."""
