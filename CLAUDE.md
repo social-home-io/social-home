@@ -7,6 +7,29 @@ only this file so the agent surfaces can't drift.
 Read `spec_work.md` (the spec) before any change. The spec is the source of
 truth — if code and spec disagree, fix the code.
 
+### Delivery workflow
+
+For any **non-trivial change** (a feature, refactor, multi-file change, a
+risky bug fix, or anything you'd open a PR for), follow the
+**`superpower-light`** skill (`.claude/skills/superpower-light/`): plan →
+decompose into bite-sized TDD tasks → implement each with a fresh subagent →
+review every stage twice (spec-compliance then code-quality; adversarial for
+security-sensitive code) → final whole-change review → ship via a PR on green.
+Its hard gates apply to all such work:
+
+- **Debug to root cause before any fix** — no symptom patches; add a
+  regression test.
+- **Verify before you claim it** — run the command in the same turn and quote
+  the real output; never claim a pass you didn't observe (a subagent's
+  "success" report is not evidence).
+- **PR-only — never commit or push to `main` directly.** Every change lands
+  through a pull request; branch first.
+- **Don't merge your own PRs** — open it, drive CI green, hand off to a human;
+  self-merge only on explicit, per-session authorization.
+
+Trivial edits, Q&A, and read-only exploration skip the skill — but the
+PR-only and verify-before-claiming gates still hold for anything that lands.
+
 ### Architecture
 
 - **Platform adapters:** `SH_MODE` selects one of three: `standalone` →
