@@ -42,6 +42,7 @@ are exempt for back-compat.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any
 
@@ -51,15 +52,23 @@ from ..domain.apps import (
     AppNotEnabledError,
     AppNotFoundError,
 )
+from ..domain.events import AppChallengeReceived
 from ..domain.federation import FederationEvent, FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 
 if TYPE_CHECKING:
+    from ..domain.events import DomainEvent
+    from ..infrastructure.event_bus import EventBus
     from ..repositories.app_repo import AbstractAppRepo
     from ..repositories.cp_repo import AbstractCpRepo
     from ..repositories.federation_repo import AbstractFederationRepo
     from ..repositories.user_repo import AbstractUserRepo
     from ..infrastructure.ws_manager import WebSocketManager
+
+#: Cap on the bounded inbound de-dupe of ``APP_SESSION`` opens — keeps memory
+#: flat (LRU eviction of the oldest session id) while still suppressing the
+#: realistic double-delivery window (WebRTC + HTTPS fallback, retransmits).
+_SEEN_OPEN_SESSIONS_MAX = 4096
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +105,8 @@ class AppFederationService:
         "_federation",
         "_federation_repo",
         "_cp_repo",
+        "_bus",
+        "_seen_open_sessions",
     )
 
     def __init__(
@@ -107,6 +118,7 @@ class AppFederationService:
         federation: Any,
         federation_repo: AbstractFederationRepo,
         cp_repo: "AbstractCpRepo | None" = None,
+        bus: "EventBus | None" = None,
     ) -> None:
         self._app_repo = app_repo
         self._user_repo = user_repo
@@ -114,6 +126,27 @@ class AppFederationService:
         self._federation = federation
         self._federation_repo = federation_repo
         self._cp_repo = cp_repo
+        self._bus = bus
+        #: Bounded LRU of inbound ``APP_SESSION`` open ``session_id``s already
+        #: handled — guards against a double federation delivery (WebRTC +
+        #: HTTPS fallback / retransmit) seating two invites + two notifications
+        #: for the same challenge. Scoped to inbound only; outbound
+        #: ``open_session`` always mints a fresh uuid so it never dedupes.
+        self._seen_open_sessions: OrderedDict[str, None] = OrderedDict()
+
+    async def _emit(self, event: "DomainEvent") -> None:
+        """Publish ``event`` fail-soft; no-op without a bus.
+
+        Mirrors :meth:`socialhome.services.bus_publisher.BusPublisherMixin._emit`
+        but additionally swallows + logs any publish error: a notification /
+        bus failure must NEVER break the WebSocket delivery of an app frame.
+        """
+        if self._bus is None:
+            return
+        try:
+            await self._bus.publish(event)
+        except Exception as exc:  # noqa: BLE001 — fail-soft publish
+            log.warning("app_federation: bus publish failed: %s", exc)
 
     # ─── Public API ───────────────────────────────────────────────────────────
 
@@ -263,6 +296,21 @@ class AppFederationService:
                     "verb": "open",
                 },
             )
+            # Raise a bell row + push for the *target only* (not the
+            # initiator) — but only if the target survived the age filter.
+            if target["user_ref"] in recipients:
+                initiator = await self._user_repo.get_by_user_id(actor_user_id)
+                from_display = (
+                    initiator.display_name if initiator is not None else actor_user_id
+                )
+                await self._emit(
+                    AppChallengeReceived(
+                        app_id=app_id,
+                        session_id=session_id,
+                        to_user_id=target["user_ref"],
+                        from_display=from_display,
+                    )
+                )
             return session_id
 
         # Remote — address the peer household; include per-user routing fields
@@ -385,6 +433,18 @@ class AppFederationService:
             # Pass the whole payload as the session info dict.
             app_payload: dict = dict(event.payload)
             kind = "session"
+            # Idempotency: suppress a re-delivered open (WebRTC + HTTPS
+            # fallback / retransmit) so we never seat two invites or raise two
+            # notifications for the same challenge.  Scoped to opens — a
+            # future ``verb`` ("close") is not a session-creating event.
+            if event.payload.get("verb") == "open" and self._seen_open_session(
+                str(session_id)
+            ):
+                log.debug(
+                    "app_federation: duplicate inbound open for session %r — skipping",
+                    session_id,
+                )
+                return
         else:
             # APP_MESSAGE: the application data is nested under "data".
             app_payload = event.payload.get("data") or {}
@@ -397,6 +457,11 @@ class AppFederationService:
         raw_to_user = event.payload.get("to_user")
         to_user = raw_to_user if isinstance(raw_to_user, str) and raw_to_user else None
 
+        raw_from_user = event.payload.get("from_user")
+        from_user = (
+            raw_from_user if isinstance(raw_from_user, str) and raw_from_user else None
+        )
+
         await self._deliver(
             app_id,
             session_id,
@@ -404,6 +469,8 @@ class AppFederationService:
             payload=app_payload,
             kind=kind,
             to_user=to_user,
+            from_user=from_user,
+            notify_open=(kind == "session" and event.payload.get("verb") == "open"),
         )
 
     async def on_inbound_message(
@@ -431,6 +498,43 @@ class AppFederationService:
         )
 
     # ─── Internal helpers ─────────────────────────────────────────────────────
+
+    def _seen_open_session(self, session_id: str) -> bool:
+        """Return whether ``session_id`` was already handled inbound.
+
+        First sight records it (LRU, capped at
+        :data:`_SEEN_OPEN_SESSIONS_MAX`, oldest evicted) and returns ``False``;
+        a repeat returns ``True`` so the caller can skip both delivery and the
+        challenge publish. Synchronous — the OrderedDict mutation is atomic
+        under the single-threaded asyncio loop.
+        """
+        if session_id in self._seen_open_sessions:
+            return True
+        self._seen_open_sessions[session_id] = None
+        if len(self._seen_open_sessions) > _SEEN_OPEN_SESSIONS_MAX:
+            self._seen_open_sessions.popitem(last=False)
+        return False
+
+    async def _remote_open_display(
+        self, from_instance: str, from_user: str | None
+    ) -> str:
+        """Resolve a human label for a remote challenge initiator.
+
+        Order: the remote user's federated ``display_name`` (when ``from_user``
+        is known) → the peer instance's display name → the raw
+        ``from_instance`` id as a last resort. Never a stable cross-household
+        id beyond the fallback.
+        """
+        if from_user:
+            remote = await self._user_repo.get_remote_by_member(
+                from_instance, from_user
+            )
+            if remote is not None and remote.display_name:
+                return remote.display_name
+        inst = await self._federation_repo.get_instance(from_instance)
+        if inst is not None:
+            return inst.effective_display_name
+        return from_instance
 
     async def _remote_online(self, instance_id: str, remote_username: str) -> bool:
         """Return whether a remote user has a live session.
@@ -576,6 +680,8 @@ class AppFederationService:
         payload: dict,
         kind: str,
         to_user: str | None = None,
+        from_user: str | None = None,
+        notify_open: bool = False,
     ) -> None:
         """Route an inbound app message to local users via WebSocket.
 
@@ -597,6 +703,14 @@ class AppFederationService:
             deliver **only** to that user.  When ``None``, empty, or
             unresolvable, fall back to the legacy/best-effort household
             fan-out to every (age-eligible) local user.
+        from_user:
+            The remote initiator's username, used to resolve the
+            ``from_display`` label on the published :class:`AppChallengeReceived`.
+        notify_open:
+            ``True`` only for an inbound ``APP_SESSION`` *open* — when the
+            event also resolves to a single local recipient, raise a bell row +
+            push for that recipient. Never set for messages or the legacy
+            household fan-out (no specific recipient to notify).
         """
         app = await self._app_repo.get(app_id)
         if app is None or not app.enabled:
@@ -624,6 +738,18 @@ class AppFederationService:
                 allowed = await self._age_filter_recipients(app_id, [recipient.user_id])
                 if allowed:
                     await self._ws.broadcast_to_user(recipient.user_id, frame)
+                    if notify_open:
+                        from_display = await self._remote_open_display(
+                            from_instance, from_user
+                        )
+                        await self._emit(
+                            AppChallengeReceived(
+                                app_id=app_id,
+                                session_id=session_id,
+                                to_user_id=recipient.user_id,
+                                from_display=from_display,
+                            )
+                        )
                 return
 
         # Legacy / best-effort fan-out to every age-eligible local user.

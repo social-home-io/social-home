@@ -165,6 +165,14 @@ class _FakeUserRepo:
         """Return ``[(blocked_user_id, blocked_at), ...]`` for the blocker."""
         return [(uid, "2026-01-01T00:00:00+00:00") for uid in self._blocked_ids]
 
+    async def get_remote_by_member(
+        self, instance_id: str, remote_username: str
+    ) -> RemoteUser | None:
+        for r in self._remote_users:
+            if r.instance_id == instance_id and r.remote_username == remote_username:
+                return r
+        return None
+
 
 class _FakeFederationRepo:
     def __init__(self, instances: list[RemoteInstance] | None = None) -> None:
@@ -179,6 +187,22 @@ class _FakeFederationRepo:
         if status is not None:
             return [i for i in self._instances if i.status.value == status]
         return list(self._instances)
+
+    async def get_instance(self, instance_id: str) -> RemoteInstance | None:
+        for i in self._instances:
+            if i.id == instance_id:
+                return i
+        return None
+
+
+class _FakeBus:
+    """Records every published domain event for assertions."""
+
+    def __init__(self) -> None:
+        self.published: list[object] = []
+
+    async def publish(self, event: object) -> None:
+        self.published.append(event)
 
 
 class _FakeFederation:
@@ -269,6 +293,7 @@ def _make_svc(
     own_instance_id: str = "own-inst-id",
     blocked_ids: set[str] | None = None,
     peer_version: int = 18,
+    bus: _FakeBus | None = None,
 ) -> tuple[AppFederationService, _FakeFederation, _FakeWs]:
     federation = _FakeFederation(
         own_instance_id=own_instance_id, peer_version=peer_version
@@ -283,6 +308,7 @@ def _make_svc(
         federation=federation,
         federation_repo=_FakeFederationRepo(instances),
         cp_repo=cp_repo,  # type: ignore[arg-type]
+        bus=bus,
     )
     return svc, federation, ws
 
@@ -1337,3 +1363,157 @@ async def test_list_contacts_excludes_blocked_users():
     # Non-blocked contacts must appear.
     assert "u-visible" in user_refs, "non-blocked local user must be included"
     assert "visible-remote" in user_refs, "non-blocked remote user must be included"
+
+
+# ─── AppChallengeReceived publish (Task 7) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_local_loopback_open_publishes_challenge_for_target_only():
+    """A local-loopback open publishes one AppChallengeReceived addressed to
+    the target, carrying the initiator's display name — never for the
+    initiator."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    alice = _make_user("u-alice", "alice", "Alice")
+    bob = _make_user("u-bob", "bob", "Bob")
+    bus = _FakeBus()
+    svc, _, _ = _make_svc(
+        apps={"chess": app},
+        users=[alice, bob],
+        own_instance_id="own-inst",
+        bus=bus,
+    )
+    session_id = await svc.open_session(
+        app_id="chess",
+        target={"instance_id": "own-inst", "user_ref": "u-bob", "is_local": True},
+        actor_user_id="u-alice",
+    )
+    challenges = [e for e in bus.published if isinstance(e, AppChallengeReceived)]
+    assert len(challenges) == 1
+    ev = challenges[0]
+    assert ev.to_user_id == "u-bob"
+    assert ev.from_display == "Alice"
+    assert ev.app_id == "chess"
+    assert ev.session_id == session_id
+    # The initiator is never the recipient of a challenge.
+    assert all(e.to_user_id != "u-alice" for e in challenges)
+
+
+@pytest.mark.asyncio
+async def test_inbound_resolved_open_publishes_challenge():
+    """An inbound APP_SESSION open routed to a single local user publishes a
+    challenge with the remote initiator's display name."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    bus = _FakeBus()
+    svc, _, ws = _make_svc(
+        apps={"chess": app},
+        users=[bob],
+        remote_users=[remote],
+        bus=bus,
+    )
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "bob",
+            "from_user": "carol",
+        },
+    )
+    await svc.on_inbound_event(event)
+    # Delivered to the resolved local user.
+    assert any(c["user_id"] == "u-bob" for c in ws.user_calls)
+    challenges = [e for e in bus.published if isinstance(e, AppChallengeReceived)]
+    assert len(challenges) == 1
+    ev = challenges[0]
+    assert ev.to_user_id == "u-bob"
+    assert ev.from_display == "Carol Remote"
+    assert ev.session_id == "sess-1"
+
+
+@pytest.mark.asyncio
+async def test_inbound_message_does_not_publish_challenge():
+    """An inbound APP_MESSAGE (kind=message) never publishes a challenge."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    bus = _FakeBus()
+    svc, _, _ = _make_svc(apps={"chess": app}, users=[bob], bus=bus)
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "to_user": "bob",
+            "from_user": "carol",
+            "data": {"move": "e4"},
+        },
+    )
+    await svc.on_inbound_event(event)
+    assert not [e for e in bus.published if isinstance(e, AppChallengeReceived)]
+
+
+@pytest.mark.asyncio
+async def test_legacy_broadcast_open_does_not_publish_challenge():
+    """A legacy household-addressed open (no to_user) fans out to everyone
+    and publishes no challenge (no specific recipient)."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    users = [_make_user("u-bob", "bob", "Bob"), _make_user("u-eve", "eve", "Eve")]
+    bus = _FakeBus()
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, bus=bus)
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {"app_id": "chess", "session_id": "sess-1", "verb": "open"},
+    )
+    await svc.on_inbound_event(event)
+    # Legacy fan-out still happens (broadcast_to_users).
+    assert ws.calls
+    assert not [e for e in bus.published if isinstance(e, AppChallengeReceived)]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_inbound_open_delivers_and_publishes_once():
+    """A re-delivered inbound open (same session_id) is idempotent: it
+    delivers and publishes exactly once."""
+    from socialhome.domain.events import AppChallengeReceived
+
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    bus = _FakeBus()
+    svc, _, ws = _make_svc(
+        apps={"chess": app}, users=[bob], remote_users=[remote], bus=bus
+    )
+    payload = {
+        "app_id": "chess",
+        "session_id": "dup-sess",
+        "verb": "open",
+        "to_user": "bob",
+        "from_user": "carol",
+    }
+    await svc.on_inbound_event(_make_event(FederationEventType.APP_SESSION, payload))
+    await svc.on_inbound_event(_make_event(FederationEventType.APP_SESSION, payload))
+    challenges = [e for e in bus.published if isinstance(e, AppChallengeReceived)]
+    assert len(challenges) == 1
+    delivered = [c for c in ws.user_calls if c["user_id"] == "u-bob"]
+    assert len(delivered) == 1
