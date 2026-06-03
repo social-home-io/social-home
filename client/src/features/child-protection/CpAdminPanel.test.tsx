@@ -23,6 +23,23 @@ describe('CpAdminPanel', () => {
     expect(mod).toBeTruthy()
   })
 
+  it('ageFromDob computes whole years and ignores bad input', async () => {
+    const { ageFromDob } = await import('./CpAdminPanel')
+    const today = new Date()
+    // Born exactly 8 years ago today → 8.
+    const eight = new Date(today.getFullYear() - 8, today.getMonth(), today.getDate())
+    expect(ageFromDob(eight.toISOString().slice(0, 10))).toBe(8)
+    // Born 10 years ago but the birthday is one day in the future → 9
+    // (not yet had this year's birthday). Shift by 2 days to stay clear of
+    // any same-day boundary regardless of when the test runs.
+    const notYet = new Date(today)
+    notYet.setDate(notYet.getDate() + 2)
+    notYet.setFullYear(notYet.getFullYear() - 10)
+    expect(ageFromDob(notYet.toISOString().slice(0, 10))).toBe(9)
+    expect(ageFromDob('')).toBeNull()
+    expect(ageFromDob('not-a-date')).toBeNull()
+  })
+
   // Regression: the "Protected" column must reflect /api/cp/protection,
   // NOT user.is_minor — that field is stripped from /api/users as a
   // SENSITIVE_FIELD, so the column was permanently blank before the fix.
