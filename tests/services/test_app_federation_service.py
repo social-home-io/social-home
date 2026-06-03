@@ -136,15 +136,21 @@ class _FakeUserRepo:
         self,
         users: list[User] | None = None,
         remote_users: list[RemoteUser] | None = None,
+        blocked_ids: set[str] | None = None,
     ) -> None:
         self._users: list[User] = users or []
         self._remote_users: list[RemoteUser] = remote_users or []
+        self._blocked_ids: set[str] = blocked_ids or set()
 
     async def list_all(self) -> list[User]:
         return list(self._users)
 
     async def list_all_known_remote(self) -> list[RemoteUser]:
         return list(self._remote_users)
+
+    async def list_blocked(self, blocker_user_id: str) -> list[tuple[str, str]]:
+        """Return ``[(blocked_user_id, blocked_at), ...]`` for the blocker."""
+        return [(uid, "2026-01-01T00:00:00+00:00") for uid in self._blocked_ids]
 
 
 class _FakeFederationRepo:
@@ -231,12 +237,15 @@ def _make_svc(
     cp_repo: _FakeCpRepo | None = None,
     online_user_ids: set[str] | None = None,
     own_instance_id: str = "own-inst-id",
+    blocked_ids: set[str] | None = None,
 ) -> tuple[AppFederationService, _FakeFederation, _FakeWs]:
     federation = _FakeFederation(own_instance_id=own_instance_id)
     ws = _FakeWs(online_user_ids=online_user_ids)
     svc = AppFederationService(
         app_repo=_FakeAppRepo(apps),
-        user_repo=_FakeUserRepo(users, remote_users=remote_users),
+        user_repo=_FakeUserRepo(
+            users, remote_users=remote_users, blocked_ids=blocked_ids
+        ),
         ws=ws,
         federation=federation,
         federation_repo=_FakeFederationRepo(instances),
@@ -830,3 +839,46 @@ async def test_list_contacts_empty_when_only_self_and_no_remotes():
     alice = _make_user("u-alice", "alice", "Alice")
     svc, _, _ = _make_svc(users=[alice], own_instance_id="own-inst")
     assert await svc.list_contacts(self_user_id="u-alice") == []
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_excludes_blocked_users():
+    """Blocked contacts (local and remote) are excluded from list_contacts.
+
+    Matches the /friends and DM roster behaviour: list_blocked(self_user_id)
+    provides the block set; any user whose user_id is in the set is dropped
+    from both local and remote populations.
+    """
+    alice = _make_user("u-alice", "alice", "Alice")
+    blocked_local = _make_user("u-blocked", "blocked", "Blocked Local")
+    visible_local = _make_user("u-visible", "visible", "Visible Local")
+
+    blocked_remote = _make_remote_user(
+        user_id="ru-blocked",
+        instance_id="peer-inst",
+        remote_username="blocked-remote",
+        display_name="Blocked Remote",
+    )
+    visible_remote = _make_remote_user(
+        user_id="ru-visible",
+        instance_id="peer-inst",
+        remote_username="visible-remote",
+        display_name="Visible Remote",
+    )
+
+    svc, _, _ = _make_svc(
+        users=[alice, blocked_local, visible_local],
+        remote_users=[blocked_remote, visible_remote],
+        own_instance_id="own-inst",
+        blocked_ids={"u-blocked", "ru-blocked"},
+    )
+    contacts = await svc.list_contacts(self_user_id="u-alice")
+    user_refs = {c["user_ref"] for c in contacts}
+
+    # Blocked contacts must not appear.
+    assert "u-blocked" not in user_refs, "blocked local user must be excluded"
+    assert "blocked-remote" not in user_refs, "blocked remote user must be excluded"
+
+    # Non-blocked contacts must appear.
+    assert "u-visible" in user_refs, "non-blocked local user must be included"
+    assert "visible-remote" in user_refs, "non-blocked remote user must be included"

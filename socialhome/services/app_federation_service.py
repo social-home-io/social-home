@@ -115,10 +115,20 @@ class AppFederationService:
     async def list_contacts(self, *, self_user_id: str) -> list[dict]:
         """Return the set of people a user can challenge to an app session.
 
+        This is the same roster that DMs and the ``/friends`` page expose:
+        members of paired households, minus personal blocks.  The per-peer
+        hide-list is applied upstream at pairing time, so hidden members
+        never reach ``remote_users`` in the first place.
+
         Includes:
         * All active local household members (excluding the caller).
-        * All known remote users across every paired household
-          (the same population as the DM composer).
+        * All known remote users across every paired household.
+
+        Blocked contacts are excluded using the same mechanism as
+        ``/friends``: ``list_blocked(self_user_id)`` returns
+        ``[(blocked_user_id, blocked_at), ...]`` and users whose
+        ``user_id`` is in that set are dropped from both the local and
+        remote populations.
 
         Each contact is a dict with keys:
         ``instance_id``, ``user_ref``, ``display_name``, ``is_local``,
@@ -129,10 +139,18 @@ class AppFederationService:
         """
         own = self._federation.own_instance_id
         connected = self._ws.connected_users()
+
+        # Personal blocks (§Privacy) — same filter as /friends and DM roster.
+        blocked_ids = {
+            uid for uid, _ in await self._user_repo.list_blocked(self_user_id)
+        }
+
         out: list[dict] = []
 
         for u in await self._user_repo.list_all():
             if u.user_id == self_user_id:
+                continue
+            if u.user_id in blocked_ids:
                 continue
             out.append(
                 {
@@ -145,6 +163,8 @@ class AppFederationService:
             )
 
         for r in await self._user_repo.list_all_known_remote():
+            if r.user_id in blocked_ids:
+                continue
             out.append(
                 {
                     "instance_id": r.instance_id,

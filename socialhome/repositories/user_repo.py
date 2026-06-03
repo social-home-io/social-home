@@ -358,9 +358,11 @@ class SqliteUserRepo:
     async def list_all_known_remote(self) -> list[RemoteUser]:
         """Return all non-deprovisioned remote users across every instance.
 
-        Used by :meth:`AppFederationService.list_contacts` to enumerate the
-        full set of people a local user can challenge across all paired
-        households — the same population the DM composer offers.
+        Used by :meth:`AppFederationService.list_contacts` to build the
+        pairing-scoped roster: members of paired households, the same set
+        DMs and ``/friends`` expose.  The per-peer hide-list is applied
+        upstream at pairing time (hidden members never reach this table).
+        Personal-block filtering is applied by the caller.
         """
         rows = await self._db.fetchall(
             "SELECT * FROM remote_users "
