@@ -3,10 +3,12 @@ name: Release — draft
 # Entry points for cutting a release.
 #
 #  * ``push: branches: [main]`` — every merge to main auto-refreshes
-#    the draft for today's CalVer date. If a draft for that date is
-#    already open (because an earlier merge created one), this run
-#    deletes it and recreates it so the notes always reflect the
-#    latest merged set. No tag is created until the operator clicks
+#    the draft for today's CalVer date. Each run first deletes EVERY
+#    open draft release (a draft is by contract the auto-generated
+#    view — a hand-polished one should have been published), then
+#    recreates today's so the notes always reflect the latest merged
+#    set AND no stale draft from an earlier, never-published day can
+#    accumulate. No tag is created until the operator clicks
 #    **Publish release**, so a refresh cycle costs nothing.
 #  * ``workflow_dispatch`` — manual override. Same logic, plus an
 #    optional ``date`` input for back-dating a draft (e.g. cutting a
@@ -97,19 +99,25 @@ jobs:
           # ``2026.5.13`` vs ``2026.5.9``.
           prev=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
 
-          # On a push-triggered run a draft for this version may already
-          # exist (an earlier merge from today). Delete + recreate so
-          # the notes reflect the *current* merge log — that's the only
-          # safe re-run shape, since ``gh release create`` would
-          # otherwise 422 on the duplicate name. ``--generate-notes``
-          # rebuilds the body deterministically from merged PRs since
-          # ``--notes-start-tag``, so nothing the operator typed by
-          # hand is at risk yet (a draft that *was* hand-polished
-          # should have been published; an un-published draft is by
-          # contract the auto-generated view).
-          if gh release view "$VERSION" --json isDraft -q .isDraft 2>/dev/null | grep -q true; then
-            gh release delete "$VERSION" --yes
-          fi
+          # Delete EVERY open draft release before recreating today's.
+          # Deleting only the draft whose name == "$VERSION" (the old
+          # behaviour) left a previous day's draft orphaned whenever the
+          # date rolled over without a publish — drafts then piled up
+          # indefinitely. A draft is by contract the auto-generated view
+          # (a hand-polished one should have been published), so sweeping
+          # them all keeps exactly one draft open and self-heals any
+          # backlog. ``--generate-notes`` rebuilds the body
+          # deterministically from merged PRs, so nothing hand-typed is
+          # at risk. Target by release *id*, never tag name: a leftover
+          # draft can share a tag with an already-published release, and
+          # ``gh release delete <tag>`` could remove the published one.
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq '.[] | select(.draft) | .id' \
+          | while read -r id; do
+              [ -n "$id" ] || continue
+              echo "Deleting stale draft release id=$id"
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$id"
+            done
 
           args=(
             "$VERSION"
