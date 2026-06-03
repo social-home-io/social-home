@@ -619,3 +619,74 @@ async def test_send_message_allowed_for_adult_meeting_min_age():
         actor_user_id="teen1",
     )
     assert len(federation.sent_app_messages) == 1
+
+
+# ─── FIX 3: _deliver filters minor recipients from fan-out ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_deliver_excludes_protected_minor_from_fanout():
+    """A protected under-age minor must NOT receive inbound app.message frames.
+
+    Setup: chess app with min_age=13.  Two local users — a protected minor
+    (declared_age=10) and an adult (declared_age=20, protection enabled).
+    Inbound APP_MESSAGE must only reach the adult.
+    """
+    app = _make_installed_app("chess", min_age=13)
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=10)
+    cp.add("adult1", enabled=True, declared_age=20)
+    users = [_make_user("minor1", "minor"), _make_user("adult1", "adult")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, cp_repo=cp)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "s1", "data": {"move": "e2e4"}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert len(ws.calls) == 1
+    recipients = ws.calls[0]["user_ids"]
+    assert "minor1" not in recipients, "minor must be excluded from fan-out"
+    assert "adult1" in recipients, "adult must receive the frame"
+
+
+@pytest.mark.asyncio
+async def test_deliver_includes_unprotected_user_regardless_of_age():
+    """An unprotected user (cp disabled) must receive frames even for min_age apps."""
+    app = _make_installed_app("chess", min_age=18)
+    cp = _FakeCpRepo()
+    cp.add("young1", enabled=False, declared_age=10)  # cp disabled → unprotected
+    users = [_make_user("young1", "young")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, cp_repo=cp)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "s1", "data": {}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert len(ws.calls) == 1
+    assert "young1" in ws.calls[0]["user_ids"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_skips_filtering_when_min_age_zero():
+    """Fast path: when app.min_age == 0 all users receive the frame."""
+    app = _make_installed_app("chess", min_age=0)
+    cp = _FakeCpRepo()
+    cp.add("minor1", enabled=True, declared_age=5)
+    users = [_make_user("minor1", "minor"), _make_user("adult1", "adult")]
+    svc, _, ws = _make_svc(apps={"chess": app}, users=users, cp_repo=cp)
+
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {"app_id": "chess", "session_id": "s1", "data": {}},
+    )
+    await svc.on_inbound_event(event)
+
+    assert len(ws.calls) == 1
+    recipients = ws.calls[0]["user_ids"]
+    # Both users receive the frame — no filtering for unrestricted apps.
+    assert "minor1" in recipients
+    assert "adult1" in recipients

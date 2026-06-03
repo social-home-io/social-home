@@ -320,6 +320,43 @@ async def test_detail_member_sees_enabled(client, monkeypatch):
     assert body["enabled"] is True
 
 
+async def test_detail_minor_gets_404_for_age_restricted_app(client, monkeypatch):
+    """An under-age protected minor GETs a restricted app → 404 (not 403).
+
+    The route must not confirm the app's existence to a minor — returning 403
+    would reveal that the app exists, which is a privacy / enumeration leak.
+    """
+    enabled_app = _make_installed(enabled=True)
+    monkeypatch.setattr(AppService, "get", AsyncMock(return_value=enabled_app))
+    monkeypatch.setattr(
+        AppService,
+        "assert_age_allowed",
+        AsyncMock(
+            side_effect=AppAgeRestrictedError("This app is restricted to ages 13+.")
+        ),
+    )
+
+    member_tok = await _seed_member(client._db)
+    r = await client.get("/api/apps/com.example.hello", headers=_auth(member_tok))
+    assert r.status == 404
+    body = await r.json()
+    assert body["error"]["code"] == "NOT_FOUND"
+
+
+async def test_detail_admin_sees_age_restricted_app(client, monkeypatch):
+    """An admin can always GET a restricted app — the age gate is non-admin only."""
+    enabled_app = _make_installed(enabled=True)
+    monkeypatch.setattr(AppService, "get", AsyncMock(return_value=enabled_app))
+    # assert_age_allowed should NOT be called for admin, so configure it to
+    # raise to verify it's not called.
+    age_mock = AsyncMock(side_effect=AppAgeRestrictedError("should not be called"))
+    monkeypatch.setattr(AppService, "assert_age_allowed", age_mock)
+
+    r = await client.get("/api/apps/com.example.hello", headers=_auth(client._tok))
+    assert r.status == 200
+    age_mock.assert_not_awaited()
+
+
 # ── PATCH /api/apps/{app_id} ──────────────────────────────────────────────
 
 

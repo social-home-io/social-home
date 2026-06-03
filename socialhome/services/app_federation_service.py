@@ -304,6 +304,24 @@ class AppFederationService:
         user_ids = [u.user_id for u in users]
         if not user_ids:
             return
+
+        # Age-gate filter: skip recipients who are protected minors below
+        # the app's minimum age.  Fast path when the app has no restriction.
+        if app.min_age > 0 and self._cp_repo is not None:
+            allowed_ids: list[str] = []
+            for uid in user_ids:
+                p = await self._cp_repo.get_user_protection(uid)
+                if p is None or not p.get("child_protection_enabled"):
+                    allowed_ids.append(uid)
+                    continue
+                declared = int(p.get("declared_age") or 0)
+                if declared >= app.min_age:
+                    allowed_ids.append(uid)
+            user_ids = allowed_ids
+
+        if not user_ids:
+            return
+
         await self._ws.broadcast_to_users(
             user_ids,
             {

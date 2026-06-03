@@ -177,6 +177,23 @@ class AppBundleView(BaseView):
         if not app.enabled:
             return error_response(403, "FORBIDDEN", "App is disabled.")
 
+        # NOTE: The age gate CANNOT be rechecked here.
+        # This route is unauthenticated (signed-URL / cookie, no user identity),
+        # so we have no user_id to look up a protection record against.
+        # The age gate is enforced at two authenticated boundaries:
+        #   1. AppRuntimeView.get (/runtime, bearer-authed) — raises
+        #      AppAgeRestrictedError and refuses to mint the signed bundle URL.
+        #   2. AppDetailView.get, store ops, and federation fan-out — all
+        #      check assert_age_allowed before any privileged action.
+        # A signed URL minted while the app was unrestricted remains valid for
+        # at most BUNDLE_TTL_SECONDS (currently 300 s) if an admin raises
+        # min_age mid-session.  This window leaks only static bundle *file
+        # reads* — no store writes, no federation sends, no session opens can
+        # occur (those are gated at their own authenticated endpoints).
+        # Rebuilding the signed-URL model to embed user identity would allow
+        # a per-request age recheck here, but the short TTL bound makes the
+        # risk acceptable and the change is deferred.
+
         # ── File resolution + path-traversal guard ───────────────────────
         config = self.svc(config_key)
         apps_root = pathlib.Path(config.apps_path).resolve()

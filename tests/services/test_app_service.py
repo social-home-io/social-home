@@ -176,7 +176,10 @@ class _FakeAppRepo:
             source_url=app.source_url,
             installed_by=existing.installed_by,
             installed_at=existing.installed_at,
-            min_age=existing.min_age,
+            # min_age is computed by the service (max of existing and manifest)
+            # and stored on the incoming app — honour it rather than overwriting
+            # with the existing value so the FIX 2 semantics are testable.
+            min_age=app.min_age,
         )
 
     async def uninstall(self, app_id: str) -> None:
@@ -1594,3 +1597,161 @@ async def test_update_app_sha_mismatch_raises_integrity_error(
     app = await repo.get("chess")
     assert app is not None
     assert app.version == "1.0.0"
+
+
+# ─── FIX 2: update_app picks up raised min_age from manifest ─────────────────
+
+
+def _make_bundle_with_min_age(min_age: int) -> tuple[bytes, str]:
+    """Build a minimal .tgz with a manifest declaring the given min_age."""
+    import gzip as _gzip
+    import io as _io
+    import json as _json
+    import tarfile as _tarfile
+
+    buf = _io.BytesIO()
+    manifest = _json.dumps(
+        {"entry": "index.html", "capabilities": [], "min_age": min_age}
+    ).encode()
+    html = b"<html><body>App</body></html>"
+    with _gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
+        with _tarfile.open(fileobj=gz, mode="w|") as tar:
+            for name, data in [("manifest.json", manifest), ("index.html", html)]:
+                info = _tarfile.TarInfo(name=name)
+                info.size = len(data)
+                tar.addfile(info, _io.BytesIO(data))
+    raw = buf.getvalue()
+    import hashlib as _hashlib
+
+    sha = _hashlib.sha256(raw).hexdigest()
+    return raw, sha
+
+
+@pytest.mark.asyncio
+async def test_update_app_raises_min_age_when_manifest_is_stricter(
+    tmp_path: Path,
+) -> None:
+    """update_app auto-raises min_age when the new manifest declares a higher value.
+
+    App installed at min_age 0 (no gate); manifest in v2 declares min_age 13
+    → the updated row must have min_age 13.
+    """
+    # v1 bundle: manifest has min_age 0 (default / not declared)
+    v1_raw, v1_sha = _make_bundle_with_min_age(0)
+    v1_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="1.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-1.0.0.tgz",
+        bundle_sha256=v1_sha,
+    )
+    repo = _FakeAppRepo()
+
+    async def downloader_v1(url: str) -> bytes:
+        return v1_raw
+
+    svc_v1 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v1_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v1",
+        downloader=downloader_v1,
+    )
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    assert (await repo.get("chess")).min_age == 0  # type: ignore[union-attr]
+
+    # v2 bundle: manifest now declares min_age 13
+    v2_raw, v2_sha = _make_bundle_with_min_age(13)
+    v2_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="2.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-2.0.0.tgz",
+        bundle_sha256=v2_sha,
+    )
+
+    async def downloader_v2(url: str) -> bytes:
+        return v2_raw
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v2_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v2",
+        downloader=downloader_v2,
+    )
+    updated = await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # The manifest raised the gate — the row must reflect the stricter value.
+    assert updated.min_age == 13
+    assert (await repo.get("chess")).min_age == 13  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_update_app_preserves_admin_min_age_when_manifest_is_laxer(
+    tmp_path: Path,
+) -> None:
+    """update_app never lowers an admin-configured gate.
+
+    App at admin-set min_age 16; new manifest declares only min_age 13
+    → the updated row must still have min_age 16.
+    """
+    # v1 bundle: manifest has min_age 0
+    v1_raw, v1_sha = _make_bundle_with_min_age(0)
+    v1_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="1.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-1.0.0.tgz",
+        bundle_sha256=v1_sha,
+    )
+    repo = _FakeAppRepo()
+
+    async def downloader_v1(url: str) -> bytes:
+        return v1_raw
+
+    svc_v1 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v1_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v1",
+        downloader=downloader_v1,
+    )
+    await svc_v1.install("chess", actor_is_admin=True, actor_user_id="admin1")
+    # Admin manually raises the gate to 16
+    await svc_v1.set_min_age("chess", min_age=16, actor_is_admin=True)
+    assert (await repo.get("chess")).min_age == 16  # type: ignore[union-attr]
+
+    # v2 bundle: manifest declares min_age 13 (less strict than admin-set 16)
+    v2_raw, v2_sha = _make_bundle_with_min_age(13)
+    v2_entry = AppCatalogEntry(
+        app_id="chess",
+        name="Chess",
+        latest_version="2.0.0",
+        description="x",
+        icon_url=None,
+        capabilities=(),
+        bundle_url="https://example.com/chess-2.0.0.tgz",
+        bundle_sha256=v2_sha,
+    )
+
+    async def downloader_v2(url: str) -> bytes:
+        return v2_raw
+
+    svc_v2 = AppService(
+        repo=repo,
+        catalog=_StubCatalog([v2_entry]),  # type: ignore[arg-type]
+        apps_path=tmp_path / "v2",
+        downloader=downloader_v2,
+    )
+    updated = await svc_v2.update_app("chess", actor_is_admin=True)
+
+    # The admin gate must NOT be lowered even though the new manifest is laxer.
+    assert updated.min_age == 16
+    assert (await repo.get("chess")).min_age == 16  # type: ignore[union-attr]

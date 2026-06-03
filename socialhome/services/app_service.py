@@ -362,6 +362,10 @@ class AppService(BusPublisherMixin):
             app_id, entry
         )
 
+        # Preserve admin-configured age gate, but auto-raise when the new
+        # manifest declares a higher minimum age (e.g. app upgrades its rating).
+        # Never silently LOWER an admin's gate — take the stricter value.
+        new_min_age = max(existing.min_age, manifest.min_age)
         updated = InstalledApp(
             app_id=app_id,
             name=entry.name,
@@ -373,7 +377,7 @@ class AppService(BusPublisherMixin):
             source_url=entry.bundle_url,
             installed_by=existing.installed_by,
             installed_at=existing.installed_at,
-            min_age=existing.min_age,
+            min_age=new_min_age,
         )
         await self._repo.update_installed(updated)
 

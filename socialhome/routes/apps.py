@@ -16,7 +16,7 @@ import json
 from aiohttp import web
 
 from ..app_keys import app_federation_service_key, app_service_key
-from ..domain.apps import InstalledApp
+from ..domain.apps import AppAgeRestrictedError, InstalledApp
 from ..security import error_response
 from .base import BaseView
 
@@ -104,6 +104,13 @@ class AppDetailView(BaseView):
         app = await svc.get(app_id)
         if app is None or (not user.is_admin and not app.enabled):
             return error_response(404, "NOT_FOUND", "App not found.")
+        # Age gate (non-admins only): return 404 rather than 403 so a minor
+        # cannot confirm that the app exists by probing the endpoint.
+        if not user.is_admin:
+            try:
+                await svc.assert_age_allowed(app, user.user_id)
+            except AppAgeRestrictedError:
+                return error_response(404, "NOT_FOUND", "App not found.")
         return self._json(_serialize(app))
 
     async def patch(self) -> web.Response:
