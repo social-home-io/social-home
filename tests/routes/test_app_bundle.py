@@ -477,3 +477,49 @@ async def test_bundle_cookie_path_unprefixed_without_ingress_header(client):
     )
     # And must NOT accidentally include a stale ingress prefix.
     assert "hassio_ingress" not in set_cookie
+
+
+async def test_bundle_tampered_bundle_path_returns_403(client):
+    """A tampered DB ``bundle_path`` that escapes apps_root is blocked with 403.
+
+    If a DB write (direct SQL injection, migration bug, etc.) stores
+    ``bundle_path = "../../escape"`` for an installed app, the serve route
+    must detect that the resolved ``base`` directory escapes ``apps_root``
+    and return 403 before attempting any file I/O.
+    """
+    from socialhome.app_keys import config_key
+    from socialhome.repositories.app_repo import SqliteAppRepo
+
+    config_obj = client.app[config_key]
+    _write_bundle(config_obj.apps_path)
+    app = await _seed_app(client._db)
+
+    # Tamper the stored bundle_path so it escapes apps_root.
+    repo = SqliteAppRepo(client._db)
+    tampered = app.__class__(
+        app_id=app.app_id,
+        name=app.name,
+        version=app.version,
+        enabled=app.enabled,
+        manifest=app.manifest,
+        bundle_path="../../escape",
+        bundle_sha256=app.bundle_sha256,
+        source_url=app.source_url,
+        installed_by=app.installed_by,
+        installed_at=app.installed_at,
+    )
+    await repo.update_installed(tampered)
+
+    # Mint a valid prefix signature.
+    signer = client.app[media_signer_key]
+    prefix = f"/api/apps/{_APP_ID}/bundle/"
+    signed = signer.sign(prefix, ttl=BUNDLE_TTL_SECONDS)
+    exp, sig = _parse_sig_from_url(signed)
+
+    # The bundle GET must be rejected — the base dir escapes apps_root.
+    r = await client.get(f"{prefix}index.html?exp={exp}&sig={sig}")
+    assert r.status == 403, (
+        f"tampered bundle_path escaping apps_root must return 403 (got {r.status})"
+    )
+    body = await r.json()
+    assert body["error"]["code"] == "FORBIDDEN"

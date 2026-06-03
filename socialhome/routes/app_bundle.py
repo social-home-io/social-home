@@ -174,7 +174,15 @@ class AppBundleView(BaseView):
 
         # ── File resolution + path-traversal guard ───────────────────────
         config = self.svc(config_key)
+        apps_root = pathlib.Path(config.apps_path).resolve()
         base = (pathlib.Path(config.apps_path) / app.bundle_path).resolve()
+        if not base.is_relative_to(apps_root):
+            log.warning(
+                "bundle serve: bundle_path %r escapes apps root",
+                app.bundle_path,
+            )
+            return error_response(403, "FORBIDDEN", "Path traversal blocked.")
+
         rel = tail if tail else app.manifest.entry
         target = (base / rel).resolve()
 

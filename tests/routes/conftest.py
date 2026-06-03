@@ -43,6 +43,7 @@ async def client(aiohttp_client, tmp_dir):
         data_dir=str(tmp_dir),
         db_path=str(tmp_dir / "test.db"),
         media_path=str(tmp_dir / "media"),
+        apps_path=str(tmp_dir / "apps"),
         mode="standalone",
         log_level="WARNING",
         db_write_batch_timeout_ms=10,
