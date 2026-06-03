@@ -187,3 +187,55 @@ async def test_config_changed_broadcast_failure_is_swallowed(space_repo):
             sequence=1,
         ),
     )
+
+
+# ─── §CP.F1: age-gate changes federate to member stubs ──────────────────
+
+
+async def test_age_gate_change_broadcasts_to_members(fed, space_repo):
+    """A CpSpaceAgeGateChanged on the host broadcasts SPACE_AGE_GATE_UPDATED
+    so member households update their stub's min_age (the inbound counterpart
+    is space_membership._on_age_gate)."""
+    from socialhome.domain.events import CpSpaceAgeGateChanged
+
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=space_repo,
+    ).wire()
+
+    await bus.publish(
+        CpSpaceAgeGateChanged(space_id="sp-1", min_age=18, target_audience="adult"),
+    )
+
+    fed.broadcast_to_space_members.assert_awaited_once()
+    call = fed.broadcast_to_space_members.await_args
+    assert call.args[0] == "sp-1"
+    assert call.args[1] == FederationEventType.SPACE_AGE_GATE_UPDATED
+    assert call.args[2] == {
+        "space_id": "sp-1",
+        "min_age": 18,
+        "target_audience": "adult",
+    }
+
+
+async def test_age_gate_change_on_non_host_is_not_broadcast(fed):
+    """Only the owner host federates the gate — a stub on a member household
+    has no authority to push the gate around."""
+    from socialhome.domain.events import CpSpaceAgeGateChanged
+
+    repo = MagicMock()
+    # Owned by someone else → this household is just a member stub.
+    repo.get = AsyncMock(return_value=_make_space(owner_instance_id="inst-other"))
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=repo,
+    ).wire()
+
+    await bus.publish(
+        CpSpaceAgeGateChanged(space_id="sp-1", min_age=13, target_audience="teen"),
+    )
+    fed.broadcast_to_space_members.assert_not_awaited()

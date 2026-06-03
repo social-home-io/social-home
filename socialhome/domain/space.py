@@ -606,6 +606,13 @@ class Space:
     # federated-multi-household case where the space anchors to a
     # different city than the home household.
     tz: str = "UTC"
+    # §CP.F1 child-protection age gate. Federated in space_meta so a member
+    # household enforces the host's gate locally on its own join paths (a
+    # protected minor below ``min_age`` can't be seated). 0 → no restriction;
+    # CHECK-constrained to {0,13,16,18} at the schema level. ``target_audience``
+    # is a discovery hint ("all"/"family"/"teen"/"adult"), not an access gate.
+    min_age: int = 0
+    target_audience: str = "all"
 
 
 @dataclass(slots=True, frozen=True)
