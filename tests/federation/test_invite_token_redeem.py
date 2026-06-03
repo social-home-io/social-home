@@ -507,6 +507,29 @@ async def test_redeem_allows_old_enough_minor():
     assert "sp-13" in sender._spaces.spaces  # type: ignore[attr-defined]
 
 
+async def test_redeem_refuses_when_space_owned_by_another_host():
+    """§D1b anti-hijack — a redeem ACK whose space_id collides with a space
+    we already hold under a DIFFERENT host is refused: nothing seated, 403.
+    Guards against a malicious issuer clobbering our config + content key."""
+    sender, _issuer, *_rest, issuer_repo, _im = _wire_pair(
+        {"space_id": "sp-own", "created_by": "owner", "uses_remaining": 1},
+    )
+    issuer_repo.space_rows_for_get["sp-own"] = _a_space("sp-own")
+    # We already hold sp-own locally, owned by a DIFFERENT host.
+    sender._spaces.space_rows_for_get["sp-own"] = _a_space(  # type: ignore[attr-defined]
+        "sp-own",
+        owner_instance_id="the-real-host",
+    )
+    with pytest.raises(SpacePermissionError, match="conflicts"):
+        await sender.request_redeem(
+            "good-token",
+            viewer_user_id="u-local",
+            issuer_instance_id="issuer-1",
+        )
+    assert sender._spaces.members == []  # type: ignore[attr-defined]
+    assert sender._spaces.space_instances == []  # type: ignore[attr-defined]
+
+
 async def test_redeem_with_expired_token_sends_deny():
     """An issuer-side ``consume_invite_token`` miss → DENY with a
     user-visible reason → receiver's Future raises

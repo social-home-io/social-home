@@ -3535,6 +3535,32 @@ def _coerce_min_age(value: object) -> int:
     return coerced if coerced in _VALID_MIN_AGES else 0
 
 
+async def can_seat_remote_stub(
+    space_repo,
+    space_id: str,
+    issuer_instance_id: str,
+) -> bool:
+    """§D1b anti-hijack — may an inbound stub for *space_id* shipped by
+    *issuer_instance_id* be seated / overwritten?
+
+    Returns ``False`` when a local ``spaces`` row already exists owned by a
+    **different** instance: a remote peer must not ship metadata that
+    clobbers a space we already hold under another host (which would
+    rewrite its name/owner/config and import a foreign content key). A
+    brand-new space (no local row) is always seatable, and re-seating a
+    row already owned by this issuer is fine.
+
+    ``issuer_instance_id`` MUST be the authenticated envelope sender
+    (``event.from_instance`` / the redeemed issuer), never the
+    attacker-controlled ``meta["owner_instance_id"]`` — otherwise a
+    malicious host could spoof the claimed owner to pass the check.
+    Mirrors the host-authority guard in
+    ``FederationInboundService._on_space_config_changed``.
+    """
+    existing = await space_repo.get(space_id)
+    return existing is None or existing.owner_instance_id == issuer_instance_id
+
+
 def _coerce_space_type(value: SpaceType | str) -> SpaceType:
     if isinstance(value, SpaceType):
         return value

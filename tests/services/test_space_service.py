@@ -2095,3 +2095,28 @@ async def test_age_gate_allows_older_minor_through_seating_paths(stack):
     req_id = await stack.space_svc.request_join(space.id, user_id=teen.user_id)
     member = await stack.space_svc.approve_join_request(req_id, actor_username="anna")
     assert member is not None and member.user_id == teen.user_id
+
+
+async def test_can_seat_remote_stub_owner_guard(stack):
+    """§D1b anti-hijack helper: a new space is seatable; re-seating by the
+    same owner is fine; a different owner is refused (compared against the
+    authenticated issuer, never the meta-claimed owner)."""
+    from socialhome.services.space_service import (
+        can_seat_remote_stub,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna", is_admin=True)
+    # No local row → seatable by anyone.
+    assert await can_seat_remote_stub(stack.space_repo, "ghost", "host-a") is True
+    # Seed a stub owned by host-a.
+    await stack.space_repo.save(
+        stub_space_from_metadata(
+            "shared",
+            host_instance_id="host-a",
+            meta={"name": "S", "owner_instance_id": "host-a"},
+        ),
+    )
+    # Same owner re-seats; a different host is refused.
+    assert await can_seat_remote_stub(stack.space_repo, "shared", "host-a") is True
+    assert await can_seat_remote_stub(stack.space_repo, "shared", "host-b") is False

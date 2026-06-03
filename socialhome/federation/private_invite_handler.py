@@ -35,6 +35,7 @@ from ..services.space_service import (
     apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
     apply_space_icon_from_metadata,
+    can_seat_remote_stub,
     stub_space_from_metadata,
 )
 
@@ -203,6 +204,21 @@ class PrivateSpaceInviteHandler:
         # the legacy behaviour — no stub, joiner sees the invite banner
         # but can't see the space until upstream upgrades.
         meta = p.get("space_meta")
+        # §D1b anti-hijack — drop the snapshot (fall back to no-stub legacy
+        # behaviour) if a local space with this id is already owned by a
+        # different host, so a malicious inviter can't clobber its config +
+        # content key. Compared against the authenticated sender, never the
+        # issuer-controlled meta["owner_instance_id"].
+        if isinstance(meta, dict) and not await can_seat_remote_stub(
+            self._space_repo, space_id, event.from_instance
+        ):
+            log.warning(
+                "§D1b: refusing invite stub — space=%s already owned "
+                "locally by another host, inviter=%s",
+                space_id,
+                event.from_instance,
+            )
+            meta = None
         if isinstance(meta, dict):
             stub = stub_space_from_metadata(
                 space_id,

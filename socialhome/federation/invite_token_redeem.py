@@ -53,6 +53,7 @@ from ..services.space_service import (
     apply_space_cover_from_metadata,
     apply_space_icon_from_metadata,
     build_space_snapshot_for_federation,
+    can_seat_remote_stub,
     stub_space_from_metadata,
 )
 
@@ -331,6 +332,26 @@ class SpaceInviteTokenRedeemCoordinator:
                 )
                 raise SpacePermissionError(
                     f"This space is restricted to users aged {min_age}+."
+                )
+            # §D1b anti-hijack — refuse if a local space with this id is
+            # already owned by a DIFFERENT host. Otherwise a malicious
+            # issuer could ship an ACK whose space_id collides with a space
+            # we hold under another host and clobber its config + content
+            # key. Compared against issuer_instance_id (the authenticated
+            # sender), never meta["owner_instance_id"] (issuer-controlled).
+            # Checked before any persistence so a conflict seats nothing.
+            if not await can_seat_remote_stub(
+                self._spaces, space_id, issuer_instance_id
+            ):
+                log.warning(
+                    "§D1b: refusing redeem seat — space=%s already owned "
+                    "locally by another host, issuer=%s",
+                    space_id,
+                    issuer_instance_id,
+                )
+                raise SpacePermissionError(
+                    "This invite points at a space that conflicts with one "
+                    "you already belong to under a different host."
                 )
             await self._spaces.add_space_instance(
                 space_id,
