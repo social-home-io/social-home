@@ -52,6 +52,28 @@ class CPProtectionView(BaseView):
         return web.Response(status=204)
 
 
+class CPProtectionStatusView(BaseView):
+    """``GET /api/cp/protection`` — admin: protection status for all users.
+
+    Returns ``{"users": [{user_id, username, is_minor, declared_age}]}``.
+    These fields are in ``SENSITIVE_FIELDS`` (stripped from ``/api/users``),
+    so the admin Child-Protection panel reads protection state here. The
+    service enforces the admin gate (``SpacePermissionError`` → 403).
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        users = await self.svc(
+            K.child_protection_service_key,
+        ).list_protection_status(actor_user_id=ctx.user_id)
+        # Deliberately bypass ``self._json`` (which runs ``sanitise_for_api``
+        # and would strip ``is_minor`` / ``declared_age`` as SENSITIVE_FIELDS).
+        # This endpoint is the sanctioned exception: the service gates it on
+        # ``_require_admin`` and surfacing protection state to an admin is the
+        # whole point. The blanket sanitiser still protects every other route.
+        return web.json_response({"users": users})
+
+
 class CPGuardiansView(BaseView):
     """``GET /api/cp/users/{minor_id}/guardians``
     + ``POST /api/cp/users/{minor_id}/guardians/{guardian_id}``

@@ -79,6 +79,7 @@ from .child_protection import (
     CPMinorsForGuardianView,
     CPSpaceCollectionView,
     CPGuardiansView,
+    CPProtectionStatusView,
     CPProtectionView,
 )
 from .conversations import (
@@ -1073,6 +1074,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/peer_spaces", PeerSpaceCollectionView)
 
     # ── Child protection ────────────────────────────────────────────────
+    app.router.add_view("/api/cp/protection", CPProtectionStatusView)
     app.router.add_view("/api/cp/users/{username}/protection", CPProtectionView)
     app.router.add_view("/api/cp/users/{minor_id}/guardians", CPGuardiansView)
     app.router.add_view(

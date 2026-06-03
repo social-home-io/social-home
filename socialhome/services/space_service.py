@@ -1017,6 +1017,12 @@ class SpaceService(SpaceMemberGuardMixin):
                 f"user {user_id!r} is banned from this space",
                 banned=True,
             )
+        # §CP.F1 — invite creation gates the invitee, but protection may be
+        # enabled *after* the invite was sent; re-check at acceptance so a
+        # newly-protected minor can't accept a stale invite into an
+        # age-restricted space.
+        if self._child_protection is not None:
+            await self._child_protection.check_space_age_gate(space.id, user_id)
         member = SpaceMember(
             space_id=space.id,
             user_id=user_id,
@@ -1923,6 +1929,24 @@ class SpaceService(SpaceMemberGuardMixin):
         host_instance = invite.get("remote_instance_id")
         if not host_instance:
             raise ValueError("not a cross-household invite")
+        # §CP.F1 — block an under-age protected minor BEFORE we send the
+        # ACCEPT envelope, so the host never sees a join the invitee's
+        # household refuses to seat (no split-brain).
+        #
+        # KNOWN LIMITATION (tracked follow-up): for a *remote-hosted* space
+        # the local stub's ``min_age`` is currently 0 because the host's age
+        # gate is NOT yet federated into ``_space_metadata_for_federation``
+        # — so this check no-ops for cross-household spaces today. It is
+        # correct and ready for when ``min_age`` joins the federated metadata
+        # (same additive/fail-soft pattern as ``allowed_post_types``). The
+        # locally-hosted seating paths (add_member / approve_join_request /
+        # accept_invite_token / accept_local_invite / subscribe) ARE fully
+        # enforced.
+        if self._child_protection is not None:
+            await self._child_protection.check_space_age_gate(
+                invite["space_id"],
+                user_id,
+            )
         # Look up the accepting user so the ACCEPT envelope can carry
         # their human-readable name to the host. The protocol method is
         # ``get_by_user_id``; an earlier draft of this code looked up
@@ -2096,6 +2120,11 @@ class SpaceService(SpaceMemberGuardMixin):
                 "banned from this space",
                 banned=True,
             )
+        # §CP.F1 — an invite link must not seat an under-age protected minor
+        # in an age-restricted space. (The token is already consumed above;
+        # a blocked minor burns one use, which beats letting them in.)
+        if self._child_protection is not None:
+            await self._child_protection.check_space_age_gate(space_id, user_id)
         member = SpaceMember(
             space_id=space_id,
             user_id=user_id,
@@ -2173,6 +2202,16 @@ class SpaceService(SpaceMemberGuardMixin):
         space = await self._require_space(row["space_id"])
         await self._require_admin_or_owner(space, actor_username)
         remote_instance = row.get("remote_applicant_instance_id")
+        # §CP.F1 — a protected minor must not be seated in an over-age space
+        # via the request→approve flow either. Check BEFORE flipping the
+        # request to "approved" so a blocked minor's request stays pending
+        # (never "approved but unseated"). No-op for remote applicants (no
+        # local protection record) and when CP isn't wired.
+        if self._child_protection is not None and not remote_instance:
+            await self._child_protection.check_space_age_gate(
+                row["space_id"],
+                row["user_id"],
+            )
         await self._spaces.update_join_request_status(
             request_id,
             "approved",
