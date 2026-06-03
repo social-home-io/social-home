@@ -146,6 +146,7 @@ class AbstractCpRepo(Protocol):
     ) -> None: ...
     async def get_space_age_gate(self, space_id: str) -> dict: ...
     async def get_user_protection(self, user_id: str) -> dict | None: ...
+    async def list_protection_status(self) -> list[dict]: ...
 
     # DM gate (§CP.F3)
     async def get_remote_instance_status(
@@ -444,6 +445,31 @@ class SqliteCpRepo:
             ),
             "declared_age": int(row["declared_age"] or 0),
         }
+
+    async def list_protection_status(self) -> list[dict]:
+        """Protection status for every user — keyed by ``user_id``.
+
+        Feeds the admin Child-Protection panel's "Protected" column.
+        ``is_minor``/``declared_age`` are in ``SENSITIVE_FIELDS`` (stripped
+        from ``/api/users``), so this is the *only* place they surface —
+        behind the admin gate in :class:`ChildProtectionService`.
+        ``is_minor`` tracks ``child_protection_enabled`` (the gate's source
+        of truth, set/cleared together with ``is_minor`` by
+        :meth:`enable_protection` / :meth:`disable_protection`).
+        """
+        rows = await self._db.fetchall(
+            "SELECT user_id, username, child_protection_enabled, declared_age"
+            " FROM users",
+        )
+        return [
+            {
+                "user_id": str(r["user_id"]),
+                "username": str(r["username"]),
+                "is_minor": bool(int(r["child_protection_enabled"] or 0)),
+                "declared_age": int(r["declared_age"] or 0),
+            }
+            for r in rows
+        ]
 
     # ── DM gate ────────────────────────────────────────────────────────
 

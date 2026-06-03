@@ -610,6 +610,17 @@ class ChildProtectionService:
     async def get_space_age_gate(self, space_id: str) -> dict:
         return await self._repo.get_space_age_gate(space_id)
 
+    async def list_protection_status(self, *, actor_user_id: str) -> list[dict]:
+        """Admin-only: protection status for every household user.
+
+        Powers the admin Child-Protection panel's "Protected" column.
+        ``is_minor`` / ``declared_age`` are stripped from ``/api/users``
+        (``SENSITIVE_FIELDS``), so the panel can't learn protection state
+        there — this admin-gated endpoint is the dedicated source.
+        """
+        await self._require_admin(actor_user_id)
+        return await self._repo.list_protection_status()
+
     async def check_space_age_gate(
         self,
         space_id: str,

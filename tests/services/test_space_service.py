@@ -15,9 +15,11 @@ from socialhome.domain.space import (
     SpaceType,
 )
 from socialhome.infrastructure.event_bus import EventBus
+from socialhome.repositories.cp_repo import SqliteCpRepo
 from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
+from socialhome.services.child_protection_service import ChildProtectionService
 from socialhome.services.space_service import SpaceService
 from socialhome.services.user_service import UserService
 
@@ -1914,3 +1916,130 @@ def test_stub_space_defaults_all_post_types_when_meta_omits_them():
         meta={"name": "X", "features": {"pages": True}},
     )
     assert stub.features.allowed_post_types == _ALL_POST_TYPES
+
+
+# ─── §CP.F1: age gate on EVERY seating path ──────────────────────────────
+#
+# Regression for the bypass found in the parent+children walkthrough: the
+# gate was enforced on add_member/subscribe but NOT on the invite-acceptance
+# and join-request-approval seating paths, so a protected minor could still
+# land in an 18+ space via a link, an invite, or an approved request.
+
+
+async def _attach_cp(stack):
+    cp = ChildProtectionService(
+        SqliteCpRepo(stack.db),
+        SqliteUserRepo(stack.db),
+        EventBus(),
+    )
+    stack.space_svc.attach_child_protection(cp)
+    return cp
+
+
+async def test_age_gate_blocks_minor_on_approve_join_request(stack):
+    anna = await stack.provision_user("anna", is_admin=True)
+    kid = await stack.provision_user("kid")
+    cp = await _attach_cp(stack)
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="Adults",
+        join_mode=JoinMode.OPEN,
+    )
+    await cp.enable_protection(
+        minor_username="kid",
+        declared_age=8,
+        actor_user_id=anna.user_id,
+    )
+    await cp.update_space_age_gate(
+        space.id,
+        min_age=18,
+        target_audience="adult",
+        actor_user_id=anna.user_id,
+    )
+    req_id = await stack.space_svc.request_join(space.id, user_id=kid.user_id)
+    with pytest.raises(SpacePermissionError, match="18"):
+        await stack.space_svc.approve_join_request(req_id, actor_username="anna")
+    assert await stack.space_repo.get_member(space.id, kid.user_id) is None
+
+
+async def test_age_gate_blocks_minor_on_accept_invite_token(stack):
+    anna = await stack.provision_user("anna", is_admin=True)
+    kid = await stack.provision_user("kid")
+    cp = await _attach_cp(stack)
+    space = await stack.space_svc.create_space(owner_username="anna", name="Adults")
+    await cp.enable_protection(
+        minor_username="kid",
+        declared_age=8,
+        actor_user_id=anna.user_id,
+    )
+    await cp.update_space_age_gate(
+        space.id,
+        min_age=18,
+        target_audience="adult",
+        actor_user_id=anna.user_id,
+    )
+    tok = await stack.space_svc.create_invite_token(
+        space.id,
+        actor_username="anna",
+        uses=1,
+    )
+    with pytest.raises(SpacePermissionError, match="18"):
+        await stack.space_svc.accept_invite_token(tok, user_id=kid.user_id)
+    assert await stack.space_repo.get_member(space.id, kid.user_id) is None
+
+
+async def test_age_gate_blocks_minor_on_accept_local_invite(stack):
+    """Protection enabled AFTER the invite was sent must still block at
+    acceptance (the invite-creation gate can't see a not-yet-minor)."""
+    anna = await stack.provision_user("anna", is_admin=True)
+    kid = await stack.provision_user("kid")
+    cp = await _attach_cp(stack)
+    space = await stack.space_svc.create_space(owner_username="anna", name="Adults")
+    await cp.update_space_age_gate(
+        space.id,
+        min_age=18,
+        target_audience="adult",
+        actor_user_id=anna.user_id,
+    )
+    # Invite while 'kid' is NOT yet protected, so invite_local_user's own
+    # gate doesn't fire — the acceptance gate is what must catch it.
+    invitation_id = await stack.space_svc.invite_local_user(
+        space.id,
+        actor_username="anna",
+        user_id=kid.user_id,
+    )
+    await cp.enable_protection(
+        minor_username="kid",
+        declared_age=8,
+        actor_user_id=anna.user_id,
+    )
+    with pytest.raises(SpacePermissionError, match="18"):
+        await stack.space_svc.accept_local_invite(invitation_id, user_id=kid.user_id)
+    assert await stack.space_repo.get_member(space.id, kid.user_id) is None
+
+
+async def test_age_gate_allows_older_minor_through_seating_paths(stack):
+    """A 16-year-old minor is allowed into a 13+ space via approve — the
+    gate blocks only when declared_age < min_age, on every path."""
+    anna = await stack.provision_user("anna", is_admin=True)
+    teen = await stack.provision_user("teen")
+    cp = await _attach_cp(stack)
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="Teens",
+        join_mode=JoinMode.OPEN,
+    )
+    await cp.enable_protection(
+        minor_username="teen",
+        declared_age=16,
+        actor_user_id=anna.user_id,
+    )
+    await cp.update_space_age_gate(
+        space.id,
+        min_age=13,
+        target_audience="teen",
+        actor_user_id=anna.user_id,
+    )
+    req_id = await stack.space_svc.request_join(space.id, user_id=teen.user_id)
+    member = await stack.space_svc.approve_join_request(req_id, actor_username="anna")
+    assert member is not None and member.user_id == teen.user_id

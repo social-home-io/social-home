@@ -21,7 +21,17 @@ interface MinorFormState {
   date_of_birth: string
 }
 
+interface ProtStatus {
+  is_minor: boolean
+  declared_age: number
+}
+
 const users = signal<User[]>([])
+/** Protection status keyed by user_id, from the admin-only
+ *  ``/api/cp/protection`` endpoint. ``is_minor`` / ``declared_age`` are
+ *  SENSITIVE_FIELDS stripped from ``/api/users``, so this is their only
+ *  source — without it the "Protected" column can't reflect reality. */
+const protection = signal<Record<string, ProtStatus>>({})
 const loading = signal(true)
 /** For the active row: pending enable form (username → state). */
 const pendingEnable = signal<MinorFormState | null>(null)
@@ -33,7 +43,14 @@ const guardians = signal<string[]>([])
 async function load() {
   loading.value = true
   try {
-    users.value = await api.get('/api/users') as User[]
+    const [allUsers, prot] = await Promise.all([
+      api.get('/api/users') as Promise<User[]>,
+      api.get('/api/cp/protection') as Promise<{ users: Array<ProtStatus & { user_id: string }> }>,
+    ])
+    users.value = allUsers
+    protection.value = Object.fromEntries(
+      prot.users.map(p => [p.user_id, { is_minor: p.is_minor, declared_age: p.declared_age }]),
+    )
   } catch (e: unknown) {
     showToast((e as Error).message || 'Failed to load users', 'error')
   } finally {
@@ -117,10 +134,11 @@ export default function CpAdminPanel() {
     <section class="sh-cp-admin sh-admin-section">
       <h2>Child protection</h2>
       <p class="sh-muted">
-        Mark household members as protected minors, assign guardians, and
-        set minimum ages on spaces. Minors are blocked from joining spaces
-        whose <code>min_age</code> exceeds their declared age, and their
-        DMs are restricted to directly-paired instances.
+        Mark household members as protected minors and assign guardians.
+        A protected minor can't join a space whose minimum age is above
+        their declared age, can't open age-restricted apps, and their DMs
+        are limited to directly-connected households. Set a space's
+        minimum age from its settings → Age &amp; safety.
       </p>
 
       <table class="sh-admin-table">
@@ -129,13 +147,18 @@ export default function CpAdminPanel() {
         </thead>
         <tbody>
           {users.value.map(u => {
-            const protectedUser = Boolean((u as User & { is_minor?: boolean }).is_minor)
+            const status = protection.value[u.user_id]
+            const protectedUser = Boolean(status?.is_minor)
             return (
               <>
                 <tr key={u.username}>
                   <td>{u.display_name}</td>
                   <td>@{u.username}</td>
-                  <td>{protectedUser ? '🔒 Yes' : '—'}</td>
+                  <td>
+                    {protectedUser
+                      ? `🔒 Yes · age ${status!.declared_age}`
+                      : '—'}
+                  </td>
                   <td>
                     {protectedUser ? (
                       <>

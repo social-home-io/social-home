@@ -141,6 +141,27 @@ async def test_disable_protection(env):
     assert row["declared_age"] is None
 
 
+async def test_list_protection_status_admin_reflects_state(env):
+    svc, _ = env
+    await svc.enable_protection(
+        minor_username="lila",
+        declared_age=8,
+        actor_user_id="admin-id",
+    )
+    rows = await svc.list_protection_status(actor_user_id="admin-id")
+    by_user = {r["username"]: r for r in rows}
+    assert by_user["lila"]["is_minor"] is True
+    assert by_user["lila"]["declared_age"] == 8
+    assert by_user["mom"]["is_minor"] is False
+    assert by_user["admin"]["is_minor"] is False
+
+
+async def test_list_protection_status_non_admin_403(env):
+    svc, _ = env
+    with pytest.raises(SpacePermissionError):
+        await svc.list_protection_status(actor_user_id="mom-id")
+
+
 # ─── Guardians ───────────────────────────────────────────────────────────
 
 

@@ -511,3 +511,46 @@ async def test_membership_audit_limit_clamped(client):
 async def test_membership_audit_requires_auth(client):
     r = await client.get("/api/cp/minors/anyone/membership-audit")
     assert r.status == 401
+
+
+# ─── Protection status (admin panel "Protected" column) ──────────────────
+
+
+async def test_protection_status_admin_reflects_minor(client):
+    """``GET /api/cp/protection`` shows is_minor + declared_age per user —
+    the admin panel's only source (these are stripped from /api/users)."""
+    await _seed_minor(client, username="lila", uid="lila-id")
+    await client.post(
+        "/api/cp/users/lila/protection",
+        json={"enabled": True, "declared_age": 9},
+        headers=_auth(client._tok),
+    )
+    r = await client.get("/api/cp/protection", headers=_auth(client._tok))
+    assert r.status == 200
+    rows = (await r.json())["users"]
+    by_user = {u["username"]: u for u in rows}
+    assert by_user["lila"]["is_minor"] is True
+    assert by_user["lila"]["declared_age"] == 9
+    # The admin themselves is not a minor.
+    assert by_user["admin"]["is_minor"] is False
+
+
+async def test_protection_status_non_admin_403(client):
+    db = client._db
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin)"
+        " VALUES('kid', 'kid-id', 'Kid', 0)",
+    )
+    raw = "kid-tok"
+    await db.enqueue(
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash)"
+        " VALUES('tk', 'kid-id', 't', ?)",
+        (sha256_token_hash(raw),),
+    )
+    r = await client.get("/api/cp/protection", headers=_auth(raw))
+    assert r.status == 403
+
+
+async def test_protection_status_requires_auth(client):
+    r = await client.get("/api/cp/protection")
+    assert r.status == 401

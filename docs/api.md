@@ -535,6 +535,10 @@ Guardian-scoped operations: manage guardians, list minor's spaces and
 conversations, set age gates, read audit logs. All require the minor
 or their guardian (household admins have an override).
 
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/cp/protection` | **Admin-only.** Protection status for every household user — `{users: [{user_id, username, is_minor, declared_age}]}`. `is_minor`/`declared_age` are `SENSITIVE_FIELDS` stripped from `/api/users`; this admin-gated endpoint is their only surface (powers the admin panel's "Protected" column). |
+
 Two distinct audit surfaces:
 
 | Method | Path | Purpose |
