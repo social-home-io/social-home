@@ -6,6 +6,8 @@
  *     GFS federation + danger zone).
  *   - About: markdown editor + cover-image uploader.
  *   - Theme: :mod:`SpaceThemeStudio` rewrite with live preview.
+ *   - Age & safety: :mod:`SpaceAgeGating` — min-age gate + audience label
+ *     that blocks under-age minors from joining (§CP.F1).
  *
  * Only owners/admins may view; a non-member gets a 403 from the
  * detail endpoint and we render an access message.
@@ -25,9 +27,10 @@ import { instanceConfig } from '@/store/instance'
 import type { Space } from '@/types'
 import { SpaceBotsTab } from './SpaceBotsTab'
 import { SpaceLinksTab } from './SpaceLinksTab'
+import { SpaceAgeGating } from '@/features/child-protection/SpaceAgeGating'
 import { confirmDialog } from '@/components/confirm'
 
-type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots'
+type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'age' | 'bots'
 
 /**
  * Which settings tabs a viewer can see.
@@ -36,9 +39,10 @@ type SettingsTab = 'general' | 'about' | 'theme' | 'links' | 'bots'
  * - A local admin gets the full hub.
  * - A *remote* admin (the space is hosted on another household) gets only
  *   the tabs whose controls forward to the host — General (config / archive
- *   / dissolve + tier proposals all federate) and About. Theme and Quick
- *   links are host-local config that would silently mutate our stub, so
- *   they're hidden on a remote stub.
+ *   / dissolve + tier proposals all federate) and About. Theme, Quick links,
+ *   and Age & safety are host-local config that would silently mutate our
+ *   stub (the age gate is enforced by the host on join), so they're hidden
+ *   on a remote stub.
  *
  * Exported pure so the gating is unit-tested without standing up a second
  * household.
@@ -49,7 +53,7 @@ export function visibleSettingsTabs(
 ): SettingsTab[] {
   if (!canAdmin) return ['bots']
   if (isRemoteSpace) return ['general', 'about', 'bots']
-  return ['general', 'about', 'theme', 'links', 'bots']
+  return ['general', 'about', 'theme', 'links', 'age', 'bots']
 }
 
 interface SpaceDetail extends Space {
@@ -147,6 +151,7 @@ export default function SpaceSettingsPage() {
       case 'about':         return 'About'
       case 'theme':         return 'Theme'
       case 'links':         return 'Quick links'
+      case 'age':           return 'Age & safety'
       case 'bots':          return 'Bots & automations'
     }
   }
@@ -200,6 +205,9 @@ export default function SpaceSettingsPage() {
       )}
       {activeTab.value === 'links' && (
         <SpaceLinksTab spaceId={space.id} />
+      )}
+      {activeTab.value === 'age' && (
+        <SpaceAgeGating spaceId={space.id} />
       )}
       {activeTab.value === 'bots' && (
         <SpaceBotsTab
