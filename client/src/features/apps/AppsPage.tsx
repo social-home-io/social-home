@@ -1,11 +1,15 @@
 /**
  * AppsPage — browse and manage Social Home Apps (§Apps).
  *
- * Two sections:
- *  - **Installed** — visible to all authenticated users; admins also
- *    get enable/disable toggles and an Uninstall button.
- *  - **Browse catalog** — admin-only; lists available apps with an
- *    Install button (already-installed entries are disabled).
+ * Admins get a two-tab layout:
+ *  - **Installed** (default) — the household's installed apps. Admin-only
+ *    settings (enable/disable, minimum age, uninstall) are tucked behind a
+ *    per-card ⋯ overflow menu so the card face stays clean; a disabled app
+ *    shows a "Disabled" chip so the exceptional state is still visible.
+ *  - **Catalog** — available apps with an Install button (already-installed
+ *    entries show an "Installed" chip).
+ *
+ * Non-admins see no tab chrome — just the enabled apps they can open.
  */
 import { useEffect, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
@@ -36,6 +40,7 @@ import {
 import { Button } from '@/components/Button'
 import { Modal } from '@/components/Modal'
 import { showToast } from '@/components/Toast'
+import { TabHeader } from '@/components/TabHeader'
 import { ApiError } from '@/api'
 import { addBase } from '@/baseUrl'
 
@@ -51,9 +56,16 @@ export function safeIconSrc(icon: string | null | undefined): string | null {
   return /^(data:|https?:\/\/)/i.test(icon) ? icon : null
 }
 
+type AppsTab = 'installed' | 'catalog'
+const TAB_LABELS: Record<AppsTab, string> = {
+  installed: 'Installed',
+  catalog: 'Catalog',
+}
+
 export default function AppsPage() {
   useTitle('Apps')
   const isAdmin = !!currentUser.value?.is_admin
+  const [tab, setTab] = useState<AppsTab>('installed')
 
   useEffect(() => {
     void loadInstalled()
@@ -64,29 +76,50 @@ export default function AppsPage() {
     }
   }, [])
 
+  // Non-admins have no catalog and a single view — skip the tab chrome.
+  if (!isAdmin) {
+    return (
+      <div class="sh-page sh-apps-page">
+        <header class="sh-page-header">
+          <h1 class="sh-page-title">Apps</h1>
+        </header>
+        <InstalledSection isAdmin={false} onBrowse={() => {}} />
+      </div>
+    )
+  }
+
   return (
     <div class="sh-page sh-apps-page">
       <header class="sh-page-header">
         <h1 class="sh-page-title">Apps</h1>
       </header>
 
-      <InstalledSection isAdmin={isAdmin} />
-      {isAdmin && <CatalogSection />}
+      <TabHeader<AppsTab>
+        activeTab={tab}
+        visibleTabs={['installed', 'catalog']}
+        labels={TAB_LABELS}
+        onSelectTab={setTab}
+        ariaLabel="Apps sections"
+        actions={tab === 'installed' ? <CheckUpdatesButton /> : undefined}
+      />
+
+      <div role="tabpanel" aria-label={TAB_LABELS[tab]}>
+        {tab === 'installed' ? (
+          <InstalledSection isAdmin onBrowse={() => setTab('catalog')} />
+        ) : (
+          <CatalogSection />
+        )}
+      </div>
     </div>
   )
 }
 
-// ─── Installed section ───────────────────────────────────────────────────────
+// ─── Check-for-updates action (Installed tab header) ──────────────────────────
 
-function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
-  const loading      = appsLoading.value
-  const error        = appsError.value
-  const apps         = installedApps.value
-  const updateList   = updates.value
-  const checking     = updatesChecking.value
-
+function CheckUpdatesButton() {
+  const checking = updatesChecking.value
   const handleCheckUpdates = async () => {
-    await loadUpdates(isAdmin)
+    await loadUpdates(true)
     const count = updates.value.length
     showToast(
       count > 0
@@ -95,68 +128,71 @@ function InstalledSection({ isAdmin }: { isAdmin: boolean }) {
       'info',
     )
   }
+  return (
+    <Button
+      variant="secondary"
+      loading={checking}
+      onClick={() => { void handleCheckUpdates() }}
+    >
+      Check for updates
+    </Button>
+  )
+}
+
+// ─── Installed section ───────────────────────────────────────────────────────
+
+function InstalledSection({
+  isAdmin,
+  onBrowse,
+}: {
+  isAdmin: boolean
+  onBrowse: () => void
+}) {
+  const loading      = appsLoading.value
+  const error        = appsError.value
+  const apps         = installedApps.value
+  const updateList   = updates.value
 
   if (loading) {
-    return (
-      <section class="sh-apps-section">
-        <h2 class="sh-apps-section__title">Installed</h2>
-        <div class="sh-apps-loading" aria-live="polite">Loading…</div>
-      </section>
-    )
+    return <div class="sh-apps-loading" aria-live="polite">Loading…</div>
   }
 
   if (error) {
     return (
-      <section class="sh-apps-section">
-        <h2 class="sh-apps-section__title">Installed</h2>
-        <div class="sh-apps-error" role="alert">
-          <p>{error}</p>
-          <Button onClick={() => { void loadInstalled() }}>Retry</Button>
-        </div>
-      </section>
+      <div class="sh-apps-error" role="alert">
+        <p>{error}</p>
+        <Button onClick={() => { void loadInstalled() }}>Retry</Button>
+      </div>
     )
   }
 
   const visible = isAdmin ? apps : apps.filter(a => a.enabled)
-  // Build a lookup map: app_id → AppUpdate (only for apps that have updates)
   const updateMap = new Map<string, AppUpdate>(updateList.map(u => [u.app_id, u]))
 
-  return (
-    <section class="sh-apps-section">
-      <div class="sh-apps-section__header">
-        <h2 class="sh-apps-section__title">Installed</h2>
+  if (visible.length === 0) {
+    return (
+      <div class="sh-apps-empty">
+        <p class="sh-muted">No apps installed yet.</p>
         {isAdmin && (
-          <Button
-            variant="secondary"
-            loading={checking}
-            onClick={() => { void handleCheckUpdates() }}
-          >
-            Check for updates
+          <Button variant="secondary" onClick={onBrowse}>
+            Browse the catalog
           </Button>
         )}
       </div>
-      {visible.length === 0 ? (
-        <div class="sh-apps-empty">
-          <p class="sh-muted">No apps installed yet.</p>
-          {isAdmin && (
-            <p class="sh-muted">
-              Browse the catalog below to find and install apps.
-            </p>
-          )}
-        </div>
-      ) : (
-        <div class="sh-apps-grid">
-          {visible.map(app => (
-            <AppCard
-              key={app.app_id}
-              app={app}
-              isAdmin={isAdmin}
-              update={updateMap.get(app.app_id) ?? null}
-            />
-          ))}
-        </div>
-      )}
-    </section>
+    )
+  }
+
+  return (
+    <div class="sh-apps-grid">
+      {visible.map(app => (
+        <AppCard
+          key={app.app_id}
+          app={app}
+          isAdmin={isAdmin}
+          update={updateMap.get(app.app_id) ?? null}
+        />
+      ))}
+    </div>
   )
 }
 
@@ -194,6 +230,7 @@ function AppCard({
   }
 
   const handleMinAgeChange = async (value: number) => {
+    if (value === app.min_age) return
     setSettingMinAge(true)
     try {
       await setMinAge(app.app_id, value)
@@ -244,18 +281,18 @@ function AppCard({
           <span class="sh-app-card__name">{app.name}</span>
           <span class="sh-muted sh-app-card__version">v{app.version}</span>
         </div>
+        {isAdmin && !app.enabled && (
+          <span class="sh-chip sh-chip--muted sh-app-card__disabled-chip">Disabled</span>
+        )}
         {isAdmin && (
-          <label class="sh-app-card__toggle" aria-label={`${app.enabled ? 'Disable' : 'Enable'} ${app.name}`}>
-            <input
-              type="checkbox"
-              checked={app.enabled}
-              disabled={togglingEnabled}
-              onChange={() => { void handleToggle() }}
-            />
-            <span class="sh-app-card__toggle-label">
-              {app.enabled ? 'Enabled' : 'Disabled'}
-            </span>
-          </label>
+          <AppCardMenu
+            app={app}
+            togglingEnabled={togglingEnabled}
+            settingMinAge={settingMinAge}
+            onToggleEnabled={() => { void handleToggle() }}
+            onSetMinAge={(v) => { void handleMinAgeChange(v) }}
+            onUninstall={() => setUninstallOpen(true)}
+          />
         )}
       </div>
 
@@ -269,31 +306,6 @@ function AppCard({
               {app.min_age}+
             </span>
           )}
-        </div>
-      )}
-
-      {/* Age-gate setting — admin-only, and only when the household has a
-       *  protected minor (no point configuring a gate nobody is subject to).
-       *  The admin has full control of the value (admin-authoritative). */}
-      {isAdmin && householdHasProtectedMinor.value && (
-        <div class="sh-app-card__min-age-row">
-          <label class="sh-app-card__min-age-label" htmlFor={`min-age-${app.app_id}`}>
-            Minimum age
-          </label>
-          <select
-            id={`min-age-${app.app_id}`}
-            class="sh-app-card__min-age-select"
-            value={app.min_age}
-            disabled={settingMinAge}
-            onChange={(e) => {
-              const val = parseInt((e.target as HTMLSelectElement).value, 10)
-              void handleMinAgeChange(val)
-            }}
-          >
-            {MIN_AGE_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
         </div>
       )}
 
@@ -315,21 +327,19 @@ function AppCard({
       )}
 
       <div class="sh-app-card__actions">
-        {app.enabled && (
+        {app.enabled ? (
           <Button
             variant="primary"
             onClick={() => { window.location.href = addBase(`/apps/${encodeURIComponent(app.app_id)}`) }}
           >
             Open
           </Button>
-        )}
-        {isAdmin && (
-          <Button
-            variant="danger"
-            onClick={() => setUninstallOpen(true)}
-          >
-            Uninstall
-          </Button>
+        ) : (
+          isAdmin && (
+            <span class="sh-muted sh-app-card__disabled-hint">
+              Enable from the ⋯ menu to open.
+            </span>
+          )
         )}
       </div>
 
@@ -353,6 +363,108 @@ function AppCard({
   )
 }
 
+// ─── Per-card admin overflow menu ─────────────────────────────────────────────
+
+/**
+ * The ⋯ menu holding the low-frequency admin settings. Reuses the shared
+ * `.sh-post-overflow` / `.sh-post-menu` kebab pattern (same a11y + visuals as
+ * PostCard / EventOverflowMenu). The minimum-age choices are
+ * `role="menuitemradio"` — the correct ARIA for a single-choice set — rather
+ * than a native `<select>` jammed into a popover.
+ */
+function AppCardMenu({
+  app,
+  togglingEnabled,
+  settingMinAge,
+  onToggleEnabled,
+  onSetMinAge,
+  onUninstall,
+}: {
+  app: InstalledApp
+  togglingEnabled: boolean
+  settingMinAge: boolean
+  onToggleEnabled: () => void
+  onSetMinAge: (value: number) => void
+  onUninstall: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const close = () => setOpen(false)
+
+  return (
+    <div class="sh-post-overflow-wrap sh-app-card__menu">
+      <button
+        type="button"
+        class="sh-post-overflow"
+        aria-label={`${app.name} settings`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(v => !v)}
+        // Match PostCard/EventOverflowMenu: a short blur delay lets a click on
+        // a menu item (which steals focus) fire before the menu closes.
+        onBlur={() => setTimeout(close, 120)}
+        onKeyDown={(e) => { if (e.key === 'Escape') close() }}
+      >
+        ⋯
+      </button>
+      {open && (
+        <div class="sh-post-menu sh-app-menu" role="menu" onKeyDown={(e) => { if (e.key === 'Escape') close() }}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={togglingEnabled}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { onToggleEnabled(); close() }}
+          >
+            {app.enabled ? 'Disable app' : 'Enable app'}
+          </button>
+
+          {/* Age gate — only when the household actually has a protected
+           *  minor (matches #536: no point configuring a gate nobody is
+           *  subject to). Admin-authoritative value. */}
+          {householdHasProtectedMinor.value && (
+            <>
+              <div class="sh-app-menu__sep" role="separator" />
+              <div class="sh-app-menu__label" id={`minage-label-${app.app_id}`}>
+                Minimum age
+              </div>
+              <div role="group" aria-labelledby={`minage-label-${app.app_id}`}>
+                {MIN_AGE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={app.min_age === opt.value}
+                    disabled={settingMinAge}
+                    class="sh-app-menu__radio"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => { onSetMinAge(opt.value); close() }}
+                  >
+                    <span class="sh-app-menu__radio-mark" aria-hidden="true">
+                      {app.min_age === opt.value ? '●' : '○'}
+                    </span>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div class="sh-app-menu__sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            class="sh-post-menu-danger"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => { onUninstall(); close() }}
+          >
+            Uninstall…
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Catalog / Browse section ─────────────────────────────────────────────────
 
 function CatalogSection() {
@@ -362,45 +474,36 @@ function CatalogSection() {
   const installed = installedApps.value
 
   if (loading) {
-    return (
-      <section class="sh-apps-section">
-        <h2 class="sh-apps-section__title">Browse</h2>
-        <div class="sh-apps-loading" aria-live="polite">Loading catalog…</div>
-      </section>
-    )
+    return <div class="sh-apps-loading" aria-live="polite">Loading catalog…</div>
   }
 
   if (error) {
     return (
-      <section class="sh-apps-section">
-        <h2 class="sh-apps-section__title">Browse</h2>
-        <div class="sh-apps-error" role="alert">
-          <p>{error}</p>
-          <Button onClick={() => { void loadCatalog() }}>Retry</Button>
-        </div>
-      </section>
+      <div class="sh-apps-error" role="alert">
+        <p>{error}</p>
+        <Button onClick={() => { void loadCatalog() }}>Retry</Button>
+      </div>
+    )
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div class="sh-apps-empty">
+        <p class="sh-muted">No apps available in the catalog.</p>
+      </div>
     )
   }
 
   return (
-    <section class="sh-apps-section">
-      <h2 class="sh-apps-section__title">Browse</h2>
-      {entries.length === 0 ? (
-        <div class="sh-apps-empty">
-          <p class="sh-muted">No apps available in the catalog.</p>
-        </div>
-      ) : (
-        <div class="sh-apps-catalog-list">
-          {entries.map(entry => (
-            <CatalogRow
-              key={entry.app_id}
-              entry={entry}
-              alreadyInstalled={installed.some(a => a.app_id === entry.app_id)}
-            />
-          ))}
-        </div>
-      )}
-    </section>
+    <div class="sh-apps-catalog-list">
+      {entries.map(entry => (
+        <CatalogRow
+          key={entry.app_id}
+          entry={entry}
+          alreadyInstalled={installed.some(a => a.app_id === entry.app_id)}
+        />
+      ))}
+    </div>
   )
 }
 
