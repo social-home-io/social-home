@@ -161,47 +161,68 @@ class SpaceSyncResumeProvider:
                 since,
             )
             return 0
-        peers = await self._space_repo.list_member_instances(space_id)
-        if event.from_instance not in peers:
-            return 0
+        return await self.replay_space_to(
+            space_id=space_id,
+            instance_id=event.from_instance,
+            since=since,
+        )
 
+    async def _is_member(self, space_id: str, instance_id: str) -> bool:
+        """Membership gate — the §S-1 security boundary.
+
+        A peer that isn't a member of ``space_id`` must never receive any
+        of the space's content (posts, comments, calendar…). Both the
+        ``SPACE_SYNC_RESUME`` path (:meth:`handle_request`) and the
+        §319.6 resync paths (:meth:`replay_space_to` /
+        :meth:`replay_calendar_to`) run this check before any
+        ``_replay_*`` call so a resync request can't bypass it.
+        """
+        peers = await self._space_repo.list_member_instances(space_id)
+        return instance_id in peers
+
+    async def replay_space_to(
+        self,
+        *,
+        space_id: str,
+        instance_id: str,
+        since: str,
+    ) -> int:
+        """Replay every space resource newer than ``since`` to one peer.
+
+        Membership-gated: a non-member receives nothing (returns 0). This
+        is the entry point for both ``SPACE_SYNC_RESUME`` and the §319.6
+        ``space:<id>`` resync scope — the gate runs *before* any
+        ``_replay_*`` call so neither path can leak space content to a
+        non-member household.
+        """
+        if not await self._is_member(space_id, instance_id):
+            return 0
         sent = 0
-        sent += await self._replay_posts(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
-        sent += await self._replay_comments(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
-        sent += await self._replay_tasks(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
-        sent += await self._replay_pages(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
-        sent += await self._replay_stickies(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
-        sent += await self._replay_calendar(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
-        sent += await self._replay_gallery_items(
-            space_id,
-            since,
-            to=event.from_instance,
-        )
+        sent += await self._replay_posts(space_id, since, to=instance_id)
+        sent += await self._replay_comments(space_id, since, to=instance_id)
+        sent += await self._replay_tasks(space_id, since, to=instance_id)
+        sent += await self._replay_pages(space_id, since, to=instance_id)
+        sent += await self._replay_stickies(space_id, since, to=instance_id)
+        sent += await self._replay_calendar(space_id, since, to=instance_id)
+        sent += await self._replay_gallery_items(space_id, since, to=instance_id)
         return sent
+
+    async def replay_calendar_to(
+        self,
+        *,
+        space_id: str,
+        instance_id: str,
+        since: str,
+    ) -> int:
+        """Replay only the space's calendar events newer than ``since``.
+
+        Entry point for the §319.6 ``calendar:<id>`` resync scope.
+        Membership-gated identically to :meth:`replay_space_to` — a
+        non-member receives nothing (returns 0).
+        """
+        if not await self._is_member(space_id, instance_id):
+            return 0
+        return await self._replay_calendar(space_id, since, to=instance_id)
 
     # ── Per-resource replay ───────────────────────────────────────────
 

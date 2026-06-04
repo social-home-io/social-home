@@ -76,6 +76,8 @@ class AbstractFederationRepo(Protocol):
 
     # Local instance identity (display_name + household coords) ----------
     async def get_local_identity(self) -> dict | None: ...
+    async def get_last_proto_version(self) -> int | None: ...
+    async def set_last_proto_version(self, version: int) -> None: ...
 
     # Replay cache --------------------------------------------------------
     async def load_replay_cache(
@@ -402,6 +404,30 @@ class SqliteFederationRepo:
             "home_lat": row["home_lat"],
             "home_lon": row["home_lon"],
         }
+
+    async def get_last_proto_version(self) -> int | None:
+        """Return the build's ``OURS`` as of the last successful boot.
+
+        ``None`` until the upgrade trigger first records it (NULL column
+        default — see migration ``0024``). A ``None`` is treated as an
+        upgrade on the first boot after the migration ships.
+        """
+        row = await self._db.fetchone(
+            "SELECT last_proto_version FROM instance_identity WHERE id='self'",
+        )
+        if row is None:
+            return None
+        return row["last_proto_version"]
+
+    async def set_last_proto_version(self, version: int) -> None:
+        """Persist ``version`` (this build's ``OURS``) on the self-row.
+
+        Overwrites in place — the singleton self-row is the only row.
+        """
+        await self._db.enqueue(
+            "UPDATE instance_identity SET last_proto_version=? WHERE id='self'",
+            (version,),
+        )
 
     # ── Replay cache ───────────────────────────────────────────────────
 

@@ -6,7 +6,12 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 18
+    assert fc.OURS == 19
+
+
+def test_instance_resync_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_INSTANCE_RESYNC == 19
+    assert fc.FederationCapability.MIN_FOR_INSTANCE_RESYNC <= fc.OURS
 
 
 def test_remote_admin_action_capability_threshold():

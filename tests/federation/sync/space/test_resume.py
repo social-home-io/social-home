@@ -521,6 +521,86 @@ async def test_handle_request_skips_resources_when_repo_missing(provider_factory
     assert fed.sent[0]["type"] == FederationEventType.SPACE_POST_CREATED
 
 
+# ── replay_space_to / replay_calendar_to (resync entry points) ──────
+
+
+async def test_replay_space_to_replays_all_resources(provider_factory):
+    """``replay_space_to`` mirrors a full ``handle_request`` for a member."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    iso = (base + timedelta(minutes=1)).isoformat()
+    provider, fed, _ = provider_factory(
+        posts=[_post(0, base + timedelta(minutes=1))],
+        comments=[("p-X", _comment(0, "p-X", base + timedelta(minutes=1)))],
+        tasks=[_task(0, base + timedelta(minutes=1))],
+        pages=[_page(0, iso)],
+        stickies=[_sticky(0, iso)],
+        cal_events=[_cal_event(0, base + timedelta(minutes=1))],
+        gallery_items=[_gallery_item(0, iso)],
+        members=["peer-a"],
+    )
+    sent = await provider.replay_space_to(
+        space_id="sp-1",
+        instance_id="peer-a",
+        since=base.isoformat(),
+    )
+    assert sent == 7
+    assert all(s["to"] == "peer-a" for s in fed.sent)
+
+
+async def test_replay_space_to_drops_non_member(provider_factory):
+    """Security boundary — a non-member never receives space content."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    provider, fed, _ = provider_factory(
+        posts=[_post(0, base + timedelta(minutes=1))],
+        members=["someone-else"],
+    )
+    sent = await provider.replay_space_to(
+        space_id="sp-1",
+        instance_id="peer-a",
+        since=base.isoformat(),
+    )
+    assert sent == 0
+    assert fed.sent == []
+
+
+async def test_replay_calendar_to_replays_only_calendar(provider_factory):
+    """``replay_calendar_to`` re-emits calendar events only."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    iso = (base + timedelta(minutes=1)).isoformat()
+    provider, fed, _ = provider_factory(
+        posts=[_post(0, base + timedelta(minutes=1))],
+        cal_events=[_cal_event(0, base + timedelta(minutes=1))],
+        gallery_items=[_gallery_item(0, iso)],
+        members=["peer-a"],
+    )
+    sent = await provider.replay_calendar_to(
+        space_id="sp-1",
+        instance_id="peer-a",
+        since=base.isoformat(),
+    )
+    assert sent == 1
+    assert [s["type"] for s in fed.sent] == [
+        FederationEventType.SPACE_CALENDAR_EVENT_CREATED,
+    ]
+    assert fed.sent[0]["to"] == "peer-a"
+
+
+async def test_replay_calendar_to_drops_non_member(provider_factory):
+    """Security boundary — a non-member never receives the calendar."""
+    base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    provider, fed, _ = provider_factory(
+        cal_events=[_cal_event(0, base + timedelta(minutes=1))],
+        members=["someone-else"],
+    )
+    sent = await provider.replay_calendar_to(
+        space_id="sp-1",
+        instance_id="peer-a",
+        since=base.isoformat(),
+    )
+    assert sent == 0
+    assert fed.sent == []
+
+
 # ── _post_to_payload location handling ─────────────────────────────────
 
 
