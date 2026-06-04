@@ -150,6 +150,7 @@ from .notifications import (
     NotificationReadView,
     NotificationUnreadCountView,
 )
+from .notify_targets import NotifyTargetsView
 from .pages import (
     PageCollectionView,
     PageConflictView,
@@ -398,6 +399,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
         "/api/me/picture/refresh-from-ha",
         MePictureRefreshFromHaView,
     )
+    app.router.add_view("/api/me/notify-targets", NotifyTargetsView)
     app.router.add_view(
         "/api/me/onboarding-complete",
         MeOnboardingCompleteView,

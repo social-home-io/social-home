@@ -57,6 +57,7 @@ log aggregation.** Code must never log the full query string of
 | POST | `/api/me/picture` | Upload avatar (multipart). |
 | DELETE | `/api/me/picture` | Remove avatar. |
 | POST | `/api/me/picture/refresh-from-ha` | HA-mode only: re-fetch from HA user profile. |
+| GET | `/api/me/notify-targets` | Selectable push notify targets for the notification-settings dropdown. HA mode lists the household's `notify.*` entities (`[{entity_id, name}]`); other platforms return `[]`. |
 | GET | `/api/me/export` | Initiate a data-export job. |
 | GET | `/api/me/corner` | "My Corner" aggregated feed. |
 | GET / POST / DELETE | `/api/me/tokens[/{id}]` | Manage personal API tokens. |
