@@ -264,7 +264,8 @@ export default function MomentumDetailPage() {
         </button>
       )}
       {m.media_type === 'video' && m.media_url && (
-        <video src={m.media_url} controls class="sh-momentum-detail-media" />
+        <video src={m.media_url} controls preload="metadata"
+          class="sh-momentum-detail-media" />
       )}
 
       <section class="sh-momentum-reactions" aria-label="Reactions">
