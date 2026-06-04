@@ -8,6 +8,8 @@ import { api } from '@/api'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { EmojiField } from './EmojiField'
+import { RadioCardGroup } from './RadioCardGroup'
+import { joinOptionsForVisibility } from './spaceModeOptions'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import type { Space, GfsConnection, GfsSpacePublication } from '@/types'
@@ -311,13 +313,13 @@ export function SpaceSettings({
         <label>Name <input value={name.value} onInput={(e) => name.value = (e.target as HTMLInputElement).value} /></label>
         <label>Description <textarea value={description.value} onInput={(e) => description.value = (e.target as HTMLTextAreaElement).value} rows={2} /></label>
         <EmojiField value={emoji} openKey="space-settings-icon" />
-        <label>Join mode
-          <select value={joinMode.value} onChange={(e) => joinMode.value = (e.target as HTMLSelectElement).value as any}>
-            <option value="invite_only">Invite only</option>
-            <option value="open">Open</option>
-            <option value="request">Request</option>
-          </select>
-        </label>
+        <RadioCardGroup
+          legend="How people join"
+          name="space-settings-join-mode"
+          value={joinMode.value}
+          options={joinOptionsForVisibility(space.space_type)}
+          onChange={(v) => joinMode.value = v as typeof joinMode.value}
+        />
         <fieldset class="sh-form-fieldset">
           <legend>🗓 Retention</legend>
           <label>

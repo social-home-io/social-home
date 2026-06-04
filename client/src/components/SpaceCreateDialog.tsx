@@ -7,6 +7,8 @@ import { loadSpaces } from '@/store/spaces'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { EmojiField } from './EmojiField'
+import { RadioCardGroup } from './RadioCardGroup'
+import { VISIBILITY_OPTIONS, joinOptionsForVisibility } from './spaceModeOptions'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 
@@ -66,26 +68,25 @@ export function SpaceCreateDialog() {
             placeholder="What's this space about?" rows={2} />
         </label>
         <EmojiField value={emoji} openKey="space-create-icon" />
-        <label>
-          Type
-          <select value={spaceType.value}
-            onChange={(e) => spaceType.value = (e.target as HTMLSelectElement).value}>
-            <option value="private">Private (invite only)</option>
-            <option value="household">Household (all members)</option>
-            <option value="public">Public (discoverable)</option>
-          </select>
-        </label>
-        {spaceType.value !== 'private' && (
-          <label>
-            Join mode
-            <select value={joinMode.value}
-              onChange={(e) => joinMode.value = (e.target as HTMLSelectElement).value}>
-              <option value="invite_only">Invite only</option>
-              <option value="open">Open (anyone can join)</option>
-              <option value="request">Request (admin approves)</option>
-            </select>
-          </label>
-        )}
+        <RadioCardGroup
+          legend="Visibility"
+          name="space-create-visibility"
+          value={spaceType.value}
+          options={VISIBILITY_OPTIONS}
+          onChange={(v) => {
+            spaceType.value = v
+            // A private space is invite-only by definition — there's no
+            // join-mode choice to make, so keep it consistent.
+            if (v === 'private') joinMode.value = 'invite_only'
+          }}
+        />
+        <RadioCardGroup
+          legend="How people join"
+          name="space-create-join-mode"
+          value={joinMode.value}
+          options={joinOptionsForVisibility(spaceType.value)}
+          onChange={(v) => joinMode.value = v}
+        />
         <div class="sh-form-actions">
           <Button variant="secondary" onClick={() => open.value = false}>{t('common.cancel')}</Button>
           <Button onClick={handleSubmit} loading={submitting.value}
