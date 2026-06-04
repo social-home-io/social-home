@@ -384,6 +384,40 @@ class SpaceArchiveView(BaseView):
         return web.json_response({"ok": True, "archived": False})
 
 
+class SpaceCompatView(BaseView):
+    """``GET /api/spaces/{id}/compat`` — per-space protocol-version
+    compatibility of member households (#319 ¶5). Owner / admin only.
+
+    Surfaces which member households lag behind this build's advertised
+    ``proto_version`` and which shared-space features that breaks, so a
+    space-admin banner can warn "these features won't work until member
+    household X upgrades." Households mid-first-handshake (no advertised
+    capabilities yet) are excluded — they aren't genuinely behind.
+    """
+
+    async def get(self) -> web.Response:
+        svc = self.svc(space_service_key)
+        c = await svc.space_version_compat(
+            self.match("id"), actor_username=self.user.username
+        )
+        return web.json_response(
+            {
+                "ours": c.ours,
+                "min_member_proto_version": c.min_member_proto_version,
+                "lagging_features": list(c.lagging_features),
+                "behind_members": [
+                    {
+                        "instance_id": b.instance_id,
+                        "display_name": b.display_name,
+                        "proto_version": b.proto_version,
+                        "lacking_features": list(b.lacking_features),
+                    }
+                    for b in c.behind_members
+                ],
+            }
+        )
+
+
 def _member_to_dict(
     m,
     space_id: str,

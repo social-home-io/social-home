@@ -63,8 +63,17 @@ from ..domain.events import (
     SpacePostCreated,
     SpacePostModerated,
 )
-from ..domain.federation import FederationEventType, PairingStatus
-from ..domain.federation_capabilities import FederationCapability
+from ..domain.federation import (
+    BehindMember,
+    FederationEventType,
+    PairingStatus,
+    SpaceVersionCompat,
+)
+from ..domain.federation_capabilities import (
+    OURS,
+    FederationCapability,
+    space_features_missing_below,
+)
 from ..media.cleanup import unlink_media
 from .child_protection_service import _VALID_MIN_AGES
 from .space_purge import purge_space_and_media
@@ -689,6 +698,57 @@ class SpaceService(SpaceMemberGuardMixin):
                 payload={"archived": archived},
                 sequence=sequence,
             )
+        )
+
+    async def space_version_compat(
+        self, space_id: str, *, actor_username: str
+    ) -> SpaceVersionCompat:
+        """Per-space protocol-version compatibility of member households (#319 ¶5).
+
+        Powers the space-admin banner that warns "these space features won't
+        work until member household X upgrades." A household that has never
+        advertised capabilities (``capabilities_seen_at is None``) is
+        EXCLUDED — it's mid-first-handshake, not genuinely behind, so counting
+        its conservative default ``proto_version`` would phantom-nag.
+        """
+        space = await self._require_space(space_id)
+        await self._require_admin_or_owner(space, actor_username)
+        if self._federation_repo is None:
+            return SpaceVersionCompat(
+                ours=OURS,
+                min_member_proto_version=None,
+                lagging_features=(),
+                behind_members=(),
+            )
+        members = await self._federation_repo.list_instances_in_space(space_id)
+        min_known: int | None = None
+        behind: list[BehindMember] = []
+        for m in members:
+            if m.capabilities_seen_at is None:
+                continue  # mid-handshake — phantom-nag guard.
+            if min_known is None or m.proto_version < min_known:
+                min_known = m.proto_version
+            if m.proto_version < OURS:
+                lacking = space_features_missing_below(m.proto_version)
+                if lacking:
+                    behind.append(
+                        BehindMember(
+                            instance_id=m.id,
+                            display_name=m.effective_display_name,
+                            proto_version=m.proto_version,
+                            lacking_features=tuple(lacking),
+                        )
+                    )
+        lagging = (
+            tuple(space_features_missing_below(min_known))
+            if min_known is not None
+            else ()
+        )
+        return SpaceVersionCompat(
+            ours=OURS,
+            min_member_proto_version=min_known,
+            lagging_features=lagging,
+            behind_members=tuple(behind),
         )
 
     async def update_config(

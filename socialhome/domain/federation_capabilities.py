@@ -443,3 +443,50 @@ def features_missing_below(version: int) -> list[str]:
     first.
     """
     return [label for ver, label in sorted(CAPABILITY_FEATURES) if ver > version]
+
+
+#: The ``MIN_FOR_*`` thresholds whose feature is **shared-space scoped** — a
+#: behind member household breaks them for the *whole* space, so a space-admin
+#: banner should warn until that household upgrades. Built FROM the
+#: :class:`FederationCapability` constants (never literal ints) so the version
+#: numbers stay single-sourced.
+#:
+#: Intentionally EXCLUDED (not space features — they're per-pair / per-user
+#: surfaces whose lag affects only the two parties involved, not the space):
+#:
+#: * ``MIN_FOR_CALENDAR_TZ`` — informational tz field, fail-soft at any version.
+#: * ``MIN_FOR_DM_MEDIA_SYNC`` — direct-message media, a 1:1 surface.
+#: * ``MIN_FOR_HOME_LOCATION_BROADCAST`` — per-pair home-location sharing.
+#: * ``MIN_FOR_APP_CHANNEL`` / ``MIN_FOR_APP_USER_ROUTING`` — Social Home Apps
+#:   ride a per-pair / per-user session, not a space content surface.
+SPACE_SCOPED_MIN_VERSIONS: frozenset[int] = frozenset(
+    {
+        FederationCapability.MIN_FOR_SPACE_INVITE_REDEEM,
+        FederationCapability.MIN_FOR_SPACE_KEY_REKEY,
+        FederationCapability.MIN_FOR_REMOTE_MEMBER_ROLE,
+        FederationCapability.MIN_FOR_REMOTE_ADMIN_KICK,
+        FederationCapability.MIN_FOR_BAZAAR_LISTING,
+        FederationCapability.MIN_FOR_BAZAAR_STATUS,
+        FederationCapability.MIN_FOR_BAZAAR_BIDS,
+        FederationCapability.MIN_FOR_SYNC_HTTPS_FALLBACK,
+        FederationCapability.MIN_FOR_MEDIA_CHANNEL,
+        FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION,
+        FederationCapability.MIN_FOR_ADMIN_PROPOSALS,
+    }
+)
+
+
+def space_features_missing_below(version: int) -> list[str]:
+    """Space-scoped feature labels a member household at ``version`` lacks.
+
+    Like :func:`features_missing_below`, but restricted to the
+    :data:`SPACE_SCOPED_MIN_VERSIONS` subset — the features whose absence on
+    one member household degrades the *whole* space. Powers the per-space
+    version-compatibility banner (#319 ¶5). Ordered by version so the SPA
+    renders the oldest gap first.
+    """
+    return [
+        label
+        for ver, label in sorted(CAPABILITY_FEATURES)
+        if ver > version and ver in SPACE_SCOPED_MIN_VERSIONS
+    ]
