@@ -260,6 +260,13 @@ class SqliteAppRepo:
         *,
         max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS,
     ) -> list[AppPendingSession]:
+        # Invariant: callers MUST store ``created_at`` as
+        # ``datetime.now(timezone.utc).isoformat()`` (tz-aware, e.g.
+        # ``…+00:00``). The TTL filter compares ISO strings lexically, which
+        # is only valid when both sides share that shape — a naive
+        # ``datetime('now')`` value (space separator) would sort below the
+        # cutoff and silently drain to nothing. ``add_pending_session`` writes
+        # the matching shape; keep it that way.
         cutoff = (
             datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
         ).isoformat()
