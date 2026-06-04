@@ -1,10 +1,9 @@
 /**
- * HouseholdThemeStudio — household-wide theme + name editor (§23.125).
+ * HouseholdThemeStudio — household-wide theme editor (§23.125).
  *
- * Pairs with SpaceThemeStudio. Hits PUT /api/theme (admin-only) and
- * PUT /api/household/features for the household name. Since the backend
- * accepts PATCH-style partials, each field edit can be saved
- * independently; the UI batches the form into a single Save press.
+ * Pairs with SpaceThemeStudio. Hits PUT /api/theme (admin-only). The
+ * household name is edited separately in admin Settings (the single
+ * source of truth), so this studio only owns the look-and-feel.
  *
  * Surface mirrors :mod:`SpaceThemeStudio`: a row of preset swatches at
  * the top for one-click "make it look nice", a tighter form grid for
@@ -70,7 +69,6 @@ const mode          = signal<Mode>('auto')
 const font          = signal<FontId>('system')
 const density       = signal<Density>('comfortable')
 const cornerRadius  = signal<number>(12)
-const householdName = signal('Home')
 const loading       = signal(true)
 const saving        = signal(false)
 
@@ -92,17 +90,6 @@ export function HouseholdThemeStudio() {
         Sets the default look for every surface in this household.
         Spaces inherit unless an admin overrides them.
       </p>
-
-      <label>
-        Household name
-        <input
-          type="text"
-          maxLength={80}
-          value={householdName.value}
-          onInput={(e) =>
-            (householdName.value = (e.target as HTMLInputElement).value)}
-        />
-      </label>
 
       <div class="sh-theme-presets" role="group" aria-label="Theme presets">
         {PRESETS.map(p => (
@@ -236,9 +223,6 @@ async function load() {
     font.value         = theme.font_family
     density.value      = theme.density
     cornerRadius.value = theme.corner_radius
-    const feats = await api.get('/api/household/features') as
-      { household_name: string }
-    householdName.value = feats.household_name
     applyToDocument()
   } catch (err: unknown) {
     showToast(
@@ -286,9 +270,6 @@ async function save() {
       font_family:   font.value,
       density:       density.value,
       corner_radius: cornerRadius.value,
-    })
-    await api.put('/api/household/features', {
-      household_name: householdName.value.trim() || 'Home',
     })
     applyToDocument()
     showToast('Saved', 'success')

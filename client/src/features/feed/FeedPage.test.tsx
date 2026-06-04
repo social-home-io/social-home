@@ -21,12 +21,12 @@ vi.mock('@/store/auth', () => ({
 }))
 
 import { pageTitle } from '@/store/pageTitle'
-import { toggles } from '@/components/HouseholdToggles'
+import { instanceConfig } from '@/store/instance'
 
 describe('FeedPage', () => {
   beforeEach(() => {
     pageTitle.value = ''
-    toggles.value = null
+    instanceConfig.value = null
   })
 
   it('module exports a default component', async () => {
@@ -35,8 +35,8 @@ describe('FeedPage', () => {
     expect(typeof mod.default).toBe('function')
   })
 
-  it('falls back to "Home" while household toggles are loading', async () => {
-    toggles.value = null
+  it('falls back to "Home" while the instance config is loading', async () => {
+    instanceConfig.value = null
     const mod = await import('./FeedPage')
     const FeedPage = mod.default
     render(<FeedPage />)
@@ -45,20 +45,18 @@ describe('FeedPage', () => {
     expect(pageTitle.value).toBe('Home')
   })
 
-  it('uses household_name from the toggles store when available', async () => {
-    toggles.value = {
-      household_name: 'The Smiths',
-      feat_feed: true, feat_pages: true, feat_tasks: true,
-      feat_stickies: true, feat_calendar: true,
-      feat_presence: true, feat_gallery: true,
-      allow_text: true, allow_image: true, allow_video: true,
-      allow_file: true, allow_poll: true, allow_schedule: true,
-      allow_highlight_share: true,
+  it('uses the federated instance_name from instanceConfig when available', async () => {
+    instanceConfig.value = {
+      mode: 'standalone',
+      instance_name: 'Casa Vizeli',
+      instance_id: 'abc123',
+      capabilities: [],
+      setup_required: false,
     }
     const mod = await import('./FeedPage')
     const FeedPage = mod.default
     render(<FeedPage />)
     await new Promise(r => setTimeout(r, 0))
-    expect(pageTitle.value).toBe('The Smiths')
+    expect(pageTitle.value).toBe('Casa Vizeli')
   })
 })
