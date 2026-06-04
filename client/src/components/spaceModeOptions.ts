@@ -4,10 +4,8 @@
  */
 import type { RadioCardOption } from './RadioCardGroup'
 
-// Public is intentionally absent from VISIBILITY_OPTIONS: a public space
-// requires a map location the create dialog doesn't collect (the backend
-// 422s without it). Public is reached by publishing an existing space from
-// its settings.
+// Public requires a map location (the create dialog collects one when this
+// is chosen; the backend 422s without it).
 export const VISIBILITY_OPTIONS: RadioCardOption[] = [
   {
     value: 'private',
@@ -20,6 +18,12 @@ export const VISIBILITY_OPTIONS: RadioCardOption[] = [
     icon: '🏠',
     title: 'Household',
     subtitle: 'Everyone in your home is a member automatically.',
+  },
+  {
+    value: 'public',
+    icon: '🌐',
+    title: 'Public',
+    subtitle: 'Listed on the public map for anyone to discover.',
   },
 ]
 
