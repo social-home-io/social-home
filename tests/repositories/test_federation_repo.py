@@ -426,6 +426,40 @@ async def test_update_alias_sets_and_clears(env):
     assert got.effective_display_name == "z7k63zfi"
 
 
+async def test_update_display_name_updates_advertised_not_alias(env):
+    """``update_display_name`` sets the *advertised* federated name a peer
+    re-broadcasts via INSTANCE_CAPABILITIES_UPDATED — it must NOT touch the
+    local_alias, so an admin-set alias still wins in ``effective_display_name``.
+    """
+    inst = RemoteInstance(
+        id="peer-rename",
+        display_name="My Home",  # the QR-time name both sides started with
+        remote_identity_pk="aa" * 32,
+        key_self_to_remote="k1",
+        key_remote_to_self="k2",
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="inbox-rename",
+        status=PairingStatus.CONFIRMED,
+    )
+    await env.fed_repo.save_instance(inst)
+
+    # Peer renamed itself → advertised display_name updates.
+    await env.fed_repo.update_display_name("peer-rename", "Casa Vizeli")
+    got = await env.fed_repo.get_instance("peer-rename")
+    assert got.display_name == "Casa Vizeli"
+    assert got.local_alias is None
+    assert got.effective_display_name == "Casa Vizeli"
+
+    # With a local alias set, the alias still wins — update_display_name
+    # only touched the advertised name, never local_alias.
+    await env.fed_repo.update_alias("peer-rename", "Brother's house")
+    await env.fed_repo.update_display_name("peer-rename", "Casa Nueva")
+    got = await env.fed_repo.get_instance("peer-rename")
+    assert got.display_name == "Casa Nueva"
+    assert got.local_alias == "Brother's house"
+    assert got.effective_display_name == "Brother's house"
+
+
 async def test_save_instance_does_not_clobber_alias(env):
     """A subsequent ``save_instance`` (e.g. after URL_UPDATED, a
     proto_version bump, or any other handshake-side write) must NOT

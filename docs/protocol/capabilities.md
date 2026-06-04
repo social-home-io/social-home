@@ -31,7 +31,7 @@ service fans out a single envelope to every confirmed peer:
 
 ```
 FederationEventType.INSTANCE_CAPABILITIES_UPDATED
-payload = {"proto_version": <our int>}
+payload = {"proto_version": <our int>, "display_name": <our household name>}
 ```
 
 The receiver's [pairing inbound
@@ -40,6 +40,24 @@ upsert the value onto the sender's `remote_instances` row. Peers that
 haven't sent the announcement yet read as `proto_version=1` — the
 oldest known wire — so any gate above v1 returns `False` until the
 first envelope lands.
+
+The optional **`display_name`** field carries the sender's federated
+household name (`instance_identity.display_name`). The receiver writes it
+onto the peer's stored *advertised* `remote_instances.display_name` (via
+`update_display_name`) so a rename reaches **already-paired** peers, not
+just QR-time pairings — fixing the case where both households still showed
+the QR-time name after one renamed itself. Two notes on the inbound side:
+
+* The name is applied **before** the `proto_version` short-circuit, so a
+  rename re-broadcast (same `proto_version`, new name) still lands.
+* It touches only the *advertised* `display_name`, never a local
+  `local_alias` — an admin-set alias keeps winning in
+  `RemoteInstance.effective_display_name`.
+
+The field is **additive + fail-soft** and needs no version bump: older
+senders omit it, and a receiver that gets a missing / blank `display_name`
+keeps the prior name. No `proto_version` gate is required because dropping
+the field is benign (the name just doesn't refresh).
 
 ## Sender-side gating
 

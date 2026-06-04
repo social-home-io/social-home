@@ -247,6 +247,22 @@ class PairingInboundHandlers:
         # before calling ``set_proto_version`` — so the admin panel can
         # distinguish a genuine v1 peer from one paired but never advertised.
         await self._repo.mark_capabilities_seen(event.from_instance)
+        # A rename re-broadcast carries the SAME proto_version but a NEW
+        # display_name, so apply the advertised name BEFORE the version
+        # short-circuit below — else a same-version rename is skipped. Only
+        # touches the advertised display_name, never a local_alias. Additive
+        # + fail-soft: older peers omit the field, leaving the prior name.
+        new_name = event.payload.get("display_name")
+        if (
+            isinstance(new_name, str)
+            and new_name.strip()
+            and new_name.strip() != instance.display_name
+        ):
+            await self._repo.update_display_name(event.from_instance, new_name.strip())
+            log.info(
+                "INSTANCE_CAPABILITIES_UPDATED from %s: display_name updated",
+                event.from_instance,
+            )
         if instance.proto_version == proto_version:
             return
         await self._repo.set_proto_version(event.from_instance, proto_version)

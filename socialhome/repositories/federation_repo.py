@@ -60,6 +60,7 @@ class AbstractFederationRepo(Protocol):
         instance_id: str,
         alias: str | None,
     ) -> None: ...
+    async def update_display_name(self, instance_id: str, name: str) -> None: ...
     async def set_share_home(
         self,
         instance_id: str,
@@ -342,6 +343,21 @@ class SqliteFederationRepo:
         await self._db.enqueue(
             "UPDATE remote_instances SET local_alias=? WHERE id=?",
             (alias, instance_id),
+        )
+
+    async def update_display_name(self, instance_id: str, name: str) -> None:
+        """Update the peer's *advertised* federated ``display_name``.
+
+        Called from the inbound
+        :data:`FederationEventType.INSTANCE_CAPABILITIES_UPDATED` handler when
+        a peer re-broadcasts a new household name. Deliberately does NOT touch
+        ``local_alias`` — an admin-set alias keeps winning in
+        :attr:`RemoteInstance.effective_display_name`. A targeted single-column
+        UPDATE so it never clobbers state set elsewhere.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_instances SET display_name=? WHERE id=?",
+            (name, instance_id),
         )
 
     async def set_share_home(

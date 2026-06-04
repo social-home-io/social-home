@@ -42,9 +42,11 @@ class CapabilitiesOutbound(ConfirmedPeerBroadcaster):
 
     __slots__ = ("_federation", "_federation_repo", "_bus")
 
-    # Narrow the broadcaster's optional ``_federation`` — required at
-    # construction, so the direct ``send_event`` access below is non-None.
+    # Narrow the broadcaster's optional ``_federation`` / ``_federation_repo``
+    # — both required at construction, so the direct ``send_event`` and
+    # ``get_local_identity`` accesses below are non-None.
     _federation: "FederationService"
+    _federation_repo: "AbstractFederationRepo"
 
     def __init__(
         self,
@@ -101,10 +103,19 @@ class CapabilitiesOutbound(ConfirmedPeerBroadcaster):
         own = getattr(self._federation, "_own_instance_id", "")
         if not instance_id or instance_id == own:
             return False
+        # Carry our federated household name alongside the version so a
+        # rename reaches already-paired peers (not just QR-time pairings).
+        # Additive + fail-soft: older receivers ignore the field; if we
+        # have no name yet (early bootstrap) the key is omitted entirely.
+        local = await self._federation_repo.get_local_identity()
+        payload: dict = {"proto_version": OUR_PROTO_VERSION}
+        name = (local or {}).get("display_name")
+        if isinstance(name, str) and name.strip():
+            payload["display_name"] = name.strip()
         await self._federation.send_event(
             to_instance_id=instance_id,
             event_type=FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
-            payload={"proto_version": OUR_PROTO_VERSION},
+            payload=payload,
         )
         log.info(
             "capabilities-outbound: sent proto_version=%d to %s",
