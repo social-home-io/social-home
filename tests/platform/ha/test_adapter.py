@@ -470,6 +470,47 @@ async def test_send_push_legacy_domain_service():
     )
 
 
+async def test_send_push_entity_value_only_lands_in_entity_id():
+    """Anti-injection invariant for the entity branch: the user-supplied
+    ``notify.*`` value is delivered as the ``entity_id`` data field while the
+    invoked domain/service stay the hardcoded literals ``notify``/
+    ``send_message`` — even for an odd multi-dot value — so the value can
+    never reach the ``/api/services/{domain}/{service}`` URL path."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("notify.weird.name")
+    await adapter.send_push(user, "t", "m")
+    calls = [c for c in client.calls if c[0] == "call_service"]
+    assert calls == [
+        (
+            "call_service",
+            "notify",
+            "send_message",
+            {
+                "entity_id": "notify.weird.name",
+                "title": "t",
+                "message": "m",
+            },
+            False,
+        ),
+    ]
+
+
+async def test_send_push_empty_notify_suffix_falls_to_legacy():
+    """``"notify."`` (no entity suffix) is not a valid entity id; it falls to
+    the legacy ``domain.service`` split (empty service) — a harmless 404 at
+    HA, never the entity action."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    await adapter.send_push(_push_user("notify."), "t", "m")
+    assert any(
+        c[0] == "call_service" and c[1] == "notify" and c[2] == "" for c in client.calls
+    )
+    assert not any(
+        c[0] == "call_service" and c[2] == "send_message" for c in client.calls
+    )
+
+
 async def test_list_notify_targets_delegates_to_client():
     targets = [{"entity_id": "notify.mobile_app_x", "name": "Mobile app x"}]
     client = _FakeHaClient(notify_entities=targets)
