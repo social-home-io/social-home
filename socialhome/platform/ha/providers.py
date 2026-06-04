@@ -262,18 +262,21 @@ class HaUserDirectory:
         )
 
 
-def _resolve_notify_service(user: Any) -> tuple[str, str] | None:
-    """The HA notify service to push this user's mobile app, taken from
-    their per-user profile setting ``preferences.ha_notify_service``.
+def _resolve_notify_service(user: Any) -> str | None:
+    """The cleaned ``preferences.ha_notify_service`` value for this user,
+    or ``None`` when unconfigured / blank / unparseable.
 
-    Accepts either a fully-qualified ``"notify.mobile_app_pascals_iphone"``
-    or a bare service ``"mobile_app_pascals_iphone"`` (assumed ``notify``
-    domain). Returns ``(domain, service)`` or ``None`` when unconfigured.
+    The value's *interpretation* lives in :meth:`HaPushProvider.send`:
+
+    - ``"notify.<entity>"`` (non-empty suffix) → a notify *entity id*,
+      delivered via the ``notify.send_message`` entity action.
+    - other ``"domain.service"`` → a legacy ``call_service`` target.
+    - a bare name (no dot) → a legacy ``notify`` service.
 
     There is no auto-derived default: HA's Companion-app notify service is
     named after the *device* (``notify.mobile_app_<device-slug>``), which
     almost never equals the username — so guessing ``mobile_app_<username>``
-    silently failed for everyone. The user sets the real service in
+    silently failed for everyone. The user sets the real target in
     Settings → profile (§25.3).
     """
     raw = getattr(user, "preferences_json", None)
@@ -286,11 +289,7 @@ def _resolve_notify_service(user: Any) -> tuple[str, str] | None:
     svc = prefs.get("ha_notify_service") if isinstance(prefs, dict) else None
     if not isinstance(svc, str) or not svc.strip():
         return None
-    svc = svc.strip()
-    domain, _, service = svc.partition(".")
-    if not service:  # bare "mobile_app_x" → notify domain
-        return "notify", domain
-    return domain, service
+    return svc.strip()
 
 
 class HaPushProvider:
@@ -309,18 +308,29 @@ class HaPushProvider:
         message: str,
         data: dict | None = None,
     ) -> None:
-        target = _resolve_notify_service(user)
-        if target is None:
+        value = _resolve_notify_service(user)
+        if value is None:
             log.debug(
                 "HA push: %s has no ha_notify_service configured — skipping. "
                 "Set it in Settings → profile (e.g. notify.mobile_app_<device>).",
                 getattr(user, "username", "?"),
             )
             return
-        domain, service = target
         body: dict = {"title": title, "message": message}
         if data:
             body["data"] = data
+        if value.startswith("notify.") and value[len("notify.") :]:
+            # A notify *entity id* → the notify.send_message entity action
+            # (takes entity_id + required message + optional title; HA notify
+            # integration). The "notify." prefix is the agreed disambiguation.
+            domain, service = "notify", "send_message"
+            body["entity_id"] = value
+        elif "." in value:
+            # A fully-qualified legacy domain.service (e.g. telegram_bot.x).
+            domain, _, service = value.partition(".")
+        else:
+            # A bare name → legacy notify service (already-configured users).
+            domain, service = "notify", value
         result = await self._adapter._client.call_service(domain, service, body)
         if result is None:
             # call_service swallows non-2xx at debug; surface push failures
@@ -335,6 +345,11 @@ class HaPushProvider:
                 domain,
                 service,
             )
+
+    async def list_notify_targets(self) -> list[dict]:
+        """User-selectable notify targets for the profile dropdown, as
+        ``[{"entity_id", "name"}]`` from HA's notify entities."""
+        return await self._adapter._client.list_notify_entities()
 
 
 class HaSTTProvider:

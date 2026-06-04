@@ -188,6 +188,11 @@ class StandalonePushProvider:
                 exc,
             )
 
+    async def list_notify_targets(self) -> list[dict]:
+        """Standalone push posts to a per-user ``notify_endpoint`` — there
+        are no platform-selectable notify targets to choose from."""
+        return []
+
 
 def _row_to_user(row: Any) -> ExternalUser:
     """Convert a ``platform_users`` row to an :class:`ExternalUser`."""
