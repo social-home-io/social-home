@@ -11625,6 +11625,67 @@ a.sh-welcome-card:hover {
   padding: var(--sh-space-lg);
 }
 
+/* ───── Radio-card group (icon + title + subtitle, replaces verbose
+   <select> menus e.g. space visibility / join mode) ───────────────── */
+.sh-radio-card-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sh-space-xs);
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.sh-radio-card-group__legend {
+  padding: 0;
+  margin-bottom: var(--sh-space-xxs);
+  font-weight: 600;
+  font-size: var(--sh-font-size-sm);
+}
+.sh-radio-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-sm);
+  border: 1px solid var(--sh-border);
+  border-radius: var(--sh-radius-lg);
+  background: var(--sh-bg);
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+}
+.sh-radio-card:hover { border-color: var(--sh-primary); }
+.sh-radio-card--selected {
+  border-color: var(--sh-primary);
+  background: var(--sh-primary-soft);
+}
+/* Keep the native radio (accessible + keyboard nav) as the visual dot. */
+.sh-radio-card__input {
+  margin: 2px 0 0 0;
+  flex: 0 0 auto;
+  accent-color: var(--sh-primary);
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+.sh-radio-card:focus-within {
+  border-color: var(--sh-primary);
+  outline: 2px solid var(--sh-primary);
+  outline-offset: 1px;
+}
+.sh-radio-card__icon { font-size: 1.4rem; line-height: 1.2; flex: 0 0 auto; }
+.sh-radio-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sh-radio-card__title { font-weight: 600; font-size: var(--sh-font-size-sm); }
+.sh-radio-card__subtitle {
+  color: var(--sh-text-muted);
+  font-size: var(--sh-font-size-xs);
+  line-height: 1.35;
+}
+
 /* ───── QR scanner (camera / upload / paste) ───────────────────── */
 .sh-pairing-scan {
   display: flex;
