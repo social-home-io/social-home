@@ -124,12 +124,26 @@ def _make_remote_user(
 class _FakeAppRepo:
     def __init__(self, apps: dict[str, InstalledApp] | None = None) -> None:
         self._apps: dict[str, InstalledApp] = apps or {}
+        #: Captured AppPendingSession rows from add_pending_session.
+        self.pending: list = []
 
     async def get(self, app_id: str) -> InstalledApp | None:
         return self._apps.get(app_id)
 
     async def list_installed(self) -> list[InstalledApp]:
         return list(self._apps.values())
+
+    async def add_pending_session(self, s) -> None:
+        self.pending.append(s)
+
+    async def drain_pending_sessions(self, app_id, user_id, **kw):
+        drained = [
+            p for p in self.pending if p.app_id == app_id and p.user_id == user_id
+        ]
+        self.pending = [
+            p for p in self.pending if not (p.app_id == app_id and p.user_id == user_id)
+        ]
+        return drained
 
 
 class _FakeUserRepo:
@@ -1683,6 +1697,148 @@ async def test_inbound_message_blocked_by_recipient_is_dropped():
     await svc.on_inbound_event(event)
     assert ws.user_calls == []
     assert ws.calls == []
+
+
+# ─── Pending-session persistence (offline-recipient invite survival) ──────────
+
+
+@pytest.mark.asyncio
+async def test_inbound_open_persists_pending_session_for_resolved_user():
+    """A resolved per-user APP_SESSION open persists exactly one pending row
+    with the right fields and a tz-aware created_at."""
+    from datetime import datetime
+
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    svc, _, _ = _make_svc(apps={"chess": app}, users=[bob], remote_users=[remote])
+    payload = {
+        "app_id": "chess",
+        "session_id": "sess-1",
+        "verb": "open",
+        "to_user": "bob",
+        "from_user": "carol",
+    }
+    await svc.on_inbound_event(_make_event(FederationEventType.APP_SESSION, payload))
+
+    repo = svc._app_repo  # type: ignore[attr-defined]
+    assert len(repo.pending) == 1
+    row = repo.pending[0]
+    assert row.app_id == "chess"
+    assert row.user_id == "u-bob"
+    assert row.session_id == "sess-1"
+    assert row.from_instance == "peer-inst-id"
+    assert row.from_user == "carol"
+    assert row.payload == payload
+    parsed = datetime.fromisoformat(row.created_at)
+    assert parsed.tzinfo is not None
+
+
+@pytest.mark.asyncio
+async def test_inbound_message_does_not_persist_pending_session():
+    """An APP_MESSAGE (kind=message) never persists a pending session."""
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    svc, _, _ = _make_svc(apps={"chess": app}, users=[bob], remote_users=[remote])
+    event = _make_event(
+        FederationEventType.APP_MESSAGE,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "to_user": "bob",
+            "from_user": "carol",
+            "data": {"move": "e4"},
+        },
+    )
+    await svc.on_inbound_event(event)
+    assert svc._app_repo.pending == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_inbound_open_blocked_initiator_does_not_persist():
+    """A blocked initiator's open persists nothing (same gate as the bell)."""
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    svc, _, _ = _make_svc(
+        apps={"chess": app},
+        users=[bob],
+        remote_users=[remote],
+        block_pairs={("u-bob", "ru-carol")},
+    )
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {
+            "app_id": "chess",
+            "session_id": "sess-1",
+            "verb": "open",
+            "to_user": "bob",
+            "from_user": "carol",
+        },
+    )
+    await svc.on_inbound_event(event)
+    assert svc._app_repo.pending == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_legacy_fanout_open_does_not_persist():
+    """A legacy household fan-out open (no to_user) persists nothing."""
+    app = _make_installed_app("chess")
+    users = [_make_user("u1", "alice"), _make_user("u2", "bob")]
+    svc, _, _ = _make_svc(apps={"chess": app}, users=users)
+    event = _make_event(
+        FederationEventType.APP_SESSION,
+        {"app_id": "chess", "session_id": "sess-1", "verb": "open"},
+    )
+    await svc.on_inbound_event(event)
+    assert svc._app_repo.pending == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_drain_pending_sessions_returns_and_clears():
+    """svc.drain_pending_sessions returns captured rows and clears them."""
+    app = _make_installed_app("chess")
+    bob = _make_user("u-bob", "bob", "Bob")
+    remote = _make_remote_user(
+        user_id="ru-carol",
+        instance_id="peer-inst-id",
+        remote_username="carol",
+        display_name="Carol Remote",
+    )
+    svc, _, _ = _make_svc(apps={"chess": app}, users=[bob], remote_users=[remote])
+    await svc.on_inbound_event(
+        _make_event(
+            FederationEventType.APP_SESSION,
+            {
+                "app_id": "chess",
+                "session_id": "sess-1",
+                "verb": "open",
+                "to_user": "bob",
+                "from_user": "carol",
+            },
+        )
+    )
+    drained = await svc.drain_pending_sessions("chess", "u-bob")
+    assert len(drained) == 1
+    assert drained[0].session_id == "sess-1"
+    # A second drain returns nothing — the first cleared it.
+    assert await svc.drain_pending_sessions("chess", "u-bob") == []
 
 
 @pytest.mark.asyncio

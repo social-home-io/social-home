@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
+from datetime import datetime, timezone
 from uuid import uuid4
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,7 @@ from ..domain.apps import (
     AppContactNotFoundError,
     AppNotEnabledError,
     AppNotFoundError,
+    AppPendingSession,
 )
 from ..domain.events import AppChallengeReceived
 from ..domain.federation import FederationEvent, FederationEventType, PairingStatus
@@ -786,6 +788,26 @@ class AppFederationService:
                     len(allowed),
                 )
                 if allowed:
+                    if notify_open:
+                        # Persist the invite so it survives until the recipient
+                        # opens the app. Stored UNCONDITIONALLY (not gated on
+                        # whether broadcast_to_user reached any sockets): a live
+                        # SPA socket does not imply the chess app is mounted, so
+                        # the durable invite must always be written — the app
+                        # drains+replays it on open and dedupes by session_id,
+                        # so a redundant replay when already online is harmless.
+                        # The drain's 14-day TTL + prune bound growth.
+                        await self._app_repo.add_pending_session(
+                            AppPendingSession(
+                                app_id=app_id,
+                                user_id=recipient.user_id,
+                                session_id=session_id,
+                                from_instance=from_instance,
+                                from_user=from_user,
+                                payload=payload,
+                                created_at=datetime.now(timezone.utc).isoformat(),
+                            )
+                        )
                     await self._ws.broadcast_to_user(recipient.user_id, frame)
                     if notify_open:
                         from_display = await self._remote_open_display(
@@ -824,3 +846,10 @@ class AppFederationService:
             len(user_ids),
         )
         await self._ws.broadcast_to_users(user_ids, frame)
+
+    async def drain_pending_sessions(
+        self, app_id: str, user_id: str
+    ) -> list["AppPendingSession"]:
+        """Return + clear this user's pending session invites for the app
+        (replayed by the app on open)."""
+        return await self._app_repo.drain_pending_sessions(app_id, user_id)
