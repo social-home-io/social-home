@@ -16,6 +16,7 @@ access patterns (a background retry loop, not the request/response path).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
@@ -41,6 +42,7 @@ class AbstractFederationRepo(Protocol):
         instance_id: str,
         proto_version: int,
     ) -> None: ...
+    async def mark_capabilities_seen(self, instance_id: str) -> None: ...
     async def list_instances(
         self,
         *,
@@ -206,6 +208,23 @@ class SqliteFederationRepo:
         await self._db.enqueue(
             "UPDATE remote_instances SET proto_version=? WHERE id=?",
             (proto_version, instance_id),
+        )
+
+    async def mark_capabilities_seen(self, instance_id: str) -> None:
+        """Stamp ``capabilities_seen_at`` to now.
+
+        Called from the inbound
+        :data:`FederationEventType.INSTANCE_CAPABILITIES_UPDATED` handler
+        on *every* advertisement — including a re-advertisement of the same
+        ``proto_version`` (where the handler short-circuits before calling
+        :meth:`set_proto_version`).
+        That keeps the "has this peer ever advertised" signal correct even
+        when the version itself doesn't change. A targeted single-column
+        UPDATE so it never clobbers state set elsewhere.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_instances SET capabilities_seen_at=? WHERE id=?",
+            (datetime.now(timezone.utc).isoformat(), instance_id),
         )
 
     async def list_instances(
@@ -610,4 +629,5 @@ def _row_to_instance(row: dict | None) -> RemoteInstance | None:
         unreachable_since=row.get("unreachable_since"),
         local_alias=row.get("local_alias"),
         share_home=bool_col(row.get("share_home", 1)),
+        capabilities_seen_at=row.get("capabilities_seen_at"),
     )

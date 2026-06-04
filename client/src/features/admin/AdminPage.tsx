@@ -25,10 +25,15 @@ import { managesLocalUsers, usesHaUserDirectory } from '@/platform'
 import CpAdminPanel from '@/features/child-protection/CpAdminPanel'
 import type { User } from '@/types'
 import { confirmDialog } from '@/components/confirm'
+import {
+  compatPeers, compatOurs, compatLoading, compatError,
+  loadFederationCompat, peersBehindCount,
+} from '@/store/federationCompat'
+import { relativeDocsTime } from '@/utils/relativeTime'
 
 type TabId =
   | 'members' | 'ha-users' | 'spaces' | 'moderation'
-  | 'sessions' | 'child-protection' | 'storage' | 'backup'
+  | 'sessions' | 'federation' | 'child-protection' | 'storage' | 'backup'
   | 'settings'
 
 interface ModerationItem {
@@ -83,7 +88,7 @@ export default function AdminPage() {
   const visibleTabs: TabId[] = [
     'members',
     ...(hasHaPersonDirectory ? (['ha-users'] as const) : []),
-    'spaces', 'moderation', 'sessions', 'child-protection',
+    'spaces', 'moderation', 'sessions', 'federation', 'child-protection',
     'storage', 'backup', 'settings',
   ]
   if (tab.value === 'ha-users' && !hasHaPersonDirectory) {
@@ -104,6 +109,14 @@ export default function AdminPage() {
             onClick={() => (tab.value = t)}
           >
             {_tabLabel(t)}
+            {t === 'federation' && peersBehindCount() > 0 && (
+              <span
+                class="sh-chip sh-chip--update sh-tab-badge"
+                aria-label={`${peersBehindCount()} peers behind`}
+              >
+                {peersBehindCount()}
+              </span>
+            )}
           </button>
         ))}
       </nav>
@@ -113,6 +126,7 @@ export default function AdminPage() {
       {tab.value === 'spaces' && <SpacesTab />}
       {tab.value === 'moderation' && <ModerationTab />}
       {tab.value === 'sessions' && <SessionsTab />}
+      {tab.value === 'federation' && <FederationTab />}
       {tab.value === 'child-protection' && <CpAdminPanel />}
       {tab.value === 'storage' && <StorageTab />}
       {tab.value === 'backup' && <BackupTab />}
@@ -692,6 +706,106 @@ function SessionsTab() {
   )
 }
 
+// ─── Federation compatibility tab ─────────────────────────────────────
+
+/**
+ * Per-peer status cell. Three mutually-exclusive states:
+ *   * caps unknown            → "Version unknown" (muted; awaiting the first
+ *                               capabilities handshake — NOT counted behind).
+ *   * caps known, none missing → "Up to date ✓".
+ *   * caps known, N missing   → "N behind" listing the missing features.
+ */
+function _compatStatus(p: { capabilities_known: boolean; lacking_features: string[] }) {
+  if (!p.capabilities_known) {
+    return <span class="sh-muted">Version unknown</span>
+  }
+  const missing = p.lacking_features.length
+  if (missing === 0) {
+    return <span class="sh-chip sh-chip--success">Up to date ✓</span>
+  }
+  return (
+    <span class="sh-chip sh-chip--update">
+      {missing} behind
+    </span>
+  )
+}
+
+function FederationTab() {
+  useEffect(() => { void loadFederationCompat() }, [])
+  if (compatLoading.value) return <Spinner />
+
+  const ours = compatOurs.value
+  if (compatError.value && compatPeers.value.length === 0) {
+    return (
+      <section class="sh-admin-section">
+        <h2>Federation compatibility</h2>
+        <p class="sh-muted">{compatError.value}</p>
+      </section>
+    )
+  }
+  if (compatPeers.value.length === 0) {
+    return (
+      <section class="sh-admin-section">
+        <h2>Federation compatibility</h2>
+        <p class="sh-muted">Your version: v{ours}</p>
+        <p class="sh-muted">
+          No paired peers yet. Confirmed households appear here with their
+          protocol version once they're paired.
+        </p>
+      </section>
+    )
+  }
+  return (
+    <section class="sh-admin-section">
+      <h2>Federation compatibility</h2>
+      <p class="sh-muted">
+        Your version: <strong>v{ours}</strong>. Peers on an older protocol
+        version miss the features listed below until they upgrade. A peer
+        whose version we haven't learned yet shows "Version unknown" — that's
+        a fresh pairing awaiting its first capabilities handshake, not a
+        problem.
+      </p>
+      <table class="sh-admin-table">
+        <thead>
+          <tr>
+            <th>Peer</th><th>Version</th><th>Missing features</th>
+            <th>Last seen</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {compatPeers.value.map((p) => (
+            <tr key={p.instance_id}>
+              <td>{p.display_name}</td>
+              <td>{p.capabilities_known ? `v${p.proto_version}` : '—'}</td>
+              <td>
+                {p.capabilities_known && p.lacking_features.length === 0
+                  ? <span class="sh-muted">up to date ✓</span>
+                  : p.lacking_features.length > 0
+                    ? p.lacking_features.join(', ')
+                    : <span class="sh-muted">—</span>}
+              </td>
+              <td>
+                {p.last_reachable_at
+                  ? (
+                    <time
+                      class="sh-muted"
+                      dateTime={p.last_reachable_at}
+                      title={new Date(p.last_reachable_at).toLocaleString()}
+                    >
+                      {relativeDocsTime(p.last_reachable_at)}
+                    </time>
+                    )
+                  : <span class="sh-muted">never</span>}
+              </td>
+              <td>{_compatStatus(p)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
 function SettingsTab() {
   useEffect(() => { void loadToggles() }, [])
 
@@ -918,7 +1032,10 @@ async function loadAll() {
     tokens.value = body.tokens
   } catch {
     tokens.value = []
-  } finally {
-    loading.value = false
   }
+  // Preload compatibility so the Federation tab-label badge ("N peers
+  // behind") is known before the tab is opened. Errors are surfaced in the
+  // tab itself; loadFederationCompat never throws.
+  await loadFederationCompat()
+  loading.value = false
 }

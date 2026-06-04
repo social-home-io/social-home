@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -42,6 +43,7 @@ class _FakeFederationRepo:
     def __init__(self) -> None:
         self.instances: dict[str, RemoteInstance] = {}
         self.pairings: dict[str, PairingSession] = {}
+        self.capabilities_seen: list[str] = []
 
     async def save_instance(self, inst):
         self.instances[inst.id] = inst
@@ -79,17 +81,18 @@ class _FakeFederationRepo:
         inst = self.instances.get(instance_id)
         if inst is None:
             return
-        self.instances[instance_id] = RemoteInstance(
-            id=inst.id,
-            display_name=inst.display_name,
-            remote_identity_pk=inst.remote_identity_pk,
-            key_self_to_remote=inst.key_self_to_remote,
-            key_remote_to_self=inst.key_remote_to_self,
-            remote_inbox_url=inst.remote_inbox_url,
-            local_inbox_id=inst.local_inbox_id,
-            status=inst.status,
-            source=inst.source,
-            proto_version=proto_version,
+        # Targeted single-column update (mirrors the real repo's UPDATE) so
+        # an earlier mark_capabilities_seen stamp isn't clobbered.
+        self.instances[instance_id] = replace(inst, proto_version=proto_version)
+
+    async def mark_capabilities_seen(self, instance_id: str) -> None:
+        inst = self.instances.get(instance_id)
+        if inst is None:
+            return
+        self.capabilities_seen.append(instance_id)
+        self.instances[instance_id] = replace(
+            inst,
+            capabilities_seen_at=datetime.now(timezone.utc).isoformat(),
         )
 
 
@@ -378,6 +381,26 @@ async def test_capabilities_updated_persists_proto_version(repo, handlers):
         )
     )
     assert repo.instances["peer-a"].proto_version == 2
+    assert repo.capabilities_seen == ["peer-a"]
+    assert repo.instances["peer-a"].capabilities_seen_at is not None
+
+
+async def test_capabilities_updated_same_version_still_stamps_seen(repo, handlers):
+    """A re-advertisement of the SAME version still stamps
+    ``capabilities_seen_at`` — so a paired-but-never-advertised v1 peer is
+    distinguishable from a genuine v1 peer that just re-announced. The
+    ``proto_version`` value short-circuits, but the seen-stamp must not."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    # _sample_instance defaults to proto_version=1; re-advertise the same.
+    assert repo.instances["peer-a"].proto_version == 1
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 1},
+        )
+    )
+    assert repo.capabilities_seen == ["peer-a"]
+    assert repo.instances["peer-a"].capabilities_seen_at is not None
 
 
 async def test_capabilities_updated_unknown_instance_is_noop(repo, handlers):

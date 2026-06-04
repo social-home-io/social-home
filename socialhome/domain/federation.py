@@ -496,6 +496,12 @@ class RemoteInstance:
     created_at: str | None = None
     last_reachable_at: str | None = None
     unreachable_since: str | None = None
+    #: ISO 8601 UTC timestamp of when this peer last advertised its
+    #: capabilities (``INSTANCE_CAPABILITIES_UPDATED``). ``None`` means the
+    #: peer has never advertised — it's paired but mid-first-handshake, so
+    #: its ``proto_version`` is still the conservative default rather than a
+    #: confirmed value. Surfaced in the admin federation-compatibility panel.
+    capabilities_seen_at: str | None = None
     #: Local-only alias the admin set in the UI ("Brother's house").
     #: Never federated — purely a display string for this household.
     #: When ``None`` the SPA falls back to :attr:`display_name`.
