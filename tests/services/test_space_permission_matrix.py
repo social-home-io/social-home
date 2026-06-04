@@ -87,6 +87,7 @@ GATED_METHODS: frozenset[str] = frozenset(
         "delete_comment",
         "upsert_link",
         "delete_link",
+        "space_version_compat",  # admin/owner read — _require_admin_or_owner
     }
 )
 

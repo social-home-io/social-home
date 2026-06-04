@@ -5,8 +5,10 @@ from __future__ import annotations
 from socialhome.domain.federation_capabilities import (
     CAPABILITY_FEATURES,
     OURS,
+    SPACE_SCOPED_MIN_VERSIONS,
     FederationCapability,
     features_missing_below,
+    space_features_missing_below,
 )
 
 
@@ -47,3 +49,49 @@ def test_features_missing_below_mid_version():
     assert "Media DataChannel" in missing
     expected = [label for ver, label in sorted(CAPABILITY_FEATURES) if ver > 13]
     assert missing == expected
+
+
+def test_space_features_missing_below_ours_is_empty():
+    """A member household at OURS lacks no space feature."""
+    assert space_features_missing_below(OURS) == []
+
+
+def test_space_features_missing_below_v1_lists_only_space_scoped():
+    """A v1 member household lacks exactly the space-scoped labels."""
+    missing = space_features_missing_below(1)
+    expected = [
+        label
+        for ver, label in sorted(CAPABILITY_FEATURES)
+        if ver in SPACE_SCOPED_MIN_VERSIONS
+    ]
+    assert missing == expected
+    # Non-space features are excluded even though a v1 peer lacks them too.
+    assert "Calendar timezones" not in missing
+    assert "DM media" not in missing
+    assert "Home-location sharing" not in missing
+    assert "App federation channel" not in missing
+    assert "App user routing" not in missing
+
+
+def test_space_features_missing_below_v13():
+    """A v13 member household lacks the three space features above v13."""
+    assert space_features_missing_below(13) == [
+        "Media DataChannel",
+        "Remote admin actions",
+        "Multi-admin approvals",
+    ]
+
+
+def test_space_features_missing_below_v16_is_empty():
+    """Nothing space-scoped lives above v16 — a v16 member lacks none."""
+    assert space_features_missing_below(16) == []
+
+
+def test_space_scoped_min_versions_are_capability_constants():
+    """Every space-scoped threshold is a MIN_FOR_* int — no magic numbers."""
+    declared = {
+        v
+        for k, v in vars(FederationCapability).items()
+        if k.startswith("MIN_FOR_") and isinstance(v, int)
+    }
+    assert SPACE_SCOPED_MIN_VERSIONS <= declared

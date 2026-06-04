@@ -33,6 +33,7 @@ import { useSpaceTheme } from '@/hooks/useSpaceTheme'
 import { CalendarEventDialog, openSpaceEventDialog } from '@/components/CalendarEventDialog'
 import { SpaceLinksStrip } from './SpaceLinksStrip'
 import { SpaceProposalsBanner } from '@/components/SpaceProposalsBanner'
+import { SpaceVersionBanner } from '@/components/SpaceVersionBanner'
 import { SpaceHero } from '@/components/SpaceHero'
 import { SpaceNotifPrefsMenu } from './SpaceNotifPrefsMenu'
 import { confirmDialog } from '@/components/confirm'
@@ -358,6 +359,10 @@ export default function SpaceFeedPage() {
           }
         />
       )}
+      {s &&
+        (viewerRole.value === 'owner' || viewerRole.value === 'admin') && (
+          <SpaceVersionBanner spaceId={spaceId} />
+        )}
       {s && <SpaceLinksStrip spaceId={spaceId} />}
 
       {/* Branded header (Space → Settings → About + Theme). On the feed
