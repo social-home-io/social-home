@@ -404,3 +404,42 @@ class FederationCapability:
     # (the legacy ``/api/pairing/peer-{accept,confirm}`` routes are
     # gone). The bump in :data:`OURS` plus the version-history entry
     # in the module docstring is the entire public surface.
+
+
+#: Single source of truth mapping each ``MIN_FOR_*`` threshold to a short
+#: human-readable feature label, for the admin federation-compatibility
+#: panel. Built FROM the :class:`FederationCapability` constants so the
+#: version numbers live in exactly one place — adding a feature means
+#: appending one ``(FederationCapability.MIN_FOR_X, "Label")`` tuple here.
+#: v_4 (pairing-via-inbox) has no entry for the same reason it has no
+#: named constant: it's a pre-capability-exchange bump with no gated field.
+CAPABILITY_FEATURES: list[tuple[int, str]] = [
+    (FederationCapability.MIN_FOR_CALENDAR_TZ, "Calendar timezones"),
+    (FederationCapability.MIN_FOR_DM_MEDIA_SYNC, "DM media"),
+    (FederationCapability.MIN_FOR_HOME_LOCATION_BROADCAST, "Home-location sharing"),
+    (FederationCapability.MIN_FOR_SPACE_INVITE_REDEEM, "Cross-household invite links"),
+    (FederationCapability.MIN_FOR_SPACE_KEY_REKEY, "Space key rotation"),
+    (FederationCapability.MIN_FOR_REMOTE_MEMBER_ROLE, "Remote member roles"),
+    (FederationCapability.MIN_FOR_REMOTE_ADMIN_KICK, "Remote admin kick"),
+    (FederationCapability.MIN_FOR_BAZAAR_LISTING, "Bazaar listings"),
+    (FederationCapability.MIN_FOR_BAZAAR_STATUS, "Bazaar status"),
+    (FederationCapability.MIN_FOR_BAZAAR_BIDS, "Bazaar bids"),
+    (FederationCapability.MIN_FOR_SYNC_HTTPS_FALLBACK, "Sync HTTPS fallback"),
+    (FederationCapability.MIN_FOR_MEDIA_CHANNEL, "Media DataChannel"),
+    (FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION, "Remote admin actions"),
+    (FederationCapability.MIN_FOR_ADMIN_PROPOSALS, "Multi-admin approvals"),
+    (FederationCapability.MIN_FOR_APP_CHANNEL, "App federation channel"),
+    (FederationCapability.MIN_FOR_APP_USER_ROUTING, "App user routing"),
+]
+
+
+def features_missing_below(version: int) -> list[str]:
+    """Return the feature labels a peer at ``version`` lacks vs :data:`OURS`.
+
+    A feature is "missing" when its introducing ``min_version`` is strictly
+    greater than the peer's advertised ``proto_version``. A peer at
+    :data:`OURS` (or higher) lacks nothing; a peer at ``1`` lacks every
+    labelled feature. Ordered by version so the SPA renders oldest-gap
+    first.
+    """
+    return [label for ver, label in sorted(CAPABILITY_FEATURES) if ver > version]

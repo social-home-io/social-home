@@ -240,7 +240,14 @@ class PairingInboundHandlers:
             proto_version = int(event.payload.get("proto_version") or 1)
         except TypeError, ValueError:
             return
-        if proto_version < 1 or instance.proto_version == proto_version:
+        if proto_version < 1:
+            return
+        # Stamp the fact-of-advertisement on every valid envelope — even a
+        # re-advertisement of the same version, where we short-circuit below
+        # before calling ``set_proto_version`` — so the admin panel can
+        # distinguish a genuine v1 peer from one paired but never advertised.
+        await self._repo.mark_capabilities_seen(event.from_instance)
+        if instance.proto_version == proto_version:
             return
         await self._repo.set_proto_version(event.from_instance, proto_version)
         log.info(

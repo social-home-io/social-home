@@ -1,0 +1,31 @@
+-- Stamp when a peer last advertised its capabilities (proto_version).
+--
+-- Migration audit (CLAUDE.md "Before adding a SQL migration"):
+--
+-- 1. Audited existing shape: remote_instances already carries
+--    ``proto_version`` (the advertised integer) and ``last_reachable_at``
+--    (transport liveness). Neither distinguishes a genuine v1 peer from one
+--    that has paired but never yet sent INSTANCE_CAPABILITIES_UPDATED — both
+--    read proto_version=1 (the conservative default in RemoteInstance /
+--    _row_to_instance). The only writer of capability state is
+--    ``federation_inbound/pairing.py:_on_capabilities_updated`` →
+--    ``set_proto_version``; there is no existing column that records the
+--    fact-of-advertisement separately from the value.
+--
+-- 2. Non-migration alternatives considered and rejected:
+--    * Reuse proto_version: can't — value 1 is ambiguous (real v1 vs
+--      never-advertised default), which is exactly the distinction the
+--      admin panel needs to surface.
+--    * Reuse last_reachable_at: wrong semantics — a peer can be reachable
+--      (transport up) without ever having sent a capabilities envelope.
+--    * Compute at read time / store in a federation event: nothing on the
+--      row or in any event records "has this peer ever advertised", so
+--      there is no value to derive it from.
+--    A nullable timestamp column is the smallest store that answers the
+--    question, with NULL meaning "never advertised".
+--
+-- 3. Smallest additive change: a single nullable ADD COLUMN, no default and
+--    no backfill. Existing rows read NULL (never advertised) until their
+--    next INSTANCE_CAPABILITIES_UPDATED stamps it — additive over
+--    destructive, NULL-default over backfill.
+ALTER TABLE remote_instances ADD COLUMN capabilities_seen_at TEXT;

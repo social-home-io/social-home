@@ -481,6 +481,7 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 | PATCH | `/api/pairing/connections/{instance_id}/alias` | Admin-only. Body `{alias: string\|null}` — set or clear the local-only rename of the peer (cap 80 chars; whitespace-only clears). Returns `{instance_id, display_name, local_alias, effective_display_name}`. Never federated. |
 | GET / POST | `/api/pairing/relay-requests[/{id}/{approve\|decline}]` | Relay-request queue. |
 | GET | `/api/friends` | Connected-people dashboard payload (non-admin). Returns `{instance, households[], totals}` — the local household block + every confirmed remote household with its member list (joining `remote_instances` × `remote_users`) plus household coordinates. Whitelisted fields only — `routing_secret` / `key_self_to_remote` / `remote_inbox_url` / identity public keys never appear. |
+| GET | `/api/admin/federation/compat` | Admin-only. Federation-compatibility panel. Returns `{"ours": <int>, "peers": [...]}` where `ours` is this build's advertised `proto_version` and each peer carries `instance_id`, `display_name`, `proto_version`, `status`, `last_reachable_at`, `capabilities_known` (bool — `false` ⇒ peer is paired but has never advertised capabilities, so its `proto_version` is the conservative default rather than a confirmed value), and `lacking_features` (human-readable labels of features the peer's version is below). Confirmed peers only, ordered by display name. |
 
 ## HFS — Calls & WebRTC
 
