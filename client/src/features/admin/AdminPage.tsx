@@ -20,6 +20,7 @@ import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
 import { showToast } from '@/components/Toast'
 import { HouseholdToggles, loadToggles } from '@/components/HouseholdToggles'
+import { HomeNameSettings } from '@/components/HomeNameSettings'
 import { HaUsersPanel } from './HaUsersPanel'
 import { managesLocalUsers, usesHaUserDirectory } from '@/platform'
 import CpAdminPanel from '@/features/child-protection/CpAdminPanel'
@@ -847,6 +848,7 @@ function SettingsTab() {
   return (
     <section class="sh-admin-section">
       <h2>Household settings</h2>
+      <HomeNameSettings />
       <HouseholdToggles />
     </section>
   )
