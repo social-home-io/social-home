@@ -9,6 +9,7 @@ than a 600-line monolith.
 
 from .pairing import PairingInboundHandlers
 from .personal_calendar import PersonalCalendarInboundHandlers
+from .resync import ResyncInboundHandlers
 from .space_membership import SpaceMembershipInboundHandlers
 from .space_invites import SpaceInviteInboundHandlers
 from .space_content import SpaceContentInboundHandlers
@@ -16,6 +17,7 @@ from .space_content import SpaceContentInboundHandlers
 __all__ = [
     "PairingInboundHandlers",
     "PersonalCalendarInboundHandlers",
+    "ResyncInboundHandlers",
     "SpaceMembershipInboundHandlers",
     "SpaceInviteInboundHandlers",
     "SpaceContentInboundHandlers",

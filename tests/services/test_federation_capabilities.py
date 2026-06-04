@@ -10,6 +10,16 @@ from socialhome.domain.federation_capabilities import (
 )
 
 
+def test_ours_is_v19_with_instance_resync_capability():
+    """v_19 introduces INSTANCE_RESYNC_REQUEST gating."""
+    assert OURS == 19
+    assert FederationCapability.MIN_FOR_INSTANCE_RESYNC == 19
+    assert (
+        FederationCapability.MIN_FOR_INSTANCE_RESYNC,
+        "Instance resync request",
+    ) in CAPABILITY_FEATURES
+
+
 def test_features_built_from_min_for_constants():
     """Every CAPABILITY_FEATURES version maps to a MIN_FOR_* constant.
 

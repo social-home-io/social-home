@@ -1468,6 +1468,45 @@ def cmd_verify() -> None:
             else:
                 print(f"  {viewer} sees {peer} at proto_version={pv} (>= {_OURS}) ✓")
 
+    # 0b. INSTANCE_RESYNC_REQUEST round-trip (v_19, #319 ¶6) — ask a confirmed
+    #     v_19+ peer to re-advertise its capabilities via the operator
+    #     endpoint and assert it's accepted. Proves the new event type +
+    #     POST /api/admin/federation/resync + peer_supports(v_19) gate are
+    #     wired end-to-end; a sub-v_19 peer would 409 (PEER_TOO_OLD).
+    va = state["instances"]["a"]
+    s, conns = _request(
+        f"http://127.0.0.1:{va['port']}/api/pairing/connections",
+        token=va["token"],
+    )
+    resync_target = ""
+    if s == 200 and isinstance(conns, list):
+        for row in conns:
+            if (
+                row.get("status") == "confirmed"
+                and int(row.get("proto_version") or 1) >= _OURS
+            ):
+                resync_target = str(row.get("instance_id") or "")
+                break
+    if resync_target:
+        s, body = _request(
+            f"http://127.0.0.1:{va['port']}/api/admin/federation/resync",
+            method="POST",
+            token=va["token"],
+            body={"instance_id": resync_target, "scope": "capabilities"},
+        )
+        if s == 200:
+            print(
+                f"  a → resync(capabilities) accepted for "
+                f"{resync_target[:8]} ✓"
+            )
+        else:
+            failures.append(
+                f"a: INSTANCE_RESYNC_REQUEST(capabilities) to "
+                f"{resync_target[:8]} returned {s} (expected 200): {body}",
+            )
+    else:
+        print("  (no confirmed v_19+ peer for resync round-trip — skipped)")
+
     # 1. Profile sync — every household sees the other two users by display name.
     for viewer in ("a", "b", "c"):
         names = _all_display_names(state, viewer)

@@ -108,3 +108,36 @@ async def test_capabilities_outbound_tolerates_repo_failure():
     # Must not raise — the outbound is fire-and-forget at startup.
     sent = await out.publish()
     assert sent == 0
+
+
+@pytest.mark.asyncio
+async def test_resend_to_re_advertises_to_one_peer():
+    """``resend_to`` (the §319.6 resync entry) sends one capabilities
+    envelope to the named peer and returns True."""
+    repo = SimpleNamespace(list_instances=AsyncMock(return_value=[]))
+    fed = SimpleNamespace(_own_instance_id="inst-self", send_event=AsyncMock())
+    out = CapabilitiesOutbound(federation_service=fed, federation_repo=repo)
+
+    ok = await out.resend_to("inst-a")
+
+    assert ok is True
+    fed.send_event.assert_awaited_once()
+    call = fed.send_event.await_args
+    assert call.kwargs["to_instance_id"] == "inst-a"
+    assert call.kwargs["event_type"] == (
+        FederationEventType.INSTANCE_CAPABILITIES_UPDATED
+    )
+    assert call.kwargs["payload"] == {"proto_version": OUR_PROTO_VERSION}
+
+
+@pytest.mark.asyncio
+async def test_resend_to_skips_self():
+    """``resend_to`` to our own instance id is a no-op returning False."""
+    repo = SimpleNamespace(list_instances=AsyncMock(return_value=[]))
+    fed = SimpleNamespace(_own_instance_id="inst-self", send_event=AsyncMock())
+    out = CapabilitiesOutbound(federation_service=fed, federation_repo=repo)
+
+    ok = await out.resend_to("inst-self")
+
+    assert ok is False
+    fed.send_event.assert_not_awaited()

@@ -221,6 +221,7 @@ from .services.task_federation_outbound import TaskFederationOutbound
 from .services.federation_inbound import (
     PairingInboundHandlers,
     PersonalCalendarInboundHandlers,
+    ResyncInboundHandlers,
     SpaceContentInboundHandlers,
     SpaceInviteInboundHandlers,
     SpaceMembershipInboundHandlers,
@@ -259,6 +260,7 @@ from .services.alias_service import AliasResolver, AliasService
 from .services.app_catalog_service import AppCatalogService
 from .services.app_federation_service import AppFederationService
 from .services.app_service import AppService
+from .services.resync_on_upgrade import request_capability_resync_if_upgraded
 from .services.preferences_service import PreferencesService
 from .services.page_conflict_service import PageConflictService
 from .services.poll_service import PollService
@@ -1069,6 +1071,14 @@ def _wire_federation_stack(
         FederationEventType.SPACE_SYNC_RESUME,
         _space_sync_resume,
     )
+
+    # §319.6 — let a peer ask us to re-broadcast capabilities / a space's
+    # content / a space's calendar. Reuses the resume provider's
+    # membership-gated replay so a non-member can never pull space content.
+    ResyncInboundHandlers(
+        capabilities_outbound=capabilities_outbound,
+        space_resume=space_sync_resume_provider,
+    ).attach_to(federation_service)
 
     dm_history_scheduler = DmHistoryScheduler(
         bus=bus,
@@ -2573,6 +2583,20 @@ def create_app(config: Config | None = None) -> web.Application:
                 await cap_outbound.publish()
             except Exception as exc:  # pragma: no cover
                 log.warning("capabilities outbound at startup failed: %s", exc)
+
+        # 9b. After an upgrade (OURS increased since last boot), ask confirmed
+        # peers to re-advertise their capabilities so our cached proto_version
+        # for each peer refreshes promptly. Capabilities-scope only — no
+        # content replay — so it can't cause a resync storm. One-shot per
+        # upgrade, guarded by the persisted last-OURS on the self-row.
+        try:
+            await request_capability_resync_if_upgraded(
+                federation=federation_service,
+                federation_repo=federation_repo,
+                identity_repo=federation_repo,
+            )
+        except Exception as exc:  # pragma: no cover
+            log.warning("capability-resync on upgrade failed: %s", exc)
 
     async def _on_shutdown(app: web.Application) -> None:  # noqa: RUF029
         """Tell every connected WebSocket client we're going away.

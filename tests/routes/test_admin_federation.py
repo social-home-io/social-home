@@ -142,3 +142,123 @@ async def test_compat_excludes_pending_peers(client):
     body = await resp.json()
     ids = {p["instance_id"] for p in body["peers"]}
     assert "peer-pending" not in ids
+
+
+# ── POST /api/admin/federation/resync ───────────────────────────────
+
+
+async def test_resync_requires_admin(client):
+    """A non-admin token gets 403."""
+    db = client._db
+    await db.enqueue(
+        "UPDATE users SET is_admin=0 WHERE user_id=?",
+        (client._uid,),
+    )
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "peer-x", "scope": "capabilities"},
+    )
+    assert resp.status == 403
+
+
+async def test_resync_rejects_bad_scope(client):
+    """An unrecognised scope is 400 before any peer lookup."""
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "peer-x", "scope": "nonsense"},
+    )
+    assert resp.status == 400
+
+
+async def test_resync_rejects_empty_instance(client):
+    """A missing instance_id is 400."""
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "", "scope": "capabilities"},
+    )
+    assert resp.status == 400
+
+
+async def test_resync_rejects_space_scope_without_id(client):
+    """``space:`` with an empty id is 400."""
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "peer-x", "scope": "space:"},
+    )
+    assert resp.status == 400
+
+
+async def test_resync_peer_too_old_is_409(client):
+    """A confirmed peer below v_19 can't honour the request → 409."""
+    db = client._db
+    await _seed_peer(
+        db,
+        instance_id="peer-old",
+        display_name="Old House",
+        proto_version=13,
+        capabilities_seen_at="2026-06-01T00:00:00+00:00",
+    )
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "peer-old", "scope": "capabilities"},
+    )
+    assert resp.status == 409
+
+
+async def test_resync_unknown_peer_is_409(client):
+    """An unknown peer (peer_supports False) → 409."""
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "no-such-peer", "scope": "capabilities"},
+    )
+    assert resp.status == 409
+
+
+async def test_resync_v19_peer_capabilities_is_200(client):
+    """A confirmed v_19 peer accepts the resync request → 200."""
+    db = client._db
+    await _seed_peer(
+        db,
+        instance_id="peer-new",
+        display_name="New House",
+        proto_version=OURS,
+        capabilities_seen_at="2026-06-04T00:00:00+00:00",
+    )
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "peer-new", "scope": "capabilities"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body == {
+        "status": "ok",
+        "instance_id": "peer-new",
+        "scope": "capabilities",
+    }
+
+
+async def test_resync_v19_peer_space_scope_is_200(client):
+    """A ``space:<id>`` scope against a v_19 peer → 200."""
+    db = client._db
+    await _seed_peer(
+        db,
+        instance_id="peer-new2",
+        display_name="New House 2",
+        proto_version=OURS,
+        capabilities_seen_at="2026-06-04T00:00:00+00:00",
+    )
+    resp = await client.post(
+        "/api/admin/federation/resync",
+        headers=_auth(client._tok),
+        json={"instance_id": "peer-new2", "scope": "space:sp-1"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["scope"] == "space:sp-1"

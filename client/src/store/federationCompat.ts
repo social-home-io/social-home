@@ -56,6 +56,35 @@ export function peersBehindCount(): number {
   ).length
 }
 
+/**
+ * Feature label (must match the backend ``CAPABILITY_FEATURES`` entry for
+ * ``MIN_FOR_INSTANCE_RESYNC``) — a peer that still *lacks* this can't honor a
+ * resync request, so the "Re-check" affordance is hidden for it.
+ */
+export const RESYNC_FEATURE = 'Instance resync request'
+
+/**
+ * True iff we can ask this peer to re-advertise (it understands the v_19
+ * ``INSTANCE_RESYNC_REQUEST``). Derived from the compat data — no version
+ * number duplicated in the client.
+ */
+export function peerSupportsResync(p: CompatPeer): boolean {
+  return p.capabilities_known && !p.lacking_features.includes(RESYNC_FEATURE)
+}
+
+/**
+ * Ask a peer to re-advertise its capabilities (``scope: "capabilities"``).
+ * Fires ``POST /api/admin/federation/resync``; the peer's fresh
+ * ``proto_version`` arrives asynchronously via its reply, so callers refresh
+ * the panel a moment later rather than expecting an immediate change.
+ */
+export async function resyncPeerCapabilities(instanceId: string): Promise<void> {
+  await api.post('/api/admin/federation/resync', {
+    instance_id: instanceId,
+    scope: 'capabilities',
+  })
+}
+
 /** Test helper — reset signals without hitting the API. */
 export function _resetFederationCompatForTest(): void {
   compatPeers.value   = []

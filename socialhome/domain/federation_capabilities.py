@@ -248,7 +248,19 @@ from __future__ import annotations
 #:   peers receive the legacy household-addressed shape (no ``to_user``)
 #:   and the local bridge fans the event to all local users (the prior
 #:   behaviour). §FIX-I2 relaxed for shared-space co-members.
-OURS: int = 18
+#: * **v_19** (2026-06-04) — :data:`FederationEventType.INSTANCE_RESYNC_REQUEST`.
+#:   A peer can ask us to re-broadcast state for a named scope:
+#:   ``"capabilities"`` (re-advertise our ``proto_version``),
+#:   ``"space:<id>"`` (replay the space's content — membership-gated), or
+#:   ``"calendar:<id>"`` (replay just the space's calendar — membership-gated).
+#:   The handler dispatches the scope and re-sends to the requester; the
+#:   space / calendar replay reuses the §4.4 ``SPACE_SYNC_RESUME`` machinery
+#:   so receivers dedup by primary key. Capability-gated: the sender gates
+#:   the outbound on :data:`FederationCapability.MIN_FOR_INSTANCE_RESYNC`
+#:   (the operator endpoint 409s a sub-v_19 peer) so the request never
+#:   reaches a peer with no handler. **No fallback** — a sub-v_19 peer has
+#:   no resync handler, so there is no safe degraded send.
+OURS: int = 19
 
 
 class FederationCapability:
@@ -396,6 +408,16 @@ class FederationCapability:
     #: bridge fans the event to all local users (the prior behaviour).
     MIN_FOR_APP_USER_ROUTING = 18
 
+    #: Minimum proto_version where the peer registers a handler for
+    #: :data:`FederationEventType.INSTANCE_RESYNC_REQUEST` — a peer can ask
+    #: us to re-broadcast our capabilities, a space's content, or a space's
+    #: calendar for a named scope. The operator-triggered sender gates on
+    #: this and 409s the request against a sub-v_19 peer (which has no
+    #: handler) rather than firing into the void. Instance-level, not a
+    #: shared-space feature — a peer lacking it doesn't degrade any space —
+    #: so it is deliberately kept out of the per-space compatibility banner.
+    MIN_FOR_INSTANCE_RESYNC = 19
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -430,6 +452,7 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (FederationCapability.MIN_FOR_ADMIN_PROPOSALS, "Multi-admin approvals"),
     (FederationCapability.MIN_FOR_APP_CHANNEL, "App federation channel"),
     (FederationCapability.MIN_FOR_APP_USER_ROUTING, "App user routing"),
+    (FederationCapability.MIN_FOR_INSTANCE_RESYNC, "Instance resync request"),
 ]
 
 

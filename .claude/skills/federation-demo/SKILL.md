@@ -126,6 +126,12 @@ That single command runs the full sequence:
      show both Alpha and Carol as ``going``.
 
 4. ``verify`` — assertions across all three households:
+   - Every confirmed peer advertises the build's current ``OURS``
+     ``proto_version`` (the capability-bump tripwire), and an
+     ``INSTANCE_RESYNC_REQUEST`` (capabilities scope, v_19, #319 ¶6) to a
+     v_19+ peer via ``POST /api/admin/federation/resync`` is accepted —
+     proving the new event type + operator endpoint + ``peer_supports``
+     gate round-trip (a sub-v_19 peer would 409).
    - Every household sees the other two's display names via
      ``/api/friends`` (peer-directory snapshot delivered).
    - Every household sees the other two's ``all_paired`` highlights

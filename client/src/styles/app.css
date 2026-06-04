@@ -7939,6 +7939,12 @@ body.sh-dm-thread-open .sh-messages {
   transform: rotate(5deg);
   pointer-events: none;
 }
+/* Wide admin tables (e.g. the federation-compat panel with a trailing
+   actions column) scroll horizontally inside their card on a narrow phone
+   rather than overflowing the page body or clipping the last column. */
+.sh-table-scroll {
+  overflow-x: auto;
+}
 .sh-admin-table {
   width: 100%;
   border-collapse: collapse;
