@@ -79,6 +79,9 @@ from .infrastructure.password_reset_cleanup_scheduler import (
     PasswordResetCleanupScheduler,
 )
 from .infrastructure.audio_transcript_scheduler import AudioTranscriptScheduler
+from .infrastructure.app_pending_session_scheduler import (
+    AppPendingSessionPruneScheduler,
+)
 from .infrastructure.replay_cache_scheduler import ReplayCachePruneScheduler
 from .infrastructure.space_retention_scheduler import SpaceRetentionScheduler
 from .infrastructure.moment_retention_scheduler import MomentRetentionScheduler
@@ -1762,6 +1765,7 @@ def create_app(config: Config | None = None) -> web.Application:
     stale_call_scheduler: StaleCallCleanupScheduler | None = None
     gfs_ws_supervisor: GfsWebSocketSupervisor | None = None
     replay_cache_scheduler: ReplayCachePruneScheduler | None = None
+    app_pending_session_scheduler: AppPendingSessionPruneScheduler | None = None
     audio_transcript_scheduler: AudioTranscriptScheduler | None = None
     dm_relay_seen_scheduler: DmRelaySeenPruneScheduler | None = None
     password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
@@ -2406,6 +2410,13 @@ def create_app(config: Config | None = None) -> web.Application:
         replay_cache_scheduler = ReplayCachePruneScheduler(federation_repo)
         await replay_cache_scheduler.start()
 
+        # App-pending-session pruner — sweeps TTL-expired inbound app-session
+        # invites so the table can't accumulate abandoned invites forever
+        # (the per-pair cap bounds a flood; this clears the slow leak).
+        nonlocal app_pending_session_scheduler
+        app_pending_session_scheduler = AppPendingSessionPruneScheduler(repos.app)
+        await app_pending_session_scheduler.start()
+
         # DM-relay-seen pruner (§12.5.3) — same shape as the replay-cache
         # pruner, but for the DM_RELAY dedup ring. Without this the
         # ``dm_relay_seen`` table grows unbounded for the lifetime of
@@ -2625,6 +2636,8 @@ def create_app(config: Config | None = None) -> web.Application:
         await moment_public_signaling_handler.stop()
         if replay_cache_scheduler is not None:
             await replay_cache_scheduler.stop()
+        if app_pending_session_scheduler is not None:
+            await app_pending_session_scheduler.stop()
         if dm_relay_seen_scheduler is not None:
             await dm_relay_seen_scheduler.stop()
         if audio_transcript_scheduler is not None:

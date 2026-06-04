@@ -123,6 +123,24 @@ class AppKvEntry:
 
 
 @dataclass(slots=True, frozen=True)
+class AppPendingSession:
+    """A pending app-session invite stored for an offline recipient.
+
+    One row of the ``app_pending_sessions`` table — a generic, app-agnostic
+    stash so an inbound ``APP_SESSION`` invite survives until the recipient
+    next opens the app. ``payload`` is the decoded invite dict.
+    """
+
+    app_id: str
+    user_id: str
+    session_id: str
+    from_instance: str
+    from_user: str | None
+    payload: dict
+    created_at: str
+
+
+@dataclass(slots=True, frozen=True)
 class AppCatalogEntry:
     """One entry of the remote ``catalog.json``."""
 

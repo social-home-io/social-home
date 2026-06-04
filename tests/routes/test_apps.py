@@ -16,6 +16,7 @@ from socialhome.domain.apps import (
     AppManifest,
     AppNotFoundError,
     AppNotEnabledError,
+    AppPendingSession,
     InstalledApp,
 )
 from socialhome.repositories.app_repo import SqliteAppRepo
@@ -935,6 +936,60 @@ async def test_sessions_rejects_missing_peer(client, fed_svc):
     assert r.status == 400
     body = await r.json()
     assert body["error"]["code"] == "UNPROCESSABLE"
+
+
+# ── GET /api/apps/{app_id}/pending-sessions ──────────────────────────────
+
+
+async def test_pending_sessions_requires_auth(client):
+    r = await client.get("/api/apps/com.example.hello/pending-sessions")
+    assert r.status == 401
+
+
+async def test_pending_sessions_returns_and_scopes_to_user(client, fed_svc):
+    """The drain is scoped to the authed user — never a request param."""
+    pending = AppPendingSession(
+        app_id="com.example.hello",
+        user_id=client._uid,
+        session_id="sess-1",
+        from_instance="peer.example.com",
+        from_user="alice@peer.example.com",
+        payload={"kind": "challenge"},
+        created_at="2026-06-04 12:00:00",
+    )
+    fed_svc.drain_pending_sessions.return_value = [pending]
+
+    r = await client.get(
+        "/api/apps/com.example.hello/pending-sessions",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {
+        "sessions": [
+            {
+                "session_id": "sess-1",
+                "from_instance": "peer.example.com",
+                "from_user": "alice@peer.example.com",
+                "payload": {"kind": "challenge"},
+            }
+        ]
+    }
+    fed_svc.drain_pending_sessions.assert_awaited_once_with(
+        "com.example.hello", client._uid
+    )
+
+
+async def test_pending_sessions_empty(client, fed_svc):
+    fed_svc.drain_pending_sessions.return_value = []
+
+    r = await client.get(
+        "/api/apps/com.example.hello/pending-sessions",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body == {"sessions": []}
 
 
 async def test_sessions_rejects_empty_peer(client, fed_svc):

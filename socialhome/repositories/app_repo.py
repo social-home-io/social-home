@@ -11,10 +11,14 @@ bound ``?`` parameter, so there is no injection surface to allow-list.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
-from ..domain.apps import AppKvEntry, AppManifest, InstalledApp
+from ..domain.apps import AppKvEntry, AppManifest, AppPendingSession, InstalledApp
+
+_PENDING_SESSION_TTL_SECONDS = 14 * 24 * 60 * 60  # 14 days
+_PENDING_SESSION_MAX_PER_PAIR = 50
 
 
 @runtime_checkable
@@ -40,6 +44,17 @@ class AbstractAppRepo(Protocol):
     ) -> None: ...
     async def kv_delete(self, app_id: str, user_id: str, key: str) -> None: ...
     async def kv_count(self, app_id: str, user_id: str) -> int: ...
+    async def add_pending_session(self, s: AppPendingSession) -> None: ...
+    async def drain_pending_sessions(
+        self,
+        app_id: str,
+        user_id: str,
+        *,
+        max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS,
+    ) -> list[AppPendingSession]: ...
+    async def prune_pending_sessions(
+        self, *, max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS
+    ) -> int: ...
 
 
 def _row_to_kv(row) -> AppKvEntry:
@@ -49,6 +64,18 @@ def _row_to_kv(row) -> AppKvEntry:
         key=str(row["key"]),
         value_json=str(row["value_json"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _row_to_pending(row) -> AppPendingSession:
+    return AppPendingSession(
+        app_id=str(row["app_id"]),
+        user_id=str(row["user_id"]),
+        session_id=str(row["session_id"]),
+        from_instance=str(row["from_instance"]),
+        from_user=row["from_user"],
+        payload=json.loads(row["payload_json"]),
+        created_at=str(row["created_at"]),
     )
 
 
@@ -207,3 +234,91 @@ class SqliteAppRepo:
             (app_id, user_id),
         )
         return int(row["cnt"]) if row is not None else 0
+
+    # ── Pending-session invites ──────────────────────────────────────────
+
+    async def add_pending_session(self, s: AppPendingSession) -> None:
+        await self._db.enqueue(
+            """INSERT OR REPLACE INTO app_pending_sessions
+                 (app_id, user_id, session_id, from_instance, from_user,
+                  payload_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                s.app_id,
+                s.user_id,
+                s.session_id,
+                s.from_instance,
+                s.from_user,
+                json.dumps(s.payload),
+                s.created_at,
+            ),
+        )
+        # Bound a flood from a paired peer: keep at most
+        # ``_PENDING_SESSION_MAX_PER_PAIR`` rows per (app, user), deleting the
+        # oldest beyond the cap. Same write-queue batch as the insert, so the
+        # per-pair invariant holds continuously (mirrors the notifications
+        # per-user cap).
+        await self._db.enqueue(
+            """DELETE FROM app_pending_sessions
+                WHERE rowid IN (
+                    SELECT rowid FROM app_pending_sessions
+                     WHERE app_id = ? AND user_id = ?
+                     ORDER BY created_at DESC
+                     LIMIT -1 OFFSET ?
+                )""",
+            (s.app_id, s.user_id, _PENDING_SESSION_MAX_PER_PAIR),
+        )
+
+    async def drain_pending_sessions(
+        self,
+        app_id: str,
+        user_id: str,
+        *,
+        max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS,
+    ) -> list[AppPendingSession]:
+        # Invariant: callers MUST store ``created_at`` as
+        # ``datetime.now(timezone.utc).isoformat()`` (tz-aware, e.g.
+        # ``…+00:00``). The TTL filter compares ISO strings lexically, which
+        # is only valid when both sides share that shape — a naive
+        # ``datetime('now')`` value (space separator) would sort below the
+        # cutoff and silently drain to nothing. ``add_pending_session`` writes
+        # the matching shape; keep it that way.
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        ).isoformat()
+        rows = await self._db.fetchall(
+            """SELECT * FROM app_pending_sessions
+               WHERE app_id = ? AND user_id = ? AND created_at >= ?
+               ORDER BY created_at ASC""",
+            (app_id, user_id, cutoff),
+        )
+        # Drain everything for the pair — both the fresh rows we return and any
+        # expired ones — in one delete.
+        await self._db.enqueue(
+            "DELETE FROM app_pending_sessions WHERE app_id = ? AND user_id = ?",
+            (app_id, user_id),
+        )
+        return [_row_to_pending(r) for r in rows]
+
+    async def prune_pending_sessions(
+        self, *, max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS
+    ) -> int:
+        """Delete pending sessions older than the TTL. Returns purge count.
+
+        Counts before deleting (aiosqlite's DELETE doesn't surface a row
+        count at this revision) — same mechanism as
+        ``federation_repo.prune_replay_cache``.
+        """
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        ).isoformat()
+        before = await self._db.fetchval(
+            "SELECT COUNT(*) FROM app_pending_sessions WHERE created_at < ?",
+            (cutoff,),
+            default=0,
+        )
+        await self._db.enqueue(
+            "DELETE FROM app_pending_sessions WHERE created_at < ?",
+            (cutoff,),
+        )
+        return int(before)
