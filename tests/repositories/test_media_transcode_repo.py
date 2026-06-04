@@ -139,3 +139,38 @@ async def test_status_for_mixed_filenames(repo):
 
 async def test_status_for_empty_returns_empty(repo):
     assert await repo.status_for([]) == {}
+
+
+async def test_active_source_paths_empty_when_no_rows(repo):
+    assert await repo.active_source_paths() == set()
+
+
+async def test_active_source_paths_returns_all_source_paths(repo):
+    await repo.enqueue(
+        output_filename="a.webm",
+        source_path="/tmp/transcode_src/a.bin",
+        thumbnail_filename="a.webp",
+        owner_user_id="u-1",
+    )
+    await repo.enqueue(
+        output_filename="b.webm",
+        source_path="/tmp/transcode_src/b.bin",
+        thumbnail_filename="b.webp",
+        owner_user_id="u-1",
+    )
+    # A processing row's source is still referenced — must be included.
+    await repo.mark_processing("b.webm")
+    # A failed row's source is still referenced until cleaned up.
+    await repo.enqueue(
+        output_filename="c.webm",
+        source_path="/tmp/transcode_src/c.bin",
+        thumbnail_filename="c.webp",
+        owner_user_id="u-1",
+    )
+    await repo.mark_failed("c.webm", "x")
+
+    assert await repo.active_source_paths() == {
+        "/tmp/transcode_src/a.bin",
+        "/tmp/transcode_src/b.bin",
+        "/tmp/transcode_src/c.bin",
+    }

@@ -21,7 +21,7 @@
  * other media renderers.
  */
 import { Spinner } from './Spinner'
-import { readyMedia, mediaFilename } from '@/store/mediaReady'
+import { readyMedia, failedMedia, mediaFilename } from '@/store/mediaReady'
 
 interface Props {
   src: string                 // api/media/<uuid>.webm (signed ok)
@@ -33,12 +33,16 @@ interface Props {
 export function VideoMedia(props: Props) {
   const { src, poster, mediaStatus } = props
   const fn = mediaFilename(src)
-  // Read the signal in the render body so the WS frame re-renders us.
-  const flagged = readyMedia.value.has(fn)
+  // Read both signals in the render body so either WS frame re-renders us.
+  const readyFlag = readyMedia.value.has(fn)
+  const failedFlag = failedMedia.value.has(fn)
   const ready =
-    (mediaStatus !== 'processing' && mediaStatus !== 'failed') || flagged
+    (mediaStatus !== 'processing' && mediaStatus !== 'failed') || readyFlag
 
-  if (mediaStatus === 'failed' && !flagged) {
+  // A WS-driven failure wins over a stale 'processing'/'ready' status. A
+  // later 'media.ready' still wins via readyFlag — but a failed transcode
+  // never emits ready, so the order can't strand a playable clip.
+  if ((mediaStatus === 'failed' && !readyFlag) || failedFlag) {
     return (
       <div class={'sh-video-wrapper sh-video-failed ' + (props.class || '')}>
         <span class="sh-video-failed-msg">

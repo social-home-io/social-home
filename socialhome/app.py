@@ -2525,6 +2525,7 @@ def create_app(config: Config | None = None) -> web.Application:
             MediaOrphanSweepService(
                 media_dir=pathlib.Path(config.media_path),
                 reference_repo=SqliteMediaReferenceRepo(db),
+                media_transcode_repo=repos.media_transcode,
             ),
         )
         await media_sweep_scheduler.start()

@@ -13,7 +13,10 @@ it lists the media dir, and deletes any file that
      owned by ``dm_gc``; sweeping them would clobber in-progress transfers.
 
 Only top-level regular files are considered — sub-directories (the DM
-``.partial/`` staging area) are skipped entirely.
+``.partial/`` staging area, the async-transcode ``transcode_src/`` source
+stash) are skipped entirely by :meth:`sweep_once`. The transcode source
+stash is reaped by its own pass, :meth:`sweep_transcode_src_once`, which the
+scheduler runs alongside the top-level sweep each tick.
 
 Fail-soft: any per-file error is logged and skipped so one bad file never
 aborts the pass.
@@ -26,12 +29,19 @@ import pathlib
 import re
 import stat
 import time
+from typing import TYPE_CHECKING
 
 import aiofiles.os
 
 from ..repositories.media_reference_repo import AbstractMediaReferenceRepo
 
+if TYPE_CHECKING:
+    from ..repositories.media_transcode_repo import AbstractMediaTranscodeRepo
+
 log = logging.getLogger(__name__)
+
+#: Sub-directory of the media root holding async-transcode source blobs.
+_TRANSCODE_SRC_DIRNAME = "transcode_src"
 
 #: Files younger than this (by mtime) are never swept — guards in-flight
 #: uploads and rows whose DB commit races a sweep pass.
@@ -45,7 +55,7 @@ _SKIP_RE = re.compile(r"(\.preview\.webp|\.part\d+|\.assembled)", re.IGNORECASE)
 class MediaOrphanSweepService:
     """One-pass sweep of unreferenced media files."""
 
-    __slots__ = ("_media_dir", "_refs", "_grace")
+    __slots__ = ("_media_dir", "_refs", "_grace", "_transcode")
 
     def __init__(
         self,
@@ -53,10 +63,12 @@ class MediaOrphanSweepService:
         media_dir: pathlib.Path,
         reference_repo: AbstractMediaReferenceRepo,
         grace_seconds: int = GRACE_SECONDS,
+        media_transcode_repo: "AbstractMediaTranscodeRepo | None" = None,
     ) -> None:
         self._media_dir = media_dir
         self._refs = reference_repo
         self._grace = grace_seconds
+        self._transcode = media_transcode_repo
 
     async def sweep_once(self, *, now: float | None = None) -> int:
         """Delete orphaned media files; return the count removed."""
@@ -91,4 +103,52 @@ class MediaOrphanSweepService:
                 log.debug("media-sweep: could not remove %s: %s", path, exc)
         if removed:
             log.info("media-sweep: removed %d orphaned media file(s)", removed)
+        return removed
+
+    async def sweep_transcode_src_once(self, *, now: float | None = None) -> int:
+        """Delete leaked async-transcode source blobs; return count removed.
+
+        On upload the raw source bytes are stashed at
+        ``media_dir/transcode_src/<uuid>.bin`` and a ``media_transcode_jobs``
+        row referencing that path is enqueued. The scheduler deletes the temp
+        source on success and on permanent failure, so a blob only leaks in a
+        narrow crash window (written but the row never processed/cleaned).
+        This pass reaps those: any ``transcode_src`` file no job row
+        references and older than the grace window.
+
+        No-op when the service was built without a transcode repo (so a caller
+        that doesn't wire one stays inert).
+        """
+        if self._transcode is None:
+            return 0
+        now = time.time() if now is None else now
+        src_dir = self._media_dir / _TRANSCODE_SRC_DIRNAME
+        try:
+            entries = await aiofiles.os.listdir(src_dir)
+        except FileNotFoundError:
+            return 0
+        except OSError as exc:  # pragma: no cover — defensive
+            log.warning("media-sweep: transcode_src listdir failed: %s", exc)
+            return 0
+
+        active = await self._transcode.active_source_paths()
+        removed = 0
+        for name in entries:
+            path = src_dir / name
+            if str(path) in active:
+                continue
+            try:
+                st = await aiofiles.os.stat(path)
+                if stat.S_ISDIR(st.st_mode):
+                    continue
+                if now - st.st_mtime < self._grace:
+                    continue
+                await aiofiles.os.remove(path)
+                removed += 1
+            except FileNotFoundError:
+                continue
+            except OSError as exc:  # pragma: no cover — defensive
+                log.debug("media-sweep: could not remove %s: %s", path, exc)
+        if removed:
+            log.info("media-sweep: removed %d leaked transcode source(s)", removed)
         return removed

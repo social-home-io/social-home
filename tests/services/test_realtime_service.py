@@ -956,3 +956,37 @@ async def test_media_transcode_ready_no_owner_no_broadcast(env):
         )
     )
     assert sock.sent == []
+
+
+async def test_media_transcode_failed_pushes_media_failed_to_owner(env):
+    """A permanently-failed background transcode → ``media.failed`` to the
+    uploader's SPA so it flips the placeholder to the failed state without
+    waiting for the next list fetch."""
+    import orjson
+
+    from socialhome.domain.events import MediaTranscodeFailed
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        MediaTranscodeFailed(output_filename="v.webm", owner_user_id="u1")
+    )
+    assert sock.sent
+    frames = [orjson.loads(s) for s in sock.sent]
+    failed = [f for f in frames if f.get("type") == "media.failed"]
+    assert len(failed) == 1
+    assert failed[0]["output_filename"] == "v.webm"
+
+
+async def test_media_transcode_failed_no_owner_no_broadcast(env):
+    """``owner_user_id=None`` → no broadcast (mirrors the ready path)."""
+    from socialhome.domain.events import MediaTranscodeFailed
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        MediaTranscodeFailed(output_filename="v.webm", owner_user_id=None)
+    )
+    assert sock.sent == []

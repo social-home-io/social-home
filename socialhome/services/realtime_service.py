@@ -82,6 +82,7 @@ from ..domain.events import (
     HighlightFrameViewed,
     HighlightRemoved,
     LocalSpaceInviteCreated,
+    MediaTranscodeFailed,
     MediaTranscodeReady,
     MomentCreated,
     MomentDeleted,
@@ -432,6 +433,12 @@ class RealtimeService:
         self._bus.subscribe(
             MediaTranscodeReady,
             self._on_media_transcode_ready,
+        )
+        # Background video transcode permanently failed — unicast to the
+        # uploader so the placeholder flips to the failed state at once.
+        self._bus.subscribe(
+            MediaTranscodeFailed,
+            self._on_media_transcode_failed,
         )
 
     # ─── Async video transcode readiness ─────────────────────────────────
@@ -2051,6 +2058,23 @@ class RealtimeService:
                 "output_filename": event.output_filename,
                 "media_url": media_url,
                 "thumbnail_url": thumb_url,
+            },
+        )
+
+    async def _on_media_transcode_failed(self, event: MediaTranscodeFailed) -> None:
+        """Tell the uploader's SPA a background video transcode permanently
+        failed so it flips the 'Processing…' placeholder to the failed state
+        at once. Other viewers pick up the ``'failed'`` status via the
+        media_status field on their next list fetch (mirrors the
+        ``media.ready`` path). No media_url is needed — the SPA just flips
+        state."""
+        if not event.owner_user_id:
+            return
+        await self._ws.broadcast_to_user(
+            event.owner_user_id,
+            {
+                "type": "media.failed",
+                "output_filename": event.output_filename,
             },
         )
 

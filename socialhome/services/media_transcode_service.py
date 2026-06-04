@@ -18,9 +18,10 @@ future ``output_filename`` immediately so the SPA renders a
 3. **On failure** — transient failures reschedule with jittered
    exponential backoff up to :data:`MAX_ATTEMPTS`; at the cap the row
    flips to ``status='failed'`` so the repo's ``status_for`` surfaces
-   ``'failed'`` to the SPA on its next list fetch. We publish the ready
-   event on success only — a failed-frame event is a documented
-   follow-up.
+   ``'failed'`` to the SPA on its next list fetch, and we publish a
+   :class:`MediaTranscodeFailed` event so the realtime layer can push a
+   ``media.failed`` frame to the uploader for an immediate placeholder
+   flip (mirrors the success-path :class:`MediaTranscodeReady`).
 
 Mirrors :class:`socialhome.services.dm_media_sync_service.DmMediaSyncService`'s
 scheduler lifecycle: an ``asyncio.Event``-based ``_stop`` / ``_wake``
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING
 import aiofiles
 import aiofiles.os
 
-from ..domain.events import MediaTranscodeReady
+from ..domain.events import MediaTranscodeFailed, MediaTranscodeReady
 from ..media.video_processor import VideoProcessor
 from ..repositories.media_transcode_repo import AbstractMediaTranscodeRepo
 from .bus_publisher import BusPublisherMixin
@@ -229,6 +230,7 @@ class MediaTranscodeService(BusPublisherMixin):
         if attempts >= MAX_ATTEMPTS:
             await self._repo.mark_failed(job.output_filename, last_error[:500])
             await self._remove_source(pathlib.Path(job.source_path))
+            await self._publish_failed(job)
             return
         base = BACKOFF_BASE_SECONDS * (2 ** (attempts - 1))
         delay = min(base, BACKOFF_CAP_SECONDS)
@@ -271,6 +273,27 @@ class MediaTranscodeService(BusPublisherMixin):
         except Exception as exc:  # pragma: no cover — fail-soft
             log.debug(
                 "media-transcode: ready-event publish failed for %s: %s",
+                job.output_filename,
+                exc,
+            )
+
+    async def _publish_failed(self, job: "MediaTranscodeJob") -> None:
+        """Fail-soft publish of :class:`MediaTranscodeFailed` at the cap.
+
+        Mirrors :meth:`_publish_ready` — uses :meth:`BusPublisherMixin._emit`
+        (a no-op when no bus is wired) and guards the call so a misbehaving
+        subscriber never blocks the fail path from completing.
+        """
+        try:
+            await self._emit(
+                MediaTranscodeFailed(
+                    output_filename=job.output_filename,
+                    owner_user_id=job.owner_user_id,
+                )
+            )
+        except Exception as exc:  # pragma: no cover — fail-soft
+            log.debug(
+                "media-transcode: failed-event publish failed for %s: %s",
                 job.output_filename,
                 exc,
             )
