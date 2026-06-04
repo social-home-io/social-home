@@ -27,7 +27,10 @@ import pytest
 
 from socialhome.domain.apps import AppManifest, AppPendingSession, InstalledApp
 from socialhome.domain.user import User
-from socialhome.repositories.app_repo import SqliteAppRepo
+from socialhome.repositories.app_repo import (
+    _PENDING_SESSION_MAX_PER_PAIR,
+    SqliteAppRepo,
+)
 from socialhome.repositories.user_repo import SqliteUserRepo
 
 
@@ -278,3 +281,69 @@ async def test_pending_cascades_on_user_delete(db):
     await repo.add_pending_session(_pending(uid))
     await db.enqueue("DELETE FROM users WHERE user_id = ?", (uid,))
     assert await repo.drain_pending_sessions("chess", uid) == []
+
+
+@pytest.mark.asyncio
+async def test_pending_per_pair_cap_drops_oldest_on_insert(db):
+    """A paired-peer flood is bounded: inserting more than the per-pair cap
+    leaves exactly the cap rows, with the OLDEST dropped (newest survive)."""
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+
+    cap = _PENDING_SESSION_MAX_PER_PAIR
+    overflow = 5
+    # Recent timestamps (within the drain TTL) spread by seconds so ordering
+    # is deterministic: sess-0 is oldest, sess-(cap+overflow-1) is newest.
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    for i in range(cap + overflow):
+        created = (base + timedelta(seconds=i)).isoformat()
+        await repo.add_pending_session(
+            _pending(uid, session_id=f"sess-{i}", created_at=created)
+        )
+
+    drained = await repo.drain_pending_sessions("chess", uid)
+    assert len(drained) == cap
+    survivors = {s.session_id for s in drained}
+    # The first ``overflow`` (oldest) sessions were pruned away.
+    expected = {f"sess-{i}" for i in range(overflow, cap + overflow)}
+    assert survivors == expected
+
+
+@pytest.mark.asyncio
+async def test_pending_cap_is_per_pair_not_global(db):
+    """The cap is keyed by (app, user) — a second user is unaffected."""
+    repo = SqliteAppRepo(db)
+    uid_a = await _seed_user(db)
+    uid_b = await _seed_user(db)
+    await repo.install(_app())
+
+    cap = _PENDING_SESSION_MAX_PER_PAIR
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    for i in range(cap + 3):
+        created = (base + timedelta(seconds=i)).isoformat()
+        await repo.add_pending_session(
+            _pending(uid_a, session_id=f"a-{i}", created_at=created)
+        )
+    # One row for user B survives untouched despite A overflowing.
+    await repo.add_pending_session(_pending(uid_b, session_id="b-only"))
+
+    assert len(await repo.drain_pending_sessions("chess", uid_a)) == cap
+    drained_b = await repo.drain_pending_sessions("chess", uid_b)
+    assert [s.session_id for s in drained_b] == ["b-only"]
+
+
+@pytest.mark.asyncio
+async def test_prune_pending_sessions_returns_deleted_count(db):
+    repo = SqliteAppRepo(db)
+    uid = await _seed_user(db)
+    await repo.install(_app())
+    old = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+    await repo.add_pending_session(_pending(uid, session_id="old1", created_at=old))
+    await repo.add_pending_session(_pending(uid, session_id="old2", created_at=old))
+    await repo.add_pending_session(_pending(uid, session_id="fresh"))
+
+    deleted = await repo.prune_pending_sessions(max_age_seconds=300)
+    assert deleted == 2
+    # Nothing left to prune the second time.
+    assert await repo.prune_pending_sessions(max_age_seconds=300) == 0

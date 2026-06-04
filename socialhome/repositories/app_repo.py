@@ -18,6 +18,7 @@ from ..db import AsyncDatabase
 from ..domain.apps import AppKvEntry, AppManifest, AppPendingSession, InstalledApp
 
 _PENDING_SESSION_TTL_SECONDS = 14 * 24 * 60 * 60  # 14 days
+_PENDING_SESSION_MAX_PER_PAIR = 50
 
 
 @runtime_checkable
@@ -53,7 +54,7 @@ class AbstractAppRepo(Protocol):
     ) -> list[AppPendingSession]: ...
     async def prune_pending_sessions(
         self, *, max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS
-    ) -> None: ...
+    ) -> int: ...
 
 
 def _row_to_kv(row) -> AppKvEntry:
@@ -252,6 +253,21 @@ class SqliteAppRepo:
                 s.created_at,
             ),
         )
+        # Bound a flood from a paired peer: keep at most
+        # ``_PENDING_SESSION_MAX_PER_PAIR`` rows per (app, user), deleting the
+        # oldest beyond the cap. Same write-queue batch as the insert, so the
+        # per-pair invariant holds continuously (mirrors the notifications
+        # per-user cap).
+        await self._db.enqueue(
+            """DELETE FROM app_pending_sessions
+                WHERE rowid IN (
+                    SELECT rowid FROM app_pending_sessions
+                     WHERE app_id = ? AND user_id = ?
+                     ORDER BY created_at DESC
+                     LIMIT -1 OFFSET ?
+                )""",
+            (s.app_id, s.user_id, _PENDING_SESSION_MAX_PER_PAIR),
+        )
 
     async def drain_pending_sessions(
         self,
@@ -286,11 +302,23 @@ class SqliteAppRepo:
 
     async def prune_pending_sessions(
         self, *, max_age_seconds: int = _PENDING_SESSION_TTL_SECONDS
-    ) -> None:
+    ) -> int:
+        """Delete pending sessions older than the TTL. Returns purge count.
+
+        Counts before deleting (aiosqlite's DELETE doesn't surface a row
+        count at this revision) — same mechanism as
+        ``federation_repo.prune_replay_cache``.
+        """
         cutoff = (
             datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
         ).isoformat()
+        before = await self._db.fetchval(
+            "SELECT COUNT(*) FROM app_pending_sessions WHERE created_at < ?",
+            (cutoff,),
+            default=0,
+        )
         await self._db.enqueue(
             "DELETE FROM app_pending_sessions WHERE created_at < ?",
             (cutoff,),
         )
+        return int(before)
