@@ -335,6 +335,11 @@ export default function HighlightViewerPage() {
         {frame.frame_type === 'image' ? (
           <img src={frame.media_url} alt={frame.caption_text ?? ''} class="sh-highlight-frame-media" />
         ) : (
+          // Story UX (autoplay-muted, controls=false, tap-to-advance) so this
+          // stays a raw <video> rather than VideoMedia. Trade-off: a frame
+          // still mid-transcode (frame.media_status === 'processing') shows a
+          // black frame here — the status isn't surfaced in the story viewer
+          // yet (documented follow-up).
           <video
             // ``key`` forces a fresh element when the frame id changes
             // — without it, switching from one video to another keeps

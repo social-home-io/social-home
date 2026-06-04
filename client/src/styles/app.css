@@ -12824,6 +12824,47 @@ a.sh-welcome-card:hover {
   margin-top: var(--sh-space-sm);
 }
 
+/* Async-transcode placeholder — same box as the eventual player so the
+ * swap to the real <video> never shifts layout. */
+.sh-video-processing { display: flex; }
+.sh-video-processing-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.35;
+}
+.sh-video-processing-overlay {
+  position: relative;
+  z-index: 1;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sh-space-sm);
+  padding: var(--sh-space-md);
+  text-align: center;
+}
+.sh-video-processing-msg {
+  color: #fff;
+  font-size: 0.85rem;
+}
+
+/* Transcode-failed state — muted box, no player. */
+.sh-video-failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sh-bg-secondary);
+}
+.sh-video-failed-msg {
+  color: var(--sh-text-muted);
+  font-size: 0.85rem;
+  padding: var(--sh-space-md);
+  text-align: center;
+}
+
 /* Location message */
 .sh-location-msg {
   display: flex;

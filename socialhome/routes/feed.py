@@ -26,11 +26,17 @@ from urllib.parse import unquote
 
 from aiohttp import web
 
-from ..app_keys import feed_service_key, media_signer_key, post_repo_key
-from ..domain.post import LocationData
+from ..app_keys import (
+    feed_service_key,
+    media_signer_key,
+    media_transcode_repo_key,
+    post_repo_key,
+)
+from ..domain.post import LocationData, PostType
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from .base import BaseView
+from .media_status import READY, media_filename
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +116,16 @@ class FeedCollectionView(BaseView):
             limit=limit,
             viewer_user_id=ctx.user_id if ctx else None,
         )
+        # Video posts transcode in the background — surface a live
+        # ``media_status`` so the SPA renders a "Processing…" placeholder
+        # until the ``.webm`` exists. One batched repo read per request.
+        video_fns = [
+            fn
+            for post, _ in pairs
+            if post.type is PostType.VIDEO
+            and (fn := media_filename(post.media_url)) is not None
+        ]
+        statuses = await self.svc(media_transcode_repo_key).status_for(video_fns)
         out: list[object] = []
         for post, latest in pairs:
             payload = _serialise_signed(self.request, post)
@@ -119,6 +135,9 @@ class FeedCollectionView(BaseView):
                     if latest is not None
                     else None
                 )
+                if post.type is PostType.VIDEO:
+                    fn = media_filename(post.media_url)
+                    payload["media_status"] = statuses.get(fn, READY) if fn else READY
             out.append(payload)
         return web.json_response(out)
 
@@ -309,9 +328,21 @@ class SavedPostsView(BaseView):
         ctx = self.user
         repo = self.svc(post_repo_key)
         posts = await repo.list_bookmarks(ctx.user_id)
-        return web.json_response(
-            [_serialise_signed(self.request, p) for p in posts],
-        )
+        video_fns = [
+            fn
+            for p in posts
+            if p.type is PostType.VIDEO
+            and (fn := media_filename(p.media_url)) is not None
+        ]
+        statuses = await self.svc(media_transcode_repo_key).status_for(video_fns)
+        out: list[object] = []
+        for p in posts:
+            payload = _serialise_signed(self.request, p)
+            if isinstance(payload, dict) and p.type is PostType.VIDEO:
+                fn = media_filename(p.media_url)
+                payload["media_status"] = statuses.get(fn, READY) if fn else READY
+            out.append(payload)
+        return web.json_response(out)
 
 
 class FeedReadWatermarkView(BaseView):

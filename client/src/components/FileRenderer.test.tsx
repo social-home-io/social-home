@@ -20,8 +20,23 @@ describe('FileRenderer', () => {
 })
 
 describe('VideoRenderer', () => {
-  it('renders video element', () => {
+  it('renders video element when ready (status absent)', () => {
     const { container } = render(<VideoRenderer src="/v.mp4" />)
+    expect(container.querySelector('video')).toBeTruthy()
+  })
+
+  it('renders the processing placeholder (no <video>) while transcoding', () => {
+    const { container } = render(
+      <VideoRenderer src="/v.webm" mediaStatus="processing" />,
+    )
+    expect(container.querySelector('video')).toBeNull()
+    expect(container.querySelector('.sh-video-processing')).toBeTruthy()
+  })
+
+  it('renders the player when mediaStatus is ready', () => {
+    const { container } = render(
+      <VideoRenderer src="/v2.webm" mediaStatus="ready" />,
+    )
     expect(container.querySelector('video')).toBeTruthy()
   })
 })

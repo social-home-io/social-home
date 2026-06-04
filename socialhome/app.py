@@ -118,6 +118,7 @@ from .repositories.dm_media_outbox_repo import SqliteDmMediaOutboxRepo
 from .repositories.space_media_outbox_repo import SqliteSpaceMediaOutboxRepo
 from .repositories.dm_routing_repo import SqliteDmRoutingRepo
 from .repositories.gallery_repo import SqliteGalleryRepo
+from .repositories.media_transcode_repo import SqliteMediaTranscodeRepo
 from .repositories.alias_repo import SqliteAliasRepo
 from .repositories.app_repo import SqliteAppRepo
 from .repositories.preferences_repo import SqlitePreferencesRepo
@@ -257,6 +258,8 @@ from .federation.sync.dm_history import (
 )
 from .federation.sync.space.resume import SpaceSyncResumeProvider
 from .services.gallery_service import GalleryService
+from .services.media_transcode_service import MediaTranscodeService
+from .media.video_processor import VideoProcessor
 from .services.system_album_bridge import SystemAlbumBridge
 from .services.pairing_relay_queue import PairingRelayQueue
 from .services.alias_service import AliasResolver, AliasService
@@ -481,6 +484,7 @@ def _build_repos(db: AsyncDatabase):
         bazaar=SqliteBazaarRepo(db),
         push_sub=SqlitePushSubscriptionRepo(db),
         gallery=SqliteGalleryRepo(db),
+        media_transcode=SqliteMediaTranscodeRepo(db),
         space_key=SqliteSpaceKeyRepo(db),
         search=SqliteSearchRepo(db),
         theme=SqliteThemeRepo(db),
@@ -1364,6 +1368,7 @@ def create_app(config: Config | None = None) -> web.Application:
         user_repo=user_repo,
         space_repo=space_repo,
         conversation_repo=conversation_repo,
+        media_transcode_repo=repos.media_transcode,
     )
     realtime_service.wire()
 
@@ -1416,12 +1421,26 @@ def create_app(config: Config | None = None) -> web.Application:
         gfs_connection_repo=repos.gfs_connection,
     )
 
+    # ── Background video-transcode scheduler ─────────────────────────────
+    # Drains ``media_transcode_jobs`` — the upload endpoints stash source
+    # bytes + enqueue a row, this service transcodes in the background so
+    # uploads return immediately with a "processing" placeholder. Started
+    # in ``_on_startup`` / stopped in cleanup alongside the DM media sync.
+    media_transcode_service = MediaTranscodeService(
+        repo=repos.media_transcode,
+        media_dir=pathlib.Path(config.media_path),
+        processor=VideoProcessor(),
+        bus=bus,
+    )
+
     # ── Gallery service ──────────────────────────────────────────────────
     gallery_service = GalleryService(
         gallery_repo,
         space_repo,
         bus,
         config,
+        media_transcode_repo=repos.media_transcode,
+        media_transcode_service=media_transcode_service,
     )
 
     # ── System "Posts" album bridge (§Gallery) ──────────────────────────
@@ -1804,6 +1823,8 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.peer_space_directory_repo_key] = repos.peer_space_directory
     app[K.gallery_service_key] = gallery_service
     app[K.gallery_repo_key] = gallery_repo
+    app[K.media_transcode_repo_key] = repos.media_transcode
+    app[K.media_transcode_service_key] = media_transcode_service
     app[K.child_protection_service_key] = child_protection_service
     app[K.typing_service_key] = typing_service
     app[K.preferences_service_key] = preferences_service
@@ -2434,6 +2455,10 @@ def create_app(config: Config | None = None) -> web.Application:
         await dm_media_sync_service.start()
         # Same shape for the space-post media outbox scheduler.
         await space_media_sync_service.start()
+        # Background video-transcode scheduler — drains
+        # ``media_transcode_jobs`` so async uploads resolve their
+        # "processing" placeholder. Reclaims orphaned rows on start.
+        await media_transcode_service.start()
 
         # Voice-note receiver-side fallback STT. Runs only when the
         # adapter advertises ``Capability.STT`` — otherwise the
@@ -2647,6 +2672,7 @@ def create_app(config: Config | None = None) -> web.Application:
         # restart (the next boot would see it stuck and never retry).
         await dm_media_sync_service.stop()
         await space_media_sync_service.stop()
+        await media_transcode_service.stop()
         if password_reset_cleanup_scheduler is not None:
             await password_reset_cleanup_scheduler.stop()
         await online_status_service.stop()

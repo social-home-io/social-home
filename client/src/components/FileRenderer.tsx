@@ -13,6 +13,7 @@
  * ``socialhome.media_signer`` and ``socialhome.auth.SignedMediaStrategy``.
  */
 import { openLightbox } from './ImageLightbox'
+import { VideoMedia } from './VideoMedia'
 
 interface FileAttachment {
   url: string
@@ -38,17 +39,19 @@ export function FileRenderer({ file }: { file: FileAttachment }) {
   )
 }
 
-export function VideoRenderer({ src, poster }: { src: string; poster?: string }) {
+export function VideoRenderer({
+  src, poster, mediaStatus,
+}: {
+  src: string
+  poster?: string
+  /** Background-transcode state from the list payload — ``'processing'``
+   *  shows a placeholder until the ``media.ready`` WS frame swaps it for
+   *  the player. Absent on older payloads → treated as ready. */
+  mediaStatus?: 'processing' | 'failed' | 'ready'
+}) {
   return (
     <div class="sh-video-wrapper">
-      <video
-        class="sh-video"
-        src={src}
-        poster={poster}
-        controls
-        preload="metadata"
-        playsinline
-      />
+      <VideoMedia src={src} poster={poster} mediaStatus={mediaStatus} />
     </div>
   )
 }

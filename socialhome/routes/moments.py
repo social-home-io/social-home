@@ -27,6 +27,7 @@ from aiohttp import web
 
 from ..app_keys import (
     media_signer_key,
+    media_transcode_repo_key,
     moment_repo_key,
     moment_service_key,
     report_service_key,
@@ -41,6 +42,7 @@ from ..domain.report import (
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from .base import BaseView
+from .media_status import READY, media_filename
 
 
 def _sign_payload(request: web.Request, payload):
@@ -62,6 +64,7 @@ def _moment_dict(
     m: Moment,
     *,
     counts: dict[str, int] | None = None,
+    media_status: str | None = None,
 ) -> dict:
     base: dict = {
         "id": m.id,
@@ -85,7 +88,29 @@ def _moment_dict(
     if counts is not None:
         base["reaction_count"] = counts.get("reaction_count", 0)
         base["reply_count"] = counts.get("reply_count", 0)
+    # Video moments transcode in the background — surface a live
+    # ``media_status`` so the SPA shows a "Processing…" placeholder.
+    if m.media_type == "video":
+        base["media_status"] = media_status if media_status is not None else READY
     return base
+
+
+async def _video_statuses(view: BaseView, moments) -> dict[str, str]:
+    """Batch one ``status_for`` read for every video moment's filename."""
+    video_fns = [
+        fn
+        for m in moments
+        if m.media_type == "video" and (fn := media_filename(m.media_url)) is not None
+    ]
+    return await view.svc(media_transcode_repo_key).status_for(video_fns)
+
+
+def _moment_status(statuses: dict[str, str], m: Moment) -> str | None:
+    """Per-moment readiness, or ``None`` for non-video moments."""
+    if m.media_type != "video":
+        return None
+    fn = media_filename(m.media_url)
+    return statuses.get(fn, READY) if fn else READY
 
 
 def _reaction_dict(r: MomentReaction) -> dict:
@@ -120,10 +145,18 @@ class MomentCollectionView(BaseView):
         )
         repo = self.svc(moment_repo_key)
         counts = await repo.count_engagement_for([m.id for m in moments])
+        statuses = await _video_statuses(self, moments)
         return self._json(
             _sign_payload(
                 self.request,
-                [_moment_dict(m, counts=counts.get(m.id)) for m in moments],
+                [
+                    _moment_dict(
+                        m,
+                        counts=counts.get(m.id),
+                        media_status=_moment_status(statuses, m),
+                    )
+                    for m in moments
+                ],
             )
         )
 
@@ -175,10 +208,18 @@ class MomentArchiveView(BaseView):
         )
         repo = self.svc(moment_repo_key)
         counts = await repo.count_engagement_for([m.id for m in moments])
+        statuses = await _video_statuses(self, moments)
         return self._json(
             _sign_payload(
                 self.request,
-                [_moment_dict(m, counts=counts.get(m.id)) for m in moments],
+                [
+                    _moment_dict(
+                        m,
+                        counts=counts.get(m.id),
+                        media_status=_moment_status(statuses, m),
+                    )
+                    for m in moments
+                ],
             )
         )
 
@@ -222,13 +263,23 @@ class MomentDetailView(BaseView):
         repo = self.svc(moment_repo_key)
         ids = [moment.id, *[r.id for r in replies]]
         counts = await repo.count_engagement_for(ids)
+        statuses = await _video_statuses(self, [moment, *replies])
         return self._json(
             _sign_payload(
                 self.request,
                 {
-                    "moment": _moment_dict(moment, counts=counts.get(moment.id)),
+                    "moment": _moment_dict(
+                        moment,
+                        counts=counts.get(moment.id),
+                        media_status=_moment_status(statuses, moment),
+                    ),
                     "replies": [
-                        _moment_dict(r, counts=counts.get(r.id)) for r in replies
+                        _moment_dict(
+                            r,
+                            counts=counts.get(r.id),
+                            media_status=_moment_status(statuses, r),
+                        )
+                        for r in replies
                     ],
                     "reactions": [_reaction_dict(r) for r in reactions],
                 },

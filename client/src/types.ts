@@ -56,6 +56,11 @@ export interface FeedPost {
   /** Single-URL slot for ``video`` and ``file`` posts. ``image`` posts
    *  leave this ``null`` and use :attr:`image_urls` instead. */
   media_url: string | null
+  /** Background-transcode state for ``video`` posts — ``'processing'``
+   *  while the worker encodes, ``'failed'`` if it gave up, ``'ready'``
+   *  once playable. Absent on non-video posts and on older payloads
+   *  (treated as ready). */
+  media_status?: 'processing' | 'failed' | 'ready'
   /** 1..5 signed URLs when ``type === 'image'``; empty otherwise. */
   image_urls: string[]
   file_meta: FileAttachment | null
@@ -149,6 +154,10 @@ export interface Moment {
   content:            string
   media_url:          string | null
   media_type:         'image' | 'video' | null
+  /** Background-transcode state for ``video`` moments — ``'processing'``
+   *  while the worker encodes, ``'ready'`` once playable. Absent on
+   *  non-video moments and on older payloads (treated as ready). */
+  media_status?:      'processing' | 'failed' | 'ready'
   duration_ms:        number | null
   parent_moment_id:   string | null
   origin_instance_id: string
@@ -381,6 +390,11 @@ export interface Message {
    *  the sender's outbox exhausted its retry budget. ``null`` on
    *  same-household messages or once the full bytes have arrived. */
   media_sync_status?: 'pending' | 'failed' | null
+  /** Background-transcode state for ``video`` messages — ``'processing'``
+   *  while the worker encodes, ``'ready'`` once playable. Distinct from
+   *  :attr:`media_sync_status` (cross-household blob transfer). Absent on
+   *  non-video messages and on older payloads (treated as ready). */
+  media_status?: 'processing' | 'failed' | 'ready'
   /** SPA-only fields set on the optimistic ``tmp-...`` bubble when
    *  its background ``POST`` fails. Never reach the wire / server. */
   send_failed?: boolean

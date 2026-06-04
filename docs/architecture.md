@@ -307,6 +307,27 @@ eviction, outbox processing, calendar reminders, page-lock expiry,
 post-draft GC, pairing-relay flush, post-rotation tasks, space
 retention, task deadlines, and recurring-task spawning.
 
+### Async media transcoding
+
+Video uploads transcode in the background instead of blocking the
+request. `POST /api/media/upload` (and gallery video upload) stashes
+the raw source bytes in a temp file, enqueues one `media_transcode_jobs`
+row keyed by the eventual output filename, and returns immediately with
+`media_status:"processing"` so the SPA renders a "Processing…"
+placeholder. `MediaTranscodeService`
+(`socialhome/services/media_transcode_service.py`) drains the queue —
+mirroring the DM media-sync outbox/scheduler pattern: it claims each due
+job, transcodes the source to a VP9/Opus `.webm` plus a WebP poster,
+writes both under the media root, deletes the row (readiness == absent
+row), and publishes `MediaTranscodeReady`. The realtime service turns
+that event into a `media.ready` WS frame pushed to the uploader so its
+SPA swaps the placeholder for the player; other viewers pick up
+readiness via the `media_status` field on their next list fetch
+(`'processing'` / `'failed'` / `'ready'`, absent ⇒ ready). It uses the
+same `_stop`/`_wake` `asyncio.Event` scheduler family as the other
+background services, with jittered exponential backoff that flips a job
+to `status='failed'` after its retry budget.
+
 ### Page conflict resolution
 
 Concurrent edits to a space page produce a `space_page_snapshots`

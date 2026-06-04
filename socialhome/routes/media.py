@@ -12,7 +12,13 @@ import aiofiles.os
 from aiohttp import web
 from aiohttp.multipart import BodyPartReader
 
-from ..app_keys import config_key, media_signer_key, storage_quota_service_key
+from ..app_keys import (
+    config_key,
+    media_signer_key,
+    media_transcode_repo_key,
+    media_transcode_service_key,
+    storage_quota_service_key,
+)
 from ..domain.media_constraints import (
     AUDIO_ACCEPTED_MIMES,
     FILE_DENIED_EXTENSIONS,
@@ -21,7 +27,6 @@ from ..domain.media_constraints import (
 )
 from ..media.audio_processor import AudioProcessor
 from ..media.image_processor import ImageProcessor
-from ..media.video_processor import VideoProcessor
 from ..security import error_response
 from .base import BaseView
 
@@ -196,15 +201,26 @@ class MediaUploadView(BaseView):
             content_type in _IMAGE_HINT_MIMES or lower_ext in _IMAGE_HINT_EXTS
         )
 
+        # ── Async video path ────────────────────────────────────────────
+        # Video transcode is the slowest, most CPU-heavy branch — running
+        # it inline blocks the request for seconds. Instead we stash the
+        # raw source bytes in the (non-served) ``transcode_src`` temp dir,
+        # enqueue one ``media_transcode_jobs`` row keyed by the eventual
+        # ``.webm`` output filename, and return 201 with
+        # ``media_status='processing'`` immediately. The background
+        # :class:`MediaTranscodeService` decodes the source, writes the
+        # ``.webm`` + ``.webp`` poster, and clears the row. Size + MIME
+        # were already validated above (``_DEFAULT_MAX_UPLOAD_BYTES`` /
+        # quota), so the enqueue can't be abused as an unbounded sink.
+        if is_video:
+            return await self._enqueue_video(config, data)
+
         try:
             out_bytes: bytes
             out_name: str
             if is_audio:
                 a_proc = AudioProcessor()
                 out_bytes, out_name = await a_proc.process(data, filename)
-            elif is_video:
-                v_proc = VideoProcessor()
-                out_bytes, out_name = await v_proc.process(data, filename)
             elif is_image:
                 processor = ImageProcessor()
                 out_bytes, out_name = await processor.process(data, filename)
@@ -251,5 +267,55 @@ class MediaUploadView(BaseView):
         signed_url = signer.sign(url) if signer is not None else url
         return web.json_response(
             {"url": url, "filename": out_name, "signed_url": signed_url},
+            status=201,
+        )
+
+    async def _enqueue_video(self, config, data: bytes) -> web.Response:
+        """Stash source bytes + enqueue a background transcode job.
+
+        Returns 201 with the future ``.webm`` URL and
+        ``media_status='processing'`` — the files don't exist yet, so
+        signing the (not-yet-present) path is fine; every read re-signs.
+        The source bytes go under ``media_dir/transcode_src`` which the
+        serve route can never reach (it rejects any filename containing
+        ``/``), so the raw upload is never publicly fetchable.
+        """
+        media_dir = pathlib.Path(config.media_path)
+        output_filename = f"{uuid.uuid4().hex}.webm"
+        thumbnail_filename = f"{uuid.uuid4().hex}.webp"
+
+        temp_dir = media_dir / "transcode_src"
+        await aiofiles.os.makedirs(temp_dir, exist_ok=True)
+        temp_path = temp_dir / f"{uuid.uuid4().hex}.bin"
+        async with aiofiles.open(temp_path, "wb") as f:
+            await f.write(data)
+
+        repo = self.svc(media_transcode_repo_key)
+        await repo.enqueue(
+            output_filename=output_filename,
+            source_path=str(temp_path),
+            thumbnail_filename=thumbnail_filename,
+            owner_user_id=self.user.user_id,
+        )
+        self.svc(media_transcode_service_key).nudge()
+
+        url = f"api/media/{output_filename}"
+        thumbnail_url = f"api/media/{thumbnail_filename}"
+        signer = self.request.app.get(media_signer_key)
+        if signer is not None:
+            url_signed = signer.sign(url)
+            thumb_signed = signer.sign(thumbnail_url)
+        else:
+            url_signed = url
+            thumb_signed = thumbnail_url
+        return web.json_response(
+            {
+                "url": url,
+                "thumbnail_url": thumbnail_url,
+                "filename": output_filename,
+                "media_status": "processing",
+                "signed_url": url_signed,
+                "signed_thumbnail_url": thumb_signed,
+            },
             status=201,
         )

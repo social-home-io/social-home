@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..domain.events import (
     BazaarBidPlaced,
@@ -82,6 +82,7 @@ from ..domain.events import (
     HighlightFrameViewed,
     HighlightRemoved,
     LocalSpaceInviteCreated,
+    MediaTranscodeReady,
     MomentCreated,
     MomentDeleted,
     MomentReactionChanged,
@@ -136,6 +137,9 @@ from .space_bot_service import (
     SpaceBotUpdated,
 )
 
+if TYPE_CHECKING:
+    from ..repositories.media_transcode_repo import AbstractMediaTranscodeRepo
+
 log = logging.getLogger(__name__)
 
 
@@ -161,6 +165,7 @@ class RealtimeService:
         "_space_repo",
         "_conversation_repo",
         "_media_signer",
+        "_media_transcode_repo",
     )
 
     def __init__(
@@ -172,6 +177,7 @@ class RealtimeService:
         space_repo,
         conversation_repo=None,
         media_signer: MediaUrlSigner | None = None,
+        media_transcode_repo: "AbstractMediaTranscodeRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._ws = ws
@@ -189,6 +195,13 @@ class RealtimeService:
         # ``_on_startup``; ``attach_media_signer`` wires it in once
         # available.
         self._media_signer = media_signer
+        # Lets ``*.created`` / ``*.edited`` frames stamp ``media_status`` on a
+        # freshly-posted video so the SPA renders the 'Processing…' placeholder
+        # until the ``media.ready`` frame swaps in the player — matching the
+        # ``media_status`` field the REST list endpoints already serve.
+        # Optional for back-compat callers / test stacks that don't exercise
+        # the video path.
+        self._media_transcode_repo = media_transcode_repo
 
     def attach_media_signer(self, signer: MediaUrlSigner) -> None:
         """Late binding — signer is built after RealtimeService.__init__."""
@@ -415,22 +428,64 @@ class RealtimeService:
             UserPreferencesChanged,
             self._on_user_preferences_changed,
         )
+        # Background video transcode finished — unicast to the uploader
+        self._bus.subscribe(
+            MediaTranscodeReady,
+            self._on_media_transcode_ready,
+        )
+
+    # ─── Async video transcode readiness ─────────────────────────────────
+
+    async def _annotate_media_status(self, item: dict | None) -> None:
+        """If ``item`` is a video with a media_url, stamp ``media_status`` from
+        the transcode queue so a freshly-posted (still-transcoding) video
+        renders the 'Processing…' placeholder until the ``media.ready`` frame
+        swaps it. Mutates in place.
+
+        Mirrors the REST list endpoints (``routes/feed.py`` etc.): a local
+        just-enqueued video has a ``media_transcode_jobs`` row →
+        ``'processing'``; a federated video with no transcode job is absent
+        from ``status_for`` → ``'ready'`` (so federated videos aren't wrongly
+        stuck processing). Fail-soft — never let annotation break the
+        broadcast.
+        """
+        if not item or self._media_transcode_repo is None:
+            return
+        if (
+            item.get("type") != "video"
+            and item.get("media_type") != "video"
+            and item.get("item_type") != "video"
+        ):
+            return
+        fn = _media_filename(item.get("media_url") or item.get("url"))
+        if not fn:
+            return
+        try:
+            statuses = await self._media_transcode_repo.status_for([fn])
+        except Exception:  # noqa: BLE001 — annotation must not break the frame
+            log.warning("media_status annotation failed for %s", fn, exc_info=True)
+            return
+        item["media_status"] = statuses.get(fn, "ready")
 
     # ─── Household feed events ────────────────────────────────────────────
 
     async def _on_post_created(self, event: PostCreated) -> None:
+        post = _safe(event.post)
+        await self._annotate_media_status(post)
         await self._broadcast_household(
             {
                 "type": "post.created",
-                "post": _safe(event.post),
+                "post": post,
             }
         )
 
     async def _on_post_edited(self, event: PostEdited) -> None:
+        post = _safe(event.post)
+        await self._annotate_media_status(post)
         await self._broadcast_household(
             {
                 "type": "post.edited",
-                "post": _safe(event.post),
+                "post": post,
             }
         )
 
@@ -657,12 +712,14 @@ class RealtimeService:
     # ─── Space events ─────────────────────────────────────────────────────
 
     async def _on_space_post_created(self, event: SpacePostCreated) -> None:
+        post = _safe(event.post)
+        await self._annotate_media_status(post)
         await self._broadcast_space(
             event.space_id,
             {
                 "type": "space.post.created",
                 "space_id": event.space_id,
-                "post": _safe(event.post),
+                "post": post,
             },
         )
 
@@ -1966,6 +2023,29 @@ class RealtimeService:
             },
         )
 
+    async def _on_media_transcode_ready(self, event: MediaTranscodeReady) -> None:
+        """Tell the uploader's SPA a background video transcode is done so it
+        can swap the 'Processing…' placeholder for the player. Other viewers
+        pick up readiness via the media_status field on their next list fetch
+        (broadcasting to the full post/item audience is a documented
+        follow-up)."""
+        if not event.owner_user_id:
+            return
+        media_url = f"api/media/{event.output_filename}"
+        thumb_url = f"api/media/{event.thumbnail_filename}"
+        if self._media_signer is not None:
+            media_url = self._media_signer.sign(media_url)
+            thumb_url = self._media_signer.sign(thumb_url)
+        await self._ws.broadcast_to_user(
+            event.owner_user_id,
+            {
+                "type": "media.ready",
+                "output_filename": event.output_filename,
+                "media_url": media_url,
+                "thumbnail_url": thumb_url,
+            },
+        )
+
     async def _on_dm_conversation_created(
         self,
         event: DmConversationCreated,
@@ -1987,6 +2067,18 @@ class RealtimeService:
 
 
 # ─── Serialisation helper ────────────────────────────────────────────────
+
+
+def _media_filename(url: str | None) -> str | None:
+    """Last path segment of a media URL, minus any signature query.
+
+    The transcode repo's ``status_for`` is keyed by the *output filename* —
+    the canonical media key. Mirrors ``routes/media_status.media_filename``;
+    inlined here so the service layer carries no dependency on ``routes``.
+    """
+    if not url:
+        return None
+    return url.split("?", 1)[0].rsplit("/", 1)[-1] or None
 
 
 def _safe(value: Any) -> Any:

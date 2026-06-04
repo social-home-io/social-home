@@ -429,3 +429,111 @@ async def test_report_missing_category_rejected(client):
         headers=_auth(client._tok),
     )
     assert r.status == 422
+
+
+# ── Video media_status ─────────────────────────────────────────────────────
+
+
+async def _create_video_moment(client) -> tuple[str, str]:
+    """Create a video moment + enqueue a matching transcode row.
+
+    Returns ``(moment_id, output_fn)``. Stops the scheduler so the row
+    stays put while the test inspects readiness.
+    """
+    from socialhome.app_keys import (
+        media_transcode_repo_key,
+        media_transcode_service_key,
+    )
+
+    await client.app[media_transcode_service_key].stop()
+    fn = "momvid00000000000000000000000.webm"
+    r = await client.post(
+        "/api/moments",
+        json={
+            "content": "look at this",
+            "media_url": f"api/media/{fn}",
+            "media_type": "video",
+            "duration_ms": 5000,
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    moment_id = (await r.json())["id"]
+    await client.app[media_transcode_repo_key].enqueue(
+        output_filename=fn,
+        source_path="/tmp/src.bin",
+        thumbnail_filename="thumb.webp",
+        owner_user_id=client._uid,
+    )
+    return moment_id, fn
+
+
+async def _inbox(client) -> list[dict]:
+    r = await client.get("/api/moments", headers=_auth(client._tok))
+    assert r.status == 200
+    return await r.json()
+
+
+async def test_moment_video_media_status_processing(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    moment_id, fn = await _create_video_moment(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    m = next(x for x in await _inbox(client) if x["id"] == moment_id)
+    assert m["media_type"] == "video"
+    assert m["media_status"] == "processing"
+
+
+async def test_moment_video_media_status_ready_after_complete(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    moment_id, fn = await _create_video_moment(client)
+    await client.app[media_transcode_repo_key].complete(fn)
+    m = next(x for x in await _inbox(client) if x["id"] == moment_id)
+    assert m["media_status"] == "ready"
+
+
+async def test_moment_video_media_status_failed(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    moment_id, fn = await _create_video_moment(client)
+    await client.app[media_transcode_repo_key].mark_failed(fn, "boom")
+    m = next(x for x in await _inbox(client) if x["id"] == moment_id)
+    assert m["media_status"] == "failed"
+
+
+async def test_moment_text_has_no_processing_status(client):
+    # A reply is exempt from the per-author top-level rate limit, so it
+    # can coexist with the video moment in the same inbox.
+    parent_id, _fn = await _create_video_moment(client)
+    r = await client.post(
+        "/api/moments",
+        json={"content": "plain text", "parent_moment_id": parent_id},
+        headers=_auth(client._tok),
+    )
+    text_id = (await r.json())["id"]
+    m = next(x for x in await _inbox(client) if x["id"] == text_id)
+    assert m["media_type"] is None
+    assert m.get("media_status") != "processing"
+
+
+async def test_moment_archive_video_media_status(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    moment_id, fn = await _create_video_moment(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    r = await client.get("/api/moments/archive", headers=_auth(client._tok))
+    assert r.status == 200
+    m = next(x for x in await r.json() if x["id"] == moment_id)
+    assert m["media_status"] == "processing"
+
+
+async def test_moment_detail_video_media_status(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    moment_id, fn = await _create_video_moment(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    r = await client.get(f"/api/moments/{moment_id}", headers=_auth(client._tok))
+    assert r.status == 200
+    body = await r.json()
+    assert body["moment"]["media_status"] == "processing"

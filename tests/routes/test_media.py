@@ -244,6 +244,94 @@ async def test_get_media_path_traversal_400(client):
     assert r.status in (400, 404)
 
 
+async def test_upload_video_is_async(client):
+    """A video upload returns 201 with ``media_status='processing'`` and
+    a ``.webm`` URL, enqueues exactly one transcode job, and does NOT
+    write the output file inline (it's still queued)."""
+    from socialhome.app_keys import (
+        media_transcode_repo_key,
+        media_transcode_service_key,
+    )
+
+    # Stop the background loop so it can't drain (or reschedule, failing
+    # the real transcode on these fake bytes) the row before we assert
+    # it's queued.
+    await client.app[media_transcode_service_key].stop()
+
+    r = await _upload_file(
+        client,
+        filename="clip.mp4",
+        body=b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200,
+        content_type="video/mp4",
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body["media_status"] == "processing"
+    assert body["url"].startswith("api/media/")
+    assert body["url"].endswith(".webm")
+    assert body["thumbnail_url"].endswith(".webp")
+    out_name = body["filename"]
+    assert out_name.endswith(".webm")
+
+    # Exactly one job enqueued, keyed by the returned output filename.
+    repo = client.app[media_transcode_repo_key]
+    due = await repo.list_due()
+    assert len(due) == 1
+    assert due[0].output_filename == out_name
+
+    # The .webm doesn't exist yet — it's still queued, not transcoded.
+    cfg = client.app[config_key]
+    assert not (pathlib.Path(cfg.media_path) / out_name).exists()
+
+
+async def test_upload_video_flush_produces_file(client, monkeypatch):
+    """Driving ``flush_once`` with a stub processor writes the output +
+    poster and clears the job (readiness == absent row)."""
+    from socialhome.app_keys import (
+        media_transcode_repo_key,
+        media_transcode_service_key,
+    )
+
+    svc = client.app[media_transcode_service_key]
+    # Stop the background loop first so it can't race ``flush_once`` (the
+    # real VideoProcessor would fail on the fake bytes + reschedule the
+    # row past its next-attempt window). With the loop stopped + a stub
+    # processor wired, the flush below is deterministic.
+    await svc.stop()
+
+    class _StubProcessor:
+        async def process(self, src, name):
+            return b"WEBMDATA", "out.webm"
+
+        async def generate_thumbnail(self, src):
+            return b"WEBPDATA"
+
+    monkeypatch.setattr(svc, "_processor", _StubProcessor())
+
+    r = await _upload_file(
+        client,
+        filename="clip.mp4",
+        body=b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200,
+        content_type="video/mp4",
+    )
+    assert r.status == 201
+    body = await r.json()
+    out_name = body["filename"]
+    thumb_name = body["thumbnail_url"].rsplit("/", 1)[-1]
+
+    done = await svc.flush_once()
+    assert done == 1
+
+    cfg = client.app[config_key]
+    media_dir = pathlib.Path(cfg.media_path)
+    assert (media_dir / out_name).read_bytes() == b"WEBMDATA"
+    assert (media_dir / thumb_name).read_bytes() == b"WEBPDATA"
+
+    # Completed job is deleted — nothing left due.
+    repo = client.app[media_transcode_repo_key]
+    assert await repo.list_due() == []
+
+
 async def test_signed_url_for_user_picture(client):
     """Same scheme works against ``/api/users/{id}/picture`` —
     avatars rely on it. We don't need a real picture row; the
