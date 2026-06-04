@@ -139,6 +139,14 @@ export function mountBridge(
           break
         }
 
+        case 'app.pendingSessions': {
+          const resp = await api.get<{ sessions: unknown[] }>(
+            `/api/apps/${encodeURIComponent(appId)}/pending-sessions`,
+          )
+          reply({ id, ok: true, result: resp.sessions })
+          break
+        }
+
         case 'app.openSession': {
           const { target } = params ?? {}
           const resp = await api.post<{ session_id: string }>(

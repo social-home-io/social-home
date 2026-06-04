@@ -327,6 +327,27 @@ describe('mountBridge', () => {
     )
   })
 
+  // ── app.pendingSessions ─────────────────────────────────────────────────
+
+  it('app.pendingSessions: GETs /pending-sessions and returns sessions array', async () => {
+    const sessions = [
+      { session_id: 's1', from_instance: 'i1', from_user: 'u', payload: {} },
+    ]
+    mockApiGet.mockResolvedValueOnce({ sessions })
+    const handler = captureMessageHandler()
+
+    await handler({
+      source: iframe.contentWindow as unknown as Window,
+      data: { id: 44, method: 'app.pendingSessions' },
+    })
+
+    expect(mockApiGet).toHaveBeenCalledWith(`/api/apps/${APP_ID}/pending-sessions`)
+    expect(iframe.contentWindow!.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 44, ok: true, result: sessions }),
+      '*',
+    )
+  })
+
   // ── app.openSession ────────────────────────────────────────────────────
 
   it('app.openSession: POSTs to /sessions with target; returns session_id', async () => {

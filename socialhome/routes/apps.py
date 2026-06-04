@@ -317,6 +317,30 @@ class AppSessionsView(BaseView):
         return self._json({"session_id": session_id}, status=201)
 
 
+class AppPendingSessionsView(BaseView):
+    """``GET /api/apps/{app_id}/pending-sessions`` — drain this user's
+    replayable session invites (delivered to apps that were closed when the
+    invite arrived). Read-and-clear: each invite is returned at most once."""
+
+    async def get(self) -> web.Response:
+        app_id = self.match("app_id")
+        svc = self.svc(app_federation_service_key)
+        pending = await svc.drain_pending_sessions(app_id, self.user.user_id)
+        return self._json(
+            {
+                "sessions": [
+                    {
+                        "session_id": p.session_id,
+                        "from_instance": p.from_instance,
+                        "from_user": p.from_user,
+                        "payload": p.payload,
+                    }
+                    for p in pending
+                ]
+            }
+        )
+
+
 class AppMessagesView(BaseView):
     """``POST /api/apps/{app_id}/messages`` — send an app-layer message to a peer."""
 
