@@ -5,7 +5,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import {
   readyMedia,
+  failedMedia,
   markMediaReady,
+  markMediaFailed,
   mediaFilename,
   _resetMediaReadyForTest,
 } from './mediaReady'
@@ -48,10 +50,37 @@ describe('markMediaReady', () => {
   })
 })
 
+describe('markMediaFailed', () => {
+  beforeEach(() => { _resetMediaReadyForTest() })
+
+  it('adds a filename to the failed set', () => {
+    markMediaFailed('abc.webm')
+    expect(failedMedia.value.has('abc.webm')).toBe(true)
+  })
+
+  it('is idempotent and keeps the signal reference stable on a no-op', () => {
+    markMediaFailed('abc.webm')
+    const ref = failedMedia.value
+    markMediaFailed('abc.webm')
+    expect(failedMedia.value).toBe(ref)
+  })
+
+  it('ignores an empty filename', () => {
+    markMediaFailed('')
+    expect(failedMedia.value.size).toBe(0)
+  })
+})
+
 describe('_resetMediaReadyForTest', () => {
   it('clears the ready set', () => {
     markMediaReady('abc.webm')
     _resetMediaReadyForTest()
     expect(readyMedia.value.size).toBe(0)
+  })
+
+  it('clears the failed set', () => {
+    markMediaFailed('abc.webm')
+    _resetMediaReadyForTest()
+    expect(failedMedia.value.size).toBe(0)
   })
 })

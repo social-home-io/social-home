@@ -21,7 +21,7 @@ import aiofiles
 import aiofiles.os
 import pytest
 
-from socialhome.domain.events import MediaTranscodeReady
+from socialhome.domain.events import MediaTranscodeFailed, MediaTranscodeReady
 from socialhome.domain.media_transcode import MediaTranscodeJob
 from socialhome.services.media_transcode_service import (
     MAX_ATTEMPTS,
@@ -236,7 +236,8 @@ async def test_missing_source_fails_without_writing_or_crashing(tmp_path):
     # First failure → rescheduled, not failed terminally.
     assert repo.rows["out.webm"].status == "pending"
     assert repo.rows["out.webm"].attempts == 1
-    # No output written, no event published.
+    # No output written, no event published (a reschedule must NOT emit
+    # the terminal MediaTranscodeFailed frame).
     assert not await aiofiles.os.path.isfile(tmp_path / "out.webm")
     assert not await aiofiles.os.path.isfile(tmp_path / "out.webp")
     assert bus.published == []
@@ -265,6 +266,7 @@ async def test_processor_error_reschedules_then_fails_after_max_attempts(tmp_pat
     assert row.attempts == 1
     now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     assert row.next_attempt_at > now_iso
+    # A reschedule must NOT publish the terminal failed frame.
     assert bus.published == []
 
     # Drive remaining attempts: reset due time + advance attempts until the cap.
@@ -274,9 +276,17 @@ async def test_processor_error_reschedules_then_fails_after_max_attempts(tmp_pat
         repo.rows["out.webm"].next_attempt_at = "2000-01-01 00:00:00"
         await svc.flush_once()
 
-    # Terminal failure: row flipped to 'failed', never deleted, no event.
+    # Terminal failure: row flipped to 'failed', never deleted.
     assert repo.rows["out.webm"].status == "failed"
-    assert bus.published == []
+    # Hitting the attempt cap publishes exactly one MediaTranscodeFailed
+    # (mirroring the success-path MediaTranscodeReady) so the uploader's
+    # SPA can flip the placeholder to the failed state immediately instead
+    # of waiting for the next list fetch. No MediaTranscodeReady on failure.
+    failed = [e for e in bus.published if isinstance(e, MediaTranscodeFailed)]
+    assert len(failed) == 1
+    assert failed[0].output_filename == "out.webm"
+    assert failed[0].owner_user_id == "user-1"
+    assert not any(isinstance(e, MediaTranscodeReady) for e in bus.published)
 
 
 async def test_start_reclaims_and_stop_is_clean(tmp_path):

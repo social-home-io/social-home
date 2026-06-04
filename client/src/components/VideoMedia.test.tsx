@@ -14,7 +14,11 @@ import { render } from '@testing-library/preact'
 vi.mock('@/ws', () => ({ ws: { on: () => () => {} } }))
 
 import { VideoMedia } from './VideoMedia'
-import { markMediaReady, _resetMediaReadyForTest } from '@/store/mediaReady'
+import {
+  markMediaReady,
+  markMediaFailed,
+  _resetMediaReadyForTest,
+} from '@/store/mediaReady'
 
 const SRC = 'api/media/abc.webm?exp=1&sig=xyz'
 const POSTER = 'api/media/abc-thumb.jpg?sig=p'
@@ -72,5 +76,24 @@ describe('VideoMedia', () => {
       <VideoMedia src={SRC} poster={POSTER} mediaStatus="failed" />,
     )
     expect(container.querySelector('video')).not.toBeNull()
+  })
+
+  it('a WS-failed frame overrides a stale ready status', () => {
+    markMediaFailed('abc.webm')
+    const { container, getByText } = render(
+      <VideoMedia src={SRC} poster={POSTER} mediaStatus="ready" />,
+    )
+    expect(container.querySelector('video')).toBeNull()
+    expect(container.querySelector('.sh-video-failed')).not.toBeNull()
+    expect(getByText(/couldn’t be processed/)).toBeTruthy()
+  })
+
+  it('a WS-failed frame flips a still-processing video to the failed state', () => {
+    markMediaFailed('abc.webm')
+    const { container } = render(
+      <VideoMedia src={SRC} poster={POSTER} mediaStatus="processing" />,
+    )
+    expect(container.querySelector('video')).toBeNull()
+    expect(container.querySelector('.sh-video-failed')).not.toBeNull()
   })
 })

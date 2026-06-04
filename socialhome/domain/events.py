@@ -1879,6 +1879,25 @@ class MediaTranscodeReady(DomainEvent):
 
 
 @dataclass(slots=True, frozen=True)
+class MediaTranscodeFailed(DomainEvent):
+    """A background video transcode permanently failed — the worker hit
+    :data:`MediaTranscodeService.MAX_ATTEMPTS` and flipped the row to
+    ``status='failed'``.
+
+    Published by :class:`MediaTranscodeService._fail` on the terminal /
+    attempt-cap branch only (a reschedule never emits it). The realtime
+    WS fan-out re-emits it as a ``media.failed`` frame to the uploader so
+    the SPA flips its "Processing…" placeholder to the failed state
+    immediately, instead of surfacing ``media_status:'failed'`` only on
+    the next list fetch. ``owner_user_id`` is ``None`` when the source
+    row carried no owner.
+    """
+
+    output_filename: str
+    owner_user_id: str | None
+
+
+@dataclass(slots=True, frozen=True)
 class UserUnfollowed(DomainEvent):
     follower_user_id: str
     followed_user_id: str

@@ -72,6 +72,8 @@ class AbstractMediaTranscodeRepo(Protocol):
 
     async def status_for(self, output_filenames: list[str]) -> dict[str, str]: ...
 
+    async def active_source_paths(self) -> set[str]: ...
+
 
 class SqliteMediaTranscodeRepo:
     """SQLite-backed :class:`AbstractMediaTranscodeRepo`."""
@@ -209,6 +211,19 @@ class SqliteMediaTranscodeRepo:
             status = d["status"]
             out[d["output_filename"]] = "failed" if status == "failed" else "processing"
         return out
+
+    async def active_source_paths(self) -> set[str]:
+        """Every ``source_path`` still referenced by a job row.
+
+        Any row (regardless of status) means its on-disk source temp
+        file is still in use — the orphan sweep keeps those and only
+        reaps ``transcode_src`` blobs no row references.
+        """
+        rows = await self._db.fetchall(
+            "SELECT source_path FROM media_transcode_jobs",
+            (),
+        )
+        return {d["source_path"] for d in rows_to_dicts(rows)}
 
 
 def _row_to_job(row: dict) -> MediaTranscodeJob:
