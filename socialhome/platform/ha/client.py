@@ -48,6 +48,8 @@ class HaClient:
         "_token",
         "_auth_list_cache",
         "_auth_list_cached_at",
+        "_notify_cache",
+        "_notify_cached_at",
     )
 
     def __init__(
@@ -61,6 +63,8 @@ class HaClient:
         self._token = token
         self._auth_list_cache: list[dict] | None = None
         self._auth_list_cached_at: float = 0.0
+        self._notify_cache: list[dict] | None = None
+        self._notify_cached_at: float = 0.0
 
     @property
     def base_url(self) -> str:
@@ -270,6 +274,47 @@ class HaClient:
         """
         self._auth_list_cache = None
         self._auth_list_cached_at = 0.0
+
+    async def list_notify_entities(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """``notify.*`` entities over WS — id + display name for the dropdown.
+
+        Runs the ``get_states`` WS command and keeps the entities whose
+        ``entity_id`` starts with ``notify.``, mapping each to
+        ``{"entity_id": ..., "name": ...}`` where ``name`` is the
+        ``friendly_name`` attribute (falling back to the entity id when
+        absent or empty). The list is sorted by ``name`` case-insensitively
+        for a stable dropdown order.
+
+        Cached for :data:`_AUTH_LIST_TTL_SECONDS` — notify entities don't
+        churn — and bypassed with ``force_refresh=True``. Empty list on
+        transport / auth error so callers degrade gracefully.
+        """
+        if not force_refresh and self._notify_cache is not None:
+            age = time.monotonic() - self._notify_cached_at
+            if age < _AUTH_LIST_TTL_SECONDS:
+                return self._notify_cache
+        reply = await self.ws_command("get_states")
+        if reply is None:
+            return []
+        result = reply.get("result")
+        states = result if isinstance(result, list) else []
+        entities = [
+            {
+                "entity_id": s["entity_id"],
+                "name": (s.get("attributes") or {}).get("friendly_name")
+                or s["entity_id"],
+            }
+            for s in states
+            if isinstance(s, dict) and str(s.get("entity_id", "")).startswith("notify.")
+        ]
+        entities.sort(key=lambda e: e["name"].casefold())
+        self._notify_cache = entities
+        self._notify_cached_at = time.monotonic()
+        return entities
 
     async def get_config(self) -> dict | None:
         """``GET /api/config`` — instance location / time zone / currency."""
