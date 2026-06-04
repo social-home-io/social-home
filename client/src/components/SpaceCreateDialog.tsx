@@ -8,7 +8,7 @@ import { Modal } from './Modal'
 import { Button } from './Button'
 import { EmojiField } from './EmojiField'
 import { RadioCardGroup } from './RadioCardGroup'
-import { VISIBILITY_OPTIONS, JOIN_MODE_OPTIONS } from './spaceModeOptions'
+import { VISIBILITY_OPTIONS, joinOptionsForVisibility } from './spaceModeOptions'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 
@@ -80,15 +80,13 @@ export function SpaceCreateDialog() {
             if (v === 'private') joinMode.value = 'invite_only'
           }}
         />
-        {spaceType.value !== 'private' && (
-          <RadioCardGroup
-            legend="How people join"
-            name="space-create-join-mode"
-            value={joinMode.value}
-            options={JOIN_MODE_OPTIONS}
-            onChange={(v) => joinMode.value = v}
-          />
-        )}
+        <RadioCardGroup
+          legend="How people join"
+          name="space-create-join-mode"
+          value={joinMode.value}
+          options={joinOptionsForVisibility(spaceType.value)}
+          onChange={(v) => joinMode.value = v}
+        />
         <div class="sh-form-actions">
           <Button variant="secondary" onClick={() => open.value = false}>{t('common.cancel')}</Button>
           <Button onClick={handleSubmit} loading={submitting.value}

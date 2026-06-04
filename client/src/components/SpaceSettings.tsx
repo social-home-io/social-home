@@ -9,7 +9,7 @@ import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
 import { EmojiField } from './EmojiField'
 import { RadioCardGroup } from './RadioCardGroup'
-import { JOIN_MODE_OPTIONS } from './spaceModeOptions'
+import { joinOptionsForVisibility } from './spaceModeOptions'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 import type { Space, GfsConnection, GfsSpacePublication } from '@/types'
@@ -317,7 +317,7 @@ export function SpaceSettings({
           legend="How people join"
           name="space-settings-join-mode"
           value={joinMode.value}
-          options={JOIN_MODE_OPTIONS}
+          options={joinOptionsForVisibility(space.space_type)}
           onChange={(v) => joinMode.value = v as typeof joinMode.value}
         />
         <fieldset class="sh-form-fieldset">

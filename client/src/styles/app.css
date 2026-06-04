@@ -11658,6 +11658,11 @@ a.sh-welcome-card:hover {
   border-color: var(--sh-primary);
   background: var(--sh-primary-soft);
 }
+.sh-radio-card--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sh-radio-card--disabled .sh-radio-card__input { cursor: not-allowed; }
 /* Keep the native radio (accessible + keyboard nav) as the visual dot. */
 .sh-radio-card__input {
   margin: 2px 0 0 0;

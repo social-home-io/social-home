@@ -43,3 +43,16 @@ export const JOIN_MODE_OPTIONS: RadioCardOption[] = [
     subtitle: 'Anyone can join instantly.',
   },
 ]
+
+/**
+ * Join-mode options for a given visibility. A **private** space is
+ * invite-only by definition (you can't request or openly join something
+ * hidden), so the non-invite options are shown but disabled — the
+ * constraint is visible rather than hidden.
+ */
+export function joinOptionsForVisibility(spaceType: string): RadioCardOption[] {
+  if (spaceType !== 'private') return JOIN_MODE_OPTIONS
+  return JOIN_MODE_OPTIONS.map((o) =>
+    o.value === 'invite_only' ? o : { ...o, disabled: true },
+  )
+}

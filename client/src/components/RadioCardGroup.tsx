@@ -17,6 +17,9 @@ export interface RadioCardOption {
   icon: string
   title: string
   subtitle: string
+  /** When true, this single option is shown but not selectable (e.g. a
+   *  join mode that doesn't apply to the chosen visibility). */
+  disabled?: boolean
 }
 
 export function RadioCardGroup({
@@ -39,10 +42,15 @@ export function RadioCardGroup({
       <legend class="sh-radio-card-group__legend">{legend}</legend>
       {options.map((opt) => {
         const selected = value === opt.value
+        const optDisabled = disabled || opt.disabled
         return (
           <label
             key={opt.value}
-            class={`sh-radio-card${selected ? ' sh-radio-card--selected' : ''}`}
+            class={
+              'sh-radio-card'
+              + (selected ? ' sh-radio-card--selected' : '')
+              + (optDisabled ? ' sh-radio-card--disabled' : '')
+            }
           >
             <input
               type="radio"
@@ -50,7 +58,7 @@ export function RadioCardGroup({
               name={name}
               value={opt.value}
               checked={selected}
-              disabled={disabled}
+              disabled={optDisabled}
               onChange={() => onChange(opt.value)}
             />
             <span class="sh-radio-card__icon" aria-hidden="true">{opt.icon}</span>
