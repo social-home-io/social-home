@@ -257,6 +257,63 @@ async def test_post_created_without_transcode_repo_is_back_compat(env):
     assert "media_status" not in frame["post"]
 
 
+async def test_post_created_video_carries_signed_poster():
+    """A freshly-posted video ships a signed ``media_thumbnail_url`` — the
+    ``.webp`` sibling of ``media_url`` (shared stem) — so the SPA can drop
+    it into ``<video poster>`` without a REST hydrate."""
+    from dataclasses import replace
+
+    from socialhome.media_signer import MediaUrlSigner
+
+    bus = EventBus()
+    ws = WebSocketManager()
+    user_repo = _FakeUserRepo([_user("u1")])
+    space_repo = _FakeSpaceRepo({})
+    transcode_repo = _FakeMediaTranscodeRepo({"v.webm": "processing"})
+    svc = RealtimeService(
+        bus,
+        ws,
+        user_repo=user_repo,
+        space_repo=space_repo,
+        media_transcode_repo=transcode_repo,
+    )
+    svc.attach_media_signer(MediaUrlSigner(key=b"\xab" * 32))
+    svc.wire()
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    video = replace(_post(), type=PostType.VIDEO, media_url="api/media/v.webm")
+    await bus.publish(PostCreated(post=video))
+    frame = json.loads(sock.sent[0])
+    poster = frame["post"]["media_thumbnail_url"]
+    assert poster.split("?", 1)[0] == "api/media/v.webp"
+    assert "exp=" in poster and "sig=" in poster
+
+
+async def test_post_created_text_post_gets_no_poster():
+    """A non-video post never gets a ``media_thumbnail_url`` key."""
+    from socialhome.media_signer import MediaUrlSigner
+
+    bus = EventBus()
+    ws = WebSocketManager()
+    user_repo = _FakeUserRepo([_user("u1")])
+    space_repo = _FakeSpaceRepo({})
+    transcode_repo = _FakeMediaTranscodeRepo({"v.webm": "processing"})
+    svc = RealtimeService(
+        bus,
+        ws,
+        user_repo=user_repo,
+        space_repo=space_repo,
+        media_transcode_repo=transcode_repo,
+    )
+    svc.attach_media_signer(MediaUrlSigner(key=b"\xab" * 32))
+    svc.wire()
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(PostCreated(post=_post()))
+    frame = json.loads(sock.sent[0])
+    assert "media_thumbnail_url" not in frame["post"]
+
+
 async def test_space_post_created_video_stamps_media_status():
     """The space-feed ``space.post.created`` frame annotates video status too."""
     from dataclasses import replace

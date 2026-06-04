@@ -582,6 +582,33 @@ async def test_feed_text_post_has_no_processing_status(client):
     assert post.get("media_status") != "processing"
 
 
+async def test_feed_video_post_has_signed_poster(client):
+    """A video post carries a signed ``media_thumbnail_url`` — the
+    ``.webp`` sibling of ``media_url`` (shared stem), signed so the SPA
+    can drop it into ``<video poster>`` without a bearer token."""
+    post_id, fn = await _create_video_post(client)
+    post = next(p for p in await _feed(client) if p["id"] == post_id)
+    poster = post["media_thumbnail_url"]
+    base = poster.split("?", 1)[0]
+    assert base == "api/media/feedvid0000000000000000000000.webp"
+    # Same stem as the (signed) media_url.
+    media_base = post["media_url"].split("?", 1)[0]
+    assert base[: -len(".webp")] == media_base[: -len(".webm")]
+    # Signed: carries an exp/sig query.
+    assert "exp=" in poster and "sig=" in poster
+
+
+async def test_feed_text_post_has_no_poster(client):
+    r = await client.post(
+        "/api/feed/posts",
+        json={"type": "text", "content": "just words"},
+        headers=_auth(client._admin_token),
+    )
+    text_id = (await r.json())["id"]
+    post = next(p for p in await _feed(client) if p["id"] == text_id)
+    assert "media_thumbnail_url" not in post
+
+
 async def test_saved_video_post_media_status_processing(client):
     from socialhome.app_keys import media_transcode_repo_key
 

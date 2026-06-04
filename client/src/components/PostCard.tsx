@@ -212,7 +212,7 @@ function PostContent({ post, timeAgo, onReact, onComment, onDelete, onEdit, spac
             )}
             {post.type === 'file' && post.file_meta && <FileRenderer file={post.file_meta} />}
             {post.type === 'video' && post.media_url && (
-              <VideoRenderer src={post.media_url} mediaStatus={post.media_status} />
+              <VideoRenderer src={post.media_url} poster={post.media_thumbnail_url} mediaStatus={post.media_status} />
             )}
             {post.type === 'image' && post.image_urls?.length > 0 && (
               <PostImageGrid urls={post.image_urls} alt={post.content ?? undefined} />

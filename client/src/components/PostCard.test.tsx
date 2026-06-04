@@ -220,6 +220,34 @@ describe('PostCard', () => {
     expect(container.querySelector('.sh-video-processing')).toBeTruthy()
   })
 
+  it('threads media_thumbnail_url to the video poster', () => {
+    const post: FeedPost = {
+      ...mockPost,
+      type: 'video',
+      media_url: '/api/media/v.webm',
+      media_thumbnail_url: '/api/media/v.webp?exp=1&sig=abc',
+    }
+    const { container } = render(<PostCard post={post} />)
+    const video = container.querySelector('video')
+    expect(video).toBeTruthy()
+    expect(video?.getAttribute('poster')).toBe('/api/media/v.webp?exp=1&sig=abc')
+  })
+
+  it('uses media_thumbnail_url as the processing placeholder poster', () => {
+    const post: FeedPost = {
+      ...mockPost,
+      type: 'video',
+      media_url: '/api/media/postcard-poster-processing.webm',
+      media_status: 'processing',
+      media_thumbnail_url: '/api/media/postcard-poster-processing.webp?exp=1&sig=xyz',
+    }
+    const { container } = render(<PostCard post={post} />)
+    const posterImg = container.querySelector('.sh-video-processing-poster')
+    expect(posterImg?.getAttribute('src')).toBe(
+      '/api/media/postcard-poster-processing.webp?exp=1&sig=xyz',
+    )
+  })
+
   it('clicking the preview row triggers onComment', () => {
     const fn = vi.fn()
     const post: FeedPost = {

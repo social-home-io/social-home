@@ -61,6 +61,11 @@ export interface FeedPost {
    *  once playable. Absent on non-video posts and on older payloads
    *  (treated as ready). */
   media_status?: 'processing' | 'failed' | 'ready'
+  /** Signed ``.webp`` poster URL for ``video`` posts — shares a UUID
+   *  stem with :attr:`media_url`'s ``.webm``. Used as the player poster
+   *  and the "Processing…" placeholder background. Absent on non-video
+   *  posts and older payloads. */
+  media_thumbnail_url?: string
   /** 1..5 signed URLs when ``type === 'image'``; empty otherwise. */
   image_urls: string[]
   file_meta: FileAttachment | null
@@ -158,6 +163,10 @@ export interface Moment {
    *  while the worker encodes, ``'ready'`` once playable. Absent on
    *  non-video moments and on older payloads (treated as ready). */
   media_status?:      'processing' | 'failed' | 'ready'
+  /** Signed ``.webp`` poster URL for ``video`` moments — shares a UUID
+   *  stem with :attr:`media_url`'s ``.webm``. Absent on non-video
+   *  moments and older payloads. */
+  media_thumbnail_url?: string
   duration_ms:        number | null
   parent_moment_id:   string | null
   origin_instance_id: string
@@ -395,6 +404,10 @@ export interface Message {
    *  :attr:`media_sync_status` (cross-household blob transfer). Absent on
    *  non-video messages and on older payloads (treated as ready). */
   media_status?: 'processing' | 'failed' | 'ready'
+  /** Signed ``.webp`` poster URL for ``video`` messages — shares a UUID
+   *  stem with :attr:`media_url`'s ``.webm``. Absent on non-video
+   *  messages and older payloads. */
+  media_thumbnail_url?: string
   /** SPA-only fields set on the optimistic ``tmp-...`` bubble when
    *  its background ``POST`` fails. Never reach the wire / server. */
   send_failed?: boolean

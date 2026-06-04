@@ -512,8 +512,12 @@ class GalleryService:
             raise RuntimeError(
                 "video upload requires the media transcode service to be wired"
             )
-        output_filename = f"{uuid.uuid4().hex}.webm"
-        thumbnail_filename = f"{uuid.uuid4().hex}.webp"
+        # ONE shared UUID stem for the transcoded ``.webm`` and its
+        # ``.webp`` poster so the poster path is derivable from the
+        # media URL server-side (matches the feed/DM upload path).
+        stem = uuid.uuid4().hex
+        output_filename = f"{stem}.webm"
+        thumbnail_filename = f"{stem}.webp"
         source_path = await self._stash_transcode_source(data)
         await self._transcode_repo.enqueue(
             output_filename=output_filename,

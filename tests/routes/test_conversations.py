@@ -730,3 +730,26 @@ async def test_dm_text_message_has_no_processing_status(client):
     text_id = (await r.json())["id"]
     m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == text_id)
     assert m.get("media_status") != "processing"
+
+
+async def test_dm_video_message_has_signed_poster(client):
+    conv_id, msg_id, _fn = await _dm_video_message(client)
+    m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == msg_id)
+    poster = m["media_thumbnail_url"]
+    base = poster.split("?", 1)[0]
+    assert base == "api/media/dmvid000000000000000000000000.webp"
+    media_base = m["media_url"].split("?", 1)[0]
+    assert base[: -len(".webp")] == media_base[: -len(".webm")]
+    assert "exp=" in poster and "sig=" in poster
+
+
+async def test_dm_text_message_has_no_poster(client):
+    conv_id, _msg_id, _fn = await _dm_video_message(client)
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "just words"},
+        headers=_auth(client._admin_token),
+    )
+    text_id = (await r.json())["id"]
+    m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == text_id)
+    assert "media_thumbnail_url" not in m

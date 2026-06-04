@@ -273,6 +273,12 @@ async def test_upload_video_is_async(client):
     out_name = body["filename"]
     assert out_name.endswith(".webm")
 
+    # The ``.webm`` output + ``.webp`` poster share one UUID stem so the
+    # poster path is derivable from the media URL server-side (no
+    # thumbnail column on feed/DM/moment rows).
+    stem = body["url"][len("api/media/") : -len(".webm")]
+    assert body["thumbnail_url"] == f"api/media/{stem}.webp"
+
     # Exactly one job enqueued, keyed by the returned output filename.
     repo = client.app[media_transcode_repo_key]
     due = await repo.list_due()

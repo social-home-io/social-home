@@ -281,8 +281,13 @@ class MediaUploadView(BaseView):
         ``/``), so the raw upload is never publicly fetchable.
         """
         media_dir = pathlib.Path(config.media_path)
-        output_filename = f"{uuid.uuid4().hex}.webm"
-        thumbnail_filename = f"{uuid.uuid4().hex}.webp"
+        # ONE shared UUID stem for the transcoded ``.webm`` and its
+        # ``.webp`` poster so the poster path is derivable from the
+        # media URL server-side (feed/DM/moment rows store only the
+        # ``.webm`` and have no thumbnail column).
+        stem = uuid.uuid4().hex
+        output_filename = f"{stem}.webm"
+        thumbnail_filename = f"{stem}.webp"
 
         temp_dir = media_dir / "transcode_src"
         await aiofiles.os.makedirs(temp_dir, exist_ok=True)

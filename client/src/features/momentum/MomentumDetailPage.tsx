@@ -187,7 +187,7 @@ export default function MomentumDetailPage() {
             </button>
           )}
           {mm.media_type === 'video' && mm.media_url && (
-            <VideoMedia src={mm.media_url} mediaStatus={mm.media_status}
+            <VideoMedia src={mm.media_url} poster={mm.media_thumbnail_url} mediaStatus={mm.media_status}
               class="sh-momentum-row-media" />
           )}
           {mm.reaction_count > 0 && (
@@ -265,7 +265,7 @@ export default function MomentumDetailPage() {
         </button>
       )}
       {m.media_type === 'video' && m.media_url && (
-        <VideoMedia src={m.media_url} mediaStatus={m.media_status}
+        <VideoMedia src={m.media_url} poster={m.media_thumbnail_url} mediaStatus={m.media_status}
           class="sh-momentum-detail-media" />
       )}
 

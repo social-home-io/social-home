@@ -36,7 +36,7 @@ from ..domain.post import LocationData, PostType
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from .base import BaseView
-from .media_status import READY, media_filename
+from .media_status import READY, media_filename, video_poster_path
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +63,24 @@ def _serialise_signed(request: web.Request, obj):
     if signer is not None:
         sign_media_urls_in(payload, signer)
     return payload
+
+
+def _stamp_video_poster(request: web.Request, payload: dict, media_url) -> None:
+    """Set a signed ``media_thumbnail_url`` poster on a video payload.
+
+    The poster is the ``.webp`` sibling of the ``.webm`` ``media_url``
+    (shared UUID stem). Signed with the same media signer that signs
+    ``media_url`` so the SPA can use it in ``<video poster>`` without a
+    bearer token. No-op when the media URL has no derivable poster (e.g.
+    a federated external) or no signer is wired.
+    """
+    poster = video_poster_path(media_url)
+    if poster is None:
+        return
+    signer = request.app.get(media_signer_key)
+    payload["media_thumbnail_url"] = (
+        signer.sign(poster) if signer is not None else poster
+    )
 
 
 def _coerce_datetimes(d: dict) -> dict:
@@ -138,6 +156,7 @@ class FeedCollectionView(BaseView):
                 if post.type is PostType.VIDEO:
                     fn = media_filename(post.media_url)
                     payload["media_status"] = statuses.get(fn, READY) if fn else READY
+                    _stamp_video_poster(self.request, payload, post.media_url)
             out.append(payload)
         return web.json_response(out)
 
@@ -341,6 +360,7 @@ class SavedPostsView(BaseView):
             if isinstance(payload, dict) and p.type is PostType.VIDEO:
                 fn = media_filename(p.media_url)
                 payload["media_status"] = statuses.get(fn, READY) if fn else READY
+                _stamp_video_poster(self.request, payload, p.media_url)
             out.append(payload)
         return web.json_response(out)
 

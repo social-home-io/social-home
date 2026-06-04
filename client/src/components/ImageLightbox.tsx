@@ -169,6 +169,10 @@ export function ImageLightbox() {
             class="sh-lightbox-media"
             controls
             autoPlay
+            // Muted so an opened clip doesn't blast audio — and browsers
+            // only allow autoplay when muted, so this also makes the
+            // autoPlay actually fire instead of being blocked.
+            muted
             playsInline
           />
         ) : (

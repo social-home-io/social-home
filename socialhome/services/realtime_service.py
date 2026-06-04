@@ -457,7 +457,8 @@ class RealtimeService:
             and item.get("item_type") != "video"
         ):
             return
-        fn = _media_filename(item.get("media_url") or item.get("url"))
+        media_url = item.get("media_url") or item.get("url")
+        fn = _media_filename(media_url)
         if not fn:
             return
         try:
@@ -466,6 +467,13 @@ class RealtimeService:
             log.warning("media_status annotation failed for %s", fn, exc_info=True)
             return
         item["media_status"] = statuses.get(fn, "ready")
+        # Server-derived poster — the ``.webp`` sibling of the ``.webm``
+        # ``media_url`` (shared UUID stem). Set the *unsigned* path so
+        # the broadcast helper's ``sign_media_urls_in`` pass signs it
+        # alongside ``media_url`` (``media_thumbnail_url`` is signable).
+        poster = _video_poster_path(media_url)
+        if poster is not None:
+            item["media_thumbnail_url"] = poster
 
     # ─── Household feed events ────────────────────────────────────────────
 
@@ -2079,6 +2087,21 @@ def _media_filename(url: str | None) -> str | None:
     if not url:
         return None
     return url.split("?", 1)[0].rsplit("/", 1)[-1] or None
+
+
+def _video_poster_path(media_url: str | None) -> str | None:
+    """Unsigned poster path for a transcoded video — the ``.webp``
+    sibling of a ``.webm`` ``media_url`` (shared UUID stem). Returns
+    ``None`` for a missing URL or any non-``.webm`` media. Mirrors
+    ``routes/media_status.video_poster_path``; inlined here so the
+    service layer carries no dependency on ``routes``.
+    """
+    if not media_url:
+        return None
+    base = media_url.split("?", 1)[0]
+    if not base.endswith(".webm"):
+        return None
+    return base[: -len(".webm")] + ".webp"
 
 
 def _safe(value: Any) -> Any:

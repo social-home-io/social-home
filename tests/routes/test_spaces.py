@@ -1005,6 +1005,29 @@ async def test_space_feed_text_post_has_no_processing_status(client):
     assert p.get("media_status") != "processing"
 
 
+async def test_space_feed_video_post_has_signed_poster(client):
+    sid, post_id, _fn = await _space_with_video_post(client)
+    p = next(x for x in await _space_feed(client, sid) if x["id"] == post_id)
+    poster = p["media_thumbnail_url"]
+    base = poster.split("?", 1)[0]
+    assert base == "api/media/spcvid00000000000000000000000.webp"
+    media_base = p["media_url"].split("?", 1)[0]
+    assert base[: -len(".webp")] == media_base[: -len(".webm")]
+    assert "exp=" in poster and "sig=" in poster
+
+
+async def test_space_feed_text_post_has_no_poster(client):
+    sid, _post_id, _fn = await _space_with_video_post(client)
+    r = await client.post(
+        f"/api/spaces/{sid}/posts",
+        json={"type": "text", "content": "words"},
+        headers=_auth(client._admin_token),
+    )
+    text_id = (await r.json())["id"]
+    p = next(x for x in await _space_feed(client, sid) if x["id"] == text_id)
+    assert "media_thumbnail_url" not in p
+
+
 async def test_create_space_empty_name_422(client):
     """POST /api/spaces with an empty name returns 422."""
     resp = await client.post(
