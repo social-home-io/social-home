@@ -6,6 +6,7 @@
  * updates to the same endpoint via PUT.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, fireEvent } from '@testing-library/preact'
 
 vi.mock('@/api', () => ({
   api: {
@@ -67,5 +68,45 @@ describe('HouseholdToggles', () => {
     // not appear in the populated signal.
     expect((toggles.value as unknown as Record<string, unknown>)['feat_highlights']).toBeUndefined()
     expect((toggles.value as unknown as Record<string, unknown>)['feat_momentum']).toBeUndefined()
+  })
+
+  it('renders a card per feature + post type (titles + subtitles)', async () => {
+    const { HouseholdToggles, loadToggles } = await import('./HouseholdToggles')
+    await loadToggles()
+    const { getByText, container } = render(<HouseholdToggles />)
+    // Feature cards
+    expect(getByText('Feed')).toBeTruthy()
+    expect(getByText('The shared household activity feed')).toBeTruthy()
+    expect(getByText('Gallery')).toBeTruthy()
+    // Post-type cards
+    expect(getByText('Text')).toBeTruthy()
+    expect(getByText('Allow text posts in the feed')).toBeTruthy()
+    expect(getByText('Highlight share')).toBeTruthy()
+    // 7 features + 7 post types = 14 checkbox cards
+    const cards = container.querySelectorAll('.sh-radio-card')
+    expect(cards).toHaveLength(14)
+  })
+
+  it('renders an enabled feature card as selected', async () => {
+    const { HouseholdToggles, loadToggles, toggles } = await import('./HouseholdToggles')
+    await loadToggles()
+    toggles.value = { ...toggles.value!, feat_feed: true }
+    const { getByText } = render(<HouseholdToggles />)
+    const card = getByText('Feed').closest('.sh-radio-card')
+    expect(card?.classList.contains('sh-radio-card--selected')).toBe(true)
+  })
+
+  it('clicking a feature card checkbox PUTs the inverted toggle', async () => {
+    const { api } = await import('@/api')
+    const { HouseholdToggles, loadToggles, toggles } = await import('./HouseholdToggles')
+    await loadToggles()
+    toggles.value = { ...toggles.value!, feat_feed: true }
+    const { getByText } = render(<HouseholdToggles />)
+    const card = getByText('Feed').closest('.sh-radio-card')!
+    const box = card.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    fireEvent.click(box)
+    expect(api.put).toHaveBeenCalledWith('/api/household/preferences', {
+      toggles: { feat_feed: false },
+    })
   })
 })
