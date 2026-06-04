@@ -306,22 +306,57 @@ async function renderNotificationsTab() {
 }
 
 describe('SettingsPage — HA notify service (§25.3)', () => {
-  it('shows the HA notify-service field in ha mode', async () => {
+  // Make the notify-targets endpoint return one discoverable target; every
+  // other GET (e.g. the privacy-tab space list) keeps its default shape.
+  function withTargets(
+    targets: { entity_id: string; name: string }[] = [
+      { entity_id: 'notify.mobile_app_pixel', name: 'Mobile App Pixel' },
+    ],
+  ) {
+    mockGet.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === '/api/me/notify-targets' ? { targets } : { spaces: [] },
+      ),
+    )
+  }
+
+  it('renders a dropdown of notify targets in ha mode', async () => {
     setMode('ha')
-    const { queryByPlaceholderText } = await renderNotificationsTab()
-    expect(queryByPlaceholderText('notify.mobile_app_my_phone')).toBeTruthy()
+    withTargets()
+    const { findByText, getByRole } = await renderNotificationsTab()
+    // The discovered target shows as an option and a <select> is present.
+    expect(await findByText('Mobile App Pixel')).toBeTruthy()
+    expect(getByRole('combobox')).toBeTruthy()
   })
 
-  it('hides the HA notify-service field in standalone mode', async () => {
+  it('hides the HA app subsection in standalone mode', async () => {
     setMode('standalone')
-    const { queryByPlaceholderText } = await renderNotificationsTab()
-    expect(queryByPlaceholderText('notify.mobile_app_my_phone')).toBeNull()
+    withTargets()
+    const { queryByText } = await renderNotificationsTab()
+    expect(queryByText('Home Assistant app')).toBeNull()
   })
 
-  it('saves the notify service to preferences', async () => {
+  it('selecting a target then saving persists its entity_id', async () => {
     setMode('haos')
-    const { getByPlaceholderText, getByText } = await renderNotificationsTab()
-    const input = getByPlaceholderText('notify.mobile_app_my_phone') as HTMLInputElement
+    withTargets()
+    const { getByRole, getByText } = await renderNotificationsTab()
+    const select = (await waitFor(() => getByRole('combobox'))) as HTMLSelectElement
+    fireEvent.change(select, { target: { value: 'notify.mobile_app_pixel' } })
+    fireEvent.click(getByText('Save'))
+    await waitFor(() => {
+      expect(mockPatch).toHaveBeenCalledWith('/api/me', {
+        preferences: { ha_notify_service: 'notify.mobile_app_pixel' },
+      })
+    })
+  })
+
+  it('falls back to the manual text input when no targets are discovered', async () => {
+    setMode('ha')
+    withTargets([])
+    const { findByPlaceholderText, getByText } = await renderNotificationsTab()
+    const input = (await findByPlaceholderText(
+      'notify.mobile_app_my_phone',
+    )) as HTMLInputElement
     fireEvent.input(input, { target: { value: 'notify.mobile_app_pixel' } })
     fireEvent.click(getByText('Save'))
     await waitFor(() => {
@@ -329,5 +364,18 @@ describe('SettingsPage — HA notify service (§25.3)', () => {
         preferences: { ha_notify_service: 'notify.mobile_app_pixel' },
       })
     })
+  })
+
+  it('selecting "Enter manually…" reveals the text input', async () => {
+    setMode('ha')
+    withTargets()
+    const { getByRole, findByPlaceholderText, queryByPlaceholderText } =
+      await renderNotificationsTab()
+    const select = (await waitFor(() => getByRole('combobox'))) as HTMLSelectElement
+    expect(queryByPlaceholderText('notify.mobile_app_my_phone')).toBeNull()
+    fireEvent.change(select, { target: { value: '__manual__' } })
+    expect(
+      await findByPlaceholderText('notify.mobile_app_my_phone'),
+    ).toBeTruthy()
   })
 })

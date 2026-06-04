@@ -38,6 +38,7 @@ class _FakeHaClient:
         stt_response: dict | None = None,
         auth_users: list[dict] | None = None,
         path_bytes: dict[str, bytes] | None = None,
+        notify_entities: list[dict] | None = None,
     ) -> None:
         self._verify_token_response = verify_token_response
         self._states = states if states is not None else []
@@ -48,7 +49,12 @@ class _FakeHaClient:
         self._stt_response = stt_response
         self._auth_users = auth_users if auth_users is not None else []
         self._path_bytes = path_bytes or {}
+        self._notify_entities = notify_entities
         self.calls: list[tuple] = []
+
+    async def list_notify_entities(self) -> list[dict]:
+        self.calls.append(("list_notify_entities",))
+        return self._notify_entities or []
 
     async def list_auth_users(self) -> list[dict]:
         self.calls.append(("list_auth_users",))
@@ -424,6 +430,8 @@ def _push_user(notify_service: str | None):
 
 
 async def test_send_push_uses_configured_notify_service():
+    """A ``notify.<entity>`` value is now an entity id → delivered via the
+    ``notify.send_message`` entity action with ``entity_id`` in the data."""
     client = _FakeHaClient(call_service_response=[])
     adapter = _build_adapter(client=client)
     user = _push_user("notify.mobile_app_pascals_iphone")
@@ -431,10 +439,84 @@ async def test_send_push_uses_configured_notify_service():
     assert any(
         c[0] == "call_service"
         and c[1] == "notify"
-        and c[2] == "mobile_app_pascals_iphone"
+        and c[2] == "send_message"
+        and c[3]
+        == {
+            "entity_id": "notify.mobile_app_pascals_iphone",
+            "title": "title",
+            "message": "message",
+            "data": {"x": 1},
+        }
+        for c in client.calls
+    )
+
+
+async def test_send_push_legacy_domain_service():
+    """A fully-qualified non-notify ``domain.service`` keeps the legacy
+    ``call_service(domain, service, ...)`` path (NOT send_message)."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("telegram_bot.send_xyz")
+    await adapter.send_push(user, "title", "message", data={"x": 1})
+    assert any(
+        c[0] == "call_service"
+        and c[1] == "telegram_bot"
+        and c[2] == "send_xyz"
         and c[3] == {"title": "title", "message": "message", "data": {"x": 1}}
         for c in client.calls
     )
+    assert not any(
+        c[0] == "call_service" and c[2] == "send_message" for c in client.calls
+    )
+
+
+async def test_send_push_entity_value_only_lands_in_entity_id():
+    """Anti-injection invariant for the entity branch: the user-supplied
+    ``notify.*`` value is delivered as the ``entity_id`` data field while the
+    invoked domain/service stay the hardcoded literals ``notify``/
+    ``send_message`` — even for an odd multi-dot value — so the value can
+    never reach the ``/api/services/{domain}/{service}`` URL path."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("notify.weird.name")
+    await adapter.send_push(user, "t", "m")
+    calls = [c for c in client.calls if c[0] == "call_service"]
+    assert calls == [
+        (
+            "call_service",
+            "notify",
+            "send_message",
+            {
+                "entity_id": "notify.weird.name",
+                "title": "t",
+                "message": "m",
+            },
+            False,
+        ),
+    ]
+
+
+async def test_send_push_empty_notify_suffix_falls_to_legacy():
+    """``"notify."`` (no entity suffix) is not a valid entity id; it falls to
+    the legacy ``domain.service`` split (empty service) — a harmless 404 at
+    HA, never the entity action."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    await adapter.send_push(_push_user("notify."), "t", "m")
+    assert any(
+        c[0] == "call_service" and c[1] == "notify" and c[2] == "" for c in client.calls
+    )
+    assert not any(
+        c[0] == "call_service" and c[2] == "send_message" for c in client.calls
+    )
+
+
+async def test_list_notify_targets_delegates_to_client():
+    targets = [{"entity_id": "notify.mobile_app_x", "name": "Mobile app x"}]
+    client = _FakeHaClient(notify_entities=targets)
+    adapter = _build_adapter(client=client)
+    assert await adapter.push.list_notify_targets() == targets
+    assert ("list_notify_entities",) in client.calls
 
 
 async def test_send_push_accepts_bare_service_name():

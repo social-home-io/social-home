@@ -268,6 +268,96 @@ async def test_invalidate_auth_list_cache_drops_cached_reply(client, ha_server):
     assert [u["username"] for u in refreshed] == ["new"]
 
 
+# ─── Notify entities ─────────────────────────────────────────────────────
+
+
+def _notify_states_reply() -> dict:
+    return {
+        "id": 1,
+        "type": "result",
+        "success": True,
+        "result": [
+            {"entity_id": "sun.sun", "attributes": {"friendly_name": "Sun"}},
+            {"entity_id": "light.kitchen", "attributes": {"friendly_name": "Kitchen"}},
+            {
+                "entity_id": "notify.mobile_app_pascal",
+                "attributes": {"friendly_name": "Mobile App — Pascal's iPhone"},
+            },
+            {
+                "entity_id": "notify.alerts",
+                "attributes": {"friendly_name": ""},
+            },
+            {
+                "entity_id": "notify.persistent_notification",
+                "attributes": {},
+            },
+        ],
+    }
+
+
+async def test_list_notify_entities_filters_to_notify_and_maps_name(client, ha_server):
+    """Only ``notify.*`` entities survive; ``friendly_name`` becomes
+    ``name`` and falls back to the entity id when missing/empty."""
+    _, captured = ha_server
+    captured["ws_reply"] = _notify_states_reply()
+    entities = await client.list_notify_entities()
+    assert captured["ws_command"]["type"] == "get_states"
+    assert entities == [
+        {
+            "entity_id": "notify.mobile_app_pascal",
+            "name": "Mobile App — Pascal's iPhone",
+        },
+        {"entity_id": "notify.alerts", "name": "notify.alerts"},
+        {
+            "entity_id": "notify.persistent_notification",
+            "name": "notify.persistent_notification",
+        },
+    ]
+
+
+async def test_list_notify_entities_sorted_case_insensitively(client, ha_server):
+    _, captured = ha_server
+    captured["ws_reply"] = {
+        "id": 1,
+        "type": "result",
+        "success": True,
+        "result": [
+            {"entity_id": "notify.zeta", "attributes": {"friendly_name": "zebra"}},
+            {"entity_id": "notify.alpha", "attributes": {"friendly_name": "Apple"}},
+            {"entity_id": "notify.beta", "attributes": {"friendly_name": "banana"}},
+        ],
+    }
+    entities = await client.list_notify_entities()
+    assert [e["name"] for e in entities] == ["Apple", "banana", "zebra"]
+
+
+async def test_list_notify_entities_returns_empty_on_auth_reject(client, ha_server):
+    _, captured = ha_server
+    captured["ws_reject_auth"] = True
+    assert await client.list_notify_entities() == []
+
+
+async def test_list_notify_entities_caches_replies_within_ttl(client, ha_server):
+    """Second call comes from the cache; ``force_refresh`` round-trips."""
+    _, captured = ha_server
+    captured["ws_reply"] = _notify_states_reply()
+    first = await client.list_notify_entities()
+    # Change the underlying reply — a cached read must not see it.
+    captured["ws_reply"] = {
+        "id": 1,
+        "type": "result",
+        "success": True,
+        "result": [
+            {"entity_id": "notify.new", "attributes": {"friendly_name": "New"}},
+        ],
+    }
+    second = await client.list_notify_entities()
+    assert second == first
+    # force_refresh bypasses the cache → sees the new reply.
+    third = await client.list_notify_entities(force_refresh=True)
+    assert third == [{"entity_id": "notify.new", "name": "New"}]
+
+
 async def test_get_config_success(client):
     cfg = await client.get_config()
     assert cfg is not None and cfg["location_name"] == "Home"

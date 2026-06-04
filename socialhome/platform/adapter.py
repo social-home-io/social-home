@@ -199,6 +199,13 @@ class PushProvider(Protocol):
         data: dict | None = None,
     ) -> None: ...
 
+    async def list_notify_targets(self) -> list[dict]:
+        """User-selectable notify targets as ``[{"entity_id", "name"}]``.
+
+        Empty list when the platform exposes no selectable targets.
+        """
+        ...
+
 
 @runtime_checkable
 class STTProvider(Protocol):
