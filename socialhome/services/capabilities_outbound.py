@@ -86,6 +86,17 @@ class CapabilitiesOutbound(ConfirmedPeerBroadcaster):
                 exc,
             )
 
+    async def resend_to(self, instance_id: str) -> bool:
+        """Re-advertise our ``proto_version`` to one peer on demand.
+
+        Public entry point for the §319.6 ``INSTANCE_RESYNC_REQUEST``
+        ``"capabilities"`` scope — a peer asks us to re-broadcast, and the
+        resync handler delegates here rather than reaching into the private
+        :meth:`_send_to`. Returns the same bool (``False`` for self / empty
+        target).
+        """
+        return await self._send_to(instance_id)
+
     async def _send_to(self, instance_id: str) -> bool:
         own = getattr(self._federation, "_own_instance_id", "")
         if not instance_id or instance_id == own:

@@ -6,6 +6,9 @@ import {
   compatError,
   loadFederationCompat,
   peersBehindCount,
+  peerSupportsResync,
+  resyncPeerCapabilities,
+  RESYNC_FEATURE,
   _resetFederationCompatForTest,
   type CompatPeer,
 } from './federationCompat'
@@ -111,5 +114,36 @@ describe('federationCompat store', () => {
       peer({ instance_id: 'i4', proto_version: 12, capabilities_known: true }),  // behind → counts
     ]
     expect(peersBehindCount()).toBe(2)
+  })
+
+  // ── resync (§319.6) ──────────────────────────────────────────────
+
+  it('peerSupportsResync: true for a known peer not lacking the resync feature', () => {
+    expect(peerSupportsResync(peer({ capabilities_known: true, lacking_features: [] }))).toBe(true)
+  })
+
+  it('peerSupportsResync: false when capabilities unknown', () => {
+    expect(peerSupportsResync(peer({ capabilities_known: false, lacking_features: [] }))).toBe(false)
+  })
+
+  it('peerSupportsResync: false when the peer still lacks the resync feature', () => {
+    expect(
+      peerSupportsResync(peer({ capabilities_known: true, lacking_features: [RESYNC_FEATURE] })),
+    ).toBe(false)
+  })
+
+  it('resyncPeerCapabilities POSTs the capabilities scope to the resync endpoint', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ status: 'ok', instance_id: 'i9', scope: 'capabilities' }),
+    )
+    await resyncPeerCapabilities('i9')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('api/admin/federation/resync')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({
+      instance_id: 'i9',
+      scope: 'capabilities',
+    })
   })
 })

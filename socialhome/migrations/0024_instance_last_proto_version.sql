@@ -1,0 +1,28 @@
+-- Record the build's protocol version (OURS) as of the last successful boot,
+-- so an upgrade (OURS increased) can fire a one-shot capability-resync to peers.
+--
+-- Migration audit (CLAUDE.md "Before adding a SQL migration"):
+--
+-- 1. Audited existing code paths: ``instance_identity`` is the singleton
+--    self-row (id='self'), read at identity bootstrap and via
+--    ``federation_repo.get_local_identity`` / the self-key getters. No
+--    existing kv/settings table persists an instance-level integer across
+--    boots: ``preferences`` is a fixed-column household-toggle row and
+--    ``app_kv`` is per-app/per-user state. ``remote_instances`` stores each
+--    *peer's* proto_version — there is no column anywhere recording *our*
+--    last-booted OURS, which is exactly what the upgrade trigger needs.
+--
+-- 2. Non-migration alternative considered and rejected: a state file under
+--    ``data_dir`` would introduce a new ad-hoc cross-boot persistence
+--    mechanism outside the DB (its own read/write/locking story), whereas a
+--    column on the existing singleton self-row is the natural home for an
+--    instance-level scalar that must survive restarts. Reusing an existing
+--    column is impossible — none carries this value. Computing at read time
+--    is impossible — "what was OURS last boot" is not derivable from any row.
+--
+-- 3. Smallest additive change: one nullable INTEGER column, no default and no
+--    backfill. NULL means "never recorded" and is treated as an upgrade on
+--    the first boot after this ships (records OURS without re-firing next
+--    boot). Additive over destructive; NULL-default over backfill; no row
+--    rewrite.
+ALTER TABLE instance_identity ADD COLUMN last_proto_version INTEGER;

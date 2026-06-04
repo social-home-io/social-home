@@ -33,6 +33,12 @@ class FederationEventType(str, enum.Enum):
     #: gate optional fields per receiver. See
     #: :mod:`socialhome.domain.federation_capabilities`.
     INSTANCE_CAPABILITIES_UPDATED = "instance_capabilities_updated"
+    #: §319.6 — a peer asks us to re-broadcast state for a named scope
+    #: (``capabilities`` / ``space:<id>`` / ``calendar:<id>``). The handler
+    #: dispatches the scope and re-sends to the requester; space / calendar
+    #: scopes are membership-gated. Capability-gated on
+    #: :data:`FederationCapability.MIN_FOR_INSTANCE_RESYNC` (v_19).
+    INSTANCE_RESYNC_REQUEST = "instance_resync_request"
     #: ``C → B`` carrying the same ack body as ``PAIRING_INTRO_AUTO_ACK``.
     #: B then forwards as ``PAIRING_INTRO_AUTO_ACK`` to A. Required because
     #: A has no confirmed pairing with C yet, so a direct C→A envelope

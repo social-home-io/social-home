@@ -28,7 +28,9 @@ import { confirmDialog } from '@/components/confirm'
 import {
   compatPeers, compatOurs, compatLoading, compatError,
   loadFederationCompat, peersBehindCount,
+  peerSupportsResync, resyncPeerCapabilities,
 } from '@/store/federationCompat'
+import type { CompatPeer } from '@/store/federationCompat'
 import { relativeDocsTime } from '@/utils/relativeTime'
 
 type TabId =
@@ -730,6 +732,32 @@ function _compatStatus(p: { capabilities_known: boolean; lacking_features: strin
   )
 }
 
+/** Per-peer "Re-check" button — asks the peer to re-advertise its protocol
+ *  version (INSTANCE_RESYNC_REQUEST, capabilities scope). The reply lands
+ *  asynchronously, so we refresh the panel a moment after firing. */
+function ReCheckCell({ peer }: { peer: CompatPeer }) {
+  const [busy, setBusy] = useState(false)
+  const onClick = async () => {
+    setBusy(true)
+    try {
+      await resyncPeerCapabilities(peer.instance_id)
+      showToast(`Asked ${peer.display_name} to re-advertise its version`, 'info')
+      // The fresh proto_version arrives via the peer's reply; give it a beat
+      // then refresh so the row reflects any change.
+      setTimeout(() => { void loadFederationCompat() }, 2500)
+    } catch (err: unknown) {
+      showToast((err as Error)?.message || 'Re-check failed', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Button variant="secondary" onClick={onClick} loading={busy}>
+      Re-check
+    </Button>
+  )
+}
+
 function FederationTab() {
   useEffect(() => { void loadFederationCompat() }, [])
   if (compatLoading.value) return <Spinner />
@@ -765,11 +793,12 @@ function FederationTab() {
         a fresh pairing awaiting its first capabilities handshake, not a
         problem.
       </p>
+      <div class="sh-table-scroll">
       <table class="sh-admin-table">
         <thead>
           <tr>
             <th>Peer</th><th>Version</th><th>Missing features</th>
-            <th>Last seen</th><th>Status</th>
+            <th>Last seen</th><th>Status</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -798,10 +827,16 @@ function FederationTab() {
                   : <span class="sh-muted">never</span>}
               </td>
               <td>{_compatStatus(p)}</td>
+              <td>
+                {peerSupportsResync(p)
+                  ? <ReCheckCell peer={p} />
+                  : <span class="sh-muted">—</span>}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </section>
   )
 }
