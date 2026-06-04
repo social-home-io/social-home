@@ -49,7 +49,7 @@ from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from ..services.space_service import _UNSET_MEMBER_PROFILE
 from .base import BaseView
-from .media_status import READY, media_filename
+from .media_status import READY, media_filename, video_poster_path
 
 _PROFILE_PICTURE_MAX_UPLOAD_BYTES = PROFILE_PICTURE_MAX_UPLOAD_BYTES
 
@@ -1634,6 +1634,13 @@ class SpaceFeedView(BaseView):
             if p.type is PostType.VIDEO:
                 fn = media_filename(p.media_url)
                 payload["media_status"] = statuses.get(fn, READY) if fn else READY
+                # Signed poster (the ``.webp`` sibling of the ``.webm``
+                # ``media_url``) — set the *unsigned* path so the
+                # ``sign_media_urls_in`` pass below signs it alongside
+                # ``media_url`` (``media_thumbnail_url`` is signable).
+                poster = video_poster_path(p.media_url)
+                if poster is not None:
+                    payload["media_thumbnail_url"] = poster
             if signer is not None:
                 sign_media_urls_in(payload, signer)
             out.append(sanitise_for_api(payload))

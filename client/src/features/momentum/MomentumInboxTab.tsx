@@ -270,6 +270,7 @@ function MomentRow({
           <span onClick={(ev) => ev.stopPropagation()}>
             <VideoMedia
               src={m.media_url}
+              poster={m.media_thumbnail_url}
               mediaStatus={m.media_status}
               class="sh-momentum-row-media"
             />

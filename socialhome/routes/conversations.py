@@ -19,7 +19,7 @@ from ..domain.user import _picture_url
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from .base import BaseView
-from .media_status import READY, media_filename
+from .media_status import READY, media_filename, video_poster_path
 
 
 class ConversationCollectionView(BaseView):
@@ -205,6 +205,12 @@ class ConversationMessageView(BaseView):
             if m.type == "video":
                 fn = media_filename(m.media_url)
                 row["media_status"] = statuses.get(fn, READY) if fn else READY
+                # Signed poster — set the unsigned ``.webp`` sibling path
+                # so the ``sign_media_urls_in`` pass below signs it
+                # alongside ``media_url``.
+                poster = video_poster_path(m.media_url)
+                if poster is not None:
+                    row["media_thumbnail_url"] = poster
             payload.append(sanitise_for_api(row))
         if signer is not None:
             sign_media_urls_in(payload, signer)

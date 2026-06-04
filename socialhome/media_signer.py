@@ -133,7 +133,18 @@ class MediaUrlSigner:
 #: ``url`` (gallery items, task attachments) opt in via
 #: :func:`sign_media_urls_in`'s ``extra_fields`` kwarg.
 _SIGNABLE_URL_FIELDS: frozenset[str] = frozenset(
-    {"media_url", "picture_url", "cover_url", "icon_url", "thumbnail_url"},
+    {
+        "media_url",
+        "picture_url",
+        "cover_url",
+        "icon_url",
+        "thumbnail_url",
+        # Server-derived poster for transcoded videos (the ``.webp``
+        # sibling of a ``.webm`` ``media_url``). List/realtime endpoints
+        # set it alongside ``media_url`` so it gets signed in the same
+        # pass — the SPA drops it into ``<video poster>``.
+        "media_thumbnail_url",
+    },
 )
 #: Field names whose **list-of-string** values get signed (e.g. bazaar
 #: ``image_urls``). Each entry is signed independently.

@@ -537,3 +537,35 @@ async def test_moment_detail_video_media_status(client):
     assert r.status == 200
     body = await r.json()
     assert body["moment"]["media_status"] == "processing"
+
+
+async def test_moment_video_has_signed_poster(client):
+    moment_id, _fn = await _create_video_moment(client)
+    m = next(x for x in await _inbox(client) if x["id"] == moment_id)
+    poster = m["media_thumbnail_url"]
+    base = poster.split("?", 1)[0]
+    assert base == "api/media/momvid00000000000000000000000.webp"
+    media_base = m["media_url"].split("?", 1)[0]
+    assert base[: -len(".webp")] == media_base[: -len(".webm")]
+    assert "exp=" in poster and "sig=" in poster
+
+
+async def test_moment_text_has_no_poster(client):
+    parent_id, _fn = await _create_video_moment(client)
+    r = await client.post(
+        "/api/moments",
+        json={"content": "plain text", "parent_moment_id": parent_id},
+        headers=_auth(client._tok),
+    )
+    text_id = (await r.json())["id"]
+    m = next(x for x in await _inbox(client) if x["id"] == text_id)
+    assert "media_thumbnail_url" not in m
+
+
+async def test_moment_detail_video_has_signed_poster(client):
+    moment_id, _fn = await _create_video_moment(client)
+    r = await client.get(f"/api/moments/{moment_id}", headers=_auth(client._tok))
+    body = await r.json()
+    poster = body["moment"]["media_thumbnail_url"]
+    assert poster.split("?", 1)[0] == "api/media/momvid00000000000000000000000.webp"
+    assert "exp=" in poster and "sig=" in poster

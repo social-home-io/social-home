@@ -355,6 +355,9 @@ async def test_upload_video_is_async(env):
     assert item.duration_s is None
     output_filename = item.url.rsplit("/", 1)[-1]
     thumb_filename = item.thumbnail_url.rsplit("/", 1)[-1]
+    # ``.webm`` + ``.webp`` share one UUID stem so the poster is
+    # derivable from the media URL server-side.
+    assert output_filename[: -len(".webm")] == thumb_filename[: -len(".webp")]
 
     # The item row is persisted right away.
     rows = await env.list_items(album.id, actor_user_id="a-id")

@@ -42,7 +42,7 @@ from ..domain.report import (
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from .base import BaseView
-from .media_status import READY, media_filename
+from .media_status import READY, media_filename, video_poster_path
 
 
 def _sign_payload(request: web.Request, payload):
@@ -92,6 +92,12 @@ def _moment_dict(
     # ``media_status`` so the SPA shows a "Processing…" placeholder.
     if m.media_type == "video":
         base["media_status"] = media_status if media_status is not None else READY
+        # Signed poster (the ``.webp`` sibling of the ``.webm``
+        # ``media_url``) — set the unsigned path so ``_sign_payload``'s
+        # ``sign_media_urls_in`` pass signs it alongside ``media_url``.
+        poster = video_poster_path(m.media_url)
+        if poster is not None:
+            base["media_thumbnail_url"] = poster
     return base
 
 

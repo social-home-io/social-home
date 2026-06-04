@@ -75,6 +75,9 @@ describe('ImageLightbox', () => {
       // Poster = thumbnail so a browser that blocks the unmuted autoplay
       // shows a clean frame instead of a black box.
       expect(video.getAttribute('poster')).toBe('/api/media/clip-thumb.webp')
+      // Muted so an opened clip doesn't blast audio — and so the autoPlay
+      // is actually allowed to fire (browsers block unmuted autoplay).
+      expect(video.muted).toBe(true)
     })
   })
 

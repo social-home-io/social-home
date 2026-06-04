@@ -1896,6 +1896,7 @@ export default function DmThreadPage() {
               {!m.deleted && m.type === 'video' && m.media_url && (
                 <VideoMedia
                   src={m.media_url}
+                  poster={m.media_thumbnail_url}
                   mediaStatus={m.media_status}
                   class={
                     'sh-message-media sh-message-media--video'
