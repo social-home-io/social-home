@@ -16,6 +16,7 @@ from ..app_keys import (
     event_bus_key,
     federation_repo_key,
     media_signer_key,
+    media_transcode_repo_key,
     notification_repo_key,
     online_status_service_key,
     presence_service_key,
@@ -33,7 +34,7 @@ from ..app_keys import (
     user_repo_key,
 )
 from ..domain.events import SpaceMemberLocationOptedIn
-from ..domain.post import LocationData
+from ..domain.post import LocationData, PostType
 from ..domain.space import (
     SpaceFeatureAccess,
     SpaceFeatures,
@@ -48,6 +49,7 @@ from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from ..services.space_service import _UNSET_MEMBER_PROFILE
 from .base import BaseView
+from .media_status import READY, media_filename
 
 _PROFILE_PICTURE_MAX_UPLOAD_BYTES = PROFILE_PICTURE_MAX_UPLOAD_BYTES
 
@@ -1578,6 +1580,16 @@ class SpaceFeedView(BaseView):
         # carried ``content`` + ``media_url`` so location / image /
         # file / event posts in space feeds rendered as bare text.
         signer = self.request.app.get(media_signer_key)
+        # Video posts transcode in the background — surface a live
+        # ``media_status`` so the SPA renders a "Processing…" placeholder
+        # until the ``.webm`` exists. One batched repo read per request.
+        video_fns = [
+            fn
+            for p in posts
+            if p.type is PostType.VIDEO
+            and (fn := media_filename(p.media_url)) is not None
+        ]
+        statuses = await self.svc(media_transcode_repo_key).status_for(video_fns)
         out: list[dict] = []
         for p in posts:
             payload = {
@@ -1619,6 +1631,9 @@ class SpaceFeedView(BaseView):
                 if p.author == SYSTEM_AUTHOR
                 else None,
             }
+            if p.type is PostType.VIDEO:
+                fn = media_filename(p.media_url)
+                payload["media_status"] = statuses.get(fn, READY) if fn else READY
             if signer is not None:
                 sign_media_urls_in(payload, signer)
             out.append(sanitise_for_api(payload))

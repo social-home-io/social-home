@@ -12,6 +12,7 @@ import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { Button } from '@/components/Button'
 import { openLightbox } from '@/components/ImageLightbox'
+import { VideoMedia } from '@/components/VideoMedia'
 import {
   MomentumComposerDialog,
   openMomentumComposer,
@@ -186,7 +187,7 @@ export default function MomentumDetailPage() {
             </button>
           )}
           {mm.media_type === 'video' && mm.media_url && (
-            <video src={mm.media_url} controls muted preload="metadata"
+            <VideoMedia src={mm.media_url} mediaStatus={mm.media_status}
               class="sh-momentum-row-media" />
           )}
           {mm.reaction_count > 0 && (
@@ -264,7 +265,7 @@ export default function MomentumDetailPage() {
         </button>
       )}
       {m.media_type === 'video' && m.media_url && (
-        <video src={m.media_url} controls preload="metadata"
+        <VideoMedia src={m.media_url} mediaStatus={m.media_status}
           class="sh-momentum-detail-media" />
       )}
 

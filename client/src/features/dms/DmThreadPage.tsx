@@ -9,6 +9,7 @@ import { DmThreadSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { VoiceRecordButton } from '@/components/VoiceRecordButton'
 import { AudioBubble } from '@/components/AudioBubble'
+import { VideoMedia } from '@/components/VideoMedia'
 import { openLightbox } from '@/components/ImageLightbox'
 import { showToast } from '@/components/Toast'
 import { ReadReceipt, readReceiptsEnabled } from '@/components/ReadReceipts'
@@ -1893,16 +1894,15 @@ export default function DmThreadPage() {
                 </button>
               )}
               {!m.deleted && m.type === 'video' && m.media_url && (
-                <video
+                <VideoMedia
+                  src={m.media_url}
+                  mediaStatus={m.media_status}
                   class={
                     'sh-message-media sh-message-media--video'
                     + (m.media_sync_status === 'pending'
                       ? ' sh-message-media--pending'
                       : '')
                   }
-                  src={m.media_url}
-                  controls
-                  preload="metadata"
                 />
               )}
               {!m.deleted && m.type === 'file' && m.media_url && (

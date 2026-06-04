@@ -643,3 +643,90 @@ async def test_gaps_endpoint_non_member_forbidden(client):
     )
     # PermissionError → base _iter maps to 403.
     assert resp.status == 403
+
+
+# ── Video message media_status ─────────────────────────────────────────────
+
+
+async def _dm_video_message(client) -> tuple[str, str, str]:
+    """Create a 1:1 DM + a video message + a matching transcode row.
+
+    Returns ``(conv_id, message_id, output_fn)``. Stops the scheduler so
+    the row stays put while the test inspects readiness.
+    """
+    from socialhome.app_keys import (
+        media_transcode_repo_key,
+        media_transcode_service_key,
+    )
+
+    await client.app[media_transcode_service_key].stop()
+    r = await client.post(
+        "/api/conversations/dm",
+        json={"username": "bob"},
+        headers=_auth(client._admin_token),
+    )
+    conv_id = (await r.json())["id"]
+    fn = "dmvid000000000000000000000000.webm"
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"type": "video", "media_url": f"api/media/{fn}"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 201
+    msg_id = (await r.json())["id"]
+    await client.app[media_transcode_repo_key].enqueue(
+        output_filename=fn,
+        source_path="/tmp/src.bin",
+        thumbnail_filename="thumb.webp",
+        owner_user_id=client._admin_uid,
+    )
+    return conv_id, msg_id, fn
+
+
+async def _dm_messages(client, conv_id: str) -> list[dict]:
+    r = await client.get(
+        f"/api/conversations/{conv_id}/messages",
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 200
+    return await r.json()
+
+
+async def test_dm_video_message_media_status_processing(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    conv_id, msg_id, fn = await _dm_video_message(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == msg_id)
+    assert m["type"] == "video"
+    assert m["media_status"] == "processing"
+
+
+async def test_dm_video_message_media_status_ready_after_complete(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    conv_id, msg_id, fn = await _dm_video_message(client)
+    await client.app[media_transcode_repo_key].complete(fn)
+    m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == msg_id)
+    assert m["media_status"] == "ready"
+
+
+async def test_dm_video_message_media_status_failed(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    conv_id, msg_id, fn = await _dm_video_message(client)
+    await client.app[media_transcode_repo_key].mark_failed(fn, "boom")
+    m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == msg_id)
+    assert m["media_status"] == "failed"
+
+
+async def test_dm_text_message_has_no_processing_status(client):
+    conv_id, _msg_id, _fn = await _dm_video_message(client)
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"content": "just words"},
+        headers=_auth(client._admin_token),
+    )
+    text_id = (await r.json())["id"]
+    m = next(x for x in await _dm_messages(client, conv_id) if x["id"] == text_id)
+    assert m.get("media_status") != "processing"

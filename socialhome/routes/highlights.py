@@ -33,6 +33,7 @@ from ..app_keys import (
     dm_service_key,
     feed_service_key,
     media_signer_key,
+    media_transcode_repo_key,
     report_service_key,
     space_service_key,
     highlight_service_key,
@@ -51,6 +52,7 @@ from ..domain.highlight import (
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response
 from .base import BaseView
+from .media_status import READY, media_filename
 
 
 # ─── Serialisation helpers ────────────────────────────────────────────────
@@ -83,8 +85,8 @@ def _highlight_dict(highlight: Highlight) -> dict:
     }
 
 
-def _frame_dict(frame: HighlightFrame) -> dict:
-    return {
+def _frame_dict(frame: HighlightFrame, *, media_status: str | None = None) -> dict:
+    out = {
         "id": frame.id,
         "highlight_id": frame.highlight_id,
         "sequence": frame.sequence,
@@ -95,6 +97,30 @@ def _frame_dict(frame: HighlightFrame) -> dict:
         "duration_ms": frame.duration_ms,
         "created_at": frame.created_at,
     }
+    # Video frames transcode in the background — surface a live
+    # ``media_status`` so the SPA shows a "Processing…" placeholder.
+    if frame.frame_type is HighlightFrameType.VIDEO:
+        out["media_status"] = media_status if media_status is not None else READY
+    return out
+
+
+async def _frame_statuses(view: BaseView, frames) -> dict[str, str]:
+    """Batch one ``status_for`` read for every video frame's filename."""
+    video_fns = [
+        fn
+        for f in frames
+        if f.frame_type is HighlightFrameType.VIDEO
+        and (fn := media_filename(f.media_url)) is not None
+    ]
+    return await view.svc(media_transcode_repo_key).status_for(video_fns)
+
+
+def _frame_status(statuses: dict[str, str], frame: HighlightFrame) -> str | None:
+    """Per-frame readiness, or ``None`` for non-video frames."""
+    if frame.frame_type is not HighlightFrameType.VIDEO:
+        return None
+    fn = media_filename(frame.media_url)
+    return statuses.get(fn, READY) if fn else READY
 
 
 # ─── Views ────────────────────────────────────────────────────────────────
@@ -152,12 +178,19 @@ class HighlightFramesCollectionView(BaseView):
             audience_kind=audience_kind,
             audience=audience_ids,
         )
+        # A freshly-uploaded video frame transcodes in the background —
+        # the ``.webm`` doesn't exist yet. Tell the SPA to render a
+        # "processing" placeholder; the LIST/detail endpoints derive the
+        # live status from the transcode repo on refetch.
+        new_frame_status = (
+            "processing" if frame.frame_type is HighlightFrameType.VIDEO else None
+        )
         return self._json(
             _sign_payload(
                 self.request,
                 {
                     "highlight": _highlight_dict(highlight),
-                    "frame": _frame_dict(frame),
+                    "frame": _frame_dict(frame, media_status=new_frame_status),
                 },
             ),
             status=201,
@@ -173,12 +206,17 @@ class HighlightsCollectionView(BaseView):
             return error_response(401, "UNAUTHENTICATED", "auth required")
         svc = self.svc(highlight_service_key)
         rows = await svc.list_visible(ctx.user_id)
+        all_frames = [f for row in rows for f in row["frames"]]
+        statuses = await _frame_statuses(self, all_frames)
         out: list[dict] = []
         for row in rows:
             out.append(
                 {
                     "highlight": _highlight_dict(row["highlight"]),
-                    "frames": [_frame_dict(f) for f in row["frames"]],
+                    "frames": [
+                        _frame_dict(f, media_status=_frame_status(statuses, f))
+                        for f in row["frames"]
+                    ],
                     "unseen_count": row["unseen_count"],
                 }
             )
@@ -198,9 +236,12 @@ class HighlightDetailView(BaseView):
         if result is None:
             return error_response(404, "NOT_FOUND", "highlight not found")
         highlight, frames = result
+        statuses = await _frame_statuses(self, frames)
         body = {
             "highlight": _highlight_dict(highlight),
-            "frames": [_frame_dict(f) for f in frames],
+            "frames": [
+                _frame_dict(f, media_status=_frame_status(statuses, f)) for f in frames
+            ],
         }
         # Authors get the per-frame views + reactions inline so the
         # viewer can render "Viewed by N" without a second request.

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import pathlib
 
 import pytest
 
 from socialhome.config import Config
+from socialhome.media.video_processor import VideoProcessor
 from socialhome.crypto import (
     derive_instance_id,
     generate_identity_keypair,
@@ -13,6 +15,7 @@ from socialhome.crypto import (
 from socialhome.db.database import AsyncDatabase
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.repositories.gallery_repo import SqliteGalleryRepo
+from socialhome.repositories.media_transcode_repo import SqliteMediaTranscodeRepo
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.services.gallery_service import (
     DESCRIPTION_MAX,
@@ -21,6 +24,7 @@ from socialhome.services.gallery_service import (
     GalleryService,
     NAME_MAX,
 )
+from socialhome.services.media_transcode_service import MediaTranscodeService
 
 
 @pytest.fixture
@@ -62,11 +66,22 @@ async def env(tmp_dir):
         media_path=str(tmp_dir / "media"),
         mode="standalone",
     )
+    transcode_repo = SqliteMediaTranscodeRepo(db)
+    transcode_service = MediaTranscodeService(
+        repo=transcode_repo,
+        media_dir=pathlib.Path(cfg.media_path),
+        processor=VideoProcessor(),
+    )
+    # Note: the scheduler loop is NOT started — the tests drive
+    # ``flush_once`` directly (or just assert the enqueue), so a real
+    # background transcode never races against the assertions.
     svc = GalleryService(
         SqliteGalleryRepo(db),
         SqliteSpaceRepo(db),
         EventBus(),
         cfg,
+        media_transcode_repo=transcode_repo,
+        media_transcode_service=transcode_service,
     )
     yield svc
     await db.shutdown()
@@ -316,6 +331,83 @@ async def test_delete_item_removes_files_from_disk(env):
     await env.delete_item(item.id, actor_user_id="a-id")
     assert not full.exists()
     assert not thumb.exists()
+
+
+async def test_upload_video_is_async(env):
+    """A video upload creates a GalleryItem row immediately (no inline
+    transcode), enqueues a transcode job keyed by the item's output
+    ``.webm`` filename, and the .webm/.webp don't exist on disk yet."""
+    album = await env.create_album(
+        space_id=None,
+        owner_user_id="a-id",
+        name="Clips",
+    )
+    item = await env.upload_item(
+        album.id,
+        data=b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200,
+        content_type="video/mp4",
+        caption="my clip",
+        uploader_user_id="a-id",
+    )
+    assert item.item_type == "video"
+    assert item.url.endswith(".webm")
+    assert item.thumbnail_url.endswith(".webp")
+    assert item.duration_s is None
+    output_filename = item.url.rsplit("/", 1)[-1]
+    thumb_filename = item.thumbnail_url.rsplit("/", 1)[-1]
+
+    # The item row is persisted right away.
+    rows = await env.list_items(album.id, actor_user_id="a-id")
+    assert any(r.id == item.id for r in rows)
+
+    # Exactly one transcode job, keyed by the .webm output filename.
+    due = await env._transcode_repo.list_due()  # type: ignore[attr-defined]
+    assert len(due) == 1
+    assert due[0].output_filename == output_filename
+    assert due[0].owner_user_id == "a-id"
+
+    # No transcode happened inline — outputs absent.
+    media_dir = env._media_dir  # type: ignore[attr-defined]
+    assert not (media_dir / output_filename).exists()
+    assert not (media_dir / thumb_filename).exists()
+
+
+async def test_upload_video_flush_writes_files(env, monkeypatch):
+    """Driving the wired transcode service's ``flush_once`` with a stub
+    processor writes the output + poster and clears the job."""
+    album = await env.create_album(
+        space_id=None,
+        owner_user_id="a-id",
+        name="Clips",
+    )
+    item = await env.upload_item(
+        album.id,
+        data=b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 200,
+        content_type="video/mp4",
+        caption=None,
+        uploader_user_id="a-id",
+    )
+    output_filename = item.url.rsplit("/", 1)[-1]
+    thumb_filename = item.thumbnail_url.rsplit("/", 1)[-1]
+
+    svc = env._transcode_service  # type: ignore[attr-defined]
+
+    class _StubProcessor:
+        async def process(self, src, name):
+            return b"WEBMDATA", "out.webm"
+
+        async def generate_thumbnail(self, src):
+            return b"WEBPDATA"
+
+    monkeypatch.setattr(svc, "_processor", _StubProcessor())
+
+    done = await svc.flush_once()
+    assert done == 1
+
+    media_dir = env._media_dir  # type: ignore[attr-defined]
+    assert (media_dir / output_filename).read_bytes() == b"WEBMDATA"
+    assert (media_dir / thumb_filename).read_bytes() == b"WEBPDATA"
+    assert await env._transcode_repo.list_due() == []  # type: ignore[attr-defined]
 
 
 async def test_system_album_set_retention_exempt_blocked(env):

@@ -46,6 +46,11 @@ interface Item {
   height: number
   caption?: string | null
   taken_at?: string | null
+  /** Background-transcode state for ``video`` items — ``'processing'``
+   *  while the worker encodes. Absent on photos and on older payloads
+   *  (treated as ready). A processing item can't play yet, so the tile
+   *  shows a "Processing…" overlay and doesn't open the lightbox. */
+  media_status?: 'processing' | 'failed' | 'ready'
 }
 
 const albums      = signal<Album[]>([])
@@ -383,29 +388,50 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
         </div>
       ) : (
         <div class="sh-image-grid">
-          {items.value.map((item, idx) => (
-            <button
-              key={item.id}
-              type="button"
-              class="sh-gallery-item"
-              aria-label={
-                item.caption
-                  ? `${item.item_type}: ${item.caption}`
-                  : `${item.item_type} item`
-              }
-              onClick={() => openLightbox({ items: lightboxItems, index: idx })}
-            >
-              <img
-                src={item.thumbnail_url}
-                alt={item.caption || ''}
-                loading="lazy"
-                decoding="async"
-              />
-              {item.item_type === 'video' && (
-                <span class="sh-video-badge" aria-hidden="true">▶</span>
-              )}
-            </button>
-          ))}
+          {items.value.map((item, idx) => {
+            // A video still transcoding can't play, so the tile shows a
+            // "Processing…" overlay and doesn't open the lightbox.
+            const processing =
+              item.item_type === 'video' && item.media_status === 'processing'
+            return (
+              <button
+                key={item.id}
+                type="button"
+                class={
+                  'sh-gallery-item' +
+                  (processing ? ' sh-gallery-item--processing' : '')
+                }
+                aria-label={
+                  processing
+                    ? `${item.item_type} item — processing`
+                    : item.caption
+                      ? `${item.item_type}: ${item.caption}`
+                      : `${item.item_type} item`
+                }
+                aria-disabled={processing ? 'true' : undefined}
+                onClick={() => {
+                  if (processing) return
+                  openLightbox({ items: lightboxItems, index: idx })
+                }}
+              >
+                <img
+                  src={item.thumbnail_url}
+                  alt={item.caption || ''}
+                  loading="lazy"
+                  decoding="async"
+                />
+                {item.item_type === 'video' && !processing && (
+                  <span class="sh-video-badge" aria-hidden="true">▶</span>
+                )}
+                {processing && (
+                  <span class="sh-gallery-item-processing">
+                    <Spinner label="Processing video" />
+                    <span class="sh-gallery-item-processing-msg">Processing…</span>
+                  </span>
+                )}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>

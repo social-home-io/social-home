@@ -195,6 +195,31 @@ describe('PostCard', () => {
     expect(container.querySelector('.sh-post-latest-comment')).toBeNull()
   })
 
+  // ── Video posts thread media_status through to VideoMedia ───────────────
+
+  it('renders the player for a ready video post (status absent)', () => {
+    const post: FeedPost = {
+      ...mockPost,
+      type: 'video',
+      media_url: '/api/media/v.webm',
+    }
+    const { container } = render(<PostCard post={post} />)
+    expect(container.querySelector('video')).toBeTruthy()
+    expect(container.querySelector('.sh-video-processing')).toBeNull()
+  })
+
+  it('renders the processing placeholder for a still-transcoding video post', () => {
+    const post: FeedPost = {
+      ...mockPost,
+      type: 'video',
+      media_url: '/api/media/postcard-processing.webm',
+      media_status: 'processing',
+    }
+    const { container } = render(<PostCard post={post} />)
+    expect(container.querySelector('video')).toBeNull()
+    expect(container.querySelector('.sh-video-processing')).toBeTruthy()
+  })
+
   it('clicking the preview row triggers onComment', () => {
     const fn = vi.fn()
     const post: FeedPost = {

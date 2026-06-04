@@ -99,6 +99,18 @@ class _FakeSpaceRepo:
         return object() if space_id in self._members else None
 
 
+class _FakeMediaTranscodeRepo:
+    """Records ``status_for`` calls and returns a canned status map."""
+
+    def __init__(self, statuses=None):
+        self._statuses = statuses or {}
+        self.calls = []
+
+    async def status_for(self, output_filenames):
+        self.calls.append(list(output_filenames))
+        return {fn: s for fn, s in self._statuses.items() if fn in output_filenames}
+
+
 def _user(uid, name="x"):
     return User(user_id=uid, username=name, display_name=name)
 
@@ -146,6 +158,128 @@ async def test_post_created_fans_to_household(env):
     await bus.publish(PostCreated(post=_post()))
     assert sock.sent
     assert "post.created" in sock.sent[0]
+
+
+async def test_post_created_video_stamps_processing_media_status():
+    """A freshly-posted video that's still transcoding ships
+    ``media_status='processing'`` on the WS frame so the SPA renders the
+    'Processing…' placeholder until the ``media.ready`` frame swaps it in."""
+    from dataclasses import replace
+
+    bus = EventBus()
+    ws = WebSocketManager()
+    user_repo = _FakeUserRepo([_user("u1")])
+    space_repo = _FakeSpaceRepo({})
+    transcode_repo = _FakeMediaTranscodeRepo({"v.webm": "processing"})
+    svc = RealtimeService(
+        bus,
+        ws,
+        user_repo=user_repo,
+        space_repo=space_repo,
+        media_transcode_repo=transcode_repo,
+    )
+    svc.wire()
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    video = replace(
+        _post(),
+        type=PostType.VIDEO,
+        media_url="api/media/v.webm",
+    )
+    await bus.publish(PostCreated(post=video))
+    frame = json.loads(sock.sent[0])
+    assert frame["post"]["media_status"] == "processing"
+    # One batched status_for call per frame, keyed by the output filename.
+    assert transcode_repo.calls == [["v.webm"]]
+
+
+async def test_post_created_video_absent_from_queue_is_ready():
+    """A video with no transcode row (e.g. a federated video) is absent from
+    ``status_for`` → ``media_status='ready'``, not wrongly stuck processing."""
+    from dataclasses import replace
+
+    bus = EventBus()
+    ws = WebSocketManager()
+    user_repo = _FakeUserRepo([_user("u1")])
+    space_repo = _FakeSpaceRepo({})
+    transcode_repo = _FakeMediaTranscodeRepo({"other.webm": "processing"})
+    svc = RealtimeService(
+        bus,
+        ws,
+        user_repo=user_repo,
+        space_repo=space_repo,
+        media_transcode_repo=transcode_repo,
+    )
+    svc.wire()
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    video = replace(_post(), type=PostType.VIDEO, media_url="api/media/v.webm")
+    await bus.publish(PostCreated(post=video))
+    frame = json.loads(sock.sent[0])
+    assert frame["post"]["media_status"] == "ready"
+
+
+async def test_post_created_text_post_gets_no_media_status():
+    """A non-video post never gets a ``media_status`` key, and the transcode
+    repo isn't queried for it."""
+    bus = EventBus()
+    ws = WebSocketManager()
+    user_repo = _FakeUserRepo([_user("u1")])
+    space_repo = _FakeSpaceRepo({})
+    transcode_repo = _FakeMediaTranscodeRepo({"v.webm": "processing"})
+    svc = RealtimeService(
+        bus,
+        ws,
+        user_repo=user_repo,
+        space_repo=space_repo,
+        media_transcode_repo=transcode_repo,
+    )
+    svc.wire()
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(PostCreated(post=_post()))
+    frame = json.loads(sock.sent[0])
+    assert "media_status" not in frame["post"]
+    assert transcode_repo.calls == []
+
+
+async def test_post_created_without_transcode_repo_is_back_compat(env):
+    """Constructed without a transcode repo (older callers / test stacks),
+    a video post broadcasts fine with no ``media_status`` key — no crash."""
+    from dataclasses import replace
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    video = replace(_post(), type=PostType.VIDEO, media_url="api/media/v.webm")
+    await bus.publish(PostCreated(post=video))
+    frame = json.loads(sock.sent[0])
+    assert "media_status" not in frame["post"]
+
+
+async def test_space_post_created_video_stamps_media_status():
+    """The space-feed ``space.post.created`` frame annotates video status too."""
+    from dataclasses import replace
+
+    bus = EventBus()
+    ws = WebSocketManager()
+    user_repo = _FakeUserRepo([_user("u1")])
+    space_repo = _FakeSpaceRepo({"sp-1": ["u1"]})
+    transcode_repo = _FakeMediaTranscodeRepo({"v.webm": "processing"})
+    svc = RealtimeService(
+        bus,
+        ws,
+        user_repo=user_repo,
+        space_repo=space_repo,
+        media_transcode_repo=transcode_repo,
+    )
+    svc.wire()
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    video = replace(_post(), type=PostType.VIDEO, media_url="api/media/v.webm")
+    await bus.publish(SpacePostCreated(post=video, space_id="sp-1"))
+    frame = json.loads(sock.sent[0])
+    assert frame["post"]["media_status"] == "processing"
 
 
 async def test_ws_post_created_carries_signed_media_url(env):
@@ -688,3 +822,80 @@ async def test_remote_space_dissolved_broadcasts_dissolved_frame(env):
         and f.get("space_id") == "sp-1"
         for f in frames
     )
+
+
+async def test_media_transcode_ready_pushes_media_ready_to_owner(env):
+    """A finished background video transcode → ``media.ready`` to the
+    uploader's SPA so it swaps the 'Processing…' placeholder for the
+    player."""
+    import orjson
+
+    from socialhome.domain.events import MediaTranscodeReady
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        MediaTranscodeReady(
+            output_filename="v.webm",
+            thumbnail_filename="v.webp",
+            owner_user_id="u1",
+        )
+    )
+    assert sock.sent
+    frames = [orjson.loads(s) for s in sock.sent]
+    ready = [f for f in frames if f.get("type") == "media.ready"]
+    assert len(ready) == 1
+    frame = ready[0]
+    assert frame["output_filename"] == "v.webm"
+    assert frame["media_url"]
+    assert frame["thumbnail_url"]
+
+
+async def test_media_transcode_ready_signs_urls_when_signer_present(env):
+    """With a signer attached the ``media_url`` / ``thumbnail_url`` arrive
+    pre-signed so the SPA can drop them straight into the player."""
+    import orjson
+
+    from socialhome.domain.events import MediaTranscodeReady
+    from socialhome.media_signer import MediaUrlSigner
+
+    svc, bus, ws = env
+    svc.attach_media_signer(MediaUrlSigner(key=b"\xab" * 32))
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        MediaTranscodeReady(
+            output_filename="v.webm",
+            thumbnail_filename="v.webp",
+            owner_user_id="u1",
+        )
+    )
+    assert sock.sent
+    frame = next(
+        orjson.loads(s)
+        for s in sock.sent
+        if orjson.loads(s).get("type") == "media.ready"
+    )
+    assert "api/media/v.webm?exp=" in frame["media_url"]
+    assert "sig=" in frame["media_url"]
+    assert "api/media/v.webp?exp=" in frame["thumbnail_url"]
+    assert "sig=" in frame["thumbnail_url"]
+
+
+async def test_media_transcode_ready_no_owner_no_broadcast(env):
+    """``owner_user_id=None`` (e.g. a household-scoped transcode without a
+    resolvable uploader) → no broadcast."""
+    from socialhome.domain.events import MediaTranscodeReady
+
+    svc, bus, ws = env
+    sock = _FakeWS()
+    await ws.register("u1", sock)
+    await bus.publish(
+        MediaTranscodeReady(
+            output_filename="v.webm",
+            thumbnail_filename="v.webp",
+            owner_user_id=None,
+        )
+    )
+    assert sock.sent == []

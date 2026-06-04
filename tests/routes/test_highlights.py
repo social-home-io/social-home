@@ -374,3 +374,100 @@ async def test_delete_frame_endpoint(client):
         headers=_auth(client),
     )
     assert r.status == 204
+
+
+# ── Video frame media_status ───────────────────────────────────────────────
+
+
+async def _create_video_frame(client) -> tuple[str, str, str]:
+    """Create a video highlight frame + a matching transcode row.
+
+    Returns ``(highlight_id, frame_id, output_fn)``. Stops the scheduler
+    so the row stays put while the test inspects readiness.
+    """
+    from socialhome.app_keys import (
+        media_transcode_repo_key,
+        media_transcode_service_key,
+    )
+
+    await client.app[media_transcode_service_key].stop()
+    fn = "hlvid000000000000000000000000.webm"
+    r = await client.post(
+        "/api/highlights/frames",
+        json={"frame_type": "video", "media_url": f"api/media/{fn}"},
+        headers=_auth(client),
+    )
+    assert r.status == 201, await r.text()
+    body = await r.json()
+    highlight_id = body["highlight"]["id"]
+    frame_id = body["frame"]["id"]
+    await client.app[media_transcode_repo_key].enqueue(
+        output_filename=fn,
+        source_path="/tmp/src.bin",
+        thumbnail_filename="thumb.webp",
+        owner_user_id=client._uid,
+    )
+    return highlight_id, frame_id, fn
+
+
+async def _list_frames(client) -> list[dict]:
+    r = await client.get("/api/highlights", headers=_auth(client))
+    assert r.status == 200
+    rows = await r.json()
+    out: list[dict] = []
+    for row in rows:
+        out.extend(row["frames"])
+    return out
+
+
+async def test_highlight_video_frame_media_status_processing(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    _hid, frame_id, fn = await _create_video_frame(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    f = next(x for x in await _list_frames(client) if x["id"] == frame_id)
+    assert f["frame_type"] == "video"
+    assert f["media_status"] == "processing"
+
+
+async def test_highlight_video_frame_media_status_ready_after_complete(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    _hid, frame_id, fn = await _create_video_frame(client)
+    await client.app[media_transcode_repo_key].complete(fn)
+    f = next(x for x in await _list_frames(client) if x["id"] == frame_id)
+    assert f["media_status"] == "ready"
+
+
+async def test_highlight_video_frame_media_status_failed(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    _hid, frame_id, fn = await _create_video_frame(client)
+    await client.app[media_transcode_repo_key].mark_failed(fn, "boom")
+    f = next(x for x in await _list_frames(client) if x["id"] == frame_id)
+    assert f["media_status"] == "failed"
+
+
+async def test_highlight_image_frame_has_no_processing_status(client):
+    _hid, _frame_id, _fn = await _create_video_frame(client)
+    r = await client.post(
+        "/api/highlights/frames",
+        json={"frame_type": "image", "media_url": "/api/media/pic.webp"},
+        headers=_auth(client),
+    )
+    assert r.status == 201
+    image_frame_id = (await r.json())["frame"]["id"]
+    f = next(x for x in await _list_frames(client) if x["id"] == image_frame_id)
+    assert f.get("media_status") != "processing"
+
+
+async def test_highlight_detail_video_frame_media_status(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    highlight_id, frame_id, fn = await _create_video_frame(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    r = await client.get(f"/api/highlights/{highlight_id}", headers=_auth(client))
+    assert r.status == 200
+    body = await r.json()
+    f = next(x for x in body["frames"] if x["id"] == frame_id)
+    assert f["media_status"] == "processing"

@@ -1,0 +1,78 @@
+/**
+ * VideoMedia — a status-aware video renderer (§ async video transcode).
+ *
+ * Video uploads transcode in the background. A list payload tags each
+ * video item with ``media_status``:
+ *
+ *  - ``'processing'`` — the worker is still encoding; show a placeholder.
+ *  - ``'failed'``     — transcode failed; show a small failed state.
+ *  - ``'ready'`` / absent — play it (older payloads omit the field).
+ *
+ * When transcoding finishes the backend pushes a ``media.ready`` WS frame
+ * to the uploader; :mod:`store/mediaReady` records the output filename and
+ * this component (which reads :data:`readyMedia` in its body) re-renders
+ * to swap placeholder → player, overriding a now-stale ``'processing'``
+ * status from the initial fetch.
+ *
+ * The player shape mirrors :func:`FileRenderer.VideoRenderer` exactly so
+ * a ready video looks identical wherever it's rendered. URLs arrive
+ * already short-lived signed from the API, so we use them as-is in
+ * ``src`` / ``poster`` (no base / auth-header surgery) — same as the
+ * other media renderers.
+ */
+import { Spinner } from './Spinner'
+import { readyMedia, mediaFilename } from '@/store/mediaReady'
+
+interface Props {
+  src: string                 // api/media/<uuid>.webm (signed ok)
+  poster?: string             // thumbnail url (signed ok)
+  mediaStatus?: 'processing' | 'failed' | 'ready'
+  class?: string              // forwarded to the <video> / placeholder
+}
+
+export function VideoMedia(props: Props) {
+  const { src, poster, mediaStatus } = props
+  const fn = mediaFilename(src)
+  // Read the signal in the render body so the WS frame re-renders us.
+  const flagged = readyMedia.value.has(fn)
+  const ready =
+    (mediaStatus !== 'processing' && mediaStatus !== 'failed') || flagged
+
+  if (mediaStatus === 'failed' && !flagged) {
+    return (
+      <div class={'sh-video-wrapper sh-video-failed ' + (props.class || '')}>
+        <span class="sh-video-failed-msg">
+          ⚠️ This video couldn’t be processed.
+        </span>
+      </div>
+    )
+  }
+
+  if (!ready) {
+    return (
+      <div class={'sh-video-wrapper sh-video-processing ' + (props.class || '')}>
+        {poster && (
+          <img class="sh-video-processing-poster" src={poster} alt=""
+               aria-hidden="true" />
+        )}
+        <div class="sh-video-processing-overlay">
+          <Spinner label="Processing video" />
+          <span class="sh-video-processing-msg">
+            Processing video… it’ll play here when ready.
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <video
+      class={'sh-video ' + (props.class || '')}
+      src={src}
+      poster={poster}
+      controls
+      preload="metadata"
+      playsInline
+    />
+  )
+}

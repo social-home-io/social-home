@@ -505,3 +505,92 @@ async def test_feed_read_watermark_accepts_null_to_clear(client):
     )
     assert r.status == 200
     assert (await r.json())["last_read_post_id"] is None
+
+
+# ─── Video media_status on the feed listing ──────────────────────────────
+
+
+async def _create_video_post(client) -> tuple[str, str]:
+    """Create a video post pointing at ``api/media/<fn>.webm`` and enqueue
+    a matching transcode row. Returns ``(post_id, output_fn)``."""
+    from socialhome.app_keys import (
+        media_transcode_repo_key,
+        media_transcode_service_key,
+    )
+
+    await client.app[media_transcode_service_key].stop()
+    fn = "feedvid0000000000000000000000.webm"
+    r = await client.post(
+        "/api/feed/posts",
+        json={"type": "video", "media_url": f"api/media/{fn}"},
+        headers=_auth(client._admin_token),
+    )
+    assert r.status == 201
+    post_id = (await r.json())["id"]
+    await client.app[media_transcode_repo_key].enqueue(
+        output_filename=fn,
+        source_path="/tmp/src.bin",
+        thumbnail_filename="thumb.webp",
+        owner_user_id=client._admin_uid,
+    )
+    return post_id, fn
+
+
+async def _feed(client) -> list[dict]:
+    r = await client.get("/api/feed", headers=_auth(client._admin_token))
+    assert r.status == 200
+    return await r.json()
+
+
+async def test_feed_video_media_status_processing(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    post_id, fn = await _create_video_post(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    post = next(p for p in await _feed(client) if p["id"] == post_id)
+    assert post["type"] == "video"
+    assert post["media_status"] == "processing"
+
+
+async def test_feed_video_media_status_ready_after_complete(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    post_id, fn = await _create_video_post(client)
+    await client.app[media_transcode_repo_key].complete(fn)
+    post = next(p for p in await _feed(client) if p["id"] == post_id)
+    assert post["media_status"] == "ready"
+
+
+async def test_feed_video_media_status_failed(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    post_id, fn = await _create_video_post(client)
+    await client.app[media_transcode_repo_key].mark_failed(fn, "boom")
+    post = next(p for p in await _feed(client) if p["id"] == post_id)
+    assert post["media_status"] == "failed"
+
+
+async def test_feed_text_post_has_no_processing_status(client):
+    await _create_video_post(client)
+    r = await client.post(
+        "/api/feed/posts",
+        json={"type": "text", "content": "just words"},
+        headers=_auth(client._admin_token),
+    )
+    text_id = (await r.json())["id"]
+    post = next(p for p in await _feed(client) if p["id"] == text_id)
+    assert post.get("media_status") != "processing"
+
+
+async def test_saved_video_post_media_status_processing(client):
+    from socialhome.app_keys import media_transcode_repo_key
+
+    post_id, fn = await _create_video_post(client)
+    await client.app[media_transcode_repo_key].mark_processing(fn)
+    await client.post(
+        f"/api/feed/posts/{post_id}/save",
+        headers=_auth(client._admin_token),
+    )
+    r = await client.get("/api/feed/saved", headers=_auth(client._admin_token))
+    post = next(p for p in await r.json() if p["id"] == post_id)
+    assert post["media_status"] == "processing"

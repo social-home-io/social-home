@@ -18,6 +18,7 @@ import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
 import { openLightbox } from '@/components/ImageLightbox'
 import { openMomentumComposer } from '@/components/MomentumComposerDialog'
+import { VideoMedia } from '@/components/VideoMedia'
 import { MomentumInboxSkeleton } from '@/components/Skeleton'
 import { showToast } from '@/components/Toast'
 import { openUserActions } from '@/components/UserActionsMenu'
@@ -266,14 +267,13 @@ function MomentRow({
           </button>
         )}
         {m.media_type === 'video' && m.media_url && (
-          <video
-            src={m.media_url}
-            controls
-            muted
-            preload="metadata"
-            class="sh-momentum-row-media"
-            onClick={(ev) => ev.stopPropagation()}
-          />
+          <span onClick={(ev) => ev.stopPropagation()}>
+            <VideoMedia
+              src={m.media_url}
+              mediaStatus={m.media_status}
+              class="sh-momentum-row-media"
+            />
+          </span>
         )}
 
         {/* Engagement chip row — Twitter-style icons + counts. */}

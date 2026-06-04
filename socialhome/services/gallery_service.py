@@ -48,9 +48,10 @@ from ..domain.space import SpaceRole
 from ..infrastructure.event_bus import EventBus
 from ..media.cleanup import unlink_media
 from ..media.image_processor import ImageProcessor
-from ..media.video_processor import VideoProcessor
 from ..repositories.gallery_repo import AbstractGalleryRepo
+from ..repositories.media_transcode_repo import AbstractMediaTranscodeRepo
 from ..repositories.space_repo import AbstractSpaceRepo
+from .media_transcode_service import MediaTranscodeService
 
 try:
     from PIL import ExifTags, Image
@@ -117,7 +118,15 @@ class GalleryPermissionError(GalleryError):
 class GalleryService:
     """CRUD + upload pipeline for gallery albums and items."""
 
-    __slots__ = ("_repo", "_space_repo", "_bus", "_config", "_media_dir")
+    __slots__ = (
+        "_repo",
+        "_space_repo",
+        "_bus",
+        "_config",
+        "_media_dir",
+        "_transcode_repo",
+        "_transcode_service",
+    )
 
     def __init__(
         self,
@@ -125,12 +134,22 @@ class GalleryService:
         space_repo: AbstractSpaceRepo,
         bus: EventBus,
         config: Config,
+        *,
+        media_transcode_repo: AbstractMediaTranscodeRepo | None = None,
+        media_transcode_service: MediaTranscodeService | None = None,
     ) -> None:
         self._repo = repo
         self._space_repo = space_repo
         self._bus = bus
         self._config = config
         self._media_dir = pathlib.Path(config.media_path)
+        # Background video transcode (§async-video). When wired, the
+        # video upload path stashes source bytes + enqueues a job and
+        # returns a "processing" item immediately; the scheduler
+        # transcodes off the request path. Optional so unit tests that
+        # only exercise photos / album CRUD can omit them.
+        self._transcode_repo = media_transcode_repo
+        self._transcode_service = media_transcode_service
 
     # ─── Albums ───────────────────────────────────────────────────────────
 
@@ -474,25 +493,43 @@ class GalleryService:
         caption: str | None,
         uploader_user_id: str,
     ) -> GalleryItem:
-        proc = VideoProcessor()
-        out_bytes, out_name = await proc.process(data, "upload.mp4")
-        await self._save_to_disk(out_name, out_bytes)
+        """Async video upload — enqueue a transcode job, return immediately.
 
-        # Extract a WebP thumbnail from the first video frame.
-        thumb_name = f"{uuid.uuid4().hex}.webp"
-        try:
-            thumb_bytes = await proc.generate_thumbnail(data)
-            await self._save_to_disk(thumb_name, thumb_bytes)
-        except (RuntimeError, ValueError) as exc:
-            log.warning("gallery: video thumbnail extraction failed: %s", exc)
+        Mints the eventual ``.webm`` output + ``.webp`` thumbnail names,
+        stashes the raw source bytes under the (non-served)
+        ``transcode_src`` temp dir, enqueues a ``media_transcode_jobs``
+        row keyed by the output filename, and nudges the scheduler. The
+        :class:`GalleryItem` is created with placeholder dims and
+        ``duration_s=None`` — the SPA renders a "processing" placeholder
+        until :meth:`MediaTranscodeService.flush_once` writes the files
+        and clears the row.
+
+        Requires the transcode repo + service to be wired; without them
+        there is no background worker to drain the queue, so we fail loud
+        rather than silently dropping the upload.
+        """
+        if self._transcode_repo is None or self._transcode_service is None:
+            raise RuntimeError(
+                "video upload requires the media transcode service to be wired"
+            )
+        output_filename = f"{uuid.uuid4().hex}.webm"
+        thumbnail_filename = f"{uuid.uuid4().hex}.webp"
+        source_path = await self._stash_transcode_source(data)
+        await self._transcode_repo.enqueue(
+            output_filename=output_filename,
+            source_path=str(source_path),
+            thumbnail_filename=thumbnail_filename,
+            owner_user_id=uploader_user_id,
+        )
+        self._transcode_service.nudge()
 
         return GalleryItem(
             id=uuid.uuid4().hex,
             album_id=album_id,
             uploaded_by=uploader_user_id,
             item_type="video",
-            url=f"api/media/{out_name}",
-            thumbnail_url=f"api/media/{thumb_name}",
+            url=f"api/media/{output_filename}",
+            thumbnail_url=f"api/media/{thumbnail_filename}",
             width=VIDEO_MAX_DIMENSION,
             height=int(VIDEO_MAX_DIMENSION * 9 / 16),
             duration_s=None,
@@ -501,6 +538,22 @@ class GalleryService:
             sort_order=0,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
+
+    async def _stash_transcode_source(self, data: bytes) -> pathlib.Path:
+        """Write raw upload bytes to the (non-served) transcode temp dir.
+
+        ``transcode_src`` is a subdir of the media root; the media serve
+        route rejects any filename containing ``/`` so these temp blobs
+        can never be fetched via ``/api/media/{filename}``. The transcode
+        scheduler reads + deletes them; the same dir is the one
+        :class:`MediaTranscodeService` is given as ``media_dir``'s root.
+        """
+        temp_dir = self._media_dir / "transcode_src"
+        await aiofiles.os.makedirs(temp_dir, exist_ok=True)
+        temp_path = temp_dir / f"{uuid.uuid4().hex}.bin"
+        async with aiofiles.open(temp_path, "wb") as f:
+            await f.write(data)
+        return temp_path
 
     async def _save_to_disk(self, filename: str, payload: bytes) -> None:
         await aiofiles.os.makedirs(self._media_dir, exist_ok=True)

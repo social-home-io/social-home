@@ -10,6 +10,7 @@ from ..app_keys import (
     conversation_repo_key,
     dm_service_key,
     media_signer_key,
+    media_transcode_repo_key,
     notification_service_key,
     online_status_service_key,
     user_repo_key,
@@ -18,6 +19,7 @@ from ..domain.user import _picture_url
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
 from .base import BaseView
+from .media_status import READY, media_filename
 
 
 class ConversationCollectionView(BaseView):
@@ -167,6 +169,15 @@ class ConversationMessageView(BaseView):
         )
         signer = self.request.app.get(media_signer_key)
         repo = self.svc(conversation_repo_key)
+        # Video messages transcode in the background — surface a live
+        # ``media_status`` so the SPA shows a "Processing…" placeholder
+        # until the ``.webm`` exists. One batched repo read per request.
+        video_fns = [
+            fn
+            for m in msgs
+            if m.type == "video" and (fn := media_filename(m.media_url)) is not None
+        ]
+        statuses = await self.svc(media_transcode_repo_key).status_for(video_fns)
         payload = []
         for m in msgs:
             # ``list_reactions`` is a small per-message read; the page
@@ -175,28 +186,26 @@ class ConversationMessageView(BaseView):
             # later if the cost shows up in profiling.
             rxs = await repo.list_reactions(m.id) if not m.deleted else []
             reactions = [{"user_id": r.user_id, "emoji": r.emoji} for r in rxs]
-            payload.append(
-                sanitise_for_api(
-                    {
-                        "id": m.id,
-                        "sender_user_id": m.sender_user_id,
-                        "content": m.content,
-                        "type": m.type,
-                        "media_url": m.media_url,
-                        "file_name": m.file_name,
-                        "mime_type": m.mime_type,
-                        "file_size_bytes": m.file_size_bytes,
-                        "media_sync_status": m.media_sync_status,
-                        "reply_to_id": m.reply_to_id,
-                        "reactions": reactions,
-                        "deleted": m.deleted,
-                        "created_at": m.created_at.isoformat()
-                        if m.created_at
-                        else None,
-                        "edited_at": m.edited_at.isoformat() if m.edited_at else None,
-                    }
-                )
-            )
+            row = {
+                "id": m.id,
+                "sender_user_id": m.sender_user_id,
+                "content": m.content,
+                "type": m.type,
+                "media_url": m.media_url,
+                "file_name": m.file_name,
+                "mime_type": m.mime_type,
+                "file_size_bytes": m.file_size_bytes,
+                "media_sync_status": m.media_sync_status,
+                "reply_to_id": m.reply_to_id,
+                "reactions": reactions,
+                "deleted": m.deleted,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "edited_at": m.edited_at.isoformat() if m.edited_at else None,
+            }
+            if m.type == "video":
+                fn = media_filename(m.media_url)
+                row["media_status"] = statuses.get(fn, READY) if fn else READY
+            payload.append(sanitise_for_api(row))
         if signer is not None:
             sign_media_urls_in(payload, signer)
         return web.json_response(payload)

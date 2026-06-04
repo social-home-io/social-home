@@ -24,6 +24,7 @@ from aiohttp.multipart import BodyPartReader
 from .. import app_keys as K
 from ..media_signer import sign_media_urls_in
 from .base import BaseView
+from .media_status import READY, media_filename
 
 _GALLERY_SECTION = "gallery"
 
@@ -228,9 +229,24 @@ class AlbumItemCollectionView(BaseView):
             limit=limit,
             before=before,
         )
-        return web.json_response(
-            [_item_signed(self.request, i) for i in items],
-        )
+        # Video items transcode in the background — surface a live
+        # ``media_status`` so the SPA shows a "Processing…" placeholder
+        # until the ``.webm`` exists. One batched repo read per request;
+        # photos/other items get no status field.
+        video_fns = [
+            fn
+            for i in items
+            if i.item_type == "video" and (fn := media_filename(i.url)) is not None
+        ]
+        statuses = await self.svc(K.media_transcode_repo_key).status_for(video_fns)
+        out = []
+        for i in items:
+            payload = _item_signed(self.request, i)
+            if i.item_type == "video":
+                fn = media_filename(i.url)
+                payload["media_status"] = statuses.get(fn, READY) if fn else READY
+            out.append(payload)
+        return web.json_response(out)
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -282,7 +298,14 @@ class AlbumItemCollectionView(BaseView):
             caption=caption,
             uploader_user_id=ctx.user_id,
         )
-        return web.json_response(_item_signed(self.request, item), status=201)
+        payload = _item_signed(self.request, item)
+        # A freshly-uploaded video transcodes in the background — the
+        # ``.webm`` + poster don't exist on disk yet. Tell the SPA to
+        # render a "processing" placeholder; the LIST endpoint (T4)
+        # derives the live status from the transcode repo on refetch.
+        if item.item_type == "video":
+            payload["media_status"] = "processing"
+        return web.json_response(payload, status=201)
 
 
 class GalleryItemDetailView(BaseView):

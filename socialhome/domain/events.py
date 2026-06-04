@@ -1858,6 +1858,26 @@ class UserFollowed(DomainEvent):
     occurred_at: datetime = field(default_factory=_now)
 
 
+# ─── Media transcode (async video transcode) ─────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class MediaTranscodeReady(DomainEvent):
+    """A background video transcode finished — the ``.webm`` + poster
+    are now on disk under the media root.
+
+    Published by :class:`MediaTranscodeService.flush_once` on success
+    only (a failed-frame event is a documented follow-up). Subscribers
+    (realtime WS fan-out) can surface a "your video is ready" signal so
+    the SPA swaps its "processing" placeholder for the playable clip.
+    ``owner_user_id`` is ``None`` when the source row carried no owner.
+    """
+
+    output_filename: str
+    thumbnail_filename: str
+    owner_user_id: str | None
+
+
 @dataclass(slots=True, frozen=True)
 class UserUnfollowed(DomainEvent):
     follower_user_id: str
