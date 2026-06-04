@@ -319,7 +319,7 @@ from .moments_public import (
     MomentPublicRegistrationCollectionView,
     MomentPublicRegistrationDetailView,
 )
-from .admin_federation import AdminFederationCompatView
+from .admin_federation import AdminFederationCompatView, AdminFederationResyncView
 from .admin_instance_bans import (
     InstanceBanCollectionView,
     InstanceBanDetailView,
@@ -424,6 +424,10 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view(
         "/api/admin/federation/compat",
         AdminFederationCompatView,
+    )
+    app.router.add_view(
+        "/api/admin/federation/resync",
+        AdminFederationResyncView,
     )
     app.router.add_view("/api/me/export", MeExportView)
     app.router.add_view("/api/users", UserCollectionView)

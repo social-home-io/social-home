@@ -637,3 +637,16 @@ async def test_update_instance_home_with_nulls_clears_row(env):
     got = await env.fed_repo.get_instance("peer-null-home")
     assert got.home_lat is None
     assert got.home_lon is None
+
+
+async def test_last_proto_version_round_trips(env):
+    """get/set_last_proto_version persist OURS on the singleton self-row."""
+    # NULL until first recorded (the migration adds the column without backfill).
+    assert await env.fed_repo.get_last_proto_version() is None
+
+    await env.fed_repo.set_last_proto_version(19)
+    assert await env.fed_repo.get_last_proto_version() == 19
+
+    # Overwrites in place — no second row, latest value wins.
+    await env.fed_repo.set_last_proto_version(20)
+    assert await env.fed_repo.get_last_proto_version() == 20
