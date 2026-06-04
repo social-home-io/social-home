@@ -161,6 +161,11 @@ export function ImageLightbox() {
         {item.item_type === 'video' ? (
           <video
             src={item.url}
+            // Poster = the item's thumbnail so the viewer shows a clean
+            // first frame (with the native play button) instead of a black
+            // box — browsers block the unmuted autoPlay below, so without a
+            // poster the user faces a black rectangle until they hit play.
+            poster={item.thumbnail_url}
             class="sh-lightbox-media"
             controls
             autoPlay

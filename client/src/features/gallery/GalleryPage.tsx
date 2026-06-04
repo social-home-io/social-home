@@ -215,6 +215,10 @@ function AlbumCover({ album }: { album: Album }) {
 
 function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
   const [uploadPct, setUploadPct] = useState<number | null>(null)
+  // Once the bytes are sent the request blocks on server-side transcoding
+  // (video → VP9/WebM). Flip to a "Processing…" label so the bar doesn't
+  // sit at "Uploading… 100%" looking stalled — matching the feed composer.
+  const [processing, setProcessing] = useState(false)
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -242,6 +246,8 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) setUploadPct((e.loaded / e.total) * 100)
       }
+      // Bytes fully sent — the server is now transcoding before it responds.
+      xhr.upload.onload = () => setProcessing(true)
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) resolve()
         else reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`))
@@ -256,15 +262,18 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
     const files = Array.from(fileList)
     for (let i = 0; i < files.length; i++) {
       setUploadPct(0)
+      setProcessing(false)
       try {
         await uploadOne(files[i])
       } catch (err: unknown) {
         showToast(describeUploadError(err, { file: files[i] }), 'error')
         setUploadPct(null)
+        setProcessing(false)
         continue
       }
     }
     setUploadPct(null)
+    setProcessing(false)
     showToast(
       files.length === 1 ? 'Uploaded' : `Uploaded ${files.length} items`,
       'success',
@@ -343,10 +352,11 @@ function AlbumDetail({ album, onBack }: { album: Album, onBack: () => void }) {
 
       {uploadPct !== null && (
         <div class="sh-upload-progress" role="progressbar"
-             aria-valuenow={Math.round(uploadPct)} aria-valuemin={0} aria-valuemax={100}>
+             aria-valuenow={processing ? 100 : Math.round(uploadPct)}
+             aria-valuemin={0} aria-valuemax={100}>
           <div class="sh-upload-progress-bar"
-               style={{ width: `${uploadPct.toFixed(0)}%` }} />
-          <span>Uploading… {uploadPct.toFixed(0)}%</span>
+               style={{ width: processing ? '100%' : `${uploadPct.toFixed(0)}%` }} />
+          <span>{processing ? 'Processing…' : `Uploading… ${uploadPct.toFixed(0)}%`}</span>
         </div>
       )}
 

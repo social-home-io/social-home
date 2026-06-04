@@ -53,6 +53,31 @@ describe('ImageLightbox', () => {
     })
   })
 
+  describe('video item', () => {
+    beforeEach(() => { closeLightbox() })
+
+    it('renders a <video> with native controls and the thumbnail as poster', async () => {
+      openLightbox({
+        items: [
+          {
+            url: '/api/media/clip.webm?exp=1&sig=2',
+            thumbnail_url: '/api/media/clip-thumb.webp',
+            item_type: 'video',
+          },
+        ],
+        index: 0,
+      })
+      const { container } = render(<ImageLightbox />)
+      const video = container.querySelector('video') as HTMLVideoElement
+      expect(video).toBeTruthy()
+      // Native controls so the viewer can scrub / mute / fullscreen.
+      expect(video.hasAttribute('controls')).toBe(true)
+      // Poster = thumbnail so a browser that blocks the unmuted autoplay
+      // shows a clean frame instead of a black box.
+      expect(video.getAttribute('poster')).toBe('/api/media/clip-thumb.webp')
+    })
+  })
+
   describe('Copy reference button', () => {
     beforeEach(() => {
       closeLightbox()
