@@ -31,6 +31,7 @@ from aiohttp import web
 from ..app_keys import (
     config_key,
     db_key,
+    federation_repo_key,
     preferences_service_key,
     platform_adapter_key,
     setup_service_key,
@@ -91,6 +92,9 @@ async def _apply_household_name(view: BaseView, name: str | None) -> None:
         actor_is_admin=True,
         household_name=name,
     )
+    # Also set the FEDERATED display name — the QR + peer display read
+    # instance_identity.display_name, not the local-only preference above.
+    await view.svc(federation_repo_key).set_instance_display_name(name)
 
 
 class StandaloneSetupView(BaseView):

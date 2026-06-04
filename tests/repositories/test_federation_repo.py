@@ -650,3 +650,11 @@ async def test_last_proto_version_round_trips(env):
     # Overwrites in place — no second row, latest value wins.
     await env.fed_repo.set_last_proto_version(20)
     assert await env.fed_repo.get_last_proto_version() == 20
+
+
+async def test_set_instance_display_name_round_trips(env):
+    """set_instance_display_name updates the federated identity display_name."""
+    await env.fed_repo.set_instance_display_name("Casa Vizeli")
+    identity = await env.fed_repo.get_local_identity()
+    assert identity is not None
+    assert identity["display_name"] == "Casa Vizeli"

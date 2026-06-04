@@ -76,6 +76,7 @@ class AbstractFederationRepo(Protocol):
 
     # Local instance identity (display_name + household coords) ----------
     async def get_local_identity(self) -> dict | None: ...
+    async def set_instance_display_name(self, name: str) -> None: ...
     async def get_last_proto_version(self) -> int | None: ...
     async def set_last_proto_version(self, version: int) -> None: ...
 
@@ -404,6 +405,17 @@ class SqliteFederationRepo:
             "home_lat": row["home_lat"],
             "home_lon": row["home_lon"],
         }
+
+    async def set_instance_display_name(self, name: str) -> None:
+        """Persist the household's federated display name on the self-row.
+
+        This is the field that federates — it's carried in the pairing QR
+        and shown to peers. Overwrites in place on the singleton self-row.
+        """
+        await self._db.enqueue(
+            "UPDATE instance_identity SET display_name=? WHERE id='self'",
+            (name,),
+        )
 
     async def get_last_proto_version(self) -> int | None:
         """Return the build's ``OURS`` as of the last successful boot.

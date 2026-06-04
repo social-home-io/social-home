@@ -49,18 +49,20 @@ class InstanceConfigView(BaseView):
         # Pre-setup the federation tables don't exist yet — degrade to
         # ``None`` rather than fail the cold-start config probe.
         instance_id: str | None = None
+        instance_display_name: str | None = None
         fed_repo = self.request.app.get(federation_repo_key)
         if fed_repo is not None:
             try:
                 identity = await fed_repo.get_local_identity()
                 if identity is not None:
                     instance_id = identity.get("instance_id")
+                    instance_display_name = identity.get("display_name")
             except Exception:
                 instance_id = None
         return web.json_response(
             {
                 "mode": config.mode,
-                "instance_name": config.instance_name,
+                "instance_name": instance_display_name or config.instance_name,
                 "instance_id": instance_id,
                 "capabilities": capabilities,
                 "setup_required": await setup.is_required(),

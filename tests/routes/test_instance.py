@@ -27,6 +27,30 @@ async def test_instance_config_public_no_token_required(aiohttp_client, tmp_dir)
     assert "instance_name" in body
 
 
+async def test_instance_config_serves_db_display_name(aiohttp_client, tmp_dir):
+    """``instance_name`` reflects the DB identity display_name, not the
+    frozen ``config.instance_name``, once a name has been set."""
+    from socialhome.app import create_app
+    from socialhome.app_keys import federation_repo_key
+    from socialhome.config import Config
+
+    cfg = Config(
+        data_dir=str(tmp_dir),
+        db_path=str(tmp_dir / "t.db"),
+        media_path=str(tmp_dir / "media"),
+        mode="standalone",
+        log_level="WARNING",
+        db_write_batch_timeout_ms=10,
+    )
+    app = create_app(cfg)
+    tc = await aiohttp_client(app)
+    await app[federation_repo_key].set_instance_display_name("Casa Vizeli")
+    r = await tc.get("/api/instance/config")
+    assert r.status == 200
+    body = await r.json()
+    assert body["instance_name"] == "Casa Vizeli"
+
+
 async def test_instance_config_serialises_haos_capabilities(client):
     r = await client.get("/api/instance/config")
     assert r.status == 200
