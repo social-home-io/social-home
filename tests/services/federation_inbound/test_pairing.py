@@ -454,6 +454,24 @@ async def test_capabilities_updated_applies_display_name(repo, handlers):
     assert repo.instances["peer-a"].display_name == "Casa Vizeli"
 
 
+async def test_capabilities_updated_sanitizes_and_caps_display_name(repo, handlers):
+    """A peer-controlled name is stripped of control chars and capped to 80
+    chars before it's persisted — so a hostile peer can't store a multi-KB /
+    multi-line / control-char name for layout-DoS or impersonation."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    hostile = "Casa\nVizeli\t\x00" + ("A" * 200)
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 2, "display_name": hostile},
+        )
+    )
+    stored = repo.instances["peer-a"].display_name
+    assert len(stored) <= 80
+    assert "\n" not in stored and "\t" not in stored and "\x00" not in stored
+    assert stored.startswith("CasaVizeli")
+
+
 async def test_capabilities_updated_applies_display_name_at_same_version(
     repo, handlers
 ):

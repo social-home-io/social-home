@@ -252,13 +252,18 @@ class PairingInboundHandlers:
         # short-circuit below — else a same-version rename is skipped. Only
         # touches the advertised display_name, never a local_alias. Additive
         # + fail-soft: older peers omit the field, leaving the prior name.
-        new_name = event.payload.get("display_name")
-        if (
-            isinstance(new_name, str)
-            and new_name.strip()
-            and new_name.strip() != instance.display_name
-        ):
-            await self._repo.update_display_name(event.from_instance, new_name.strip())
+        raw_name = event.payload.get("display_name")
+        if isinstance(raw_name, str):
+            # Sanitize a peer-controlled, persisted, rendered string: strip
+            # control / non-printable chars and cap to the same 80-char limit
+            # setup enforces locally, so a malicious peer can't store a
+            # multi-KB / multi-line / control-char name for layout-DoS or
+            # impersonation.
+            clean_name = "".join(c for c in raw_name.strip() if c.isprintable())[:80]
+        else:
+            clean_name = ""
+        if clean_name and clean_name != instance.display_name:
+            await self._repo.update_display_name(event.from_instance, clean_name)
             log.info(
                 "INSTANCE_CAPABILITIES_UPDATED from %s: display_name updated",
                 event.from_instance,
