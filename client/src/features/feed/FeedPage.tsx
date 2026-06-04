@@ -15,15 +15,16 @@ import { FeedSkeleton, PostCardSkeleton } from '@/components/Skeleton'
 import { Button } from '@/components/Button'
 import { PullToRefresh } from '@/components/PullToRefresh'
 import { showToast } from '@/components/Toast'
-import { toggles } from '@/components/HouseholdToggles'
+import { instanceConfig } from '@/store/instance'
 import type { FeedPost } from '@/types'
 import { confirmDialog } from '@/components/confirm'
 
 export default function FeedPage() {
-  // Use the actual household name set by the admin (HouseholdToggles)
-  // — falls back to "Home" while ``loadToggles`` is in flight, matching
-  // the same default the backend ships with on first boot.
-  const householdName = toggles.value?.household_name ?? 'Home'
+  // The household's federated display name from instanceConfig — the
+  // single source of truth (set in admin Settings; what peers also
+  // see). Falls back to "Home" while the cold-start config fetch is in
+  // flight, matching the default the backend ships with on first boot.
+  const householdName = instanceConfig.value?.instance_name ?? 'Home'
   useTitle(householdName)
   useEffect(() => {
     void loadHouseholdUsers()

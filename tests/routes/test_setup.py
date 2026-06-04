@@ -7,6 +7,7 @@ from dataclasses import replace
 from socialhome.app import create_app
 from socialhome.app_keys import (
     config_key,
+    federation_repo_key,
     preferences_service_key,
     platform_adapter_key,
     setup_service_key,
@@ -79,6 +80,31 @@ async def test_standalone_setup_persists_household_name(
     assert r.status == 201, await r.text()
     feats = await tc._app[preferences_service_key].get_household()
     assert feats.household_name == "The Rivendells"
+
+
+async def test_standalone_setup_household_name_reaches_federated_identity(
+    aiohttp_client,
+    tmp_dir,
+):
+    """Regression: the setup name must reach the FEDERATED identity field.
+
+    The federated identity (``instance_identity.display_name``, carried in
+    the pairing QR + shown to peers) used to stay the bootstrap default
+    while only the local preference got the name — so peers saw "My Home".
+    """
+    tc = await _build_standalone_app(aiohttp_client, tmp_dir)
+    r = await tc.post(
+        "/api/setup/standalone",
+        json={
+            "username": "owner",
+            "password": "hunter2",
+            "household_name": "Casa Vizeli",
+        },
+    )
+    assert r.status == 201, await r.text()
+    identity = await tc._app[federation_repo_key].get_local_identity()
+    assert identity is not None
+    assert identity["display_name"] == "Casa Vizeli"
 
 
 async def test_standalone_setup_blank_household_name_keeps_default(

@@ -95,6 +95,14 @@ class _FakeFederationRepo:
             capabilities_seen_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    async def update_display_name(self, instance_id: str, name: str) -> None:
+        inst = self.instances.get(instance_id)
+        if inst is None:
+            return
+        # Targeted single-column update — only the advertised display_name,
+        # never local_alias (mirrors the real repo's UPDATE).
+        self.instances[instance_id] = replace(inst, display_name=name)
+
 
 def _event(event_type, payload, *, from_instance="peer-a", space_id=None):
     return FederationEvent(
@@ -431,3 +439,76 @@ async def test_capabilities_updated_invalid_payload_keeps_existing(repo, handler
         )
     )
     assert repo.instances["peer-a"].proto_version == 5
+
+
+async def test_capabilities_updated_applies_display_name(repo, handlers):
+    """A capabilities envelope carrying a ``display_name`` updates the
+    peer's stored advertised name — so a peer rename reaches us."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 2, "display_name": "Casa Vizeli"},
+        )
+    )
+    assert repo.instances["peer-a"].display_name == "Casa Vizeli"
+
+
+async def test_capabilities_updated_sanitizes_and_caps_display_name(repo, handlers):
+    """A peer-controlled name is stripped of control chars and capped to 80
+    chars before it's persisted — so a hostile peer can't store a multi-KB /
+    multi-line / control-char name for layout-DoS or impersonation."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    hostile = "Casa\nVizeli\t\x00" + ("A" * 200)
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 2, "display_name": hostile},
+        )
+    )
+    stored = repo.instances["peer-a"].display_name
+    assert len(stored) <= 80
+    assert "\n" not in stored and "\t" not in stored and "\x00" not in stored
+    assert stored.startswith("CasaVizeli")
+
+
+async def test_capabilities_updated_applies_display_name_at_same_version(
+    repo, handlers
+):
+    """A RENAME re-broadcast carries the SAME proto_version but a NEW name.
+    The name update MUST land even though the proto_version short-circuits —
+    otherwise an existing pairing stays stuck at the QR-time name."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    # _sample_instance defaults to proto_version=1 and display_name="peer-a".
+    assert repo.instances["peer-a"].proto_version == 1
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 1, "display_name": "Casa Vizeli"},
+        )
+    )
+    # proto_version unchanged, but the name updated.
+    assert repo.instances["peer-a"].proto_version == 1
+    assert repo.instances["peer-a"].display_name == "Casa Vizeli"
+
+
+async def test_capabilities_updated_blank_or_missing_name_is_noop(repo, handlers):
+    """A missing or blank ``display_name`` leaves the stored name intact —
+    older peers omit the field entirely and must not clear our name."""
+    repo.instances["peer-a"] = _sample_instance("peer-a", PairingStatus.CONFIRMED)
+    # Missing field (older peer).
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 1},
+        )
+    )
+    assert repo.instances["peer-a"].display_name == "peer-a"
+    # Blank field.
+    await handlers._on_capabilities_updated(
+        _event(
+            FederationEventType.INSTANCE_CAPABILITIES_UPDATED,
+            {"proto_version": 1, "display_name": "   "},
+        )
+    )
+    assert repo.instances["peer-a"].display_name == "peer-a"

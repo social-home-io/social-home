@@ -60,6 +60,7 @@ class AbstractFederationRepo(Protocol):
         instance_id: str,
         alias: str | None,
     ) -> None: ...
+    async def update_display_name(self, instance_id: str, name: str) -> None: ...
     async def set_share_home(
         self,
         instance_id: str,
@@ -76,6 +77,7 @@ class AbstractFederationRepo(Protocol):
 
     # Local instance identity (display_name + household coords) ----------
     async def get_local_identity(self) -> dict | None: ...
+    async def set_instance_display_name(self, name: str) -> None: ...
     async def get_last_proto_version(self) -> int | None: ...
     async def set_last_proto_version(self, version: int) -> None: ...
 
@@ -343,6 +345,21 @@ class SqliteFederationRepo:
             (alias, instance_id),
         )
 
+    async def update_display_name(self, instance_id: str, name: str) -> None:
+        """Update the peer's *advertised* federated ``display_name``.
+
+        Called from the inbound
+        :data:`FederationEventType.INSTANCE_CAPABILITIES_UPDATED` handler when
+        a peer re-broadcasts a new household name. Deliberately does NOT touch
+        ``local_alias`` — an admin-set alias keeps winning in
+        :attr:`RemoteInstance.effective_display_name`. A targeted single-column
+        UPDATE so it never clobbers state set elsewhere.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_instances SET display_name=? WHERE id=?",
+            (name, instance_id),
+        )
+
     async def set_share_home(
         self,
         instance_id: str,
@@ -404,6 +421,17 @@ class SqliteFederationRepo:
             "home_lat": row["home_lat"],
             "home_lon": row["home_lon"],
         }
+
+    async def set_instance_display_name(self, name: str) -> None:
+        """Persist the household's federated display name on the self-row.
+
+        This is the field that federates — it's carried in the pairing QR
+        and shown to peers. Overwrites in place on the singleton self-row.
+        """
+        await self._db.enqueue(
+            "UPDATE instance_identity SET display_name=? WHERE id='self'",
+            (name,),
+        )
 
     async def get_last_proto_version(self) -> int | None:
         """Return the build's ``OURS`` as of the last successful boot.

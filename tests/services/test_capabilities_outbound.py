@@ -49,6 +49,7 @@ async def test_capabilities_outbound_fans_out_to_confirmed_peers():
     peer_b = _peer("inst-b")
     repo = SimpleNamespace(
         list_instances=AsyncMock(return_value=[peer_a, peer_b]),
+        get_local_identity=AsyncMock(return_value={"display_name": "My Home"}),
     )
     fed = SimpleNamespace(
         _own_instance_id="inst-self",
@@ -63,14 +64,53 @@ async def test_capabilities_outbound_fans_out_to_confirmed_peers():
 
     assert sent == 2
     assert fed.send_event.await_count == 2
-    # Same payload to every peer — the integer is build-wide.
+    # Same payload to every peer — the integer is build-wide, and our
+    # federated household name rides along so renames reach paired peers.
     for call in fed.send_event.await_args_list:
         assert call.kwargs["event_type"] == (
             FederationEventType.INSTANCE_CAPABILITIES_UPDATED
         )
-        assert call.kwargs["payload"] == {"proto_version": OUR_PROTO_VERSION}
+        assert call.kwargs["payload"] == {
+            "proto_version": OUR_PROTO_VERSION,
+            "display_name": "My Home",
+        }
     targets = {c.kwargs["to_instance_id"] for c in fed.send_event.await_args_list}
     assert targets == {"inst-a", "inst-b"}
+
+
+@pytest.mark.asyncio
+async def test_capabilities_outbound_omits_blank_display_name():
+    """A blank / missing local display_name → no ``display_name`` key in the
+    payload (older-peer-compatible, additive shape)."""
+    peer = _peer("inst-a")
+    repo = SimpleNamespace(
+        list_instances=AsyncMock(return_value=[peer]),
+        get_local_identity=AsyncMock(return_value={"display_name": "   "}),
+    )
+    fed = SimpleNamespace(_own_instance_id="inst-self", send_event=AsyncMock())
+    out = CapabilitiesOutbound(federation_service=fed, federation_repo=repo)
+
+    await out.publish()
+
+    call = fed.send_event.await_args
+    assert call.kwargs["payload"] == {"proto_version": OUR_PROTO_VERSION}
+
+
+@pytest.mark.asyncio
+async def test_capabilities_outbound_omits_when_no_local_identity():
+    """No self-row yet (early bootstrap) → still sends, name omitted."""
+    peer = _peer("inst-a")
+    repo = SimpleNamespace(
+        list_instances=AsyncMock(return_value=[peer]),
+        get_local_identity=AsyncMock(return_value=None),
+    )
+    fed = SimpleNamespace(_own_instance_id="inst-self", send_event=AsyncMock())
+    out = CapabilitiesOutbound(federation_service=fed, federation_repo=repo)
+
+    await out.publish()
+
+    call = fed.send_event.await_args
+    assert call.kwargs["payload"] == {"proto_version": OUR_PROTO_VERSION}
 
 
 @pytest.mark.asyncio
@@ -114,7 +154,10 @@ async def test_capabilities_outbound_tolerates_repo_failure():
 async def test_resend_to_re_advertises_to_one_peer():
     """``resend_to`` (the §319.6 resync entry) sends one capabilities
     envelope to the named peer and returns True."""
-    repo = SimpleNamespace(list_instances=AsyncMock(return_value=[]))
+    repo = SimpleNamespace(
+        list_instances=AsyncMock(return_value=[]),
+        get_local_identity=AsyncMock(return_value={"display_name": "My Home"}),
+    )
     fed = SimpleNamespace(_own_instance_id="inst-self", send_event=AsyncMock())
     out = CapabilitiesOutbound(federation_service=fed, federation_repo=repo)
 
@@ -127,7 +170,10 @@ async def test_resend_to_re_advertises_to_one_peer():
     assert call.kwargs["event_type"] == (
         FederationEventType.INSTANCE_CAPABILITIES_UPDATED
     )
-    assert call.kwargs["payload"] == {"proto_version": OUR_PROTO_VERSION}
+    assert call.kwargs["payload"] == {
+        "proto_version": OUR_PROTO_VERSION,
+        "display_name": "My Home",
+    }
 
 
 @pytest.mark.asyncio

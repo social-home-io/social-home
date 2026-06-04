@@ -9,6 +9,7 @@ import { signal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { showToast } from './Toast'
+import { CheckboxCardGroup, type CheckboxCardOption } from './CheckboxCardGroup'
 
 interface Toggles {
   feat_feed: boolean; feat_pages: boolean; feat_tasks: boolean
@@ -56,35 +57,45 @@ export function HouseholdToggles() {
   // Bazaar is a per-space feature only — no household-level section
   // toggle, no post-type toggle. Listings live inside spaces and the
   // Bazaar tab in the SPA stays visible to everyone for browsing.
-  const features: [keyof Toggles, string][] = [
-    ['feat_feed', 'Feed'], ['feat_pages', 'Pages'], ['feat_tasks', 'Tasks'],
-    ['feat_stickies', 'Stickies'], ['feat_calendar', 'Calendar'],
-    ['feat_presence', 'Presence'], ['feat_gallery', 'Gallery'],
+  const featureCards: { value: keyof Toggles; icon: string; title: string; subtitle: string }[] = [
+    { value: 'feat_feed', icon: '📮', title: 'Feed', subtitle: 'The shared household activity feed' },
+    { value: 'feat_pages', icon: '📄', title: 'Pages', subtitle: 'Wiki-style shared pages' },
+    { value: 'feat_tasks', icon: '✅', title: 'Tasks', subtitle: 'Shared to-do lists' },
+    { value: 'feat_stickies', icon: '📝', title: 'Stickies', subtitle: 'A shared sticky-note board' },
+    { value: 'feat_calendar', icon: '🗓', title: 'Calendar', subtitle: 'The shared household calendar' },
+    { value: 'feat_presence', icon: '👥', title: 'Presence', subtitle: "Show who's home and online" },
+    { value: 'feat_gallery', icon: '🖼', title: 'Gallery', subtitle: 'Shared photo galleries' },
   ]
-  const postTypes: [keyof Toggles, string][] = [
-    ['allow_text', 'Text'], ['allow_image', 'Image'], ['allow_video', 'Video'],
-    ['allow_file', 'File'], ['allow_poll', 'Poll'],
-    ['allow_schedule', 'Schedule'], ['allow_highlight_share', 'Highlight share'],
+  const postTypeCards: { value: keyof Toggles; icon: string; title: string; subtitle: string }[] = [
+    { value: 'allow_text', icon: '🔤', title: 'Text', subtitle: 'Allow text posts in the feed' },
+    { value: 'allow_image', icon: '📷', title: 'Image', subtitle: 'Allow image posts' },
+    { value: 'allow_video', icon: '🎬', title: 'Video', subtitle: 'Allow video posts' },
+    { value: 'allow_file', icon: '📄', title: 'File', subtitle: 'Allow file attachments' },
+    { value: 'allow_poll', icon: '📊', title: 'Poll', subtitle: 'Allow polls' },
+    { value: 'allow_schedule', icon: '📅', title: 'Schedule', subtitle: 'Allow scheduled-event posts' },
+    { value: 'allow_highlight_share', icon: '⭕', title: 'Highlight share', subtitle: 'Allow sharing highlights to the feed' },
   ]
+
+  const toOption = (c: { value: keyof Toggles; icon: string; title: string; subtitle: string }): CheckboxCardOption => ({
+    value: c.value,
+    icon: c.icon,
+    title: c.title,
+    subtitle: c.subtitle,
+    checked: !!toggles.value![c.value],
+  })
 
   return (
     <div class="sh-toggles">
-      <h3>Sections</h3>
-      {features.map(([key, label]) => (
-        <label key={key} class="sh-toggle-row">
-          <input type="checkbox" checked={!!toggles.value![key]}
-            onChange={() => toggle(key)} />
-          {label}
-        </label>
-      ))}
-      <h3>Post types</h3>
-      {postTypes.map(([key, label]) => (
-        <label key={key} class="sh-toggle-row">
-          <input type="checkbox" checked={!!toggles.value![key]}
-            onChange={() => toggle(key)} />
-          {label}
-        </label>
-      ))}
+      <CheckboxCardGroup
+        legend="Household features"
+        options={featureCards.map(toOption)}
+        onToggle={(k) => void toggle(k as keyof Toggles)}
+      />
+      <CheckboxCardGroup
+        legend="Feed post types"
+        options={postTypeCards.map(toOption)}
+        onToggle={(k) => void toggle(k as keyof Toggles)}
+      />
     </div>
   )
 }
