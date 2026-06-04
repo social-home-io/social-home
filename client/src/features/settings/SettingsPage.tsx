@@ -1,4 +1,4 @@
-import { useEffect } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
 import { signal } from '@preact/signals'
 import { currentUser } from '@/store/auth'
@@ -875,11 +875,57 @@ function NotificationsTab() {
   )
 }
 
+interface NotifyTarget {
+  entity_id: string
+  name: string
+}
+
+const MANUAL_SENTINEL = '__manual__'
+
 /** ha / haos only: the notify service that pushes to *this* user's HA
  *  Companion app. HA names that service after the device
- *  (`notify.mobile_app_<device>`), not the username — so it can't be
- *  guessed and the user sets it here. */
+ *  (`notify.mobile_app_<device>`), not the username. The household's
+ *  `notify.*` entities are fetched from `/api/me/notify-targets` and offered
+ *  as a dropdown; an "Enter manually…" escape hatch (and a graceful fallback
+ *  when discovery is empty/unreachable) keeps power users + legacy values
+ *  working. The saved value is still the entity_id stored under the
+ *  `ha_notify_service` preference. */
 function HaNotifyServiceRow() {
+  const [targets, setTargets] = useState<NotifyTarget[]>([])
+  const [loading, setLoading] = useState(true)
+  const [manual, setManual] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    const load = async () => {
+      let fetched: NotifyTarget[] = []
+      try {
+        const res = await api.get<{ targets: NotifyTarget[] }>(
+          '/api/me/notify-targets',
+        )
+        fetched = res.targets ?? []
+      } catch {
+        // HA unreachable / no notify entities — fall back to manual entry.
+        fetched = []
+      }
+      if (!active) return
+      setTargets(fetched)
+      // Start in manual mode when there's nothing to pick from, or when the
+      // saved value isn't a currently-discoverable target (legacy bare names
+      // or entities not listed right now) so it's never silently lost.
+      const saved = haNotifyService.value.trim()
+      const known = fetched.some((t) => t.entity_id === saved)
+      if (fetched.length === 0 || (saved !== '' && !known)) {
+        setManual(true)
+      }
+      setLoading(false)
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [])
+
   const save = async () => {
     haNotifySaving.value = true
     try {
@@ -897,19 +943,63 @@ function HaNotifyServiceRow() {
       haNotifySaving.value = false
     }
   }
+
+  const onSelectChange = (e: Event) => {
+    const v = (e.target as HTMLSelectElement).value
+    if (v === MANUAL_SENTINEL) {
+      // Reveal the text input, keeping the current value.
+      setManual(true)
+      return
+    }
+    haNotifyService.value = v
+  }
+
+  const showSelect = !manual && targets.length > 0
+  const emptyDiscovery = !loading && targets.length === 0
+
   return (
     <div class="sh-settings-subsection">
       <h3>Home Assistant app</h3>
-      <label class="sh-field">
-        <span>Notify service</span>
-        <input
-          type="text"
-          placeholder="notify.mobile_app_my_phone"
-          value={haNotifyService.value}
-          onInput={(e) =>
-            haNotifyService.value = (e.target as HTMLInputElement).value}
-        />
-      </label>
+      {loading ? (
+        <p class="sh-muted">Loading…</p>
+      ) : showSelect ? (
+        <label class="sh-form-row">
+          Notify target
+          <select value={haNotifyService.value} onChange={onSelectChange}>
+            <option value="">— No HA notifications —</option>
+            {targets.map((t) => (
+              <option key={t.entity_id} value={t.entity_id}>
+                {t.name}
+              </option>
+            ))}
+            <option value={MANUAL_SENTINEL}>Enter manually…</option>
+          </select>
+        </label>
+      ) : (
+        <label class="sh-field">
+          <span>Notify service</span>
+          <input
+            type="text"
+            placeholder="notify.mobile_app_my_phone"
+            value={haNotifyService.value}
+            onInput={(e) =>
+              haNotifyService.value = (e.target as HTMLInputElement).value}
+          />
+        </label>
+      )}
+      {emptyDiscovery && (
+        <p class="sh-muted">
+          Couldn't list notify targets from Home Assistant — enter the service
+          name manually.
+        </p>
+      )}
+      {manual && targets.length > 0 && (
+        <div class="sh-settings-row">
+          <Button variant="ghost" onClick={() => setManual(false)}>
+            Choose from list
+          </Button>
+        </div>
+      )}
       <p class="sh-muted">
         The Home Assistant notify service for your phone — find it under
         Developer Tools → Actions as <code>notify.mobile_app_…</code> (named
