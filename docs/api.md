@@ -151,6 +151,7 @@ events these routes fire.
 | GET / POST | `/api/spaces/{id}/proposals` | Multi-admin approval (quorum) for critical actions (v_16). GET lists open proposals + tally. POST `{action, space_type?}` opens a `dissolve` or `set_public_tier` proposal. Any admin may propose; executes once a majority of admins approve. |
 | POST | `/api/spaces/{id}/proposals/{pid}/vote` | Admin approves / rejects an open proposal (`{approve}`). A reject cancels it; a majority of approvals executes it. |
 | POST / DELETE | `/api/spaces/{id}/archive` | Archive (read-only, reversible) / unarchive. Owner or admin. |
+| GET | `/api/spaces/{id}/compat` | Owner / admin only. Per-space protocol-version compatibility of member households (#319 ¶5). Returns `{"ours": <int>, "min_member_proto_version": <int\|null>, "lagging_features": [...], "behind_members": [{instance_id, display_name, proto_version, lacking_features}]}`. `lagging_features` are the shared-space features unavailable because the weakest known member household lacks them; `behind_members` lists each lagging household and the space features it's missing. Member households that have never advertised capabilities (mid-handshake) are excluded — they aren't genuinely behind. `min_member_proto_version` is `null` when there are no known remote members. |
 | POST | `/api/spaces/join` | Join a space via an invite token. |
 | PATCH | `/api/spaces/{id}/ownership` | Transfer ownership. |
 | GET | `/api/admin/spaces` | Admin-only: list all spaces on this HFS. |

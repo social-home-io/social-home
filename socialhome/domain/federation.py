@@ -525,6 +525,39 @@ class RemoteInstance:
         return alias or self.display_name
 
 
+# ─── Space version compatibility (#319 ¶5) ────────────────────────────────
+
+
+@dataclass(slots=True, frozen=True)
+class BehindMember:
+    """A member household whose protocol version lags behind ours, lacking
+    one or more shared-space features."""
+
+    instance_id: str
+    display_name: str
+    proto_version: int
+    lacking_features: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class SpaceVersionCompat:
+    """Per-space protocol-version compatibility of member households.
+
+    Powers the space-admin banner ("these space features won't work until
+    member household X upgrades"). Households that have never advertised
+    capabilities (mid-handshake) are EXCLUDED from every field — counting
+    them would phantom-nag with the conservative default version.
+    """
+
+    ours: int
+    #: Min proto_version across member households whose capabilities are
+    #: known; ``None`` when there are no known remote members.
+    min_member_proto_version: int | None
+    #: Space features unavailable because the weakest known member lacks them.
+    lagging_features: tuple[str, ...]
+    behind_members: tuple[BehindMember, ...]
+
+
 # ─── Wire envelope (§24.11) ───────────────────────────────────────────────
 
 

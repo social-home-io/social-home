@@ -2135,3 +2135,141 @@ async def test_stub_space_uses_authenticated_sender_as_owner():
         meta={"name": "S", "owner_instance_id": "spoofed-host"},
     )
     assert stub.owner_instance_id == "real-sender"
+
+
+# ─── space_version_compat (#319 ¶5) ───────────────────────────────────────
+
+
+def _member(instance_id, proto_version, *, seen, name=None):
+    """Craft a RemoteInstance-like member household row."""
+    from socialhome.domain.federation import RemoteInstance
+
+    return RemoteInstance(
+        id=instance_id,
+        display_name=name or instance_id,
+        remote_identity_pk="ab" * 32,
+        key_self_to_remote="x",
+        key_remote_to_self="y",
+        remote_inbox_url="https://peer/inbox",
+        local_inbox_id="inbox",
+        proto_version=proto_version,
+        capabilities_seen_at="2026-06-04T00:00:00+00:00" if seen else None,
+    )
+
+
+class _FakeFedRepo:
+    def __init__(self, members):
+        self._members = members
+
+    async def list_instances_in_space(self, space_id):
+        return list(self._members)
+
+
+async def test_space_version_compat_flags_behind_member(stack):
+    """A known member at v13 surfaces in behind_members with its lacking
+    space features; min + lagging reflect the weakest known member."""
+    from socialhome.domain.federation_capabilities import OURS
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    stack.space_svc._federation_repo = _FakeFedRepo(
+        [_member("peer-13", 13, seen=True, name="Brother's house")]
+    )
+
+    c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
+    assert c.ours == OURS
+    assert c.min_member_proto_version == 13
+    assert c.lagging_features == (
+        "Media DataChannel",
+        "Remote admin actions",
+        "Multi-admin approvals",
+    )
+    assert len(c.behind_members) == 1
+    bm = c.behind_members[0]
+    assert bm.instance_id == "peer-13"
+    assert bm.display_name == "Brother's house"
+    assert bm.proto_version == 13
+    assert bm.lacking_features == (
+        "Media DataChannel",
+        "Remote admin actions",
+        "Multi-admin approvals",
+    )
+
+
+async def test_space_version_compat_excludes_mid_handshake_member(stack):
+    """A member that has never advertised capabilities (seen_at=None) is
+    excluded entirely — not counted in min, not in behind_members."""
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    stack.space_svc._federation_repo = _FakeFedRepo(
+        [
+            _member("peer-up", 18, seen=True),
+            _member("peer-mystery", 1, seen=False),
+        ]
+    )
+
+    c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
+    # The seen v18 member is the only counted one — phantom-nag guard.
+    assert c.min_member_proto_version == 18
+    assert c.lagging_features == ()
+    assert c.behind_members == ()
+
+
+async def test_space_version_compat_all_current(stack):
+    """A member at OURS leaves behind_members + lagging empty."""
+    from socialhome.domain.federation_capabilities import OURS
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    stack.space_svc._federation_repo = _FakeFedRepo(
+        [_member("peer-ours", OURS, seen=True)]
+    )
+
+    c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
+    assert c.min_member_proto_version == OURS
+    assert c.lagging_features == ()
+    assert c.behind_members == ()
+
+
+async def test_space_version_compat_behind_but_only_nonspace_features(stack):
+    """A member at v16 is < OURS but its only missing features are the
+    non-space app channels (v17/v18) — so it counts toward
+    min_member_proto_version yet is excluded from behind_members and never
+    adds a non-space feature to lagging_features."""
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    stack.space_svc._federation_repo = _FakeFedRepo([_member("peer-16", 16, seen=True)])
+
+    c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
+    assert c.min_member_proto_version == 16
+    assert c.lagging_features == ()
+    assert c.behind_members == ()
+
+
+async def test_space_version_compat_no_federation_repo(stack):
+    """No federation repo wired → empty compat at OURS."""
+    from socialhome.domain.federation_capabilities import OURS
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    stack.space_svc._federation_repo = None
+
+    c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
+    assert c.ours == OURS
+    assert c.min_member_proto_version is None
+    assert c.lagging_features == ()
+    assert c.behind_members == ()
+
+
+async def test_space_version_compat_requires_admin(stack):
+    """A non-admin member is refused."""
+    await stack.provision_user("anna", is_admin=True)
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    stack.space_svc._federation_repo = _FakeFedRepo([])
+
+    with pytest.raises(SpacePermissionError):
+        await stack.space_svc.space_version_compat(space.id, actor_username="bob")

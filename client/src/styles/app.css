@@ -14859,7 +14859,9 @@ a.sh-welcome-card:hover {
 .sh-proposal-banner__text {
   min-width: 0;
 }
-.sh-proposal-banner__text strong {
+/* Only the heading (direct child) is a block; inline <strong> inside the
+   body paragraphs — feature names, vote tallies — must stay inline. */
+.sh-proposal-banner__text > strong {
   display: block;
   margin-bottom: 2px;
 }
@@ -14886,6 +14888,13 @@ a.sh-welcome-card:hover {
   .sh-proposal-banner__actions > * {
     flex: 1;
   }
+}
+
+/* Version-compat advisory (issue #319 ¶5). Same shape as a proposal banner
+   but an informational primary tint — it's advice, not a pending decision. */
+.sh-version-banner {
+  background: color-mix(in srgb, var(--sh-primary) 8%, transparent);
+  border-color: color-mix(in srgb, var(--sh-primary) 30%, transparent);
 }
 
 /* Scope chips — which kind of space is this? */

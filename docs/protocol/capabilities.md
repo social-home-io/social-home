@@ -131,4 +131,10 @@ Two related future events that fit the same announcement channel:
 * An admin-UI panel that diffs `peer.proto_version` against `OURS` per
   peer and surfaces "this peer is behind, [X] features won't work with
   them yet" hints. Pure UI on top of the existing column — no new
-  wire shape.
+  wire shape. **Shipped:** the household-wide admin panel
+  (`GET /api/admin/federation/compat`) plus a per-space banner
+  (`GET /api/spaces/{id}/compat`, #319 ¶5) that diffs each member
+  household and warns which shared-space features lag; the per-space
+  subset is driven by `space_features_missing_below` over
+  `SPACE_SCOPED_MIN_VERSIONS`. Both skip member households that have
+  never advertised capabilities so a mid-handshake peer isn't flagged.
