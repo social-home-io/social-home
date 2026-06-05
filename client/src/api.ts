@@ -1,5 +1,15 @@
-import { token } from '@/store/auth'
+// Import token from its own module (NOT '@/store/auth') so api.ts has no
+// static dependency on auth.ts — breaks the api↔auth import cycle.
+import { token } from '@/store/token'
 import { showToast } from '@/components/Toast'
+
+// Logout handler, registered by store/auth at module load. Lets the 401 path
+// clear the session without importing '@/store/auth' (which would re-form the
+// api↔auth cycle, since auth imports api).
+let _onUnauthorized: (() => void) | null = null
+export function setUnauthorizedHandler(fn: () => void): void {
+  _onUnauthorized = fn
+}
 
 // Strip the leading ``/`` from a caller-supplied path so ``fetch``
 // resolves it against ``document.baseURI`` (which the backend sets to
@@ -110,8 +120,10 @@ class ApiClient {
       if (token.value !== null && !ApiClient._loggingOut) {
         ApiClient._loggingOut = true
         showToast('Session expired — please sign in again', 'info')
-        const auth = await import('@/store/auth')
-        auth.logout()
+        // Call the registered logout (auth registers it at module load) rather
+        // than importing '@/store/auth' here — that import would re-form the
+        // api↔auth cycle (auth already imports api). DI keeps the graph acyclic.
+        _onUnauthorized?.()
       }
       throw new Error('Unauthorized')
     }

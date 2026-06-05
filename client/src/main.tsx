@@ -2,6 +2,8 @@ import { render } from 'preact'
 import { App } from './App'
 import { SpaUpdateBanner } from './components/SpaUpdateBanner'
 import { ws } from './ws'
+import { setUnauthorizedHandler } from './api'
+import { logout } from './store/auth'
 import './styles/tokens.css'
 import './styles/app.css'
 // Eagerly initialise the theme signal + effect so the `<html>` class
@@ -42,6 +44,12 @@ wireCallsWs()
 wireConnectionsWs()
 wireUserPreferencesWs()
 wireMediaReadyWs()
+
+// Wire the api client's 401 handler to clear the session. Done here (not at
+// store/auth module load) so api.ts stays free of a static import back to
+// store/auth — that's what keeps the api↔auth dependency graph acyclic.
+setUnauthorizedHandler(logout)
+
 ws.connect()
 
 render(<App />, document.getElementById('root')!)
