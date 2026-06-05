@@ -99,6 +99,11 @@ jobs:
       - name: Lint (ESLint)
         working-directory: client
         run: pnpm run lint
+      - name: Circular import check (madge)
+        working-directory: client
+        # Circular imports break module execution order under bundlers
+        # (esp. Vite/Rolldown in prod) — guard against re-introducing any.
+        run: pnpm run lint:circular
       - name: i18n key check (§30.5)
         working-directory: client
         run: pnpm run i18n:check

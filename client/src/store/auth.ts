@@ -2,8 +2,12 @@ import { signal, computed } from '@preact/signals'
 import type { User } from '@/types'
 import { api, _resetApiLoggedOut } from '@/api'
 import { detectBrowserTz } from '@/utils/timezone'
+import { token } from './token'
 
-export const token       = signal<string | null>(localStorage.getItem('sh_token'))
+// ``token`` lives in its own module to break the api↔auth import cycle.
+// Re-exported here so existing ``import { token } from '@/store/auth'`` call
+// sites are unaffected; api.ts imports it from ``store/token`` directly.
+export { token }
 export const currentUser = signal<User | null>(null)
 // ``currentUser`` is only ever populated by a successful ``/api/me``,
 // which itself requires authentication — so a non-null user is proof
@@ -86,3 +90,10 @@ export function logout() {
   currentUser.value = null
   localStorage.removeItem('sh_token')
 }
+
+// NOTE: the api 401 handler's logout is wired in ``main.tsx`` at startup via
+// ``setUnauthorizedHandler(logout)`` — NOT here. Registering at this module's
+// top level would run a side effect the moment any consumer imports
+// ``store/auth`` (every component test that pulls auth in), forcing each
+// ``vi.mock('@/api')`` to also stub ``setUnauthorizedHandler``. Wiring it at
+// the app entry keeps auth.ts import-pure and the api↔auth graph acyclic.

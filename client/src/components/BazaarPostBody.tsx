@@ -17,22 +17,12 @@ import { showToast } from './Toast'
 import { currentUser } from '@/store/auth'
 import type { BazaarBid, BazaarListing, BazaarOffer } from '@/types'
 import { confirmDialog } from '@/components/confirm'
+import { CURRENCY_FRACTION_DIGITS, formatBazaarAmount } from './bazaarFormat'
 
-const CURRENCY_FRACTION_DIGITS: Record<string, number> = {
-  JPY: 0, KRW: 0, ISK: 0,
-}
-
-export function formatBazaarAmount(
-  amount: number | null | undefined, currency: string,
-): string {
-  if (amount == null) return '—'
-  const digits = CURRENCY_FRACTION_DIGITS[currency] ?? 2
-  const value = digits === 0 ? amount : amount / 100
-  return new Intl.NumberFormat(undefined, {
-    style: 'currency', currency,
-    minimumFractionDigits: digits, maximumFractionDigits: digits,
-  }).format(value)
-}
+// Re-exported so existing ``import { formatBazaarAmount } from
+// '@/components/BazaarPostBody'`` call sites keep working. The helper now lives
+// in ./bazaarFormat to break the BazaarPostBody↔BazaarOffersPanel import cycle.
+export { formatBazaarAmount }
 
 function modeLabel(mode: BazaarListing['mode']): string {
   switch (mode) {

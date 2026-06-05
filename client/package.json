@@ -14,7 +14,8 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"gfs/**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "i18n:check": "node scripts/i18n-check.js",
-    "i18n:status": "curl -sf \"$WEBLATE_URL/api/components/socialhome/ui/statistics/\" -H \"Authorization: Token $WEBLATE_TOKEN\""
+    "i18n:status": "curl -sf \"$WEBLATE_URL/api/components/socialhome/ui/statistics/\" -H \"Authorization: Token $WEBLATE_TOKEN\"",
+    "lint:circular": "madge --circular --ts-config tsconfig.json --extensions ts,tsx src gfs"
   },
   "dependencies": {
     "@preact/signals": "^2.9.1",
@@ -39,6 +40,7 @@
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
     "jsdom": "^29.1.1",
+    "madge": "^8.0.0",
     "preact-render-to-string": "^6.7.0",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",

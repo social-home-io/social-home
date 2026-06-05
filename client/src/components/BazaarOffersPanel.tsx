@@ -17,7 +17,7 @@ import { api } from '@/api'
 import { ws } from '@/ws'
 import { Button } from './Button'
 import { showToast } from './Toast'
-import { formatBazaarAmount } from './BazaarPostBody'
+import { formatBazaarAmount } from './bazaarFormat'
 import type { BazaarListing, BazaarOffer } from '@/types'
 import { confirmDialog } from '@/components/confirm'
 
