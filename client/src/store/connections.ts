@@ -30,6 +30,10 @@ export interface Connection {
   intro_relay_enabled?: boolean
   unreachable_since?: string | null
   transport?: 'rtc' | 'https' | null
+  /** Monotonic federation protocol version the peer last advertised via
+   *  INSTANCE_CAPABILITIES_UPDATED. Defaults to 1 server-side when the peer
+   *  has never announced capabilities. */
+  proto_version?: number
   last_seen_at?: string | null
   home_lat?: number | null
   home_lon?: number | null

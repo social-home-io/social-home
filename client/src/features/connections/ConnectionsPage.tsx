@@ -456,6 +456,7 @@ export default function ConnectionsPage() {
             unreachable_since: detail.unreachable_since ?? null,
             paired_at: detail.paired_at ?? null,
             transport: detail.transport ?? null,
+            proto_version: detail.proto_version,
           }}
           onClose={() => setDetail(null)}
           onRevoke={() => { setDetail(null); void loadConnections() }}
