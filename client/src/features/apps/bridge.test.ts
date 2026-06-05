@@ -7,14 +7,14 @@
  * - WS relay forwards only frames whose app_id matches the mounted context.
  */
 
-import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 
 // ── mock @/ws ──────────────────────────────────────────────────────────────
 // Capture every ws.on registration so tests can drive synthetic frames.
 type WsHandler = (evt: { data: Record<string, unknown> }) => void
 const wsHandlers: Record<string, WsHandler> = {}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const wsOffFns: Record<string, MockInstance<any, any>> = {}
+const wsOffFns: Record<string, MockInstance> = {}
 
 vi.mock('@/ws', () => ({
   ws: {
@@ -95,9 +95,9 @@ describe('mountBridge', () => {
   let iframe: HTMLIFrameElement
   let cleanup: () => void
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let addEventSpy: MockInstance<any, any>
+  let addEventSpy: MockInstance
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let removeEventSpy: MockInstance<any, any>
+  let removeEventSpy: MockInstance
 
   beforeEach(() => {
     mockApiGet.mockReset()
@@ -113,6 +113,14 @@ describe('mountBridge', () => {
     removeEventSpy = vi.spyOn(window, 'removeEventListener')
 
     cleanup = mountBridge(iframe, { appId: APP_ID, selfUserId: USER_ID })
+  })
+
+  afterEach(() => {
+    // Vitest 4 no longer auto-restores spies between tests; without this the
+    // window add/removeEventListener spies accumulate calls across tests and
+    // ``mock.calls.find('message')`` returns a *previous* test's handler.
+    addEventSpy.mockRestore()
+    removeEventSpy.mockRestore()
   })
 
   // ── wrong source ─────────────────────────────────────────────────────────
@@ -445,7 +453,7 @@ describe('mountBridge', () => {
   it('cleanup: removes the message listener from window', () => {
     // Find the handler that was registered in beforeEach
     const addCalls = addEventSpy.mock.calls
-    const messageHandler = addCalls.find(([type]) => type === 'message')?.[1]
+    const messageHandler = addCalls.find((c: unknown[]) => c[0] === 'message')?.[1]
     expect(messageHandler).toBeDefined()
 
     cleanup()
