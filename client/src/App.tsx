@@ -19,7 +19,7 @@ import { ForgotPasswordPage } from '@/features/auth/ForgotPasswordPage'
 import { routes } from './router'
 import { Button } from '@/components/Button'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { NotificationBell, startNotificationPolling } from '@/components/NotificationBell'
+import { NotificationBell, startNotificationPolling, stopNotificationPolling } from '@/components/NotificationBell'
 import { SearchBar } from '@/components/SearchBar'
 import { QuickSwitcher } from '@/components/QuickSwitcher'
 import { ToastContainer, showToast } from '@/components/Toast'
@@ -294,6 +294,18 @@ export function App() {
     void loadUserPreferences()
   }, [authed.value])
 
+  // 30 s notifications poll — a belt-and-suspenders fallback for when
+  // the WS feed is down. MUST live in an effect, not the render body:
+  // ``startNotificationPolling`` arms a ``setInterval``, so calling it
+  // inline on every render leaked an orphaned timer per render (each
+  // kept fetching ``/unread-count`` forever). The effect starts it once
+  // the main shell is up and tears it down on sign-out / onboarding.
+  useEffect(() => {
+    if (!authed.value || showOnboarding.value) return
+    startNotificationPolling()
+    return stopNotificationPolling
+  }, [authed.value, showOnboarding.value])
+
   // While the config is loading, render nothing (avoids a flash of
   // login form before we know whether to redirect to /setup).
   if (cfg.value === null) return null
@@ -330,8 +342,6 @@ export function App() {
   if (showOnboarding.value) {
     return <OnboardingFlow onComplete={() => { showOnboarding.value = false }} />
   }
-
-  startNotificationPolling()
 
   // <Router> from preact-iso requires a <LocationProvider> ancestor —
   // it reads the current location from that context. Without the
