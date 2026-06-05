@@ -67,6 +67,11 @@ export function IngressLocationProvider({
       path,
       query: Object.fromEntries(u.searchParams),
       route,
+      // ``back`` / ``forward`` are part of preact-iso's ``LocationHook``
+      // contract (added in 2.12). They just drive browser history; our
+      // ``popstate`` listener below re-strips the URL into ``url`` state.
+      back: () => history.back(),
+      forward: () => history.forward(),
       // ``wasPush`` is part of the contract but only consumed by
       // preact-iso-internal effects we no longer run; ``false`` is
       // safe.
