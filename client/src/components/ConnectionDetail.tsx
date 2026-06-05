@@ -30,6 +30,10 @@ interface Connection {
   /** Active federation transport for this peer. Shown read-only
    *  in the detail panel so the admin can see whether WebRTC is up. */
   transport?: 'rtc' | 'https' | null
+  /** Monotonic federation protocol version the peer last advertised via
+   *  INSTANCE_CAPABILITIES_UPDATED. Shown read-only so an admin can spot a
+   *  peer that's behind. Absent on old API responses (defaults to v1 there). */
+  proto_version?: number
 }
 
 interface VisibleUser {
@@ -219,6 +223,9 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
           <dt>Status</dt><dd class={`sh-status sh-status--${conn.status}`}>{conn.status}</dd>
           <dt>Inbox</dt><dd class="sh-mono sh-muted">{conn.inbox_url}</dd>
           {conn.paired_at && <><dt>Paired</dt><dd>{new Date(conn.paired_at).toLocaleString()}</dd></>}
+          {conn.proto_version != null && (
+            <><dt>Protocol version</dt><dd>v{conn.proto_version}</dd></>
+          )}
           {conn.unreachable_since && (
             <><dt>Unreachable since</dt><dd class="sh-text-warning">{new Date(conn.unreachable_since).toLocaleString()}</dd></>
           )}

@@ -192,6 +192,33 @@ describe('Transport row', () => {
   })
 })
 
+describe('Protocol version row', () => {
+  it('shows the peer protocol version when present', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ proto_version: 19 }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(screen.getByText('Protocol version')).toBeTruthy()
+    expect(screen.getByText('v19')).toBeTruthy()
+  })
+
+  it('omits the Protocol version row when the field is absent', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn() as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(screen.queryByText('Protocol version')).toBeNull()
+  })
+})
+
 describe('ShareHomeToggle integration', () => {
   it('renders ShareHomeToggle with correct props when share_home is true', async () => {
     const { ConnectionDetail } = await import('./ConnectionDetail')
