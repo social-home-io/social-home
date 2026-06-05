@@ -89,16 +89,61 @@ works even when ``Xvfb`` is down, because it doesn't need a display:
 ```bash
 /usr/bin/chromium \
   --headless --no-sandbox --disable-gpu --hide-scrollbars \
+  --virtual-time-budget=5000 \
   --window-size=1280,2400 \
   --screenshot=/tmp/page.png \
   http://127.0.0.1:8099/
 ```
+
+``--virtual-time-budget=<ms>`` is **required for a JS-rendered SPA** — the
+one-shot ``--screenshot`` otherwise fires before the app fetches its config
+and mounts, giving you a blank/tiny PNG (a ~4 KB file is the tell). With a
+budget Chromium lets the page's timers/fetches run before capturing.
 
 For static HTML inspection (no JS) plain ``curl`` is faster:
 
 ```bash
 curl -s http://127.0.0.1:8099/ -o /tmp/page.html
 ```
+
+## Headless rendering limits in this devcontainer (learned 2026-06-05)
+
+Empirically, headless Chromium here renders **light pages reliably** (the
+SPA login screen, GFS public pages) via both Puppeteer and the direct
+``--screenshot`` one-shot — but its **renderer crashes on the heavy
+authenticated Social Home SPA**. The crash surfaces as
+``TargetCloseError: Protocol error (… ): Target closed`` /
+``ProtocolError`` and reproduced across *every* CDP path that touches the
+authenticated page: ``page.evaluate``, ``page.waitForSelector`` (it polls
+via an isolated-world function — same runtime-eval path), and even
+``Page.captureScreenshot``. Blocking the WebSocket, ``--single-process
+--no-zygote``, and ``protocolTimeout`` bumps did **not** help; ~8 GB RAM was
+free, so it's a renderer crash, not host OOM. This is the same instability
+that blocks long Puppeteer soak/repro runs (the browser dies after a while).
+
+Practical guidance:
+
+- **For a "does the bundle render" smoke test**, screenshot the **login /
+  public page** with the direct one-shot ``--screenshot
+  --virtual-time-budget=5000``. That's reliable and proves the bundle boots,
+  Preact/signals mount, and CSS loads (enough to sign off a dep bump / build
+  change). Capture both ``--window-size=1280,800`` and ``390,844``.
+- **Authenticated-view screenshots are NOT reliable in-sandbox.** Don't burn
+  many attempts — note "authenticated capture not possible in sandbox
+  (headless renderer crashes on the heavy page); covered by the component
+  test suite instead" in the PR, per CLAUDE.md's "say so rather than claim
+  verification" rule.
+- **Reaching authed state without the login form** (when you do try): POST
+  ``/api/auth/token`` ``{username,password}`` → bearer; POST
+  ``/api/me/onboarding-complete`` with that bearer to clear the
+  ``is_new_member`` gate (else the SPA shows ``OnboardingFlow``, not the
+  ``.sh-layout`` shell); seed ``localStorage.sh_token`` via
+  ``page.evaluateOnNewDocument`` (stable CDP ``addScriptToEvaluateOnNewDocument``,
+  unlike ``page.evaluate``). The render may still crash — but this is the
+  least-crashy path.
+- Puppeteer-core for ad-hoc scripts lives at
+  ``/tmp/pptr/node_modules/puppeteer-core`` (also in the plugin cache under
+  ``~/.claude/plugins/cache/.../chrome-devtools-mcp/*/node_modules``).
 
 ## Files this skill touches
 
