@@ -26,8 +26,12 @@ const fullList = signal<Notification[]>([])
 // 30 s polling fallback for the rare case the WS connection is
 // down. Kept as a belt-and-suspenders guard — the WS path is the
 // primary signal.
-let pollTimer: ReturnType<typeof setInterval>
+let pollTimer: ReturnType<typeof setInterval> | null = null
 export function startNotificationPolling() {
+  // Idempotent: clear any prior timer before arming a new one so a
+  // double-start (or a stray render-phase call) can never leak an
+  // orphaned 30 s interval that keeps fetching forever.
+  stopNotificationPolling()
   const poll = async () => {
     try {
       const data = await api.get('/api/notifications/unread-count')
@@ -43,7 +47,10 @@ export function startNotificationPolling() {
 }
 
 export function stopNotificationPolling() {
-  clearInterval(pollTimer)
+  if (pollTimer !== null) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 }
 
 export function NotificationBell() {
