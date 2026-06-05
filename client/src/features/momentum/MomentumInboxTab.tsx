@@ -12,7 +12,7 @@
  * and :class:`MomentumArchiveTab`.
  */
 import { useEffect } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { useLocation } from 'preact-iso'
 import { api } from '@/api'
 import { Avatar } from '@/components/Avatar'
@@ -179,7 +179,7 @@ function MomentRow({
   onReact: (ev: Event) => void
   onTagClick: (tag: string) => void
 }) {
-  const expanded = signal(false)
+  const expanded = useSignal(false)
   const longContent = m.content.length > CONTENT_TRUNCATE_AT
   const visibleText = longContent && !expanded.value
     ? m.content.slice(0, CONTENT_TRUNCATE_AT) + '…'

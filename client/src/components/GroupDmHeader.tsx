@@ -1,7 +1,7 @@
 /**
  * GroupDmHeader — group DM header + member management (§23.47c).
  */
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Avatar } from './Avatar'
 import { Button } from './Button'
@@ -13,7 +13,7 @@ export function GroupDmHeader({ conversationId, name, members, onUpdate }: {
   conversationId: string; name: string | null
   members: GroupMember[]; onUpdate: () => void
 }) {
-  const showMembers = signal(false)
+  const showMembers = useSignal(false)
 
   const addMember = async () => {
     const username = prompt('Username to add:')

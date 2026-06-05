@@ -1,7 +1,7 @@
 /**
  * RetentionConfig — space retention exemption settings (§23.132).
  */
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from './Button'
 import { showToast } from './Toast'
@@ -12,9 +12,9 @@ export function RetentionConfig({ spaceId, retentionDays, exemptTypes, onSave }:
   spaceId: string; retentionDays: number | null
   exemptTypes: string[]; onSave?: () => void
 }) {
-  const days = signal(retentionDays?.toString() || '')
-  const exempt = signal(new Set(exemptTypes))
-  const saving = signal(false)
+  const days = useSignal(retentionDays?.toString() || '')
+  const exempt = useSignal(new Set(exemptTypes))
+  const saving = useSignal(false)
 
   const toggleExempt = (type: string) => {
     const s = new Set(exempt.value)

@@ -1,7 +1,7 @@
 /**
  * LocationMessage — location sharing in DMs (§23.131).
  */
-import { signal } from '@preact/signals'
+import { useSignal } from '@preact/signals'
 import { Button } from './Button'
 import { showToast } from './Toast'
 
@@ -24,7 +24,7 @@ export function LocationMessage({ lat, lon, label }: {
 export function ShareLocationButton({ onShare }: {
   onShare: (lat: number, lon: number) => void
 }) {
-  const sharing = signal(false)
+  const sharing = useSignal(false)
 
   const share = () => {
     if (!navigator.geolocation) {

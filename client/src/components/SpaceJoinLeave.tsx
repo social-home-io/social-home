@@ -1,7 +1,7 @@
 /**
  * SpaceJoinLeave — join and leave flows (§23.101, §23.68).
  */
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { Button } from './Button'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -13,7 +13,7 @@ const leaving = signal(false)
 export function JoinSpaceButton({ spaceId, joinMode }: {
   spaceId: string; joinMode: string
 }) {
-  const joining = signal(false)
+  const joining = useSignal(false)
 
   const join = async () => {
     joining.value = true
