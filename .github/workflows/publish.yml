@@ -32,6 +32,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # hatch-vcs derives the version from git tags + history; the default
+          # shallow clone (depth 1, no tags) can't resolve the release tag.
+          # Full history makes the vcs version correct.
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
         with:
           version: 9
@@ -48,6 +53,20 @@ jobs:
           pnpm --dir client install --frozen-lockfile
           pnpm --dir client run build
       - name: Build wheel + sdist
+        # Pin the version to the exact release tag. The "Build SPA + GFS
+        # bundles" step above rewrites tracked files under
+        # ``socialhome/global_server/static/``, which dirties the git tree —
+        # hatch-vcs would then bump to a ``.dev0+g<sha>.d<date>`` local version
+        # that PyPI rejects (HTTP 400). Pinning makes the published version the
+        # tag regardless of tree state. Empty on workflow_dispatch → falls back
+        # to vcs (with no-local-version from pyproject).
+        # NB: the bare ``SETUPTOOLS_SCM_PRETEND_VERSION`` — NOT the
+        # ``_FOR_SOCIALHOME`` variant, which hatch-vcs ignores (it doesn't pass
+        # ``dist_name`` through to setuptools_scm, so the per-project lookup
+        # never matches). Verified locally: bare var → exact tag on a dirty
+        # tree; the _FOR_ variant fell through to the dev version.
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ github.event.release.tag_name }}
         run: |
           pip install build
           python -m build
