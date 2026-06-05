@@ -12,7 +12,7 @@
  * quietly degrades instead of showing a broken button.
  */
 import type preact from 'preact'
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { token } from '@/store/auth'
 
 const TARGET_SAMPLE_RATE = 16000
@@ -37,8 +37,8 @@ interface ActiveRecording {
 }
 
 export function SttButton({ onText, language = 'en', disabled, className }: SttButtonProps) {
-  const state = signal<State>('idle')
-  const error = signal<string | null>(null)
+  const state = useSignal<State>('idle')
+  const error = useSignal<string | null>(null)
   let active: ActiveRecording | null = null
 
   const cleanup = async () => {

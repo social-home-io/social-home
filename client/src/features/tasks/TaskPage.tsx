@@ -223,8 +223,6 @@ export default function TaskPage() {
     }
   }
 
-  if (loading.value) return <TasksSkeleton />
-
   const me = currentUser.value
   const userNameById = (uid: string): string => {
     if (me?.user_id === uid) return 'you'
@@ -255,6 +253,10 @@ export default function TaskPage() {
   // while the cursor is hovering over it. Both clear on dragend.
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<Status | null>(null)
+
+  // Loading guard sits below every hook so hook call-order stays stable
+  // across the loading→loaded transition (react-hooks/rules-of-hooks).
+  if (loading.value) return <TasksSkeleton />
 
   const handleTaskDrop = (target: Status) => {
     const id = draggingId

@@ -68,6 +68,11 @@ const tab           = signal<TabId>('members')
 export default function AdminPage() {
   useTitle('Admin')
   const user = currentUser.value
+  // Every hook must run before any early return so hook call-order stays stable
+  // across renders (react-hooks/rules-of-hooks). loadAll is gated on admin
+  // here rather than skipped by an early return placed above the hook.
+  useEffect(() => { if (user?.is_admin) void loadAll() }, [])
+
   if (!user?.is_admin) {
     return (
       <div class="sh-admin">
@@ -75,8 +80,6 @@ export default function AdminPage() {
       </div>
     )
   }
-
-  useEffect(() => { void loadAll() }, [])
 
   if (loading.value) return <Spinner />
 

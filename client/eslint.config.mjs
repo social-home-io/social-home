@@ -4,7 +4,66 @@
 import js from '@eslint/js'
 import tseslint from '@typescript-eslint/eslint-plugin'
 import tsparser from '@typescript-eslint/parser'
+import reactHooks from 'eslint-plugin-react-hooks'
 import globals from 'globals'
+
+// Local rule: forbid creating a `signal()` / `computed()` inside a component
+// or hook body. A fresh signal is minted on every render, so writing it
+// triggers a re-render that recreates it at its initial value — local state
+// silently resets (the toggles/loading-state bug fixed across the SPA). Use
+// `useSignal()` / `useComputed()` (stable across renders) instead. Module-level
+// `signal()` (shared/store state) is fine and not flagged.
+const localPlugin = {
+  rules: {
+    'no-signal-in-component': {
+      meta: {
+        type: 'problem',
+        docs: { description: 'Disallow signal()/computed() in a component/hook body; use useSignal()/useComputed().' },
+        messages: {
+          inComponent: "`{{name}}()` in a component/hook body creates a NEW signal every render, so its state resets on re-render. Use `use{{Cap}}()` instead.",
+        },
+        schema: [],
+      },
+      create(context) {
+        // Name of the nearest enclosing component (PascalCase) or hook (useX)
+        // function, walking the lexical parent chain. null if none (e.g. a
+        // module-level call or a plain lowercase helper).
+        function enclosingComponentOrHook(node) {
+          for (let n = node.parent; n; n = n.parent) {
+            if (
+              n.type === 'FunctionDeclaration' ||
+              n.type === 'FunctionExpression' ||
+              n.type === 'ArrowFunctionExpression'
+            ) {
+              const name =
+                (n.id && n.id.name) ||
+                (n.parent && n.parent.type === 'VariableDeclarator' && n.parent.id && n.parent.id.name) ||
+                null
+              if (name && (/^[A-Z]/.test(name) || /^use[A-Z]/.test(name))) return true
+            }
+          }
+          return false
+        }
+        return {
+          CallExpression(node) {
+            const callee = node.callee
+            if (
+              callee.type === 'Identifier' &&
+              (callee.name === 'signal' || callee.name === 'computed') &&
+              enclosingComponentOrHook(node)
+            ) {
+              context.report({
+                node,
+                messageId: 'inComponent',
+                data: { name: callee.name, Cap: callee.name === 'signal' ? 'Signal' : 'Computed' },
+              })
+            }
+          },
+        }
+      },
+    },
+  },
+}
 
 export default [
   {
@@ -37,9 +96,21 @@ export default [
       parserOptions: { ecmaFeatures: { jsx: true } },
       globals: { ...globals.browser, ...globals.node },
     },
-    plugins: { '@typescript-eslint': tseslint },
+    plugins: {
+      '@typescript-eslint': tseslint,
+      'react-hooks': reactHooks,
+      local: localPlugin,
+    },
     rules: {
       ...tseslint.configs.recommended.rules,
+      // Preact hooks follow React's rules. `rules-of-hooks` is high-signal
+      // (conditional/looped hook calls are real bugs) — error. `exhaustive-deps`
+      // is valuable but flags a long tail of existing effects, so it rides as a
+      // warning (doesn't fail CI) until a dedicated cleanup turns it to error.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+      // Guard the render-body signal() footgun (state-loss bug). See above.
+      'local/no-signal-in-component': 'error',
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -78,6 +149,10 @@ export default [
         afterAll: 'readonly',
         afterEach: 'readonly',
       },
+    },
+    rules: {
+      // Tests legitimately create throwaway signals in helper closures.
+      'local/no-signal-in-component': 'off',
     },
   },
 ]
