@@ -96,6 +96,14 @@ build-backend = "hatchling.build"
 # ``version = "..."`` bump in this file before each release.
 [tool.hatch.version]
 source = "vcs"
+# Never emit a PEP 440 *local* version segment (``+g<sha>.d<date>``). PyPI
+# rejects local versions outright (HTTP 400), so a build off a non-tag commit
+# or a dirty tree (e.g. the release job rebuilds the SPA into tracked GFS
+# static, dirtying the tree) would otherwise produce an unpublishable wheel
+# like ``2026.6.6.dev0+g531e19e11.d20260605``. The release workflow pins the
+# exact tag via ``SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SOCIALHOME``; this is the
+# belt-and-suspenders for the workflow_dispatch / fallback path.
+raw-options = { local_scheme = "no-local-version" }
 
 [tool.hatch.build.hooks.vcs]
 version-file = "socialhome/_version.py"
