@@ -16,16 +16,26 @@ import { signal } from '@preact/signals'
 
 const inflight = signal(0)
 
+// preact-iso invokes these from inside the Router's *synchronous* suspend
+// handler (`_childDidSuspend`), which runs mid-diff while a lazy route chunk
+// is in flight. Mutating a signal there re-enters Preact's render
+// synchronously, which re-renders the still-suspended route, which re-throws
+// its load promise, which re-invokes `onLoadStart` → an infinite synchronous
+// loop that starves the microtask queue so the dynamic `import()` never
+// resolves and the tab hard-freezes (the #473 regression). Deferring the
+// mutation to a microtask moves the signal write *after* the diff completes,
+// so the bar still toggles but the suspend cycle can settle. See
+// `RouteProgress.test.tsx` for the regression guard.
 /** Called from the Router's `onLoadStart`. */
 export function routeLoadStart() {
-  inflight.value += 1
+  queueMicrotask(() => { inflight.value += 1 })
 }
 
 /** Called from the Router's `onLoadEnd`. */
 export function routeLoadEnd() {
   // Never drop below zero — a stray `onLoadEnd` without a matching
   // `onLoadStart` shouldn't wedge the bar in a negative state.
-  inflight.value = Math.max(0, inflight.value - 1)
+  queueMicrotask(() => { inflight.value = Math.max(0, inflight.value - 1) })
 }
 
 export function RouteProgress() {
