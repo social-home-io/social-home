@@ -118,7 +118,7 @@ class SqliteGfsConnectionRepo:
             (space_id, gfs_id),
         )
         assert row is not None  # just written
-        return _row_to_publication(dict(zip(row.keys(), tuple(row))))
+        return _row_to_publication(rows_to_dicts([row])[0])
 
     async def unpublish_space(self, space_id: str, gfs_id: str) -> None:
         await self._db.enqueue(
