@@ -386,6 +386,41 @@ async def test_call_service_plain(client, ha_server):
     assert captured["requests"][-1]["query"] == {}
 
 
+async def test_call_service_url_encodes_path_segments():
+    """Defense-in-depth: domain/service are percent-encoded into the URL path
+    so no caller can traverse/inject via the ``/api/services/{domain}/{service}``
+    segments. A service token containing a special char is escaped."""
+    from unittest.mock import MagicMock
+
+    captured: dict = {}
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def json(self, content_type=None):
+            return {}
+
+    def _post(url, headers=None, json=None):
+        captured["url"] = url
+        return _FakeResp()
+
+    session = MagicMock()
+    session.post = _post
+    c = HaClient(session, "http://ha.local", "tok")
+    await c.call_service("notify", "weird name/#x")
+    assert "weird%20name%2F%23x" in captured["url"]
+    assert (
+        "/api/services/notify/weird%20name%2F%23x"
+        == captured["url"].rsplit("http://ha.local", 1)[-1]
+    )
+
+
 async def test_fire_event_true_on_2xx(client):
     assert await client.fire_event("socialhome.post_created", {"id": "p1"}) is True
 
