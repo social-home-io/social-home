@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
+import aiohttp
 import pytest
 
 from socialhome.crypto import derive_instance_id, generate_identity_keypair
@@ -932,6 +933,112 @@ async def test_publish_body_carries_brand_colors_and_image_data_uris(env):
     assert body["accent_color"] == "#445566"
     assert body["cover_url"].startswith("data:image/webp;base64,")
     assert body["icon_url"].startswith("data:image/webp;base64,")
+
+
+# ── update_display_name_to_all ──────────────────────────────────────────
+
+
+async def test_update_display_name_signs_and_posts_to_each_gfs(env):
+    """The household rename is signed over the canonical
+    ``{instance_id, display_name, ts}`` JSON and POSTed to every active
+    GFS's ``/gfs/instance``; the return value is the number of 200s and
+    the signature verifies byte-for-byte against the GFS contract."""
+    from socialhome.crypto import b64url_decode, verify_ed25519
+
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://a.example"))
+    await repo.save(_make_conn("g2", inbox_url="https://b.example"))
+    kp = generate_identity_keypair()
+    session = _StubSession(status=200, body={"status": "ok"})
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    n = await svc.update_display_name_to_all("Casa Vizeli")
+    assert n == 2
+    # POSTed to each GFS's /gfs/instance.
+    assert ("POST", "https://a.example/gfs/instance") in session.calls
+    assert ("POST", "https://b.example/gfs/instance") in session.calls
+    body = session._last_body  # type: ignore[attr-defined]
+    assert body["instance_id"] == "alpha.home"
+    assert body["display_name"] == "Casa Vizeli"
+    assert body["ts"]
+    sig = body["signature"]
+    assert sig
+    canonical = json.dumps(
+        {
+            "instance_id": body["instance_id"],
+            "display_name": body["display_name"],
+            "ts": body["ts"],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig))
+
+
+async def test_update_display_name_skips_404_old_gfs(env):
+    """A GFS too old to have ``/gfs/instance`` returns 404 — skipped,
+    counted as 0, never raising."""
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://old.example"))
+    kp = generate_identity_keypair()
+    session = _StubSession(status=404)
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    n = await svc.update_display_name_to_all("New Name")
+    assert n == 0
+
+
+async def test_update_display_name_skips_transport_errors(env):
+    """A GFS raising ClientError or a bare TimeoutError is skipped; the
+    healthy GFS is still updated, and the method never raises."""
+    _, repo = env
+    await repo.save(_make_conn("ok", inbox_url="https://ok.example"))
+    await repo.save(_make_conn("err", inbox_url="https://err.example"))
+    await repo.save(_make_conn("slow", inbox_url="https://slow.example"))
+    kp = generate_identity_keypair()
+
+    class _MixedSession:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def post(self, url, **kw):
+            self.calls.append(("POST", url))
+            if "err.example" in url:
+                raise aiohttp.ClientError("boom")
+            if "slow.example" in url:
+                raise asyncio.TimeoutError
+            return _StubResp(200, {"status": "ok"})
+
+    session = _MixedSession()
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    n = await svc.update_display_name_to_all("New Name")
+    assert n == 1
+    assert len(session.calls) == 3
+
+
+async def test_update_display_name_no_context_returns_zero(env):
+    """Without publish context wired (no instance id / signing key),
+    the method is a no-op returning 0 — never crashes early boot."""
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://a.example"))
+    session = _StubSession(status=200)
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    n = await svc.update_display_name_to_all("New Name")
+    assert n == 0
+    assert session.calls == []
 
 
 async def test_publish_body_falls_back_when_space_missing(env):

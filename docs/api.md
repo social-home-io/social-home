@@ -672,6 +672,7 @@ selected transparently by the server.  See [protocol/apps.md](./protocol/apps.md
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/gfs/register` | Register instance. |
+| POST | `/gfs/instance` | Update a registered instance's `display_name`. Body `{instance_id, display_name, ts, signature}`; Ed25519-signed over canonical JSON of `{instance_id, display_name, ts}` and verified against the registered public key (replay-guarded ±300 s on `ts`). |
 | POST | `/gfs/publish` | Publish a space. |
 | POST | `/gfs/subscribe` | Subscribe to directory updates. |
 | POST | `/gfs/report` | File a fraud / abuse report. |

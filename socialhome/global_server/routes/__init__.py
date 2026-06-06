@@ -55,6 +55,7 @@ from .relay import (
     AppealView,
     GfsInfoView,
     HealthzView,
+    InstanceUpdateView,
     PublishView,
     RegisterView,
     ReportView,
@@ -136,6 +137,10 @@ def register_routes(
     # public_key, inbox_url}``.
     app.router.add_view("/gfs/info", GfsInfoView)
     app.router.add_view("/gfs/register", RegisterView)
+    # Signed self-service rename for an already-registered instance — the
+    # pairing token is single-use, so re-registering to change the name
+    # isn't possible (verify-then-mutate against the registered pubkey).
+    app.router.add_view("/gfs/instance", InstanceUpdateView)
 
     # Persistent SH↔GFS WebSocket — primary transport (spec §24.12).
     app.router.add_view("/gfs/ws", GfsWebSocketView)

@@ -85,6 +85,42 @@ class RegisterView(GfsBaseView):
         )
 
 
+class InstanceUpdateView(GfsBaseView):
+    """``POST /gfs/instance`` — a registered HFS updates its own
+    ``display_name``.
+
+    Body shape: ``{instance_id, display_name, ts, signature}``. The
+    pairing-registration token is single-use, so an already-registered
+    instance can't re-register to change its name; this signed update is
+    the supported path. The Ed25519 signature is verified against the
+    registered ``ClientInstance.public_key`` (same trust model as
+    :class:`SpacePublishView` — a peer can't rename another household).
+    """
+
+    async def post(self) -> web.Response:
+        svc = self.svc(K.gfs_federation_key)
+        body = await self.body_or_400()
+        try:
+            instance_id = body["instance_id"]
+            display_name = body["display_name"]
+            ts = body["ts"]
+            signature = body["signature"]
+        except KeyError as exc:
+            raise web.HTTPBadRequest(reason=f"Missing field: {exc}") from exc
+        try:
+            await svc.update_instance(
+                str(instance_id),
+                str(display_name),
+                str(ts),
+                str(signature),
+            )
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
+        return web.json_response({"status": "ok", "instance_id": instance_id})
+
+
 class PublishView(GfsBaseView):
     """``POST /gfs/publish`` — relay an event to a space's subscribers."""
 

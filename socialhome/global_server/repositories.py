@@ -57,6 +57,11 @@ class AbstractGfsFederationRepo(Protocol):
         instance_id: str,
         status: str,
     ) -> None: ...
+    async def set_instance_display_name(
+        self,
+        instance_id: str,
+        display_name: str,
+    ) -> None: ...
     async def delete_instance(self, instance_id: str) -> None: ...
 
     # Spaces
@@ -174,6 +179,16 @@ class SqliteGfsFederationRepo:
         await self._db.enqueue(
             "UPDATE client_instances SET status=? WHERE instance_id=?",
             (status, instance_id),
+        )
+
+    async def set_instance_display_name(
+        self,
+        instance_id: str,
+        display_name: str,
+    ) -> None:
+        await self._db.enqueue(
+            "UPDATE client_instances SET display_name=? WHERE instance_id=?",
+            (display_name, instance_id),
         )
 
     async def delete_instance(self, instance_id: str) -> None:

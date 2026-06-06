@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from ..app_keys import capabilities_outbound_key, federation_repo_key
+from ..app_keys import (
+    capabilities_outbound_key,
+    federation_repo_key,
+    gfs_connection_service_key,
+)
 from ..security import error_response
 from .base import BaseView
 
@@ -32,4 +36,7 @@ class AdminInstanceView(BaseView):
         await self.svc(federation_repo_key).set_instance_display_name(name)
         # Best-effort fan-out to confirmed peers; never blocks the rename.
         await self.svc(capabilities_outbound_key).publish()
+        # Best-effort: keep every paired GFS's client_instances row in sync.
+        # Never raises — an unreachable/old GFS is logged and skipped.
+        await self.svc(gfs_connection_service_key).update_display_name_to_all(name)
         return self._json({"display_name": name})

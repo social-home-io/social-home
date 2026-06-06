@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -30,6 +31,15 @@ log = logging.getLogger(__name__)
 #: real "about" blurb; bounds DB growth + the public-page render cost from
 #: an oversized publish. The public renderer applies its own (smaller) cap.
 MAX_ABOUT_MARKDOWN_CHARS: int = 8000
+
+#: Max display_name length accepted by ``update_instance`` (chars). Mirrors
+#: the household-name bound on the HFS side.
+MAX_DISPLAY_NAME_CHARS: int = 80
+
+#: Freshness window for the signed instance-update timestamp (seconds). A
+#: ``ts`` further than this from now is treated as a replay and rejected —
+#: same ±300 s tolerance the §24.11 inbound pipeline uses.
+INSTANCE_UPDATE_TS_SKEW_SECONDS: int = 300
 
 
 class GfsFederationService:
@@ -306,6 +316,63 @@ class GfsFederationService:
             next_status,
         )
         return space
+
+    async def update_instance(
+        self,
+        instance_id: str,
+        display_name: str,
+        ts: str,
+        signature: str,
+    ) -> None:
+        """Update a registered instance's display_name. Signed by the
+        instance and verified against its registered public key (same
+        trust model as publish_space — a peer can't rename another
+        household). Rejects unknown instances, bad signatures, and stale
+        timestamps (replay guard)."""
+        inst = await self._repo.get_instance(instance_id)
+        if inst is None:
+            raise PermissionError(f"Unknown instance: {instance_id}")
+
+        # Signature is REQUIRED here (unlike publish_space's optional-sig
+        # branch): an empty or invalid signature is a hard PermissionError.
+        if not signature:
+            raise PermissionError("Invalid Ed25519 signature")
+        canonical = json.dumps(
+            {
+                "instance_id": instance_id,
+                "display_name": display_name,
+                "ts": ts,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        raw_key = bytes.fromhex(inst.public_key)
+        try:
+            raw_sig = b64url_decode(signature)
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Invalid Ed25519 signature") from exc
+        if not verify_ed25519(raw_key, canonical, raw_sig):
+            raise PermissionError("Invalid Ed25519 signature")
+
+        # Replay guard: the signed ``ts`` must be a fresh, tz-aware ISO 8601
+        # timestamp within ±300 s of now. Unparseable / naive timestamps are
+        # rejected too (a missing offset is treated as untrusted).
+        try:
+            parsed = datetime.fromisoformat(ts)
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Stale timestamp") from exc
+        if parsed.tzinfo is None:
+            raise PermissionError("Stale timestamp")
+        now = datetime.now(timezone.utc)
+        if abs((now - parsed).total_seconds()) > INSTANCE_UPDATE_TS_SKEW_SECONDS:
+            raise PermissionError("Stale timestamp")
+
+        cleaned = display_name.strip()
+        if not cleaned or len(cleaned) > MAX_DISPLAY_NAME_CHARS:
+            raise ValueError("display_name must be 1-80 chars")
+
+        await self._repo.set_instance_display_name(instance_id, cleaned)
+        log.info("GFS: instance %s renamed to %r", instance_id, cleaned)
 
     # ── Fan-out ──────────────────────────────────────────────────────────
 
