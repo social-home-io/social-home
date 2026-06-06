@@ -239,4 +239,58 @@ describe('ConnectionsPage', () => {
     })
   })
 
+  describe('GFS connection status labels', () => {
+    beforeEach(() => {
+      wsHandlers.clear()
+      wsMock.on.mockClear()
+    })
+
+    function makeGfs(over: Record<string, unknown> = {}) {
+      return {
+        id: 'gfs-1',
+        gfs_instance_id: 'i1',
+        display_name: 'Town GFS',
+        inbox_url: 'https://gfs.example.com',
+        status: 'active',
+        paired_at: '2026-06-06T00:00:00+00:00',
+        published_space_count: 0,
+        ...over,
+      }
+    }
+
+    it('renders the "Pending approval" label for a pending GFS', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections') return Promise.resolve([makeGfs({ status: 'pending' })])
+        return Promise.resolve([])
+      })
+
+      const { findByText } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_pending')).toBeTruthy()
+    })
+
+    it('renders the "Suspended" label for a suspended GFS', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections') return Promise.resolve([makeGfs({ status: 'suspended' })])
+        return Promise.resolve([])
+      })
+
+      const { findByText } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_suspended')).toBeTruthy()
+    })
+
+    it('renders no status label for an active GFS', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections') return Promise.resolve([makeGfs({ status: 'active' })])
+        return Promise.resolve([])
+      })
+
+      const { container, queryByText } = render(<ConnectionsPage />)
+      await waitFor(() => {
+        expect(container.querySelector('.sh-type-badge')).not.toBeNull()
+      })
+      expect(queryByText('gfs.status_pending')).toBeNull()
+      expect(queryByText('gfs.status_suspended')).toBeNull()
+    })
+  })
+
 })

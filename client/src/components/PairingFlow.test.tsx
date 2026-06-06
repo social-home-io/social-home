@@ -35,6 +35,19 @@ vi.mock('@/ws', () => ({
   ws: { on: (...args: Parameters<typeof wsOnMock>) => wsOnMock(...args) },
 }))
 
+// preact-iso: the success-dialog CTA navigates via the base/ingress-aware
+// client router (loc.route), never a raw location.assign. Mock useLocation
+// so the test can assert the route call.
+const routeSpy = vi.fn()
+vi.mock('preact-iso', () => ({
+  useLocation: () => ({ route: routeSpy, url: '/' }),
+}))
+
+const showToastSpy = vi.fn()
+vi.mock('./Toast', () => ({
+  showToast: (...args: unknown[]) => showToastSpy(...args),
+}))
+
 vi.mock('@/i18n/i18n', () => ({
   t: (key: string) => key,
   locale: { value: 'en' },
@@ -61,6 +74,8 @@ Object.assign(navigator, { clipboard: { writeText } })
 beforeEach(() => {
   vi.resetModules()
   apiPost.mockReset()
+  routeSpy.mockReset()
+  showToastSpy.mockReset()
   writeText.mockReset().mockResolvedValue(undefined)
   // Clear captured WS handlers so stale handlers from prior tests don't fire.
   for (const k of Object.keys(wsHandlers)) delete wsHandlers[k]
@@ -288,5 +303,60 @@ describe('PairingFlow — configure-sharing step', () => {
     await new Promise(r => setTimeout(r, 0))
 
     expect(screen.queryByText('pairing.configure_sharing_title')).toBeNull()
+  })
+})
+
+describe('PairingFlow — GFS pending-approval success dialog', () => {
+  async function connectGfs(status: string) {
+    apiPost.mockResolvedValueOnce({
+      id: 'gfs-1',
+      gfs_instance_id: 'i1',
+      display_name: 'Town GFS',
+      inbox_url: 'https://gfs.example.com',
+      status,
+      paired_at: '2026-06-06T00:00:00+00:00',
+      published_space_count: 0,
+    })
+    const { PairingFlow, openPairing } = await import('./PairingFlow')
+    render(<PairingFlow />)
+    openPairing('gfs')
+    fireEvent.click(await screen.findByText('gfs.add'))
+    fireEvent.click(await screen.findByText('pairing.method_paste'))
+    const textarea = await screen.findByPlaceholderText('gfs.paste_placeholder')
+    const code = 'socialhome://gfs-pair/https://gfs.example.com/?token=tok-gfs'
+    fireEvent.input(textarea, { target: { value: code } })
+    fireEvent.click(screen.getByText('pairing.paste_submit'))
+    await new Promise(r => setTimeout(r, 0))
+  }
+
+  it('pending: shows the pending heading/message and only Done (no publish CTA)', async () => {
+    await connectGfs('pending')
+
+    // Pending copy, not the "Connected!" copy.
+    expect(screen.getByText('gfs.connected_pending')).toBeTruthy()
+    expect(screen.getByText('gfs.pending_approval')).toBeTruthy()
+    expect(screen.queryByText('gfs.connected')).toBeNull()
+
+    // Only the Done button — no "Open public sharing settings".
+    expect(screen.getByText('pairing.done')).toBeTruthy()
+    expect(screen.queryByText('gfs.open_publishing')).toBeNull()
+
+    // Neutral/info toast, not the green "connected" toast.
+    expect(showToastSpy).toHaveBeenCalledWith('gfs.pending_toast', 'info')
+  })
+
+  it('active: shows the connected copy + the publish CTA, which routes via loc.route', async () => {
+    await connectGfs('active')
+
+    expect(screen.getByText('gfs.connected')).toBeTruthy()
+    expect(screen.queryByText('gfs.connected_pending')).toBeNull()
+    expect(showToastSpy).toHaveBeenCalledWith('gfs.pair_success', 'success')
+
+    // The "Open public sharing settings" CTA is present and navigates via
+    // the base-aware client router — never location.assign to an absolute path.
+    const cta = screen.getByText('gfs.open_publishing')
+    fireEvent.click(cta)
+    await new Promise(r => setTimeout(r, 0))
+    expect(routeSpy).toHaveBeenCalledWith('/momentum/public/sharing')
   })
 })

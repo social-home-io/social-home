@@ -49,8 +49,12 @@ const loading = signal(true)
 async function reload(): Promise<void> {
   loading.value = true
   try {
+    // Only active GFS can accept a moment registration — a pending/suspended
+    // connection would render a Register button that fails server-side
+    // (moment_public_service._require_active_gfs). Pending state is surfaced
+    // on the Connections page; here we only offer ready servers.
     const conns = await api.get<GfsConnection[]>('/api/gfs/connections')
-    gfses.value = conns ?? []
+    gfses.value = (conns ?? []).filter(c => c.status === 'active')
     await loadRegistrations()
   } catch (err) {
     showToast(

@@ -227,8 +227,15 @@ class GfsConnectionService:
         await self._repo.delete(gfs_id)
 
     async def list_connections(self) -> list[GfsConnection]:
-        """Return all active GFS connections."""
-        return await self._repo.list_active()
+        """Return ALL GFS connections for this household — active, pending,
+        and suspended.
+
+        The UI list distinguishes them by ``status`` and must surface a
+        ``pending`` connection (GFS hasn't approved the household yet) or a
+        ``suspended`` one; filtering to active-only made a freshly-connected
+        GFS invisible until approval.
+        """
+        return await self._repo.list_all()
 
     async def publish_space(self, space_id: str, gfs_id: str) -> GfsSpacePublication:
         """Publish a space to a GFS.

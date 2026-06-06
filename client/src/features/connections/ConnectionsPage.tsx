@@ -422,6 +422,15 @@ export default function ConnectionsPage() {
                   <span class={statusDotClass(gfs.status)} />
                   <strong>{gfs.display_name}</strong>
                   <span class="sh-type-badge">Global Server</span>
+                  {gfs.status !== 'active' && (
+                    <span class={gfs.status === 'pending' ? 'sh-text-warning' : 'sh-muted'}>
+                      {gfs.status === 'pending'
+                        ? t('gfs.status_pending')
+                        : gfs.status === 'suspended'
+                          ? t('gfs.status_suspended')
+                          : gfs.status}
+                    </span>
+                  )}
                   <span class="sh-muted">{gfs.inbox_url}</span>
                   <span class="sh-muted">
                     {t('gfs.published_spaces')}: {gfs.published_space_count}

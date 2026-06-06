@@ -392,6 +392,38 @@ describe('SpaceSettings', () => {
     )
   })
 
+  it('does NOT render a Publish button for a non-active (pending) GFS', async () => {
+    apiMock.get.mockReset()
+    apiMock.get.mockImplementation((url: string) => {
+      if (url.includes('/connections')) {
+        return Promise.resolve([
+          { id: 'gfs-active', gfs_instance_id: 'i1', display_name: 'Active GFS',
+            inbox_url: 'https://active.example.com', status: 'active',
+            paired_at: '', published_space_count: 0 },
+          { id: 'gfs-pending', gfs_instance_id: 'i2', display_name: 'Pending GFS',
+            inbox_url: 'https://pending.example.com', status: 'pending',
+            paired_at: '', published_space_count: 0 },
+        ])
+      }
+      return Promise.resolve([]) // nothing published
+    })
+    const space = makeSpace()
+    const { container, queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    await new Promise(r => setTimeout(r, 0))
+    // Active GFS row renders with a Publish button.
+    expect(container.querySelector('[data-testid="gfs-row-gfs-active"]')).toBeTruthy()
+    // Pending GFS gets NO publish row at all.
+    expect(container.querySelector('[data-testid="gfs-row-gfs-pending"]')).toBeNull()
+    // Exactly one Publish button (the active one).
+    const publishBtns = Array.from(container.querySelectorAll('button'))
+      .filter(b => b.textContent === 'gfs.publish')
+    expect(publishBtns).toHaveLength(1)
+    // A muted note explains the held connection.
+    expect(queryByText('space.gfs_pending_note')).toBeTruthy()
+  })
+
   it('confirms before publishing, then POSTs and shows the returned status', async () => {
     apiMock.get.mockReset()
     apiMock.get.mockImplementation((url: string) => {

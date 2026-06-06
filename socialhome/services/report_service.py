@@ -336,6 +336,10 @@ class ReportService:
             connections = await self._gfs_connection_service.list_connections()
         except Exception:  # pragma: no cover
             return
+        # ``list_connections`` now also returns pending/suspended connections
+        # (so the UI can surface them) — only forward fraud reports to GFS
+        # that have actually accepted this household.
+        connections = [c for c in connections if c.status == "active"]
         if not connections:
             return
 
