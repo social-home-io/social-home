@@ -476,23 +476,37 @@ async def test_send_push_other_notify_entity_uses_send_message_without_data():
     assert "data" not in call[3]
 
 
-async def test_send_push_legacy_domain_service():
-    """A fully-qualified non-notify ``domain.service`` keeps the legacy
-    ``call_service(domain, service, ...)`` path (NOT send_message)."""
+async def test_send_push_non_notify_domain_service_rejected(caplog):
+    """notify-only policy: a fully-qualified non-``notify`` ``domain.service``
+    (e.g. ``telegram_bot.send_xyz``) is REJECTED — NO ``call_service`` is made,
+    and a WARNING is logged. SH calls HA with the instance's shared token, so a
+    user-controlled ``ha_notify_service`` must never reach an arbitrary domain;
+    the Settings dropdown only ever offers ``notify.*`` targets. (Behavior
+    change: legacy non-notify domain.service passthrough is gone.)"""
     client = _FakeHaClient(call_service_response=[])
     adapter = _build_adapter(client=client)
     user = _push_user("telegram_bot.send_xyz")
-    await adapter.send_push(user, "title", "message", data={"x": 1})
-    assert any(
-        c[0] == "call_service"
-        and c[1] == "telegram_bot"
-        and c[2] == "send_xyz"
-        and c[3] == {"title": "title", "message": "message", "data": {"x": 1}}
-        for c in client.calls
-    )
-    assert not any(
-        c[0] == "call_service" and c[2] == "send_message" for c in client.calls
-    )
+    with caplog.at_level("WARNING"):
+        await adapter.send_push(user, "title", "message", data={"x": 1})
+    assert not any(c[0] == "call_service" for c in client.calls)
+    assert any("unsupported notify target" in r.message for r in caplog.records)
+
+
+async def test_send_push_dangerous_domain_service_rejected(caplog):
+    """The attack this hardening blocks: ``homeassistant.restart`` (or
+    ``shell_command.*``, ``automation.trigger``, …) set as a user's
+    ``ha_notify_service`` must NEVER be invoked with the instance token."""
+    for value in ("homeassistant.restart", "shell_command.foo"):
+        client = _FakeHaClient(call_service_response=[])
+        adapter = _build_adapter(client=client)
+        user = _push_user(value)
+        with caplog.at_level("WARNING"):
+            await adapter.send_push(user, "title", "message", data={"x": 1})
+        assert not any(c[0] == "call_service" for c in client.calls), value
+        assert any("unsupported notify target" in r.message for r in caplog.records), (
+            value
+        )
+        caplog.clear()
 
 
 async def test_send_push_entity_value_only_lands_in_entity_id():
@@ -550,19 +564,28 @@ async def test_send_push_mobile_app_injection_token_falls_through_to_body():
     ]
 
 
-async def test_send_push_empty_notify_suffix_falls_to_legacy():
-    """``"notify."`` (no entity suffix) is not a valid entity id; it falls to
-    the legacy ``domain.service`` split (empty service) — a harmless 404 at
-    HA, never the entity action."""
+async def test_send_push_empty_notify_suffix_rejected(caplog):
+    """``"notify."`` (no entity suffix) is not a valid entity id and, having a
+    ``.``, reaches the non-notify reject branch — REJECTED with a WARNING, no
+    ``call_service`` (notify-only policy; no ``notify.`` garbage call)."""
     client = _FakeHaClient(call_service_response=[])
     adapter = _build_adapter(client=client)
-    await adapter.send_push(_push_user("notify."), "t", "m")
-    assert any(
-        c[0] == "call_service" and c[1] == "notify" and c[2] == "" for c in client.calls
-    )
-    assert not any(
-        c[0] == "call_service" and c[2] == "send_message" for c in client.calls
-    )
+    with caplog.at_level("WARNING"):
+        await adapter.send_push(_push_user("notify."), "t", "m")
+    assert not any(c[0] == "call_service" for c in client.calls)
+    assert any("unsupported notify target" in r.message for r in caplog.records)
+
+
+async def test_send_push_bare_garbage_name_rejected(caplog):
+    """A bare name (no dot) that is NOT a valid HA service token — e.g.
+    ``"weird name/../x"`` — is REJECTED before building a ``notify.<garbage>``
+    call: no ``call_service``, a WARNING logged."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    with caplog.at_level("WARNING"):
+        await adapter.send_push(_push_user("weird name/../x"), "t", "m")
+    assert not any(c[0] == "call_service" for c in client.calls)
+    assert any("unsupported notify target" in r.message for r in caplog.records)
 
 
 async def test_list_notify_targets_delegates_to_client():

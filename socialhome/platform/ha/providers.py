@@ -28,7 +28,11 @@ log = logging.getLogger(__name__)
 # service names are lowercase ``[a-z0-9_]`` slugs; anything else (dots,
 # slashes, spaces, uppercase) is rejected so a user-controlled value can never
 # inject into the ``/api/services/{domain}/{service}`` URL path.
-_VALID_HA_SERVICE = re.compile(r"^[a-z0-9_]+$")
+#
+# ``\A...\Z`` (not ``^...$``): in Python ``$`` also matches just before a
+# trailing newline, so ``^[a-z0-9_]+$`` would accept ``"mobile_app_x\n"``.
+# The anchored form rejects any embedded/trailing newline.
+_VALID_HA_SERVICE = re.compile(r"\A[a-z0-9_]+\Z")
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -277,8 +281,10 @@ def _resolve_notify_service(user: Any) -> str | None:
 
     - ``"notify.<entity>"`` (non-empty suffix) → a notify *entity id*,
       delivered via the ``notify.send_message`` entity action.
-    - other ``"domain.service"`` → a legacy ``call_service`` target.
-    - a bare name (no dot) → a legacy ``notify`` service.
+    - a bare name (no dot) → a legacy ``notify.<name>`` service.
+    - any other ``"domain.service"`` (non-notify domain) → rejected in
+      :meth:`HaPushProvider.send`: SH invokes HA with the instance's shared
+      token, so only ``notify.*`` targets are ever called.
 
     There is no auto-derived default: HA's Companion-app notify service is
     named after the *device* (``notify.mobile_app_<device-slug>``), which
@@ -350,14 +356,37 @@ class HaPushProvider:
             domain, service = "notify", "send_message"
             body["entity_id"] = value
         elif "." in value:
-            # A fully-qualified legacy domain.service (e.g. telegram_bot.x) —
-            # legacy call carries the data payload.
-            domain, _, service = value.partition(".")
-            if data:
-                body["data"] = data
+            # A fully-qualified non-``notify`` ``domain.service`` (every
+            # ``notify.*`` value was already handled by the two suffix branches
+            # above, so anything reaching here has a non-notify domain). SH
+            # calls HA with the *instance's* shared token (operator LLAT /
+            # SUPERVISOR_TOKEN), never a per-user one — so honouring an
+            # arbitrary user-set domain.service would let any member invoke
+            # ``homeassistant.restart`` / ``shell_command.*`` / etc. with that
+            # token. Reject it: only ``notify.*`` is supported (the only thing
+            # the Settings dropdown ever offers).
+            log.warning(
+                "HA push: %s has an unsupported notify target %r — only "
+                "notify.* services are allowed; pick your device in "
+                "Settings → Notifications.",
+                getattr(user, "username", "?"),
+                value,
+            )
+            return
         else:
             # A bare name → legacy ``notify.<value>`` service (already-configured
-            # users) — legacy call carries the data payload.
+            # users) — legacy call carries the data payload. Validate the value
+            # against the service-token regex first so a bare ``notify.<garbage>``
+            # call is never built (and the value can't inject into the URL path).
+            if _VALID_HA_SERVICE.match(value) is None:
+                log.warning(
+                    "HA push: %s has an unsupported notify target %r — only "
+                    "notify.* services are allowed; pick your device in "
+                    "Settings → Notifications.",
+                    getattr(user, "username", "?"),
+                    value,
+                )
+                return
             domain, service = "notify", value
             if data:
                 body["data"] = data
