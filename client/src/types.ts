@@ -613,8 +613,14 @@ export interface GfsConnection {
 export interface GfsSpacePublication {
   space_id: string
   gfs_connection_id: string
-  gfs_display_name: string
+  /** Only the admin ``/api/gfs/publications`` view carries this; the
+   *  per-space ``/api/spaces/{id}/publications`` endpoint omits it. */
+  gfs_display_name?: string
   published_at: string
+  /** ``active`` = live & discoverable; ``pending`` = held for GFS
+   *  moderator approval (not yet discoverable); ``banned`` = removed /
+   *  rejected by the GFS. */
+  status: 'active' | 'pending' | 'banned'
 }
 
 export interface Page {
