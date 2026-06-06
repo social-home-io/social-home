@@ -666,10 +666,12 @@ class CalendarService(BusPublisherMixin):
             cover_url=new_cover,
             location=new_location,
             tz=new_tz,
+            # Only overwrite when a *valid* uuid is supplied — a malformed
+            # one (cleans to None) falls through to "no change" rather than
+            # silently clearing an existing group, per the docstring.
             client_event_uuid=(
                 _clean_client_event_uuid(client_event_uuid)
-                if client_event_uuid is not None
-                else existing.client_event_uuid
+                or existing.client_event_uuid
             ),
         )
         await self._repo.save_event(updated)

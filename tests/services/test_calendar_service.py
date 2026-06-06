@@ -664,6 +664,10 @@ async def test_update_event_does_not_clear_existing_group(federated_cal_env):
     saved = await e.cal_svc.get_event(ev.id)
     assert saved.summary == "Picnic — renamed"
     assert saved.client_event_uuid == grp
+    # A malformed uuid (cleans to None) is also a no-op — never a clear.
+    await e.cal_svc.update_event(ev.id, client_event_uuid="not a uuid!!")
+    saved2 = await e.cal_svc.get_event(ev.id)
+    assert saved2.client_event_uuid == grp
 
 
 async def test_attendee_on_unconfirmed_instance_rejected(federated_cal_env):
