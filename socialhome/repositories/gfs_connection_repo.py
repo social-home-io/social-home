@@ -16,6 +16,7 @@ class AbstractGfsConnectionRepo(Protocol):
     async def save(self, conn: GfsConnection) -> None: ...
     async def get(self, gfs_id: str) -> GfsConnection | None: ...
     async def list_active(self) -> list[GfsConnection]: ...
+    async def list_all(self) -> list[GfsConnection]: ...
     async def update_status(self, gfs_id: str, status: str) -> None: ...
     async def delete(self, gfs_id: str) -> None: ...
     async def publish_space(
@@ -78,6 +79,12 @@ class SqliteGfsConnectionRepo:
         rows = await self._db.fetchall(
             "SELECT * FROM gfs_connections WHERE status='active'"
             " ORDER BY paired_at DESC",
+        )
+        return [_row_to_conn(r) for r in rows_to_dicts(rows)]
+
+    async def list_all(self) -> list[GfsConnection]:
+        rows = await self._db.fetchall(
+            "SELECT * FROM gfs_connections ORDER BY paired_at DESC",
         )
         return [_row_to_conn(r) for r in rows_to_dicts(rows)]
 

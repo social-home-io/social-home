@@ -655,12 +655,15 @@ async def test_disconnect_not_found(env):
 
 async def test_list_connections(env):
     _, repo = env
-    await repo.save(_make_conn("gfs-1"))
+    await repo.save(_make_conn("gfs-1", status="active"))
     await repo.save(_make_conn("gfs-2", status="suspended"))
+    await repo.save(_make_conn("gfs-3", status="pending"))
     svc = GfsConnectionService(repo, http_client=_StubSession())
     result = await svc.list_connections()
-    assert len(result) == 1
-    assert result[0].id == "gfs-1"
+    # The UI list surfaces every status — a pending/suspended connection
+    # must not be invisible just because the GFS hasn't approved yet.
+    assert {c.id for c in result} == {"gfs-1", "gfs-2", "gfs-3"}
+    assert {c.status for c in result} == {"active", "suspended", "pending"}
 
 
 async def test_publish_space_success(env):

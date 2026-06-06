@@ -85,15 +85,19 @@ async def test_list_empty(client):
     assert await r.json() == []
 
 
-async def test_list_returns_active_connections(client):
+async def test_list_returns_connections_of_every_status(client):
+    # The UI list must surface pending/suspended connections too — the
+    # SPA distinguishes them by ``status``. Active-only made a freshly
+    # connected (still-pending) GFS invisible.
     await _seed_gfs(client, "gfs-1")
     await _seed_gfs(client, "gfs-2", status="suspended")
+    await _seed_gfs(client, "gfs-3", status="pending")
     r = await client.get("/api/gfs/connections", headers=_auth(client._tok))
     body = await r.json()
-    assert len(body) == 1
-    assert body[0]["id"] == "gfs-1"
+    assert {c["id"] for c in body} == {"gfs-1", "gfs-2", "gfs-3"}
+    assert {c["status"] for c in body} == {"active", "suspended", "pending"}
     # public_key should be stripped from the response.
-    assert "public_key" not in body[0]
+    assert all("public_key" not in c for c in body)
 
 
 # ─── POST /api/gfs/connections (pair) ────────────────────────────────

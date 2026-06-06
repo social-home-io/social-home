@@ -88,3 +88,44 @@ async def test_list_publications_all_carries_status(repo):
     rows = await repo.list_publications_all()
     assert len(rows) == 1
     assert rows[0]["status"] == "pending"
+
+
+def _conn_with(gfs_id: str, *, status: str, paired_at: str) -> GfsConnection:
+    return GfsConnection(
+        id=gfs_id,
+        gfs_instance_id=f"inst-{gfs_id}",
+        display_name="A GFS",
+        public_key="ab" * 32,
+        inbox_url="https://gfs.example/inbox",
+        status=status,
+        paired_at=paired_at,
+    )
+
+
+async def test_list_all_returns_every_status_ordered_by_paired_at_desc(repo):
+    await repo.save(
+        _conn_with("g-active", status="active", paired_at="2026-06-01 00:00:00")
+    )
+    await repo.save(
+        _conn_with("g-pending", status="pending", paired_at="2026-06-03 00:00:00")
+    )
+    await repo.save(
+        _conn_with("g-suspended", status="suspended", paired_at="2026-06-02 00:00:00")
+    )
+    rows = await repo.list_all()
+    assert [r.id for r in rows] == ["g-pending", "g-suspended", "g-active"]
+    assert {r.status for r in rows} == {"active", "pending", "suspended"}
+
+
+async def test_list_active_still_filters_to_active_only(repo):
+    await repo.save(
+        _conn_with("g-active", status="active", paired_at="2026-06-01 00:00:00")
+    )
+    await repo.save(
+        _conn_with("g-pending", status="pending", paired_at="2026-06-03 00:00:00")
+    )
+    await repo.save(
+        _conn_with("g-suspended", status="suspended", paired_at="2026-06-02 00:00:00")
+    )
+    active = await repo.list_active()
+    assert [r.id for r in active] == ["g-active"]
