@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -288,6 +289,105 @@ async def test_publish_space_raises_on_network_error_and_skips_local_row(env):
     with pytest.raises(GfsConnectionError, match="reach GFS"):
         await svc.publish_space("space-n", "pub-4")
     assert await repo.list_publications_for_space("space-n") == []
+
+
+class _TimeoutSession:
+    """Stub session whose request raises a *bare* ``asyncio.TimeoutError``.
+
+    Mirrors what aiohttp's ``ClientTimeout(total=...)`` raises when the
+    request hangs — NOT an ``aiohttp.ClientError`` subclass. The transport
+    guard must still map it to ``GfsConnectionError``.
+    """
+
+    def post(self, *a, **kw):
+        raise asyncio.TimeoutError
+
+    def delete(self, *a, **kw):
+        raise asyncio.TimeoutError
+
+
+async def test_publish_space_maps_timeout_to_gfs_error(env):
+    """A hung GFS raises a bare ``asyncio.TimeoutError`` from the total
+    timeout; ``publish_space`` must map it to ``GfsConnectionError`` (→ 422)
+    and leave no local row, not leak the raw timeout (→ 500)."""
+    _, repo = env
+    await repo.save(_make_conn("pub-to"))
+    svc = GfsConnectionService(repo, http_client=_TimeoutSession())  # type: ignore[arg-type]
+    with pytest.raises(GfsConnectionError, match="reach GFS"):
+        await svc.publish_space("space-to", "pub-to")
+    assert await repo.list_publications_for_space("space-to") == []
+
+
+async def test_unpublish_space_maps_timeout_to_gfs_error(env):
+    """Symmetric with publish: a bare ``asyncio.TimeoutError`` on unpublish
+    maps to ``GfsConnectionError`` and keeps the local row."""
+    _, repo = env
+    await repo.save(_make_conn("up-to"))
+    await repo.publish_space("space-uto", "up-to")
+    svc = GfsConnectionService(repo, http_client=_TimeoutSession())  # type: ignore[arg-type]
+    with pytest.raises(GfsConnectionError, match="reach GFS"):
+        await svc.unpublish_space("space-uto", "up-to")
+    rows = await repo.list_publications_for_space("space-uto")
+    assert len(rows) == 1
+
+
+async def test_publish_space_to_all_skips_timed_out_gfs(env):
+    """One GFS that times out must NOT abort the whole fan-out — the bare
+    ``asyncio.TimeoutError`` is caught as ``GfsConnectionError`` and skipped,
+    so the healthy GFS is still published to."""
+    _, repo = env
+    await repo.save(_make_conn("ok-gfs", inbox_url="https://ok.example"))
+    await repo.save(_make_conn("slow-gfs", inbox_url="https://slow.example"))
+
+    class _MixedSession:
+        """``post`` times out for the slow GFS, succeeds for the healthy one."""
+
+        def post(self, url, **kw):
+            if "slow.example" in url:
+                raise asyncio.TimeoutError
+            return _StubResp(200, {"status": "active"})
+
+    svc = GfsConnectionService(repo, http_client=_MixedSession())  # type: ignore[arg-type]
+    published = await svc.publish_space_to_all("space-fan")
+    assert published == 1
+    # Only the healthy GFS got a local publication row.
+    rows = await repo.list_publications_for_space("space-fan")
+    assert len(rows) == 1
+    assert rows[0].gfs_connection_id == "ok-gfs"
+
+
+async def test_publish_space_handles_non_dict_json_body(env):
+    """A GFS that returns valid-but-non-object JSON (e.g. ``[]``) on a 200
+    must not crash the status parse — coerce to ``{}`` and default to
+    ``active``."""
+    _, repo = env
+    await repo.save(_make_conn("pub-nd"))
+
+    class _NonDictResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def json(self):
+            return []  # valid JSON, but not an object
+
+        async def text(self):
+            return ""
+
+    class _NonDictSession:
+        def post(self, *a, **kw):
+            return _NonDictResp()
+
+    svc = GfsConnectionService(repo, http_client=_NonDictSession())  # type: ignore[arg-type]
+    pub = await svc.publish_space("space-nd", "pub-nd")
+    assert pub.status == "active"
+    rows = await repo.list_publications_for_space("space-nd")
+    assert len(rows) == 1
+    assert rows[0].status == "active"
 
 
 async def test_unpublish_space_records_local(env):

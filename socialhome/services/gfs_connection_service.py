@@ -19,6 +19,7 @@ The pairing flow (simpler than HFS):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -268,7 +269,9 @@ class GfsConnectionService:
                     data = await resp.json()
                 except Exception:
                     data = {}
-        except aiohttp.ClientError as exc:
+                if not isinstance(data, dict):
+                    data = {}
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             raise GfsConnectionError(f"Could not reach GFS: {exc}") from exc
 
         status = data.get("status") or "active"
@@ -368,7 +371,7 @@ class GfsConnectionService:
                     raise GfsConnectionError(
                         f"GFS rejected unpublish (HTTP {resp.status}): {detail}",
                     )
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             raise GfsConnectionError(f"Could not reach GFS: {exc}") from exc
 
         await self._repo.unpublish_space(space_id, gfs_id)
