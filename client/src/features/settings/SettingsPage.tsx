@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useTitle } from '@/store/pageTitle'
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { currentUser } from '@/store/auth'
 import { api, ApiError } from '@/api'
 import { Avatar } from '@/components/Avatar'
@@ -714,9 +714,9 @@ function HighlightsPreferencesPanel() {
       return parsed.highlights ?? {}
     } catch { return {} as HighlightsPrefs }
   })()
-  const retentionDays = signal<number>(prefs.retention_days ?? 30)
-  const maxCount = signal<number>(prefs.max_count ?? 100)
-  const audienceKind = signal<'all_paired' | 'households' | 'users'>(
+  const retentionDays = useSignal<number>(prefs.retention_days ?? 30)
+  const maxCount = useSignal<number>(prefs.max_count ?? 100)
+  const audienceKind = useSignal<'all_paired' | 'households' | 'users'>(
     prefs.default_audience?.kind ?? 'all_paired',
   )
 
@@ -789,7 +789,7 @@ function HighlightsPreferencesPanel() {
 
 function MomentumPanel() {
   const prefs = (getPreferences().moments ?? {}) as { max_hops?: 1 | 2 | 3 }
-  const maxHops = signal<1 | 2 | 3>((prefs.max_hops ?? 3) as 1 | 2 | 3)
+  const maxHops = useSignal<1 | 2 | 3>((prefs.max_hops ?? 3) as 1 | 2 | 3)
   const save = async () => {
     try {
       await setPreference('moments', { max_hops: maxHops.value })

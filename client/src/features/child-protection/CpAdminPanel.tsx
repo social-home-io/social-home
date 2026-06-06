@@ -6,7 +6,7 @@
  * guardians for each protected minor.
  */
 import { useEffect } from 'preact/hooks'
-import { signal } from '@preact/signals'
+import { signal, useSignal } from '@preact/signals'
 import { api } from '@/api'
 import { ws } from '@/ws'
 import { Button } from '@/components/Button'
@@ -282,7 +282,7 @@ function GuardianList({ minorUserId, allUsers }: {
   allUsers: User[]
 }) {
   const candidates = allUsers.filter(u => u.user_id !== minorUserId)
-  const picker = signal<string>('')
+  const picker = useSignal<string>('')
 
   return (
     <div class="sh-cp-guardian-list">

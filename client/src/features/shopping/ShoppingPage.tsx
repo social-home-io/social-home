@@ -313,8 +313,6 @@ export default function ShoppingPage() {
     inputRef.current?.focus()
   }, [])
 
-  if (loading.value) return <Spinner />
-
   const active    = items.value.filter(i => !i.completed)
   const completed = items.value.filter(i =>  i.completed)
   const me        = currentUser.value
@@ -341,6 +339,10 @@ export default function ShoppingPage() {
   }
 
   const storeNames = stores.value.map(s => s.name)
+
+  // Loading guard sits below every hook so hook call-order is stable across
+  // the loading→loaded transition (react-hooks/rules-of-hooks).
+  if (loading.value) return <Spinner />
 
   return (
     <div class="sh-shopping">
