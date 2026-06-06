@@ -36,6 +36,14 @@ const showDissolve = signal(false)
 const gfsServers = signal<GfsConnection[]>([])
 const publications = signal<GfsSpacePublication[]>([])
 const federationLoading = signal(false)
+// GFS connection ids whose publish/unpublish request is in flight, so the
+// per-row Button can show a spinner and be disabled — blocks a double-click
+// from firing duplicate publish/unpublish requests.
+const pendingPublish = signal<Set<string>>(new Set())
+// GFS connection id awaiting publish confirmation (publishing makes a space
+// world-discoverable, so it's gated behind a confirm like dissolve). ``null``
+// = no dialog open.
+const confirmPublishGfs = signal<string | null>(null)
 
 async function loadFederationData(spaceId: string) {
   federationLoading.value = true
@@ -55,6 +63,13 @@ async function loadFederationData(spaceId: string) {
 
 function isPublished(gfsId: string): boolean {
   return publications.value.some(p => p.gfs_connection_id === gfsId)
+}
+
+/** The publication row for this GFS, if any — exposes ``.status`` so the
+ *  UI can distinguish live (``active``) from held (``pending``) and
+ *  rejected (``banned``) publications, not just the boolean. */
+function publicationFor(gfsId: string): GfsSpacePublication | undefined {
+  return publications.value.find(p => p.gfs_connection_id === gfsId)
 }
 
 /**
@@ -82,19 +97,52 @@ async function copyToClipboard(text: string): Promise<void> {
   }
 }
 
+function setPending(gfsId: string, on: boolean) {
+  const next = new Set(pendingPublish.value)
+  if (on) next.add(gfsId)
+  else next.delete(gfsId)
+  pendingPublish.value = next
+}
+
+/**
+ * Run the publish/unpublish mutation. Unpublish fires straight away;
+ * publish is funnelled through a confirm dialog (``confirmPublishGfs``)
+ * because it makes the space world-discoverable. The per-row in-flight
+ * flag guards against a double-click firing a duplicate request and is
+ * always cleared in ``finally``.
+ */
 async function togglePublish(spaceId: string, gfsId: string) {
+  if (!isPublished(gfsId)) {
+    // Defer the actual POST to the confirm handler.
+    confirmPublishGfs.value = gfsId
+    return
+  }
+  if (pendingPublish.value.has(gfsId)) return
+  setPending(gfsId, true)
   try {
-    if (isPublished(gfsId)) {
-      await api.delete(`/api/spaces/${spaceId}/publish/${gfsId}`)
-      publications.value = publications.value.filter(p => p.gfs_connection_id !== gfsId)
-      showToast(t('space.unpublish_from_gfs'), 'success')
-    } else {
-      const pub = await api.post<GfsSpacePublication>(`/api/spaces/${spaceId}/publish/${gfsId}`)
-      publications.value = [...publications.value, pub]
-      showToast(t('space.publish_to_gfs'), 'success')
-    }
+    await api.delete(`/api/spaces/${spaceId}/publish/${gfsId}`)
+    publications.value = publications.value.filter(p => p.gfs_connection_id !== gfsId)
+    showToast(t('space.unpublish_from_gfs'), 'success')
   } catch (e: any) {
     showToast(e.message || 'Failed', 'error')
+  } finally {
+    setPending(gfsId, false)
+  }
+}
+
+/** Confirmed publish — pushes the returned publication (carrying
+ *  ``status`` so the row reflects active-vs-pending immediately). */
+async function doPublish(spaceId: string, gfsId: string) {
+  if (pendingPublish.value.has(gfsId)) return
+  setPending(gfsId, true)
+  try {
+    const pub = await api.post<GfsSpacePublication>(`/api/spaces/${spaceId}/publish/${gfsId}`)
+    publications.value = [...publications.value, pub]
+    showToast(t('space.publish_to_gfs'), 'success')
+  } catch (e: any) {
+    showToast(e.message || 'Failed', 'error')
+  } finally {
+    setPending(gfsId, false)
   }
 }
 
@@ -596,16 +644,38 @@ export function SpaceSettings({
       ) : (
         <div class="sh-federation-list">
           {gfsServers.value.map(gfs => {
-            const published = isPublished(gfs.id)
+            const pub = publicationFor(gfs.id)
+            const published = pub != null
+            // Only a live (``active``) publication has a resolvable public
+            // page; a pending/banned space's GFS page 404s, so suppress the
+            // link in those states.
+            const isLive = pub?.status === 'active'
+            const isPending = pub?.status === 'pending'
+            const inFlight = pendingPublish.value.has(gfs.id)
             const publicUrl = publicSpaceUrl(gfs.inbox_url, space.id)
+            // Status label honesty: green only when actually live; pending and
+            // rejected get muted treatments so the admin never mistakes a
+            // held/removed publication for a discoverable one.
+            const statusLabel = !published
+              ? t('space.not_published')
+              : isLive
+                ? t('space.published')
+                : isPending
+                  ? t('space.publish_pending')
+                  : t('space.publish_rejected')
+            const statusClass = isLive
+              ? 'sh-text-success'
+              : isPending
+                ? 'sh-text-warning'
+                : 'sh-muted'
             return (
-              <div key={gfs.id} class="sh-federation-row">
+              <div key={gfs.id} class="sh-federation-row" data-testid={`gfs-row-${gfs.id}`}>
                 <div class="sh-connection-info">
                   <span class={`sh-status-dot sh-status-dot--${gfs.status === 'active' ? 'active' : gfs.status === 'suspended' ? 'unreachable' : 'pending'}`} />
                   <strong>{gfs.display_name}</strong>
                   <span class="sh-muted">{gfs.inbox_url}</span>
                 </div>
-                {published && (
+                {isLive && (
                   <div class="sh-federation-public-url">
                     <span class="sh-muted">🔗 Public link</span>
                     <a
@@ -628,12 +698,16 @@ export function SpaceSettings({
                     </button>
                   </div>
                 )}
+                {isPending && (
+                  <p class="sh-muted sh-federation-pending-hint">
+                    {t('space.publish_pending_hint')}
+                  </p>
+                )}
                 <div class="sh-federation-actions">
-                  <span class={published ? 'sh-text-success' : 'sh-muted'}>
-                    {published ? t('space.published') : t('space.not_published')}
-                  </span>
+                  <span class={statusClass}>{statusLabel}</span>
                   <Button
                     variant={published ? 'danger' : 'primary'}
+                    loading={inFlight}
                     onClick={() => togglePublish(space.id, gfs.id)}
                   >
                     {published ? t('gfs.unpublish') : t('gfs.publish')}
@@ -675,6 +749,18 @@ export function SpaceSettings({
         owner) can delete the group alone.
       </p>
       <Button variant="danger" onClick={() => showDissolve.value = true}>Dissolve space</Button>
+      <ConfirmDialog
+        open={confirmPublishGfs.value !== null}
+        title="Publish this space?"
+        message="Publishing lists this space on the global server so anyone can discover and view it. The server may hold it for moderator review before it goes live. You can unpublish at any time."
+        confirmLabel={t('gfs.publish')}
+        onConfirm={() => {
+          const gfsId = confirmPublishGfs.value
+          confirmPublishGfs.value = null
+          if (gfsId) doPublish(space.id, gfsId)
+        }}
+        onCancel={() => { confirmPublishGfs.value = null }}
+      />
       <ConfirmDialog open={showDissolve.value} title="Dissolve space?"
         message="This permanently deletes the space and all its content — posts, photos, events, everything — for every member household. This cannot be undone. With more than one admin it needs a majority to approve before it takes effect. To just hide it, use Archive instead."
         confirmLabel="Propose dissolve" destructive

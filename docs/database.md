@@ -49,7 +49,7 @@ anything below contradicts the file, the file wins.
 | `federation_replay_cache` | `msg_id` → `received_at` for inbound dedup. Pruned by `infrastructure/replay_cache_scheduler.py`. |
 | `network_discovery` | Peer-graph cache for §11.10 BFS path-finding — one row per `(instance_id, discovered_via)` edge. Compound PK so multiple paths to a peer are independent rows. |
 | `gfs_connections` | Paired Global Federation Servers — `gfs_instance_id`, public key, inbox URL, status. |
-| `gfs_space_publications` | Which public spaces are currently published to which GFS connection. |
+| `gfs_space_publications` | Which public spaces are currently published to which GFS connection. `status` mirrors the GFS-returned publication state (`active` \| `pending` \| `banned`, default `active`). |
 
 ## Household feed and content
 

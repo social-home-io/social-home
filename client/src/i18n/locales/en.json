@@ -299,6 +299,9 @@
   "space.no_gfs_connections": "No GFS servers connected. Add one in Connections.",
   "space.published": "Published",
   "space.not_published": "Not published",
+  "space.publish_pending": "Pending review",
+  "space.publish_pending_hint": "Waiting for the server to approve — the public link appears here once it's accepted.",
+  "space.publish_rejected": "Removed by server",
 
   "pairing.title": "Pair with Household",
   "pairing.intro": "Scan the QR code on the other household\u2019s device, or let them scan yours.",

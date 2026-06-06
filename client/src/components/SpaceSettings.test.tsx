@@ -333,6 +333,100 @@ describe('SpaceSettings', () => {
     expect(body.name).toBe('New name')
   })
 
+  it('renders a pending publication with a muted "Pending review" label, no public link', async () => {
+    // /api/gfs/connections then /api/spaces/{id}/publications.
+    apiMock.get.mockReset()
+    apiMock.get.mockImplementation((url: string) => {
+      if (url.includes('/connections')) {
+        return Promise.resolve([
+          { id: 'gfs-1', gfs_instance_id: 'i1', display_name: 'Town GFS',
+            inbox_url: 'https://gfs.example.com', status: 'active',
+            paired_at: '', published_space_count: 0 },
+        ])
+      }
+      return Promise.resolve([
+        { space_id: 's-1', gfs_connection_id: 'gfs-1',
+          published_at: '2026-06-06T00:00:00+00:00', status: 'pending' },
+      ])
+    })
+    const space = makeSpace()
+    const { container, queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    await new Promise(r => setTimeout(r, 0))
+    // Pending label shown, not the green "published" label.
+    expect(queryByText('space.publish_pending')).toBeTruthy()
+    expect(queryByText('space.published')).toBeNull()
+    // No live public link in pending state; the pending hint shows instead.
+    expect(container.querySelector('.sh-federation-public-url')).toBeNull()
+    expect(queryByText('space.publish_pending_hint')).toBeTruthy()
+  })
+
+  it('renders the live public link only for an active publication', async () => {
+    apiMock.get.mockReset()
+    apiMock.get.mockImplementation((url: string) => {
+      if (url.includes('/connections')) {
+        return Promise.resolve([
+          { id: 'gfs-1', gfs_instance_id: 'i1', display_name: 'Town GFS',
+            inbox_url: 'https://gfs.example.com', status: 'active',
+            paired_at: '', published_space_count: 1 },
+        ])
+      }
+      return Promise.resolve([
+        { space_id: 's-1', gfs_connection_id: 'gfs-1',
+          published_at: '2026-06-06T00:00:00+00:00', status: 'active' },
+      ])
+    })
+    const space = makeSpace()
+    const { container, queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    await new Promise(r => setTimeout(r, 0))
+    expect(queryByText('space.published')).toBeTruthy()
+    const link = container.querySelector(
+      '.sh-federation-public-url__link',
+    ) as HTMLAnchorElement | null
+    expect(link).toBeTruthy()
+    expect(link!.getAttribute('href')).toBe(
+      'https://gfs.example.com/spaces/s-1',
+    )
+  })
+
+  it('confirms before publishing, then POSTs and shows the returned status', async () => {
+    apiMock.get.mockReset()
+    apiMock.get.mockImplementation((url: string) => {
+      if (url.includes('/connections')) {
+        return Promise.resolve([
+          { id: 'gfs-1', gfs_instance_id: 'i1', display_name: 'Town GFS',
+            inbox_url: 'https://gfs.example.com', status: 'active',
+            paired_at: '', published_space_count: 0 },
+        ])
+      }
+      return Promise.resolve([]) // not published yet
+    })
+    apiMock.post = vi.fn().mockResolvedValue({
+      space_id: 's-1', gfs_connection_id: 'gfs-1',
+      published_at: '2026-06-06T00:00:00+00:00', status: 'pending',
+    })
+    const space = makeSpace()
+    const { container, getByText, queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    await new Promise(r => setTimeout(r, 0))
+    // Clicking Publish opens the confirm dialog — it does NOT post yet.
+    fireEvent.click(getByText('gfs.publish'))
+    expect(apiMock.post).not.toHaveBeenCalled()
+    const dialog = container.querySelector('[role="dialog"]') as HTMLElement | null
+    expect(dialog).toBeTruthy()
+    expect(dialog!.textContent).toContain('Publish this space?')
+    // Confirm → POST fires, and the row reflects the pending status.
+    const confirmBtn = dialog!.querySelector('.sh-btn--primary') as HTMLButtonElement
+    fireEvent.click(confirmBtn)
+    await new Promise(r => setTimeout(r, 0))
+    expect(apiMock.post).toHaveBeenCalledWith('/api/spaces/s-1/publish/gfs-1')
+    expect(queryByText('space.publish_pending')).toBeTruthy()
+  })
+
   it('proposes a publication-tier change via POST /proposals', async () => {
     apiMock.post = vi.fn().mockResolvedValue({ proposal: { status: 'pending' } })
     const space = makeSpace()

@@ -13868,6 +13868,10 @@ a.sh-welcome-card:hover {
   align-items: center;
   gap: var(--sh-space-xs);
   flex: 1 1 100%;
+  /* Allow the block to shrink below its monospace URL's min-content
+   * width so the inner __link's ellipsis engages instead of the URL
+   * overflowing (and being clipped mid-string) on narrow viewports. */
+  min-width: 0;
   margin-top: var(--sh-space-xs);
   padding: var(--sh-space-xs) var(--sh-space-sm);
   background: var(--sh-bg-secondary, var(--sh-bg));
@@ -13900,6 +13904,14 @@ a.sh-welcome-card:hover {
 .sh-federation-public-url__copy:hover {
   background: var(--sh-surface-hover, color-mix(in srgb, var(--sh-text) 8%, transparent));
   border-color: var(--sh-border);
+}
+/* Pending-review hint shown in place of the public link while a GFS
+ * holds the space for moderation. Wraps full-width under the connection
+ * meta via the row's flex-wrap, mirroring the public-link block. */
+.sh-federation-pending-hint {
+  flex: 1 1 100%;
+  margin: var(--sh-space-xs) 0 0;
+  font-size: 0.875rem;
 }
 .sh-token-create {
   padding: var(--sh-space-md);
