@@ -57,6 +57,18 @@ const spaceId = signal<string | null>(null)
 /** Set when editing an existing event — submit PATCHes instead of
  *  POSTing a new event. ``null`` for the create flow. */
 const editingEventId = signal<string | null>(null)
+/** Edit-mode full-sync state: the CURRENT copies of the event being
+ *  edited, keyed ``calendar_id → event_id``. Built from the agenda's
+ *  ``_grouped_*`` arrays (falling back to a single-entry map for an
+ *  ungrouped event). On submit, ticked calendars already in the map
+ *  are PATCHed, newly-ticked ones are POSTed, and map entries no
+ *  longer ticked are DELETEd — keeping every member's copy in sync. */
+const editGroup = signal<Map<string, string>>(new Map())
+/** The shared ``client_event_uuid`` of the group under edit, or
+ *  ``null`` for a legacy single event. When a legacy event is fanned
+ *  out across >1 calendar a uuid is minted on submit and stamped on
+ *  every copy so the agenda groups them. */
+const editGroupUuid = signal<string | null>(null)
 const summary = signal('')
 const startDate = signal('')
 const startTime = signal('')
@@ -151,6 +163,19 @@ interface EditableEvent {
    *  browser tz and the host can no longer tell what they actually
    *  scheduled. */
   tz?: string | null
+  /** Shared group identity (issue #327). When several members hold a
+   *  copy of the same event they share this uuid; the agenda's
+   *  ``groupSharedEvents`` merges them into one card. ``null`` /
+   *  absent for a legacy single event — full-sync mints one when the
+   *  edit fans the event out across >1 calendar. */
+  client_event_uuid?: string | null
+  /** Parallel arrays (same order) carrying the underlying copies of a
+   *  grouped event: ``grouped_calendar_ids[i]`` holds the event whose
+   *  id is ``grouped_event_ids[i]``. Sourced from the agenda's
+   *  ``_grouped_*`` fields. Absent for an ungrouped event — full-sync
+   *  falls back to the single ``{calendar_id: id}`` pair. */
+  grouped_calendar_ids?: string[]
+  grouped_event_ids?: string[]
 }
 
 /** IANA tz the dialog uses for the date / time inputs. Defaulted to
@@ -179,9 +204,23 @@ export function openEditEventDialog(
   reset()
   editingEventId.value = ev.id
   calendarId.value = ev.calendar_id
-  // Edit mode keeps the single-target select — empty set short-circuits
-  // the multi-create path on submit.
-  targetCalendarIds.value = new Set()
+  // Build the current-copies map from the agenda's parallel arrays
+  // (same order, from ``groupSharedEvents``). When they're absent the
+  // event is ungrouped — fall back to its single ``{calendar_id: id}``
+  // pair so the picker still seeds with exactly the one copy.
+  const group = new Map<string, string>()
+  const calIds = ev.grouped_calendar_ids
+  const evIds = ev.grouped_event_ids
+  if (calIds && evIds && calIds.length === evIds.length && calIds.length > 0) {
+    for (let i = 0; i < calIds.length; i++) group.set(calIds[i], evIds[i])
+  } else {
+    group.set(ev.calendar_id, ev.id)
+  }
+  editGroup.value = group
+  editGroupUuid.value = ev.client_event_uuid ?? null
+  // Seed the picker with the members who already hold a copy so the
+  // chips start ticked — editing then add/removes from that baseline.
+  targetCalendarIds.value = new Set(group.keys())
   householdCalendars.value = available
   spaceId.value = inSpaceId
   summary.value = ev.summary
@@ -213,6 +252,8 @@ export function openEditEventDialog(
 
 function reset() {
   editingEventId.value = null
+  editGroup.value = new Map()
+  editGroupUuid.value = null
   summary.value = ''
   description.value = ''
   location.value = ''
@@ -335,11 +376,63 @@ export function CalendarEventDialog({ onCreated }: {
         }
       }
       if (editingEventId.value && !isSpace) {
-        await api.patch(
-          `/api/calendars/events/${editingEventId.value}`,
-          body,
-        )
-        showToast('Event updated', 'success')
+        // Full sync: PATCH every still-ticked copy with the edited
+        // details, POST a copy for newly-ticked members, DELETE the
+        // copy for unticked members — all under one
+        // ``client_event_uuid`` so the agenda keeps grouping them.
+        const selected = new Set(targetCalendarIds.value)
+        const group = editGroup.value
+        let uuid = editGroupUuid.value
+        // Promote a legacy single event into a group the moment the
+        // edit spans >1 calendar and there's no uuid yet.
+        if (!uuid && selected.size > 1) uuid = _mintEventUuid()
+        const withUuid = uuid ? { ...body, client_event_uuid: uuid } : body
+
+        const ops: Promise<unknown>[] = []
+        let added = 0
+        let removed = 0
+        for (const calId of selected) {
+          const existingId = group.get(calId)
+          if (existingId) {
+            ops.push(api.patch(`/api/calendars/events/${existingId}`, withUuid))
+          } else {
+            ops.push(api.post(`/api/calendars/${calId}/events`, withUuid))
+            added++
+          }
+        }
+        for (const [calId, evId] of group) {
+          if (!selected.has(calId)) {
+            ops.push(api.delete(`/api/calendars/events/${evId}`))
+            removed++
+          }
+        }
+        const results = await Promise.allSettled(ops)
+        const ok = results.filter(r => r.status === 'fulfilled').length
+        const failed = results.length - ok
+        if (failed > 0 && ok === 0) {
+          throw new Error(
+            (results.find(r => r.status === 'rejected') as PromiseRejectedResult)
+              .reason?.message
+              ?? t('event.dialog.update_failed'),
+          )
+        }
+        if (failed > 0) {
+          showToast(
+            t('event.dialog.updated_partial', { count: String(failed) }),
+            'error',
+          )
+        } else if (added > 0 || removed > 0) {
+          let msg = t('event.dialog.updated')
+          if (added > 0) {
+            msg += t('event.dialog.added_suffix', { count: String(added) })
+          }
+          if (removed > 0) {
+            msg += t('event.dialog.removed_suffix', { count: String(removed) })
+          }
+          showToast(msg, 'success')
+        } else {
+          showToast(t('event.dialog.updated'), 'success')
+        }
       } else if (isSpace && editingEventId.value) {
         // Space-event edit: PATCH the space-scoped route so the
         // ``SpaceCalendarService.update_event`` path runs (membership
@@ -433,9 +526,7 @@ export function CalendarEventDialog({ onCreated }: {
            title={editingEventId.value ? 'Edit event' : t('event.dialog.title')}>
       <div class="sh-form">
         {!isSpace && householdCalendars.value.length > 1 && (
-          editingEventId.value
-            ? <EditCalendarSelect />
-            : <CreateCalendarPicker />
+          <CreateCalendarPicker />
         )}
         <label>
           {t('event.dialog.summary')} *
@@ -720,42 +811,6 @@ function ownerPictureUrl(owner_username: string): string | null {
     }
   }
   return null
-}
-
-/** Edit-mode single-target calendar selector. Kept as a native
- *  ``<select>`` — moving an existing event between calendars is a
- *  rare operation and the dropdown handles ten-plus options gracefully
- *  whereas a chip grid would dominate the form. */
-function EditCalendarSelect() {
-  const me = currentUser.value?.username
-  const ownerCount = new Map<string, number>()
-  for (const c of householdCalendars.value) {
-    ownerCount.set(c.owner_username,
-      (ownerCount.get(c.owner_username) ?? 0) + 1)
-  }
-  return (
-    <label>
-      Move to calendar
-      <select
-        value={calendarId.value}
-        onChange={(ev) => {
-          calendarId.value = (ev.target as HTMLSelectElement).value
-        }}
-      >
-        {householdCalendars.value.map(c => {
-          const mine = c.owner_username === me
-          const ownerLabel = ownerDisplayName(c.owner_username)
-          const ambiguous = (ownerCount.get(c.owner_username) ?? 1) > 1
-          const base = mine ? 'My calendar' : `${ownerLabel}'s calendar`
-          return (
-            <option key={c.id} value={c.id}>
-              {ambiguous ? `${base} · ${c.name}` : base}
-            </option>
-          )
-        })}
-      </select>
-    </label>
-  )
 }
 
 /** Create-mode multi-target calendar picker — the very first question

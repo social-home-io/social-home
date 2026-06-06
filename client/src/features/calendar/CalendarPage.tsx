@@ -292,6 +292,18 @@ export default function CalendarPage() {
         attendees: evt.attendees,
         rsvp_enabled: evt.rsvp_enabled,
         location: evt.location,
+        // Without ``cover_url`` the edit form would open with a blank
+        // cover and full-sync would propagate the blank to every copy.
+        cover_url: evt.cover_url,
+        // Anchor the form's date / time inputs to the event's tz.
+        tz: evt.tz,
+        // Group identity + the parallel arrays of underlying copies
+        // (from ``groupSharedEvents``) so the picker pre-ticks every
+        // member who already holds a copy and full-sync can PATCH /
+        // POST / DELETE the right rows.
+        client_event_uuid: evt.client_event_uuid,
+        grouped_calendar_ids: evt._grouped_calendar_ids,
+        grouped_event_ids: evt._grouped_event_ids,
       },
       calendars.value,
     )
