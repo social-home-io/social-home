@@ -303,6 +303,10 @@ class CalendarEventDeleteView(BaseView):
             cover_url=cover,
             location=location,
             tz=body.get("tz"),
+            # Composer-stamped grouping uuid (issue #327). Optional —
+            # attaches a legacy event to a shared household group;
+            # absent / null leaves any existing group id untouched.
+            client_event_uuid=body.get("client_event_uuid"),
         )
         return web.json_response(_sign_payload(self.request, _event_dict(event)))
 

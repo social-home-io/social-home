@@ -98,6 +98,38 @@ async def test_event_cover_round_trips_create_edit_clear(client):
     assert (await r4.json())["cover_url"] is None
 
 
+async def test_event_patch_attaches_client_event_uuid(client):
+    """PATCH can stamp a ``client_event_uuid`` onto a legacy event so
+    fanned-out copies share a group id (#327)."""
+    r = await client.post(
+        "/api/calendars", json={"name": "C"}, headers=_auth(client._tok)
+    )
+    cid = (await r.json())["id"]
+    now = datetime.now(timezone.utc)
+    r = await client.post(
+        f"/api/calendars/{cid}/events",
+        json={
+            "summary": "Picnic",
+            "start": now.isoformat(),
+            "end": (now + timedelta(hours=1)).isoformat(),
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 201
+    body = await r.json()
+    assert body["client_event_uuid"] is None
+    eid = body["id"]
+
+    grp = "11111111-2222-3333-4444-555555555555"
+    r2 = await client.patch(
+        f"/api/calendars/events/{eid}",
+        json={"summary": "Picnic — group", "client_event_uuid": grp},
+        headers=_auth(client._tok),
+    )
+    assert r2.status == 200
+    assert (await r2.json())["client_event_uuid"] == grp
+
+
 # ─── Space-scoped calendar + RSVP (§23.7) ─────────────────────────────────
 
 

@@ -623,6 +623,49 @@ async def test_update_event_without_attendees_keeps_existing(federated_cal_env):
     )
 
 
+async def test_update_event_promotes_legacy_to_group(federated_cal_env):
+    """A legacy event with no ``client_event_uuid`` can be stamped with
+    one via ``update_event`` so all copies share the group id (#327)."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    now = datetime.now(timezone.utc)
+    ev = await e.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="Picnic",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="uid-anna",
+    )
+    assert ev.client_event_uuid is None
+    grp = uuid.uuid4().hex
+    await e.cal_svc.update_event(ev.id, client_event_uuid=grp)
+    saved = await e.cal_svc.get_event(ev.id)
+    assert saved.client_event_uuid == grp
+
+
+async def test_update_event_does_not_clear_existing_group(federated_cal_env):
+    """Passing no ``client_event_uuid`` (None) must NOT clear an event's
+    existing group id — None means "no change", never "clear"."""
+    e = federated_cal_env
+    cal = await e.cal_svc.create_calendar(name="Anna", owner_username="anna")
+    now = datetime.now(timezone.utc)
+    grp = uuid.uuid4().hex
+    ev = await e.cal_svc.create_event(
+        calendar_id=cal.id,
+        summary="Picnic",
+        start=now.isoformat(),
+        end=(now + timedelta(hours=1)).isoformat(),
+        created_by="uid-anna",
+        client_event_uuid=grp,
+    )
+    assert ev.client_event_uuid == grp
+    # Update an unrelated field without passing client_event_uuid.
+    await e.cal_svc.update_event(ev.id, summary="Picnic — renamed")
+    saved = await e.cal_svc.get_event(ev.id)
+    assert saved.summary == "Picnic — renamed"
+    assert saved.client_event_uuid == grp
+
+
 async def test_attendee_on_unconfirmed_instance_rejected(federated_cal_env):
     """A remote user whose home instance exists but is in
     pending_sent (not confirmed) is rejected at create time."""
