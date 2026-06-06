@@ -430,8 +430,12 @@ def _push_user(notify_service: str | None):
 
 
 async def test_send_push_uses_configured_notify_service():
-    """A ``notify.<entity>`` value is now an entity id → delivered via the
-    ``notify.send_message`` entity action with ``entity_id`` in the data."""
+    """A ``notify.mobile_app_<device>`` value resolves to mobile_app's legacy
+    per-device service — ``call_service("notify", "mobile_app_<device>", body)``
+    — and INCLUDES the rich ``data`` payload (tap url / actions). The entity
+    action ``notify.send_message`` is NOT used: HA's strict entity-service
+    schema rejects ``data``, so the legacy service is the only path that
+    carries the payload."""
     client = _FakeHaClient(call_service_response=[])
     adapter = _build_adapter(client=client)
     user = _push_user("notify.mobile_app_pascals_iphone")
@@ -439,16 +443,37 @@ async def test_send_push_uses_configured_notify_service():
     assert any(
         c[0] == "call_service"
         and c[1] == "notify"
-        and c[2] == "send_message"
+        and c[2] == "mobile_app_pascals_iphone"
         and c[3]
         == {
-            "entity_id": "notify.mobile_app_pascals_iphone",
             "title": "title",
             "message": "message",
             "data": {"x": 1},
         }
         for c in client.calls
     )
+    # NOT routed through the send_message entity action, and the value never
+    # appears as an entity_id.
+    assert not any(
+        c[0] == "call_service" and c[2] == "send_message" for c in client.calls
+    )
+
+
+async def test_send_push_other_notify_entity_uses_send_message_without_data():
+    """A non-mobile_app ``notify.<entity>`` (e.g. a notify group entity that
+    has no legacy per-device service) routes to the ``notify.send_message``
+    entity action with the value in ``entity_id`` — and OMITS ``data`` because
+    HA's ``notify.send_message`` only accepts ``message``/``title``."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("notify.alerts_group")
+    await adapter.send_push(user, "title", "message", data={"x": 1})
+    call = next(
+        c for c in client.calls if c[0] == "call_service" and c[2] == "send_message"
+    )
+    assert call[1] == "notify"
+    assert call[3]["entity_id"] == "notify.alerts_group"
+    assert "data" not in call[3]
 
 
 async def test_send_push_legacy_domain_service():
@@ -488,6 +513,35 @@ async def test_send_push_entity_value_only_lands_in_entity_id():
             "send_message",
             {
                 "entity_id": "notify.weird.name",
+                "title": "t",
+                "message": "m",
+            },
+            False,
+        ),
+    ]
+
+
+async def test_send_push_mobile_app_injection_token_falls_through_to_body():
+    """A ``notify.mobile_app_*`` value whose suffix is NOT a valid HA service
+    token (contains ``/``, dots, traversal…) MUST NOT reach the legacy-service
+    URL path. It falls through to ``notify.send_message`` so the malicious
+    value lands safely in the request BODY (``entity_id``), never the
+    ``/api/services/{domain}/{service}`` URL path."""
+    client = _FakeHaClient(call_service_response=[])
+    adapter = _build_adapter(client=client)
+    user = _push_user("notify.mobile_app_x/../../evil")
+    await adapter.send_push(user, "t", "m")
+    calls = [c for c in client.calls if c[0] == "call_service"]
+    # The invoked service stays the hardcoded literal — the value never
+    # becomes the {service} URL segment.
+    assert all(c[2] != "mobile_app_x/../../evil" for c in calls)
+    assert calls == [
+        (
+            "call_service",
+            "notify",
+            "send_message",
+            {
+                "entity_id": "notify.mobile_app_x/../../evil",
                 "title": "t",
                 "message": "m",
             },

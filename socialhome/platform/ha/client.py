@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import AsyncIterable, Mapping
+from urllib.parse import quote
 
 import aiohttp
 
@@ -344,7 +345,13 @@ class HaClient:
         ``ai_task.generate_data`` output) is included in the reply.
         Returns ``None`` on non-2xx or transport error.
         """
-        url = f"{self._base_url}/api/services/{domain}/{service}"
+        # Percent-encode the path segments so no caller can traverse/inject
+        # via the domain/service (defense-in-depth alongside the provider's
+        # service-token validation).
+        url = (
+            f"{self._base_url}/api/services/"
+            f"{quote(domain, safe='')}/{quote(service, safe='')}"
+        )
         if return_response:
             url = f"{url}?return_response"
         try:

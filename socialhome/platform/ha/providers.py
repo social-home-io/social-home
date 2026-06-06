@@ -17,11 +17,18 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any, AsyncIterable
 
 from ..adapter import ExternalUser, _extract_bearer
 
 log = logging.getLogger(__name__)
+
+# A valid Home Assistant service token (the part after ``notify.``). HA
+# service names are lowercase ``[a-z0-9_]`` slugs; anything else (dots,
+# slashes, spaces, uppercase) is rejected so a user-controlled value can never
+# inject into the ``/api/services/{domain}/{service}`` URL path.
+_VALID_HA_SERVICE = re.compile(r"^[a-z0-9_]+$")
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -317,20 +324,43 @@ class HaPushProvider:
             )
             return
         body: dict = {"title": title, "message": message}
-        if data:
-            body["data"] = data
-        if value.startswith("notify.") and value[len("notify.") :]:
-            # A notify *entity id* → the notify.send_message entity action
-            # (takes entity_id + required message + optional title; HA notify
-            # integration). The "notify." prefix is the agreed disambiguation.
+        suffix = value[len("notify.") :] if value.startswith("notify.") else ""
+        if (
+            suffix.startswith("mobile_app_")
+            and _VALID_HA_SERVICE.match(suffix) is not None
+        ):
+            # mobile_app target → mobile_app's *legacy* per-device service
+            # (``notify.mobile_app_<device>``). Only the legacy service accepts
+            # the rich ``data`` payload (tap url / actions); HA's strict
+            # entity-service schema for ``notify.send_message`` rejects ``data``.
+            # The suffix is validated as a real HA service token
+            # (``^[a-z0-9_]+$``) so a malicious/mistyped value can never inject
+            # into the ``/api/services/{domain}/{service}`` URL path here — any
+            # other shape falls through to the send_message body branch below.
+            domain, service = "notify", suffix
+            if data:
+                body["data"] = data
+        elif suffix:
+            # Any other notify *entity id* (e.g. a notify group with no legacy
+            # per-device service) → the ``notify.send_message`` entity action.
+            # It takes entity_id + message + optional title ONLY; HA rejects an
+            # unsupported ``data`` key, so ``data`` is deliberately omitted. The
+            # user-supplied value rides in the request BODY (``entity_id``),
+            # never the URL path.
             domain, service = "notify", "send_message"
             body["entity_id"] = value
         elif "." in value:
-            # A fully-qualified legacy domain.service (e.g. telegram_bot.x).
+            # A fully-qualified legacy domain.service (e.g. telegram_bot.x) —
+            # legacy call carries the data payload.
             domain, _, service = value.partition(".")
+            if data:
+                body["data"] = data
         else:
-            # A bare name → legacy notify service (already-configured users).
+            # A bare name → legacy ``notify.<value>`` service (already-configured
+            # users) — legacy call carries the data payload.
             domain, service = "notify", value
+            if data:
+                body["data"] = data
         result = await self._adapter._client.call_service(domain, service, body)
         if result is None:
             # call_service swallows non-2xx at debug; surface push failures
