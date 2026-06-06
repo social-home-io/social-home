@@ -22,7 +22,7 @@ import { CURRENCY_FRACTION_DIGITS, formatBazaarAmount } from './bazaarFormat'
 // Re-exported so existing ``import { formatBazaarAmount } from
 // '@/components/BazaarPostBody'`` call sites keep working. The helper now lives
 // in ./bazaarFormat to break the BazaarPostBody↔BazaarOffersPanel import cycle.
-export { formatBazaarAmount }
+export { formatBazaarAmount } from './bazaarFormat'
 
 function modeLabel(mode: BazaarListing['mode']): string {
   switch (mode) {

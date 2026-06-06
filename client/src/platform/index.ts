@@ -29,7 +29,7 @@ export function platformMode(): PlatformMode | null {
 
 // ── Capability accessors (mirror backend `Capability`) ───────────────────
 
-export { hasCapability }
+export { hasCapability } from '@/store/instance'
 /** Adapter exposes a working STT (speech-to-text) provider. */
 export const supportsStt = (): boolean => hasCapability('stt')
 /** Adapter exposes a working AI provider (e.g. calendar photo import). */

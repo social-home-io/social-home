@@ -7,7 +7,12 @@ import { token } from './token'
 // ``token`` lives in its own module to break the api↔auth import cycle.
 // Re-exported here so existing ``import { token } from '@/store/auth'`` call
 // sites are unaffected; api.ts imports it from ``store/token`` directly.
-export { token }
+// Use the direct `export … from` form (not `export { token }` over the local
+// import binding): Rolldown — vite 8's bundler — resolves a re-exported *local
+// import binding* to `undefined` in the vitest transform, which breaks every
+// consumer that imports `token` from here. `export … from` is a pure
+// re-export Rolldown handles correctly.
+export { token } from './token'
 export const currentUser = signal<User | null>(null)
 // ``currentUser`` is only ever populated by a successful ``/api/me``,
 // which itself requires authentication — so a non-null user is proof

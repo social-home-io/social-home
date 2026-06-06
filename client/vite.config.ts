@@ -1,6 +1,8 @@
-// NOTE: vite is pinned to ^7 in package.json. vite 8 production builds
-// infinite-loop the authenticated SPA on boot (blank screen + pegged tab,
-// reproduced + bisected). Revisit when a fixed vite 8.x lands.
+// vite 8 (Rolldown). The earlier "vite 8 prod build infinite-loops the SPA on
+// boot" symptom was NOT a vite/Rolldown bug — it was the RouteProgress suspend
+// loop (a signal mutated synchronously inside preact-iso's suspend handler);
+// vite 8's chunk timing merely surfaced it at initial route load. Fixed at the
+// source (RouteProgress defers the write), so vite 8 boots + navigates clean.
 import { defineConfig } from 'vite'
 import preact from '@preact/preset-vite'
 import { resolve } from 'path'

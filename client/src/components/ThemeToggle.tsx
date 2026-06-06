@@ -7,7 +7,7 @@
  */
 import { theme, type Theme } from '@/store/theme'
 
-export { theme }
+export { theme } from '@/store/theme'
 export type { Theme }
 
 export function ThemeToggle() {
