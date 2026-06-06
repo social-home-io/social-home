@@ -1,0 +1,25 @@
+-- 0027_gfs_publication_status.sql
+--
+-- Persist the GFS-returned publication status on each
+-- ``gfs_space_publications`` row. The GFS replies whether a published
+-- space is live (``active``), awaiting moderator approval
+-- (``pending``), or rejected (``banned``); previously we discarded that
+-- and the UI could not show "Pending review".
+--
+-- Migration audit (mandatory 3-point):
+--
+--   1. Audited every code path that touches this data. Only
+--      ``SqliteGfsConnectionRepo`` (publish_space / list_publications /
+--      list_publications_all) and ``GfsConnectionService`` read/write
+--      these rows; the status returned by the GFS publish response was
+--      dropped on the floor, so there is no other home for it.
+--   2. Alternative rejected: deriving status at read time is impossible
+--      — it is authoritative state held by the remote GFS moderator,
+--      not computable locally. Stashing it in a federation event would
+--      lose it across restarts. The publication row is the right home.
+--   3. Smallest possible change: additive ``ADD COLUMN`` with a NOT NULL
+--      DEFAULT. Existing rows default to ``active`` — they predate
+--      status tracking, when every publish was assumed live — so no
+--      backfill or row rewrite is needed.
+
+ALTER TABLE gfs_space_publications ADD COLUMN status TEXT NOT NULL DEFAULT 'active';

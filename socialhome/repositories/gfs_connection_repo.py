@@ -18,9 +18,14 @@ class AbstractGfsConnectionRepo(Protocol):
     async def list_active(self) -> list[GfsConnection]: ...
     async def update_status(self, gfs_id: str, status: str) -> None: ...
     async def delete(self, gfs_id: str) -> None: ...
-    async def publish_space(self, space_id: str, gfs_id: str) -> None: ...
+    async def publish_space(
+        self, space_id: str, gfs_id: str, status: str = "active"
+    ) -> GfsSpacePublication: ...
     async def unpublish_space(self, space_id: str, gfs_id: str) -> None: ...
     async def list_publications(self, gfs_id: str) -> list[GfsSpacePublication]: ...
+    async def list_publications_for_space(
+        self, space_id: str
+    ) -> list[GfsSpacePublication]: ...
     async def list_gfs_for_space(self, space_id: str) -> list[GfsConnection]: ...
     async def count_published_spaces(self, gfs_id: str) -> int: ...
     async def list_publications_all(self) -> list[dict]: ...
@@ -92,12 +97,28 @@ class SqliteGfsConnectionRepo:
             (gfs_id,),
         )
 
-    async def publish_space(self, space_id: str, gfs_id: str) -> None:
+    async def publish_space(
+        self, space_id: str, gfs_id: str, status: str = "active"
+    ) -> GfsSpacePublication:
+        # Upsert so a re-publish refreshes the GFS-returned status
+        # (e.g. pending → active once a moderator approves).
         await self._db.enqueue(
-            "INSERT OR IGNORE INTO gfs_space_publications(space_id, gfs_connection_id)"
-            " VALUES(?, ?)",
+            "INSERT INTO gfs_space_publications(space_id, gfs_connection_id, status)"
+            " VALUES(?, ?, ?)"
+            " ON CONFLICT(space_id, gfs_connection_id) DO UPDATE SET"
+            " status=excluded.status",
+            (space_id, gfs_id, status),
+        )
+        # Fetch the row back so ``published_at`` (DB ``datetime('now')``
+        # default) is authoritative rather than synthesised. ``enqueue``
+        # awaits the write's completion, so the row is visible here.
+        row = await self._db.fetchone(
+            "SELECT * FROM gfs_space_publications"
+            " WHERE space_id=? AND gfs_connection_id=?",
             (space_id, gfs_id),
         )
+        assert row is not None  # just written
+        return _row_to_publication(dict(zip(row.keys(), tuple(row))))
 
     async def unpublish_space(self, space_id: str, gfs_id: str) -> None:
         await self._db.enqueue(
@@ -112,14 +133,17 @@ class SqliteGfsConnectionRepo:
             " ORDER BY published_at DESC",
             (gfs_id,),
         )
-        return [
-            GfsSpacePublication(
-                space_id=r["space_id"],
-                gfs_connection_id=r["gfs_connection_id"],
-                published_at=r["published_at"],
-            )
-            for r in rows_to_dicts(rows)
-        ]
+        return [_row_to_publication(r) for r in rows_to_dicts(rows)]
+
+    async def list_publications_for_space(
+        self, space_id: str
+    ) -> list[GfsSpacePublication]:
+        rows = await self._db.fetchall(
+            "SELECT * FROM gfs_space_publications WHERE space_id=?"
+            " ORDER BY published_at DESC",
+            (space_id,),
+        )
+        return [_row_to_publication(r) for r in rows_to_dicts(rows)]
 
     async def list_gfs_for_space(self, space_id: str) -> list[GfsConnection]:
         rows = await self._db.fetchall(
@@ -150,6 +174,7 @@ class SqliteGfsConnectionRepo:
             SELECT gsp.space_id            AS space_id,
                    gsp.gfs_connection_id   AS gfs_id,
                    gsp.published_at        AS published_at,
+                   gsp.status              AS status,
                    gc.display_name         AS gfs_display_name,
                    gc.inbox_url         AS gfs_inbox_url,
                    s.name                  AS space_name,
@@ -161,6 +186,15 @@ class SqliteGfsConnectionRepo:
             """,
         )
         return rows_to_dicts(rows)
+
+
+def _row_to_publication(r: dict) -> GfsSpacePublication:
+    return GfsSpacePublication(
+        space_id=r["space_id"],
+        gfs_connection_id=r["gfs_connection_id"],
+        published_at=r["published_at"],
+        status=r["status"],
+    )
 
 
 def _row_to_conn(r: dict) -> GfsConnection:

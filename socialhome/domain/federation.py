@@ -740,3 +740,4 @@ class GfsSpacePublication:
     space_id: str
     gfs_connection_id: str
     published_at: str
+    status: str = "active"  # active | pending | banned (GFS-returned)
