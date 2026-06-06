@@ -102,6 +102,14 @@ def _conn_with(gfs_id: str, *, status: str, paired_at: str) -> GfsConnection:
     )
 
 
+async def test_update_display_name_changes_the_row(repo):
+    await repo.save(_conn("gfs-1"))
+    await repo.update_display_name("gfs-1", "Renamed GFS")
+    got = await repo.get("gfs-1")
+    assert got is not None
+    assert got.display_name == "Renamed GFS"
+
+
 async def test_list_all_returns_every_status_ordered_by_paired_at_desc(repo):
     await repo.save(
         _conn_with("g-active", status="active", paired_at="2026-06-01 00:00:00")

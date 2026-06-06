@@ -18,6 +18,7 @@ class AbstractGfsConnectionRepo(Protocol):
     async def list_active(self) -> list[GfsConnection]: ...
     async def list_all(self) -> list[GfsConnection]: ...
     async def update_status(self, gfs_id: str, status: str) -> None: ...
+    async def update_display_name(self, gfs_id: str, display_name: str) -> None: ...
     async def delete(self, gfs_id: str) -> None: ...
     async def publish_space(
         self, space_id: str, gfs_id: str, status: str = "active"
@@ -92,6 +93,12 @@ class SqliteGfsConnectionRepo:
         await self._db.enqueue(
             "UPDATE gfs_connections SET status=? WHERE id=?",
             (status, gfs_id),
+        )
+
+    async def update_display_name(self, gfs_id: str, display_name: str) -> None:
+        await self._db.enqueue(
+            "UPDATE gfs_connections SET display_name=? WHERE id=?",
+            (display_name, gfs_id),
         )
 
     async def delete(self, gfs_id: str) -> None:

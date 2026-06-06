@@ -102,6 +102,57 @@ async def test_supervisor_starts_clients_for_active_pairings(http_session):
             await supervisor.stop()
 
 
+async def test_supervisor_binds_on_connected_per_connection(http_session):
+    """Each spawned client gets an ``on_connected`` bound to its own gfs id,
+    so a WS (re)connect refreshes the right pairing's display name."""
+    repo = _FakeRepo(
+        [_make_conn("g1", "http://gfs1.test"), _make_conn("g2", "http://gfs2.test")]
+    )
+    refreshed: list[str] = []
+
+    async def on_connected(gfs_id: str) -> None:
+        refreshed.append(gfs_id)
+
+    captured: dict[str, object] = {}
+
+    class _StubClient:
+        def __init__(self, *, gfs_url, on_connected=None, **_kwargs):
+            self.gfs_url = gfs_url
+            captured[gfs_url] = on_connected
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            return None
+
+    with patch(
+        "socialhome.infrastructure.gfs_ws_supervisor.GfsWebSocketClient",
+        _StubClient,
+    ):
+        supervisor = GfsWebSocketSupervisor(
+            repo=repo,
+            instance_id="sh-1",
+            signing_key=b"\x00" * 32,
+            session_factory=lambda: http_session,
+            on_relay=AsyncMock(),
+            on_connected=on_connected,
+            reconcile_interval_seconds=0.05,
+        )
+        await supervisor.start()
+        try:
+            assert supervisor.client_count() == 2
+            # Each client got a callable bound to its gfs id.
+            cb1 = captured["http://gfs1.test"]
+            cb2 = captured["http://gfs2.test"]
+            assert callable(cb1) and callable(cb2)
+            await cb1()  # type: ignore[operator]
+            await cb2()  # type: ignore[operator]
+            assert sorted(refreshed) == ["g1", "g2"]
+        finally:
+            await supervisor.stop()
+
+
 async def test_supervisor_picks_up_new_pairing_on_reconcile(http_session):
     repo = _FakeRepo([_make_conn("g1", "http://gfs1.test")])
     started: list[str] = []

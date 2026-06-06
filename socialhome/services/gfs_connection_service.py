@@ -219,6 +219,52 @@ class GfsConnectionService:
         await self._repo.save(conn)
         return conn
 
+    async def refresh_connection_metadata(self, gfs_id: str) -> None:
+        """Re-fetch the GFS's current server_name from GET /gfs/info and
+        update the stored display_name if it changed. Best-effort: a
+        transport error / missing field is logged and ignored (the next
+        reconnect retries). Called on each GFS WS (re)connect so a server
+        rename propagates to this client."""
+        conn = await self._repo.get(gfs_id)
+        if conn is None:
+            return
+        try:
+            client = self._client()
+        except RuntimeError:
+            return
+        info_url = f"{conn.inbox_url}/gfs/info"
+        try:
+            async with client.get(
+                info_url,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status != 200:
+                    log.debug(
+                        "GFS %s /gfs/info refresh returned HTTP %d — skipping",
+                        gfs_id,
+                        resp.status,
+                    )
+                    return
+                info = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            log.debug(
+                "GFS %s unreachable during name refresh: %s",
+                gfs_id,
+                exc,
+            )
+            return
+
+        new_name = str(info.get("server_name") or "")
+        if not new_name or new_name == conn.display_name:
+            return
+        log.info(
+            "GFS %s renamed %r -> %r",
+            gfs_id,
+            conn.display_name,
+            new_name,
+        )
+        await self._repo.update_display_name(gfs_id, new_name)
+
     async def disconnect(self, gfs_id: str) -> None:
         """Remove a GFS connection and all its publications."""
         conn = await self._repo.get(gfs_id)

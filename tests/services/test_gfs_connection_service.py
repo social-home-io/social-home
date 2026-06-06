@@ -154,6 +154,72 @@ async def test_list_active_filters_status(env):
     assert active[0].id == "a1"
 
 
+# ── Service: refresh_connection_metadata ───────────────────────────────
+
+
+async def test_refresh_connection_metadata_updates_changed_name(env):
+    _, repo = env
+    await repo.save(_make_conn("gfs-1", status="active", inbox_url="https://gfs.test"))
+    session = _StubSession(status=200, body={"server_name": "New Name"})
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    await svc.refresh_connection_metadata("gfs-1")
+    got = await repo.get("gfs-1")
+    assert got is not None
+    assert got.display_name == "New Name"
+    # Hit GET /gfs/info on the connection's inbox URL.
+    assert session.calls and session.calls[0][0] == "GET"
+    assert session.calls[0][1].endswith("/gfs/info")
+
+
+async def test_refresh_connection_metadata_noop_when_unchanged(env):
+    _, repo = env
+    await repo.save(_make_conn("gfs-1", status="active", inbox_url="https://gfs.test"))
+    # The fake GFS returns the SAME name the row already holds.
+    session = _StubSession(status=200, body={"server_name": "GFS gfs-1"})
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    await svc.refresh_connection_metadata("gfs-1")
+    got = await repo.get("gfs-1")
+    assert got is not None
+    assert got.display_name == "GFS gfs-1"
+
+
+async def test_refresh_connection_metadata_swallows_transport_error(env):
+    _, repo = env
+    await repo.save(_make_conn("gfs-1", status="active", inbox_url="https://gfs.test"))
+
+    class _BoomSession:
+        def get(self, url, **kw):
+            raise aiohttp.ClientError("boom")
+
+    svc = GfsConnectionService(repo, http_client=_BoomSession())  # type: ignore[arg-type]
+    # Best-effort: never raises.
+    await svc.refresh_connection_metadata("gfs-1")
+    got = await repo.get("gfs-1")
+    assert got is not None
+    # Name untouched on error.
+    assert got.display_name == "GFS gfs-1"
+
+
+async def test_refresh_connection_metadata_noop_for_unknown_gfs(env):
+    _, repo = env
+    session = _StubSession(status=200, body={"server_name": "Whatever"})
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    # No connection row → returns without touching the network.
+    await svc.refresh_connection_metadata("nope")
+    assert session.calls == []
+
+
+async def test_refresh_connection_metadata_ignores_missing_server_name(env):
+    _, repo = env
+    await repo.save(_make_conn("gfs-1", status="active", inbox_url="https://gfs.test"))
+    session = _StubSession(status=200, body={})
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    await svc.refresh_connection_metadata("gfs-1")
+    got = await repo.get("gfs-1")
+    assert got is not None
+    assert got.display_name == "GFS gfs-1"
+
+
 # ── Service: report_fraud ──────────────────────────────────────────────
 
 
