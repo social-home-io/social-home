@@ -643,7 +643,11 @@ export function SpaceSettings({
         <p class="sh-muted">{t('space.no_gfs_connections')}</p>
       ) : (
         <div class="sh-federation-list">
-          {gfsServers.value.map(gfs => {
+          {/* You can only publish to a GFS that has accepted your household
+              (``active``); pending/suspended connections get no publish row.
+              The backend now returns those non-active connections too, so we
+              filter here and surface the held count below. */}
+          {gfsServers.value.filter(g => g.status === 'active').map(gfs => {
             const pub = publicationFor(gfs.id)
             const published = pub != null
             // Only a live (``active``) publication has a resolvable public
@@ -716,6 +720,13 @@ export function SpaceSettings({
               </div>
             )
           })}
+          {gfsServers.value.some(g => g.status !== 'active') && (
+            <p class="sh-muted">
+              {t('space.gfs_pending_note', {
+                n: String(gfsServers.value.filter(g => g.status !== 'active').length),
+              })}
+            </p>
+          )}
         </div>
       ))}
 

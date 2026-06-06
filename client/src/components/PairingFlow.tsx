@@ -24,7 +24,9 @@
  */
 import { signal } from '@preact/signals'
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { useLocation } from 'preact-iso'
 import { api, ApiError } from '@/api'
+import type { GfsConnection } from '@/types'
 import { ws } from '@/ws'
 import { base64UrlEncode, base64UrlDecode } from '@/lib/base64Url'
 import { Modal } from './Modal'
@@ -62,6 +64,10 @@ const pairingToken = signal('')
 const scannedSas = signal('')  // scanner-side SAS to display
 const open = signal(false)
 const onGfsConnectedCb = signal<(() => void) | null>(null)
+/** Status of the GFS connection just created — drives the success-dialog
+ *  copy + CTA. ``pending`` = the GFS holds new households for admin review,
+ *  so we can't offer "publish" yet. */
+const gfsResultStatus = signal<string>('active')
 const peerHint = signal<string | null>(null)
 const scanError = signal<string | null>(null)
 /** Instance ID of the peer that was just paired — populated on ``pairing.confirmed``
@@ -434,6 +440,7 @@ const PAIRING_STEP_TIMEOUT_MS = 5 * 60 * 1000
 
 export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void }) {
   onGfsConnectedCb.value = onGfsConnected ?? null
+  const loc = useLocation()
   const sasAutofilledRef = useRef(false)
   const [scanMethod, setScanMethod] = useState<ScanMethod>('qr')
 
@@ -594,9 +601,14 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     }
     step.value = 'generating'
     try {
-      await api.post('/api/gfs/connections', parsed)
+      const conn = await api.post<GfsConnection>('/api/gfs/connections', parsed)
+      gfsResultStatus.value = conn.status
       step.value = 'success'
-      showToast(t('gfs.pair_success'), 'success')
+      if (conn.status === 'pending') {
+        showToast(t('gfs.pending_toast'), 'info')
+      } else {
+        showToast(t('gfs.pair_success'), 'success')
+      }
       if (onGfsConnectedCb.value) onGfsConnectedCb.value()
     } catch (err: unknown) {
       step.value = 'failed'
@@ -623,6 +635,7 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
     scanError.value = null
     justPairedInstanceId.value = null
     justPairedDisplayName.value = null
+    gfsResultStatus.value = 'active'
     setScanMethod('qr')
   }
 
@@ -845,26 +858,44 @@ export function PairingFlow({ onGfsConnected }: { onGfsConnected?: () => void })
         )}
 
         {mode.value === 'gfs' && step.value === 'success' && (
-          <div class="sh-pairing-success">
-            <div class="sh-pairing-success-burst" aria-hidden="true">
-              <span>✓</span>
+          gfsResultStatus.value === 'pending' ? (
+            <div class="sh-pairing-success">
+              <div class="sh-pairing-success-burst" aria-hidden="true">
+                <span>✓</span>
+              </div>
+              <h3 style={{ margin: 0 }}>{t('gfs.connected_pending')}</h3>
+              <p class="sh-muted">{t('gfs.pending_approval')}</p>
+              <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
+                <Button onClick={() => { open.value = false }}>
+                  {t('pairing.done')}
+                </Button>
+              </div>
             </div>
-            <h3 style={{ margin: 0 }}>{t('gfs.connected')}</h3>
-            <p class="sh-muted">{t('gfs.pair_success')}</p>
-            <p class="sh-muted">{t('gfs.next_steps')}</p>
-            <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
-              <Button variant="secondary"
-                      onClick={() => { open.value = false }}>
-                {t('pairing.done')}
-              </Button>
-              <Button onClick={() => {
-                open.value = false
-                location.assign('/momentum/public/sharing')
-              }}>
-                {t('gfs.open_publishing')}
-              </Button>
+          ) : (
+            <div class="sh-pairing-success">
+              <div class="sh-pairing-success-burst" aria-hidden="true">
+                <span>✓</span>
+              </div>
+              <h3 style={{ margin: 0 }}>{t('gfs.connected')}</h3>
+              <p class="sh-muted">{t('gfs.pair_success')}</p>
+              <p class="sh-muted">{t('gfs.next_steps')}</p>
+              <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
+                <Button variant="secondary"
+                        onClick={() => { open.value = false }}>
+                  {t('pairing.done')}
+                </Button>
+                <Button onClick={() => {
+                  // Base/ingress-aware client-side nav — never location.assign
+                  // to a raw absolute path (escapes the ingress prefix +
+                  // forces a full reload). See CLAUDE.md "Frontend & ingress".
+                  open.value = false
+                  loc.route('/momentum/public/sharing')
+                }}>
+                  {t('gfs.open_publishing')}
+                </Button>
+              </div>
             </div>
-          </div>
+          )
         )}
       </div>
     </Modal>

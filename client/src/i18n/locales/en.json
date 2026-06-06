@@ -292,6 +292,11 @@
   "gfs.no_servers": "No global federation servers connected.",
   "gfs.no_servers_hint": "Connect to a GFS to publish spaces for global discovery.",
   "gfs.confirm_disconnect": "Disconnect from this GFS? Published spaces will be unpublished.",
+  "gfs.connected_pending": "Request sent",
+  "gfs.pending_approval": "This server reviews new households before listing them. You'll be connected once an admin approves — it'll show as “Pending approval” in your connections until then.",
+  "gfs.pending_toast": "Request sent — awaiting approval",
+  "gfs.status_pending": "Pending approval",
+  "gfs.status_suspended": "Suspended",
 
   "space.federation": "Federation",
   "space.publish_to_gfs": "Publish to GFS",
@@ -302,6 +307,7 @@
   "space.publish_pending": "Pending review",
   "space.publish_pending_hint": "Waiting for the server to approve — the public link appears here once it's accepted.",
   "space.publish_rejected": "Removed by server",
+  "space.gfs_pending_note": "{n} server(s) awaiting approval — you can publish once they're active.",
 
   "pairing.title": "Pair with Household",
   "pairing.intro": "Scan the QR code on the other household\u2019s device, or let them scan yours.",
