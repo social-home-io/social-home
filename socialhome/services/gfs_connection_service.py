@@ -421,6 +421,67 @@ class GfsConnectionService:
                 )
         return unpublished
 
+    async def update_display_name_to_all(self, display_name: str) -> int:
+        """Push the household's new display_name to every active GFS so the
+        GFS-side client_instances row stays in sync. Best-effort: a GFS that's
+        unreachable, errors, or is too old (404 — no /gfs/instance) is logged
+        and skipped, never aborting the rename. Returns the success count."""
+        if not self._own_instance_id or not self._own_signing_key:
+            # Early boot / tests without publish context wired — nothing
+            # to sign with, so there's nothing to push.
+            return 0
+
+        ts = datetime.now(timezone.utc).isoformat()
+        canonical = json.dumps(
+            {
+                "instance_id": self._own_instance_id,
+                "display_name": display_name,
+                "ts": ts,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        sig = b64url_encode(sign_ed25519(self._own_signing_key, canonical))
+        body = {
+            "instance_id": self._own_instance_id,
+            "display_name": display_name,
+            "ts": ts,
+            "signature": sig,
+        }
+
+        client = self._client()
+        updated = 0
+        for conn in await self._repo.list_active():
+            url = f"{conn.inbox_url}/gfs/instance"
+            try:
+                async with client.post(
+                    url,
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        updated += 1
+                    elif resp.status == 404:
+                        log.debug(
+                            "GFS %s has no /gfs/instance (older server) —"
+                            " skipping name sync",
+                            conn.id,
+                        )
+                    else:
+                        log.warning(
+                            "GFS %s rejected name sync (HTTP %d): %s",
+                            conn.id,
+                            resp.status,
+                            await resp.text(),
+                        )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                log.warning(
+                    "GFS %s unreachable during name sync: %s",
+                    conn.id,
+                    exc,
+                )
+        return updated
+
     # ── Fraud report outbound ─────────────────────────────────────────
 
     async def report_fraud(
