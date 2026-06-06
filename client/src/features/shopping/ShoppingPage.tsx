@@ -423,6 +423,16 @@ export default function ShoppingPage() {
               type="button"
               class="sh-chip"
               onMouseDown={(e) => e.preventDefault()}
+              // Touch (iOS/WKWebView) suppresses the synthetic ``click``
+              // when the preceding ``mousedown`` is preventDefault'd, so a
+              // tap would do nothing — the store autocomplete looked dead
+              // on mobile. Pick on ``touchend`` and cancel the would-be
+              // click so it never double-fires; ``onClick`` still covers
+              // mouse + keyboard (Enter/Space).
+              onTouchEnd={(e) => {
+                e.preventDefault()
+                pickStore(name)
+              }}
               onClick={() => pickStore(name)}
             >
               {name}
@@ -443,6 +453,13 @@ export default function ShoppingPage() {
                 type="button"
                 class="sh-chip"
                 onMouseDown={(e) => e.preventDefault()}
+                // See the store chips above — touch needs an explicit
+                // ``touchend`` pick (and a cancelled click) so the
+                // re-add suggestion isn't dead on mobile.
+                onTouchEnd={(e) => {
+                  e.preventDefault()
+                  void addSuggestion(name)
+                }}
                 onClick={() => void addSuggestion(name)}
               >
                 {name}

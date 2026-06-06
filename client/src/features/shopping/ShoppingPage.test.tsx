@@ -617,6 +617,42 @@ describe('ShoppingPage', () => {
     })
   })
 
+  it('tapping a store chip on touch (no click) still picks it', async () => {
+    // On iOS/WKWebView the synthetic ``click`` is suppressed because the
+    // chip preventDefaults its mousedown — so the pick must work from
+    // ``touchend`` alone. Fire only the touch event, never a click.
+    wireApi({
+      items: [],
+      stores: [{ name: 'Aldi', sort_order: 0 }],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const mod = await import('./ShoppingPage')
+    const { container } = render(<mod.default />)
+    await waitFor(() => {
+      expect(container.querySelector('.sh-shopping-add input')).not.toBeNull()
+    })
+    const input = container.querySelector(
+      '.sh-shopping-add input',
+    ) as HTMLInputElement
+    input.value = 'Milk @ Al'
+    input.setSelectionRange(input.value.length, input.value.length)
+    fireEvent.input(input, { target: input })
+    await waitFor(() => {
+      expect(
+        container.querySelector(
+          '.sh-shopping-suggest[aria-label="Pick a store"] .sh-chip',
+        ),
+      ).not.toBeNull()
+    })
+    const chip = container.querySelector(
+      '.sh-shopping-suggest[aria-label="Pick a store"] .sh-chip',
+    ) as HTMLElement
+    fireEvent.touchEnd(chip)
+    await waitFor(() => {
+      expect(input.value).toBe('Milk @ Aldi ')
+    })
+  })
+
   it('autocomplete is scoped to the current comma-segment', async () => {
     // Pasting "Milk @ Aldi, Bread" with the caret after "Bread" must
     // NOT keep the autocomplete open against Aldi's "@" — the comma
