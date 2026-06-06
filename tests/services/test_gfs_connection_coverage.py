@@ -250,27 +250,31 @@ async def test_publish_space_unknown_gfs_raises(env):
         await svc.publish_space("sp1", "gfs-missing")
 
 
-async def test_publish_space_http_error_is_swallowed(env):
+async def test_publish_space_http_error_raises_and_skips_local(env):
     await env.save(_conn("g1"))
     session = _StubSession(status=500)
     svc = GfsConnectionService(env, http_client=session)
-    # Should not raise — only log.
-    await svc.publish_space("sp1", "g1")
+    with pytest.raises(GfsConnectionError):
+        await svc.publish_space("sp1", "g1")
+    assert await env.list_publications_for_space("sp1") == []
 
 
-async def test_publish_space_network_error_is_swallowed(env):
+async def test_publish_space_network_error_raises_and_skips_local(env):
     await env.save(_conn("g1"))
     svc = GfsConnectionService(env, http_client=_RaisingSession())
-    await svc.publish_space("sp1", "g1")
+    with pytest.raises(GfsConnectionError):
+        await svc.publish_space("sp1", "g1")
+    assert await env.list_publications_for_space("sp1") == []
 
 
 async def test_publish_space_success(env):
     await env.save(_conn("g1"))
-    session = _StubSession(status=204)
+    session = _StubSession(status=200)
     svc = GfsConnectionService(env, http_client=session)
-    await svc.publish_space("sp1", "g1")
+    pub = await svc.publish_space("sp1", "g1")
     assert session.calls[0][0] == "POST"
     assert session.calls[0][1].endswith("/gfs/spaces/sp1/publish")
+    assert pub.space_id == "sp1"
 
 
 async def test_unpublish_space_unknown_gfs_raises(env):
@@ -287,17 +291,31 @@ async def test_unpublish_space_success(env):
     assert session.calls[0][0] == "DELETE"
 
 
-async def test_unpublish_space_http_error_is_swallowed(env):
+async def test_unpublish_space_http_error_raises(env):
     await env.save(_conn("g1"))
+    await env.publish_space("sp1", "g1")
     session = _StubSession(status=500)
     svc = GfsConnectionService(env, http_client=session)
-    await svc.unpublish_space("sp1", "g1")
+    with pytest.raises(GfsConnectionError):
+        await svc.unpublish_space("sp1", "g1")
+    # Local row preserved — the GFS still believes it's published.
+    assert len(await env.list_publications_for_space("sp1")) == 1
 
 
-async def test_unpublish_space_network_error_is_swallowed(env):
+async def test_unpublish_space_network_error_raises(env):
     await env.save(_conn("g1"))
     svc = GfsConnectionService(env, http_client=_RaisingSession())
+    with pytest.raises(GfsConnectionError):
+        await svc.unpublish_space("sp1", "g1")
+
+
+async def test_unpublish_space_404_is_success(env):
+    await env.save(_conn("g1"))
+    await env.publish_space("sp1", "g1")
+    session = _StubSession(status=404)
+    svc = GfsConnectionService(env, http_client=session)
     await svc.unpublish_space("sp1", "g1")
+    assert await env.list_publications_for_space("sp1") == []
 
 
 # ─── publish_space_to_all / unpublish_space_from_all ────────────────────
@@ -306,7 +324,7 @@ async def test_unpublish_space_network_error_is_swallowed(env):
 async def test_publish_space_to_all(env):
     await env.save(_conn("g1"))
     await env.save(_conn("g2"))
-    svc = GfsConnectionService(env, http_client=_StubSession(status=204))
+    svc = GfsConnectionService(env, http_client=_StubSession(status=200))
     n = await svc.publish_space_to_all("sp1")
     assert n == 2
 
@@ -335,12 +353,13 @@ async def test_publish_space_to_all_individual_failure_logs(env):
                 import aiohttp
 
                 raise aiohttp.ClientError("second fails")
-            return _StubResp(204)
+            return _StubResp(200)
 
     svc = GfsConnectionService(env, http_client=_Mixed())
     n = await svc.publish_space_to_all("sp1")
-    # Both counted regardless of individual outcome.
-    assert n == 2
+    # One GFS succeeded, the other raised + was caught: only the
+    # success is counted, and the fan-out did not abort.
+    assert n == 1
 
 
 # ─── send_appeal ────────────────────────────────────────────────────────

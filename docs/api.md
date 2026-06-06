@@ -514,7 +514,8 @@ unfederated; space variants (below) fan out `SPACE_POLL_*` /
 | GET / DELETE | `/api/gfs/connections/{id}` | Inspect / disconnect. |
 | POST | `/api/gfs/connections/{id}/appeal` | Appeal a ban. |
 | GET | `/api/gfs/publications` | Spaces published to GFS. |
-| POST / DELETE | `/api/spaces/{id}/publish/{gfs_id}` | Publish / unpublish. |
+| GET | `/api/spaces/{id}/publications` | This space's GFS publications, each with `status` (`active`/`pending`/`banned`). Admin. |
+| POST / DELETE | `/api/spaces/{id}/publish/{gfs_id}` | Publish (returns the publication object: `{space_id, gfs_connection_id, published_at, status}`; `422` if the GFS is unreachable or rejects) / unpublish. |
 | GET | `/api/public_spaces` | Aggregated directory. |
 | POST | `/api/public_spaces/refresh` | Force-poll GFS. |
 | POST | `/api/public_spaces/{space_id}/join-request` | Ask to join. |

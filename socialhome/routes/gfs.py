@@ -24,6 +24,16 @@ def _conn_dict(conn) -> dict:
     return d
 
 
+def _pub_dict(pub) -> dict:
+    """JSON shape of a :class:`GfsSpacePublication` for the SPA."""
+    return {
+        "space_id": pub.space_id,
+        "gfs_connection_id": pub.gfs_connection_id,
+        "published_at": pub.published_at,
+        "status": pub.status,
+    }
+
+
 class GfsConnectionCollectionView(BaseView):
     """``GET /api/gfs/connections`` — list.
     ``POST /api/gfs/connections`` — pair via QR payload.
@@ -115,10 +125,10 @@ class GfsSpacePublishView(BaseView):
         gfs_id = self.match("gfs_id")
         svc = self.svc(K.gfs_connection_service_key)
         try:
-            await svc.publish_space(space_id, gfs_id)
+            pub = await svc.publish_space(space_id, gfs_id)
         except GfsConnectionError as exc:
             return error_response(422, "GFS_PUBLISH_FAILED", str(exc))
-        return web.Response(status=204)
+        return web.json_response(_pub_dict(pub))
 
     async def delete(self) -> web.Response:
         ctx = self.user
@@ -134,6 +144,27 @@ class GfsSpacePublishView(BaseView):
         except GfsConnectionError as exc:
             return error_response(422, "GFS_UNPUBLISH_FAILED", str(exc))
         return web.Response(status=204)
+
+
+class GfsSpacePublicationsView(BaseView):
+    """``GET /api/spaces/{id}/publications`` — list this space's GFS
+    publications (with per-row ``status``).
+
+    Drives the space's federation panel in the SPA, fetched on mount.
+    Admin-only, mirroring the gating on
+    :class:`GfsSpacePublishView.post`.
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        if ctx is None or ctx.user_id is None:
+            return error_response(401, "UNAUTHENTICATED", "Authentication required.")
+        if not ctx.is_admin:
+            return error_response(403, "FORBIDDEN", "Admin only.")
+        space_id = self.match("id")
+        repo = self.svc(K.gfs_connection_repo_key)
+        pubs = await repo.list_publications_for_space(space_id)
+        return web.json_response([_pub_dict(p) for p in pubs])
 
 
 class GfsPublicationsView(BaseView):

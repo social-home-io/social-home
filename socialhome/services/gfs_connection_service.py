@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 import aiohttp
 
 from ..crypto import b64url_encode, sign_ed25519
-from ..domain.federation import GfsConnection
+from ..domain.federation import GfsConnection, GfsSpacePublication
 from ..repositories.gfs_connection_repo import AbstractGfsConnectionRepo
 
 log = logging.getLogger(__name__)
@@ -229,15 +229,22 @@ class GfsConnectionService:
         """Return all active GFS connections."""
         return await self._repo.list_active()
 
-    async def publish_space(self, space_id: str, gfs_id: str) -> None:
+    async def publish_space(self, space_id: str, gfs_id: str) -> GfsSpacePublication:
         """Publish a space to a GFS.
 
-        Builds the metadata payload from the local ``Space`` row,
-        signs it with the household identity key, and POSTs to
-        ``/gfs/spaces/{space_id}/publish`` so the GFS can list the
-        space on ``GET /gfs/spaces``. Records the local publication
-        regardless of network success — the outbox / scheduled retry
-        layer is responsible for retrying the publish.
+        Builds the metadata payload from the local ``Space`` row, signs
+        it with the household identity key, and POSTs to
+        ``/gfs/spaces/{space_id}/publish`` so the GFS can list the space
+        on ``GET /gfs/spaces``.
+
+        The local publication row is recorded **only** on a successful
+        GFS round-trip — there's no outbox/retry layer, so writing the
+        row on a failed publish would make a lost publish look like a
+        success. On a non-2xx response or a transport error this raises
+        :class:`GfsConnectionError` (mapped to 422 by the route) and
+        leaves no local row. The persisted ``status`` is whatever the
+        GFS returned (``active`` / ``pending`` / ``banned``), defaulting
+        to ``active`` when the body carries none.
         """
         conn = await self._repo.get(gfs_id)
         if conn is None:
@@ -252,17 +259,20 @@ class GfsConnectionService:
                 json=body,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
-                if resp.status not in (200, 201, 204):
+                if resp.status not in (200, 201):
                     detail = await resp.text()
-                    log.warning(
-                        "GFS publish failed (HTTP %d): %s",
-                        resp.status,
-                        detail,
+                    raise GfsConnectionError(
+                        f"GFS rejected publish (HTTP {resp.status}): {detail}",
                     )
+                try:
+                    data = await resp.json()
+                except Exception:
+                    data = {}
         except aiohttp.ClientError as exc:
-            log.warning("GFS publish request failed: %s", exc)
+            raise GfsConnectionError(f"Could not reach GFS: {exc}") from exc
 
-        await self._repo.publish_space(space_id, gfs_id)
+        status = data.get("status") or "active"
+        return await self._repo.publish_space(space_id, gfs_id, status=status)
 
     async def _build_publish_body(self, space_id: str) -> dict:
         """Compose + sign the publish body. Falls back to the
@@ -333,7 +343,15 @@ class GfsConnectionService:
         return "data:image/webp;base64," + base64.b64encode(webp).decode("ascii")
 
     async def unpublish_space(self, space_id: str, gfs_id: str) -> None:
-        """Unpublish a space from a GFS."""
+        """Unpublish a space from a GFS.
+
+        Symmetric with :meth:`publish_space`: the local row is removed
+        **only** on a successful GFS round-trip. A ``404`` is treated as
+        success — the space was already absent on the GFS, so the delete
+        is idempotent. Any other non-2xx, or a transport error, raises
+        :class:`GfsConnectionError` and keeps the local row (the GFS
+        still believes the space is published).
+        """
         conn = await self._repo.get(gfs_id)
         if conn is None:
             raise GfsConnectionError(f"GFS connection {gfs_id} not found")
@@ -345,15 +363,13 @@ class GfsConnectionService:
                 unpublish_url,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
-                if resp.status not in (200, 204):
+                if resp.status not in (200, 204, 404):
                     detail = await resp.text()
-                    log.warning(
-                        "GFS unpublish failed (HTTP %d): %s",
-                        resp.status,
-                        detail,
+                    raise GfsConnectionError(
+                        f"GFS rejected unpublish (HTTP {resp.status}): {detail}",
                     )
         except aiohttp.ClientError as exc:
-            log.warning("GFS unpublish request failed: %s", exc)
+            raise GfsConnectionError(f"Could not reach GFS: {exc}") from exc
 
         await self._repo.unpublish_space(space_id, gfs_id)
 
@@ -361,33 +377,46 @@ class GfsConnectionService:
         """Publish a space to every active GFS connection.
 
         Used by :class:`SpaceService` when a space flips to
-        ``space_type=global``. Returns the number of GFS instances
-        published to. Errors on individual GFS instances are logged
-        and do not abort the fan-out.
+        ``space_type=global``. The per-GFS :meth:`publish_space` now
+        raises on failure; here a failing GFS is logged and skipped so
+        one unreachable server doesn't abort the auto-publish fan-out.
+        Returns the number of GFS instances the space was successfully
+        published to.
         """
         conns = await self._repo.list_active()
+        published = 0
         for conn in conns:
             try:
                 await self.publish_space(space_id, conn.id)
-            except Exception:
-                log.exception(
-                    "publish_space_to_all: failed for gfs %s",
+                published += 1
+            except GfsConnectionError as exc:
+                log.warning(
+                    "publish_space_to_all: failed for gfs %s: %s",
                     conn.id,
+                    exc,
                 )
-        return len(conns)
+        return published
 
     async def unpublish_space_from_all(self, space_id: str) -> int:
-        """Unpublish a space from every GFS it was published to."""
+        """Unpublish a space from every GFS it was published to.
+
+        Mirrors :meth:`publish_space_to_all`: a failing per-GFS
+        unpublish is logged and skipped. Returns the number of GFS
+        instances the space was successfully unpublished from.
+        """
         conns = await self._repo.list_active()
+        unpublished = 0
         for conn in conns:
             try:
                 await self.unpublish_space(space_id, conn.id)
-            except Exception:
-                log.exception(
-                    "unpublish_space_from_all: failed for gfs %s",
+                unpublished += 1
+            except GfsConnectionError as exc:
+                log.warning(
+                    "unpublish_space_from_all: failed for gfs %s: %s",
                     conn.id,
+                    exc,
                 )
-        return len(conns)
+        return unpublished
 
     # ── Fraud report outbound ─────────────────────────────────────────
 

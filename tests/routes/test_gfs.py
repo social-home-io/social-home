@@ -2,11 +2,51 @@
 
 from __future__ import annotations
 
+from socialhome.app_keys import gfs_connection_service_key
 from socialhome.auth import sha256_token_hash
 from socialhome.domain.federation import GfsConnection
 from socialhome.repositories.gfs_connection_repo import SqliteGfsConnectionRepo
 
 from .conftest import _auth
+
+
+class _StubResp:
+    def __init__(self, status: int, body: dict | None = None):
+        self.status = status
+        self._body = body or {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def json(self):
+        return self._body
+
+    async def text(self):
+        return ""
+
+
+class _StubSession:
+    """Minimal aiohttp-session stub for the publish round-trip."""
+
+    def __init__(self, *, status: int = 200, body: dict | None = None):
+        self._status = status
+        self._body = body or {}
+
+    def post(self, url, **kw):
+        return _StubResp(self._status, self._body)
+
+    def delete(self, url, **kw):
+        return _StubResp(self._status, self._body)
+
+
+def _stub_session(client, *, status: int = 200, body: dict | None = None) -> None:
+    """Swap the wired GFS service's HTTP client for a stub so publish /
+    unpublish round-trips don't hit the network."""
+    svc = client.app[gfs_connection_service_key]
+    svc._http_client = _StubSession(status=status, body=body)
 
 
 def _make_conn(
@@ -185,6 +225,89 @@ async def test_publish_gfs_not_found(client):
         headers=_auth(client._tok),
     )
     assert r.status == 422
+
+
+async def test_publish_returns_publication_with_status(client):
+    await _seed_gfs(client, "gfs-1")
+    _stub_session(client, status=200, body={"status": "pending"})
+    r = await client.post(
+        "/api/spaces/sp-1/publish/gfs-1",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert body["space_id"] == "sp-1"
+    assert body["gfs_connection_id"] == "gfs-1"
+    assert body["status"] == "pending"
+    assert "published_at" in body
+
+
+async def test_publish_returns_422_when_gfs_rejects(client):
+    await _seed_gfs(client, "gfs-1")
+    _stub_session(client, status=500)
+    r = await client.post(
+        "/api/spaces/sp-1/publish/gfs-1",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+# ─── GET /api/spaces/{id}/publications ───────────────────────────────
+
+
+async def test_space_publications_requires_auth(client):
+    r = await client.get("/api/spaces/sp-1/publications")
+    assert r.status == 401
+
+
+async def test_space_publications_requires_admin(client):
+    db = client._db
+    await db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, is_admin)"
+        " VALUES('bob4', 'bob4-id', 'Bob4', 0)",
+    )
+    raw = "bob4-tok"
+    await db.enqueue(
+        "INSERT INTO api_tokens(token_id, user_id, label, token_hash)"
+        " VALUES('tb4', 'bob4-id', 't', ?)",
+        (sha256_token_hash(raw),),
+    )
+    r = await client.get(
+        "/api/spaces/sp-1/publications",
+        headers=_auth(raw),
+    )
+    assert r.status == 403
+
+
+async def test_space_publications_returns_array(client):
+    await _seed_gfs(client, "gfs-1")
+    _stub_session(client, status=200, body={"status": "active"})
+    # Publish so there's a row to list.
+    pr = await client.post(
+        "/api/spaces/sp-1/publish/gfs-1",
+        headers=_auth(client._tok),
+    )
+    assert pr.status == 200
+    r = await client.get(
+        "/api/spaces/sp-1/publications",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    body = await r.json()
+    assert isinstance(body, list)
+    assert len(body) == 1
+    assert body[0]["space_id"] == "sp-1"
+    assert body[0]["gfs_connection_id"] == "gfs-1"
+    assert body[0]["status"] == "active"
+
+
+async def test_space_publications_empty_array(client):
+    r = await client.get(
+        "/api/spaces/sp-no-pubs/publications",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 200
+    assert await r.json() == []
 
 
 # ─── DELETE /api/spaces/{id}/publish/{gfs_id} ────────────────────────
