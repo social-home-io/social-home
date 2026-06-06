@@ -13,6 +13,7 @@ The GFS verifies the Ed25519 signature against the registered
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -388,6 +389,100 @@ async def test_unpublish_space_post_method_also_works(gfs_client):
     )
     resp = await gfs_client.post("/gfs/spaces/sp-bye-2/unpublish")
     assert resp.status == 200
+
+
+# ── POST /gfs/instance (signed display-name update) ─────────────────────
+
+
+def _sign_body(body: dict, *, seed: bytes) -> dict:
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return {**body, "signature": b64url_encode(sign_ed25519(seed, canonical))}
+
+
+async def test_instance_update_happy_path_200(gfs_client):
+    """A registered instance renames itself with a valid signature + fresh ts."""
+    app = gfs_client.server.app
+    seed, _pk = await _register_owner(app, instance_id="rename.home")
+    ts = datetime.now(timezone.utc).isoformat()
+    body = _sign_body(
+        {"instance_id": "rename.home", "display_name": "Fresh Name", "ts": ts},
+        seed=seed,
+    )
+    resp = await gfs_client.post("/gfs/instance", json=body)
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload == {"status": "ok", "instance_id": "rename.home"}
+
+    stored = await app[gfs_fed_repo_key].get_instance("rename.home")
+    assert stored is not None
+    assert stored.display_name == "Fresh Name"
+
+
+async def test_instance_update_unknown_instance_403(gfs_client):
+    """An instance the GFS hasn't registered can't rename — 403."""
+    ts = datetime.now(timezone.utc).isoformat()
+    body = {
+        "instance_id": "ghost.home",
+        "display_name": "Ghost",
+        "ts": ts,
+        "signature": "AAAA",
+    }
+    resp = await gfs_client.post("/gfs/instance", json=body)
+    assert resp.status == 403
+
+
+async def test_instance_update_bad_signature_403(gfs_client):
+    """A signature from the wrong key fails verification — 403."""
+    app = gfs_client.server.app
+    await _register_owner(app, instance_id="known.home")
+    other_seed = generate_identity_keypair().private_key
+    ts = datetime.now(timezone.utc).isoformat()
+    body = _sign_body(
+        {"instance_id": "known.home", "display_name": "Hijack", "ts": ts},
+        seed=other_seed,
+    )
+    resp = await gfs_client.post("/gfs/instance", json=body)
+    assert resp.status == 403
+    err = await resp.json()
+    assert "signature" in err["error"].lower()
+
+
+async def test_instance_update_stale_timestamp_403(gfs_client):
+    """A stale ts is rejected with 403 (replay guard)."""
+    app = gfs_client.server.app
+    seed, _pk = await _register_owner(app, instance_id="stale.home")
+    ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    body = _sign_body(
+        {"instance_id": "stale.home", "display_name": "Late", "ts": ts},
+        seed=seed,
+    )
+    resp = await gfs_client.post("/gfs/instance", json=body)
+    assert resp.status == 403
+
+
+async def test_instance_update_overlong_name_422(gfs_client):
+    """A >80-char display_name maps to 422."""
+    app = gfs_client.server.app
+    seed, _pk = await _register_owner(app, instance_id="long.home")
+    ts = datetime.now(timezone.utc).isoformat()
+    name = "z" * 81
+    body = _sign_body(
+        {"instance_id": "long.home", "display_name": name, "ts": ts},
+        seed=seed,
+    )
+    resp = await gfs_client.post("/gfs/instance", json=body)
+    assert resp.status == 422
+
+
+async def test_instance_update_missing_field_400(gfs_client):
+    """A missing required field is a 400 before any verification."""
+    app = gfs_client.server.app
+    await _register_owner(app, instance_id="incomplete.home")
+    resp = await gfs_client.post(
+        "/gfs/instance",
+        json={"instance_id": "incomplete.home"},
+    )
+    assert resp.status == 400
 
 
 async def test_publish_space_caps_about_markdown(gfs_client):

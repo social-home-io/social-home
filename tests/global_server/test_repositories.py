@@ -56,6 +56,25 @@ async def test_list_instances_filtered_by_status(fed):
     assert {x.instance_id for x in pending} == {"a"}
 
 
+async def test_set_instance_display_name_updates_only_name(fed):
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="rn",
+            display_name="Old",
+            public_key="cc" * 32,
+            inbox_url="http://rn",
+            status="active",
+        )
+    )
+    await fed.set_instance_display_name("rn", "New Name")
+    inst = await fed.get_instance("rn")
+    assert inst is not None
+    assert inst.display_name == "New Name"
+    # Other columns untouched.
+    assert inst.public_key == "cc" * 32
+    assert inst.status == "active"
+
+
 async def test_list_spaces_for_instance(fed):
     await fed.upsert_instance(
         ClientInstance(
