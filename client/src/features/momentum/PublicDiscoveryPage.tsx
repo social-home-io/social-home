@@ -57,8 +57,10 @@ async function loadDirectory(gfsId: string): Promise<void> {
 async function bootstrap(): Promise<void> {
   loading.value = true
   try {
+    // Active GFS only — a pending/suspended connection can't serve a
+    // directory and would auto-select into a doomed fetch.
     const conns = await api.get<GfsConnection[]>('/api/gfs/connections')
-    gfses.value = conns ?? []
+    gfses.value = (conns ?? []).filter(c => c.status === 'active')
     if (gfses.value.length > 0 && !selectedGfs.value) {
       selectedGfs.value = gfses.value[0].id
     }

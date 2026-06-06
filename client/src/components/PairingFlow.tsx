@@ -214,6 +214,7 @@ export function openPairing(pairingMode: PairingMode = 'household') {
   qrPayload.value = ''
   pairingCode.value = ''
   pairingToken.value = ''
+  gfsResultStatus.value = 'active'
 }
 
 function SasInput({ autofilled }: { autofilled?: boolean }) {
