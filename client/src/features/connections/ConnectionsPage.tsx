@@ -432,9 +432,6 @@ export default function ConnectionsPage() {
                     </span>
                   )}
                   <span class="sh-muted">{gfs.inbox_url}</span>
-                  <span class="sh-muted">
-                    {t('gfs.published_spaces')}: {gfs.published_space_count}
-                  </span>
                 </div>
                 <div class="sh-connection-actions">
                   <Button variant="danger"
