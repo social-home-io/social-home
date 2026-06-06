@@ -423,7 +423,7 @@ export default function ConnectionsPage() {
                   <strong>{gfs.display_name}</strong>
                   <span class="sh-type-badge">Global Server</span>
                   {gfs.status !== 'active' && (
-                    <span class="sh-muted">
+                    <span class={gfs.status === 'pending' ? 'sh-text-warning' : 'sh-muted'}>
                       {gfs.status === 'pending'
                         ? t('gfs.status_pending')
                         : gfs.status === 'suspended'
