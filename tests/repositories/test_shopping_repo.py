@@ -147,6 +147,42 @@ async def test_touch_store_ignores_empty(env):
     assert await env.repo.list_stores() == []
 
 
+async def test_add_store_matches_existing_case_insensitively(env):
+    """Adding ``@ aldi`` when ``Aldi`` already exists reuses the
+    existing catalogue casing instead of spawning a duplicate row —
+    and the item carries the canonical name so grouping stays merged."""
+    await env.repo.add("Milk", created_by="u1", store="Aldi")
+    item = await env.repo.add("Eggs", created_by="u1", store="aldi")
+
+    # The item is stored under the catalogue's existing casing.
+    assert item.store == "Aldi"
+    # No duplicate catalogue row.
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Aldi"]
+
+
+async def test_add_new_store_keeps_its_own_casing(env):
+    """A genuinely new store keeps exactly the casing the user typed —
+    canonicalisation only kicks in against an existing match."""
+    item = await env.repo.add("Milk", created_by="u1", store="Whole Foods")
+    assert item.store == "Whole Foods"
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Whole Foods"]
+
+
+async def test_update_item_store_matches_existing_case_insensitively(env):
+    """update_item canonicalises a case-variant store the same way add
+    does, so editing an item's store can't fork the catalogue."""
+    await env.repo.touch_store("Bakery")
+    item = await env.repo.add("Bread", created_by="u1")
+
+    updated = await env.repo.update_item(item.id, store="bakery")
+
+    assert updated.store == "Bakery"
+    stores = await env.repo.list_stores()
+    assert [s.name for s in stores] == ["Bakery"]
+
+
 async def test_update_item_text_only_keeps_store(env):
     """update_item(text=…) without store sentinel leaves the store alone."""
     item = await env.repo.add("Milk", created_by="uid-alice", store="Aldi")

@@ -85,6 +85,24 @@ class SqliteShoppingRepo:
 
     # ─── Items ───────────────────────────────────────────────────────────
 
+    async def _canonical_store_name(self, name: str) -> str:
+        """Resolve ``name`` against the catalogue case-insensitively.
+
+        Returns the existing catalogue row's casing when one matches
+        (``"aldi"`` → ``"Aldi"``), else ``name`` unchanged. Keeps the
+        store catalogue from forking into ``"Aldi"`` / ``"aldi"`` rows
+        when a member types a store name with different capitalisation —
+        the item is then stored under the canonical name so grouping
+        stays merged. ASCII-case folding via SQLite's ``NOCASE``
+        collation is plenty for free-form store names.
+        """
+        row = await self._db.fetchone(
+            "SELECT name FROM shopping_stores WHERE name = ? COLLATE NOCASE",
+            (name,),
+        )
+        existing = row_to_dict(row)
+        return existing["name"] if existing else name
+
     async def add(
         self,
         text: str,
@@ -95,6 +113,8 @@ class SqliteShoppingRepo:
         text = text.strip()
         if not text:
             raise ValueError("shopping item text must not be empty")
+        if store:
+            store = await self._canonical_store_name(store)
         now = datetime.now(timezone.utc).isoformat()
         item = ShoppingItem(
             id=uuid.uuid4().hex,
@@ -167,6 +187,8 @@ class SqliteShoppingRepo:
         else:
             assert store is None or isinstance(store, str)
             new_store = store
+            if new_store:
+                new_store = await self._canonical_store_name(new_store)
 
         await self._db.enqueue(
             "UPDATE shopping_list_items SET text=?, store=? WHERE id=?",
