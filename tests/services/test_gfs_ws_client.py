@@ -235,6 +235,75 @@ async def test_client_ignores_non_relay_frames(fake_gfs, http_session):
         await client.stop()
 
 
+async def test_client_invokes_on_connected_after_connect(fake_gfs, http_session):
+    """``on_connected`` fires once a WS handshake succeeds — the hook the
+    supervisor uses to re-fetch /gfs/info and refresh the stored name."""
+    seed, _pub = _gen_keypair()
+    connected: list[int] = []
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    async def on_connected() -> None:
+        connected.append(1)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-oc",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        on_connected=on_connected,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if connected:
+                break
+            await asyncio.sleep(0.02)
+        assert connected
+    finally:
+        await client.stop()
+
+
+async def test_client_on_connected_exception_does_not_kill_loop(fake_gfs, http_session):
+    """A raising ``on_connected`` is contained — the WS keeps relaying."""
+    seed, _pub = _gen_keypair()
+    relays: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        relays.append(frame)
+
+    async def on_connected() -> None:
+        raise RuntimeError("boom")
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-oce",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        on_connected=on_connected,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        assert client.connected
+        await fake_gfs.outbound.put(
+            {"type": "relay", "space_id": "s-oce", "payload": {}},
+        )
+        for _ in range(100):
+            if relays:
+                break
+            await asyncio.sleep(0.02)
+        assert relays and relays[0]["space_id"] == "s-oce"
+    finally:
+        await client.stop()
+
+
 async def test_client_dispatches_moment_public_frames(fake_gfs, http_session):
     """``incoming_public_moment`` + ``incoming_public_moment_delete``
     frames go to the dedicated handler."""

@@ -2389,6 +2389,12 @@ def create_app(config: Config | None = None) -> web.Application:
                 frame.get("from_instance"),
             )
 
+        # Re-fetch the GFS's current server_name on each WS (re)connect and
+        # refresh the stored display_name if the operator renamed the
+        # server (a rename typically restarts the GFS → forces a reconnect).
+        async def _on_gfs_connected(gfs_id: str) -> None:
+            await gfs_connection_service.refresh_connection_metadata(gfs_id)
+
         nonlocal gfs_ws_supervisor
         gfs_ws_supervisor = GfsWebSocketSupervisor(
             repo=repos.gfs_connection,
@@ -2399,6 +2405,7 @@ def create_app(config: Config | None = None) -> web.Application:
             on_highlight_signal=highlight_signaling_handler.handle_signal,
             on_moment_signal=moment_public_signaling_handler.handle_signal,
             on_moment_public=moment_public_inbound.handle,
+            on_connected=_on_gfs_connected,
         )
         await gfs_ws_supervisor.start()
         app[K.gfs_ws_supervisor_key] = gfs_ws_supervisor

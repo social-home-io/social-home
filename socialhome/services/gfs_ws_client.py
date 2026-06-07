@@ -68,6 +68,7 @@ class GfsWebSocketClient:
         "_on_moment_signal",
         "_on_moment_public",
         "_on_follow_changed",
+        "_on_connected",
         "_reconnect_delays",
         "_stop",
         "_task",
@@ -86,6 +87,7 @@ class GfsWebSocketClient:
         on_moment_signal: Callable[[dict], Awaitable[None]] | None = None,
         on_moment_public: Callable[[dict], Awaitable[None]] | None = None,
         on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
+        on_connected: Callable[[], Awaitable[None]] | None = None,
         reconnect_delays: tuple[float, ...] = RECONNECT_DELAYS,
     ) -> None:
         self._gfs_url = gfs_url
@@ -97,6 +99,7 @@ class GfsWebSocketClient:
         self._on_moment_signal = on_moment_signal
         self._on_moment_public = on_moment_public
         self._on_follow_changed = on_follow_changed
+        self._on_connected = on_connected
         self._reconnect_delays = reconnect_delays
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
@@ -225,6 +228,15 @@ class GfsWebSocketClient:
         ) as ws:
             await ws.send_json(self._build_hello())
             self._connected_event.set()
+            if self._on_connected is not None:
+                try:
+                    await self._on_connected()
+                except Exception as exc:  # defensive — never tear the loop down
+                    log.warning(
+                        "gfs.ws.client: on_connected handler raised for %s: %s",
+                        self._gfs_url,
+                        exc,
+                    )
             try:
                 async for msg in ws:
                     if msg.type == aiohttp.WSMsgType.TEXT:

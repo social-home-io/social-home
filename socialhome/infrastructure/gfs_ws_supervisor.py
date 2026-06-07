@@ -45,6 +45,7 @@ class GfsWebSocketSupervisor:
         "_on_moment_signal",
         "_on_moment_public",
         "_on_follow_changed",
+        "_on_connected",
         "_interval",
         "_clients",
         "_lock",
@@ -64,6 +65,7 @@ class GfsWebSocketSupervisor:
         on_moment_signal: Callable[[dict], Awaitable[None]] | None = None,
         on_moment_public: Callable[..., Awaitable[None]] | None = None,
         on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
+        on_connected: Callable[[str], Awaitable[None]] | None = None,
         reconcile_interval_seconds: float = DEFAULT_RECONCILE_INTERVAL_SECONDS,
     ) -> None:
         self._repo = repo
@@ -75,6 +77,7 @@ class GfsWebSocketSupervisor:
         self._on_moment_signal = on_moment_signal
         self._on_moment_public = on_moment_public
         self._on_follow_changed = on_follow_changed
+        self._on_connected = on_connected
         self._interval = reconcile_interval_seconds
         self._clients: dict[str, GfsWebSocketClient] = {}
         self._lock = asyncio.Lock()
@@ -187,6 +190,14 @@ class GfsWebSocketSupervisor:
             if self._on_moment_public is not None
             else None
         )
+        # The display-name refresh hook needs to know *which* GFS just
+        # (re)connected so it can re-fetch that pairing's /gfs/info. Bind
+        # ``conn.id`` per client (gfs rename → reconnect → refresh).
+        wrapped_on_connected = (
+            _bind_on_connected(self._on_connected, conn.id)
+            if self._on_connected is not None
+            else None
+        )
         client = GfsWebSocketClient(
             gfs_url=conn.inbox_url,
             instance_id=self._instance_id,
@@ -197,6 +208,7 @@ class GfsWebSocketSupervisor:
             on_moment_signal=self._on_moment_signal,
             on_moment_public=wrapped_moment_public,
             on_follow_changed=self._on_follow_changed,
+            on_connected=wrapped_on_connected,
         )
         async with self._lock:
             existing = self._clients.get(conn.id)
@@ -233,5 +245,22 @@ def _bind_gfs_id(
 
     async def _wrapped(frame: dict) -> None:
         await handler(frame, gfs_id=gfs_id)
+
+    return _wrapped
+
+
+def _bind_on_connected(
+    handler: Callable[[str], Awaitable[None]],
+    gfs_id: str,
+) -> Callable[[], Awaitable[None]]:
+    """Return a zero-arg WS ``on_connected`` callback bound to ``gfs_id``.
+
+    The :class:`GfsWebSocketClient` invokes ``on_connected()`` with no
+    args on each (re)connect; the supervisor's hook needs the pairing's
+    id to refresh the right connection, so we close over ``conn.id``.
+    """
+
+    async def _wrapped() -> None:
+        await handler(gfs_id)
 
     return _wrapped
