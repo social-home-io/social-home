@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         AbstractGfsAdminRepo,
         AbstractGfsFederationRepo,
     )
+    from .ws_registry import GfsWebSocketRegistry
 
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class GfsAdminService:
         "_federation",
         "_fraud_threshold",
         "_cluster",
+        "_ws_registry",
     )
 
     def __init__(
@@ -51,11 +53,13 @@ class GfsAdminService:
         admin_repo: "AbstractGfsAdminRepo",
         federation: "GfsFederationService",
         fraud_threshold: int = 5,
+        ws_registry: "GfsWebSocketRegistry | None" = None,
     ) -> None:
         self._fed_repo = fed_repo
         self._admin_repo = admin_repo
         self._federation = federation
         self._fraud_threshold = fraud_threshold
+        self._ws_registry = ws_registry
         self._cluster = None  # attached in GfsApp
 
     def attach_cluster(self, cluster) -> None:
@@ -227,13 +231,29 @@ class GfsAdminService:
         header_image_file: str | None = None,
         admin_ip: str,
     ) -> dict:
+        name_changed = False
         if server_name is not None:
+            previous = await self._admin_repo.get_config("server_name")
+            name_changed = previous != server_name
             await self._admin_repo.set_config("server_name", server_name)
         if landing_markdown is not None:
             await self._admin_repo.set_config("landing_markdown", landing_markdown)
         if header_image_file is not None:
             await self._admin_repo.set_config("header_image_file", header_image_file)
         await self._log("set_branding", None, None, admin_ip)
+        # Real-time push: tell every connected client household the server
+        # was renamed so it refreshes without waiting for a reconnect
+        # (the reconnect-refresh path stays as the fallback, incl. clients
+        # on other cluster nodes). Only fire on an actual name change.
+        if self._ws_registry is not None and name_changed and server_name is not None:
+            delivered = await self._ws_registry.broadcast(
+                {"type": "server_info_updated", "server_name": server_name}
+            )
+            log.info(
+                "GFS: server renamed to %r — notified %d connected client(s)",
+                server_name,
+                delivered,
+            )
         return await self.get_branding()
 
     # ── Fraud reports ─────────────────────────────────────────────────

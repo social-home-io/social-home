@@ -134,6 +134,19 @@ class GfsWebSocketRegistry:
             await self._drop_dead(instance_id, ws)
             return False
 
+    async def broadcast(self, payload: dict[str, Any]) -> int:
+        """Send *payload* to every connected client socket.
+
+        Returns the number delivered. Iterates a snapshot of instance ids
+        so eviction during send (a dead socket dropped by :meth:`send`)
+        can't mutate the dict mid-iteration.
+        """
+        delivered = 0
+        for instance_id in list(self._by_instance.keys()):
+            if await self.send(instance_id, payload):
+                delivered += 1
+        return delivered
+
     async def _drop_dead(
         self,
         instance_id: str,

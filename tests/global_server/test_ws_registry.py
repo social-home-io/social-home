@@ -126,6 +126,46 @@ async def test_send_serializes_default_str_for_unknown_types(registry):
     assert "stringified" in ws.sent[0]
 
 
+# ── broadcast ────────────────────────────────────────────────────────────────────
+
+
+async def test_broadcast_sends_to_every_connected_socket(registry):
+    a, b, c = _FakeWS(), _FakeWS(), _FakeWS()
+    await registry.register("inst-1", a)
+    await registry.register("inst-2", b)
+    await registry.register("inst-3", c)
+
+    delivered = await registry.broadcast(
+        {"type": "server_info_updated", "server_name": "New"}
+    )
+
+    assert delivered == 3
+    for ws in (a, b, c):
+        assert len(ws.sent) == 1
+        assert "server_info_updated" in ws.sent[0]
+
+
+async def test_broadcast_tolerates_failed_socket(registry):
+    """A broken socket is evicted and not counted; the rest still receive."""
+    good = _FakeWS()
+    broken = _FakeWS(broken=True)
+    await registry.register("inst-good", good)
+    await registry.register("inst-broken", broken)
+
+    delivered = await registry.broadcast(
+        {"type": "server_info_updated", "server_name": "X"}
+    )
+
+    assert delivered == 1
+    assert len(good.sent) == 1
+    assert registry.is_connected("inst-broken") is False
+
+
+async def test_broadcast_returns_zero_when_no_sockets(registry):
+    delivered = await registry.broadcast({"type": "server_info_updated"})
+    assert delivered == 0
+
+
 # ── close_all ──────────────────────────────────────────────────────────────────
 
 
