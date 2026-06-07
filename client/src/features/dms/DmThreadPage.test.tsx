@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+// ``waitFor`` budget for "the heavy DmThreadPage has finished its initial
+// render". The page is large and each test ``import()``s it fresh; under the
+// full parallel suite on CI that cold render + mocked-API microtask chain can
+// take ~3 s, so the old 3 s budget timed out intermittently (the jump-down
+// chip tests were a recurring flake). ``waitFor`` resolves as soon as the
+// condition is true, so a generous ceiling costs nothing on a fast run — it
+// only adds headroom under load.
+const RENDER_WAIT = 15_000
+
 // Mock the API module before importing the page
 vi.mock('@/api', () => ({
   api: {
@@ -238,7 +247,7 @@ describe('DmThreadPage — jump-down chip integration', () => {
       const { container } = render(<DmThreadPage />)
       await waitFor(() => {
         expect(container.textContent ?? '').toContain('BUG-REPRO')
-      }, { timeout: 3000 })
+      }, { timeout: RENDER_WAIT })
       // Give the layout effect + the follow-up useEffect a tick to settle.
       await new Promise(r => setTimeout(r, 50))
       const chip = container.querySelector('.sh-dm-jump-down')
@@ -294,7 +303,7 @@ describe('DmThreadPage — jump-down chip integration', () => {
       const { container } = render(<DmThreadPage />)
       await waitFor(() => {
         expect(container.querySelectorAll('[data-msg-id]').length).toBeGreaterThan(0)
-      }, { timeout: 3000 })
+      }, { timeout: RENDER_WAIT })
       await new Promise(r => setTimeout(r, 50))
       // distFromBottom = 400 > 80 so the entry-scroll layout effect
       // leaves stickToBottom=false. The follow-up effect must NOT
@@ -352,13 +361,17 @@ describe('DmThreadPage — jump-down chip integration', () => {
       const { container } = render(<DmThreadPage />)
       await waitFor(() => {
         expect(container.querySelectorAll('[data-msg-id]').length).toBeGreaterThan(0)
-      }, { timeout: 3000 })
-      await new Promise(r => setTimeout(r, 50))
-      const readPosts = apiPost.mock.calls.filter(
-        ([url]) => typeof url === 'string'
-          && url.startsWith('/api/conversations/conv-test/read'),
-      )
-      expect(readPosts.length).toBeGreaterThanOrEqual(1)
+      }, { timeout: RENDER_WAIT })
+      // Poll for the read-mark POST rather than a fixed sleep — the
+      // follow-up effect fires it post-render, and a fixed delay races it
+      // under CI load.
+      await waitFor(() => {
+        const readPosts = apiPost.mock.calls.filter(
+          ([url]) => typeof url === 'string'
+            && url.startsWith('/api/conversations/conv-test/read'),
+        )
+        expect(readPosts.length).toBeGreaterThanOrEqual(1)
+      }, { timeout: RENDER_WAIT })
     } finally {
       restore()
     }
@@ -407,7 +420,7 @@ describe('DmThreadPage — jump-down chip integration', () => {
       const { container } = render(<DmThreadPage />)
       await waitFor(() => {
         expect(container.textContent ?? '').toContain('hello')
-      }, { timeout: 3000 })
+      }, { timeout: RENDER_WAIT })
       // Both buttons are siblings on the bubble — Reply ↩ closer to
       // the bubble, React 😊 the further-out chip. The privacy /
       // hover-CSS contract lives in app.css; this test just pins
@@ -452,7 +465,7 @@ describe('DmThreadPage — jump-down chip integration', () => {
       const { unmount } = render(<DmThreadPage />)
       await waitFor(() => {
         expect(sendMock).toHaveBeenCalledWith('dm.active', { conversation_id: 'conv-test' })
-      }, { timeout: 3000 })
+      }, { timeout: RENDER_WAIT })
       sendMock.mockClear()
       unmount()
       // Cleanup effect must clear the marker so backgrounded threads
@@ -493,7 +506,7 @@ describe('DmThreadPage — composer mic⇄send swap', () => {
     const { container } = render(<DmThreadPage />)
     await waitFor(() => {
       expect(container.querySelector('textarea[name="content"]')).not.toBeNull()
-    }, { timeout: 3000 })
+    }, { timeout: RENDER_WAIT })
 
     // Empty composer → no Send button, the voice-record slot owns it.
     expect(container.querySelector('[aria-label="Send message"]')).toBeNull()
@@ -508,12 +521,12 @@ describe('DmThreadPage — composer mic⇄send swap', () => {
       const el = container.querySelector('.sh-emoji-btn')
       expect(el).not.toBeNull()
       return el as HTMLElement
-    }, { timeout: 3000 })
+    }, { timeout: RENDER_WAIT })
     fireEvent.click(firstEmoji)
 
     // The composer now has content (an emoji), so the slot must show Send.
     await waitFor(() => {
       expect(container.querySelector('[aria-label="Send message"]')).not.toBeNull()
-    }, { timeout: 3000 })
+    }, { timeout: RENDER_WAIT })
   })
 })
