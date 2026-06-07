@@ -440,13 +440,13 @@ def _render_landing(
       <p>Social Home is a privacy-first, self-hosted social network.
       Global Federation Servers like {_escape(server_name)} stitch
       households together for public spaces. Learn more at
-      <a href="https://socialhome.io" rel="nofollow noopener">
-      socialhome.io</a>.</p>
+      <a href="https://social-home.io" rel="nofollow noopener">
+      social-home.io</a>.</p>
     </section>
   </main>
   <p class="footer-brand">
     A Global Federation Server · powered by
-    <a href="https://socialhome.io" rel="nofollow noopener">Social Home</a>
+    <a href="https://social-home.io" rel="nofollow noopener">Social Home</a>
   </p>
 </body>
 </html>
@@ -600,7 +600,7 @@ def _render_space_page(
   </main>
   <p class="footer-brand">
     Hosted on {_escape(server_name)} · powered by
-    <a href="https://socialhome.io" rel="nofollow noopener">Social Home</a>
+    <a href="https://social-home.io" rel="nofollow noopener">Social Home</a>
   </p>
 </body>
 </html>
