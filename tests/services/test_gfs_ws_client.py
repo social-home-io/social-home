@@ -697,3 +697,50 @@ async def test_on_text_swallows_handler_exception():
     await client._on_text(json.dumps({"type": "moment_signal"}))
     await client._on_text(json.dumps({"type": "incoming_public_moment"}))
     await client._on_text(json.dumps({"type": "follow_changed"}))
+
+
+async def test_on_text_server_info_updated_invokes_on_connected():
+    """A ``server_info_updated`` frame re-runs the reconnect refresh hook
+    (``on_connected``) and does NOT fall through to the relay handler."""
+    seed, _pub = _gen_keypair()
+    refreshed: list[int] = []
+    relayed: list[dict] = []
+
+    async def on_connected() -> None:
+        refreshed.append(1)
+
+    async def on_relay(frame: dict) -> None:
+        relayed.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url="https://gfs.test",
+        instance_id="sh-info",
+        signing_key=seed,
+        session_factory=lambda: None,
+        on_relay=on_relay,
+        on_connected=on_connected,
+    )
+
+    await client._on_text(
+        json.dumps({"type": "server_info_updated", "server_name": "X"})
+    )
+
+    assert refreshed == [1]
+    assert relayed == []  # did not fall through to the relay handler
+
+
+async def test_on_text_server_info_updated_without_hook_is_noop():
+    """No ``on_connected`` wired → the frame is a safe no-op (no crash)."""
+    seed, _pub = _gen_keypair()
+    client = GfsWebSocketClient(
+        gfs_url="https://gfs.test",
+        instance_id="sh-info2",
+        signing_key=seed,
+        session_factory=lambda: None,
+        on_relay=_sink_noop,
+    )
+
+    # Must not raise.
+    await client._on_text(
+        json.dumps({"type": "server_info_updated", "server_name": "Y"})
+    )

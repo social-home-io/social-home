@@ -330,6 +330,13 @@ class GfsWebSocketClient:
                     exc,
                 )
             return
+        if frame_type == "server_info_updated":
+            # The GFS renamed itself. Re-run the same refresh the reconnect
+            # path uses (re-fetch GET /gfs/info → update display_name) so we
+            # pull the authoritative name rather than trusting the frame.
+            if self._on_connected is not None:
+                await self._on_connected()
+            return
         if frame_type != "relay":
             log.debug(
                 "gfs.ws.client: ignoring non-relay frame type=%r",

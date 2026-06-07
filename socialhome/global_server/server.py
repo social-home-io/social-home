@@ -161,6 +161,7 @@ class GfsApp:
             admin_repo=repos.admin,
             federation=federation,
             fraud_threshold=config.fraud_threshold,
+            ws_registry=ws_registry,
         )
         # Cluster mode (spec §24.10). Signing key derived deterministically
         # from the config's instance_id hash so every start is stable
