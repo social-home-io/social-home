@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// ``waitFor`` budget for "the heavy DmThreadPage has finished its initial
-// render". The page is large and each test ``import()``s it fresh; under the
-// full parallel suite on CI that cold render + mocked-API microtask chain can
-// take ~3 s, so the old 3 s budget timed out intermittently (the jump-down
-// chip tests were a recurring flake). ``waitFor`` resolves as soon as the
-// condition is true, so a generous ceiling costs nothing on a fast run — it
-// only adds headroom under load.
+// The heavy DmThreadPage cold render (fresh ``import()`` + mocked-API
+// microtask chain + layout effects) can take several seconds under the full
+// parallel suite on CI. TWO ceilings have to clear it or these tests flake:
+//   1. vitest's per-test timeout — defaults to 5 s, which *kills the whole
+//      test* ("Test timed out in 5000ms") before any inner ``waitFor`` can
+//      help. Raise it for this file.
+//   2. the ``waitFor`` budget below — must sit *under* the per-test timeout so
+//      a genuinely-stuck wait fails with a useful assertion rather than the
+//      opaque test-timeout error.
+// Both resolve as soon as the condition holds, so the generous ceilings cost
+// nothing on a fast run — they only add headroom under load.
+vi.setConfig({ testTimeout: 20_000 })
 const RENDER_WAIT = 15_000
 
 // Mock the API module before importing the page
