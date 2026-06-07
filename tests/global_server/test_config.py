@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from socialhome.global_server.config import (
@@ -112,6 +114,92 @@ def test_load_falls_back_to_env_without_toml(monkeypatch, tmp_dir):
     monkeypatch.chdir(tmp_dir)
     cfg = GfsConfig.load()
     assert cfg.base_url == "http://0.0.0.0:8765"
+
+
+def test_toml_host_port_apply_without_env(tmp_dir, monkeypatch):
+    """Issue #563 (core): with no ``GFS_*`` env set, a ``--config``
+    TOML's ``[server] host``/``port`` are honoured. The shipped image
+    must not bake env that silently shadows them."""
+    toml = """
+[server]
+host = "127.0.0.1"
+port = 7654
+base_url = "https://cfg.example"
+"""
+    p = tmp_dir / "global_server.toml"
+    p.write_text(toml)
+    for var in (
+        "GFS_HOST",
+        "GFS_PORT",
+        "GFS_BASE_URL",
+        "GFS_DATA_DIR",
+        "GFS_DB_PATH",
+        "GFS_INSTANCE_ID",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    cfg = GfsConfig.load(p)
+    assert cfg.host == "127.0.0.1"
+    assert cfg.port == 7654
+
+
+def test_env_overrides_toml(tmp_dir, monkeypatch):
+    """Issue #563 (model): an explicit ``GFS_*`` env var overrides the
+    TOML's ``[server]`` value (env > file > defaults), consistent with
+    :class:`socialhome.config.Config`. Unset vars leave the file value
+    intact, so a single override doesn't disturb the rest of the file."""
+    toml = """
+[server]
+host = "10.0.0.1"
+port = 9000
+base_url = "https://file.example"
+data_dir = "/file/dir"
+instance_id = "from-file"
+"""
+    p = tmp_dir / "global_server.toml"
+    p.write_text(toml)
+    monkeypatch.delenv("SOCIAL_HOME_GFS_CONFIG", raising=False)
+    monkeypatch.delenv("SOCIAL_HOME_GFS_DATA", raising=False)
+    monkeypatch.setenv("GFS_PORT", "5555")
+    monkeypatch.setenv("GFS_BASE_URL", "https://env.example")
+    monkeypatch.setenv("GFS_DATA_DIR", "/env/dir")
+    monkeypatch.setenv("GFS_INSTANCE_ID", "from-env")
+    monkeypatch.delenv("GFS_HOST", raising=False)
+    monkeypatch.delenv("GFS_DB_PATH", raising=False)
+    cfg = GfsConfig.load(p)
+    assert cfg.port == 5555  # env wins
+    assert cfg.base_url == "https://env.example"  # env wins
+    assert cfg.data_dir == "/env/dir"  # env wins
+    assert cfg.instance_id == "from-env"  # env wins
+    assert cfg.host == "10.0.0.1"  # file (no env override)
+
+
+def test_env_db_path_pins_data_dir_to_parent(tmp_dir, monkeypatch):
+    """``GFS_DB_PATH`` continues to pin ``data_dir`` to the DB file's
+    parent directory, layered over a TOML the same as the dev fallback."""
+    toml = """
+[server]
+base_url = "https://cfg.example"
+data_dir = "/file/dir"
+"""
+    p = tmp_dir / "global_server.toml"
+    p.write_text(toml)
+    monkeypatch.delenv("SOCIAL_HOME_GFS_CONFIG", raising=False)
+    monkeypatch.delenv("SOCIAL_HOME_GFS_DATA", raising=False)
+    monkeypatch.setenv("GFS_DB_PATH", "/custom/db/gfs.db")
+    monkeypatch.delenv("GFS_DATA_DIR", raising=False)
+    cfg = GfsConfig.load(p)
+    assert cfg.data_dir == "/custom/db"
+
+
+def test_gfs_dockerfile_does_not_bake_host_port():
+    """Issue #563 guard: the published image must NOT bake
+    ``ENV GFS_HOST`` / ``ENV GFS_PORT`` — that would pin them above the
+    ``--config`` file (env > file) and silently shadow its ``[server]``
+    host/port. They are opt-in run-time overrides only."""
+    repo_root = Path(__file__).resolve().parents[2]
+    dockerfile = (repo_root / "Dockerfile.gfs").read_text(encoding="utf-8")
+    assert "ENV GFS_HOST" not in dockerfile
+    assert "ENV GFS_PORT" not in dockerfile
 
 
 def test_write_example_config_refuses_overwrite(tmp_dir):

@@ -6,7 +6,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from socialhome.global_server import create_gfs_app
+from socialhome.global_server import create_gfs_app, server
 
 
 @pytest.fixture
@@ -268,3 +268,64 @@ async def test_subscribe_unsubscribe_roundtrip(gfs_client):
     assert resp.status == 200
     body = await resp.json()
     assert body["status"] == "unsubscribed"
+
+
+# ── main() entry point: bind address resolution (issue #563) ────────────
+# The shipped image runs ``socialhome-global-server --config <toml>``. The
+# bug: a baked-in GFS_HOST/GFS_PORT shadowed the file's [server] host/port.
+# main() must now bind whatever ``GfsConfig.load`` resolved (env > file).
+
+
+def _toml(tmp_path, *, host="127.0.0.1", port=7654):
+    p = tmp_path / "global_server.toml"
+    p.write_text(
+        f'[server]\nhost = "{host}"\nport = {port}\nbase_url = "https://cfg.example"\n'
+    )
+    return p
+
+
+def test_main_binds_config_host_port_without_env(tmp_path, monkeypatch):
+    """With a --config TOML and no GFS_* env set, main() binds the
+    file's host/port — the core #563 regression."""
+    p = _toml(tmp_path, host="127.0.0.1", port=7654)
+    for var in (
+        "GFS_HOST",
+        "GFS_PORT",
+        "GFS_BASE_URL",
+        "GFS_DATA_DIR",
+        "GFS_DB_PATH",
+        "GFS_INSTANCE_ID",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        server.sys, "argv", ["socialhome-global-server", "--config", str(p)]
+    )
+    captured: dict = {}
+    monkeypatch.setattr(server, "create_gfs_app", lambda cfg: object())
+    monkeypatch.setattr(
+        server.web,
+        "run_app",
+        lambda app, host=None, port=None: captured.update(host=host, port=port),
+    )
+    server.main()
+    assert captured == {"host": "127.0.0.1", "port": 7654}
+
+
+def test_main_env_overrides_config_host_port(tmp_path, monkeypatch):
+    """GFS_* env stays an opt-in override (orchestrators): a per-instance
+    GFS_PORT wins, while host still comes from the file."""
+    p = _toml(tmp_path, host="127.0.0.1", port=7654)
+    monkeypatch.delenv("GFS_HOST", raising=False)
+    monkeypatch.setenv("GFS_PORT", "5555")
+    monkeypatch.setattr(
+        server.sys, "argv", ["socialhome-global-server", "--config", str(p)]
+    )
+    captured: dict = {}
+    monkeypatch.setattr(server, "create_gfs_app", lambda cfg: object())
+    monkeypatch.setattr(
+        server.web,
+        "run_app",
+        lambda app, host=None, port=None: captured.update(host=host, port=port),
+    )
+    server.main()
+    assert captured == {"host": "127.0.0.1", "port": 5555}

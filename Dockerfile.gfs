@@ -55,9 +55,13 @@ RUN uv pip install --system --no-cache "/tmp/${WHEEL}[global-server]" && \
 RUN mkdir -p /var/lib/sh-gfs && chown -R gfsuser:gfsuser /var/lib/sh-gfs
 
 VOLUME /var/lib/sh-gfs
-ENV GFS_HOST=0.0.0.0
-ENV GFS_PORT=8765
 
+# NB: we deliberately do NOT bake GFS_HOST / GFS_PORT here. The CMD below
+# passes a --config file, and GFS layers env over the file (env > file >
+# defaults); baking these would pin them above the file and silently
+# shadow its [server] host/port (issue #563). They stay opt-in overrides:
+# set GFS_PORT at `docker run` time to retarget a single instance. The
+# dataclass defaults (0.0.0.0:8765) already apply when neither is set.
 EXPOSE 8765
 
 USER gfsuser
