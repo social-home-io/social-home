@@ -1132,6 +1132,17 @@ export default function DmThreadPage() {
     }
   }
 
+  /** Recompute the mic⇄send slot flag from the textarea's current
+   *  value. A staged attachment also counts as "ready to send". Call
+   *  this after any *programmatic* mutation of ``ta.value`` — setting
+   *  ``.value`` in code does NOT fire ``onInput``, so the flag would
+   *  otherwise go stale (e.g. an emoji inserted via the picker as the
+   *  first character would leave the mic button up instead of Send). */
+  const syncComposerHasContent = (ta: HTMLTextAreaElement) => {
+    composerHasContent.value =
+      ta.value.trim().length > 0 || pendingAttachment.value !== null
+  }
+
   /** Replace ``ta.value[start:end]`` with ``emoji`` and place the caret
    *  immediately after the inserted glyph. Shared by the
    *  ``:shortcode`` autocomplete (range = the typed token) and the
@@ -1144,6 +1155,7 @@ export default function DmThreadPage() {
     const after = ta.value.slice(end)
     ta.value = before + emoji + after
     autoResize(ta)
+    syncComposerHasContent(ta)
     requestAnimationFrame(() => {
       if (!composerInputRef.current) return
       composerInputRef.current.focus()
@@ -1201,8 +1213,7 @@ export default function DmThreadPage() {
     // to send" so a picture-with-no-caption keeps the Send button
     // visible. ``trim`` is cheap relative to the keystroke cadence;
     // no need to memo.
-    composerHasContent.value =
-      ta.value.trim().length > 0 || pendingAttachment.value !== null
+    syncComposerHasContent(ta)
     // Slack-style ``:partial`` autocomplete — fires after the
     // close-colon substitution above so a fully-typed ``:heart:`` never
     // opens the dropdown (the glyph is already in place).
