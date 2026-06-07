@@ -2163,7 +2163,7 @@ export default function DmThreadPage() {
         <input
           ref={attachInputRef}
           type="file"
-          class="sh-dm-attach-input"
+          class="sr-only"
           aria-hidden="true"
           tabIndex={-1}
           onChange={handleAttachPicked}

@@ -1794,16 +1794,23 @@ textarea { min-height: 80px; resize: vertical; line-height: 1.5; }
 /* Visually hidden but exposed to assistive tech. Used to live as a
    `<span class="sr-only">` inside the old Spinner — putting it here so
    any other components that rely on the same convention work too. */
+/* Visually-hidden / screen-reader-only. ``!important`` on the box
+ * properties is the canonical pattern (Bootstrap, HTML5 Boilerplate):
+ * sr-only elements must have zero visual footprint regardless of any
+ * competing rule. Without it, a broad rule like the global
+ * ``input:not(...) { width: 100% }`` (specificity 0,3,1) out-weighs this
+ * class (0,1,0) and stretches a hidden file input to full width — which
+ * bled ~7px past the viewport on the DM composer. */
 .sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 .sh-skeleton-line, .sh-skeleton-rect {
@@ -3838,22 +3845,6 @@ body.sh-dm-thread-open .sh-messages {
 .sh-thread > .sh-composer > .sh-dm-attach-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-/* Hidden file input — only meant to be triggered programmatically
- * via the paperclip button. ``display: none`` would still work, but
- * ``visually-hidden`` keeps the input in the focus order for any
- * future keyboard-only attach affordance and stays compatible with
- * uploader testing utilities that need to set ``input.files``. */
-.sh-thread > .sh-composer > .sh-dm-attach-input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 /* Pre-send attachment preview. Sits above the composer between the
  * reply-quote chip (if any) and the input row so the user can
