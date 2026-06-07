@@ -57,6 +57,10 @@ def _build_ogg_with_codec(codec_name: str) -> bytes:
     try:
         stream = out.add_stream(codec_name, rate=sample_rate)
         frame = _silent_audio_frame(n_samples, sample_rate)
+        # FLAC (and most non-Opus encoders) require a monotonic pts; the
+        # Opus encoder happens to tolerate its absence but FLAC errors
+        # (EINVAL) without it.
+        frame.pts = 0
         for packet in stream.encode(frame):
             out.mux(packet)
         for packet in stream.encode(None):
@@ -205,11 +209,19 @@ async def test_process_rejects_non_ogg_magic():
 
 
 async def test_process_rejects_non_opus_codec():
-    """OGG with a Vorbis stream (not Opus) is rejected."""
-    blob = _build_ogg_with_codec("libvorbis")
+    """OGG with a non-Opus/AAC stream (here FLAC) is rejected.
+
+    Uses FLAC rather than Vorbis for the sample: FLAC is a native
+    ffmpeg codec (always built into libavcodec), whereas ``libvorbis``
+    is an external encoder PyAV's manylinux wheel dropped in 17.1.0 —
+    a Vorbis fixture would fail to *build* (UnknownCodecError) on that
+    wheel even though production never needs the Vorbis encoder. FLAC
+    keeps the rejection check independent of the wheel's codec set.
+    """
+    blob = _build_ogg_with_codec("flac")
     proc = AudioProcessor()
     with pytest.raises(ValueError, match="Opus or AAC"):
-        await proc.process(blob, "vorbis.ogg")
+        await proc.process(blob, "flac.ogg")
 
 
 async def test_process_rejects_overlong_duration():
