@@ -463,3 +463,57 @@ describe('DmThreadPage — jump-down chip integration', () => {
     }
   })
 })
+
+describe('DmThreadPage — composer mic⇄send swap', () => {
+  // Regression: inserting an emoji as the FIRST composer character via
+  // the picker mutates the textarea value programmatically, which does
+  // NOT fire ``onInput`` — so the ``composerHasContent`` flag must be
+  // refreshed by the splice itself, or the mic button never swaps to
+  // Send and the user can't send an emoji-only first message.
+  it('swaps mic→send when the first character is an emoji from the picker', async () => {
+    wireApiMock({
+      conversations: [{
+        id: 'conv-test',
+        type: 'dm',
+        name: null,
+        last_message_at: '2026-05-17T13:00:42+00:00',
+        members: [{ user_id: 'u-bob', username: 'bob', display_name: 'Bob', picture_url: null }],
+        member_count: 2,
+        unread: 0,
+        last_read_at: '2026-05-17T13:00:42+00:00',
+      }],
+      messages: [],
+      members: [{
+        user_id: 'u-bob', username: 'bob', display_name: 'Bob',
+        picture_url: null, is_online: false, is_idle: false, last_seen_at: null,
+      }],
+    })
+    const { render, waitFor, fireEvent } = await import('@testing-library/preact')
+    const { default: DmThreadPage } = await import('./DmThreadPage')
+    const { container } = render(<DmThreadPage />)
+    await waitFor(() => {
+      expect(container.querySelector('textarea[name="content"]')).not.toBeNull()
+    }, { timeout: 3000 })
+
+    // Empty composer → no Send button, the voice-record slot owns it.
+    expect(container.querySelector('[aria-label="Send message"]')).toBeNull()
+
+    // Open the inline emoji picker and pick the first emoji.
+    const emojiBtn = container.querySelector(
+      '[aria-label="Insert emoji into message"]',
+    ) as HTMLElement
+    expect(emojiBtn).not.toBeNull()
+    fireEvent.click(emojiBtn)
+    const firstEmoji = await waitFor(() => {
+      const el = container.querySelector('.sh-emoji-btn')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    }, { timeout: 3000 })
+    fireEvent.click(firstEmoji)
+
+    // The composer now has content (an emoji), so the slot must show Send.
+    await waitFor(() => {
+      expect(container.querySelector('[aria-label="Send message"]')).not.toBeNull()
+    }, { timeout: 3000 })
+  })
+})
