@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from socialhome.crypto import (
+    REPLAY_CACHE_WINDOW,
     ReplayCache,
     b64url_decode,
     b64url_encode,
@@ -230,6 +231,42 @@ def test_replay_cache_load_from_persistence():
     rc.load([("m1", datetime.now(timezone.utc).isoformat())])
     assert rc.seen("m1") is True
     assert rc.seen("m2") is False
+
+
+def test_replay_cache_window_outlasts_max_jittered_redelivery():
+    """Drift guard: the replay-dedup window MUST outlast the federation
+    outbox's max jittered redelivery interval.
+
+    Outbox redelivery re-signs each retry with a fresh timestamp
+    (``resign_for_redelivery``), so a retry of a delivery whose 2xx ack
+    was lost passes the §24.11 timestamp gate and relies SOLELY on the
+    replay cache to be deduped. If the window were shorter than the max
+    retry cadence the receiver would apply the event twice. This fails if
+    someone later shrinks the window or raises the backoff ceiling past it.
+    """
+    from socialhome.infrastructure.outbox_processor import (
+        BACKOFF_SECONDS,
+        JITTER_RATIO,
+    )
+
+    max_jittered_interval = max(BACKOFF_SECONDS) * (1 + JITTER_RATIO)
+    assert REPLAY_CACHE_WINDOW.total_seconds() > max_jittered_interval
+
+
+def test_replay_cache_dedupes_lost_ack_retry_within_window():
+    """A ``REPLAY_CACHE_WINDOW``-sized cache dedupes a lost-ack retry that
+    lands hours after the first (successful-but-unacked) delivery, and only
+    forgets it once the window has elapsed."""
+    rc = ReplayCache(window=REPLAY_CACHE_WINDOW)
+    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    # First delivery: not seen, recorded.
+    assert rc.seen("m", from_instance="p", now=t0) is False
+    # Lost-ack retry ~5 h later (within the ~5.2 h max jittered cadence):
+    # still deduped.
+    assert rc.seen("m", from_instance="p", now=t0 + timedelta(hours=5)) is True
+    # Well past the window: pruned, so a brand-new event with the same id
+    # is no longer falsely deduped.
+    assert rc.seen("m", from_instance="p", now=t0 + timedelta(hours=25)) is False
 
 
 def test_crypto_helpers_random_token():

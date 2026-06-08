@@ -37,6 +37,7 @@ from .auth import (
     require_auth,
 )
 from .config import Config
+from .crypto import REPLAY_CACHE_WINDOW
 from .db import AsyncDatabase
 from .domain.federation import FederationEventType
 from .federation.auto_pair_coordinator import AutoPairCoordinator
@@ -367,7 +368,11 @@ async def _redeliver_envelope(
     # parse/sign failure is PERMANENT (drop). Doing this inside the try
     # would turn a corrupt row into an immortal TRANSIENT retry — and for
     # the NEVER_DROP events this fix protects, that's a ceiling-backoff loop
-    # that never ends.
+    # that never ends. (A row whose stored sig_suite needs a signer this
+    # node no longer has — e.g. a PQ suite after the PQ signer was removed —
+    # also drops PERMANENT here; pre-fix it would have looped on skew. That's
+    # correct: the node that originally signed it had the signer, so a missing
+    # one is misconfiguration, not a transient condition.)
     try:
         body = federation_service.resign_for_redelivery(entry.payload_json)
     except Exception as exc:
@@ -2455,7 +2460,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # bounded so a long-running instance doesn't accumulate years of
         # signed-envelope ids on disk.
         nonlocal replay_cache_scheduler
-        replay_cache_scheduler = ReplayCachePruneScheduler(federation_repo)
+        replay_cache_scheduler = ReplayCachePruneScheduler(
+            federation_repo, window=REPLAY_CACHE_WINDOW
+        )
         await replay_cache_scheduler.start()
 
         # App-pending-session pruner — sweeps TTL-expired inbound app-session

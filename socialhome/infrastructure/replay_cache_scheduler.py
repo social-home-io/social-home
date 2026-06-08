@@ -1,14 +1,21 @@
 """Periodic pruning for ``federation_replay_cache`` (§24.11).
 
 The replay cache prevents an attacker from re-playing a captured
-federation envelope. The in-memory :class:`~socialhome.crypto.ReplayCache`
-keeps a 1-hour sliding window; the on-disk
+federation envelope, and also dedupes a re-signed outbox redelivery
+whose 2xx ack was lost (such a retry carries a fresh §24.11 timestamp,
+so the timestamp gate no longer drops it — the replay cache is the only
+thing left to stop a double-apply). The in-memory
+:class:`~socialhome.crypto.ReplayCache` keeps a sliding window sized by
+:data:`~socialhome.crypto.REPLAY_CACHE_WINDOW` (24 h, comfortably past
+the outbox's ~5.2 h max jittered redelivery interval); the on-disk
 ``federation_replay_cache`` table is the source of truth that survives
 restarts. Without pruning, the table grows by every signed inbound
 event forever — eventually crowding out the rest of the database.
 
 This scheduler runs once per ``interval_seconds`` and deletes rows
-older than ``window`` (default 1 hour, matching the in-memory cache).
+older than ``window`` (production passes
+:data:`~socialhome.crypto.REPLAY_CACHE_WINDOW`, matching the in-memory
+cache).
 """
 
 from __future__ import annotations
@@ -32,6 +39,10 @@ class ReplayCachePruneScheduler:
         repo: AbstractFederationRepo,
         *,
         interval_seconds: float = 600.0,  # every 10 min
+        # The 1 h default is for ad-hoc / test construction only; production
+        # passes ``REPLAY_CACHE_WINDOW`` (24 h) so the on-disk prune horizon
+        # matches the in-memory cache and outlasts the outbox's re-signed
+        # redelivery cadence (see module docstring).
         window: timedelta = timedelta(hours=1),
     ) -> None:
         self._repo = repo

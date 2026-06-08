@@ -21,7 +21,7 @@ import hmac
 import logging
 import uuid
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from .routed_envelope import SpaceRoutedHandler
 
 from ..crypto import (
+    REPLAY_CACHE_WINDOW,
     ReplayCache,
     b64url_encode,
 )
@@ -209,7 +210,7 @@ class FederationService:
         self._own_pq_pk = own_pq_pk
         self._sig_suite = sig_suite
         self._http_client = http_client
-        self._replay_cache = ReplayCache(window=timedelta(hours=1))
+        self._replay_cache = ReplayCache(window=REPLAY_CACHE_WINDOW)
         self._sync_manager = sync_manager
         self._call_signaling = call_signaling
         self._ice_servers = ice_servers or []
@@ -674,7 +675,9 @@ class FederationService:
         Call this once at startup so the in-memory cache is populated before
         any inbound requests are handled.
         """
-        entries = await self._federation_repo.load_replay_cache(within_hours=1)
+        entries = await self._federation_repo.load_replay_cache(
+            within_hours=int(REPLAY_CACHE_WINDOW.total_seconds() // 3600),
+        )
         self._replay_cache.load(entries)
 
     # ─── HTTP client helper ───────────────────────────────────────────────
