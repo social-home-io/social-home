@@ -233,7 +233,14 @@ retention sweep folded into the same loop with two phases:
 `TERMINAL_GRACE` (24 h) in bounded batches. Together these bound the
 table: failures are kept 24 h for operator diagnostics then purged, and
 the pre-change historical `delivered`/`failed` backlog is reclaimed over
-successive sweep ticks.
+successive sweep ticks. A hard **per-peer pending cap**
+(`MAX_PENDING_PER_PEER`, default 1000) bounds the table independently of
+the TTL: when a peer is at/over the cap, `enqueue` evicts that peer's
+oldest *droppable* (non-NEVER_DROP) pending row before inserting the new
+one, so a permanently-offline peer plus a busy space can't flood the
+outbox. NEVER_DROP rows are never evicted — if the backlog is entirely
+NEVER_DROP the new row is still inserted over the cap rather than dropping
+a security/structural event.
 
 ### Bulk sync
 

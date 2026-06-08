@@ -31,6 +31,14 @@ NEVER_DROP: frozenset[FederationEventType] = frozenset(
     }
 )
 
+#: Hard ceiling on PENDING outbox rows per peer. When a peer is over this,
+#: enqueue evicts its oldest *droppable* (non-NEVER_DROP) pending row before
+#: inserting the new one, so a permanently-offline peer plus a busy space
+#: can't flood the outbox. Ordinary events are best-effort (the receiver
+#: rebuilds via sync), so dropping the oldest to keep the freshest state is
+#: the right trade; NEVER_DROP rows are never evicted.
+MAX_PENDING_PER_PEER = 1000
+
 #: Ordinary (non-NEVER_DROP) outbox entries live this long before the prune
 #: sweep marks them failed (§4.4.7).
 RETENTION_DAYS = 7
