@@ -153,9 +153,11 @@ GFS-side tables (in `socialhome/global_server/migrations/0001_initial.sql`):
 
 | Table | Purpose |
 |---|---|
-| `gfs_highlight_publications` | One row per `(highlight_id, instance_id)` opted into public sharing. `expires_at` mirrors the author's retention so a publication can never outlive the highlight it advertises. `publish_signature` caches the Ed25519 over the publish body for audit. The OG-thumbnail filename column was **dropped** in GFS migration `0003` — the GFS no longer caches OG thumbnails and now stores zero highlight content bytes. |
+| `gfs_highlight_publications` | One row per `(highlight_id, instance_id)` opted into public sharing. `expires_at` mirrors the author's retention so a publication can never outlive the highlight it advertises. `publish_signature` caches the Ed25519 over the publish body for audit. The OG-thumbnail filename column was **dropped** in GFS migration `0003` — the GFS no longer caches OG thumbnails and now stores zero highlight content bytes. Expired rows are pruned hourly by the GFS maintenance loop (`global_server/maintenance.py`). |
 | `gfs_highlight_tokens` | Revocable share-link tokens under a publication (composite FK CASCADE on the publication PK). `revoked_at` is `NULL` while active; ``label`` is the author-supplied "for-twitter" hint. |
-| `admin_login_attempts` | One row per failed GFS admin login, `(ip, attempted_at)`. Read only as a count within a short window (`count_failed_attempts`) to rate-limit brute force. GFS has no recurring scheduler, so `record_login_attempt` prunes rows older than 24 h on write — comfortably beyond the 15-minute lockout window — keeping the table bounded. |
+| `admin_login_attempts` | One row per failed GFS admin login, `(ip, attempted_at)`. Read only as a count within a short window (`count_failed_attempts`) to rate-limit brute force. `record_login_attempt` prunes rows older than 24 h on write — comfortably beyond the 15-minute lockout window — keeping the table bounded. |
+| `admin_sessions` | GFS admin-portal session tokens with `expires_at`. Purged at boot and then hourly by the GFS maintenance loop (`global_server/maintenance.py`), so a long-running GFS doesn't accumulate expired sessions until reboot. |
+| `gfs_pair_tokens` | Single-use public-pairing tokens (§24.7.4) with a 10-min TTL. Counted within a short rate-limit window, then dead weight; pruned after 24 h (`PAIR_TOKEN_RETENTION_SECONDS`) by the GFS maintenance loop. |
 
 ## Momentum
 
@@ -176,7 +178,7 @@ themselves moments and link to the conversation root via
 
 | Table | Purpose |
 |---|---|
-| `notifications` | In-app notification feed — id, user_id, type, title, optional body (omitted for DMs / location messages / UGC per §25.3), link URL, read_at. |
+| `notifications` | In-app notification feed — id, user_id, type, title, optional body (omitted for DMs / location messages / UGC per §25.3), link URL, read_at. Capped at the 200 most-recent rows per user on insert; rows older than 90 days are also pruned hourly by `notification_cleanup_scheduler` so inactive users' rows don't linger forever. |
 | `push_subscriptions` | Web Push endpoints — `endpoint`, `p256dh`, `auth_secret` (sensitive). One row per browser/device. |
 
 ## Presence

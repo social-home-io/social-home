@@ -77,6 +77,9 @@ from .infrastructure.pairing_session_prune_scheduler import (
     PairingSessionPruneScheduler,
 )
 from .infrastructure.auth_audit_cleanup_scheduler import AuthAuditCleanupScheduler
+from .infrastructure.notification_cleanup_scheduler import (
+    NotificationCleanupScheduler,
+)
 from .infrastructure.password_reset_cleanup_scheduler import (
     PasswordResetCleanupScheduler,
 )
@@ -1815,6 +1818,7 @@ def create_app(config: Config | None = None) -> web.Application:
     dm_relay_seen_scheduler: DmRelaySeenPruneScheduler | None = None
     password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
     auth_audit_cleanup_scheduler: AuthAuditCleanupScheduler | None = None
+    notification_cleanup_scheduler: NotificationCleanupScheduler | None = None
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
     pairing_session_prune_scheduler: PairingSessionPruneScheduler | None = None
     dm_gc_scheduler: DmGcScheduler | None = None
@@ -2529,6 +2533,15 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         await auth_audit_cleanup_scheduler.start()
 
+        # Notification cleanup — drops in-app notification rows older than
+        # the 90-day retention window so inactive users' rows don't pile up
+        # forever (per-user cap only prunes on fresh inserts; runs hourly).
+        nonlocal notification_cleanup_scheduler
+        notification_cleanup_scheduler = NotificationCleanupScheduler(
+            repos.notification,
+        )
+        await notification_cleanup_scheduler.start()
+
         # Online-status idle scanner — promotes online → idle after 5
         # minutes of WS-frame silence and back to online on activity.
         await online_status_service.start()
@@ -2723,6 +2736,8 @@ def create_app(config: Config | None = None) -> web.Application:
             await password_reset_cleanup_scheduler.stop()
         if auth_audit_cleanup_scheduler is not None:
             await auth_audit_cleanup_scheduler.stop()
+        if notification_cleanup_scheduler is not None:
+            await notification_cleanup_scheduler.stop()
         await online_status_service.stop()
         if pairing_relay_scheduler is not None:
             await pairing_relay_scheduler.stop()

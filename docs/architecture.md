@@ -324,9 +324,19 @@ template: `replay_cache_scheduler.py`. Schedulers cover replay-cache
 eviction, outbox processing, calendar reminders, page-lock expiry,
 post-draft GC, pairing-relay flush, post-rotation tasks, space
 retention, task deadlines, recurring-task spawning, password-reset-token
-GC, and auth-audit-log pruning (`auth_audit_cleanup_scheduler.py` drops
+GC, auth-audit-log pruning (`auth_audit_cleanup_scheduler.py` drops
 `auth_audit_log` rows older than 90 days hourly, so the append-only trail
-can't be grown without bound by repeated failed logins).
+can't be grown without bound by repeated failed logins), and
+notification-feed GC (`notification_cleanup_scheduler.py` drops
+`notifications` rows older than 90 days hourly).
+
+The GFS runs its own periodic maintenance sweep
+(`global_server/maintenance.py`, same `_stop: asyncio.Event` lifecycle as
+`global_server/cluster.py`): hourly it purges expired `admin_sessions`,
+expired `gfs_highlight_publications`, and aged `gfs_pair_tokens`, each
+prune best-effort and independently guarded. Before this loop the GFS had
+no recurring cleanup — only a boot-time session purge and the cluster
+heartbeat — so those tables grew unbounded on a long-running process.
 
 ### Async media transcoding
 

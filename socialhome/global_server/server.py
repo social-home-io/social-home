@@ -46,6 +46,7 @@ from .config import (
     write_example_config,
 )
 from .federation import GfsFederationService
+from .maintenance import GfsMaintenanceScheduler
 from .public import (
     PairingTokenService,
     build_listing_rate_limit,
@@ -199,9 +200,17 @@ class GfsApp:
             repos.moment_public_follows,
             ws_registry,
         )
+        # Periodic retention sweep — purges expired admin sessions, expired
+        # highlight publications, and aged pair tokens (the GFS otherwise has
+        # no recurring cleanup loop; these tables would grow without bound).
+        maintenance = GfsMaintenanceScheduler(
+            admin_repo=repos.admin,
+            highlight_repo=repos.highlight_pubs,
+        )
         return SimpleNamespace(
             federation=federation,
             cluster=cluster,
+            maintenance=maintenance,
             admin_auth=AdminAuth(repos.admin),
             admin=admin,
             tokens=PairingTokenService(repos.admin),
@@ -283,9 +292,13 @@ class GfsApp:
 
         await self.repos.admin.purge_expired_sessions(int(time.time()))
         await self.services.cluster.start()
+        # Recurring retention sweep — runs the purge again on its first tick
+        # then hourly (the boot purge above stays for an immediate clean).
+        await self.services.maintenance.start()
 
     async def _on_cleanup(self, app: web.Application) -> None:
         log.info("GFS: shutting down")
+        await self.services.maintenance.stop()
         await self.services.cluster.stop()
         await self.services.ws_registry.close_all()
         session = app.get(K.gfs_http_session_key)
