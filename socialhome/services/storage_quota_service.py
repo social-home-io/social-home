@@ -1,11 +1,17 @@
 """Storage quota tracking + enforcement (§5.2 ``max_storage_bytes``).
 
-A household has a single global byte budget. The service:
+A household has a single global byte budget. "Storage used" is the total
+size of the **media directory on disk** — every uploaded blob lands there
+(images, gallery photos, DM media, video/audio transcodes, profile
+pictures…), so measuring the directory counts all real storage regardless
+of which table references it. (The previous implementation summed only the
+``file_meta_json`` of FILE-type posts, so a household whose storage is
+photos / DMs / gallery — the normal case — always reported 0 bytes.)
 
-* sums all file_meta.size_bytes across feed_posts + space_posts +
-  conversation_messages by walking the persisted JSON fields;
-* exposes :meth:`current_usage_bytes` for the GET /api/storage/usage
-  endpoint;
+The service:
+
+* exposes :meth:`current_usage_bytes` (the media-dir size) for the
+  GET /api/storage/usage endpoint;
 * exposes :meth:`check_can_store` which raises
   :class:`StorageQuotaExceeded` when an upload would push the
   household over the configured cap.
@@ -17,13 +23,11 @@ by a single file's size; that's acceptable for the v1 quota model.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from dataclasses import dataclass
-from typing import Iterable
-
-import orjson
-
-from ..repositories.storage_stats_repo import AbstractStorageStatsRepo
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -62,15 +66,15 @@ class StorageUsage:
 class StorageQuotaService:
     """Per-household storage usage + quota enforcement."""
 
-    __slots__ = ("_repo", "_quota_bytes")
+    __slots__ = ("_media_path", "_quota_bytes")
 
     def __init__(
         self,
-        repo: AbstractStorageStatsRepo,
         *,
+        media_path: str | Path,
         quota_bytes: int,
     ) -> None:
-        self._repo = repo
+        self._media_path = Path(media_path)
         self._quota_bytes = quota_bytes
 
     @property
@@ -89,8 +93,26 @@ class StorageQuotaService:
     # ─── Usage ────────────────────────────────────────────────────────────
 
     async def current_usage_bytes(self) -> int:
-        """Sum the byte size of every file_meta blob in the database."""
-        return _sum_meta_sizes(await self._repo.list_file_meta_blobs())
+        """Total bytes of every file under the media directory — the real
+        on-disk household storage. Walked off the event loop (IO-bound)."""
+        return await asyncio.to_thread(self._dir_size, self._media_path)
+
+    @staticmethod
+    def _dir_size(root: Path) -> int:
+        """Recursively sum regular-file sizes under ``root`` (sync helper —
+        runs in a worker thread). A missing dir (no uploads yet) is 0; an
+        unreadable entry is skipped rather than failing the whole tally."""
+        total = 0
+        try:
+            for dirpath, _dirs, files in os.walk(root):
+                for name in files:
+                    try:
+                        total += os.stat(os.path.join(dirpath, name)).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            return total
+        return total
 
     async def usage(self) -> StorageUsage:
         used = await self.current_usage_bytes()
@@ -117,19 +139,3 @@ class StorageQuotaService:
         if used + additional_bytes > self._quota_bytes:
             available = max(0, self._quota_bytes - used)
             raise StorageQuotaExceeded(additional_bytes, available)
-
-
-# ─── Helpers ─────────────────────────────────────────────────────────────
-
-
-def _sum_meta_sizes(json_blobs: Iterable[str]) -> int:
-    total = 0
-    for blob in json_blobs:
-        try:
-            data = orjson.loads(blob)
-        except TypeError, orjson.JSONDecodeError:
-            continue
-        size = data.get("size_bytes") if isinstance(data, dict) else 0
-        if isinstance(size, int) and size > 0:
-            total += size
-    return total

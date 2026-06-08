@@ -83,6 +83,7 @@ async def client(aiohttp_client, tmp_dir):
     tc._tok = raw
     tc._uid = uid
     tc._db = db
+    tc._cfg = cfg
     return tc
 
 

@@ -151,7 +151,6 @@ from .services.space_approval_service import SpaceApprovalService
 from .repositories.report_repo import SqliteReportRepo
 from .repositories.search_repo import SqliteSearchRepo
 from .repositories.space_key_repo import SqliteSpaceKeyRepo
-from .repositories.storage_stats_repo import SqliteStorageStatsRepo
 from .repositories.theme_repo import SqliteThemeRepo
 from .routes import setup_routes
 from .services.auto_pair_inbox import AutoPairInbox
@@ -526,7 +525,6 @@ def _build_repos(db: AsyncDatabase):
         space_remote_member=SqliteSpaceRemoteMemberRepo(db),
         space_proposal=SqliteSpaceProposalRepo(db),
         space_remote_location=SqliteSpaceRemoteLocationRepo(db),
-        storage_stats=SqliteStorageStatsRepo(db),
         poll=SqlitePollRepo(db),
         space_poll=SqliteSpacePollRepo(db),
         gfs_connection=SqliteGfsConnectionRepo(db),
@@ -1425,7 +1423,7 @@ def create_app(config: Config | None = None) -> web.Application:
 
     # ── Storage quota ─────────────────────────────────────────────────────
     storage_quota = StorageQuotaService(
-        repos.storage_stats,
+        media_path=config.media_path,
         quota_bytes=config.max_storage_bytes,
     )
 
