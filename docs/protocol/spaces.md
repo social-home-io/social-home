@@ -56,10 +56,14 @@ sequenceDiagram
     Note over A,B: both sides ready to<br/>exchange encrypted content
 ```
 
-## Dissolution (hard delete)
+## Dissolution (host hard-deletes; members keep a read-only archive)
 
-Dissolving a space is a **permanent removal**, not a soft archive — on
-the owner host *and* on every member household:
+Dissolving a space is asymmetric: a **permanent removal** on the owner
+host, but on every member household the local copy is **archived
+read-only** rather than purged. A member's space is *their own local
+copy* of shared content — silently deleting it when the owner ends the
+space loses everything they had, so members instead keep a frozen,
+clearly-labelled archive they choose when to remove.
 
 1. **Host** (`SpaceService.dissolve_space`, owner-only): unpublish from
    any paired GFS; publish `SpaceConfigChanged(DISSOLVED)`, which (a)
@@ -68,23 +72,30 @@ the owner host *and* on every member household:
    every member household via `broadcast_to_space_members`. These run
    while the rows still exist (the broadcast + WS fan-out resolve
    recipients from the membership rows about to be deleted).
-2. **Purge**: `DELETE FROM spaces WHERE id=?`. Every space-scoped child
-   table is `REFERENCES spaces(id) ON DELETE CASCADE` and the connection
-   runs `PRAGMA foreign_keys=ON`, so the full content graph — posts,
-   comments, members, gallery albums/items, calendar, pages, tasks,
-   stickies, content keys, the media-outbox rows, location pins — drops
-   in one statement. Media **files** (no FK) are collected before the
-   delete and unlinked after (`services/space_purge.py`).
-3. **Member** (inbound `SPACE_DISSOLVED` → `_on_dissolved`): publishes
-   `RemoteSpaceDissolved` (→ `space.config.changed` WS frame so the
-   member's tabs drop the card), then runs the identical purge + media
-   unlink on its local copy.
+2. **Host purge**: `DELETE FROM spaces WHERE id=?`. Every space-scoped
+   child table is `REFERENCES spaces(id) ON DELETE CASCADE` and the
+   connection runs `PRAGMA foreign_keys=ON`, so the full content graph —
+   posts, comments, members, gallery albums/items, calendar, pages,
+   tasks, stickies, content keys, the media-outbox rows, location pins —
+   drops in one statement. Media **files** (no FK) are collected before
+   the delete and unlinked after (`services/space_purge.py`).
+3. **Member** (inbound `SPACE_DISSOLVED` → `_on_dissolved`): verifies the
+   event came from the space's `owner_instance_id` (drops it otherwise —
+   a non-owner can't dissolve someone else's space), then **archives**
+   its local copy read-only via `set_archived(space_id, True,
+   reason="dissolved")` and publishes `RemoteSpaceDissolved`. The local
+   content is kept; the space becomes read-only (`_require_writable_space`)
+   and cannot be unarchived from the member side (`unarchive_space` refuses
+   any space with an `archived_reason` set). `NotificationService` raises a
+   one-time `space_dissolved` notification per local member
+   (deduped by link). No purge, no media unlink on the member side.
 
 `SPACE_DISSOLVED` carries only `{space_id}` and is in the outbox
-`NEVER_DROP` set, so an offline member still hard-deletes its copy once
-it reconnects. (`SPACE_CONFIG_CHANGED` is deliberately **not** used for
-dissolve — it would refresh the member's stub and resurrect a row the
-purge just removed.)
+`NEVER_DROP` set, so an offline member still receives it and archives its
+copy once it reconnects. (`SPACE_CONFIG_CHANGED` is deliberately **not**
+used for dissolve. It is also ignored once a space is in a terminal state:
+`_on_space_config_changed` returns early when `archived_reason` is set, so
+a late or replayed config snapshot can't revive a dissolved archive.)
 
 ## Archive (soft, reversible, federated read-only)
 
@@ -105,6 +116,14 @@ deleting anything, and is reversible.
   restores read-write everywhere.
 - `archived` is independent of `dissolved`: `dissolved` means *gone*
   (`_require_space` 404s it), `archived` means *read-only-visible*.
+- `archived_reason` (`NULL` | `'dissolved'` | `'removed'`) distinguishes a
+  reversible admin archive (`NULL` — Unarchive available) from a
+  remote-termination archive a member can't undo (`'dissolved'` when the
+  owner dissolved the space; `'removed'` reserved for the member-removed
+  path). When set, `unarchive_space` refuses and the SPA shows a
+  reason-aware "read-only archive" banner with no Unarchive control. The
+  host never sets `archived_reason` on its own space (it purges); only
+  member copies carry it, and it is never re-federated.
 
 ## Post-type allow-list (per-space feed composer gating)
 
