@@ -109,7 +109,7 @@ anything below contradicts the file, the file wins.
 | `space_calendar_feed_tokens` | Per-`(user, space)` revocable tokens for the iCal `.ics` feed. The `token_hash` column holds a SHA-256 hash of the raw token (matching `api_tokens`); a leaked DB never exposes a live feed URL. Separate from API tokens so revoking one doesn't affect the other. |
 | `pending_federated_rsvps` | Buffer for RSVP federation events arriving before their event has propagated. Flushed on event arrival. |
 | `space_pages` | Wiki-style space pages with edit-lock fields and pending-delete approval workflow. |
-| `space_page_snapshots` | Concurrent-edit conflict resolution (§4.4.4.1). Sides are `base` / `mine` / `theirs`; `conflict=1` blocks further edits until resolved. |
+| `space_page_snapshots` | Concurrent-edit conflict resolution (§4.4.4.1). Sides are `base` / `mine` / `theirs`; `conflict=1` blocks further edits until resolved. Each row holds a full page body, so growth is bounded: pruned to the newest `MAX_PAGE_SNAPSHOTS` (10) per page on each insert, and dropped explicitly when the page is deleted (no FK cascade). |
 | `space_task_lists` / `space_tasks` | Space task lists and tasks; mirror household `task_lists` / `tasks` with `space_id`. |
 
 ## Direct messages
@@ -193,7 +193,7 @@ themselves moments and link to the conversation root via
 | Table | Purpose |
 |---|---|
 | `call_sessions` | One row per call — type (`audio` / `video`), status (`ringing` / `active` / `ended` / `declined` / `missed`), participant list JSON, started/connected/ended timestamps, duration. |
-| `call_quality_samples` | Per-peer ~10 s WebRTC stats samples (RTT, jitter, loss, audio/video bitrate). Used for admin diagnostics (§26). |
+| `call_quality_samples` | The latest WebRTC quality reading (RTT, jitter, loss, audio/video bitrate) **per participant per call** — `save_quality_sample` replaces any prior reading for the same `(call_id, reporter_user_id)`, so this is **one row per participant per call**, not a stored per-second sample stream. Naturally bounded like `call_sessions` (no cap/prune needed). The DM call-history view (§26) averages the per-participant readings into the call's quality. |
 
 ## Public discovery and moderation
 
@@ -210,7 +210,7 @@ themselves moments and link to the conversation root via
 | Table | Purpose |
 |---|---|
 | `task_lists` / `tasks` | Household task lists and tasks. Tasks have `assignees_json`, status (`todo` / `in_progress` / `done`), `rrule` for recurrence, `last_spawned_at`, `recurrence_parent_id`, `archived_at`. |
-| `task_deadline_notifications` | Dedup table for fired deadline notifications, keyed by `(task_id, due_date)`. |
+| `task_deadline_notifications` | Dedup table for fired deadline notifications, keyed by `(task_id, due_date)`. Only guards same-day refires, so rows older than `DEADLINE_NOTIF_RETENTION_DAYS` (30) are pruned at the end of each daily scheduler tick. |
 | `task_comments` / `task_attachments` | Comments and file attachments on tasks (§23.68). |
 
 ## Calendar (household)

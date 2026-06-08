@@ -231,6 +231,18 @@ class SqliteCallRepo:
         self,
         sample: CallQualitySample,
     ) -> None:
+        # Social-home scale: a call's quality is a single *current* reading
+        # per participant, not a stored per-second sample stream. Keep only
+        # the latest reading per (call, reporter) — replace any prior one — so
+        # the table holds one row per participant per call, naturally bounded
+        # like ``call_sessions`` (no cap, no prune sweep). The DM call-history
+        # view averages these per-participant readings into the call's quality.
+        # Both statements share the same async-write batch, so the DELETE lands
+        # before the INSERT.
+        await self._db.enqueue(
+            "DELETE FROM call_quality_samples WHERE call_id=? AND reporter_user_id=?",
+            (sample.call_id, sample.reporter_user_id),
+        )
         await self._db.enqueue(
             """
             INSERT INTO call_quality_samples(
