@@ -69,7 +69,9 @@ class AbstractSpaceRepo(Protocol):
     async def list_subscriptions_for_user(self, user_id: str) -> list[dict]: ...
     async def list_all(self) -> list[Space]: ...
     async def mark_dissolved(self, space_id: str) -> None: ...
-    async def set_archived(self, space_id: str, archived: bool) -> None: ...
+    async def set_archived(
+        self, space_id: str, archived: bool, reason: str | None = None
+    ) -> None: ...
     async def purge(self, space_id: str) -> None: ...
     async def increment_config_sequence(self, space_id: str) -> int: ...
     async def update_age_gate(
@@ -289,7 +291,7 @@ class SqliteSpaceRepo:
                 allow_post_file, allow_post_bazaar,
                 allow_post_event, allow_post_location, allow_post_highlight_share,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
-                dissolved, archived, about_markdown, cover_hash, tz,
+                dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
                 min_age, target_audience
             ) VALUES(
                 -- 50 placeholders, one per column listed above.
@@ -307,7 +309,7 @@ class SqliteSpaceRepo:
                 ?, ?,                         -- allow_post_file, allow_post_bazaar
                 ?, ?, ?,                      -- allow_post_event, allow_post_location, allow_post_highlight_share
                 ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
-                ?, ?, ?, ?, ?,                -- dissolved, archived, about_markdown, cover_hash, tz
+                ?, ?, ?, ?, ?, ?,             -- dissolved, archived, archived_reason, about_markdown, cover_hash, tz
                 ?, ?                          -- min_age, target_audience
             )
             ON CONFLICT(id) DO UPDATE SET
@@ -353,6 +355,7 @@ class SqliteSpaceRepo:
                 allow_here_mention=excluded.allow_here_mention,
                 dissolved=excluded.dissolved,
                 archived=excluded.archived,
+                archived_reason=excluded.archived_reason,
                 about_markdown=excluded.about_markdown,
                 cover_hash=excluded.cover_hash,
                 tz=excluded.tz,
@@ -406,6 +409,7 @@ class SqliteSpaceRepo:
                 int(space.allow_here_mention),
                 int(space.dissolved),
                 int(space.archived),
+                space.archived_reason,
                 space.about_markdown,
                 space.cover_hash,
                 space.tz,
@@ -584,12 +588,20 @@ class SqliteSpaceRepo:
             (space_id,),
         )
 
-    async def set_archived(self, space_id: str, archived: bool) -> None:
-        """Soft, reversible archive flag. Unlike :meth:`purge` this keeps
-        all rows + media; the space stays readable but read-only."""
+    async def set_archived(
+        self, space_id: str, archived: bool, reason: str | None = None
+    ) -> None:
+        """Soft archive flag + reason. Unlike :meth:`purge` this keeps all
+        rows + media; the space stays readable but read-only.
+
+        ``reason`` stamps *why* archived: ``'dissolved'`` (owner dissolved)
+        or ``'removed'`` (this household removed). Omitting it (the default
+        ``None``) clears the reason — so a normal admin archive carries NULL,
+        and unarchiving (``set_archived(id, False)``) resets it to NULL too.
+        """
         await self._db.enqueue(
-            "UPDATE spaces SET archived=? WHERE id=?",
-            (int(archived), space_id),
+            "UPDATE spaces SET archived=?, archived_reason=? WHERE id=?",
+            (int(archived), reason, space_id),
         )
 
     async def purge(self, space_id: str) -> None:
@@ -1397,6 +1409,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         allow_here_mention=bool_col(row.get("allow_here_mention", 0)),
         dissolved=bool_col(row.get("dissolved", 0)),
         archived=bool_col(row.get("archived", 0)),
+        archived_reason=row.get("archived_reason"),
         about_markdown=row.get("about_markdown"),
         cover_hash=row.get("cover_hash"),
         icon_hash=row.get("icon_hash"),

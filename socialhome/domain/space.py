@@ -587,6 +587,10 @@ class Space:
     #: an archived space stays readable but is read-only and drops out of
     #: active space lists. Federates over SPACE_CONFIG_CHANGED + space_meta.
     archived: bool = False
+    #: Why the space is archived. NULL = not-archived or a normal/reversible
+    #: admin archive; ``'dissolved'``/``'removed'`` = remote-terminated
+    #: (read-only, content kept, not unarchivable).
+    archived_reason: str | None = None
     allow_here_mention: bool = False
     # Rich-text "about" block rendered at the top of the space feed
     # via MarkdownView (§23 customization).

@@ -1,0 +1,32 @@
+-- Space archive *reason* — distinguishes remote-termination from admin archive.
+--
+-- The ``archived`` flag (0013) is reversible: an admin archives a space and
+-- can un-archive it. A space can ALSO end remotely — its owner dissolved it,
+-- or this household was removed from a still-living space. We want that shown
+-- as a permanent, read-only archive that KEEPS the local content (distinct
+-- from ``dissolved``, which hides the space entirely). ``archived_reason``
+-- carries the *why* so the UI can show the right copy and block unarchive.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. Only ``space_repo`` reads/writes archived state
+--       (``set_archived`` / ``_row_to_space`` / the ``save`` upsert),
+--       ``space_service`` archive/dissolve, and the federation_inbound
+--       dissolve/removal handlers. No existing column carries *why* a space
+--       is archived — ``archived`` is a bare boolean, ``dissolved`` is a
+--       different (hide-entirely) state.
+--   (2) Alternative rejected. Reusing ``archived`` alone can't distinguish
+--       admin-archive (reversible) from remote-termination (permanent,
+--       content kept), so the UI can't pick the right copy nor block
+--       unarchive. ``dissolved`` hides the space entirely — wrong, we want it
+--       visible read-only. A federation event can't substitute for a local
+--       persisted state the SPA reads on every space load.
+--   (3) Smallest change. One additive NULLable column. NULL = "not
+--       remote-terminated" (un-archived OR a normal admin archive). No
+--       backfill (every existing archived space is an admin archive → NULL is
+--       correct), no table rewrite.
+--
+-- Value domain:
+--   NULL          → not remote-terminated (un-archived, or normal admin archive)
+--   'dissolved'   → the owner dissolved the space
+--   'removed'     → this household was removed from a still-living space
+ALTER TABLE spaces ADD COLUMN archived_reason TEXT;
