@@ -17,6 +17,7 @@ business logic.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Protocol, runtime_checkable
 
 import orjson
@@ -37,6 +38,13 @@ from .domain import (
     GlobalSpace,
     RtcConnection,
 )
+
+# Retention for the brute-force counter table. ``admin_login_attempts`` is
+# only ever read as a count within a short ``since`` window (the 15-minute
+# BRUTE_FORCE_WINDOW_SECONDS in admin.py), so anything older is dead weight.
+# 24h comfortably exceeds any rate-limit window; rows are pruned on write,
+# keeping the table from growing without bound under repeated failed logins.
+_ADMIN_LOGIN_ATTEMPT_RETENTION_SECONDS = 86400
 
 
 # ─── Federation repo ─────────────────────────────────────────────────────
@@ -551,6 +559,14 @@ class SqliteGfsAdminRepo:
         await self._db.enqueue(
             "INSERT INTO admin_login_attempts(ip) VALUES(?)",
             (ip,),
+        )
+        # Prune-on-write: GFS has no recurring cleanup scheduler, and this
+        # table is purely a short-window rate-limit counter, so drop rows
+        # older than the retention window to keep it bounded.
+        now_seconds = int(time.time())
+        await self._db.enqueue(
+            "DELETE FROM admin_login_attempts WHERE attempted_at < ?",
+            (now_seconds - _ADMIN_LOGIN_ATTEMPT_RETENTION_SECONDS,),
         )
 
     async def count_failed_attempts(self, ip: str, since: int) -> int:

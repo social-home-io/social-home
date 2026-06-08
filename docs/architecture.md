@@ -323,7 +323,10 @@ same lifecycle: `_stop: asyncio.Event` set in `stop()`, drained in
 template: `replay_cache_scheduler.py`. Schedulers cover replay-cache
 eviction, outbox processing, calendar reminders, page-lock expiry,
 post-draft GC, pairing-relay flush, post-rotation tasks, space
-retention, task deadlines, and recurring-task spawning.
+retention, task deadlines, recurring-task spawning, password-reset-token
+GC, and auth-audit-log pruning (`auth_audit_cleanup_scheduler.py` drops
+`auth_audit_log` rows older than 90 days hourly, so the append-only trail
+can't be grown without bound by repeated failed logins).
 
 ### Async media transcoding
 
