@@ -1014,7 +1014,11 @@ class NotificationService:
                         "read-only archive."
                     ),
                     link_url=f"/spaces/{event.space_id}",
-                )
+                ),
+                # A re-broadcast of SPACE_DISSOLVED (fresh msg_id) must not
+                # re-notify every member; the (user_id, type, link_url) tuple
+                # is stable for this one-time notice.
+                dedupe_by_link=True,
             )
 
     async def on_space_join_requested(

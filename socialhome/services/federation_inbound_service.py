@@ -1519,6 +1519,11 @@ class FederationInboundService:
             return
         if existing.owner_instance_id != event.from_instance:
             return
+        if existing.archived_reason:
+            # Terminal state: the host dissolved this space (or removed us). A
+            # later config snapshot must not revive it — ignore further config
+            # changes for a remote-terminated space.
+            return
         # Out-of-order delivery guard: with #459, every config edit
         # broadcasts a SPACE_CONFIG_CHANGED, AND the §D1b catch-up
         # path (_push_config_to) still ships a snapshot on demand. If

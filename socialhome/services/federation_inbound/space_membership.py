@@ -28,13 +28,8 @@ from ..child_protection_service import _VALID_MIN_AGES
 from ..space_service import _space_metadata_for_federation, can_seat_remote_stub
 
 if TYPE_CHECKING:
-    import pathlib
-
     from ...domain.federation import FederationEvent
     from ...federation.federation_service import FederationService
-    from ...repositories.bazaar_repo import AbstractBazaarRepo
-    from ...repositories.gallery_repo import AbstractGalleryRepo
-    from ...repositories.space_post_repo import AbstractSpacePostRepo
     from ...repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
@@ -46,10 +41,6 @@ class SpaceMembershipInboundHandlers:
     __slots__ = (
         "_bus",
         "_space_repo",
-        "_post_repo",
-        "_gallery_repo",
-        "_bazaar_repo",
-        "_media_dir",
         "_federation",
     )
 
@@ -58,22 +49,9 @@ class SpaceMembershipInboundHandlers:
         *,
         bus: EventBus,
         space_repo: "AbstractSpaceRepo",
-        post_repo: "AbstractSpacePostRepo | None" = None,
-        gallery_repo: "AbstractGalleryRepo | None" = None,
-        bazaar_repo: "AbstractBazaarRepo | None" = None,
-        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._bus = bus
         self._space_repo = space_repo
-        # Wired so an inbound SPACE_DISSOLVED can hard-delete the local
-        # copy's content + media, mirroring the host. Optional for
-        # minimal/legacy wirings — post media still drops via the FK
-        # cascade even when ``post_repo`` is absent (only the on-disk
-        # file unlink is skipped).
-        self._post_repo = post_repo
-        self._gallery_repo = gallery_repo
-        self._bazaar_repo = bazaar_repo
-        self._media_dir = media_dir
         self._federation: "FederationService | None" = None
 
     def attach_to(self, federation_service: "FederationService") -> None:

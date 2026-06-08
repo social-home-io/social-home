@@ -892,6 +892,40 @@ async def test_remote_space_dissolved_notifies_each_member(stack):
         assert dissolved[0].link_url == f"/spaces/{space.id}"
 
 
+async def test_remote_space_dissolved_rebroadcast_dedupes(stack):
+    """A re-broadcast of SPACE_DISSOLVED (fresh msg_id) must not re-notify
+    every member. Publishing ``RemoteSpaceDissolved`` twice for the same
+    space yields ONE unread ``space_dissolved`` row per member, not two."""
+    from socialhome.domain.events import RemoteSpaceDissolved
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+    from socialhome.services.space_service import SpaceService
+
+    alice = await stack.provision_user("alice-rdd")
+    bob = await stack.provision_user("bob-rdd")
+    spost_repo = SqliteSpacePostRepo(stack.db)
+    space_svc = SpaceService(
+        stack.space_repo,
+        spost_repo,
+        SqliteUserRepo(stack.db),
+        stack.bus,
+        own_instance_id="iid",
+    )
+    space = await space_svc.create_space(owner_username="alice-rdd", name="Crew")
+    await space_svc.add_member(
+        space.id, actor_username="alice-rdd", user_id=bob.user_id
+    )
+
+    await stack.bus.publish(RemoteSpaceDissolved(space_id=space.id))
+    await stack.bus.publish(RemoteSpaceDissolved(space_id=space.id))  # re-broadcast
+
+    for user in (alice, bob):
+        notes = await stack.notif_repo.list(user.user_id, limit=10)
+        dissolved = [
+            n for n in notes if n.type == "space_dissolved" and n.read_at is None
+        ]
+        assert len(dissolved) == 1, user.user_id
+
+
 async def test_remote_space_dissolved_unknown_space_is_noop(stack):
     from socialhome.domain.events import RemoteSpaceDissolved
 

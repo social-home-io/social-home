@@ -744,10 +744,6 @@ def _wire_federation_stack(
     SpaceMembershipInboundHandlers(
         bus=bus,
         space_repo=space_repo,
-        post_repo=space_post_repo,
-        gallery_repo=gallery_repo,
-        bazaar_repo=bazaar_repo,
-        media_dir=pathlib.Path(config.media_path),
     ).attach_to(federation_service)
     SpaceInviteInboundHandlers(
         bus=bus,

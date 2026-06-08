@@ -1626,3 +1626,33 @@ async def test_space_config_changed_wrong_owner_drops(db, bus, inbound):
         ("sp-cfg",),
     )
     assert row["name"] == "Cfg Space"
+
+
+async def test_space_config_changed_ignored_after_remote_dissolve(db, bus, inbound):
+    """Terminal state: once the host dissolved this space (locally archived
+    with ``archived_reason='dissolved'``), a LATER higher-sequence
+    SPACE_CONFIG_CHANGED with ``archived=False`` must NOT revive it. The
+    snapshot is ignored — the space stays archived with its dissolve reason
+    intact."""
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=5)
+    # Host dissolved → member archived its local copy read-only.
+    await db.enqueue(
+        "UPDATE spaces SET archived=1, archived_reason='dissolved' WHERE id=?",
+        ("sp-cfg",),
+    )
+    event = _cfg_event(
+        space_id="sp-cfg",
+        from_instance="peer-a",
+        sequence=9,  # higher than existing 5
+        name="Revived",
+    )
+    # A revival attempt would carry archived=False in the snapshot.
+    event.payload["space_meta"]["archived"] = False
+    await inbound._on_space_config_changed(event)
+    row = await db.fetchone(
+        "SELECT name, archived, archived_reason FROM spaces WHERE id=?",
+        ("sp-cfg",),
+    )
+    assert row["name"] == "Cfg Space"  # snapshot ignored, no rename
+    assert row["archived"] == 1
+    assert row["archived_reason"] == "dissolved"
