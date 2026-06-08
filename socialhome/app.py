@@ -76,6 +76,7 @@ from .infrastructure.pairing_relay_scheduler import PairingRelayRetentionSchedul
 from .infrastructure.pairing_session_prune_scheduler import (
     PairingSessionPruneScheduler,
 )
+from .infrastructure.auth_audit_cleanup_scheduler import AuthAuditCleanupScheduler
 from .infrastructure.password_reset_cleanup_scheduler import (
     PasswordResetCleanupScheduler,
 )
@@ -1813,6 +1814,7 @@ def create_app(config: Config | None = None) -> web.Application:
     audio_transcript_scheduler: AudioTranscriptScheduler | None = None
     dm_relay_seen_scheduler: DmRelaySeenPruneScheduler | None = None
     password_reset_cleanup_scheduler: PasswordResetCleanupScheduler | None = None
+    auth_audit_cleanup_scheduler: AuthAuditCleanupScheduler | None = None
     pairing_relay_scheduler: PairingRelayRetentionScheduler | None = None
     pairing_session_prune_scheduler: PairingSessionPruneScheduler | None = None
     dm_gc_scheduler: DmGcScheduler | None = None
@@ -2518,6 +2520,15 @@ def create_app(config: Config | None = None) -> web.Application:
         )
         await password_reset_cleanup_scheduler.start()
 
+        # Auth-audit cleanup — drops aged rows so the append-only trail
+        # can't be grown without bound by repeated failed logins
+        # (90-day retention, runs hourly).
+        nonlocal auth_audit_cleanup_scheduler
+        auth_audit_cleanup_scheduler = AuthAuditCleanupScheduler(
+            repos.auth_audit_log,
+        )
+        await auth_audit_cleanup_scheduler.start()
+
         # Online-status idle scanner — promotes online → idle after 5
         # minutes of WS-frame silence and back to online on activity.
         await online_status_service.start()
@@ -2710,6 +2721,8 @@ def create_app(config: Config | None = None) -> web.Application:
         await media_transcode_service.stop()
         if password_reset_cleanup_scheduler is not None:
             await password_reset_cleanup_scheduler.stop()
+        if auth_audit_cleanup_scheduler is not None:
+            await auth_audit_cleanup_scheduler.stop()
         await online_status_service.stop()
         if pairing_relay_scheduler is not None:
             await pairing_relay_scheduler.stop()

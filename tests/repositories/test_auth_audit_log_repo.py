@@ -71,3 +71,30 @@ async def test_list_recent_honours_limit(db):
         await repo.record("login_success", username="alice")
     rows = await repo.list_recent(limit=3)
     assert len(rows) == 3
+
+
+async def test_prune_older_than_drops_old_keeps_recent(db):
+    repo = SqliteAuthAuditLogRepo(db)
+    # An ancient failed login (the attacker-driven row) plus a recent one.
+    await repo.record("login_failure", ip_address="10.0.0.1")
+    await repo.record("login_failure", ip_address="10.0.0.2")
+    # Force the first row to be 200 days old.
+    await db.enqueue(
+        "UPDATE auth_audit_log SET created_at = datetime('now', '-200 days') "
+        "WHERE ip_address = ?",
+        ("10.0.0.1",),
+    )
+    deleted = await repo.prune_older_than(days=90)
+    assert deleted == 1
+    rows = await repo.list_recent()
+    assert len(rows) == 1
+    assert rows[0]["ip_address"] == "10.0.0.2"
+
+
+async def test_prune_older_than_noop_when_all_recent(db):
+    repo = SqliteAuthAuditLogRepo(db)
+    await repo.record("login_success", username="alice")
+    deleted = await repo.prune_older_than(days=90)
+    assert deleted == 0
+    rows = await repo.list_recent()
+    assert len(rows) == 1

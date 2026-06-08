@@ -36,7 +36,7 @@ anything below contradicts the file, the file wins.
 | `platform_users` | Standalone-mode local accounts (`platform/standalone/`). Empty in HA mode. Stores password hash, email, notify endpoint. |
 | `platform_tokens` | Bearer tokens for `platform_users`. Hash-only storage. |
 | `password_reset_tokens` | Admin-issued, single-use, 1h-TTL tokens that let a user set a new password. Stores SHA-256 of the raw token; `used_at` flips on consume so a token can't be replayed. |
-| `auth_audit_log` | Append-only trail of password-bearing auth events: `login_success`, `login_failure`, `reset_issue`, `reset_redeem_success`, `reset_redeem_failure`. Each row carries `username` (NULL when the request didn't carry a recoverable principal), `ip_address`, and free-form `metadata` JSON. Read by admins via `GET /api/admin/auth-audit`. |
+| `auth_audit_log` | Append-only trail of password-bearing auth events: `login_success`, `login_failure`, `reset_issue`, `reset_redeem_success`, `reset_redeem_failure`. Each row carries `username` (NULL when the request didn't carry a recoverable principal), `ip_address`, and free-form `metadata` JSON. Read by admins via `GET /api/admin/auth-audit`. Pruned after 90 days by `auth_audit_cleanup_scheduler` so a brute-forcer can't grow it without bound via repeated failed logins. |
 
 ## Federation: peers, pairing, outbox, replay
 
@@ -155,6 +155,7 @@ GFS-side tables (in `socialhome/global_server/migrations/0001_initial.sql`):
 |---|---|
 | `gfs_highlight_publications` | One row per `(highlight_id, instance_id)` opted into public sharing. `expires_at` mirrors the author's retention so a publication can never outlive the highlight it advertises. `publish_signature` caches the Ed25519 over the publish body for audit. The OG-thumbnail filename column was **dropped** in GFS migration `0003` — the GFS no longer caches OG thumbnails and now stores zero highlight content bytes. |
 | `gfs_highlight_tokens` | Revocable share-link tokens under a publication (composite FK CASCADE on the publication PK). `revoked_at` is `NULL` while active; ``label`` is the author-supplied "for-twitter" hint. |
+| `admin_login_attempts` | One row per failed GFS admin login, `(ip, attempted_at)`. Read only as a count within a short window (`count_failed_attempts`) to rate-limit brute force. GFS has no recurring scheduler, so `record_login_attempt` prunes rows older than 24 h on write — comfortably beyond the 15-minute lockout window — keeping the table bounded. |
 
 ## Momentum
 

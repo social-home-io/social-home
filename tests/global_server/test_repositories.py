@@ -212,3 +212,27 @@ async def test_pair_token_single_use_and_ttl(admin):
     assert await admin.consume_pair_token("tok-1") is False
     # Unknown token.
     assert await admin.consume_pair_token("nope") is False
+
+
+async def test_record_login_attempt_prunes_old_rows(admin, gfs_db):
+    """Prune-on-write bounds the brute-force counter table.
+
+    An old attempt (beyond the retention window) is dropped when a new
+    attempt is recorded, while recent attempts survive and still count.
+    """
+    # Seed an ancient attempt directly (2 days old, beyond the 24h retention).
+    old = int(time.time()) - 2 * 86400
+    await gfs_db.enqueue(
+        "INSERT INTO admin_login_attempts(ip, attempted_at) VALUES(?, ?)",
+        ("9.9.9.9", old),
+    )
+    # Recording a fresh attempt triggers the prune-on-write.
+    await admin.record_login_attempt("1.2.3.4")
+
+    rows = await gfs_db.fetchall("SELECT ip FROM admin_login_attempts")
+    ips = {r["ip"] for r in rows}
+    assert "9.9.9.9" not in ips  # old row pruned
+    assert "1.2.3.4" in ips  # recent row kept
+    # The recent attempt still counts within a generous window.
+    recent = int(time.time()) - 3600
+    assert await admin.count_failed_attempts("1.2.3.4", since=recent) == 1

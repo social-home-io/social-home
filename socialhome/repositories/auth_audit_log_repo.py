@@ -42,6 +42,8 @@ class AbstractAuthAuditLogRepo(Protocol):
 
     async def list_recent(self, limit: int = 100) -> list[dict]: ...
 
+    async def prune_older_than(self, *, days: int = 90) -> int: ...
+
 
 class SqliteAuthAuditLogRepo:
     """SQLite-backed audit log."""
@@ -92,3 +94,21 @@ class SqliteAuthAuditLogRepo:
                     row["metadata"] = None
             out.append(row)
         return out
+
+    async def prune_older_than(self, *, days: int = 90) -> int:
+        """Delete audit rows older than ``days``. Returns the count deleted.
+
+        Bounds the table — it's an append-only trail (a row per login attempt,
+        incl. failures), so without this an attacker can grow it via repeated
+        failed logins. 90 days is plenty of history for spotting brute force.
+        """
+        before = await self._db.fetchval(
+            "SELECT COUNT(*) FROM auth_audit_log WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+            default=0,
+        )
+        await self._db.enqueue(
+            "DELETE FROM auth_audit_log WHERE created_at < datetime('now', ?)",
+            (f"-{int(days)} days",),
+        )
+        return int(before)
