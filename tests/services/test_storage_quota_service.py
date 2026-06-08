@@ -1,101 +1,69 @@
-"""Tests for StorageQuotaService."""
+"""Tests for StorageQuotaService.
+
+Storage "used" is the size of the media directory on disk — every uploaded
+blob (images, gallery photos, DM media, transcodes, …) lands there, so the
+service measures the directory rather than summing post metadata (which only
+ever covered FILE-type post attachments and reported 0 for a normal household).
+"""
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from socialhome.crypto import (
-    derive_instance_id,
-    generate_identity_keypair,
-)
-from socialhome.db.database import AsyncDatabase
-from socialhome.repositories.storage_stats_repo import SqliteStorageStatsRepo
 from socialhome.services.storage_quota_service import (
     StorageQuotaExceeded,
     StorageQuotaService,
 )
 
 
-def _svc(db, *, quota_bytes: int) -> StorageQuotaService:
-    """Test helper — builds the service against the SQLite repo."""
-    return StorageQuotaService(SqliteStorageStatsRepo(db), quota_bytes=quota_bytes)
+def _svc(media_dir, *, quota_bytes: int) -> StorageQuotaService:
+    return StorageQuotaService(media_path=media_dir, quota_bytes=quota_bytes)
+
+
+def _write(media_dir, rel: str, size: int) -> None:
+    """Write a file of ``size`` bytes at ``media_dir/rel`` (creating dirs)."""
+    p = media_dir / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"\0" * size)
 
 
 @pytest.fixture
-async def env(tmp_dir):
-    kp = generate_identity_keypair()
-    iid = derive_instance_id(kp.public_key)
-    db = AsyncDatabase(tmp_dir / "t.db", batch_timeout_ms=10)
-    await db.startup()
-    await db.enqueue(
-        "INSERT INTO instance_identity(instance_id, identity_private_key,"
-        " identity_public_key, routing_secret) VALUES(?,?,?,?)",
-        (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
-    )
-    await db.enqueue(
-        "INSERT INTO users(username, user_id, display_name) VALUES('u1', 'u1-id', 'U1')",
-    )
-    yield db
-    await db.shutdown()
-
-
-async def _seed_post(db, post_id: str, size: int) -> None:
-    meta = json.dumps(
-        {
-            "url": f"/m/{post_id}",
-            "mime_type": "application/octet-stream",
-            "original_name": "x.bin",
-            "size_bytes": size,
-        }
-    )
-    await db.enqueue(
-        "INSERT INTO feed_posts(id, author, type, content, file_meta_json)"
-        " VALUES(?, 'u1-id', 'file', '', ?)",
-        (post_id, meta),
-    )
+def media_dir(tmp_path):
+    d = tmp_path / "media"
+    d.mkdir()
+    return d
 
 
 # ─── current_usage_bytes ─────────────────────────────────────────────────
 
 
-async def test_zero_usage_when_no_files(env):
-    svc = _svc(env, quota_bytes=1024)
+async def test_zero_usage_when_empty(media_dir):
+    svc = _svc(media_dir, quota_bytes=1024)
     assert await svc.current_usage_bytes() == 0
 
 
-async def test_sums_feed_post_file_meta(env):
-    await _seed_post(env, "p1", 100)
-    await _seed_post(env, "p2", 250)
-    svc = _svc(env, quota_bytes=10_000)
-    assert await svc.current_usage_bytes() == 350
-
-
-async def test_skips_malformed_file_meta(env):
-    await env.enqueue(
-        "INSERT INTO feed_posts(id, author, type, content, file_meta_json)"
-        " VALUES('bad', 'u1-id', 'file', '', 'not-json')",
-    )
-    svc = _svc(env, quota_bytes=10_000)
+async def test_zero_usage_when_dir_missing(tmp_path):
+    # No uploads yet — the media dir may not exist. Must be 0, not a crash.
+    svc = _svc(tmp_path / "does-not-exist", quota_bytes=1024)
     assert await svc.current_usage_bytes() == 0
 
 
-async def test_skips_meta_without_size(env):
-    await env.enqueue(
-        "INSERT INTO feed_posts(id, author, type, content, file_meta_json)"
-        " VALUES('nosz', 'u1-id', 'file', '', '{\"url\":\"x\"}')",
-    )
-    svc = _svc(env, quota_bytes=10_000)
-    assert await svc.current_usage_bytes() == 0
+async def test_sums_all_files_including_subdirs(media_dir):
+    # The real-world reason the old impl reported 0: media lives as files in
+    # the dir (and subdirs like transcode_src), not in post file_meta JSON.
+    _write(media_dir, "photo.jpg", 100)
+    _write(media_dir, "doc.pdf", 250)
+    _write(media_dir, "transcode_src/clip.mp4", 650)
+    svc = _svc(media_dir, quota_bytes=10_000)
+    assert await svc.current_usage_bytes() == 1000
 
 
 # ─── usage ───────────────────────────────────────────────────────────────
 
 
-async def test_usage_returns_struct(env):
-    await _seed_post(env, "p1", 200)
-    svc = _svc(env, quota_bytes=1000)
+async def test_usage_returns_struct(media_dir):
+    _write(media_dir, "a.bin", 200)
+    svc = _svc(media_dir, quota_bytes=1000)
     u = await svc.usage()
     assert u.used_bytes == 200
     assert u.quota_bytes == 1000
@@ -103,8 +71,8 @@ async def test_usage_returns_struct(env):
     assert u.percent_used == 20.0
 
 
-async def test_usage_percent_zero_when_quota_zero(env):
-    svc = _svc(env, quota_bytes=0)
+async def test_usage_percent_zero_when_quota_zero(media_dir):
+    svc = _svc(media_dir, quota_bytes=0)
     u = await svc.usage()
     assert u.percent_used == 0.0
 
@@ -112,28 +80,38 @@ async def test_usage_percent_zero_when_quota_zero(env):
 # ─── check_can_store ─────────────────────────────────────────────────────
 
 
-async def test_check_can_store_passes_when_under_quota(env):
-    await _seed_post(env, "p1", 100)
-    svc = _svc(env, quota_bytes=1000)
+async def test_check_can_store_passes_when_under_quota(media_dir):
+    _write(media_dir, "a.bin", 100)
+    svc = _svc(media_dir, quota_bytes=1000)
     await svc.check_can_store(500)  # 100 + 500 = 600 < 1000
 
 
-async def test_check_can_store_raises_when_over_quota(env):
-    await _seed_post(env, "p1", 800)
-    svc = _svc(env, quota_bytes=1000)
+async def test_check_can_store_raises_when_over_quota(media_dir):
+    _write(media_dir, "a.bin", 800)
+    svc = _svc(media_dir, quota_bytes=1000)
     with pytest.raises(StorageQuotaExceeded) as exc:
         await svc.check_can_store(500)
     assert exc.value.requested == 500
     assert exc.value.available == 200
 
 
-async def test_check_can_store_disabled_when_quota_zero(env):
-    svc = _svc(env, quota_bytes=0)
-    # Enormous request must NOT raise.
-    await svc.check_can_store(10_000_000_000)
+async def test_check_can_store_disabled_when_quota_zero(media_dir):
+    svc = _svc(media_dir, quota_bytes=0)
+    await svc.check_can_store(10_000_000_000)  # must NOT raise
 
 
-async def test_check_can_store_ignores_zero_or_negative(env):
-    svc = _svc(env, quota_bytes=10)
+async def test_check_can_store_ignores_zero_or_negative(media_dir):
+    svc = _svc(media_dir, quota_bytes=10)
     await svc.check_can_store(0)
     await svc.check_can_store(-5)
+
+
+# ─── set_quota_bytes ───────────────────────────────────────────────────────
+
+
+async def test_set_quota_bytes_updates_cap(media_dir):
+    svc = _svc(media_dir, quota_bytes=1000)
+    svc.set_quota_bytes(500)
+    assert svc.quota_bytes == 500
+    svc.set_quota_bytes(-1)  # <= 0 disables
+    assert svc.quota_bytes == 0
