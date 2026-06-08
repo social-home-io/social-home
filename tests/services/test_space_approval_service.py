@@ -399,8 +399,12 @@ async def test_mirror_update_shows_host_tally_not_local_recompute(stack):
         "approvals": 2,
         "total_admins": 3,
         "needed": 2,
-        "created_at": "2026-06-01T00:00:00+00:00",
-        "expires_at": "2026-06-08T00:00:00+00:00",
+        # Relative dates: ``list_for_space`` filters out proposals whose
+        # ``expires_at`` is in the past (service.py ``_now()`` check), so a
+        # hardcoded date silently rots the test the day it lapses. Keep the
+        # proposal active by anchoring on the run time.
+        "created_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
     }
     await stack.approvals.apply_mirror_update(stub.id, host_view)
     listed = await stack.approvals.list_for_space(stub.id)
@@ -438,8 +442,12 @@ async def test_mirror_update_drops_resolved_proposal(stack):
         "approvals": 1,
         "total_admins": 2,
         "needed": 2,
-        "created_at": "2026-06-01T00:00:00+00:00",
-        "expires_at": "2026-06-08T00:00:00+00:00",
+        # Relative dates: ``list_for_space`` filters out proposals whose
+        # ``expires_at`` is in the past (service.py ``_now()`` check), so a
+        # hardcoded date silently rots the test the day it lapses. Keep the
+        # proposal active by anchoring on the run time.
+        "created_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
     }
     await stack.approvals.apply_mirror_update(stub.id, {**base, "status": "pending"})
     assert len(await stack.approvals.list_for_space(stub.id)) == 1
