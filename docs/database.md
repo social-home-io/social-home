@@ -193,7 +193,7 @@ themselves moments and link to the conversation root via
 | Table | Purpose |
 |---|---|
 | `call_sessions` | One row per call — type (`audio` / `video`), status (`ringing` / `active` / `ended` / `declined` / `missed`), participant list JSON, started/connected/ended timestamps, duration. |
-| `call_quality_samples` | Per-peer ~10 s WebRTC stats samples (RTT, jitter, loss, audio/video bitrate). Used for admin diagnostics + post-call per-call avg RTT/loss in the DM call-history view (§26). Bounded: pruned to the newest `CALL_QUALITY_SAMPLE_CAP` (1000) per call on each insert, so a call that never cleanly ends can't grow unbounded. (Not deleted on call end — the call-history view reads them post-call.) |
+| `call_quality_samples` | The latest WebRTC quality reading (RTT, jitter, loss, audio/video bitrate) **per participant per call** — `save_quality_sample` replaces any prior reading for the same `(call_id, reporter_user_id)`, so this is **one row per participant per call**, not a stored per-second sample stream. Naturally bounded like `call_sessions` (no cap/prune needed). The DM call-history view (§26) averages the per-participant readings into the call's quality. |
 
 ## Public discovery and moderation
 

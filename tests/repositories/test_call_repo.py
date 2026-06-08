@@ -260,11 +260,10 @@ async def test_list_quality_samples_empty_when_none(repo):
     assert await repo.list_quality_samples("c1") == []
 
 
-async def test_save_quality_sample_caps_per_call(repo, db, monkeypatch):
-    """``save_quality_sample`` prunes to the newest CAP rows per call."""
-    import socialhome.repositories.call_repo as mod
-
-    monkeypatch.setattr(mod, "CALL_QUALITY_SAMPLE_CAP", 3)
+async def test_save_quality_sample_keeps_only_latest_per_participant(repo, db):
+    """A social home stores one *current* reading per participant per call,
+    not a per-second sample stream — so repeated reports from the same
+    reporter replace the prior row (bounded: one row per (call, reporter))."""
     await repo.save_call(_call())
     for i in range(5):
         await repo.save_quality_sample(
@@ -276,9 +275,27 @@ async def test_save_quality_sample_caps_per_call(repo, db, monkeypatch):
             )
         )
     samples = await repo.list_quality_samples("c1")
-    assert len(samples) == 3
-    # Newest 3 by sampled_at survive (sampled_at 2, 3, 4 → rtt_ms 2, 3, 4).
-    assert [s.rtt_ms for s in samples] == [2, 3, 4]
+    assert len(samples) == 1
+    assert samples[0].rtt_ms == 4  # the latest reading
+
+
+async def test_save_quality_sample_one_row_per_participant(repo, db):
+    """Two participants → two rows; each keeps its own latest reading."""
+    await repo.save_call(_call())
+    for reporter in ("alice", "bob"):
+        for i in range(3):
+            await repo.save_quality_sample(
+                CallQualitySample(
+                    call_id="c1",
+                    reporter_user_id=reporter,
+                    sampled_at=1700000000 + i,
+                    rtt_ms=i,
+                )
+            )
+    samples = await repo.list_quality_samples("c1")
+    assert len(samples) == 2
+    assert {s.reporter_user_id for s in samples} == {"alice", "bob"}
+    assert all(s.rtt_ms == 2 for s in samples)
 
 
 async def test_quality_samples_cascade_with_call(repo, db):
