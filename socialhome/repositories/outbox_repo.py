@@ -32,6 +32,13 @@ from .base import rows_to_dicts
 from ..domain.outbox import OutboxEntry  # noqa: F401,E402
 
 
+#: Default batch size for :meth:`SqliteOutboxRepo.purge_terminal`. Exported so
+#: the OutboxProcessor's batch-drain loop compares against the SAME value its
+#: per-call limit uses — the "fewer than a full batch ⇒ drained" sentinel must
+#: not drift from the repo's default limit.
+PURGE_BATCH = 5000
+
+
 @runtime_checkable
 class AbstractOutboxRepo(Protocol):
     async def enqueue(
@@ -55,6 +62,9 @@ class AbstractOutboxRepo(Protocol):
         attempts: int,
     ) -> None: ...
     async def expire_past_retention(self, now_iso: str) -> int: ...
+    async def purge_terminal(
+        self, cutoff_iso: str, *, limit: int = PURGE_BATCH
+    ) -> int: ...
     async def count_pending_for(self, instance_id: str) -> int: ...
 
 
@@ -129,9 +139,12 @@ class SqliteOutboxRepo:
         return [_row_to_entry(d) for d in rows_to_dicts(rows)]
 
     async def mark_delivered(self, entry_id: str) -> None:
+        # A delivered entry's job is done — remove it so the queue doesn't
+        # accumulate one tombstone per successfully-delivered event. The
+        # receiver's 2xx already satisfies at-least-once; nothing reads
+        # delivered rows.
         await self._db.enqueue(
-            "UPDATE federation_outbox SET status='delivered', "
-            "delivered_at=datetime('now') WHERE id=?",
+            "DELETE FROM federation_outbox WHERE id=?",
             (entry_id,),
         )
 
@@ -180,6 +193,39 @@ class SqliteOutboxRepo:
             (now_iso, now_iso),
         )
         return int(count)
+
+    async def purge_terminal(self, cutoff_iso: str, *, limit: int = PURGE_BATCH) -> int:
+        """Delete up to ``limit`` terminal (delivered/failed) rows whose
+        terminal timestamp is older than ``cutoff_iso``. Returns the count
+        deleted. Batched so a large historical backlog drains over several
+        sweep ticks instead of one writer-blocking transaction. Uses
+        COALESCE(delivered_at, failed_at, created_at) so rows missing a
+        terminal stamp (legacy) are still reclaimed by created_at.
+        """
+        before = await self._db.fetchval(
+            """
+            SELECT COUNT(*) FROM federation_outbox
+             WHERE status IN ('delivered','failed')
+               AND COALESCE(delivered_at, failed_at, created_at) < ?
+            """,
+            (cutoff_iso,),
+            default=0,
+        )
+        to_delete = min(int(before), limit)
+        if to_delete:
+            await self._db.enqueue(
+                """
+                DELETE FROM federation_outbox
+                 WHERE id IN (
+                     SELECT id FROM federation_outbox
+                      WHERE status IN ('delivered','failed')
+                        AND COALESCE(delivered_at, failed_at, created_at) < ?
+                      LIMIT ?
+                 )
+                """,
+                (cutoff_iso, limit),
+            )
+        return to_delete
 
     async def count_pending_for(self, instance_id: str) -> int:
         return int(

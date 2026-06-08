@@ -35,6 +35,12 @@ NEVER_DROP: frozenset[FederationEventType] = frozenset(
 #: sweep marks them failed (§4.4.7).
 RETENTION_DAYS = 7
 
+#: How long a terminal (failed) outbox row is kept for operator diagnostics
+#: before the prune sweep deletes it. Failures (give-up at MAX_ATTEMPTS, 4xx
+#: PERMANENT, or expired-past-retention) flip the row to ``failed``; this
+#: window lets an operator see recent delivery failures before they're purged.
+TERMINAL_GRACE: timedelta = timedelta(hours=24)
+
 
 def retention_expires_at(
     event_type: FederationEventType, *, now: datetime | None = None

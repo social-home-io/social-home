@@ -71,6 +71,16 @@ class _FakeRepo:
                     created_at=e.created_at,
                 )
 
+    # Retention sweep methods — the loop's first tick calls prune_once, which
+    # invokes both. Implement them (as no-ops) so the fake is an honest
+    # AbstractOutboxRepo citizen and the prune path is genuinely exercised
+    # rather than silently swallowed by prune_once's try/except.
+    async def expire_past_retention(self, now_iso):
+        return 0
+
+    async def purge_terminal(self, cutoff_iso, *, limit=5000):
+        return 0
+
 
 def _entry(eid: str, attempts: int = 0):
     return OutboxEntry(

@@ -278,6 +278,7 @@ async def test_prune_once_calls_expire_past_retention():
     """prune_once delegates to repo.expire_past_retention and returns its count."""
     repo = MagicMock()
     repo.expire_past_retention = AsyncMock(return_value=3)
+    repo.purge_terminal = AsyncMock(return_value=0)
     proc = OutboxProcessor(repo, AsyncMock())
     result = await proc.prune_once()
     assert result == 3
@@ -287,12 +288,42 @@ async def test_prune_once_calls_expire_past_retention():
     assert datetime.fromisoformat(now_iso).tzinfo is not None
 
 
+async def test_prune_once_sums_expire_and_purge():
+    """prune_once returns expired + purged, purging terminal rows past grace."""
+    repo = MagicMock()
+    repo.expire_past_retention = AsyncMock(return_value=2)
+    repo.purge_terminal = AsyncMock(return_value=4)
+    proc = OutboxProcessor(repo, AsyncMock())
+    result = await proc.prune_once()
+    assert result == 2 + 4
+    repo.purge_terminal.assert_awaited()
+    # The purge cutoff is an ISO-8601 timestamp in the past (now - grace).
+    (cutoff_iso,), _ = repo.purge_terminal.await_args
+    assert datetime.fromisoformat(cutoff_iso).tzinfo is not None
+
+
+async def test_prune_once_drains_multiple_batches():
+    """The batch loop keeps purging until a partial batch signals drained.
+
+    A stub returning [5000, 5000, 1] (full, full, partial) must result in
+    three calls and a summed purged count, then stop on the partial batch.
+    """
+    repo = MagicMock()
+    repo.expire_past_retention = AsyncMock(return_value=0)
+    repo.purge_terminal = AsyncMock(side_effect=[5000, 5000, 1])
+    proc = OutboxProcessor(repo, AsyncMock())
+    result = await proc.prune_once()
+    assert result == 5000 + 5000 + 1
+    assert repo.purge_terminal.await_count == 3
+
+
 async def test_loop_prunes_on_first_tick_when_last_prune_zero():
     """With _last_prune left at 0.0, the loop prunes on the first tick."""
     repo = MagicMock()
     repo.list_due = AsyncMock(return_value=[])
     repo.expire_past_retention = AsyncMock(return_value=0)
 
+    repo.purge_terminal = AsyncMock(return_value=0)
     proc = OutboxProcessor(repo, AsyncMock(), poll_interval_seconds=0.01)
     assert proc._last_prune is None  # "never pruned" → first tick prunes
     await proc.start()

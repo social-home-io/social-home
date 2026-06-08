@@ -43,7 +43,7 @@ async def env(tmp_dir):
 
 
 async def test_outbox_full_cycle(env):
-    """Enqueued entry appears in list_due; marking delivered removes it from due list."""
+    """Enqueued entry appears in list_due; marking delivered DELETEs the row."""
     eid = await env.outbox_repo.enqueue(
         instance_id="peer",
         event_type=FederationEventType.SPACE_POST_CREATED,
@@ -53,6 +53,10 @@ async def test_outbox_full_cycle(env):
     assert len(due) == 1
     await env.outbox_repo.mark_delivered(eid)
     assert await env.outbox_repo.list_due() == []
+    # mark_delivered now DELETEs the row outright — no 'delivered' tombstone
+    # is left behind (nothing reads it; at-least-once is the receiver's 2xx).
+    rows = await env.db.fetchall("SELECT id FROM federation_outbox WHERE id=?", (eid,))
+    assert rows == []
 
 
 async def test_outbox_processor_backoff(env):
@@ -227,3 +231,93 @@ async def test_expire_past_retention_skips_null_expiry(env):
         "SELECT status FROM federation_outbox WHERE id=?", (eid,)
     )
     assert rows[0]["status"] == "pending"
+
+
+# ── §4.4.7 retention: purge_terminal sweep ──────────────────────────────────
+
+
+async def _seed_terminal(env, eid, *, status, stamp_col, stamp):
+    """Insert a row directly in a terminal state with a deterministic
+    terminal timestamp so the cutoff comparison doesn't rely on wall-clock."""
+    await env.db.enqueue(
+        "INSERT INTO federation_outbox(id, instance_id, event_type,"
+        " payload_json, status, created_at) VALUES(?,?,?,?,?,?)",
+        (eid, "peer", "SPACE_POST_CREATED", "{}", status, stamp),
+    )
+    await env.db.enqueue(
+        f"UPDATE federation_outbox SET {stamp_col}=? WHERE id=?",
+        (stamp, eid),
+    )
+
+
+async def test_purge_terminal_deletes_old_failed_keeps_new(env):
+    """A failed row older than cutoff is purged; a newer one is kept."""
+    await _seed_terminal(
+        env,
+        "old",
+        status="failed",
+        stamp_col="failed_at",
+        stamp="2000-01-01T00:00:00+00:00",
+    )
+    await _seed_terminal(
+        env,
+        "new",
+        status="failed",
+        stamp_col="failed_at",
+        stamp="2030-01-01T00:00:00+00:00",
+    )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00")
+    assert n == 1
+    ids = {r["id"] for r in await env.db.fetchall("SELECT id FROM federation_outbox")}
+    assert ids == {"new"}
+
+
+async def test_purge_terminal_reclaims_legacy_delivered(env):
+    """A legacy 'delivered' row (pre-change backlog) past cutoff is reclaimed."""
+    await _seed_terminal(
+        env,
+        "leg",
+        status="delivered",
+        stamp_col="delivered_at",
+        stamp="2000-01-01T00:00:00+00:00",
+    )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00")
+    assert n == 1
+    rows = await env.db.fetchall("SELECT id FROM federation_outbox WHERE id='leg'")
+    assert rows == []
+
+
+async def test_purge_terminal_never_touches_pending(env):
+    """A pending row is never purged, however old."""
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+    )
+    await env.db.enqueue(
+        "UPDATE federation_outbox SET created_at='2000-01-01T00:00:00+00:00'"
+        " WHERE id=?",
+        (eid,),
+    )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00")
+    assert n == 0
+    rows = await env.db.fetchall(
+        "SELECT status FROM federation_outbox WHERE id=?", (eid,)
+    )
+    assert rows[0]["status"] == "pending"
+
+
+async def test_purge_terminal_respects_limit(env):
+    """With more eligible rows than ``limit``, only ``limit`` are deleted."""
+    for i in range(5):
+        await _seed_terminal(
+            env,
+            f"f{i}",
+            status="failed",
+            stamp_col="failed_at",
+            stamp="2000-01-01T00:00:00+00:00",
+        )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00", limit=3)
+    assert n == 3
+    remaining = await env.db.fetchall("SELECT id FROM federation_outbox")
+    assert len(remaining) == 2

@@ -222,10 +222,18 @@ Outbound envelopes go to `federation_outbox` first
 fixed cadence, picks the best transport for each peer (RTC if open,
 HTTPS otherwise), and retries with exponential backoff. Structural /
 security-critical events have `expires_at = NULL` and never age out;
-ordinary events have a 7-day TTL (§4.4.7). The processor also runs a
-periodic retention sweep (`expire_past_retention`) folded into the same
-loop, so undelivered ordinary events age out at 7 days while NEVER_DROP
-events keep retrying indefinitely.
+ordinary events have a 7-day TTL (§4.4.7). A delivered envelope's row is
+**deleted on success** (`mark_delivered`) — the receiver's 2xx satisfies
+at-least-once and nothing reads delivered rows, so the queue never keeps
+a tombstone per delivered event. The processor also runs a periodic
+retention sweep folded into the same loop with two phases:
+`expire_past_retention` flips undelivered ordinary events to `failed` at
+7 days (NEVER_DROP events keep retrying indefinitely), and
+`purge_terminal` DELETEs terminal (`delivered`/`failed`) rows older than
+`TERMINAL_GRACE` (24 h) in bounded batches. Together these bound the
+table: failures are kept 24 h for operator diagnostics then purged, and
+the pre-change historical `delivered`/`failed` backlog is reclaimed over
+successive sweep ticks.
 
 ### Bulk sync
 
