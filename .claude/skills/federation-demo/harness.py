@@ -1443,7 +1443,10 @@ def cmd_verify() -> None:
     #    (SPACE_REMOTE_ADMIN_ACTION) — a remote admin's config/ban/archive
     #    forward gates on ``peer_supports(min_version=15)``, so if the peer
     #    is stuck at an older version the forward would raise instead of
-    #    reaching the host.
+    #    reaching the host. Latest gated event: v_20 (SPACE_SYNC_REJECTED) —
+    #    a host only sends the reconnect-reconcile reply to a peer it sees at
+    #    >= v_20, so this same tripwire guards that the backstop round-trips
+    #    (a sub-v_20 peer silently falls back to the SPACE_DISSOLVED path).
     from socialhome.domain.federation_capabilities import OURS as _OURS
 
     for viewer in ("a", "b", "c"):
