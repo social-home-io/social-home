@@ -60,6 +60,9 @@ class SpaceMembershipInboundHandlers:
         registry.register(FederationEventType.SPACE_CREATED, self._on_created)
         registry.register(FederationEventType.SPACE_DISSOLVED, self._on_dissolved)
         registry.register(
+            FederationEventType.SPACE_SYNC_REJECTED, self._on_sync_rejected
+        )
+        registry.register(
             FederationEventType.SPACE_INSTANCE_LEFT, self._on_instance_left
         )
         registry.register(FederationEventType.SPACE_MEMBER_BANNED, self._on_banned)
@@ -157,6 +160,48 @@ class SpaceMembershipInboundHandlers:
             )
             return
         await self._space_repo.set_archived(space_id, True, reason="dissolved")
+        await self._bus.publish(RemoteSpaceDissolved(space_id=space_id))
+
+    async def _on_sync_rejected(self, event: "FederationEvent") -> None:
+        """The host rejected our reconnect sync because we're no longer a
+        member — ARCHIVE our local copy read-only (the §S-1 reconnect
+        backstop). Same archive-not-delete treatment as a remote dissolve:
+        an offline member that missed SPACE_DISSOLVED / a removal event
+        still reconciles here instead of keeping an orphaned stub forever.
+
+        Security: identical owner-instance guard to ``_on_dissolved`` — only
+        the space's OWNER host may terminate our copy, so a non-owner peer's
+        SPACE_SYNC_REJECTED is dropped with a warning. The ``reason`` must be
+        a known terminal reason (``"dissolved"`` | ``"removed"``); anything
+        else is dropped (don't archive on a garbage/forward-incompatible
+        payload). Idempotent: a copy already in a terminal archive
+        (``archived_reason`` set) is left untouched.
+        """
+        space_id = event.space_id or str(event.payload.get("space_id") or "")
+        if not space_id:
+            return
+        reason = str(event.payload.get("reason") or "")
+        if reason not in ("dissolved", "removed"):
+            log.warning(
+                "SPACE_SYNC_REJECTED for %s with unknown reason %r — dropping",
+                space_id,
+                reason,
+            )
+            return
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            return  # nothing local to archive
+        if space.owner_instance_id != event.from_instance:
+            log.warning(
+                "SPACE_SYNC_REJECTED for %s from non-owner %s (owner=%s) — dropping",
+                space_id,
+                event.from_instance,
+                space.owner_instance_id,
+            )
+            return
+        if space.archived_reason:
+            return  # already terminally archived — idempotent
+        await self._space_repo.set_archived(space_id, True, reason=reason)
         await self._bus.publish(RemoteSpaceDissolved(space_id=space_id))
 
     async def _on_instance_left(self, event: "FederationEvent") -> None:
