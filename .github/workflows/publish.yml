@@ -142,20 +142,25 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # CalVer (YYYY.M.D) image tags. ``docker/metadata-action`` runs
+      # CalVer (YYYY.M.D[.N]) image tags. ``docker/metadata-action`` runs
       # the regexes below against ``github.ref_name`` and emits one
       # tag per match, so a single ``2026.5.10`` push gets:
       #   :2026.5.10  — pinned, immutable
       #   :2026.5     — minor track (rolling within the month)
       #   :2026       — major track (rolling within the year)
       #   :latest     — current stable
+      # The pinned pattern includes the OPTIONAL same-day ``.N`` segment
+      # (group=0 = the whole match), so a second release on a day —
+      # ``2026.5.10.1`` — pins ``:2026.5.10.1`` instead of dropping the ``.1``
+      # and overwriting ``:2026.5.10``. (The month/year tracks already
+      # collapse the 4th segment correctly.)
       - name: Generate image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/social-home-io/socialhome
           tags: |
-            type=match,pattern=(\d+\.\d+\.\d+),group=1
+            type=match,pattern=\d+\.\d+\.\d+(\.\d+)?,group=0
             type=match,pattern=(\d+\.\d+)\.\d+,group=1
             type=match,pattern=(\d+)\.\d+\.\d+,group=1
             type=raw,value=latest,enable=${{ github.event_name != 'workflow_dispatch' }}
@@ -194,14 +199,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # Same CalVer fan-out as ``docker-core`` — see comments there.
+      # Same CalVer fan-out as ``docker-core`` — see comments there (incl.
+      # the 4-part ``.N`` same-day pinned tag).
       - name: Generate image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/social-home-io/gfs
           tags: |
-            type=match,pattern=(\d+\.\d+\.\d+),group=1
+            type=match,pattern=\d+\.\d+\.\d+(\.\d+)?,group=0
             type=match,pattern=(\d+\.\d+)\.\d+,group=1
             type=match,pattern=(\d+)\.\d+\.\d+,group=1
             type=raw,value=latest,enable=${{ github.event_name != 'workflow_dispatch' }}
