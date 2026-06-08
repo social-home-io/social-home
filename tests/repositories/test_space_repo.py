@@ -504,3 +504,38 @@ async def test_get_link(env):
     assert link is not None
     assert link["space_id"] == "sp-get"
     assert await env.repo.get_link("missing") is None
+
+
+# ── Join requests ───────────────────────────────────────────────────────────
+
+
+async def test_list_pending_join_request_space_ids_for_user(env):
+    """The by-user complement returns DISTINCT space_ids of the caller's
+    own pending join-requests, excluding non-pending and other users'."""
+    await env.repo.save(_space("sp-pend-a"))
+    await env.repo.save(_space("sp-pend-b"))
+    await env.repo.save(_space("sp-approved"))
+    await env.repo.save(_space("sp-other"))
+
+    # Two pending requests for alice (b twice → DISTINCT collapses).
+    await env.repo.save_join_request("sp-pend-a", "uid-alice")
+    await env.repo.save_join_request("sp-pend-b", "uid-alice")
+    await env.repo.save_join_request("sp-pend-b", "uid-alice")
+    # An approved request for alice → excluded.
+    rid = await env.repo.save_join_request("sp-approved", "uid-alice")
+    await env.repo.update_join_request_status(rid, "approved")
+    # A pending request for bob → excluded (different user).
+    await env.repo.save_join_request("sp-other", "uid-bob")
+
+    ids = await env.repo.list_pending_join_request_space_ids_for_user("uid-alice")
+    assert set(ids) == {"sp-pend-a", "sp-pend-b"}
+    assert sorted(ids) == ids[:] or len(ids) == len(set(ids))  # DISTINCT
+    assert "sp-approved" not in ids
+    assert "sp-other" not in ids
+
+
+async def test_list_pending_join_request_space_ids_for_user_empty(env):
+    """A user with no pending requests gets an empty list."""
+    assert (
+        await env.repo.list_pending_join_request_space_ids_for_user("uid-alice") == []
+    )

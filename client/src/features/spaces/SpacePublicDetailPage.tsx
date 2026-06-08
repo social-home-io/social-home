@@ -103,25 +103,41 @@ export default function SpacePublicDetailPage() {
       loc.route(`/spaces/${entry.space_id}`)
       return
     }
-    if (entry.scope === 'household' || entry.host_instance_id === 'local') {
-      if (entry.join_mode === 'open') {
-        try {
-          await api.post(`/api/spaces/${entry.space_id}/join-requests`, {})
-          showToast(`Joined ${entry.name}`, 'success')
-          loc.route(`/spaces/${entry.space_id}`)
-        } catch (exc) {
-          showToast((exc as Error).message, 'error')
-        }
-      } else {
-        setActiveModal(entry)
-      }
-      return
-    }
-    // Remote (public peer or global GFS) — needs a paired host.
-    if (!entry.host_is_paired) {
+    const isLocalEntry =
+      entry.scope === 'household' || entry.host_instance_id === 'local'
+    // Remote (public peer or global GFS) — needs a paired host before
+    // either the open send or the request modal can reach it.
+    if (!isLocalEntry && !entry.host_is_paired) {
       showToast(`Pair with ${entry.host_display_name} first.`, 'info')
       return
     }
+    // Open spaces join immediately with no message — match the browser's
+    // ``onAction`` open branch (no JoinRequestModal). The modal is only
+    // for ``request`` mode, where a message is appropriate.
+    if (entry.join_mode === 'open') {
+      try {
+        if (isLocalEntry) {
+          // Local open-to-join: the server auto-approves JoinMode.OPEN
+          // through the join-request endpoint.
+          await api.post(`/api/spaces/${entry.space_id}/join-requests`, {})
+          showToast(`Joined ${entry.name}`, 'success')
+          loc.route(`/spaces/${entry.space_id}`)
+        } else {
+          await api.post(
+            `/api/public_spaces/${entry.space_id}/join-request`,
+            { host_instance_id: entry.host_instance_id },
+          )
+          showToast(`Request sent to ${entry.host_display_name}`, 'success')
+          if (detail.value) {
+            detail.value = { ...detail.value, request_pending: true }
+          }
+        }
+      } catch (exc) {
+        showToast((exc as Error).message, 'error')
+      }
+      return
+    }
+    // ``request`` (approval-required) mode — collect a message.
     setActiveModal(entry)
   }
 

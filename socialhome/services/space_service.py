@@ -3068,6 +3068,17 @@ class SpaceService(SpaceMemberGuardMixin):
     async def list_subscriptions(self, user_id: str) -> list[dict]:
         return await self._spaces.list_subscriptions_for_user(user_id)
 
+    async def list_pending_join_request_space_ids(
+        self,
+        user_id: str,
+    ) -> list[str]:
+        """Space ids the caller has an outstanding (``pending``) join
+        request for — used by the SPA to restore "Request pending" on
+        the browser/detail cards after a reload."""
+        return await self._spaces.list_pending_join_request_space_ids_for_user(
+            user_id,
+        )
+
     async def is_subscribed(self, user_id: str, space_id: str) -> bool:
         member = await self._spaces.get_member(space_id, user_id)
         return member is not None and member.role == SpaceRole.SUBSCRIBER

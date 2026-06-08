@@ -139,6 +139,87 @@ async def test_block_then_list_excludes_blocked_instance(client):
     assert all(s["instance_id"] != "bad-inst" for s in body)
 
 
+# ─── Join request (POST /api/public_spaces/{id}/join-request) ────────────
+
+
+async def test_join_request_requires_auth(client):
+    r = await client.post(
+        "/api/public_spaces/sp-1/join-request",
+        json={"host_instance_id": "remote-1"},
+    )
+    assert r.status == 401
+
+
+async def test_join_request_requires_host_instance_id(client):
+    r = await client.post(
+        "/api/public_spaces/sp-1/join-request",
+        json={},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+
+
+async def test_join_request_paired_host_federates(client, monkeypatch):
+    """A paired-host global space federates the join request via
+    ``request_join_remote`` and returns 202 with the request id."""
+    from socialhome.services.space_service import SpaceService
+
+    captured: dict = {}
+
+    async def _fake(
+        self,
+        space_id,
+        *,
+        applicant_user_id,
+        host_instance_id,
+        message=None,
+    ):
+        captured.update(
+            space_id=space_id,
+            applicant_user_id=applicant_user_id,
+            host_instance_id=host_instance_id,
+            message=message,
+        )
+        return "req-xyz"
+
+    monkeypatch.setattr(SpaceService, "request_join_remote", _fake)
+    r = await client.post(
+        "/api/public_spaces/sp-global/join-request",
+        json={"host_instance_id": "remote-1", "message": "hi"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 202
+    assert (await r.json())["request_id"] == "req-xyz"
+    assert captured["space_id"] == "sp-global"
+    assert captured["host_instance_id"] == "remote-1"
+    assert captured["applicant_user_id"] == client._uid
+    assert captured["message"] == "hi"
+
+
+async def test_join_request_unpaired_host_403(client, monkeypatch):
+    """An unpaired host can't be join-requested — ``request_join_remote``
+    raises ``SpacePermissionError`` ("pair first"), which the BaseView
+    exception map surfaces as 403 FORBIDDEN so the SPA can fall back to
+    the pairing flow."""
+    from socialhome.domain.space import SpacePermissionError
+    from socialhome.services.space_service import SpaceService
+
+    async def _fake(
+        self, space_id, *, applicant_user_id, host_instance_id, message=None
+    ):
+        raise SpacePermissionError(
+            "host household is not a CONFIRMED peer — pair first",
+        )
+
+    monkeypatch.setattr(SpaceService, "request_join_remote", _fake)
+    r = await client.post(
+        "/api/public_spaces/sp-global/join-request",
+        json={"host_instance_id": "not-paired"},
+        headers=_auth(client._tok),
+    )
+    assert r.status == 403
+
+
 # ─── §CP.F1 — minor discovery filter ────────────────────────────────────
 
 

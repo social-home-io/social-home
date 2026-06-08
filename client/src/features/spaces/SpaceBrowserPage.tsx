@@ -42,20 +42,31 @@ interface MySubscription { space_id: string; subscribed_at: string }
 async function loadAll() {
   loading.value = true
   try {
-    const [rawLocal, rawFriends, rawGlobal, rawMine, rawSubs] = await Promise.all([
-      api.get('/api/spaces').catch(() => [] as Space[]),
-      api.get('/api/peer_spaces').catch(() => [] as DirectoryEntry[]),
-      api.get('/api/public_spaces').catch(() => [] as DirectoryEntry[]),
-      api.get('/api/spaces').catch(() => [] as Space[]),
-      api
-        .get('/api/me/subscriptions')
-        .catch(() => ({ subscriptions: [] as MySubscription[] })),
-    ])
+    const [rawLocal, rawFriends, rawGlobal, rawMine, rawSubs, rawPending] =
+      await Promise.all([
+        api.get('/api/spaces').catch(() => [] as Space[]),
+        api.get('/api/peer_spaces').catch(() => [] as DirectoryEntry[]),
+        api.get('/api/public_spaces').catch(() => [] as DirectoryEntry[]),
+        api.get('/api/spaces').catch(() => [] as Space[]),
+        api
+          .get('/api/me/subscriptions')
+          .catch(() => ({ subscriptions: [] as MySubscription[] })),
+        api
+          .get('/api/me/join-requests')
+          .catch(() => ({ pending_space_ids: [] as string[] })),
+      ])
     const myIds = new Set((rawMine as Space[]).map((s) => s.id))
     const subIds = new Set(
       ((rawSubs as { subscriptions: MySubscription[] }).subscriptions || []).map(
         (s) => s.space_id,
       ),
+    )
+    // Persisted "Request pending": the caller's own outstanding
+    // join-requests, so a sent request survives this reload (the
+    // optimistic in-memory flag set in onAction is otherwise lost on
+    // the next mount). Mirrors the subscriptions merge above.
+    const pendingIds = new Set(
+      ((rawPending as { pending_space_ids: string[] }).pending_space_ids || []),
     )
     // Subscribers ARE members (role='subscriber') on the server — the
     // host puts them in space_members. Filter subscribed-only ids OUT
@@ -82,12 +93,14 @@ async function loadAll() {
         target_audience:    'all',
         already_member:     realMemberIds.has(s.id),
         already_subscribed: subIds.has(s.id),
+        request_pending:    pendingIds.has(s.id),
       }))
     friends.value = (rawFriends as DirectoryEntry[]).map((e) => ({
       ...e,
       scope:              'public' as const,
       already_subscribed: subIds.has(e.space_id),
       already_member:     realMemberIds.has(e.space_id),
+      request_pending:    pendingIds.has(e.space_id),
     }))
     global_.value = (rawGlobal as DirectoryEntry[]).map((e) => ({
       ...e,
@@ -96,6 +109,7 @@ async function loadAll() {
       join_mode:          e.join_mode || 'request',
       already_subscribed: subIds.has(e.space_id),
       already_member:     realMemberIds.has(e.space_id),
+      request_pending:    pendingIds.has(e.space_id),
     }))
     // Stash every directory entry so SpacePublicDetailPage can render
     // immediately when the user taps a card — no second round-trip
