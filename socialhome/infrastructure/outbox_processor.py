@@ -21,10 +21,11 @@ import asyncio
 import enum
 import logging
 import random
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
-from ..domain.federation import FederationEventType
+from ..domain.federation_retention import NEVER_DROP
 from ..repositories.outbox_repo import AbstractOutboxRepo, OutboxEntry
 
 
@@ -56,25 +57,11 @@ JITTER_RATIO: float = 0.30
 #: of :data:`BACKOFF_SECONDS`.
 MAX_ATTEMPTS: int = len(BACKOFF_SECONDS)
 
-#: Event types that must NEVER be marked ``failed`` regardless of attempt
-#: count (§4.4.7).  These carry security or structural state — admin key
-#: shares, bans, unpair signals, key revocations — that the receiver
-#: must eventually see, even if the peer is offline for weeks.  Instead
-#: of giving up after :data:`MAX_ATTEMPTS`, we keep retrying on the
-#: ceiling backoff (4 hours) indefinitely.
-NEVER_DROP: frozenset[FederationEventType] = frozenset(
-    {
-        FederationEventType.SPACE_MEMBER_BANNED,
-        FederationEventType.SPACE_MEMBER_UNBANNED,
-        FederationEventType.SPACE_MEMBER_ROLE_CHANGED,
-        FederationEventType.SPACE_REMOTE_ADMIN_KICK,
-        FederationEventType.SPACE_KEY_EXCHANGE,
-        FederationEventType.SPACE_KEY_EXCHANGE_REKEY,
-        FederationEventType.SPACE_ADMIN_KEY_SHARE,
-        FederationEventType.SPACE_DISSOLVED,
-        FederationEventType.UNPAIR,
-    }
-)
+# ``NEVER_DROP`` is imported from :mod:`socialhome.domain.federation_retention`
+# (the single source of truth) and re-exported under this name so the
+# retry-pinning logic below and ``infrastructure.__init__``'s re-export still
+# resolve. It is used by ``drain_once`` to pin structural / security events on
+# the ceiling backoff instead of marking them failed.
 
 
 class DeliveryOutcome(enum.Enum):
@@ -117,6 +104,8 @@ class OutboxProcessor:
         "_repo",
         "_deliver",
         "_poll_interval",
+        "_prune_interval",
+        "_last_prune",
         "_task",
         "_stop",
         "_jitter",
@@ -128,11 +117,18 @@ class OutboxProcessor:
         deliver: Deliver,
         *,
         poll_interval_seconds: float = 5.0,
+        prune_interval_seconds: float = 3600.0,
         rng: Callable[[], float] | None = None,
     ) -> None:
         self._repo = repo
         self._deliver = deliver
         self._poll_interval = poll_interval_seconds
+        self._prune_interval = prune_interval_seconds
+        # ``_last_prune`` is a ``time.monotonic()`` stamp. Initialised to
+        # ``0.0`` so the FIRST loop tick prunes immediately at startup —
+        # harmless (it only marks already-expired rows failed) and keeps the
+        # cold-start outbox clean. Tests set this explicitly to gate cadence.
+        self._last_prune = 0.0
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         # ``rng`` is injectable for deterministic tests. Default uses
@@ -162,6 +158,21 @@ class OutboxProcessor:
                 await self.drain_once()
             except Exception:
                 log.exception("OutboxProcessor tick failed")
+            # §4.4.7 retention sweep — runs on its own (slow) cadence folded
+            # into the drain loop. Best-effort: a failure here must never
+            # crash the drain loop, hence the separate try/except.
+            now = time.monotonic()
+            if now - self._last_prune >= self._prune_interval:
+                self._last_prune = now
+                try:
+                    expired = await self.prune_once()
+                    if expired:
+                        log.info(
+                            "OutboxProcessor: expired %d entries past retention",
+                            expired,
+                        )
+                except Exception:
+                    log.exception("OutboxProcessor prune tick failed")
             try:
                 await asyncio.wait_for(
                     self._stop.wait(),
@@ -248,6 +259,13 @@ class OutboxProcessor:
                 attempts=new_attempts,
             )
         return len(entries)
+
+    async def prune_once(self) -> int:
+        """Mark pending entries past their retention window as failed
+        (§4.4.7). NEVER_DROP entries have expires_at=NULL and are skipped
+        by the repo query, so they're untouched. Returns count expired."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        return await self._repo.expire_past_retention(now_iso)
 
     # ── Backoff math (pure) ────────────────────────────────────────────
 

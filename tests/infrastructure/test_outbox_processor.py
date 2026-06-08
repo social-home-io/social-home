@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -268,3 +269,59 @@ async def test_start_idempotent():
     await proc.start()
     assert proc._task is first_task
     await proc.stop()
+
+
+# ── §4.4.7 retention prune ──────────────────────────────────────────────────
+
+
+async def test_prune_once_calls_expire_past_retention():
+    """prune_once delegates to repo.expire_past_retention and returns its count."""
+    repo = MagicMock()
+    repo.expire_past_retention = AsyncMock(return_value=3)
+    proc = OutboxProcessor(repo, AsyncMock())
+    result = await proc.prune_once()
+    assert result == 3
+    repo.expire_past_retention.assert_awaited_once()
+    # The argument is an ISO-8601 'now'.
+    (now_iso,), _ = repo.expire_past_retention.await_args
+    assert datetime.fromisoformat(now_iso).tzinfo is not None
+
+
+async def test_loop_prunes_on_first_tick_when_last_prune_zero():
+    """With _last_prune left at 0.0, the loop prunes on the first tick."""
+    repo = MagicMock()
+    repo.list_due = AsyncMock(return_value=[])
+    repo.expire_past_retention = AsyncMock(return_value=0)
+
+    proc = OutboxProcessor(repo, AsyncMock(), poll_interval_seconds=0.01)
+    assert proc._last_prune == 0.0  # documented init
+    await proc.start()
+    # Give the loop a moment to run a tick.
+    for _ in range(50):
+        if repo.expire_past_retention.await_count:
+            break
+        await asyncio.sleep(0.01)
+    await proc.stop()
+    repo.expire_past_retention.assert_awaited()
+
+
+async def test_loop_skips_prune_within_interval():
+    """A recent _last_prune gates the sweep until the interval elapses."""
+    import time
+
+    repo = MagicMock()
+    repo.list_due = AsyncMock(return_value=[])
+    repo.expire_past_retention = AsyncMock(return_value=0)
+
+    proc = OutboxProcessor(
+        repo,
+        AsyncMock(),
+        poll_interval_seconds=0.01,
+        prune_interval_seconds=3600.0,
+    )
+    # Pretend we just pruned — the next several ticks must NOT prune again.
+    proc._last_prune = time.monotonic()
+    await proc.start()
+    await asyncio.sleep(0.1)
+    await proc.stop()
+    repo.expire_past_retention.assert_not_called()
