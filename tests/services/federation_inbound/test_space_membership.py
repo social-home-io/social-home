@@ -125,7 +125,7 @@ def handlers(bus, repo):
     return h
 
 
-async def test_attach_registers_six_event_types(bus, repo):
+async def test_attach_registers_eight_event_types(bus, repo):
     h = SpaceMembershipInboundHandlers(bus=bus, space_repo=repo)
     fed = _FakeFederationService()
     h.attach_to(fed)

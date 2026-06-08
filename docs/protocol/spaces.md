@@ -121,10 +121,19 @@ with a signed `SPACE_SYNC_REJECTED {sync_id, space_id, reason}` instead of
 dropping it:
 
 - `reason="dissolved"` — the `spaces` row is gone on the host (a dissolve
-  purged it; a never-existed space collapses into this case too, so it leaks
-  nothing a never-member could exploit).
+  purged it; a never-existed space collapses into this case too, so a
+  dissolved space is indistinguishable from one that never existed).
 - `reason="removed"` — the space still exists on the host but the requester
   is no longer in `space_instances`.
+
+The `dissolved`/`removed` split is an existence signal: a peer that asks
+about an *existing* space it isn't a member of learns the space exists
+(`removed`) rather than getting silence. That signal is gated behind a
+**confirmed, Ed25519-authenticated** peer, an **unguessable** `space_id`
+(`uuid4().hex`, 122-bit) the peer must already hold, and the **5/h
+per-peer+space rate limit** — so it can't be used to enumerate or
+amplify-probe. Accepted as a deliberate, bounded relaxation of the S-1
+silent drop in exchange for reconciling orphaned member stubs.
 
 The member's `_on_sync_rejected` handler (sibling of `_on_dissolved`) applies
 the **same** archive-not-delete treatment: it verifies the event came from the
