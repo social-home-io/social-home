@@ -529,7 +529,7 @@ async def test_list_pending_join_request_space_ids_for_user(env):
 
     ids = await env.repo.list_pending_join_request_space_ids_for_user("uid-alice")
     assert set(ids) == {"sp-pend-a", "sp-pend-b"}
-    assert sorted(ids) == ids[:] or len(ids) == len(set(ids))  # DISTINCT
+    assert len(ids) == len(set(ids))  # DISTINCT — no duplicate space_ids
     assert "sp-approved" not in ids
     assert "sp-other" not in ids
 
