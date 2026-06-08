@@ -2353,6 +2353,27 @@ class MySubscriptionsView(BaseView):
         )
 
 
+class MyJoinRequestsView(BaseView):
+    """``GET /api/me/join-requests`` — the caller's own outstanding
+    (``pending``) join-requests, as a list of space ids.
+
+    Returns ``{"pending_space_ids": [...]}``. The SPA merges these into
+    its directory entries so a "Request pending" card survives a reload
+    (the optimistic in-memory flag is otherwise lost on the next mount).
+    """
+
+    async def get(self) -> web.Response:
+        ctx = self.user
+        svc = self.svc(space_service_key)
+        return web.json_response(
+            {
+                "pending_space_ids": await svc.list_pending_join_request_space_ids(
+                    ctx.user_id
+                ),
+            },
+        )
+
+
 # ─── Space sidebar links ────────────────────────────────────────────────
 
 

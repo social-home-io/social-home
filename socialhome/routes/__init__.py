@@ -238,6 +238,7 @@ from .space_bots import (
 )
 from .spaces import (
     AdminSpaceCollectionView,
+    MyJoinRequestsView,
     MySubscriptionsView,
     SpaceBanListView,
     SpaceArchiveView,
@@ -550,6 +551,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/spaces/{id}/sync", SpaceSyncTriggerView)
     app.router.add_view("/api/spaces/{id}/subscribe", SpaceSubscribeView)
     app.router.add_view("/api/me/subscriptions", MySubscriptionsView)
+    app.router.add_view("/api/me/join-requests", MyJoinRequestsView)
     # Space customisation — admin-configured sidebar links + per-user
     # notification preferences (§23).
     app.router.add_view("/api/spaces/{id}/links", SpaceLinkCollectionView)

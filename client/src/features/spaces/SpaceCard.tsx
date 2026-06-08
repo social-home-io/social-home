@@ -81,15 +81,22 @@ function decidePrimary(entry: DirectoryEntry): SpaceCardAction {
 }
 
 /**
- * Whether Subscribe is appropriate for this entry. Only public /
- * global spaces support subscription, and only when the user isn't
- * already a real member. Paired host or "local" are both fine —
- * subscribe is a self-service member-add that doesn't need admin
- * approval.
+ * Whether Subscribe is appropriate for this entry. Only LOCAL public /
+ * global spaces (hosted by this household) support subscription, and only
+ * when the user isn't already a real member. Subscribe is a local
+ * self-service member-add with no remote federation path, so it's hidden
+ * for remotely-hosted (friends / global) spaces — those use the join-request
+ * flow instead.
  */
 function subscribableScope(entry: DirectoryEntry): boolean {
+  // Subscribe is a LOCAL self-service member-add: the backend
+  // `/api/spaces/{id}/subscribe` requires a local space row, so it only
+  // works for spaces this household hosts. Remote (friends/global) spaces
+  // have no remote-subscribe federation path — showing the button there
+  // just 404s; they're joined via the request flow instead.
   return (
-    (entry.scope === 'public' || entry.scope === 'global')
+    entry.host_instance_id === 'local'
+    && (entry.scope === 'public' || entry.scope === 'global')
     && !entry.already_member
   )
 }

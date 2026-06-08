@@ -1637,3 +1637,65 @@ async def test_subscribe_requires_auth(client):
     assert r.status == 401
     r2 = await client.get("/api/me/subscriptions")
     assert r2.status == 401
+
+
+# ─── GET /api/me/join-requests (Fix A — pending survives reload) ──────────
+
+
+async def test_my_join_requests_requires_auth(client):
+    r = await client.get("/api/me/join-requests")
+    assert r.status == 401
+
+
+async def test_my_join_requests_lists_only_own_pending(client):
+    """A user's own pending join-requests surface; approved rows and
+    other users' rows don't."""
+    from socialhome.app_keys import space_repo_key
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+    from socialhome.repositories.space_repo import SqliteSpaceRepo
+
+    repo: SqliteSpaceRepo = client.app[space_repo_key]
+
+    async def _space(sid: str) -> None:
+        await repo.save(
+            Space(
+                id=sid,
+                name=sid,
+                owner_instance_id="inst-x",
+                owner_username="pascal",
+                identity_public_key="aabb" * 16,
+                config_sequence=0,
+                features=SpaceFeatures(),
+                space_type=SpaceType.PUBLIC,
+                join_mode=JoinMode.REQUEST,
+            )
+        )
+
+    for sid in ("sp-pend-1", "sp-pend-2", "sp-done", "sp-admin"):
+        await _space(sid)
+
+    # Bob has two pending requests + one approved (excluded).
+    await repo.save_join_request("sp-pend-1", client._bob_uid)
+    await repo.save_join_request("sp-pend-2", client._bob_uid)
+    rid = await repo.save_join_request("sp-done", client._bob_uid)
+    await repo.update_join_request_status(rid, "approved")
+    # Admin has a pending request → must not leak into bob's list.
+    await repo.save_join_request("sp-admin", client._admin_uid)
+
+    r = await client.get("/api/me/join-requests", headers=_auth(client._bob_token))
+    assert r.status == 200
+    body = await r.json()
+    assert set(body["pending_space_ids"]) == {"sp-pend-1", "sp-pend-2"}
+    assert "sp-done" not in body["pending_space_ids"]
+    assert "sp-admin" not in body["pending_space_ids"]
+
+
+async def test_my_join_requests_empty(client):
+    r = await client.get("/api/me/join-requests", headers=_auth(client._bob_token))
+    assert r.status == 200
+    assert (await r.json())["pending_space_ids"] == []

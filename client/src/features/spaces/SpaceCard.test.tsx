@@ -63,11 +63,23 @@ describe('SpaceCard', () => {
 
   // ── Subscribe / unsubscribe ─────────────────────────────────────────
 
-  it('renders a Subscribe button for public / global non-members', () => {
+  it('renders a Subscribe button for LOCAL public / global non-members', () => {
     const { getByText } = render(
-      <SpaceCard entry={baseEntry} onAction={() => {}} />,
+      <SpaceCard
+        entry={{ ...baseEntry, host_instance_id: 'local' }}
+        onAction={() => {}}
+      />,
     )
     expect(getByText(/Subscribe/)).toBeTruthy()
+  })
+
+  it('hides Subscribe for a remotely-hosted (friends / global) space', () => {
+    // No remote-subscribe federation path — the button would just 404, so
+    // it must not show; remote spaces are joined via the request flow.
+    const { queryByText } = render(
+      <SpaceCard entry={baseEntry} onAction={() => {}} />,
+    )
+    expect(queryByText(/Subscribe/)).toBeNull()
   })
 
   it('does not render a Subscribe button for household-scope entries', () => {
@@ -106,7 +118,7 @@ describe('SpaceCard', () => {
     let captured: { kind: string } | null = null
     const { getByText } = render(
       <SpaceCard
-        entry={baseEntry}
+        entry={{ ...baseEntry, host_instance_id: 'local' }}
         onAction={(_e, a) => { captured = a }}
       />,
     )
@@ -117,7 +129,7 @@ describe('SpaceCard', () => {
   it('disables Subscribe while the parent reports it busy', () => {
     const { getByLabelText } = render(
       <SpaceCard
-        entry={baseEntry}
+        entry={{ ...baseEntry, host_instance_id: 'local' }}
         onAction={() => {}}
         subscribeBusy={true}
       />,

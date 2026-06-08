@@ -217,6 +217,10 @@ class AbstractSpaceRepo(Protocol):
         request_id: str | None = None,
     ) -> str: ...
     async def list_pending_join_requests(self, space_id: str) -> list[dict]: ...
+    async def list_pending_join_request_space_ids_for_user(
+        self,
+        user_id: str,
+    ) -> list[str]: ...
     async def update_join_request_status(
         self,
         request_id: str,
@@ -1239,6 +1243,19 @@ class SqliteSpaceRepo:
             (space_id,),
         )
         return rows_to_dicts(rows)
+
+    async def list_pending_join_request_space_ids_for_user(
+        self,
+        user_id: str,
+    ) -> list[str]:
+        rows = await self._db.fetchall(
+            """
+            SELECT DISTINCT space_id FROM space_join_requests
+             WHERE user_id=? AND status='pending'
+            """,
+            (user_id,),
+        )
+        return [r["space_id"] for r in rows]
 
     async def update_join_request_status(
         self,

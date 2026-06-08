@@ -2436,7 +2436,8 @@ class SpaceService(SpaceMemberGuardMixin):
         becomes a space member without further UI clicks.
         """
         row = await self._spaces._db.fetchone(  # type: ignore[attr-defined]
-            "SELECT user_id FROM space_join_requests WHERE id=?",
+            "SELECT user_id, space_id, remote_applicant_instance_id"
+            " FROM space_join_requests WHERE id=?",
             (request_id,),
         )
         r = row_to_dict(row)
@@ -2445,11 +2446,42 @@ class SpaceService(SpaceMemberGuardMixin):
         user_id = r.get("user_id")
         if not user_id:
             return
+        # The host-minted invite token row lives in the HOST's DB, not
+        # ours — ``remote_applicant_instance_id`` carries that host. Route
+        # through the cross-instance redeem path (consumes on the host and
+        # seats locally). For a LOCAL approval (host None/self),
+        # redeem_invite_token falls back to accept_invite_token.
+        host = r.get("remote_applicant_instance_id")
         try:
-            await self.accept_invite_token(invite_token, user_id=user_id)
-        except KeyError, SpacePermissionError:
-            # Token already consumed or user now banned.
-            pass
+            await self.redeem_invite_token(
+                invite_token,
+                user_id=user_id,
+                issuer_instance_id=host,
+            )
+        except KeyError:
+            # Token already consumed/replayed — expected on a duplicate
+            # APPROVED envelope; nothing to seat.
+            log.debug(
+                "join-request %s approval: token already consumed for space=%s user=%s",
+                request_id,
+                r.get("space_id"),
+                user_id,
+            )
+        except (SpacePermissionError, TimeoutError) as exc:
+            # A genuine failure — host unreachable, denied, or banned.
+            # Don't crash the inbound pipeline, but surface it: a silent
+            # drop here strands the applicant with no membership and no
+            # signal. No existing "join failed" notification event to
+            # publish, so the WARNING log is the observable signal.
+            log.warning(
+                "join-request %s approval failed to seat user=%s in "
+                "space=%s via host=%s: %s",
+                request_id,
+                user_id,
+                r.get("space_id"),
+                host,
+                exc,
+            )
 
     # ── Space posts ────────────────────────────────────────────────────
 
@@ -3035,6 +3067,17 @@ class SpaceService(SpaceMemberGuardMixin):
 
     async def list_subscriptions(self, user_id: str) -> list[dict]:
         return await self._spaces.list_subscriptions_for_user(user_id)
+
+    async def list_pending_join_request_space_ids(
+        self,
+        user_id: str,
+    ) -> list[str]:
+        """Space ids the caller has an outstanding (``pending``) join
+        request for — used by the SPA to restore "Request pending" on
+        the browser/detail cards after a reload."""
+        return await self._spaces.list_pending_join_request_space_ids_for_user(
+            user_id,
+        )
 
     async def is_subscribed(self, user_id: str, space_id: str) -> bool:
         member = await self._spaces.get_member(space_id, user_id)

@@ -102,6 +102,7 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         "list_links",
         "list_pending_moderation",
         "list_subscriptions",
+        "list_pending_join_request_space_ids",  # caller's own pending requests
         "is_subscribed",
         # Self-service joins / leaves — gate is on the *invite* / *request*,
         # not the join action itself.

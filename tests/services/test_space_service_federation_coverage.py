@@ -24,6 +24,7 @@ from socialhome.domain.federation import (
 from socialhome.domain.space import (
     JoinMode,
     SpaceFeatures,
+    SpaceMember,
     SpacePermissionError,
     SpaceRole,
     SpaceType,
@@ -378,7 +379,16 @@ async def test_on_remote_join_request_approved_unknown_noop(stack):
     )
 
 
-async def test_on_remote_join_request_approved_happy(stack):
+async def test_on_remote_join_request_approved_routes_cross_instance(stack):
+    """§D2 — the host-minted token row lives in the HOST's DB, not ours.
+
+    The applicant's local request row's ``remote_applicant_instance_id``
+    holds the HOST instance id. The approval handler MUST route through
+    the cross-instance redeem coordinator (which consumes on the host and
+    seats locally), passing ``issuer_instance_id=<host>`` — NOT the local
+    ``accept_invite_token`` path, which would KeyError on the missing
+    local token row and silently drop the join.
+    """
     await _user(stack, "alicehost")
     bob = await _user(stack, "bobapp")
     space = await stack.svc.create_space(
@@ -389,22 +399,114 @@ async def test_on_remote_join_request_approved_happy(stack):
         lon=4.89,
         radius_km=50,
     )
-    # First create the remote request (seeds space_join_requests row).
+    # Applicant-side remote join request: host = "peer" (a DIFFERENT
+    # instance from ours). Seeds the local request row with
+    # remote_applicant_instance_id="peer".
     rid = await stack.svc.request_join_remote(
         space.id,
         applicant_user_id=bob.user_id,
         host_instance_id="peer",
     )
-    # Mint a token to consume.
+
+    # Stub coordinator records the call and seats the applicant locally
+    # (mirrors what the real coordinator does after the host consumes).
+    coordinator = MagicMock()
+
+    async def _request_redeem(token, *, viewer_user_id, issuer_instance_id):
+        await stack.space_repo.save_member(
+            SpaceMember(
+                space_id=space.id,
+                user_id=viewer_user_id,
+                role=SpaceRole.MEMBER,
+                joined_at="2026-01-01T00:00:00+00:00",
+            )
+        )
+        return {"space_id": space.id, "role": SpaceRole.MEMBER}
+
+    coordinator.request_redeem = AsyncMock(side_effect=_request_redeem)
+    stack.svc.attach_redeem_coordinator(coordinator)
+
+    await stack.svc.on_remote_join_request_approved(
+        rid,
+        invite_token="host-minted-token",
+    )
+
+    # Routed through the coordinator with the host as issuer + applicant.
+    coordinator.request_redeem.assert_awaited_once()
+    call = coordinator.request_redeem.call_args
+    assert call.args[0] == "host-minted-token"
+    assert call.kwargs["issuer_instance_id"] == "peer"
+    assert call.kwargs["viewer_user_id"] == bob.user_id
+    # And the applicant is actually seated.
+    member = await stack.space_repo.get_member(space.id, bob.user_id)
+    assert member is not None
+    assert member.role == SpaceRole.MEMBER
+
+
+async def test_on_remote_join_request_approved_local_fallback_seats(stack):
+    """A LOCAL join-request approval (no remote host on the row) keeps
+    working: redeem_invite_token falls back to accept_invite_token and
+    the applicant becomes a real member.
+    """
+    await _user(stack, "alicehost")
+    bob = await _user(stack, "bobapp")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="S",
+        join_mode=JoinMode.REQUEST,
+    )
+    # Local request row → remote_applicant_instance_id is NULL.
+    rid = await stack.svc.request_join(
+        space.id,
+        user_id=bob.user_id,
+        message="please",
+    )
+    # Locally-minted token in OUR DB.
     token = await stack.svc.create_invite_token(
         space.id,
         actor_username="alicehost",
     )
-    # Handler auto-consumes it.
-    await stack.svc.on_remote_join_request_approved(
-        rid,
-        invite_token=token,
+    await stack.svc.on_remote_join_request_approved(rid, invite_token=token)
+    member = await stack.space_repo.get_member(space.id, bob.user_id)
+    assert member is not None
+    assert member.role == SpaceRole.MEMBER
+
+
+async def test_on_remote_join_request_approved_failure_is_logged(stack, caplog):
+    """A genuine redeem failure (host unreachable / denied) must NOT crash
+    and must NOT seat the user — but it MUST be observable (WARNING log),
+    not a bare ``pass``.
+    """
+    await _user(stack, "alicehost")
+    bob = await _user(stack, "bobapp")
+    space = await stack.svc.create_space(
+        owner_username="alicehost",
+        name="S",
+        space_type=SpaceType.PUBLIC,
+        lat=52.37,
+        lon=4.89,
+        radius_km=50,
     )
+    rid = await stack.svc.request_join_remote(
+        space.id,
+        applicant_user_id=bob.user_id,
+        host_instance_id="peer",
+    )
+    coordinator = MagicMock()
+    coordinator.request_redeem = AsyncMock(side_effect=TimeoutError("host down"))
+    stack.svc.attach_redeem_coordinator(coordinator)
+
+    with caplog.at_level("WARNING"):
+        # Does not raise.
+        await stack.svc.on_remote_join_request_approved(
+            rid,
+            invite_token="host-minted-token",
+        )
+
+    # Not seated.
+    assert (await stack.space_repo.get_member(space.id, bob.user_id)) is None
+    # Surfaced at WARNING, not swallowed.
+    assert any(r.levelname == "WARNING" for r in caplog.records)
 
 
 # ── approve_join_request / deny_join_request ──────────────────────
