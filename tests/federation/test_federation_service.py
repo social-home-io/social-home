@@ -2387,3 +2387,161 @@ async def test_app_inbound_handler_no_op_when_no_app_fed_attached():
     # Should complete without error.
     await p.svc_b._app_inbound_handler(p.a_id, b"{}", b"")
     # No dispatch raised
+
+
+# ─── resign_for_redelivery (outbox redelivery re-stamp/re-sign) ────────────
+
+
+def _build_stored_envelope(svc, peer_kp, *, timestamp_iso, msg_id="msg-fixed-1"):
+    """Build a fully-signed stored envelope the way send_event would,
+    but with a caller-chosen timestamp so a test can age it.
+
+    Mirrors the canonical verifier field order so the produced
+    signature verifies against ``make_verify_signature``.
+    """
+    import orjson
+
+    envelope_dict = {
+        "msg_id": msg_id,
+        "event_type": FederationEventType.SPACE_DISSOLVED.value,
+        "from_instance": svc._own_instance_id,
+        "to_instance": derive_instance_id(peer_kp.public_key),
+        "timestamp": timestamp_iso,
+        "encrypted_payload": "nonce123:ciphertextABC",
+        "space_id": "space-xyz",
+        "proto_version": 1,
+        "sig_suite": "ed25519",
+    }
+    envelope_bytes = orjson.dumps(envelope_dict)
+    envelope_dict["signatures"] = svc._encoder.sign_envelope_all(
+        envelope_bytes, suite="ed25519"
+    )
+    return envelope_dict
+
+
+def test_resign_for_redelivery_refreshes_timestamp_keeps_identity():
+    """resign_for_redelivery: fresh timestamp, same msg_id /
+    encrypted_payload / sig_suite / space_id, non-empty signatures."""
+    svc, own_kp = _make_service()
+    peer_kp = generate_identity_keypair()
+    stale_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stored = _build_stored_envelope(svc, peer_kp, timestamp_iso=stale_iso)
+    payload_json = _dumps(stored)
+
+    out = svc.resign_for_redelivery(payload_json)
+    parsed = _loads(out)
+
+    # msg_id / encrypted_payload / sig_suite / space_id preserved.
+    assert parsed["msg_id"] == stored["msg_id"]
+    assert parsed["encrypted_payload"] == stored["encrypted_payload"]
+    assert parsed["sig_suite"] == stored["sig_suite"]
+    assert parsed["space_id"] == stored["space_id"]
+    assert parsed["event_type"] == stored["event_type"]
+    assert parsed["from_instance"] == stored["from_instance"]
+    assert parsed["to_instance"] == stored["to_instance"]
+
+    # Fresh timestamp: within a couple of seconds of now.
+    new_ts = datetime.fromisoformat(parsed["timestamp"])
+    skew = abs((datetime.now(timezone.utc) - new_ts).total_seconds())
+    assert skew < 5, f"expected fresh timestamp, skew was {skew}s"
+
+    # Non-empty signatures map with the ed25519 entry.
+    assert parsed["signatures"]
+    assert "ed25519" in parsed["signatures"]
+    # And the timestamp actually changed.
+    assert parsed["timestamp"] != stored["timestamp"]
+
+
+def test_resign_for_redelivery_preserves_msg_id_for_replay_dedup():
+    """The re-signed envelope keeps the exact original msg_id so the
+    receiver's replay cache still dedupes a genuinely-redelivered event."""
+    svc, _ = _make_service()
+    peer_kp = generate_identity_keypair()
+    stale_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stored = _build_stored_envelope(
+        svc, peer_kp, timestamp_iso=stale_iso, msg_id="unique-msg-id-42"
+    )
+    out = svc.resign_for_redelivery(_dumps(stored))
+    assert _loads(out)["msg_id"] == "unique-msg-id-42"
+
+
+@pytest.mark.asyncio
+async def test_resign_for_redelivery_passes_real_inbound_timestamp_and_sig():
+    """END-TO-END guarantee: a stale stored envelope is rejected by the
+    real §24.11 timestamp step (proving the bug), and after
+    resign_for_redelivery it passes BOTH the real timestamp step AND the
+    real signature-verify step in the verifier's canonical field order.
+
+    This is the canonicalization tripwire: if resign_for_redelivery's
+    field order drifts from inbound_validator's envelope_for_verify, the
+    signature verification below fails.
+    """
+    import orjson
+    from socialhome.federation.inbound_validator import (
+        InboundContext,
+        make_check_timestamp,
+        make_verify_signature,
+    )
+
+    svc, own_kp = _make_service()
+    peer_kp = generate_identity_keypair()
+
+    # Build a stale (10-minute-old) signed envelope exactly as the outbox
+    # would have stored it from the original send_event call.
+    stale_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stored = _build_stored_envelope(svc, peer_kp, timestamp_iso=stale_iso)
+    payload_json = _dumps(stored)
+
+    ts_step = make_check_timestamp()
+
+    # (a) The STALE original is rejected by the real timestamp step.
+    stale_ctx = InboundContext()
+    stale_ctx.envelope = stored
+    with pytest.raises(ValueError, match="Timestamp skew"):
+        await ts_step(stale_ctx)
+
+    # Re-stamp + re-sign for redelivery.
+    resigned_json = svc.resign_for_redelivery(payload_json)
+    resigned = _loads(resigned_json)
+
+    # (b1) The re-signed envelope passes the real timestamp step.
+    fresh_ctx = InboundContext()
+    fresh_ctx.envelope = resigned
+    await ts_step(fresh_ctx)  # must not raise
+
+    # (b2) The re-signed envelope passes the real signature-verify step
+    # against the signer's (our) public key, in the verifier's canonical
+    # field order. We use a verifier-side encoder + an _InboxInstance-like
+    # wrapper carrying the signer's from_instance + public key.
+    class _SignerInstance:
+        from_instance = svc._own_instance_id
+        remote_identity_pk = own_kp.public_key.hex()
+        remote_pq_identity_pk = None
+
+    verifier_encoder = FederationEncoder(generate_identity_keypair().private_key)
+    sig_step = make_verify_signature(encoder=verifier_encoder)
+    sig_ctx = InboundContext()
+    sig_ctx.envelope = resigned
+    sig_ctx.instance = _SignerInstance()
+    await sig_step(sig_ctx)  # must not raise → signature valid in canonical order
+
+    # Sanity: the canonical bytes the verifier reconstructs match what we
+    # signed (independent cross-check of field order).
+    envelope_for_verify = {
+        "msg_id": resigned["msg_id"],
+        "event_type": resigned["event_type"],
+        "from_instance": resigned["from_instance"],
+        "to_instance": resigned["to_instance"],
+        "timestamp": resigned["timestamp"],
+        "encrypted_payload": resigned["encrypted_payload"],
+        "space_id": resigned.get("space_id"),
+        "proto_version": resigned.get("proto_version", 1),
+        "sig_suite": resigned["sig_suite"],
+    }
+    assert verifier_encoder.verify_signatures_all(
+        orjson.dumps(envelope_for_verify),
+        suite=resigned["sig_suite"],
+        signatures=resigned["signatures"],
+        ed_public_key=own_kp.public_key,
+        pq_public_key=None,
+    )

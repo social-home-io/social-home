@@ -278,6 +278,10 @@ def make_verify_signature(*, encoder) -> InboundStep:
             raise ValueError("Invalid envelope signature")
         remote_pk = bytes.fromhex(ctx.instance.remote_identity_pk)
         # Reconstruct the signed bytes (envelope without the signatures map).
+        # CANONICAL FIELD ORDER — must stay byte-identical to the order in
+        # FederationService.send_event and resign_for_redelivery (the signer
+        # side), or signatures fail to verify. Changing a field here means
+        # changing it there too.
         envelope_for_verify = {
             "msg_id": data["msg_id"],
             "event_type": data["event_type"],
