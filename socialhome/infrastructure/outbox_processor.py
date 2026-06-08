@@ -25,8 +25,12 @@ import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
-from ..domain.federation_retention import NEVER_DROP
-from ..repositories.outbox_repo import AbstractOutboxRepo, OutboxEntry
+from ..domain.federation_retention import NEVER_DROP, TERMINAL_GRACE
+from ..repositories.outbox_repo import (
+    PURGE_BATCH,
+    AbstractOutboxRepo,
+    OutboxEntry,
+)
 
 
 log = logging.getLogger(__name__)
@@ -268,11 +272,29 @@ class OutboxProcessor:
         return len(entries)
 
     async def prune_once(self) -> int:
-        """Mark pending entries past their retention window as failed
-        (§4.4.7). NEVER_DROP entries have expires_at=NULL and are skipped
-        by the repo query, so they're untouched. Returns count expired."""
-        now_iso = datetime.now(timezone.utc).isoformat()
-        return await self._repo.expire_past_retention(now_iso)
+        """Retention sweep (§4.4.7). Two phases:
+        1. flip pending rows past their expires_at to ``failed`` (NEVER_DROP
+           rows have expires_at=NULL and are skipped);
+        2. DELETE terminal (delivered/failed) rows older than TERMINAL_GRACE,
+           in bounded batches, so the queue never accumulates tombstones
+           (and a pre-change historical backlog is reclaimed over time).
+        Returns expired + purged count.
+        """
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        expired = await self._repo.expire_past_retention(now_iso)
+        cutoff_iso = (now - TERMINAL_GRACE).isoformat()
+        purged = 0
+        for _ in range(20):  # bounded: up to 20 * batch rows per tick
+            n = await self._repo.purge_terminal(cutoff_iso)
+            purged += n
+            # ``PURGE_BATCH`` is the repo's default ``limit`` — comparing to
+            # the same constant keeps the "drained" sentinel from drifting.
+            if n < PURGE_BATCH:  # fewer than a full batch ⇒ drained
+                break
+        if purged:
+            log.info("OutboxProcessor: purged %d terminal outbox rows", purged)
+        return expired + purged
 
     # ── Backoff math (pure) ────────────────────────────────────────────
 

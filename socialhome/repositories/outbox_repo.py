@@ -19,17 +19,31 @@ Retention tiers follow §4.4.7:
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
 from ..domain.federation import FederationEventType
-from ..domain.federation_retention import retention_expires_at
+from ..domain.federation_retention import (
+    MAX_PENDING_PER_PEER,
+    NEVER_DROP,
+    retention_expires_at,
+)
 from .base import rows_to_dicts
+
+log = logging.getLogger(__name__)
 
 # Domain dataclass lives in ``socialhome/domain/outbox.py``;
 # re-exported here so existing repo-level imports keep working.
 from ..domain.outbox import OutboxEntry  # noqa: F401,E402
+
+
+#: Default batch size for :meth:`SqliteOutboxRepo.purge_terminal`. Exported so
+#: the OutboxProcessor's batch-drain loop compares against the SAME value its
+#: per-call limit uses — the "fewer than a full batch ⇒ drained" sentinel must
+#: not drift from the repo's default limit.
+PURGE_BATCH = 5000
 
 
 @runtime_checkable
@@ -55,7 +69,11 @@ class AbstractOutboxRepo(Protocol):
         attempts: int,
     ) -> None: ...
     async def expire_past_retention(self, now_iso: str) -> int: ...
+    async def purge_terminal(
+        self, cutoff_iso: str, *, limit: int = PURGE_BATCH
+    ) -> int: ...
     async def count_pending_for(self, instance_id: str) -> int: ...
+    async def evict_oldest_droppable(self, instance_id: str) -> bool: ...
 
 
 class SqliteOutboxRepo:
@@ -81,6 +99,21 @@ class SqliteOutboxRepo:
         # explicit ``expires_at`` from the caller is respected as-is.
         if expires_at is None:
             expires_at = retention_expires_at(event_type)
+        # Per-peer back-pressure (§4.4.7): a permanently-offline peer plus a
+        # busy space must not flood the outbox. At/over the cap, evict the
+        # oldest droppable (non-NEVER_DROP) pending row to make room. We still
+        # insert the new row — NEVER_DROP events are never refused, and for an
+        # ordinary event the freshest state is the one worth keeping. If the
+        # backlog is entirely NEVER_DROP (nothing droppable) we let it through
+        # rather than drop a security/structural event.
+        if await self.count_pending_for(instance_id) >= MAX_PENDING_PER_PEER:
+            evicted = await self.evict_oldest_droppable(instance_id)
+            if not evicted:
+                log.warning(
+                    "outbox: peer %s at pending cap with no droppable rows "
+                    "(all NEVER_DROP) — inserting over cap",
+                    instance_id,
+                )
         await self._db.enqueue(
             """
             INSERT INTO federation_outbox(
@@ -129,9 +162,12 @@ class SqliteOutboxRepo:
         return [_row_to_entry(d) for d in rows_to_dicts(rows)]
 
     async def mark_delivered(self, entry_id: str) -> None:
+        # A delivered entry's job is done — remove it so the queue doesn't
+        # accumulate one tombstone per successfully-delivered event. The
+        # receiver's 2xx already satisfies at-least-once; nothing reads
+        # delivered rows.
         await self._db.enqueue(
-            "UPDATE federation_outbox SET status='delivered', "
-            "delivered_at=datetime('now') WHERE id=?",
+            "DELETE FROM federation_outbox WHERE id=?",
             (entry_id,),
         )
 
@@ -181,6 +217,39 @@ class SqliteOutboxRepo:
         )
         return int(count)
 
+    async def purge_terminal(self, cutoff_iso: str, *, limit: int = PURGE_BATCH) -> int:
+        """Delete up to ``limit`` terminal (delivered/failed) rows whose
+        terminal timestamp is older than ``cutoff_iso``. Returns the count
+        deleted. Batched so a large historical backlog drains over several
+        sweep ticks instead of one writer-blocking transaction. Uses
+        COALESCE(delivered_at, failed_at, created_at) so rows missing a
+        terminal stamp (legacy) are still reclaimed by created_at.
+        """
+        before = await self._db.fetchval(
+            """
+            SELECT COUNT(*) FROM federation_outbox
+             WHERE status IN ('delivered','failed')
+               AND COALESCE(delivered_at, failed_at, created_at) < ?
+            """,
+            (cutoff_iso,),
+            default=0,
+        )
+        to_delete = min(int(before), limit)
+        if to_delete:
+            await self._db.enqueue(
+                """
+                DELETE FROM federation_outbox
+                 WHERE id IN (
+                     SELECT id FROM federation_outbox
+                      WHERE status IN ('delivered','failed')
+                        AND COALESCE(delivered_at, failed_at, created_at) < ?
+                      LIMIT ?
+                 )
+                """,
+                (cutoff_iso, limit),
+            )
+        return to_delete
+
     async def count_pending_for(self, instance_id: str) -> int:
         return int(
             await self._db.fetchval(
@@ -190,6 +259,32 @@ class SqliteOutboxRepo:
                 default=0,
             )
         )
+
+    async def evict_oldest_droppable(self, instance_id: str) -> bool:
+        """Delete the oldest PENDING non-NEVER_DROP row for ``instance_id``.
+
+        Returns True iff a row was evicted. NEVER_DROP rows (security /
+        structural state) are excluded — they are never dropped to make room.
+        """
+        never = sorted(e.value for e in NEVER_DROP)
+        placeholders = ",".join("?" * len(never))
+        row = await self._db.fetchone(
+            f"""
+            SELECT id FROM federation_outbox
+             WHERE instance_id=? AND status='pending'
+               AND event_type NOT IN ({placeholders})
+             ORDER BY datetime(created_at) ASC, id ASC
+             LIMIT 1
+            """,
+            (instance_id, *never),
+        )
+        if row is None:
+            return False
+        await self._db.enqueue(
+            "DELETE FROM federation_outbox WHERE id=?",
+            (row["id"],),
+        )
+        return True
 
 
 def _row_to_entry(row: dict) -> OutboxEntry:

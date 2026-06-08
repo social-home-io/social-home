@@ -43,7 +43,7 @@ async def env(tmp_dir):
 
 
 async def test_outbox_full_cycle(env):
-    """Enqueued entry appears in list_due; marking delivered removes it from due list."""
+    """Enqueued entry appears in list_due; marking delivered DELETEs the row."""
     eid = await env.outbox_repo.enqueue(
         instance_id="peer",
         event_type=FederationEventType.SPACE_POST_CREATED,
@@ -53,6 +53,10 @@ async def test_outbox_full_cycle(env):
     assert len(due) == 1
     await env.outbox_repo.mark_delivered(eid)
     assert await env.outbox_repo.list_due() == []
+    # mark_delivered now DELETEs the row outright — no 'delivered' tombstone
+    # is left behind (nothing reads it; at-least-once is the receiver's 2xx).
+    rows = await env.db.fetchall("SELECT id FROM federation_outbox WHERE id=?", (eid,))
+    assert rows == []
 
 
 async def test_outbox_processor_backoff(env):
@@ -227,3 +231,324 @@ async def test_expire_past_retention_skips_null_expiry(env):
         "SELECT status FROM federation_outbox WHERE id=?", (eid,)
     )
     assert rows[0]["status"] == "pending"
+
+
+# ── §4.4.7 retention: purge_terminal sweep ──────────────────────────────────
+
+
+async def _seed_terminal(env, eid, *, status, stamp_col, stamp):
+    """Insert a row directly in a terminal state with a deterministic
+    terminal timestamp so the cutoff comparison doesn't rely on wall-clock."""
+    await env.db.enqueue(
+        "INSERT INTO federation_outbox(id, instance_id, event_type,"
+        " payload_json, status, created_at) VALUES(?,?,?,?,?,?)",
+        (eid, "peer", "SPACE_POST_CREATED", "{}", status, stamp),
+    )
+    await env.db.enqueue(
+        f"UPDATE federation_outbox SET {stamp_col}=? WHERE id=?",
+        (stamp, eid),
+    )
+
+
+async def test_purge_terminal_deletes_old_failed_keeps_new(env):
+    """A failed row older than cutoff is purged; a newer one is kept."""
+    await _seed_terminal(
+        env,
+        "old",
+        status="failed",
+        stamp_col="failed_at",
+        stamp="2000-01-01T00:00:00+00:00",
+    )
+    await _seed_terminal(
+        env,
+        "new",
+        status="failed",
+        stamp_col="failed_at",
+        stamp="2030-01-01T00:00:00+00:00",
+    )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00")
+    assert n == 1
+    ids = {r["id"] for r in await env.db.fetchall("SELECT id FROM federation_outbox")}
+    assert ids == {"new"}
+
+
+async def test_purge_terminal_reclaims_legacy_delivered(env):
+    """A legacy 'delivered' row (pre-change backlog) past cutoff is reclaimed."""
+    await _seed_terminal(
+        env,
+        "leg",
+        status="delivered",
+        stamp_col="delivered_at",
+        stamp="2000-01-01T00:00:00+00:00",
+    )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00")
+    assert n == 1
+    rows = await env.db.fetchall("SELECT id FROM federation_outbox WHERE id='leg'")
+    assert rows == []
+
+
+async def test_purge_terminal_never_touches_pending(env):
+    """A pending row is never purged, however old."""
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+    )
+    await env.db.enqueue(
+        "UPDATE federation_outbox SET created_at='2000-01-01T00:00:00+00:00'"
+        " WHERE id=?",
+        (eid,),
+    )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00")
+    assert n == 0
+    rows = await env.db.fetchall(
+        "SELECT status FROM federation_outbox WHERE id=?", (eid,)
+    )
+    assert rows[0]["status"] == "pending"
+
+
+async def test_purge_terminal_respects_limit(env):
+    """With more eligible rows than ``limit``, only ``limit`` are deleted."""
+    for i in range(5):
+        await _seed_terminal(
+            env,
+            f"f{i}",
+            status="failed",
+            stamp_col="failed_at",
+            stamp="2000-01-01T00:00:00+00:00",
+        )
+    n = await env.outbox_repo.purge_terminal("2026-01-01T00:00:00+00:00", limit=3)
+    assert n == 3
+    remaining = await env.db.fetchall("SELECT id FROM federation_outbox")
+    assert len(remaining) == 2
+
+
+# ── §4.4.7 back-pressure: per-peer pending cap + droppable eviction ──────────
+
+
+async def _seed_pending(env, eid, *, instance_id, event_type, created_at):
+    """Insert a pending outbox row with a deterministic created_at so eviction
+    order (oldest-first) doesn't rely on wall-clock."""
+    await env.db.enqueue(
+        "INSERT INTO federation_outbox(id, instance_id, event_type,"
+        " payload_json, status, created_at) VALUES(?,?,?,?,'pending',?)",
+        (eid, instance_id, event_type.value, "{}", created_at),
+    )
+
+
+async def _pending_ids(env, instance_id):
+    rows = await env.db.fetchall(
+        "SELECT id FROM federation_outbox WHERE instance_id=? AND status='pending'",
+        (instance_id,),
+    )
+    return {r["id"] for r in rows}
+
+
+async def test_evict_oldest_droppable_removes_oldest_ordinary(env):
+    """With three ordinary pending rows, the oldest is evicted first."""
+    await _seed_pending(
+        env,
+        "o1",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    await _seed_pending(
+        env,
+        "o2",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        created_at="2026-01-02T00:00:00+00:00",
+    )
+    await _seed_pending(
+        env,
+        "o3",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        created_at="2026-01-03T00:00:00+00:00",
+    )
+    assert await env.outbox_repo.evict_oldest_droppable("peer") is True
+    assert await _pending_ids(env, "peer") == {"o2", "o3"}
+    # A 2nd call evicts the next-oldest.
+    assert await env.outbox_repo.evict_oldest_droppable("peer") is True
+    assert await _pending_ids(env, "peer") == {"o3"}
+
+
+async def test_evict_oldest_droppable_skips_all_never_drop(env):
+    """With only NEVER_DROP pending rows, nothing is evicted."""
+    await _seed_pending(
+        env,
+        "n1",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_MEMBER_BANNED,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    await _seed_pending(
+        env,
+        "n2",
+        instance_id="peer",
+        event_type=FederationEventType.UNPAIR,
+        created_at="2026-01-02T00:00:00+00:00",
+    )
+    assert await env.outbox_repo.evict_oldest_droppable("peer") is False
+    assert await _pending_ids(env, "peer") == {"n1", "n2"}
+
+
+async def test_evict_oldest_droppable_never_touches_never_drop(env):
+    """In a mix, only the oldest *ordinary* row is evicted; NEVER_DROP survive
+    even when they are older than the evicted ordinary row."""
+    await _seed_pending(
+        env,
+        "n_old",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_MEMBER_BANNED,
+        created_at="2026-01-01T00:00:00+00:00",
+    )
+    await _seed_pending(
+        env,
+        "o_mid",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        created_at="2026-01-02T00:00:00+00:00",
+    )
+    await _seed_pending(
+        env,
+        "o_new",
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        created_at="2026-01-03T00:00:00+00:00",
+    )
+    assert await env.outbox_repo.evict_oldest_droppable("peer") is True
+    # The older NEVER_DROP row is untouched; the oldest ordinary one is gone.
+    assert await _pending_ids(env, "peer") == {"n_old", "o_new"}
+
+
+async def test_evict_oldest_droppable_no_rows(env):
+    """No pending rows ⇒ nothing evicted, returns False."""
+    assert await env.outbox_repo.evict_oldest_droppable("peer") is False
+
+
+async def test_enqueue_evicts_oldest_when_over_cap(env, monkeypatch):
+    """At the per-peer cap, enqueue evicts the oldest droppable row and the
+    newest is kept; count stays at the cap."""
+    import socialhome.repositories.outbox_repo as outbox_mod
+
+    monkeypatch.setattr(outbox_mod, "MAX_PENDING_PER_PEER", 3)
+
+    ids = []
+    for i in range(3):
+        eid = await env.outbox_repo.enqueue(
+            instance_id="peer",
+            event_type=FederationEventType.SPACE_POST_CREATED,
+            payload_json="{}",
+            msg_id=f"e{i}",
+        )
+        ids.append(eid)
+        # Deterministic ascending created_at so e0 is the oldest.
+        await env.db.enqueue(
+            "UPDATE federation_outbox SET created_at=? WHERE id=?",
+            (f"2026-01-0{i + 1}T00:00:00+00:00", eid),
+        )
+    assert await env.outbox_repo.count_pending_for("peer") == 3
+
+    newest = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+        msg_id="e_new",
+    )
+    # Stayed at the cap: oldest evicted, newest present.
+    assert await env.outbox_repo.count_pending_for("peer") == 3
+    pending = await _pending_ids(env, "peer")
+    assert newest in pending
+    assert "e0" not in pending  # oldest evicted
+
+
+async def test_enqueue_cap_is_per_peer(env, monkeypatch):
+    """A different peer's backlog is unaffected by another peer's cap."""
+    import socialhome.repositories.outbox_repo as outbox_mod
+
+    monkeypatch.setattr(outbox_mod, "MAX_PENDING_PER_PEER", 2)
+
+    for i in range(2):
+        await env.outbox_repo.enqueue(
+            instance_id="peer-a",
+            event_type=FederationEventType.SPACE_POST_CREATED,
+            payload_json="{}",
+            msg_id=f"a{i}",
+        )
+    # peer-b is independent.
+    await env.outbox_repo.enqueue(
+        instance_id="peer-b",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+        msg_id="b0",
+    )
+    # Over cap for peer-a evicts only from peer-a.
+    await env.outbox_repo.enqueue(
+        instance_id="peer-a",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+        msg_id="a2",
+    )
+    assert await env.outbox_repo.count_pending_for("peer-a") == 2
+    assert await env.outbox_repo.count_pending_for("peer-b") == 1
+
+
+async def test_enqueue_never_drop_inserted_even_over_cap(env, monkeypatch):
+    """A NEVER_DROP enqueue when the backlog is entirely NEVER_DROP is still
+    inserted (count exceeds the cap rather than dropping a security event)."""
+    import socialhome.repositories.outbox_repo as outbox_mod
+
+    monkeypatch.setattr(outbox_mod, "MAX_PENDING_PER_PEER", 2)
+
+    for i in range(2):
+        await env.outbox_repo.enqueue(
+            instance_id="peer",
+            event_type=FederationEventType.SPACE_MEMBER_BANNED,
+            payload_json="{}",
+            msg_id=f"n{i}",
+        )
+    assert await env.outbox_repo.count_pending_for("peer") == 2
+
+    nid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.UNPAIR,
+        payload_json="{}",
+        msg_id="n_new",
+    )
+    # Nothing droppable ⇒ the new NEVER_DROP row goes in over the cap.
+    assert await env.outbox_repo.count_pending_for("peer") == 3
+    assert nid in await _pending_ids(env, "peer")
+
+
+async def test_enqueue_at_cap_with_ordinary_evicts_ordinary_for_never_drop(
+    env, monkeypatch
+):
+    """A NEVER_DROP enqueue at cap with droppable rows present evicts the
+    oldest ordinary row to make room (and is itself inserted)."""
+    import socialhome.repositories.outbox_repo as outbox_mod
+
+    monkeypatch.setattr(outbox_mod, "MAX_PENDING_PER_PEER", 2)
+
+    for i in range(2):
+        eid = await env.outbox_repo.enqueue(
+            instance_id="peer",
+            event_type=FederationEventType.SPACE_POST_CREATED,
+            payload_json="{}",
+            msg_id=f"o{i}",
+        )
+        await env.db.enqueue(
+            "UPDATE federation_outbox SET created_at=? WHERE id=?",
+            (f"2026-01-0{i + 1}T00:00:00+00:00", eid),
+        )
+    nid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_DISSOLVED,
+        payload_json="{}",
+        msg_id="n_new",
+    )
+    assert await env.outbox_repo.count_pending_for("peer") == 2
+    pending = await _pending_ids(env, "peer")
+    assert "o0" not in pending  # oldest ordinary evicted
+    assert nid in pending

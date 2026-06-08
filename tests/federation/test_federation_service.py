@@ -303,8 +303,14 @@ class InMemoryOutboxRepo:
     async def expire_past_retention(self, now_iso: str) -> int:
         return 0
 
+    async def purge_terminal(self, cutoff_iso: str, *, limit: int = 5000) -> int:
+        return 0
+
     async def count_pending_for(self, instance_id: str) -> int:
         return 0
+
+    async def evict_oldest_droppable(self, instance_id: str) -> bool:
+        return False
 
 
 def _make_service(

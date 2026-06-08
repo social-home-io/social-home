@@ -31,9 +31,23 @@ NEVER_DROP: frozenset[FederationEventType] = frozenset(
     }
 )
 
+#: Hard ceiling on PENDING outbox rows per peer. When a peer is over this,
+#: enqueue evicts its oldest *droppable* (non-NEVER_DROP) pending row before
+#: inserting the new one, so a permanently-offline peer plus a busy space
+#: can't flood the outbox. Ordinary events are best-effort (the receiver
+#: rebuilds via sync), so dropping the oldest to keep the freshest state is
+#: the right trade; NEVER_DROP rows are never evicted.
+MAX_PENDING_PER_PEER = 1000
+
 #: Ordinary (non-NEVER_DROP) outbox entries live this long before the prune
 #: sweep marks them failed (§4.4.7).
 RETENTION_DAYS = 7
+
+#: How long a terminal (failed) outbox row is kept for operator diagnostics
+#: before the prune sweep deletes it. Failures (give-up at MAX_ATTEMPTS, 4xx
+#: PERMANENT, or expired-past-retention) flip the row to ``failed``; this
+#: window lets an operator see recent delivery failures before they're purged.
+TERMINAL_GRACE: timedelta = timedelta(hours=24)
 
 
 def retention_expires_at(

@@ -8,6 +8,7 @@ from socialhome.domain.federation import FederationEventType
 from socialhome.domain.federation_retention import (
     NEVER_DROP,
     RETENTION_DAYS,
+    TERMINAL_GRACE,
     retention_expires_at,
 )
 
@@ -32,6 +33,13 @@ def test_ordinary_event_expires_in_seven_days():
 def test_retention_days_constant():
     """RETENTION_DAYS is 7 (§4.4.7)."""
     assert RETENTION_DAYS == 7
+
+
+def test_terminal_grace_is_positive_timedelta():
+    """TERMINAL_GRACE is a positive timedelta of a sane minimum (≥1h)."""
+    assert isinstance(TERMINAL_GRACE, timedelta)
+    assert TERMINAL_GRACE > timedelta(0)
+    assert TERMINAL_GRACE >= timedelta(hours=1)
 
 
 def test_retention_expires_at_honours_injected_now():
