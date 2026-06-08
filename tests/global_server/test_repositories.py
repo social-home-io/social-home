@@ -214,6 +214,30 @@ async def test_pair_token_single_use_and_ttl(admin):
     assert await admin.consume_pair_token("nope") is False
 
 
+async def test_prune_old_pair_tokens_drops_old_keeps_recent(admin, gfs_db):
+    """``prune_old_pair_tokens`` deletes tokens created before the cutoff."""
+    now = int(time.time())
+    old = now - 2 * 86400  # 2 days ago
+    recent = now - 60  # 1 minute ago
+    await gfs_db.enqueue(
+        "INSERT INTO gfs_pair_tokens(token, ip, created_at) VALUES(?, ?, ?)",
+        ("old-tok", "1.1.1.1", old),
+    )
+    await gfs_db.enqueue(
+        "INSERT INTO gfs_pair_tokens(token, ip, created_at) VALUES(?, ?, ?)",
+        ("recent-tok", "2.2.2.2", recent),
+    )
+
+    cutoff = now - 86400  # 24h
+    deleted = await admin.prune_old_pair_tokens(cutoff)
+    assert deleted == 1
+
+    rows = await gfs_db.fetchall("SELECT token FROM gfs_pair_tokens")
+    tokens = {r["token"] for r in rows}
+    assert "old-tok" not in tokens  # old row pruned
+    assert "recent-tok" in tokens  # recent row kept
+
+
 async def test_record_login_attempt_prunes_old_rows(admin, gfs_db):
     """Prune-on-write bounds the brute-force counter table.
 

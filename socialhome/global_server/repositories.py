@@ -46,6 +46,12 @@ from .domain import (
 # keeping the table from growing without bound under repeated failed logins.
 _ADMIN_LOGIN_ATTEMPT_RETENTION_SECONDS = 86400
 
+# Retention for ``gfs_pair_tokens``. Tokens are single-use with a 10-min TTL
+# and only counted within a short rate-limit window, so a row older than this
+# is dead weight. 24h comfortably exceeds the TTL; the GFS maintenance loop
+# prunes anything older to keep the table bounded.
+PAIR_TOKEN_RETENTION_SECONDS = 86400
+
 
 # ─── Federation repo ─────────────────────────────────────────────────────
 
@@ -484,6 +490,7 @@ class AbstractGfsAdminRepo(Protocol):
     async def save_pair_token(self, token: str, ip: str) -> None: ...
     async def consume_pair_token(self, token: str) -> bool: ...
     async def count_pair_tokens(self, ip: str, since: int) -> int: ...
+    async def prune_old_pair_tokens(self, cutoff: int) -> int: ...
 
 
 class SqliteGfsAdminRepo:
@@ -845,8 +852,6 @@ class SqliteGfsAdminRepo:
         )
         if row is None or row["consumed_at"] is not None:
             return False
-        import time
-
         if int(time.time()) - int(row["created_at"]) > 600:
             return False
         await self._db.enqueue(
@@ -863,6 +868,22 @@ class SqliteGfsAdminRepo:
                 default=0,
             )
         )
+
+    async def prune_old_pair_tokens(self, cutoff: int) -> int:
+        """Delete pair tokens created before ``cutoff`` (unix seconds).
+
+        Tokens are single-use with a 10-min TTL and only counted within a
+        short rate-limit window, so older rows are dead weight.
+        """
+
+        def _run(conn) -> int:
+            cur = conn.execute(
+                "DELETE FROM gfs_pair_tokens WHERE created_at < ?",
+                (cutoff,),
+            )
+            return int(cur.rowcount or 0)
+
+        return await self._db.transact(_run)
 
 
 # ─── Cluster repo (unchanged surface) ────────────────────────────────────
