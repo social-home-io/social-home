@@ -24,7 +24,6 @@ from __future__ import annotations
 import getpass
 import hashlib
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -363,8 +362,15 @@ def main() -> None:
             sys.exit(_cli_set_password(config_path))
         i += 1
 
-    config = GfsConfig.load(config_path) if config_path else GfsConfig.load()
-    host = os.environ.get("GFS_HOST", config.host)
-    port = int(os.environ.get("GFS_PORT", config.port))
-    log.info("Starting GFS on %s:%s (base_url=%s)", host, port, config.base_url)
-    web.run_app(create_gfs_app(config), host=host, port=port)
+    # ``load`` already layers GFS_* env vars over the file (env > file >
+    # defaults), so the bind address comes straight from the resolved
+    # config — no second env lookup here (that asymmetry was issue #563:
+    # a baked-in GFS_HOST/GFS_PORT shadowed the --config file's values).
+    config = GfsConfig.load(config_path)
+    log.info(
+        "Starting GFS on %s:%s (base_url=%s)",
+        config.host,
+        config.port,
+        config.base_url,
+    )
+    web.run_app(create_gfs_app(config), host=config.host, port=config.port)

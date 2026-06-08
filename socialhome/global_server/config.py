@@ -3,16 +3,25 @@
 Loaded with layered precedence:
 
 1. **Runtime overrides in ``server_config`` table** — the admin portal
-   writes here; wins over the TOML for keys it owns (server_name,
+   writes here; wins over everything for the keys it owns (server_name,
    landing_markdown, header_image_file, auto_accept_clients,
    auto_accept_spaces, fraud_threshold, admin_password_hash).
-2. **TOML file** at the path passed via ``--config``, or
+2. **Environment variables** (``GFS_HOST``, ``GFS_PORT``, ``GFS_BASE_URL``,
+   ``GFS_DATA_DIR``, ``GFS_DB_PATH``, ``GFS_INSTANCE_ID``) — override the
+   matching ``[server]`` key when set, so an orchestrator can retarget a
+   single value (e.g. a per-instance port) without rewriting the file.
+   This mirrors :class:`socialhome.config.Config` (env > file > defaults).
+   Only ``[server]`` scalars have env bindings; branding/policy/webrtc/
+   cluster are file- and DB-owned. Unset vars leave the file value intact.
+3. **TOML file** at the path passed via ``--config``, or
    ``$SOCIAL_HOME_GFS_CONFIG``, or ``$SOCIAL_HOME_GFS_DATA/global_server.toml``,
    or ``./global_server.toml``.
-3. **Legacy env vars** (``GFS_HOST``, ``GFS_PORT``, ``GFS_DB_PATH``,
-   ``GFS_INSTANCE_ID``) — kept as a fallback so existing dev scripts
-   keep working.
 4. **Dataclass defaults** — safe values for a fresh node.
+
+Note: the shipped image (``Dockerfile.gfs``) deliberately does NOT bake
+``GFS_HOST``/``GFS_PORT`` — that would pin them at layer 2 and silently
+shadow the ``[server]`` keys of any ``--config`` file (see issue #563).
+The env vars are an opt-in override, not an image default.
 
 Separate from :class:`socialhome.config.Config` because the GFS is a
 different deploy artifact with its own sections. Import-safe: does not
@@ -23,7 +32,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -125,40 +134,58 @@ class GfsConfig:
             )
         return cfg
 
-    @classmethod
-    def from_env_fallback(cls) -> "GfsConfig":
-        """Build a GFS config from the legacy ``GFS_*`` env vars.
+    def _with_env_overrides(self) -> "GfsConfig":
+        """Return a copy with ``GFS_*`` env vars layered on top.
 
-        Used when no TOML is discoverable (mostly unit tests and the
-        existing dev scripts). ``base_url`` is inferred from ``GFS_HOST``
-        + ``GFS_PORT`` as ``http://host:port`` — good enough for loopback,
-        operators should always supply a TOML in production.
+        Env wins over the file/defaults this instance was built from
+        (env > file > defaults), matching :class:`socialhome.config.Config`.
+        Only the ``[server]`` scalars have env bindings; an unset var
+        leaves its field untouched so a single override (e.g. a
+        per-instance ``GFS_PORT``) doesn't disturb the rest of the file.
         """
-        host = os.environ.get("GFS_HOST", "0.0.0.0")
-        port = int(os.environ.get("GFS_PORT", "8765"))
-        data_dir = os.environ.get("GFS_DATA_DIR", DEFAULT_DATA_DIR)
-        db_path = os.environ.get("GFS_DB_PATH")
-        # Prefer an explicit GFS_DB_PATH — override data_dir if it's outside.
-        if db_path:
-            data_dir = str(Path(db_path).resolve().parent)
-        return cls(
-            host=host,
-            port=port,
-            base_url=os.environ.get("GFS_BASE_URL", f"http://{host}:{port}"),
+        env = os.environ
+        data_dir = env.get("GFS_DATA_DIR", self.data_dir)
+        # An explicit DB path pins data_dir to its parent (the filename
+        # itself is always gfs.db via the ``db_path`` property). Wins
+        # over GFS_DATA_DIR, mirroring the historical fallback order.
+        if "GFS_DB_PATH" in env:
+            data_dir = str(Path(env["GFS_DB_PATH"]).resolve().parent)
+        return replace(
+            self,
+            host=env.get("GFS_HOST", self.host),
+            port=int(env["GFS_PORT"]) if "GFS_PORT" in env else self.port,
+            base_url=env.get("GFS_BASE_URL", self.base_url),
             data_dir=data_dir,
-            instance_id=os.environ.get("GFS_INSTANCE_ID", "gfs-node-0"),
+            instance_id=env.get("GFS_INSTANCE_ID", self.instance_id),
         )
 
     @classmethod
-    def load(cls, config_path: str | Path | None = None) -> "GfsConfig":
-        """Discover + load the GFS config.
+    def from_env_fallback(cls) -> "GfsConfig":
+        """Build a GFS config from defaults + the ``GFS_*`` env vars.
 
-        Search order:
+        Used when no TOML is discoverable (mostly unit tests and the
+        existing dev scripts). ``base_url`` is inferred from the resolved
+        host + port as ``http://host:port`` when neither env nor a file
+        supplies one — good enough for loopback; production should set it.
+        """
+        cfg = cls()._with_env_overrides()
+        if not cfg.base_url:
+            cfg = replace(cfg, base_url=f"http://{cfg.host}:{cfg.port}")
+        return cfg
+
+    @classmethod
+    def load(cls, config_path: str | Path | None = None) -> "GfsConfig":
+        """Discover + load the GFS config, then layer env overrides.
+
+        Search order for the TOML:
           1. Explicit ``config_path`` argument.
           2. ``$SOCIAL_HOME_GFS_CONFIG``.
           3. ``$SOCIAL_HOME_GFS_DATA/global_server.toml``.
           4. ``./global_server.toml``.
-          5. Env-var fallback (legacy dev path).
+          5. Env-var fallback (no file — dev / loopback path).
+
+        Whichever base is chosen, ``GFS_*`` environment variables are
+        applied on top (env > file > defaults). See the module docstring.
         """
         candidates: list[Path] = []
         if config_path:
@@ -172,7 +199,7 @@ class GfsConfig:
         candidates.append(Path(DEFAULT_CONFIG_FILENAME))
         for candidate in candidates:
             if candidate.is_file():
-                return cls.from_toml(candidate)
+                return cls.from_toml(candidate)._with_env_overrides()
         return cls.from_env_fallback()
 
 
@@ -180,6 +207,9 @@ class GfsConfig:
 
 EXAMPLE_TOML: str = """\
 [server]
+# These apply as written. To retarget a single instance without editing
+# the file, set the matching env var (env > file): GFS_HOST, GFS_PORT,
+# GFS_BASE_URL, GFS_DATA_DIR, GFS_INSTANCE_ID.
 host     = "0.0.0.0"
 port     = 8765
 base_url = "https://gfs.example.com"
