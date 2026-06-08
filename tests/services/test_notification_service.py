@@ -861,6 +861,43 @@ async def test_calendar_event_created_on_space_calendar_notifies_members(stack):
     )
 
 
+async def test_remote_space_dissolved_notifies_each_member(stack):
+    """A remote SPACE_DISSOLVED archived the space read-only; every local
+    member gets a one-time ``space_dissolved`` notification (the space is
+    still viewable as an archive)."""
+    from socialhome.domain.events import RemoteSpaceDissolved
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+    from socialhome.services.space_service import SpaceService
+
+    alice = await stack.provision_user("alice-rd")
+    bob = await stack.provision_user("bob-rd")
+    spost_repo = SqliteSpacePostRepo(stack.db)
+    space_svc = SpaceService(
+        stack.space_repo,
+        spost_repo,
+        SqliteUserRepo(stack.db),
+        stack.bus,
+        own_instance_id="iid",
+    )
+    space = await space_svc.create_space(owner_username="alice-rd", name="Crew")
+    await space_svc.add_member(space.id, actor_username="alice-rd", user_id=bob.user_id)
+
+    await stack.bus.publish(RemoteSpaceDissolved(space_id=space.id))
+
+    for user in (alice, bob):
+        notes = await stack.notif_repo.list(user.user_id, limit=10)
+        dissolved = [n for n in notes if n.type == "space_dissolved"]
+        assert len(dissolved) == 1, user.user_id
+        assert space.name in dissolved[0].title
+        assert dissolved[0].link_url == f"/spaces/{space.id}"
+
+
+async def test_remote_space_dissolved_unknown_space_is_noop(stack):
+    from socialhome.domain.events import RemoteSpaceDissolved
+
+    await stack.bus.publish(RemoteSpaceDissolved(space_id="nope"))  # no raise
+
+
 # ─── TaskCompleted handler ─────────────────────────────────────────────
 
 

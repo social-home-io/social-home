@@ -677,6 +677,12 @@ class SpaceService(SpaceMemberGuardMixin):
         """Restore an archived space to read-write + active lists (owner/admin)."""
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+        if space.archived_reason:
+            # A space terminated on its host (``dissolved``/``removed``) is a
+            # read-only archive — it can't be revived from a member's side.
+            raise SpacePermissionError(
+                "This space ended on its host — it can't be unarchived."
+            )
         if await self._forward_admin_action_if_remote(
             space, actor_username, "unarchive", {}
         ):
