@@ -294,7 +294,7 @@ async def test_loop_prunes_on_first_tick_when_last_prune_zero():
     repo.expire_past_retention = AsyncMock(return_value=0)
 
     proc = OutboxProcessor(repo, AsyncMock(), poll_interval_seconds=0.01)
-    assert proc._last_prune == 0.0  # documented init
+    assert proc._last_prune is None  # "never pruned" → first tick prunes
     await proc.start()
     # Give the loop a moment to run a tick.
     for _ in range(50):

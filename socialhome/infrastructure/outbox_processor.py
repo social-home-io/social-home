@@ -124,11 +124,15 @@ class OutboxProcessor:
         self._deliver = deliver
         self._poll_interval = poll_interval_seconds
         self._prune_interval = prune_interval_seconds
-        # ``_last_prune`` is a ``time.monotonic()`` stamp. Initialised to
-        # ``0.0`` so the FIRST loop tick prunes immediately at startup —
-        # harmless (it only marks already-expired rows failed) and keeps the
-        # cold-start outbox clean. Tests set this explicitly to gate cadence.
-        self._last_prune = 0.0
+        # ``_last_prune`` is a ``time.monotonic()`` stamp, or ``None`` for
+        # "never pruned yet" so the FIRST loop tick always prunes regardless
+        # of the machine's uptime. (A plain ``0.0`` sentinel would NOT prune
+        # on the first tick on a freshly-booted host, where ``time.monotonic()``
+        # can be < ``prune_interval`` — the gate ``now - 0.0 >= interval``
+        # would be false.) Pruning at startup is harmless — it only marks
+        # already-expired rows failed — and keeps the cold-start outbox clean.
+        # Tests set this explicitly to gate cadence.
+        self._last_prune: float | None = None
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         # ``rng`` is injectable for deterministic tests. Default uses
@@ -162,7 +166,10 @@ class OutboxProcessor:
             # into the drain loop. Best-effort: a failure here must never
             # crash the drain loop, hence the separate try/except.
             now = time.monotonic()
-            if now - self._last_prune >= self._prune_interval:
+            if (
+                self._last_prune is None
+                or now - self._last_prune >= self._prune_interval
+            ):
                 self._last_prune = now
                 try:
                     expired = await self.prune_once()
