@@ -88,3 +88,12 @@ def test_app_message_event_type_round_trip():
     """APP_MESSAGE wire value round-trips through the str enum."""
     assert FederationEventType("app_message") == FederationEventType.APP_MESSAGE
     assert FederationEventType.APP_MESSAGE == "app_message"
+
+
+def test_space_sync_rejected_event_type_round_trip():
+    """SPACE_SYNC_REJECTED wire value round-trips through the str enum."""
+    assert (
+        FederationEventType("space_sync_rejected")
+        == FederationEventType.SPACE_SYNC_REJECTED
+    )
+    assert FederationEventType.SPACE_SYNC_REJECTED == "space_sync_rejected"

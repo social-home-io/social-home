@@ -260,7 +260,21 @@ from __future__ import annotations
 #:   (the operator endpoint 409s a sub-v_19 peer) so the request never
 #:   reaches a peer with no handler. **No fallback** — a sub-v_19 peer has
 #:   no resync handler, so there is no safe degraded send.
-OURS: int = 19
+#: * **v_20** (2026-06-08) — :data:`FederationEventType.SPACE_SYNC_REJECTED`.
+#:   When a member reconnects and sends ``SPACE_SYNC_BEGIN`` for a space it
+#:   is no longer a member of, the host replies with a signed
+#:   ``SPACE_SYNC_REJECTED {sync_id, space_id, reason}`` instead of silently
+#:   dropping the request. ``reason`` is ``"dissolved"`` (the space no longer
+#:   exists on the host) or ``"removed"`` (the space exists but the requester
+#:   is no longer a member). The member verifies the event came from the
+#:   space's owner instance, then archives its local copy read-only
+#:   (``archived_reason`` = the reason) so an offline member who missed the
+#:   original ``SPACE_DISSOLVED`` / removal event still reconciles on
+#:   reconnect. **Best-effort backstop.** Sub-v_20 hosts silently drop the
+#:   non-member sync request as before, so a sub-v_20 member relies on the
+#:   normal ``SPACE_DISSOLVED`` broadcast / outbox (unchanged) and may keep
+#:   an orphaned stub until that arrives.
+OURS: int = 20
 
 
 class FederationCapability:
@@ -418,6 +432,15 @@ class FederationCapability:
     #: so it is deliberately kept out of the per-space compatibility banner.
     MIN_FOR_INSTANCE_RESYNC = 19
 
+    #: Minimum proto_version where the peer (as host) replies
+    #: :data:`FederationEventType.SPACE_SYNC_REJECTED` to a non-member
+    #: ``SPACE_SYNC_BEGIN`` instead of silently dropping it, and (as member)
+    #: handles that event by archiving its local copy read-only. Best-effort
+    #: backstop: sub-v_20 peers silently drop the non-member sync request as
+    #: before, so a sub-v_20 member relies on the normal ``SPACE_DISSOLVED``
+    #: broadcast / outbox and may keep an orphaned stub until it arrives.
+    MIN_FOR_SPACE_SYNC_REJECTED = 20
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -453,6 +476,7 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (FederationCapability.MIN_FOR_APP_CHANNEL, "App federation channel"),
     (FederationCapability.MIN_FOR_APP_USER_ROUTING, "App user routing"),
     (FederationCapability.MIN_FOR_INSTANCE_RESYNC, "Instance resync request"),
+    (FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED, "Space sync reject reconcile"),
 ]
 
 

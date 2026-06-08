@@ -6,7 +6,18 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 19
+    assert fc.OURS == 20
+
+
+def test_space_sync_rejected_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED == 20
+    assert fc.FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED <= fc.OURS
+
+
+def test_space_sync_rejected_feature_label():
+    assert "Space sync reject reconcile" in dict(fc.CAPABILITY_FEATURES).values()
+    assert "Space sync reject reconcile" in fc.features_missing_below(19)
+    assert "Space sync reject reconcile" not in fc.features_missing_below(20)
 
 
 def test_instance_resync_capability_threshold():
