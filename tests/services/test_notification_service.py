@@ -932,6 +932,63 @@ async def test_remote_space_dissolved_unknown_space_is_noop(stack):
     await stack.bus.publish(RemoteSpaceDissolved(space_id="nope"))  # no raise
 
 
+async def test_remote_space_dissolved_reason_dissolved_keeps_was_dissolved(stack):
+    """When the space's archived_reason is 'dissolved', the notice keeps the
+    'was dissolved' wording."""
+    from socialhome.domain.events import RemoteSpaceDissolved
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+    from socialhome.services.space_service import SpaceService
+
+    alice = await stack.provision_user("alice-rdis")
+    spost_repo = SqliteSpacePostRepo(stack.db)
+    space_svc = SpaceService(
+        stack.space_repo,
+        spost_repo,
+        SqliteUserRepo(stack.db),
+        stack.bus,
+        own_instance_id="iid",
+    )
+    space = await space_svc.create_space(owner_username="alice-rdis", name="Crew")
+    await stack.space_repo.set_archived(space.id, True, reason="dissolved")
+
+    await stack.bus.publish(RemoteSpaceDissolved(space_id=space.id))
+
+    notes = await stack.notif_repo.list(alice.user_id, limit=10)
+    dissolved = [n for n in notes if n.type == "space_dissolved"]
+    assert len(dissolved) == 1
+    assert "was dissolved" in dissolved[0].title
+    assert space.name in dissolved[0].title
+
+
+async def test_remote_space_dissolved_reason_removed_says_no_longer_member(stack):
+    """When the space's archived_reason is 'removed' (we were removed from a
+    still-existing space), the notice reads 'no longer a member'."""
+    from socialhome.domain.events import RemoteSpaceDissolved
+    from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+    from socialhome.services.space_service import SpaceService
+
+    alice = await stack.provision_user("alice-rrem")
+    spost_repo = SqliteSpacePostRepo(stack.db)
+    space_svc = SpaceService(
+        stack.space_repo,
+        spost_repo,
+        SqliteUserRepo(stack.db),
+        stack.bus,
+        own_instance_id="iid",
+    )
+    space = await space_svc.create_space(owner_username="alice-rrem", name="Crew")
+    await stack.space_repo.set_archived(space.id, True, reason="removed")
+
+    await stack.bus.publish(RemoteSpaceDissolved(space_id=space.id))
+
+    notes = await stack.notif_repo.list(alice.user_id, limit=10)
+    removed = [n for n in notes if n.type == "space_dissolved"]
+    assert len(removed) == 1
+    assert "no longer a member" in removed[0].title
+    assert space.name in removed[0].title
+    assert removed[0].link_url == f"/spaces/{space.id}"
+
+
 # ─── TaskCompleted handler ─────────────────────────────────────────────
 
 

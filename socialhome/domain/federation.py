@@ -265,6 +265,7 @@ class FederationEventType(str, enum.Enum):
     SPACE_SYNC_DIRECT_READY = "space_sync_direct_ready"
     SPACE_SYNC_DIRECT_FAILED = "space_sync_direct_failed"
     SPACE_SYNC_REQUEST_MORE = "space_sync_request_more"
+    SPACE_SYNC_REJECTED = "space_sync_rejected"
 
     # ── Resilience / partition handling ──
     INSTANCE_SYNC_STATUS = "instance_sync_status"

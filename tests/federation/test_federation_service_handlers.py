@@ -366,6 +366,87 @@ async def test_handle_space_sync_begin_no_gfs_service_no_signaling_node(svc):
     assert "signaling_node" not in sent_payload
 
 
+async def test_handle_space_sync_begin_rejected_sends_to_v20_peer(svc):
+    """A non-member SPACE_SYNC_BEGIN from a v_20+ peer triggers a
+    SPACE_SYNC_REJECTED reply so the member can reconcile its stub."""
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.begin_session = AsyncMock(
+        return_value=SimpleNamespace(
+            accepted=False,
+            reason="not_a_member",
+            next_event=FederationEventType.SPACE_SYNC_REJECTED,
+            next_payload={
+                "sync_id": "s9",
+                "space_id": "sp",
+                "reason": "removed",
+            },
+        ),
+    )
+    with (
+        patch.object(
+            FederationService,
+            "peer_supports",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
+        await svc._handle_space_sync_begin(
+            _event(
+                "SPACE_SYNC_BEGIN",
+                {"sync_id": "s9", "space_id": "sp"},
+                space_id="sp",
+            ),
+        )
+    send_mock.assert_awaited_once()
+    kwargs = send_mock.await_args.kwargs
+    assert kwargs["event_type"] is FederationEventType.SPACE_SYNC_REJECTED
+    assert kwargs["payload"]["reason"] == "removed"
+
+
+async def test_handle_space_sync_begin_rejected_silent_for_sub_v20_peer(svc):
+    """The SAME reject against a sub-v_20 peer (no SPACE_SYNC_REJECTED
+    handler) falls back to the S-1 silent drop — no send."""
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.begin_session = AsyncMock(
+        return_value=SimpleNamespace(
+            accepted=False,
+            reason="not_a_member",
+            next_event=FederationEventType.SPACE_SYNC_REJECTED,
+            next_payload={
+                "sync_id": "s10",
+                "space_id": "sp",
+                "reason": "dissolved",
+            },
+        ),
+    )
+    with (
+        patch.object(
+            FederationService,
+            "peer_supports",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
+        await svc._handle_space_sync_begin(
+            _event(
+                "SPACE_SYNC_BEGIN",
+                {"sync_id": "s10", "space_id": "sp"},
+                space_id="sp",
+            ),
+        )
+    send_mock.assert_not_awaited()
+
+
 # ─── _handle_space_sync_offer ──────────────────────────────────────
 
 

@@ -1783,6 +1783,17 @@ class FederationService:
             ice_servers=self._ice_servers,
         )
         if not decision.accepted and decision.next_event is not None:
+            if (
+                decision.next_event is FederationEventType.SPACE_SYNC_REJECTED
+                and not await self.peer_supports(
+                    event.from_instance,
+                    min_version=FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED,
+                )
+            ):
+                # Sub-v_20 peer has no SPACE_SYNC_REJECTED handler — fall back
+                # to the S-1 silent drop (the member still reconciles via the
+                # normal SPACE_DISSOLVED broadcast / outbox).
+                return
             await self.send_event(
                 to_instance_id=event.from_instance,
                 event_type=decision.next_event,

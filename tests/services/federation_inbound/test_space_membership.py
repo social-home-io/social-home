@@ -125,7 +125,7 @@ def handlers(bus, repo):
     return h
 
 
-async def test_attach_registers_six_event_types(bus, repo):
+async def test_attach_registers_eight_event_types(bus, repo):
     h = SpaceMembershipInboundHandlers(bus=bus, space_repo=repo)
     fed = _FakeFederationService()
     h.attach_to(fed)
@@ -133,6 +133,7 @@ async def test_attach_registers_six_event_types(bus, repo):
     assert types == {
         FederationEventType.SPACE_CREATED,
         FederationEventType.SPACE_DISSOLVED,
+        FederationEventType.SPACE_SYNC_REJECTED,
         FederationEventType.SPACE_INSTANCE_LEFT,
         FederationEventType.SPACE_MEMBER_BANNED,
         FederationEventType.SPACE_MEMBER_UNBANNED,
@@ -232,6 +233,159 @@ async def test_space_dissolved_from_non_owner_is_rejected(bus, repo, handlers):
     assert repo.archived == []
     assert repo.purged == []
     assert captured == []
+
+
+async def test_sync_rejected_dissolved_from_owner_archives(bus, repo, handlers):
+    """§S-1 reconnect backstop: host rejected our sync with reason
+    'dissolved' → archive read-only + publish RemoteSpaceDissolved."""
+    repo.spaces["sp-1"] = _host_space("sp-1", owner_instance_id="peer-a")
+    captured: list[RemoteSpaceDissolved] = []
+    bus.subscribe(RemoteSpaceDissolved, captured.append)
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "dissolved"},
+            from_instance="peer-a",  # the owner
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == [("sp-1", True, "dissolved")]
+    assert captured[0].space_id == "sp-1"
+
+
+async def test_sync_rejected_removed_from_owner_archives(bus, repo, handlers):
+    """reason='removed' (space still exists on host, we're not a member) →
+    archive with reason='removed'."""
+    repo.spaces["sp-1"] = _host_space("sp-1", owner_instance_id="peer-a")
+    captured: list[RemoteSpaceDissolved] = []
+    bus.subscribe(RemoteSpaceDissolved, captured.append)
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "removed"},
+            from_instance="peer-a",
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == [("sp-1", True, "removed")]
+    assert captured[0].space_id == "sp-1"
+
+
+async def test_sync_rejected_from_non_owner_is_rejected(bus, repo, handlers):
+    """Security: only the OWNER host may terminate our copy — a non-owner
+    SPACE_SYNC_REJECTED is dropped (no archive, no publish)."""
+    repo.spaces["sp-1"] = _host_space("sp-1", owner_instance_id="the-real-host")
+    captured: list[RemoteSpaceDissolved] = []
+    bus.subscribe(RemoteSpaceDissolved, captured.append)
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "dissolved"},
+            from_instance="peer-a",  # not the owner
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == []
+    assert captured == []
+
+
+async def test_sync_rejected_unknown_reason_is_dropped(bus, repo, handlers):
+    """An unknown/missing reason is dropped — never archive on a
+    garbage/forward-incompatible payload."""
+    repo.spaces["sp-1"] = _host_space("sp-1", owner_instance_id="peer-a")
+    captured: list[RemoteSpaceDissolved] = []
+    bus.subscribe(RemoteSpaceDissolved, captured.append)
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "later-invented-reason"},
+            from_instance="peer-a",
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == []
+    assert captured == []
+    # missing reason entirely
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {},
+            from_instance="peer-a",
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == []
+    assert captured == []
+
+
+async def test_sync_rejected_absent_space_is_noop(repo, handlers):
+    """No local row for the space → nothing to archive."""
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "removed"},
+            from_instance="peer-a",
+            space_id="sp-gone",
+        )
+    )
+    assert repo.archived == []
+
+
+async def test_sync_rejected_already_terminally_archived_is_idempotent(repo, handlers):
+    """A copy already in a terminal archive (archived_reason set) is left
+    untouched — set_archived NOT called again."""
+    repo.spaces["sp-1"] = Space(
+        id="sp-1",
+        name="S",
+        owner_instance_id="peer-a",
+        owner_username="owner",
+        identity_public_key="aa" * 32,
+        config_sequence=1,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        archived=True,
+        archived_reason="dissolved",
+    )
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "removed"},
+            from_instance="peer-a",
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == []
+
+
+async def test_sync_rejected_upgrades_admin_archived_space(bus, repo, handlers):
+    """An admin-archived space (archived=True, archived_reason=None) is NOT
+    terminal — a terminal reason must still upgrade it."""
+    repo.spaces["sp-1"] = Space(
+        id="sp-1",
+        name="S",
+        owner_instance_id="peer-a",
+        owner_username="owner",
+        identity_public_key="aa" * 32,
+        config_sequence=1,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+        archived=True,
+        archived_reason=None,
+    )
+    captured: list[RemoteSpaceDissolved] = []
+    bus.subscribe(RemoteSpaceDissolved, captured.append)
+    await handlers._on_sync_rejected(
+        _event(
+            FederationEventType.SPACE_SYNC_REJECTED,
+            {"reason": "removed"},
+            from_instance="peer-a",
+            space_id="sp-1",
+        )
+    )
+    assert repo.archived == [("sp-1", True, "removed")]
+    assert captured[0].space_id == "sp-1"
 
 
 async def test_instance_left_removes_row(repo, handlers):

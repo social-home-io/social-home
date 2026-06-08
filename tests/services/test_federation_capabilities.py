@@ -12,13 +12,14 @@ from socialhome.domain.federation_capabilities import (
 )
 
 
-def test_ours_is_v19_with_instance_resync_capability():
-    """v_19 introduces INSTANCE_RESYNC_REQUEST gating."""
-    assert OURS == 19
+def test_ours_is_v20_with_space_sync_rejected_capability():
+    """v_20 introduces SPACE_SYNC_REJECTED gating (v_19 added INSTANCE_RESYNC)."""
+    assert OURS == 20
     assert FederationCapability.MIN_FOR_INSTANCE_RESYNC == 19
+    assert FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED == 20
     assert (
-        FederationCapability.MIN_FOR_INSTANCE_RESYNC,
-        "Instance resync request",
+        FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED,
+        "Space sync reject reconcile",
     ) in CAPABILITY_FEATURES
 
 

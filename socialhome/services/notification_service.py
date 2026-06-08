@@ -996,23 +996,35 @@ class NotificationService:
             )
 
     async def on_remote_space_dissolved(self, event: RemoteSpaceDissolved) -> None:
-        """The owner host dissolved a space; the local copy was archived
-        read-only. Tell each local member once that their copy is now a
-        read-only archive (the space is still viewable)."""
+        """The owner host ended our membership in a space; the local copy was
+        archived read-only. Tell each local member once that their copy is now
+        a read-only archive (the space is still viewable).
+
+        Reason-aware: both ``_on_dissolved`` (reason='dissolved') and
+        ``_on_sync_rejected`` (reason='dissolved' | 'removed') publish this
+        event, and the space row's ``archived_reason`` is already set by the
+        time we run. 'removed' means the space still exists on the host but we
+        were dropped from it; 'dissolved' (or anything else) keeps the
+        original 'was dissolved' wording."""
         space = await self._spaces.get(event.space_id)
         if space is None:
             return
+        if space.archived_reason == "removed":
+            title = f"You're no longer a member of “{space.name}”"
+            body = "Your copy is now a read-only archive."
+        else:
+            title = f"“{space.name}” was dissolved"
+            body = (
+                "The space's owner dissolved it. Your copy is now a read-only archive."
+            )
         members = await self._spaces.list_members(event.space_id)
         for member in members:
             await self._save_notif(
                 new_notification(
                     user_id=member.user_id,
                     type="space_dissolved",
-                    title=f"“{space.name}” was dissolved",
-                    body=(
-                        "The space's owner dissolved it. Your copy is now a "
-                        "read-only archive."
-                    ),
+                    title=title,
+                    body=body,
                     link_url=f"/spaces/{event.space_id}",
                 ),
                 # A re-broadcast of SPACE_DISSOLVED (fresh msg_id) must not

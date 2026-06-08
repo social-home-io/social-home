@@ -127,7 +127,9 @@ That single command runs the full sequence:
 
 4. ``verify`` — assertions across all three households:
    - Every confirmed peer advertises the build's current ``OURS``
-     ``proto_version`` (the capability-bump tripwire), and an
+     ``proto_version`` (the capability-bump tripwire — now v_20, which also
+     guards the ``SPACE_SYNC_REJECTED`` reconnect-reconcile backstop: a host
+     only sends that reply to peers it sees at >= v_20), and an
      ``INSTANCE_RESYNC_REQUEST`` (capabilities scope, v_19, #319 ¶6) to a
      v_19+ peer via ``POST /api/admin/federation/resync`` is accepted —
      proving the new event type + operator endpoint + ``peer_supports``

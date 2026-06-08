@@ -41,6 +41,14 @@ approval" below.
 source-routed envelope + the discovery probe that finds the path.
 See "Mesh routing (SPACE_ROUTED)" below.
 
+**Space sync**
+
+`SPACE_SYNC_BEGIN`, `SPACE_SYNC_OFFER`, `SPACE_SYNC_ANSWER`,
+`SPACE_SYNC_ICE`, `SPACE_SYNC_CHUNK` (v_13+), `SPACE_SYNC_COMPLETE`,
+`SPACE_SYNC_REJECTED` (v_20+), … — the reconnect content-sync handshake.
+`SPACE_SYNC_REJECTED` is the membership backstop covered under "Dissolution"
+below; the rest are the WebRTC/HTTPS content-streaming dance.
+
 ## Flow — create + join
 
 ```mermaid
@@ -97,6 +105,52 @@ used for dissolve. It is also ignored once a space is in a terminal state:
 `_on_space_config_changed` returns early when `archived_reason` is set, so
 a late or replayed config snapshot can't revive a dissolved archive.)
 
+### Reconnect backstop — `SPACE_SYNC_REJECTED` (v_20+)
+
+`NEVER_DROP` makes the `SPACE_DISSOLVED` re-delivery best-effort, not
+guaranteed: an outbox row can be pruned, or a member can be *removed* from a
+space (a separate flow) while offline and never learn it. Either way the
+member reconnects still believing it's a member, and its sync scheduler sends
+`SPACE_SYNC_BEGIN` for the space. The host used to **silently drop** that
+request when the requester wasn't a member (S-1), leaving an orphaned
+read-write stub forever.
+
+The backstop closes that gap. On a `SPACE_SYNC_BEGIN` from a non-member, the
+host (`SyncSessionManager.begin_session` → `_handle_space_sync_begin`) replies
+with a signed `SPACE_SYNC_REJECTED {sync_id, space_id, reason}` instead of
+dropping it:
+
+- `reason="dissolved"` — the `spaces` row is gone on the host (a dissolve
+  purged it; a never-existed space collapses into this case too, so a
+  dissolved space is indistinguishable from one that never existed).
+- `reason="removed"` — the space still exists on the host but the requester
+  is no longer in `space_instances`.
+
+The `dissolved`/`removed` split is an existence signal: a peer that asks
+about an *existing* space it isn't a member of learns the space exists
+(`removed`) rather than getting silence. That signal is gated behind a
+**confirmed, Ed25519-authenticated** peer, an **unguessable** `space_id`
+(`uuid4().hex`, 122-bit) the peer must already hold, and the **5/h
+per-peer+space rate limit** — so it can't be used to enumerate or
+amplify-probe. Accepted as a deliberate, bounded relaxation of the S-1
+silent drop in exchange for reconciling orphaned member stubs.
+
+The member's `_on_sync_rejected` handler (sibling of `_on_dissolved`) applies
+the **same** archive-not-delete treatment: it verifies the event came from the
+space's `owner_instance_id` (a non-owner can't terminate your copy), checks the
+reason is a known terminal value, and — if the copy isn't already terminally
+archived — calls `set_archived(space_id, True, reason=reason)` and publishes
+`RemoteSpaceDissolved`. The notification copy is reason-aware (`removed` →
+"you're no longer a member"). An *admin*-archived copy (`archived_reason`
+NULL) is still upgradable to a terminal reason here.
+
+Guards: the request is rate-limited (S-6, 5/h per peer+space) **before** the
+membership check, so the reply can't be used to amplify probes; the reply
+target and `space_id` are bound to the Ed25519-verified envelope; and the send
+is gated on `peer_supports(min_version=MIN_FOR_SPACE_SYNC_REJECTED)`.
+**Best-effort backstop** — a sub-v_20 host keeps the silent drop, so a sub-v_20
+member still relies on the normal `SPACE_DISSOLVED` broadcast/outbox.
+
 ## Archive (soft, reversible, federated read-only)
 
 Distinct from dissolution: archiving **hides + freezes** a space without
@@ -119,11 +173,12 @@ deleting anything, and is reversible.
 - `archived_reason` (`NULL` | `'dissolved'` | `'removed'`) distinguishes a
   reversible admin archive (`NULL` — Unarchive available) from a
   remote-termination archive a member can't undo (`'dissolved'` when the
-  owner dissolved the space; `'removed'` reserved for the member-removed
-  path). When set, `unarchive_space` refuses and the SPA shows a
-  reason-aware "read-only archive" banner with no Unarchive control. The
-  host never sets `archived_reason` on its own space (it purges); only
-  member copies carry it, and it is never re-federated.
+  owner dissolved the space; `'removed'` when the member was dropped from a
+  still-existing space — set by the `SPACE_SYNC_REJECTED` backstop above).
+  When set, `unarchive_space` refuses and the SPA shows a reason-aware
+  "read-only archive" banner with no Unarchive control. The host never sets
+  `archived_reason` on its own space (it purges); only member copies carry
+  it, and it is never re-federated.
 
 ## Post-type allow-list (per-space feed composer gating)
 
