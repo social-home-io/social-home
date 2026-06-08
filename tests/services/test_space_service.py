@@ -2273,3 +2273,29 @@ async def test_space_version_compat_requires_admin(stack):
 
     with pytest.raises(SpacePermissionError):
         await stack.space_svc.space_version_compat(space.id, actor_username="bob")
+
+
+async def test_unarchive_normally_archived_space_succeeds(stack):
+    """An admin-archived space (``archived_reason=None``) unarchives fine."""
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.archive_space(space.id, actor_username="anna")
+    assert (await stack.space_repo.get(space.id)).archived is True
+
+    await stack.space_svc.unarchive_space(space.id, actor_username="anna")
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.archived is False
+    assert refreshed.archived_reason is None
+
+
+async def test_unarchive_remote_terminated_space_is_rejected(stack):
+    """A space that ended on its host (``archived_reason='dissolved'``) must
+    not be unarchivable — it can't be revived from the member's side."""
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_repo.set_archived(space.id, True, reason="dissolved")
+
+    with pytest.raises(SpacePermissionError, match="ended on its host"):
+        await stack.space_svc.unarchive_space(space.id, actor_username="anna")
+    # Still archived — the guard refused before applying.
+    assert (await stack.space_repo.get(space.id)).archived is True

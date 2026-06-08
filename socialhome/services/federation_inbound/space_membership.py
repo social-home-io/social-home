@@ -25,17 +25,11 @@ from ...domain.space import (
 )
 from ...infrastructure.event_bus import EventBus
 from ..child_protection_service import _VALID_MIN_AGES
-from ..space_purge import purge_space_and_media
 from ..space_service import _space_metadata_for_federation, can_seat_remote_stub
 
 if TYPE_CHECKING:
-    import pathlib
-
     from ...domain.federation import FederationEvent
     from ...federation.federation_service import FederationService
-    from ...repositories.bazaar_repo import AbstractBazaarRepo
-    from ...repositories.gallery_repo import AbstractGalleryRepo
-    from ...repositories.space_post_repo import AbstractSpacePostRepo
     from ...repositories.space_repo import AbstractSpaceRepo
 
 log = logging.getLogger(__name__)
@@ -47,10 +41,6 @@ class SpaceMembershipInboundHandlers:
     __slots__ = (
         "_bus",
         "_space_repo",
-        "_post_repo",
-        "_gallery_repo",
-        "_bazaar_repo",
-        "_media_dir",
         "_federation",
     )
 
@@ -59,22 +49,9 @@ class SpaceMembershipInboundHandlers:
         *,
         bus: EventBus,
         space_repo: "AbstractSpaceRepo",
-        post_repo: "AbstractSpacePostRepo | None" = None,
-        gallery_repo: "AbstractGalleryRepo | None" = None,
-        bazaar_repo: "AbstractBazaarRepo | None" = None,
-        media_dir: "pathlib.Path | None" = None,
     ) -> None:
         self._bus = bus
         self._space_repo = space_repo
-        # Wired so an inbound SPACE_DISSOLVED can hard-delete the local
-        # copy's content + media, mirroring the host. Optional for
-        # minimal/legacy wirings — post media still drops via the FK
-        # cascade even when ``post_repo`` is absent (only the on-disk
-        # file unlink is skipped).
-        self._post_repo = post_repo
-        self._gallery_repo = gallery_repo
-        self._bazaar_repo = bazaar_repo
-        self._media_dir = media_dir
         self._federation: "FederationService | None" = None
 
     def attach_to(self, federation_service: "FederationService") -> None:
@@ -149,30 +126,38 @@ class SpaceMembershipInboundHandlers:
         )
 
     async def _on_dissolved(self, event: "FederationEvent") -> None:
-        """The host dissolved a space — hard-delete our local copy.
+        """The owner host dissolved a space — ARCHIVE our local copy
+        read-only; never hard-delete a member's local data.
 
-        Mirrors :meth:`SpaceService.dissolve_space`: publish the local
-        ``RemoteSpaceDissolved`` first (so connected tabs drop the space
-        while its members still resolve), then drop the content graph
-        (FK cascade) and unlink the on-disk media. When the media repos
-        aren't wired we still purge the rows — only the file unlink is
-        skipped.
+        A remote dissolve must not destroy local data: instead of purging
+        the content graph we flip the space to ``archived=True`` with
+        ``archived_reason='dissolved'`` so the member keeps a read-only
+        archive of everything they held. Only a *local* self-initiated
+        :meth:`SpaceService.dissolve_space` hard-purges.
+
+        Security: the dissolve is authoritative only from the space's
+        OWNER instance. A non-owner paired peer must not be able to
+        terminate your space, so we drop the event (with a warning) when
+        the sender isn't ``space.owner_instance_id``. We still publish
+        ``RemoteSpaceDissolved`` (drives the UI refresh + the one-time
+        notification) once the archive is applied.
         """
         space_id = event.space_id or str(event.payload.get("space_id") or "")
         if not space_id:
             return
-        await self._bus.publish(RemoteSpaceDissolved(space_id=space_id))
-        if self._post_repo is not None:
-            await purge_space_and_media(
-                space_repo=self._space_repo,
-                post_repo=self._post_repo,
-                gallery_repo=self._gallery_repo,
-                bazaar_repo=self._bazaar_repo,
-                media_dir=self._media_dir,
-                space_id=space_id,
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            return  # already gone locally — nothing to archive
+        if space.owner_instance_id != event.from_instance:
+            log.warning(
+                "SPACE_DISSOLVED for %s from non-owner %s (owner=%s) — dropping",
+                space_id,
+                event.from_instance,
+                space.owner_instance_id,
             )
-        else:
-            await self._space_repo.purge(space_id)
+            return
+        await self._space_repo.set_archived(space_id, True, reason="dissolved")
+        await self._bus.publish(RemoteSpaceDissolved(space_id=space_id))
 
     async def _on_instance_left(self, event: "FederationEvent") -> None:
         space_id = event.space_id or str(event.payload.get("space_id") or "")

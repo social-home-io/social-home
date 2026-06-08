@@ -68,6 +68,53 @@ interface SpaceDetail {
   owner_instance_id?: string
   /** Read-only archive state — hide the composer + show a banner. */
   archived?: boolean
+  /** Why archived. ``null`` = a reversible admin archive; ``'dissolved'``
+   *  = the owner host dissolved the space; ``'removed'`` = this household
+   *  was removed. The latter two are remote-terminated read-only archives
+   *  that can't be revived — the banner copy adapts to this. */
+  archived_reason?: 'dissolved' | 'removed' | null
+}
+
+/** Reason-aware copy for the read-only archive banner + empty-state.
+ *  Returns ``null`` when the space isn't archived. Pure (no DOM, no
+ *  signals) so the wording can be unit-tested without rendering the page. */
+export function archivedCopy(
+  archived: boolean | undefined,
+  reason: 'dissolved' | 'removed' | null | undefined,
+): { title: string; body: string; empty: string } | null {
+  if (!archived) return null
+  if (reason === 'dissolved') {
+    return {
+      title: 'This space was dissolved by its owner.',
+      body:
+        'This is a read-only archive of what you had — no new posts or '
+        + 'comments. It can’t be revived.',
+      empty:
+        'This space was dissolved by its owner. This is a read-only archive '
+        + 'of what you had.',
+    }
+  }
+  if (reason === 'removed') {
+    return {
+      title: 'You’re no longer a member of this space.',
+      body:
+        'This is a read-only archive of what you had — no new posts or '
+        + 'comments.',
+      empty:
+        'You’re no longer a member of this space. This is a read-only '
+        + 'archive of what you had.',
+    }
+  }
+  // Normal, reversible admin archive.
+  return {
+    title: 'This space is archived.',
+    body:
+      'It’s read-only — existing content is kept, but no new posts or '
+      + 'comments can be added until an admin unarchives it.',
+    empty:
+      'This space is archived (read-only). Unarchive it from settings to '
+      + 'start posting again.',
+  }
 }
 
 const posts = signal<FeedPost[]>([])
@@ -451,10 +498,17 @@ export default function SpaceFeedPage() {
             <div class="sh-subscriber-banner" role="status">
               <span class="sh-subscriber-banner__icon" aria-hidden="true">🗄️</span>
               <div class="sh-subscriber-banner__body">
-                <strong>This space is archived.</strong>
+                <strong>
+                  {archivedCopy(
+                    spaceDetail.value?.archived,
+                    spaceDetail.value?.archived_reason,
+                  )?.title}
+                </strong>
                 <p class="sh-muted">
-                  It's read-only — existing content is kept, but no new posts
-                  or comments can be added until an admin unarchives it.
+                  {archivedCopy(
+                    spaceDetail.value?.archived,
+                    spaceDetail.value?.archived_reason,
+                  )?.body}
                 </p>
               </div>
             </div>
@@ -469,8 +523,10 @@ export default function SpaceFeedPage() {
               <h3>No posts in this space</h3>
               {spaceDetail.value?.archived ? (
                 <p class="sh-muted">
-                  This space is archived (read-only). Unarchive it from
-                  settings to start posting again.
+                  {archivedCopy(
+                    spaceDetail.value?.archived,
+                    spaceDetail.value?.archived_reason,
+                  )?.empty}
                 </p>
               ) : (
                 <>

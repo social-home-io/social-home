@@ -46,6 +46,7 @@ from ..domain.events import (
     MomentReactionChanged,
     NotificationCreated,
     PostCreated,
+    RemoteSpaceDissolved,
     RemoteSpaceInviteAccepted,
     RemoteSpaceInviteDeclined,
     SpaceJoinApproved,
@@ -310,6 +311,7 @@ class NotificationService:
             RemoteSpaceInviteDeclined,
             self.on_remote_invite_declined,
         )
+        self._bus.subscribe(RemoteSpaceDissolved, self.on_remote_space_dissolved)
         # Momentum (§Momentum) — reactions, replies, and new follows.
         self._bus.subscribe(MomentReactionChanged, self.on_moment_reaction_changed)
         self._bus.subscribe(MomentCreated, self.on_moment_created)
@@ -991,6 +993,32 @@ class NotificationService:
                     ),
                     link_url=f"/spaces/{event.space_id}",
                 )
+            )
+
+    async def on_remote_space_dissolved(self, event: RemoteSpaceDissolved) -> None:
+        """The owner host dissolved a space; the local copy was archived
+        read-only. Tell each local member once that their copy is now a
+        read-only archive (the space is still viewable)."""
+        space = await self._spaces.get(event.space_id)
+        if space is None:
+            return
+        members = await self._spaces.list_members(event.space_id)
+        for member in members:
+            await self._save_notif(
+                new_notification(
+                    user_id=member.user_id,
+                    type="space_dissolved",
+                    title=f"“{space.name}” was dissolved",
+                    body=(
+                        "The space's owner dissolved it. Your copy is now a "
+                        "read-only archive."
+                    ),
+                    link_url=f"/spaces/{event.space_id}",
+                ),
+                # A re-broadcast of SPACE_DISSOLVED (fresh msg_id) must not
+                # re-notify every member; the (user_id, type, link_url) tuple
+                # is stable for this one-time notice.
+                dedupe_by_link=True,
             )
 
     async def on_space_join_requested(

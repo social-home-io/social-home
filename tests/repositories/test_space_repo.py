@@ -58,6 +58,7 @@ def _space(
     name: str = "TestSpace",
     space_type: SpaceType = SpaceType.PRIVATE,
     archived: bool = False,
+    archived_reason: str | None = None,
 ) -> Space:
     return Space(
         id=space_id,
@@ -70,6 +71,7 @@ def _space(
         space_type=space_type,
         join_mode=JoinMode.INVITE_ONLY,
         archived=archived,
+        archived_reason=archived_reason,
     )
 
 
@@ -168,6 +170,45 @@ async def test_archived_round_trips_and_set_archived(env):
     assert (await env.repo.get("sp-arch")).archived is True
     # Still present — archive never deletes.
     assert await env.repo.get("sp-arch") is not None
+
+
+async def test_set_archived_with_reason_stamps_it(env):
+    """``set_archived(id, True, reason=...)`` records the remote-termination
+    reason alongside the flag (NULL otherwise = normal/admin archive)."""
+    await env.repo.save(_space("sp-term"))
+    await env.repo.set_archived("sp-term", True, reason="dissolved")
+    fetched = await env.repo.get("sp-term")
+    assert fetched.archived is True
+    assert fetched.archived_reason == "dissolved"
+
+
+async def test_unarchive_clears_reason(env):
+    """Un-archiving (``set_archived(id, False)``) clears the reason back to
+    NULL — reason defaults to None when omitted."""
+    await env.repo.save(_space("sp-term2"))
+    await env.repo.set_archived("sp-term2", True, reason="removed")
+    assert (await env.repo.get("sp-term2")).archived_reason == "removed"
+    await env.repo.set_archived("sp-term2", False)
+    fetched = await env.repo.get("sp-term2")
+    assert fetched.archived is False
+    assert fetched.archived_reason is None
+
+
+async def test_save_round_trips_archived_reason(env):
+    """The save upsert persists ``archived_reason`` through get."""
+    await env.repo.save(_space("sp-saved", archived=True, archived_reason="removed"))
+    fetched = await env.repo.get("sp-saved")
+    assert fetched.archived is True
+    assert fetched.archived_reason == "removed"
+
+
+async def test_fresh_space_has_no_archived_reason(env):
+    """A freshly-created, un-archived space defaults ``archived_reason`` to
+    None."""
+    await env.repo.save(_space("sp-fresh"))
+    fetched = await env.repo.get("sp-fresh")
+    assert fetched.archived is False
+    assert fetched.archived_reason is None
 
 
 async def test_list_by_type(env):

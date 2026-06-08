@@ -733,14 +733,28 @@ export function SpaceSettings({
       <hr />
       <h3>Archive</h3>
       {space.archived ? (
-        <>
+        space.archived_reason === 'dissolved' ? (
+          // Remote-terminated: the owner host dissolved the space. The
+          // server rejects unarchiving, so offer no Unarchive button.
           <p class="sh-muted" style={{ marginTop: 0 }}>
-            This space is <strong>archived</strong>: it's read-only and hidden
-            from your active spaces. Everything is kept — unarchive to use it
-            again.
+            This space was <strong>dissolved by its owner</strong> — it can't
+            be reactivated. This is a read-only archive of what you had.
           </p>
-          <Button variant="secondary" onClick={() => setArchived(false)}>Unarchive space</Button>
-        </>
+        ) : space.archived_reason === 'removed' ? (
+          <p class="sh-muted" style={{ marginTop: 0 }}>
+            You were <strong>removed from this space</strong> — it can't be
+            reactivated. This is a read-only archive of what you had.
+          </p>
+        ) : (
+          <>
+            <p class="sh-muted" style={{ marginTop: 0 }}>
+              This space is <strong>archived</strong>: it's read-only and hidden
+              from your active spaces. Everything is kept — unarchive to use it
+              again.
+            </p>
+            <Button variant="secondary" onClick={() => setArchived(false)}>Unarchive space</Button>
+          </>
+        )
       ) : (
         <>
           <p class="sh-muted" style={{ marginTop: 0 }}>
