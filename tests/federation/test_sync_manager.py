@@ -291,6 +291,123 @@ async def test_begin_session_silently_drops_non_member_s1():
     assert d.next_event is None
 
 
+async def test_begin_session_rejects_non_member_dissolved_with_reason():
+    """S-1 backstop: a non-member with a ``reject_reason`` classifier
+    returning ``"dissolved"`` gets a SPACE_SYNC_REJECTED follow-up so
+    the member can archive its orphaned stub."""
+
+    async def check_member(space_id, instance_id):
+        return False
+
+    async def reject_reason(space_id):
+        return "dissolved"
+
+    mgr = SyncSessionManager(
+        _FakeFedRepo(),
+        check_member=check_member,
+        reject_reason=reject_reason,
+    )
+    d = await mgr.begin_session(
+        sync_id="sid-1",
+        space_id="sp-1",
+        requester_instance_id="ex-member",
+        provider_instance_id="me",
+    )
+    assert d.accepted is False
+    assert d.reason == "not_a_member"
+    assert d.next_event is FederationEventType.SPACE_SYNC_REJECTED
+    assert d.next_payload == {
+        "sync_id": "sid-1",
+        "space_id": "sp-1",
+        "reason": "dissolved",
+    }
+
+
+async def test_begin_session_rejects_non_member_removed_with_reason():
+    """Same backstop, but the space row still exists → ``"removed"``."""
+
+    async def check_member(space_id, instance_id):
+        return False
+
+    async def reject_reason(space_id):
+        return "removed"
+
+    mgr = SyncSessionManager(
+        _FakeFedRepo(),
+        check_member=check_member,
+        reject_reason=reject_reason,
+    )
+    d = await mgr.begin_session(
+        sync_id="sid-2",
+        space_id="sp-2",
+        requester_instance_id="ex-member",
+        provider_instance_id="me",
+    )
+    assert d.accepted is False
+    assert d.next_event is FederationEventType.SPACE_SYNC_REJECTED
+    assert d.next_payload["reason"] == "removed"
+    assert d.next_payload["sync_id"] == "sid-2"
+    assert d.next_payload["space_id"] == "sp-2"
+
+
+async def test_begin_session_non_member_silent_without_classifier():
+    """Backward compat: ``check_member`` but NO ``reject_reason`` keeps
+    the original S-1 silent drop (no follow-up event)."""
+
+    async def check_member(space_id, instance_id):
+        return False
+
+    mgr = SyncSessionManager(_FakeFedRepo(), check_member=check_member)
+    d = await mgr.begin_session(
+        sync_id="sid-3",
+        space_id="sp-3",
+        requester_instance_id="hostile",
+        provider_instance_id="me",
+    )
+    assert d.accepted is False
+    assert d.reason == "not_a_member"
+    assert d.next_event is None
+
+
+async def test_begin_session_rate_limit_fires_before_member_check():
+    """S-6 anti-probe: a rate-limited non-member gets
+    SPACE_SYNC_DIRECT_FAILED (rate_limited), never SPACE_SYNC_REJECTED —
+    the rate check runs BEFORE the membership classifier."""
+
+    async def check_member(space_id, instance_id):
+        return False
+
+    async def reject_reason(space_id):
+        return "removed"
+
+    mgr = SyncSessionManager(
+        _FakeFedRepo(),
+        check_member=check_member,
+        reject_reason=reject_reason,
+    )
+    # Burn the per-(instance, space) hourly bucket.
+    for _ in range(SYNC_BEGIN_RATE_LIMIT_PER_HOUR):
+        sid = new_sync_id()
+        await mgr.begin_session(
+            sync_id=sid,
+            space_id="sp-rl",
+            requester_instance_id="prober",
+            provider_instance_id="me",
+        )
+        mgr.close_session(sid)
+
+    blocked = await mgr.begin_session(
+        sync_id=new_sync_id(),
+        space_id="sp-rl",
+        requester_instance_id="prober",
+        provider_instance_id="me",
+    )
+    assert blocked.accepted is False
+    assert blocked.reason == "rate_limited"
+    assert blocked.next_event is FederationEventType.SPACE_SYNC_DIRECT_FAILED
+    assert blocked.next_payload["reason"] == "rate_limited"
+
+
 async def test_apply_answer_rejects_wrong_origin_s14():
     """S-14: the answer must come from the original requester."""
     mgr = SyncSessionManager(_FakeFedRepo())

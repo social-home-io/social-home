@@ -116,6 +116,7 @@ class SyncSessionManager:
         "_rate_buckets",
         "_get_max_seq",
         "_check_member",
+        "_reject_reason",
         "_on_local_ice",
     )
 
@@ -125,6 +126,7 @@ class SyncSessionManager:
         *,
         get_max_seq=None,
         check_member=None,
+        reject_reason=None,
         on_local_ice=None,
     ) -> None:
         self._federation_repo = federation_repo
@@ -140,6 +142,14 @@ class SyncSessionManager:
         # the corresponding check is skipped.
         self._get_max_seq = get_max_seq
         self._check_member = check_member
+        # Classifies WHY a non-member's SPACE_SYNC_BEGIN is being rejected
+        # so the host can reply with a signed SPACE_SYNC_REJECTED (S-1
+        # backstop) instead of the silent drop. Signature:
+        # ``async (space_id) -> "dissolved" | "removed"`` — "removed" if
+        # the space row still exists (requester was dropped), "dissolved"
+        # if it's gone. Kept generic so the manager has no hard
+        # space_repo dependency; when ``None`` the silent drop is kept.
+        self._reject_reason = reject_reason
         # Forwards each session's locally-gathered ICE candidate to the
         # opposite peer via ``SPACE_SYNC_ICE``. Signature:
         # ``async (sync_id, candidate, sdp_mid) -> None``. Injected by
@@ -307,8 +317,23 @@ class SyncSessionManager:
             except Exception:
                 ok = False
             if not ok:
-                # Silently dropped per S-1 — no response event.
-                return SyncDecision(accepted=False, reason="not_a_member")
+                if self._reject_reason is None:
+                    # No classifier wired — preserve the S-1 silent drop.
+                    return SyncDecision(accepted=False, reason="not_a_member")
+                try:
+                    reason = await self._reject_reason(space_id)
+                except Exception:
+                    reason = "dissolved"
+                return SyncDecision(
+                    accepted=False,
+                    reason="not_a_member",
+                    next_event=FederationEventType.SPACE_SYNC_REJECTED,
+                    next_payload={
+                        "sync_id": sync_id,
+                        "space_id": space_id,
+                        "reason": reason,
+                    },
+                )
 
         rtc = SyncRtcSession(
             sync_id=sync_id,

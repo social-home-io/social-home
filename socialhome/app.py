@@ -620,10 +620,18 @@ def _wire_federation_stack(
         )
         return row is not None
 
+    async def _sync_reject_reason(space_id: str) -> str:
+        # SPACE_SYNC_BEGIN from a non-member: "removed" if we still host the
+        # space (requester was dropped from it) or "dissolved" if the space
+        # row is gone (a dissolve purged it). Drives the member's archive copy.
+        row = await db.fetchone("SELECT 1 FROM spaces WHERE id=?", (space_id,))
+        return "removed" if row is not None else "dissolved"
+
     sync_manager = SyncSessionManager(
         federation_repo,
         get_max_seq=_get_max_seq,
         check_member=_check_member,
+        reject_reason=_sync_reject_reason,
     )
     federation_service.attach_sync_manager(sync_manager)
     federation_service.attach_idempotency_cache(idempotency_cache)
