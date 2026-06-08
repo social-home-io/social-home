@@ -289,6 +289,11 @@ export interface Space {
    *  list + shows a read-only banner. Distinct from a dissolve (hard
    *  delete). */
   archived?: boolean
+  /** Why the space is archived. ``null``/absent = a normal reversible
+   *  admin archive; ``'dissolved'`` = the owner host dissolved it;
+   *  ``'removed'`` = this household was removed. The latter two are
+   *  remote-terminated: read-only, content kept, NOT unarchivable. */
+  archived_reason?: 'dissolved' | 'removed' | null
   /** §D1b — the instance that originally created this space. When
    *  this differs from the caller's own instance, the local row is a
    *  *stub* mirroring a space hosted on another household. The SPA

@@ -25,6 +25,8 @@ const apiMock = api as unknown as {
 function makeSpace(overrides: Partial<{
   retention_days: number | null
   features: object
+  archived: boolean
+  archived_reason: 'dissolved' | 'removed' | null
 }> = {}) {
   return {
     id: 's-1',
@@ -42,6 +44,8 @@ function makeSpace(overrides: Partial<{
       allowed_post_types: ['text'],
     },
     retention_days: overrides.retention_days ?? null,
+    archived: overrides.archived ?? false,
+    archived_reason: overrides.archived_reason ?? null,
   } as never
 }
 
@@ -457,6 +461,36 @@ describe('SpaceSettings', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(apiMock.post).toHaveBeenCalledWith('/api/spaces/s-1/publish/gfs-1')
     expect(queryByText('space.publish_pending')).toBeTruthy()
+  })
+
+  it('shows the Unarchive button for a plain admin-archived space', () => {
+    const space = makeSpace({ archived: true, archived_reason: null })
+    const { getByText, queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    expect(getByText('Unarchive space')).toBeTruthy()
+    expect(queryByText(/dissolved by its owner/i)).toBeNull()
+    expect(queryByText(/removed from this space/i)).toBeNull()
+  })
+
+  it('hides Unarchive and explains a dissolved space cannot be reactivated', () => {
+    const space = makeSpace({ archived: true, archived_reason: 'dissolved' })
+    const { queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    expect(queryByText('Unarchive space')).toBeNull()
+    expect(queryByText(/dissolved by its owner/i)).toBeTruthy()
+    expect(queryByText(/can't be reactivated/i)).toBeTruthy()
+  })
+
+  it('hides Unarchive and explains a removed space cannot be reactivated', () => {
+    const space = makeSpace({ archived: true, archived_reason: 'removed' })
+    const { queryByText } = render(
+      <SpaceSettings space={space} onUpdate={() => {}} />,
+    )
+    expect(queryByText('Unarchive space')).toBeNull()
+    expect(queryByText(/removed from this space/i)).toBeTruthy()
+    expect(queryByText(/can't be reactivated/i)).toBeTruthy()
   })
 
   it('proposes a publication-tier change via POST /proposals', async () => {

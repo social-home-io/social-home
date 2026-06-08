@@ -166,6 +166,11 @@ class SpaceCollectionView(BaseView):
                         # Read-only archive state — the SPA groups
                         # archived spaces out of the active sidebar list.
                         "archived": s.archived,
+                        # Why archived: NULL = normal reversible admin
+                        # archive; 'dissolved'/'removed' = remote-terminated
+                        # (read-only, not unarchivable). The SPA picks the
+                        # banner copy + hides Unarchive off this.
+                        "archived_reason": s.archived_reason,
                         # §D1b — the creator's instance. When it
                         # differs from our own, the row is a remote
                         # stub: the SPA gates the Settings link + any
@@ -243,6 +248,11 @@ class SpaceDetailView(BaseView):
                 # Read-only archive state — the SPA disables write
                 # affordances and shows a read-only banner when true.
                 "archived": space.archived,
+                # Why archived: NULL = normal reversible admin archive;
+                # 'dissolved'/'removed' = remote-terminated (read-only, not
+                # unarchivable). Drives the reason-aware banner + hides the
+                # Unarchive button in Settings.
+                "archived_reason": space.archived_reason,
                 # §D1b — see ``SpaceCollectionView.get`` for the
                 # complement; the SPA reads this on the SpaceFeedPage
                 # to suppress local-only admin gestures on a remote

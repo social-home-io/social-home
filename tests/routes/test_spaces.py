@@ -298,6 +298,45 @@ async def test_archive_and_unarchive_space(client):
     assert post.status in (200, 201)
 
 
+async def test_space_serialisation_exposes_archived_reason(client):
+    """The space detail + list responses surface ``archived_reason`` so the
+    SPA can distinguish a normal reversible admin archive (``null``) from a
+    remote-terminated read-only archive (``'dissolved'`` / ``'removed'``)."""
+    from socialhome.app_keys import space_repo_key
+
+    r = await client.post(
+        "/api/spaces", json={"name": "Reasoned"}, headers=_auth(client._admin_token)
+    )
+    sid = (await r.json())["id"]
+
+    # A normal active space reports archived_reason=None.
+    got = await client.get(f"/api/spaces/{sid}", headers=_auth(client._admin_token))
+    body = await got.json()
+    assert "archived_reason" in body
+    assert body["archived_reason"] is None
+
+    lst = await client.get("/api/spaces", headers=_auth(client._admin_token))
+    rows = await lst.json()
+    row = next(s for s in rows if s["id"] == sid)
+    assert "archived_reason" in row
+    assert row["archived_reason"] is None
+
+    # Archive it read-only with a 'dissolved' reason, as the inbound
+    # SPACE_DISSOLVED handler does on a member's copy.
+    repo = client.app[space_repo_key]
+    await repo.set_archived(sid, True, reason="dissolved")
+
+    got = await client.get(f"/api/spaces/{sid}", headers=_auth(client._admin_token))
+    body = await got.json()
+    assert body["archived"] is True
+    assert body["archived_reason"] == "dissolved"
+
+    lst = await client.get("/api/spaces", headers=_auth(client._admin_token))
+    rows = await lst.json()
+    row = next(s for s in rows if s["id"] == sid)
+    assert row["archived_reason"] == "dissolved"
+
+
 async def test_invite_and_accept_local_member(client):
     """``POST /api/spaces/{id}/members`` now creates a pending
     invitation; the invitee accepts via
