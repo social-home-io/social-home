@@ -42,6 +42,33 @@ class _OutboxEntry:
         self.payload_json = payload_json
 
 
+def _stored_envelope_json(svc, *, to_instance, msg_id="m1"):
+    """A valid signed stored envelope, as the outbox would have it.
+
+    ``_redeliver_envelope`` now re-stamps + re-signs the stored envelope
+    before POSTing, so the queued ``payload_json`` must be a real
+    envelope dict (not a ``"{}"`` placeholder) for the redelivery path
+    to parse it.
+    """
+    import orjson
+
+    envelope = {
+        "msg_id": msg_id,
+        "event_type": "space_dissolved",
+        "from_instance": svc._own_instance_id,
+        "to_instance": to_instance,
+        "timestamp": "2000-01-01T00:00:00+00:00",
+        "encrypted_payload": "nonce:ct",
+        "space_id": "space-1",
+        "proto_version": 1,
+        "sig_suite": "ed25519",
+    }
+    envelope["signatures"] = svc._encoder.sign_envelope_all(
+        orjson.dumps(envelope), suite="ed25519"
+    )
+    return orjson.dumps(envelope).decode()
+
+
 @pytest.fixture
 async def env(tmp_dir):
     db = AsyncDatabase(tmp_dir / "t.db", batch_timeout_ms=10)
@@ -83,6 +110,47 @@ async def test_redeliver_unknown_instance_is_permanent(env):
     assert outcome is DeliveryOutcome.PERMANENT
 
 
+async def test_redeliver_corrupt_payload_is_permanent_not_infinite_retry(env):
+    """A malformed stored envelope can't be re-signed and never will be — it
+    must drop PERMANENT, not wedge as an immortal TRANSIENT retry (which, for
+    a NEVER_DROP event, is a ceiling-backoff loop that never ends). The HTTP
+    client must never be reached for an undecodable entry."""
+    svc, fed_repo, kek = env
+    peer_kp = generate_identity_keypair()
+    wrapped = kek.encrypt(b"\x01" * 32)
+    peer = RemoteInstance(
+        id=derive_instance_id(peer_kp.public_key),
+        display_name="peer",
+        remote_identity_pk=peer_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(peer)
+
+    class _BoomClient:
+        def post(self, url, **kw):  # pragma: no cover - must not be called
+            raise AssertionError("HTTP client reached for an undecodable entry")
+
+    svc._http_client = _BoomClient()
+    # Missing msg_id/encrypted_payload → resign_for_redelivery raises (KeyError).
+    entry = _OutboxEntry(
+        id="e-bad",
+        instance_id=peer.id,
+        payload_json='{"not":"an envelope"}',
+    )
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.PERMANENT
+
+    # Invalid JSON entirely → same PERMANENT drop.
+    entry2 = _OutboxEntry(id="e-bad2", instance_id=peer.id, payload_json="not json")
+    outcome2 = await _redeliver_envelope(svc, fed_repo, entry2)
+    assert outcome2 is DeliveryOutcome.PERMANENT
+
+
 async def test_redeliver_2xx_is_success(env):
     svc, fed_repo, kek = env
     peer_kp = generate_identity_keypair()
@@ -115,7 +183,11 @@ async def test_redeliver_2xx_is_success(env):
             return _Resp()
 
     svc._http_client = _Client()
-    entry = _OutboxEntry(id="e1", instance_id=peer.id, payload_json='{"x":1}')
+    entry = _OutboxEntry(
+        id="e1",
+        instance_id=peer.id,
+        payload_json=_stored_envelope_json(svc, to_instance=peer.id),
+    )
     outcome = await _redeliver_envelope(svc, fed_repo, entry)
     assert outcome is DeliveryOutcome.SUCCESS
 
@@ -152,7 +224,11 @@ async def test_redeliver_5xx_is_transient(env):
             return _Resp()
 
     svc._http_client = _Client()
-    entry = _OutboxEntry(id="e2", instance_id=peer.id, payload_json="{}")
+    entry = _OutboxEntry(
+        id="e2",
+        instance_id=peer.id,
+        payload_json=_stored_envelope_json(svc, to_instance=peer.id),
+    )
     outcome = await _redeliver_envelope(svc, fed_repo, entry)
     assert outcome is DeliveryOutcome.TRANSIENT
 
@@ -198,7 +274,11 @@ async def test_redeliver_4xx_is_permanent(env):
 
     for status in (400, 403, 410, 422):
         svc._http_client = _Client(status)
-        entry = _OutboxEntry(id=f"e-{status}", instance_id=peer.id, payload_json="{}")
+        entry = _OutboxEntry(
+            id=f"e-{status}",
+            instance_id=peer.id,
+            payload_json=_stored_envelope_json(svc, to_instance=peer.id),
+        )
         outcome = await _redeliver_envelope(svc, fed_repo, entry)
         assert outcome is DeliveryOutcome.PERMANENT, (status, outcome)
 
@@ -242,7 +322,11 @@ async def test_redeliver_404_is_transient(env):
             return _Resp(404)
 
     svc._http_client = _Client()
-    entry = _OutboxEntry(id="e-404", instance_id=peer.id, payload_json="{}")
+    entry = _OutboxEntry(
+        id="e-404",
+        instance_id=peer.id,
+        payload_json=_stored_envelope_json(svc, to_instance=peer.id),
+    )
     outcome = await _redeliver_envelope(svc, fed_repo, entry)
     assert outcome is DeliveryOutcome.TRANSIENT
 
@@ -292,7 +376,11 @@ async def test_redeliver_4xx_marks_peer_reachable(env):
             return _Resp()
 
     svc._http_client = _Client()
-    entry = _OutboxEntry(id="e-reach", instance_id=peer.id, payload_json="{}")
+    entry = _OutboxEntry(
+        id="e-reach",
+        instance_id=peer.id,
+        payload_json=_stored_envelope_json(svc, to_instance=peer.id),
+    )
     outcome = await _redeliver_envelope(svc, fed_repo, entry)
     assert outcome is DeliveryOutcome.PERMANENT
 
@@ -325,6 +413,87 @@ async def test_redeliver_transport_error_is_transient(env):
             raise ConnectionError("boom")
 
     svc._http_client = _Client()
-    entry = _OutboxEntry(id="e3", instance_id=peer.id, payload_json="{}")
+    entry = _OutboxEntry(
+        id="e3",
+        instance_id=peer.id,
+        payload_json=_stored_envelope_json(svc, to_instance=peer.id),
+    )
     outcome = await _redeliver_envelope(svc, fed_repo, entry)
     assert outcome is DeliveryOutcome.TRANSIENT
+
+
+async def test_redeliver_re_signs_with_fresh_timestamp(env):
+    """The redelivery path re-stamps + re-signs the stored envelope so a
+    NEVER_DROP event (ban / key revocation / SPACE_DISSOLVED) queued more
+    than ±300s ago is no longer rejected for clock skew. We capture the
+    bytes actually POSTed and assert the timestamp is fresh while msg_id
+    is preserved (replay-dedup still keys correctly)."""
+    import orjson
+    from datetime import datetime, timedelta, timezone
+
+    svc, fed_repo, kek = env
+    peer_kp = generate_identity_keypair()
+    wrapped = kek.encrypt(b"\x07" * 32)
+    peer = RemoteInstance(
+        id=derive_instance_id(peer_kp.public_key),
+        display_name="peer",
+        remote_identity_pk=peer_kp.public_key.hex(),
+        key_self_to_remote=wrapped,
+        key_remote_to_self=wrapped,
+        remote_inbox_url="https://x/wh",
+        local_inbox_id="wh-resign",
+        status=PairingStatus.CONFIRMED,
+        source=InstanceSource.MANUAL,
+    )
+    await fed_repo.save_instance(peer)
+
+    # A stale stored envelope (10 minutes old), signed the canonical way.
+    stale_iso = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    stored = {
+        "msg_id": "never-drop-msg-1",
+        "event_type": "space_dissolved",
+        "from_instance": svc._own_instance_id,
+        "to_instance": peer.id,
+        "timestamp": stale_iso,
+        "encrypted_payload": "nonce:ct",
+        "space_id": "space-1",
+        "proto_version": 1,
+        "sig_suite": "ed25519",
+    }
+    stored["signatures"] = svc._encoder.sign_envelope_all(
+        orjson.dumps(stored), suite="ed25519"
+    )
+
+    captured = {}
+
+    class _Resp:
+        status = 204
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Client:
+        def post(self, url, **kw):
+            captured["body"] = kw.get("data")
+            return _Resp()
+
+    svc._http_client = _Client()
+    entry = _OutboxEntry(
+        id="e-resign", instance_id=peer.id, payload_json=orjson.dumps(stored).decode()
+    )
+    outcome = await _redeliver_envelope(svc, fed_repo, entry)
+    assert outcome is DeliveryOutcome.SUCCESS
+
+    posted = orjson.loads(captured["body"])
+    # msg_id preserved → replay-dedup keys correctly.
+    assert posted["msg_id"] == "never-drop-msg-1"
+    # encrypted payload untouched.
+    assert posted["encrypted_payload"] == "nonce:ct"
+    # Fresh timestamp: well within the ±300s skew window.
+    new_ts = datetime.fromisoformat(posted["timestamp"])
+    skew = abs((datetime.now(timezone.utc) - new_ts).total_seconds())
+    assert skew < 5, f"redelivered envelope timestamp not refreshed (skew {skew}s)"
+    assert posted["timestamp"] != stale_iso

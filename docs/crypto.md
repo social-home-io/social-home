@@ -102,6 +102,22 @@ parsed from `sig_suite`. Verification is **AND across all algorithms**
 (see `encoder.verify_signatures_all`): an attacker must break every
 algorithm in the suite, not just one.
 
+**Redelivery re-signs (fresh `timestamp`, same `msg_id`).** The §24.11
+pipeline rejects any envelope whose `timestamp` is outside ±300 s. A
+queued event redelivered from the outbox days later would fail that gate,
+so `FederationService.resign_for_redelivery` rebuilds the envelope with a
+fresh `timestamp` and re-signs it (same `msg_id`, same `encrypted_payload`,
+same `sig_suite`) on every retry — otherwise structural / security events
+in `NEVER_DROP` (bans, key revocations, `SPACE_DISSOLVED`) would be silently
+lost to any peer offline more than 5 minutes. The `msg_id` is preserved, so
+the receiver's replay cache still dedupes a redelivery whose `2xx` ack was
+lost. Because re-signed retries pass the timestamp gate, the replay-dedup
+window (`REPLAY_CACHE_WINDOW`, 24 h) is deliberately sized to outlast the
+outbox's max jittered redelivery interval (~5.2 h) so a lost-ack retry is
+caught by replay rather than applied twice. The re-sign uses the sender's
+own signing key — an attacker who captures the bytes still cannot move the
+timestamp window themselves (the signature covers `timestamp`).
+
 **Pairing** — `PairingCoordinator.initiate/accept/confirm` runs a QR-
 flow with an ephemeral X25519 ECDH. Two directional keys fall out via
 HKDF-SHA256; each is AES-256-GCM-wrapped under the local KEK and

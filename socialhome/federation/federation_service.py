@@ -21,7 +21,7 @@ import hmac
 import logging
 import uuid
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from .routed_envelope import SpaceRoutedHandler
 
 from ..crypto import (
+    REPLAY_CACHE_WINDOW,
     ReplayCache,
     b64url_encode,
 )
@@ -209,7 +210,7 @@ class FederationService:
         self._own_pq_pk = own_pq_pk
         self._sig_suite = sig_suite
         self._http_client = http_client
-        self._replay_cache = ReplayCache(window=timedelta(hours=1))
+        self._replay_cache = ReplayCache(window=REPLAY_CACHE_WINDOW)
         self._sync_manager = sync_manager
         self._call_signaling = call_signaling
         self._ice_servers = ice_servers or []
@@ -674,7 +675,9 @@ class FederationService:
         Call this once at startup so the in-memory cache is populated before
         any inbound requests are handled.
         """
-        entries = await self._federation_repo.load_replay_cache(within_hours=1)
+        entries = await self._federation_repo.load_replay_cache(
+            within_hours=int(REPLAY_CACHE_WINDOW.total_seconds() // 3600),
+        )
         self._replay_cache.load(entries)
 
     # ─── HTTP client helper ───────────────────────────────────────────────
@@ -866,6 +869,49 @@ class FederationService:
             status_code=status_code if isinstance(status_code, int) else None,
             error="delivery_failed",
         )
+
+    def resign_for_redelivery(self, payload_json: str) -> str:
+        """Refresh a queued envelope's timestamp + signature for redelivery.
+
+        The outbox stores the full signed envelope from the original
+        :meth:`send_event` call. Re-POSTing it verbatim fails the
+        receiver's ±300s skew check once the entry is older than 5 min,
+        which would silently drop NEVER_DROP events (bans / key
+        revocations / SPACE_DISSOLVED) to any peer offline longer than
+        that. We rebuild the canonical envelope (verifier field order)
+        with a fresh timestamp and re-sign; ``msg_id`` / ``sig_suite`` /
+        ``encrypted_payload`` are preserved so replay-dedup and
+        decryption are unaffected.
+
+        The timestamp check runs *before* the replay-cache step on the
+        receiver, so a previously skew-rejected envelope was never
+        recorded in the replay cache — a re-signed one carrying the same
+        ``msg_id`` verifies cleanly and still dedupes a genuinely-
+        already-delivered event.
+
+        The field order MUST match
+        :func:`~socialhome.federation.inbound_validator.make_verify_signature`'s
+        ``envelope_for_verify`` exactly — we rebuild from the parsed
+        fields rather than trusting the stored JSON's key order.
+        """
+        data = _loads(payload_json)
+        suite = data.get("sig_suite") or self._encoder.sig_suite
+        envelope_dict = {
+            "msg_id": data["msg_id"],
+            "event_type": data["event_type"],
+            "from_instance": data["from_instance"],
+            "to_instance": data["to_instance"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "encrypted_payload": data["encrypted_payload"],
+            "space_id": data.get("space_id"),
+            "proto_version": data.get("proto_version", 1),
+            "sig_suite": suite,
+        }
+        envelope_bytes = _dumps(envelope_dict).encode("utf-8")
+        envelope_dict["signatures"] = self._encoder.sign_envelope_all(
+            envelope_bytes, suite=suite
+        )
+        return _dumps(envelope_dict)
 
     async def send_with_mesh_fallback(
         self,

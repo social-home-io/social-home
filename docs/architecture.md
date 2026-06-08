@@ -222,7 +222,10 @@ Outbound envelopes go to `federation_outbox` first
 fixed cadence, picks the best transport for each peer (RTC if open,
 HTTPS otherwise), and retries with exponential backoff. Structural /
 security-critical events have `expires_at = NULL` and never age out;
-ordinary events have a 7-day TTL (§4.4.7).
+ordinary events have a 7-day TTL (§4.4.7). The processor also runs a
+periodic retention sweep (`expire_past_retention`) folded into the same
+loop, so undelivered ordinary events age out at 7 days while NEVER_DROP
+events keep retrying indefinitely.
 
 ### Bulk sync
 

@@ -37,6 +37,7 @@ from .auth import (
     require_auth,
 )
 from .config import Config
+from .crypto import REPLAY_CACHE_WINDOW
 from .db import AsyncDatabase
 from .domain.federation import FederationEventType
 from .federation.auto_pair_coordinator import AutoPairCoordinator
@@ -316,7 +317,12 @@ async def _redeliver_envelope(
 
     The envelope JSON stored in ``payload_json`` is already signed and
     encrypted from the original :meth:`FederationService.send_event`
-    call — we just need to look up the peer inbox and POST again.
+    call. Before POSTing we re-stamp + re-sign it with a fresh
+    ``timestamp`` via :meth:`FederationService.resign_for_redelivery`
+    (same ``msg_id`` / ``encrypted_payload``) so an entry queued more
+    than ±300s ago is no longer dropped for clock skew — without this a
+    NEVER_DROP event (ban / key revocation / SPACE_DISSOLVED) to any
+    peer offline longer than 5 min was silently lost.
 
     Status code mapping:
 
@@ -325,17 +331,16 @@ async def _redeliver_envelope(
       inbox returns 4xx for several distinct reasons — most are
       genuinely "the receiver has this state already" (success-
       equivalent) and the rest are "the receiver will never accept
-      this envelope" (irrecoverable). Either way retrying won't help:
+      this envelope" (irrecoverable). Either way retrying won't help.
+      Timestamp skew is **no longer** a drop reason: the envelope is
+      re-signed with a fresh timestamp on every attempt. The remaining
+      terminal reasons are:
 
       * **410 ``Replay detected``** — receiver already saw this
         ``msg_id``; their state is consistent with ours. Most
         commonly the residue of a previously-mangled response (e.g.
         the HA integration's pre-2026.5.18 charset bug) that left
         the row queued even though the peer processed it.
-      * **410 timestamp skew** — envelope is older than ±300s; the
-        receiver dropped it on §24.11 anti-replay grounds. Retrying
-        with a new timestamp would require resigning, which would
-        change ``msg_id`` — out of scope for the outbox.
       * **403 banned / signature invalid** — receiver refuses this
         sender. Dropping the entry is the right call: retrying gives
         the sender no path to recover, and the ban / key revocation
@@ -358,11 +363,27 @@ async def _redeliver_envelope(
         log.warning("outbox: unknown instance %s — dropping", entry.instance_id)
         return DeliveryOutcome.PERMANENT
 
+    # Re-stamp + re-sign BEFORE the delivery try: a malformed / legacy /
+    # suite-mismatched stored envelope can't be fixed by retrying, so a
+    # parse/sign failure is PERMANENT (drop). Doing this inside the try
+    # would turn a corrupt row into an immortal TRANSIENT retry — and for
+    # the NEVER_DROP events this fix protects, that's a ceiling-backoff loop
+    # that never ends. (A row whose stored sig_suite needs a signer this
+    # node no longer has — e.g. a PQ suite after the PQ signer was removed —
+    # also drops PERMANENT here; pre-fix it would have looped on skew. That's
+    # correct: the node that originally signed it had the signer, so a missing
+    # one is misconfiguration, not a transient condition.)
+    try:
+        body = federation_service.resign_for_redelivery(entry.payload_json)
+    except Exception as exc:
+        log.warning("outbox: undecodable entry %s — dropping: %s", entry.id, exc)
+        return DeliveryOutcome.PERMANENT
+
     try:
         client = await federation_service._get_http_client()
         async with client.post(
             instance.remote_inbox_url,
-            data=entry.payload_json,
+            data=body,
             headers={"Content-Type": "application/json"},
             timeout=_aiohttp_timeout(10),
         ) as resp:
@@ -2439,7 +2460,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # bounded so a long-running instance doesn't accumulate years of
         # signed-envelope ids on disk.
         nonlocal replay_cache_scheduler
-        replay_cache_scheduler = ReplayCachePruneScheduler(federation_repo)
+        replay_cache_scheduler = ReplayCachePruneScheduler(
+            federation_repo, window=REPLAY_CACHE_WINDOW
+        )
         await replay_cache_scheduler.start()
 
         # App-pending-session pruner — sweeps TTL-expired inbound app-session

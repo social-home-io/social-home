@@ -24,6 +24,7 @@ from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
 from ..domain.federation import FederationEventType
+from ..domain.federation_retention import retention_expires_at
 from .base import rows_to_dicts
 
 # Domain dataclass lives in ``socialhome/domain/outbox.py``;
@@ -74,6 +75,12 @@ class SqliteOutboxRepo:
         expires_at: str | None = None,
     ) -> str:
         entry_id = msg_id or uuid.uuid4().hex
+        # §4.4.7: default the retention deadline from the event type so every
+        # AbstractOutboxRepo caller (today: send_event) gets a 7-day TTL on
+        # ordinary events and NULL (retry forever) on NEVER_DROP ones. An
+        # explicit ``expires_at`` from the caller is respected as-is.
+        if expires_at is None:
+            expires_at = retention_expires_at(event_type)
         await self._db.enqueue(
             """
             INSERT INTO federation_outbox(
@@ -149,8 +156,9 @@ class SqliteOutboxRepo:
     async def expire_past_retention(self, now_iso: str) -> int:
         """Mark pending entries whose ``expires_at`` has passed as ``failed``.
 
-        Returns the count transitioned. Runs on a daily schedule —
-        receivers will rebuild state via sync protocols.
+        Returns the count transitioned. Driven by ``OutboxProcessor`` on a
+        periodic sweep (hourly by default) — receivers rebuild state via the
+        sync protocols rather than the outbox replaying a week-stale event.
         """
         count = await self._db.fetchval(
             """

@@ -141,3 +141,89 @@ async def test_outbox_processor_drain(env):
     proc = OutboxProcessor(env.outbox_repo, deliver, rng=lambda: 0.5)
     count = await proc.drain_once()
     assert count == 1 and delivered == [eid]
+
+
+# ── §4.4.7 retention: default expires_at at enqueue ──────────────────────────
+
+
+async def _expires_at(env, eid: str) -> str | None:
+    rows = await env.db.fetchall(
+        "SELECT expires_at FROM federation_outbox WHERE id=?", (eid,)
+    )
+    return rows[0]["expires_at"]
+
+
+async def test_enqueue_never_drop_event_has_null_expiry(env):
+    """A NEVER_DROP event (e.g. SPACE_MEMBER_BANNED) enqueues with NULL TTL."""
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_MEMBER_BANNED,
+        payload_json="{}",
+    )
+    assert await _expires_at(env, eid) is None
+
+
+async def test_enqueue_ordinary_event_gets_seven_day_ttl(env):
+    """An ordinary event enqueues with a ~7-day retention deadline."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+    )
+    iso = await _expires_at(env, eid)
+    assert iso is not None
+    parsed = datetime.fromisoformat(iso)
+    assert now + timedelta(days=6) < parsed < now + timedelta(days=8)
+
+
+async def test_enqueue_explicit_expires_at_is_respected(env):
+    """An explicit expires_at from the caller overrides the default policy."""
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+        expires_at="2030-01-01T00:00:00+00:00",
+    )
+    assert await _expires_at(env, eid) == "2030-01-01T00:00:00+00:00"
+
+
+# ── §4.4.7 retention: expire_past_retention sweep ────────────────────────────
+
+
+async def test_expire_past_retention_marks_expired_failed(env):
+    """A pending row whose expires_at has passed is marked failed."""
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_POST_CREATED,
+        payload_json="{}",
+        expires_at="2000-01-01T00:00:00+00:00",
+    )
+    count = await env.outbox_repo.expire_past_retention("2026-01-01T00:00:00+00:00")
+    assert count == 1
+    rows = await env.db.fetchall(
+        "SELECT status FROM federation_outbox WHERE id=?", (eid,)
+    )
+    assert rows[0]["status"] == "failed"
+
+
+async def test_expire_past_retention_skips_null_expiry(env):
+    """A NEVER_DROP (NULL-expires) row is untouched even if ancient."""
+    eid = await env.outbox_repo.enqueue(
+        instance_id="peer",
+        event_type=FederationEventType.SPACE_MEMBER_BANNED,
+        payload_json="{}",
+    )
+    # Backdate created_at to prove age is irrelevant for NULL-expires rows.
+    await env.db.enqueue(
+        "UPDATE federation_outbox SET created_at='2000-01-01 00:00:00' WHERE id=?",
+        (eid,),
+    )
+    count = await env.outbox_repo.expire_past_retention("2026-01-01T00:00:00+00:00")
+    assert count == 0
+    rows = await env.db.fetchall(
+        "SELECT status FROM federation_outbox WHERE id=?", (eid,)
+    )
+    assert rows[0]["status"] == "pending"
