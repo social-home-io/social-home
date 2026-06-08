@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from ..domain.events import TaskDeadlineDue
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
     from ..repositories.task_repo import AbstractTaskRepo
 
 log = logging.getLogger(__name__)
+
+#: Dedupe rows only guard same-day refires, so anything older than this
+#: window is dead weight. Pruned at the end of each daily ``tick_once``.
+DEADLINE_NOTIF_RETENTION_DAYS = 30
 
 
 class TaskDeadlineScheduler:
@@ -98,7 +102,16 @@ class TaskDeadlineScheduler:
             )
             await self._record_notification(task.id, today)
             fired += 1
+        await self._prune_old(today)
         return fired
+
+    async def _prune_old(self, today: date) -> None:
+        """Drop dedupe rows older than the retention window (best-effort)."""
+        cutoff = (today - timedelta(days=DEADLINE_NOTIF_RETENTION_DAYS)).isoformat()
+        await self._db.enqueue(
+            "DELETE FROM task_deadline_notifications WHERE due_date < ?",
+            (cutoff,),
+        )
 
     async def _already_notified(self, task_id: str, due: date) -> bool:
         row = await self._db.fetchone(

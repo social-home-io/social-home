@@ -16,6 +16,18 @@ from ..domain.call import CallQualitySample, CallSession
 from .base import dump_json, load_json, row_to_dict, rows_to_dicts
 
 
+# Cap on persisted quality samples per call — the highest-insert-rate of the
+# three core tables (one row per WebRTC stats sample, per participant, per
+# call), so an unbounded or never-cleanly-ended call could flood it.
+# ``save_quality_sample`` prunes to the newest N per call after each INSERT.
+# We cap rather than delete-on-end because the DM call-history view
+# (``ConversationCallHistoryView``) reads ``list_quality_samples`` post-call
+# for per-call avg RTT/loss — so the samples must outlive the call. (Residual:
+# the table still grows with total call count, like ``call_sessions`` itself;
+# bounding that fully would mean precomputing the averages onto the call row.)
+CALL_QUALITY_SAMPLE_CAP = 1000
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -249,6 +261,22 @@ class SqliteCallRepo:
                 sample.audio_bitrate,
                 sample.video_bitrate,
             ),
+        )
+        # Safety net for calls that never cleanly end — keep only the newest
+        # ``CALL_QUALITY_SAMPLE_CAP`` rows per call. Both statements hit the
+        # same async-write batch so the INSERT lands before this DELETE.
+        await self._db.enqueue(
+            """
+            DELETE FROM call_quality_samples
+             WHERE call_id=?
+               AND rowid NOT IN (
+                   SELECT rowid FROM call_quality_samples
+                    WHERE call_id=?
+                    ORDER BY sampled_at DESC
+                    LIMIT ?
+               )
+            """,
+            (sample.call_id, sample.call_id, CALL_QUALITY_SAMPLE_CAP),
         )
 
     async def list_quality_samples(

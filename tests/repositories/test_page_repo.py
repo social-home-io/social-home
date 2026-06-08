@@ -143,3 +143,54 @@ async def test_page_lock_and_versions(env):
     await env.page_repo.save_version(v)
     versions = await env.page_repo.list_versions(p.id)
     assert len(versions) == 1
+
+
+async def _snapshot_count(env, page_id: str) -> int:
+    row = await env.db.fetchone(
+        "SELECT COUNT(*) AS n FROM space_page_snapshots WHERE page_id=?",
+        (page_id,),
+    )
+    return int(row["n"])
+
+
+async def test_insert_snapshot_caps_per_page(env, monkeypatch):
+    """``insert_snapshot`` prunes to the newest MAX_PAGE_SNAPSHOTS per page."""
+    import socialhome.repositories.page_repo as mod
+
+    monkeypatch.setattr(mod, "MAX_PAGE_SNAPSHOTS", 3)
+    p = new_page(title="Wiki", content="x", created_by="u1")
+    await env.page_repo.save(p)
+    for i in range(5):
+        await env.page_repo.insert_snapshot(
+            page_id=p.id,
+            space_id=None,
+            body=f"body-{i}",
+            author_user_id="u1",
+            side="base",
+            conflict=False,
+        )
+    assert await _snapshot_count(env, p.id) == 3
+    # Newest 3 by snapshot_at survive.
+    rows = await env.db.fetchall(
+        "SELECT body FROM space_page_snapshots WHERE page_id=? "
+        "ORDER BY snapshot_at ASC",
+        (p.id,),
+    )
+    assert [r["body"] for r in rows] == ["body-2", "body-3", "body-4"]
+
+
+async def test_delete_removes_page_snapshots(env):
+    """``delete`` also drops the page's snapshot rows."""
+    p = new_page(title="Wiki", content="x", created_by="u1")
+    await env.page_repo.save(p)
+    await env.page_repo.insert_snapshot(
+        page_id=p.id,
+        space_id=None,
+        body="b",
+        author_user_id="u1",
+        side="base",
+        conflict=False,
+    )
+    assert await _snapshot_count(env, p.id) == 1
+    await env.page_repo.delete(p.id)
+    assert await _snapshot_count(env, p.id) == 0

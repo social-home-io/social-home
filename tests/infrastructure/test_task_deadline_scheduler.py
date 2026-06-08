@@ -9,7 +9,10 @@ import pytest
 from socialhome.domain.events import TaskDeadlineDue
 from socialhome.domain.task import Task, TaskStatus
 from socialhome.infrastructure.event_bus import EventBus
+from datetime import timedelta
+
 from socialhome.infrastructure.task_deadline_scheduler import (
+    DEADLINE_NOTIF_RETENTION_DAYS,
     TaskDeadlineScheduler,
 )
 
@@ -33,7 +36,11 @@ class _FakeDb:
         task_id, due = params
         return {"1": 1} if (task_id, due) in self._rows else None
 
-    async def enqueue(self, _sql: str, params):
+    async def enqueue(self, sql: str, params):
+        if "DELETE" in sql.upper():
+            (cutoff,) = params
+            self._rows = {(t, d) for (t, d) in self._rows if d >= cutoff}
+            return
         task_id, due = params
         self._rows.add((task_id, due))
 
@@ -87,3 +94,18 @@ async def test_tick_is_idempotent(env):
     await sched.tick_once(today=today)
     # Still exactly 2 — second pass notices the dedupe rows.
     assert len(fired) == 2
+
+
+async def test_tick_prunes_stale_dedupe_rows(env):
+    """``tick_once`` drops dedupe rows older than the retention window."""
+    sched, _fired, today = env
+    db = sched._db
+    old = (today - timedelta(days=DEADLINE_NOTIF_RETENTION_DAYS + 1)).isoformat()
+    recent = (today - timedelta(days=1)).isoformat()
+    db._rows.add(("old-task", old))
+    db._rows.add(("recent-task", recent))
+
+    await sched.tick_once(today=today)
+
+    assert ("old-task", old) not in db._rows
+    assert ("recent-task", recent) in db._rows

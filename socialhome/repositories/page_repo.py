@@ -36,6 +36,11 @@ LOCK_TTL = timedelta(seconds=60)
 #: Older versions are pruned on each ``save_version`` write.
 MAX_HISTORY = 5
 
+#: Cap on conflict snapshots per page. Each row carries a full page body,
+#: appended per federated conflict merge, so this is the largest-row table.
+#: Pruned on each ``insert_snapshot`` write and dropped with the page.
+MAX_PAGE_SNAPSHOTS = 10
+
 
 class PageLockError(Exception):
     """Raised when an editor tries to acquire a lock another editor holds."""
@@ -266,6 +271,11 @@ class SqlitePageRepo:
         # Try both tables; whichever matches, wins.
         await self._db.enqueue("DELETE FROM pages WHERE id=?", (page_id,))
         await self._db.enqueue("DELETE FROM space_pages WHERE id=?", (page_id,))
+        # Conflict snapshots carry no ON DELETE CASCADE FK, so drop them
+        # explicitly — otherwise a deleted page's full-body snapshots leak.
+        await self._db.enqueue(
+            "DELETE FROM space_page_snapshots WHERE page_id=?", (page_id,)
+        )
 
     # ── Locks ──────────────────────────────────────────────────────────
 
@@ -552,6 +562,22 @@ class SqlitePageRepo:
                 side,
                 1 if conflict else 0,
             ),
+        )
+        # Prune to the newest ``MAX_PAGE_SNAPSHOTS`` per page. Both
+        # statements share the same async-write batch so the INSERT lands
+        # before this DELETE.
+        await self._db.enqueue(
+            """
+            DELETE FROM space_page_snapshots
+             WHERE page_id=?
+               AND rowid NOT IN (
+                   SELECT rowid FROM space_page_snapshots
+                    WHERE page_id=?
+                    ORDER BY snapshot_at DESC
+                    LIMIT ?
+               )
+            """,
+            (page_id, page_id, MAX_PAGE_SNAPSHOTS),
         )
 
     async def has_active_conflict(self, page_id: str) -> bool:
