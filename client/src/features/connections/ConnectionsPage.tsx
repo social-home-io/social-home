@@ -28,6 +28,13 @@ import {
   selfLon,
   type Connection,
 } from '@/store/connections'
+import {
+  compatPeers,
+  compatOurs,
+  loadFederationCompat,
+  peersBehindCount,
+  type CompatPeer,
+} from '@/store/federationCompat'
 
 import { useTitle } from '@/store/pageTitle'
 import type { GfsConnection } from '@/types'
@@ -97,6 +104,30 @@ function transportIcon(t: Connection['transport']) {
   }
   return (
     <span class="sh-transport-icon" aria-hidden="true" />
+  )
+}
+
+/**
+ * Compatibility badge for a confirmed household, derived from its matched
+ * CompatPeer. Mirrors AdminPage's `_compatStatus` three-state logic but kept
+ * local to this surface (no cross-feature import):
+ *   * no compat row yet            → nothing.
+ *   * caps not yet learned         → "version unknown".
+ *   * caps known, none lacking     → "up to date ✓".
+ *   * caps known, N features short → "N behind" (titled with the list).
+ */
+function compatBadge(peer: CompatPeer | undefined) {
+  if (peer === undefined) return null
+  if (!peer.capabilities_known) {
+    return <span class="sh-chip sh-chip--muted">version unknown</span>
+  }
+  if (peer.lacking_features.length === 0) {
+    return <span class="sh-chip sh-chip--success">up to date ✓</span>
+  }
+  return (
+    <span class="sh-chip sh-chip--update" title={peer.lacking_features.join(', ')}>
+      {peer.lacking_features.length} behind
+    </span>
   )
 }
 
@@ -213,6 +244,7 @@ export default function ConnectionsPage() {
     void loadConnections()
     void loadSelfHome()
     void loadGfsConnections()
+    void loadFederationCompat()
     if (currentUser.value?.is_admin) void loadAutoPairRequests()
 
     const off1 = ws.on('pairing.confirmed', () => {
@@ -238,6 +270,7 @@ export default function ConnectionsPage() {
   const confirmed = connections.value.filter(c => c.status === 'confirmed')
   const pending = connections.value.filter(c => c.status !== 'confirmed')
   const isAdmin = !!currentUser.value?.is_admin
+  const compatByInstance = new Map(compatPeers.value.map(p => [p.instance_id, p]))
 
   return (
     <div class="sh-connections">
@@ -321,7 +354,20 @@ export default function ConnectionsPage() {
       {/* ── Households ─────────────────────────────────────────────── */}
       <section class="sh-connections-section">
         <div class="sh-section-header">
-          <h2>{t('connections.households')}</h2>
+          <div class="sh-section-header__title">
+            <h2>{t('connections.households')}</h2>
+            {compatOurs.value > 0 && (
+              <span class="sh-muted" style={{ fontSize: 'var(--sh-font-size-sm)' }}>
+                Your protocol version: v{compatOurs.value}
+              </span>
+            )}
+            {peersBehindCount() > 0 && (
+              <span class="sh-chip sh-chip--update"
+                    aria-label={`${peersBehindCount()} households behind`}>
+                {peersBehindCount()} behind
+              </span>
+            )}
+          </div>
           <div class="sh-row" style={{ gap: 'var(--sh-space-xs)' }}>
             {confirmed.length > 0 && (
               <Button variant="secondary"
@@ -368,6 +414,7 @@ export default function ConnectionsPage() {
                   <strong>{c.display_name}</strong>
                   {transportIcon(c.transport)}
                   <span class="sh-type-badge">Household</span>
+                  {c.status === 'confirmed' && compatBadge(compatByInstance.get(c.instance_id))}
                   {c.status !== 'confirmed' && (
                     <span class="sh-muted">
                       {c.status === 'pending_sent' ? 'Waiting for scan' :
@@ -464,6 +511,7 @@ export default function ConnectionsPage() {
             transport: detail.transport ?? null,
             proto_version: detail.proto_version,
           }}
+          compat={detail ? compatByInstance.get(detail.instance_id) : undefined}
           onClose={() => setDetail(null)}
           onRevoke={() => { setDetail(null); void loadConnections() }}
           onAliasSaved={() => { setDetail(null); void loadConnections() }}

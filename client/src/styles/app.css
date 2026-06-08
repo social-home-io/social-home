@@ -8154,6 +8154,13 @@ body.sh-dm-thread-open .sh-messages {
 /* Connections — pinned cream cards with a moss tape (federation /
  * pairing has a "trust" feel that fits the moss palette). Hover
  * untilts; pinned-wall shadow on rest. */
+.sh-section-header__title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sh-space-xs);
+  min-width: 0;
+}
 .sh-connection-card, .sh-card-connection {
   position: relative;
   background: var(--sh-bg-tertiary);
