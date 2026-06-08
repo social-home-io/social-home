@@ -11,6 +11,12 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { Spinner } from './Spinner'
 import { showToast } from './Toast'
 import { ShareHomeToggle } from './ShareHomeToggle'
+import {
+  peerSupportsResync,
+  resyncPeerCapabilities,
+  loadFederationCompat,
+  type CompatPeer,
+} from '@/store/federationCompat'
 
 interface Connection {
   instance_id: string; display_name: string; status: string
@@ -51,8 +57,11 @@ interface RelayDetail {
 
 const showRevoke = signal(false)
 
-export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
+export function ConnectionDetail({ conn, compat, onClose, onRevoke, onAliasSaved }: {
   conn: Connection
+  /** Matched federation-compat row for this peer, if loaded. Surfaces the
+   *  peer's missing-feature list + the "Re-check version" affordance. */
+  compat?: CompatPeer
   onClose: () => void
   onRevoke: () => void
   /** Called after the alias was successfully saved so the parent
@@ -65,6 +74,7 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
   const [alias, setAlias] = useState(conn.local_alias ?? '')
   const [aliasBusy, setAliasBusy] = useState(false)
   const [relay, setRelay] = useState<RelayDetail | null>(null)
+  const [recheckBusy, setRecheckBusy] = useState(false)
   /** Effective display name as currently rendered — handshake name
    *  if no alias is set, else the alias. Shown above the input as
    *  the "Display this household as" hint. */
@@ -163,6 +173,22 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
     }
   }
 
+  /** Ask the peer to re-advertise its protocol version. The fresh
+   *  proto_version arrives asynchronously via the peer's reply, so we refresh
+   *  the compat store a beat after firing. */
+  const recheck = async () => {
+    setRecheckBusy(true)
+    try {
+      await resyncPeerCapabilities(conn.instance_id)
+      showToast(`Asked ${conn.display_name ?? 'peer'} to re-advertise its version`, 'info')
+      setTimeout(() => { void loadFederationCompat() }, 2500)
+    } catch (e: any) {
+      showToast(e.message || 'Re-check failed', 'error')
+    } finally {
+      setRecheckBusy(false)
+    }
+  }
+
   const revoke = async () => {
     try {
       await api.delete(`/api/pairing/connections/${conn.instance_id}`)
@@ -226,6 +252,13 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
           {conn.proto_version != null && (
             <><dt>Protocol version</dt><dd>v{conn.proto_version}</dd></>
           )}
+          {compat && compat.capabilities_known && (
+            compat.lacking_features.length === 0 ? (
+              <><dt>Compatibility</dt><dd><span class="sh-chip sh-chip--success">up to date ✓</span></dd></>
+            ) : (
+              <><dt>Missing features</dt><dd>{compat.lacking_features.join(', ')}</dd></>
+            )
+          )}
           {conn.unreachable_since && (
             <><dt>Unreachable since</dt><dd class="sh-text-warning">{new Date(conn.unreachable_since).toLocaleString()}</dd></>
           )}
@@ -255,6 +288,13 @@ export function ConnectionDetail({ conn, onClose, onRevoke, onAliasSaved }: {
             </dd></>
           )}
         </dl>
+        {compat && peerSupportsResync(compat) && (
+          <div class="sh-row" style={{ marginBottom: 'var(--sh-space-sm)' }}>
+            <Button variant="secondary" onClick={() => void recheck()} loading={recheckBusy}>
+              Re-check version
+            </Button>
+          </div>
+        )}
         <label class="sh-toggle-row">
           <input type="checkbox" checked={conn.intro_relay_enabled} onChange={toggleRelay} />
           Allow introduced pairing (friend-of-a-friend)

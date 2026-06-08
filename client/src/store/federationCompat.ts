@@ -4,8 +4,9 @@
  * Mirrors ``GET /api/admin/federation/compat`` (admin-only): our own
  * ``proto_version`` plus a row per confirmed peer with its version, last
  * reachability, and the list of features it's missing relative to us. Drives
- * the Admin → Federation panel and the tab-label "N peers behind" badge so an
- * admin sees skew without opening the tab.
+ * the Federation (Connections) page compatibility badges (per-household
+ * "up to date ✓" / "N behind" / "version unknown", the "N households behind"
+ * header summary) and the per-peer "Re-check" affordance.
  */
 import { signal } from '@preact/signals'
 import { api } from '@/api'

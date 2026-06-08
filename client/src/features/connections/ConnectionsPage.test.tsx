@@ -51,6 +51,26 @@ vi.mock('@/components/ConnectionDetail', () => ({
   ConnectionDetail: () => null,
 }))
 
+// Federation-compat store — back it with real signals so the page can read
+// compatPeers/compatOurs and call loadFederationCompat()/peersBehindCount().
+const { compatSignals } = vi.hoisted(() => {
+  return {
+    compatSignals: {
+      compatPeers: { value: [] as Array<Record<string, unknown>> },
+      compatOurs: { value: 0 },
+    },
+  }
+})
+vi.mock('@/store/federationCompat', () => ({
+  compatPeers: compatSignals.compatPeers,
+  compatOurs: compatSignals.compatOurs,
+  loadFederationCompat: vi.fn().mockResolvedValue(undefined),
+  peersBehindCount: () =>
+    compatSignals.compatPeers.value.filter(
+      (p) => p.capabilities_known && (p.proto_version as number) < compatSignals.compatOurs.value,
+    ).length,
+}))
+
 vi.mock('@/components/Toast', () => ({
   showToast: vi.fn(),
 }))
@@ -290,6 +310,117 @@ describe('ConnectionsPage', () => {
       })
       expect(queryByText('gfs.status_pending')).toBeNull()
       expect(queryByText('gfs.status_suspended')).toBeNull()
+    })
+  })
+
+  describe('federation compatibility on the households surface', () => {
+    beforeEach(() => {
+      wsHandlers.clear()
+      wsMock.on.mockClear()
+      compatSignals.compatPeers.value = []
+      compatSignals.compatOurs.value = 0
+    })
+
+    function makeCompat(over: Record<string, unknown> = {}) {
+      return {
+        instance_id: 'inst-1',
+        display_name: 'Household Alpha',
+        proto_version: 19,
+        status: 'confirmed',
+        last_reachable_at: null,
+        capabilities_known: true,
+        lacking_features: [] as string[],
+        ...over,
+      }
+    }
+
+    it('shows "up to date ✓" for a confirmed peer with no lacking features', async () => {
+      compatSignals.compatOurs.value = 19
+      compatSignals.compatPeers.value = [makeCompat()]
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/connections') return Promise.resolve([makeConnection()])
+        return Promise.resolve([])
+      })
+
+      const { container } = render(<ConnectionsPage />)
+      await waitFor(() => {
+        const card = container.querySelector('.sh-connection-card')
+        expect(card).not.toBeNull()
+        expect(card!.textContent).toContain('up to date ✓')
+      })
+    })
+
+    it('shows "N behind" for a peer lacking features', async () => {
+      compatSignals.compatOurs.value = 19
+      compatSignals.compatPeers.value = [
+        makeCompat({ proto_version: 15, lacking_features: ['Bazaar bids', 'Calendar overrides'] }),
+      ]
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/connections') return Promise.resolve([makeConnection()])
+        return Promise.resolve([])
+      })
+
+      const { container } = render(<ConnectionsPage />)
+      await waitFor(() => {
+        const card = container.querySelector('.sh-connection-card')
+        expect(card).not.toBeNull()
+        expect(card!.textContent).toContain('2 behind')
+      })
+      const chip = container.querySelector('.sh-connection-card .sh-chip--update')
+      expect(chip!.getAttribute('title')).toBe('Bazaar bids, Calendar overrides')
+    })
+
+    it('shows "version unknown" for a caps-unknown peer', async () => {
+      compatSignals.compatOurs.value = 19
+      compatSignals.compatPeers.value = [makeCompat({ capabilities_known: false, proto_version: 1 })]
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/connections') return Promise.resolve([makeConnection()])
+        return Promise.resolve([])
+      })
+
+      const { container } = render(<ConnectionsPage />)
+      await waitFor(() => {
+        const card = container.querySelector('.sh-connection-card')
+        expect(card).not.toBeNull()
+        expect(card!.textContent).toContain('version unknown')
+      })
+    })
+
+    it('shows the "N behind" summary chip and "Your protocol version: vN" in the households header', async () => {
+      compatSignals.compatOurs.value = 19
+      compatSignals.compatPeers.value = [
+        makeCompat({ proto_version: 15, lacking_features: ['Bazaar bids'] }),
+      ]
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/connections') return Promise.resolve([makeConnection()])
+        return Promise.resolve([])
+      })
+
+      const { container } = render(<ConnectionsPage />)
+      await waitFor(() => {
+        expect(container.querySelector('.sh-connection-card')).not.toBeNull()
+      })
+      const header = container.querySelector('.sh-section-header')!
+      expect(header.textContent).toContain('Your protocol version: v19')
+      const summary = header.querySelector('.sh-chip--update')
+      expect(summary).not.toBeNull()
+      expect(summary!.textContent).toContain('1 behind')
+      expect(summary!.getAttribute('aria-label')).toBe('1 households behind')
+    })
+
+    it('omits the protocol-version line when compat has not loaded (ours=0)', async () => {
+      compatSignals.compatOurs.value = 0
+      compatSignals.compatPeers.value = []
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/connections') return Promise.resolve([makeConnection()])
+        return Promise.resolve([])
+      })
+
+      const { container } = render(<ConnectionsPage />)
+      await waitFor(() => {
+        expect(container.querySelector('.sh-connection-card')).not.toBeNull()
+      })
+      expect(container.textContent).not.toContain('Your protocol version')
     })
   })
 

@@ -23,6 +23,15 @@ vi.mock('@/api', () => ({
 
 vi.mock('@/components/Toast', () => ({ showToast: vi.fn() }))
 
+const resyncPeerCapabilities = vi.fn().mockResolvedValue(undefined)
+const loadFederationCompat = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/store/federationCompat', () => ({
+  resyncPeerCapabilities: (...a: unknown[]) => resyncPeerCapabilities(...a),
+  loadFederationCompat: (...a: unknown[]) => loadFederationCompat(...a),
+  peerSupportsResync: (p: { capabilities_known: boolean; lacking_features: string[] }) =>
+    p.capabilities_known && !p.lacking_features.includes('Instance resync request'),
+}))
+
 vi.mock('./ShareHomeToggle', () => ({
   ShareHomeToggle: ({ instanceId, peerName, initialValue }: {
     instanceId: string; peerName: string; initialValue: boolean
@@ -216,6 +225,97 @@ describe('Protocol version row', () => {
       />,
     )
     expect(screen.queryByText('Protocol version')).toBeNull()
+  })
+})
+
+describe('Federation compatibility row + re-check', () => {
+  const _compat = (over: Partial<Record<string, unknown>> = {}) => ({
+    instance_id: 'z7k63zfi',
+    display_name: 'z7k63zfi',
+    proto_version: 15,
+    status: 'confirmed',
+    last_reachable_at: null,
+    capabilities_known: true,
+    lacking_features: ['Bazaar bids', 'Calendar overrides'],
+    ...over,
+  })
+
+  beforeEach(() => {
+    resyncPeerCapabilities.mockClear()
+    loadFederationCompat.mockClear()
+  })
+
+  it('shows the Missing features row when the peer lacks features', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn({ proto_version: 15 }) as any}
+        compat={_compat() as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(await screen.findByText('Missing features')).toBeTruthy()
+    expect(screen.getByText('Bazaar bids, Calendar overrides')).toBeTruthy()
+  })
+
+  it('shows "up to date ✓" when caps known and nothing lacking', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn() as any}
+        compat={_compat({ lacking_features: [] }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    expect(await screen.findByText('Compatibility')).toBeTruthy()
+    expect(screen.getByText('up to date ✓')).toBeTruthy()
+  })
+
+  it('renders a "Re-check version" button that calls resyncPeerCapabilities', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn() as any}
+        compat={_compat() as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    const btn = await screen.findByText('Re-check version')
+    fireEvent.click(btn)
+    await new Promise(r => setTimeout(r, 0))
+    expect(resyncPeerCapabilities).toHaveBeenCalledWith('z7k63zfi')
+  })
+
+  it('hides the Re-check button when the peer cannot honor a resync request', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn() as any}
+        compat={_compat({ lacking_features: ['Instance resync request'] }) as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    await screen.findByText('Missing features')
+    expect(screen.queryByText('Re-check version')).toBeNull()
+  })
+
+  it('renders no compat row when compat prop is absent', async () => {
+    const { ConnectionDetail } = await import('./ConnectionDetail')
+    render(
+      <ConnectionDetail
+        conn={_conn() as any}
+        onClose={() => {}}
+        onRevoke={() => {}}
+      />,
+    )
+    await screen.findByLabelText('Display this household as')
+    expect(screen.queryByText('Missing features')).toBeNull()
+    expect(screen.queryByText('Compatibility')).toBeNull()
+    expect(screen.queryByText('Re-check version')).toBeNull()
   })
 })
 
