@@ -233,6 +233,22 @@ def test_replay_cache_load_from_persistence():
     assert rc.seen("m2") is False
 
 
+def test_replay_cache_warm_entries_dedupe_scoped_runtime_checks():
+    """A warmed (cross-restart) entry must dedupe a runtime check that
+    passes the sender's ``from_instance``.
+
+    The inbound pipeline calls ``seen(msg_id, from_instance=<verified
+    signer>)``; the persisted ``federation_replay_cache`` is keyed by
+    ``msg_id`` alone (its PK), so a warmed entry has to match regardless of
+    the ``from_instance`` the live check supplies. Otherwise a replay (or a
+    re-signed redelivery) of an event processed before a restart slips past
+    dedup and is applied twice.
+    """
+    rc = ReplayCache()
+    rc.load([("warmed-msg", datetime.now(timezone.utc).isoformat())])
+    assert rc.seen("warmed-msg", from_instance="peer-instance") is True
+
+
 def test_replay_cache_window_outlasts_max_jittered_redelivery():
     """Drift guard: the replay-dedup window MUST outlast the federation
     outbox's max jittered redelivery interval.

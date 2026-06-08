@@ -311,12 +311,12 @@ REPLAY_CACHE_WINDOW: timedelta = timedelta(hours=24)
 
 
 class ReplayCache:
-    """A bounded-window replay cache keyed by ``(msg_id, from_instance)``.
+    """A bounded-window replay cache keyed by ``msg_id``.
 
-    Federation envelopes carry a unique ``msg_id`` per sender instance.
-    Any key seen within the configured ``window`` is rejected as a
-    replay. Entries older than ``window`` are pruned lazily on each
-    check and on ``prune()``.
+    Federation envelopes carry a globally-unique ``msg_id`` (``uuid4``).
+    Any ``msg_id`` seen within the configured ``window`` is rejected as a
+    replay. Entries older than ``window`` are pruned lazily on each check
+    and on ``prune()``.
 
     Production constructs this with :data:`REPLAY_CACHE_WINDOW` (24 h),
     which must outlast the federation outbox's max jittered redelivery
@@ -324,12 +324,20 @@ class ReplayCache:
     so a retry of a lost-ack delivery passes the §24.11 timestamp gate and
     this cache is the only thing left to dedupe it.
 
-    **Why scope by sender?** UUID collisions between two instances are
-    astronomically unlikely, but scoping the cache key by
-    ``from_instance`` removes the edge case entirely and makes per-peer
-    rate-limiting trivial to bolt on later. The ``seen()`` API accepts
-    the sender for forward compatibility; callers that don't have it
-    (tests, in-memory diagnostics) can pass ``from_instance=""``.
+    **Why key by ``msg_id`` alone?** The durable source of truth,
+    ``federation_replay_cache``, is keyed by ``msg_id`` (its PRIMARY KEY)
+    and so is the documented design (``docs/architecture.md`` →
+    "Replay cache"). Keying the in-memory cache the same way keeps the two
+    consistent — critically, an entry warmed at startup via :meth:`load`
+    must dedupe the inbound check, which calls ``seen(msg_id,
+    from_instance=<verified signer>)``. An earlier ``(from_instance,
+    msg_id)`` tuple key meant warmed rows (loaded as ``("", msg_id)`` since
+    the table has no sender column) never matched a scoped runtime check,
+    so a replay arriving after a restart slipped through. ``seen()`` still
+    accepts ``from_instance`` for caller context (the inbound error message,
+    a future per-peer feature) but it is **not** part of the dedup key. A
+    ``uuid4`` collision across senders is ~2⁻¹²² — negligible vs the cost of
+    a key the durable layer can't enforce.
     """
 
     def __init__(self, window: timedelta = timedelta(hours=1)) -> None:
@@ -337,7 +345,7 @@ class ReplayCache:
         # passes :data:`REPLAY_CACHE_WINDOW` (24 h) explicitly so the live
         # window outlasts the outbox's re-signed redelivery cadence.
         self._window = window
-        self._seen: dict[tuple[str, str], datetime] = {}
+        self._seen: dict[str, datetime] = {}
 
     def seen(
         self,
@@ -346,18 +354,18 @@ class ReplayCache:
         from_instance: str = "",
         now: datetime | None = None,
     ) -> bool:
-        """Return ``True`` if this ``(msg_id, from_instance)`` was seen
-        within the window.
+        """Return ``True`` if this ``msg_id`` was seen within the window.
 
         If not seen, records it and returns ``False`` so callers can use
-        this as an atomic check-and-insert primitive.
+        this as an atomic check-and-insert primitive. ``from_instance`` is
+        accepted for caller context but is not part of the dedup key (see
+        the class docstring) — the durable replay table is ``msg_id``-keyed.
         """
         current = now if now is not None else datetime.now(timezone.utc)
         self._prune(current)
-        key = (from_instance, msg_id)
-        if key in self._seen:
+        if msg_id in self._seen:
             return True
-        self._seen[key] = current
+        self._seen[msg_id] = current
         return False
 
     def prune(self, *, now: datetime | None = None) -> None:
@@ -366,25 +374,14 @@ class ReplayCache:
     def load(self, entries: list[tuple[str, str]]) -> None:
         """Warm the cache from persisted ``(msg_id, received_at)`` rows.
 
-        Pre-scoping entries (``("", msg_id)``) are preserved for back-compat
-        with existing persisted rows from before the scoping change.
+        Keyed by ``msg_id`` to match both the durable
+        ``federation_replay_cache`` (PK = ``msg_id``) and runtime
+        :meth:`seen`, so a warmed entry dedupes a post-restart inbound check
+        regardless of the ``from_instance`` that check supplies.
         """
         for msg_id, received_at in entries:
             try:
-                self._seen[("", msg_id)] = parse_iso8601_strict(received_at)
-            except ValueError:
-                continue
-
-    def load_scoped(
-        self,
-        entries: list[tuple[str, str, str]],
-    ) -> None:
-        """Warm the cache from ``(from_instance, msg_id, received_at)``
-        rows. Used by callers that persist replay keys with sender
-        scoping."""
-        for from_instance, msg_id, received_at in entries:
-            try:
-                self._seen[(from_instance, msg_id)] = parse_iso8601_strict(received_at)
+                self._seen[msg_id] = parse_iso8601_strict(received_at)
             except ValueError:
                 continue
 
