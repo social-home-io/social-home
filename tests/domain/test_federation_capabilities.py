@@ -6,7 +6,21 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 20
+    assert fc.OURS == 21
+
+
+def test_authenticated_route_discovery_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY == 21
+    assert fc.FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY <= fc.OURS
+
+
+def test_authenticated_route_discovery_feature_label():
+    labels = dict(fc.CAPABILITY_FEATURES).values()
+    assert "Authenticated mesh route discovery" in labels
+    assert "Authenticated mesh route discovery" in fc.features_missing_below(20)
+    assert "Authenticated mesh route discovery" not in fc.features_missing_below(21)
+    # Space-scoped: a behind member household is mesh-unreachable.
+    assert "Authenticated mesh route discovery" in fc.space_features_missing_below(20)
 
 
 def test_space_sync_rejected_capability_threshold():

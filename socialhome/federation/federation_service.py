@@ -667,6 +667,10 @@ class FederationService:
     def own_identity_seed(self) -> bytes:
         return self._own_identity_seed
 
+    @property
+    def own_identity_pk(self) -> bytes:
+        return self._own_identity_pk
+
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
     async def warm_replay_cache(self) -> None:

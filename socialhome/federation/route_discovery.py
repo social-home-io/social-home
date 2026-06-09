@@ -44,6 +44,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..crypto import (
+    b64url_decode,
+    b64url_encode,
+    derive_instance_id,
+    sign_ed25519,
+    verify_ed25519,
+)
 from ..domain.federation import FederationEventType, PairingStatus
 from ..domain.federation_capabilities import FederationCapability
 from . import routed_crypto
@@ -73,6 +80,25 @@ _MIN_MESH_PROTO_VERSION = FederationCapability.MIN_FOR_SPACE_INVITE_REDEEM
 #: so the cap is the floor of a layered defence rather than the only
 #: line.
 _MAX_CACHE_ENTRIES: int = 5000
+
+
+def _route_found_signing_bytes(request_id: str, target_eph_pk_b64: str) -> bytes:
+    """Canonical bytes the target signs to bind its ephemeral X25519 pub
+    to THIS discovery request.
+
+    Domain-separated (``space-route-found:v1:``) and request-scoped so a
+    signature can't be lifted onto another ``request_id`` (replay) and
+    can't collide with any other Ed25519 signature this identity
+    produces. See :meth:`RouteDiscoveryService._on_route_found` (origin
+    branch) for the verification that closes the relay-MITM where a
+    confirmed peer substitutes its own ephemeral key (§D2).
+    """
+    return (
+        b"space-route-found:v1:"
+        + request_id.encode()
+        + b":"
+        + target_eph_pk_b64.encode()
+    )
 
 
 def cap_by_expiry(
@@ -493,6 +519,10 @@ class RouteDiscoveryService:
         path_raw = p.get("path")
         path = [str(h) for h in path_raw] if isinstance(path_raw, list) else []
         target_eph_pk = str(p.get("target_eph_pk") or "")
+        # Identity-binding fields the target minted (§D2). Relays carry
+        # them opaquely; the origin verifies them below.
+        target_identity_pk = str(p.get("target_identity_pk") or "")
+        target_eph_sig = str(p.get("target_eph_sig") or "")
         if not request_id or not path or not target_eph_pk:
             return
 
@@ -506,6 +536,22 @@ class RouteDiscoveryService:
         if pending is not None:
             if pending.resolved:
                 return
+            # SECURITY (§D2): authenticate the target ephemeral key
+            # before trusting it. A confirmed relay can forge a
+            # ROUTE_FOUND and substitute its OWN eph key; sealing space
+            # content under it would hand the relay our plaintext. Drop
+            # the response unless the route ends at the asked-for target
+            # AND the eph key is signed by that target's identity.
+            if not self._verify_route_found(
+                request_id=request_id,
+                target=pending.target,
+                path=path,
+                target_eph_pk=target_eph_pk,
+                target_identity_pk=target_identity_pk,
+                target_eph_sig=target_eph_sig,
+                from_instance=event.from_instance,
+            ):
+                return
             pending.responses.append((path, target_eph_pk))
             if len(pending.responses) == 1:
                 # First response — start the collection window.
@@ -515,7 +561,8 @@ class RouteDiscoveryService:
         # Relay path: forward to the caller we cached when the
         # original FIND_ROUTE flowed through us. The ``target_eph_pk``
         # the target minted travels through opaque — relays never
-        # generate their own.
+        # generate their own, and they pass the identity-binding
+        # signature through unaltered so the origin can verify it.
         cached = self._caller_cache.get(request_id)
         if cached is None:
             return
@@ -528,6 +575,8 @@ class RouteDiscoveryService:
                     "request_id": request_id,
                     "path": path,
                     "target_eph_pk": target_eph_pk,
+                    "target_identity_pk": target_identity_pk,
+                    "target_eph_sig": target_eph_sig,
                 },
             )
         except Exception:
@@ -547,6 +596,16 @@ class RouteDiscoveryService:
         *,
         target_eph_pk: str,
     ) -> None:
+        # Bind the ephemeral key we just minted to OUR identity so the
+        # origin can prove the key really came from the target it asked
+        # for — a relay can't substitute its own eph (§D2 relay-MITM).
+        target_identity_pk = self._federation.own_identity_pk.hex()
+        target_eph_sig = b64url_encode(
+            sign_ed25519(
+                self._federation.own_identity_seed,
+                _route_found_signing_bytes(request_id, target_eph_pk),
+            )
+        )
         try:
             await self._federation.send_event(
                 to_instance_id=to_instance_id,
@@ -555,6 +614,8 @@ class RouteDiscoveryService:
                     "request_id": request_id,
                     "path": path,
                     "target_eph_pk": target_eph_pk,
+                    "target_identity_pk": target_identity_pk,
+                    "target_eph_sig": target_eph_sig,
                 },
             )
         except Exception:
@@ -563,6 +624,95 @@ class RouteDiscoveryService:
                 to_instance_id,
                 exc_info=True,
             )
+
+    def _verify_route_found(
+        self,
+        *,
+        request_id: str,
+        target: str,
+        path: list[str],
+        target_eph_pk: str,
+        target_identity_pk: str,
+        target_eph_sig: str,
+        from_instance: str,
+    ) -> bool:
+        """Return ``True`` iff a ROUTE_FOUND response is authentic (§D2).
+
+        Three independent checks, all of which must hold; any failure
+        drops the response (logged at WARNING) so a forged or relayed
+        substitution never reaches :meth:`_resolve_after_window`:
+
+        1. ``path`` actually ends at the target we asked for.
+        2. ``target_identity_pk`` hashes to that target's instance_id
+           (``derive_instance_id`` — the id IS the identity-key
+           fingerprint, so no prior pairing is needed to check this).
+        3. ``target_eph_sig`` is a valid Ed25519 signature by that
+           identity over ``_route_found_signing_bytes(request_id,
+           target_eph_pk)`` — i.e. the genuine target signed THIS eph
+           key for THIS request.
+
+        Malformed hex / base64url input is treated as a verification
+        failure rather than propagating, so a peer can't crash the
+        origin with garbage fields.
+        """
+        if not path or path[-1] != target:
+            log.warning(
+                "route_discovery: ROUTE_FOUND from %s dropped — path does "
+                "not end at target %s",
+                from_instance,
+                target,
+            )
+            return False
+        if not target_identity_pk or not target_eph_sig:
+            log.warning(
+                "route_discovery: ROUTE_FOUND from %s dropped — missing "
+                "identity-binding fields for target %s",
+                from_instance,
+                target,
+            )
+            return False
+        try:
+            identity_pk_bytes = bytes.fromhex(target_identity_pk)
+            sig_bytes = b64url_decode(target_eph_sig)
+        except ValueError, TypeError:
+            log.warning(
+                "route_discovery: ROUTE_FOUND from %s dropped — malformed "
+                "identity_pk / signature encoding",
+                from_instance,
+            )
+            return False
+        try:
+            derived = derive_instance_id(identity_pk_bytes)
+        except ValueError:
+            log.warning(
+                "route_discovery: ROUTE_FOUND from %s dropped — identity_pk "
+                "is not a valid Ed25519 key",
+                from_instance,
+            )
+            return False
+        if derived != target:
+            log.warning(
+                "route_discovery: ROUTE_FOUND from %s dropped — identity_pk "
+                "derives to %s, not the requested target %s (substitution "
+                "attempt?)",
+                from_instance,
+                derived,
+                target,
+            )
+            return False
+        if not verify_ed25519(
+            identity_pk_bytes,
+            _route_found_signing_bytes(request_id, target_eph_pk),
+            sig_bytes,
+        ):
+            log.warning(
+                "route_discovery: ROUTE_FOUND from %s dropped — bad eph-key "
+                "signature for target %s",
+                from_instance,
+                target,
+            )
+            return False
+        return True
 
     async def _resolve_after_window(self, request_id: str) -> None:
         """Wait ``discovery_timeout_s`` then resolve the pending Future

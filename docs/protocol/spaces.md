@@ -495,10 +495,10 @@ sequenceDiagram
     participant C as HFS C<br/>(target)
     A->>B: SPACE_FIND_ROUTE<br/>(request_id, target=C,<br/>hops_traversed=[A], max_hops)
     B->>C: SPACE_FIND_ROUTE<br/>(hops_traversed=[A, B])
-    Note over C: target generates fresh<br/>X25519 ephemeral,<br/>caches priv (TTL 5 min)
-    C->>B: SPACE_ROUTE_FOUND<br/>(request_id, path=[A, B, C],<br/>target_eph_pk)
-    B->>A: SPACE_ROUTE_FOUND<br/>(relayed via cached caller)
-    Note over A: pick shortest path,<br/>random tie-break;<br/>cache (path, target_eph_pk)
+    Note over C: target generates fresh<br/>X25519 ephemeral,<br/>caches priv (TTL 5 min),<br/>signs eph_pk with its<br/>Ed25519 identity key
+    C->>B: SPACE_ROUTE_FOUND<br/>(request_id, path=[A, B, C],<br/>target_eph_pk,<br/>target_identity_pk, target_eph_sig)
+    B->>A: SPACE_ROUTE_FOUND<br/>(relayed via cached caller;<br/>signature opaque)
+    Note over A: verify sig + identity-id<br/>+ path ends at C;<br/>pick shortest path,<br/>random tie-break;<br/>cache (path, target_eph_pk)
 ```
 
 `SPACE_FIND_ROUTE` floods over the federation graph bounded by
@@ -508,6 +508,51 @@ to forward back through itself, and gates forwards on
 ``peer_supports(min_version=6)`` so sub-v_6 peers are invisible to the
 mesh. ROUTE_FOUND responses ride back along the cached caller chain
 (``request_id → caller_instance_id``, TTL 60 s).
+
+#### Authenticating `target_eph_pk` (v_21+)
+
+The origin seals real space content (post bodies, GPS, files, the §D2
+invite token) under the `target_eph_pk` it learns from ROUTE_FOUND —
+and that response is *relayed* and was, pre-v_21, **unauthenticated**.
+A malicious confirmed peer that caught the `SPACE_FIND_ROUTE` flood
+could answer `ROUTE_FOUND(path=[A, attacker], target_eph_pk=<its own
+eph>)`, win the shortest-path tie-break, and make the origin seal
+plaintext content under the attacker's key — the attacker then
+decrypts it (the inner payload is **not** independently encrypted on
+the mesh path). This broke the "a non-member relay can't read space
+content" invariant.
+
+The fix binds `target_eph_pk` to the target's **identity** key. Only
+the genuine target can mint the eph key, so it signs it:
+
+```
+target_identity_pk : "<64 hex>"   # the target's Ed25519 identity public key
+target_eph_sig     : "<b64url>"   # Ed25519 sig over
+                                   #   b"space-route-found:v1:" + request_id
+                                   #   + b":" + target_eph_pk
+```
+
+Relays forward both fields **opaquely** (they never generate or alter
+them). The origin, before collecting a response, verifies **all** of:
+
+1. `path` is non-empty and `path[-1] == target` (the route really ends
+   at the asked-for target).
+2. `derive_instance_id(target_identity_pk) == target` — the key belongs
+   to the target instance. The `instance_id` **is** the SHA-256
+   fingerprint of the identity key (§4.1.2), so this needs no prior
+   pairing with the target.
+3. `target_eph_sig` is a valid Ed25519 signature by that identity over
+   the domain-separated, request-scoped signing bytes (so a signature
+   can't be lifted onto another `request_id`).
+
+Any failure drops the response (logged at WARNING); malformed hex /
+base64url is treated as a failure, never propagated. **Fail-closed,
+no fallback:** a sub-v_21 target ships no signature, so a patched
+origin won't accept its ROUTE_FOUND — the target is mesh-*unreachable*
+via discovery until it upgrades. A forgeable key is strictly worse
+than a missing route, so the trade is intentional. Direct CONFIRMED
+peers and the local short-circuit (target == self) are unaffected —
+there is no relayed ROUTE_FOUND to trust.
 
 ### Forward + reply leg (any inner event)
 
@@ -569,6 +614,12 @@ The wire shape of ``SPACE_ROUTED.payload``:
 | `sealed.nonce`       | yes         |                                                |
 | `sealed.ciphertext`  | yes (bytes) | undecipherable without the matching priv half  |
 | **inner payload**    | **no**      | only the target can derive the seal key        |
+
+For the discovery leg, relays also see ROUTE_FOUND's
+`target_identity_pk` + `target_eph_sig` (v_21+) — public key + a
+signature, harmless on their own and forwarded unaltered; the origin
+verifies them to defeat key substitution (see "Authenticating
+`target_eph_pk`" above).
 
 ### First consumer: token-redeem (`SPACE_INVITE_TOKEN_REDEEM`)
 

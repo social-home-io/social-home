@@ -29,6 +29,13 @@ from typing import Any
 
 import pytest
 
+from socialhome.crypto import (
+    b64url_decode,
+    b64url_encode,
+    derive_instance_id,
+    generate_identity_keypair,
+    sign_ed25519,
+)
 from socialhome.domain.federation import (
     FederationEvent,
     FederationEventType,
@@ -38,6 +45,7 @@ from socialhome.federation.route_discovery import (
     RouteDiscoveryService,
     _CachedRoute,
     _PendingDiscovery,
+    _route_found_signing_bytes,
 )
 
 
@@ -99,9 +107,18 @@ class _LinkedFederationService:
     Tracks every outbound for assertions.
     """
 
-    def __init__(self, *, own_instance_id: str, repo: _FakeFederationRepo) -> None:
+    def __init__(
+        self,
+        *,
+        own_instance_id: str,
+        repo: _FakeFederationRepo,
+        own_identity_seed: bytes,
+        own_identity_pk: bytes,
+    ) -> None:
         self._own_instance_id = own_instance_id
         self._repo = repo
+        self._own_identity_seed = own_identity_seed
+        self._own_identity_pk = own_identity_pk
         #: dest_instance_id → other node (set by the test driver).
         self.peers: dict[str, _Node] = {}
         self.sent: list[dict[str, Any]] = []
@@ -111,6 +128,14 @@ class _LinkedFederationService:
     @property
     def own_instance_id(self) -> str:
         return self._own_instance_id
+
+    @property
+    def own_identity_seed(self) -> bytes:
+        return self._own_identity_seed
+
+    @property
+    def own_identity_pk(self) -> bytes:
+        return self._own_identity_pk
 
     async def peer_supports(self, instance_id: str, *, min_version: int) -> bool:
         peer = await self._repo.get_instance(instance_id)
@@ -179,12 +204,36 @@ def _build_mesh(
     Each peer entry is rendered into both nodes' ``RemoteInstance``
     rows via ``_FakeFederationRepo``. ``proto_versions[node_id]``
     overrides the default ``proto_version=6`` for a specific node.
+
+    Each node is given a *real* Ed25519 identity keypair and its
+    ``instance_id`` is derived from that key
+    (:func:`derive_instance_id`) — required so the origin's
+    authenticated-route-discovery check (``derive_instance_id(target
+    identity pk) == target``) holds end-to-end through the mesh. The
+    returned dict is still keyed by the human-readable graph name for
+    test ergonomics; ``_Node.instance_id`` carries the derived id.
     """
     proto_versions = proto_versions or {}
+    # Readable name → (seed, pk, derived instance_id).
+    identities: dict[str, tuple[bytes, bytes, str]] = {}
+    for name in graph:
+        kp = generate_identity_keypair()
+        identities[name] = (
+            kp.private_key,
+            kp.public_key,
+            derive_instance_id(kp.public_key),
+        )
+
     nodes: dict[str, _Node] = {}
-    for node_id in graph:
+    for name in graph:
+        seed, pk, inst_id = identities[name]
         repo = _FakeFederationRepo()
-        fed = _LinkedFederationService(own_instance_id=node_id, repo=repo)
+        fed = _LinkedFederationService(
+            own_instance_id=inst_id,
+            repo=repo,
+            own_identity_seed=seed,
+            own_identity_pk=pk,
+        )
         service = RouteDiscoveryService(
             federation_service=fed,  # type: ignore[arg-type]
             federation_repo=repo,  # type: ignore[arg-type]
@@ -193,25 +242,25 @@ def _build_mesh(
             cache_ttl_s=60.0,
             seen_ttl_s=60.0,
         )
-        nodes[node_id] = _Node(
-            instance_id=node_id,
+        nodes[name] = _Node(
+            instance_id=inst_id,
             repo=repo,
             fed=fed,
             service=service,
         )
-    # Wire neighbour repos + peer maps.
-    for node_id, neighbour_ids in graph.items():
-        node = nodes[node_id]
-        for nb_id in neighbour_ids:
-            nb = nodes[nb_id]
-            pv = proto_versions.get(nb_id, 6)
-            node.repo._instances[nb_id] = _FakeInstance(
-                id=nb_id,
+    # Wire neighbour repos + peer maps (keyed by derived instance id).
+    for name, neighbour_names in graph.items():
+        node = nodes[name]
+        for nb_name in neighbour_names:
+            nb = nodes[nb_name]
+            pv = proto_versions.get(nb_name, 6)
+            node.repo._instances[nb.instance_id] = _FakeInstance(
+                id=nb.instance_id,
                 status=PairingStatus.CONFIRMED,
                 proto_version=pv,
             )
-            node.fed.peers[nb_id] = nb
-            node.neighbours[nb_id] = nb
+            node.fed.peers[nb.instance_id] = nb
+            node.neighbours[nb.instance_id] = nb
     return nodes
 
 
@@ -223,10 +272,11 @@ async def test_local_target_returns_self_path():
     ``([self], target_eph_pk)`` without any probe — and the target
     ephemeral priv is cached on us for the inbound SPACE_ROUTED."""
     nodes = _build_mesh({"a": []})
-    result = await nodes["a"].service.discover_route("a")
+    a_id = nodes["a"].instance_id
+    result = await nodes["a"].service.discover_route(a_id)
     assert result is not None
     path, target_eph_pk = result
-    assert path == ["a"]
+    assert path == [a_id]
     assert target_eph_pk  # non-empty b64url
     # The corresponding priv is cached locally for unseal.
     assert nodes["a"].service.lookup_target_eph_priv(target_eph_pk) is not None
@@ -239,10 +289,11 @@ async def test_direct_peer_resolves_via_single_hop_probe():
     (no static short-circuit): the target answers with its freshly-
     minted ephemeral pub, so the origin can seal against it."""
     nodes = _build_mesh({"a": ["b"], "b": ["a"]})
-    result = await nodes["a"].service.discover_route("b")
+    a_id, b_id = nodes["a"].instance_id, nodes["b"].instance_id
+    result = await nodes["a"].service.discover_route(b_id)
     assert result is not None
     path, target_eph_pk = result
-    assert path == ["a", "b"]
+    assert path == [a_id, b_id]
     assert target_eph_pk
     # The target ('b') minted the priv and cached it for unseal.
     assert nodes["b"].service.lookup_target_eph_priv(target_eph_pk) is not None
@@ -253,10 +304,15 @@ async def test_indirect_discovery_finds_three_hop_path():
     paired with c), discovering c from a yields ``([a, b, c],
     target_eph_pk)``."""
     nodes = _build_mesh({"a": ["b"], "b": ["a", "c"], "c": ["b"]})
-    result = await nodes["a"].service.discover_route("c")
+    a_id, b_id, c_id = (
+        nodes["a"].instance_id,
+        nodes["b"].instance_id,
+        nodes["c"].instance_id,
+    )
+    result = await nodes["a"].service.discover_route(c_id)
     assert result is not None
     path, target_eph_pk = result
-    assert path == ["a", "b", "c"]
+    assert path == [a_id, b_id, c_id]
     assert target_eph_pk
     assert nodes["c"].service.lookup_target_eph_priv(target_eph_pk) is not None
 
@@ -319,7 +375,7 @@ async def test_max_hops_budget_returns_none_when_target_too_deep():
         discovery_timeout_s=0.05,
         max_hops=2,
     )
-    result = await nodes["a"].service.discover_route("d")
+    result = await nodes["a"].service.discover_route(nodes["d"].instance_id)
     assert result is None
 
 
@@ -329,27 +385,29 @@ async def test_cache_hit_on_second_discover():
     re-running the probe.
     """
     nodes = _build_mesh({"a": ["b"], "b": ["a"]})
-    first = await nodes["a"].service.discover_route("b")
+    a_id, b_id = nodes["a"].instance_id, nodes["b"].instance_id
+    first = await nodes["a"].service.discover_route(b_id)
     assert first is not None
     first_path, first_eph = first
-    assert first_path == ["a", "b"]
-    assert "b" in nodes["a"].service._route_cache
+    assert first_path == [a_id, b_id]
+    assert b_id in nodes["a"].service._route_cache
     # Force a third-party look — drop b from the repo + retry. If the
     # cache is honored, we still get the *same* tuple back.
-    nodes["a"].repo._instances.pop("b", None)
-    nodes["a"].fed.peers.pop("b", None)
-    cached = await nodes["a"].service.discover_route("b")
-    assert cached == (["a", "b"], first_eph)
+    nodes["a"].repo._instances.pop(b_id, None)
+    nodes["a"].fed.peers.pop(b_id, None)
+    cached = await nodes["a"].service.discover_route(b_id)
+    assert cached == ([a_id, b_id], first_eph)
 
 
 async def test_invalidate_drops_cache_entry():
     """``invalidate`` removes a cached path; subsequent discover
     runs a fresh probe."""
     nodes = _build_mesh({"a": ["b"], "b": ["a"]})
-    await nodes["a"].service.discover_route("b")
-    assert "b" in nodes["a"].service._route_cache
-    await nodes["a"].service.invalidate("b")
-    assert "b" not in nodes["a"].service._route_cache
+    b_id = nodes["b"].instance_id
+    await nodes["a"].service.discover_route(b_id)
+    assert b_id in nodes["a"].service._route_cache
+    await nodes["a"].service.invalidate(b_id)
+    assert b_id not in nodes["a"].service._route_cache
 
 
 async def test_random_tie_break_over_equal_paths():
@@ -369,21 +427,27 @@ async def test_random_tie_break_over_equal_paths():
         # asyncio scheduler's response latency.
         discovery_timeout_s=0.2,
     )
+    a_id, b_id, c_id, z_id = (
+        nodes["a"].instance_id,
+        nodes["b"].instance_id,
+        nodes["c"].instance_id,
+        nodes["z"].instance_id,
+    )
     seen_first_hops: set[str] = set()
     for _ in range(20):
         # Clear cache so each iteration runs a fresh probe.
-        await nodes["a"].service.invalidate("z")
-        result = await nodes["a"].service.discover_route("z")
+        await nodes["a"].service.invalidate(z_id)
+        result = await nodes["a"].service.discover_route(z_id)
         assert result is not None
         path, _eph = result
         # Path is [a, ?, z] — capture the middle hop.
         assert len(path) == 3
-        assert path[0] == "a"
-        assert path[-1] == "z"
+        assert path[0] == a_id
+        assert path[-1] == z_id
         seen_first_hops.add(path[1])
         if len(seen_first_hops) == 2:
             break
-    assert seen_first_hops == {"b", "c"}, (
+    assert seen_first_hops == {b_id, c_id}, (
         f"random tie-break didn't sample both hops in 20 runs: {seen_first_hops}"
     )
 
@@ -398,7 +462,7 @@ async def test_sub_v6_peer_is_not_proposed_as_next_hop():
         proto_versions={"b": 5},
         discovery_timeout_s=0.05,
     )
-    result = await nodes["a"].service.discover_route("c")
+    result = await nodes["a"].service.discover_route(nodes["c"].instance_id)
     assert result is None
 
 
@@ -411,7 +475,7 @@ async def test_sub_v6_direct_peer_target_returns_none():
         proto_versions={"b": 5},
         discovery_timeout_s=0.05,
     )
-    result = await nodes["a"].service.discover_route("b")
+    result = await nodes["a"].service.discover_route(nodes["b"].instance_id)
     assert result is None
 
 
@@ -446,6 +510,8 @@ async def test_relay_forwards_route_found_back_to_caller():
             "request_id": "rid-fwd",
             "path": ["a", "b", "c"],
             "target_eph_pk": "fake-pub-b64",
+            "target_identity_pk": "deadbeef",
+            "target_eph_sig": "sig-b64",
         },
     )
     await svc_b._on_route_found(ev)
@@ -455,8 +521,11 @@ async def test_relay_forwards_route_found_back_to_caller():
     assert fwd["to"] == "a"
     assert fwd["event_type"] == FederationEventType.SPACE_ROUTE_FOUND
     assert fwd["payload"]["path"] == ["a", "b", "c"]
-    # Relay never strips / replaces the target ephemeral.
+    # Relay never strips / replaces the target ephemeral or its
+    # identity-binding signature — they travel through opaquely.
     assert fwd["payload"]["target_eph_pk"] == "fake-pub-b64"
+    assert fwd["payload"]["target_identity_pk"] == "deadbeef"
+    assert fwd["payload"]["target_eph_sig"] == "sig-b64"
 
 
 async def test_route_found_without_target_eph_is_dropped():
@@ -597,13 +666,14 @@ async def test_discover_route_continues_when_one_of_many_sends_fails():
         {"a": ["b", "x"], "b": ["a"], "x": ["a"]},
         discovery_timeout_s=0.05,
     )
+    b_id, x_id = nodes["b"].instance_id, nodes["x"].instance_id
     # Force the ship to 'x' to fail. 'b' is reachable but isn't the
     # target — discovery still resolves to None for unknown 'z'.
-    nodes["a"].fed.fail_to = {"x"}
+    nodes["a"].fed.fail_to = {x_id}
     result = await nodes["a"].service.discover_route("z")
     assert result is None
     # send tried both peers; ≥1 succeeded.
-    assert any(s["to"] == "b" for s in nodes["a"].fed.sent)
+    assert any(s["to"] == b_id for s in nodes["a"].fed.sent)
 
 
 async def test_lookup_target_eph_priv_unknown_pub_returns_none():
@@ -651,19 +721,20 @@ async def test_find_route_with_malformed_max_hops_falls_back_to_local_cap():
     """A FIND_ROUTE whose ``max_hops`` is not an int gracefully falls
     back to the local cap (no crash)."""
     nodes = _build_mesh({"a": ["b"], "b": ["a", "c"], "c": ["b"]}, max_hops=3)
+    a_id, c_id = nodes["a"].instance_id, nodes["c"].instance_id
     svc_b = nodes["b"].service
     ev = FederationEvent(
         msg_id="m-bad-mh",
         event_type=FederationEventType.SPACE_FIND_ROUTE,
-        from_instance="a",
-        to_instance="b",
+        from_instance=a_id,
+        to_instance=nodes["b"].instance_id,
         timestamp="2026-05-22T00:00:00Z",
         payload={
             "request_id": "rid-bad-mh",
-            "target_instance_id": "c",
-            "hops_traversed": ["a"],
+            "target_instance_id": c_id,
+            "hops_traversed": [a_id],
             "max_hops": {"not": "an int"},  # triggers TypeError → fallback
-            "origin_instance_id": "a",
+            "origin_instance_id": a_id,
         },
     )
     await svc_b._on_find_route(ev)
@@ -673,32 +744,35 @@ async def test_find_route_with_malformed_max_hops_falls_back_to_local_cap():
         for s in nodes["b"].fed.sent
         if s["event_type"] is FederationEventType.SPACE_FIND_ROUTE
     ]
-    assert any(s["to"] == "c" for s in forwards)
+    assert any(s["to"] == c_id for s in forwards)
 
 
 async def test_find_route_forward_send_failure_is_logged(caplog):
     """Relay-side forwarding: when ``send_event`` raises on the
     forward FIND_ROUTE, we swallow + warn."""
     nodes = _build_mesh({"a": ["b"], "b": ["a", "c"], "c": ["b"]})
+    a_id, c_id = nodes["a"].instance_id, nodes["c"].instance_id
     svc_b = nodes["b"].service
-    nodes["b"].fed.fail_to = {"c"}
+    nodes["b"].fed.fail_to = {c_id}
     ev = FederationEvent(
         msg_id="m-fwd-fail",
         event_type=FederationEventType.SPACE_FIND_ROUTE,
-        from_instance="a",
-        to_instance="b",
+        from_instance=a_id,
+        to_instance=nodes["b"].instance_id,
         timestamp="2026-05-22T00:00:00Z",
         payload={
             "request_id": "rid-fwd-fail",
             "target_instance_id": "z",  # unknown, so b must forward
-            "hops_traversed": ["a"],
+            "hops_traversed": [a_id],
             "max_hops": 3,
-            "origin_instance_id": "a",
+            "origin_instance_id": a_id,
         },
     )
     await svc_b._on_find_route(ev)
     # We attempted the send and the warning fired.
-    assert any("forward FIND_ROUTE to c failed" in r.message for r in caplog.records)
+    assert any(
+        f"forward FIND_ROUTE to {c_id} failed" in r.message for r in caplog.records
+    )
 
 
 async def test_on_route_found_resolved_pending_is_ignored():
@@ -933,3 +1007,244 @@ def test_prune_caps_oversized_target_eph_state():
     assert len(svc._target_eph_state) == cap
     assert "pub0" not in svc._target_eph_state
     assert f"pub{cap + overshoot - 1}" in svc._target_eph_state
+
+
+# ── §D2 authenticated route discovery — relay-MITM regression guards ───
+#
+# The mesh route-discovery origin used to trust the ``target_eph_pk`` it
+# pulled out of a *relayed*, unauthenticated SPACE_ROUTE_FOUND. A
+# malicious confirmed peer that caught the SPACE_FIND_ROUTE flood could
+# answer ROUTE_FOUND(path=[origin, attacker], target_eph_pk=<attacker's
+# own eph>) and win the shortest-path tie-break, so the origin sealed
+# real space content under the *attacker's* key → the attacker decrypts
+# it (the inner payload is NOT independently encrypted on the mesh
+# path). The fix binds ``target_eph_pk`` to the target's identity key:
+# the genuine target signs the eph key, and the origin verifies
+# ``derive_instance_id(target_identity_pk) == target`` + a valid sig
+# over THIS request_id before collecting the response.
+
+
+def _signed_route_found_payload(
+    *,
+    request_id: str,
+    path: list[str],
+    target_eph_pk_b64: str,
+    signer_seed: bytes,
+    signer_pk: bytes,
+) -> dict:
+    """Build a SPACE_ROUTE_FOUND payload signed by ``signer`` — used to
+    forge both an attacker's self-signed response and a legit target's
+    response (the difference is purely which identity signs)."""
+    sig = sign_ed25519(
+        signer_seed,
+        _route_found_signing_bytes(request_id, target_eph_pk_b64),
+    )
+    return {
+        "request_id": request_id,
+        "path": path,
+        "target_eph_pk": target_eph_pk_b64,
+        "target_identity_pk": signer_pk.hex(),
+        "target_eph_sig": b64url_encode(sig),
+    }
+
+
+async def _drive_origin_route_found(
+    origin: _Node,
+    *,
+    target_instance_id: str,
+    payload: dict,
+    discovery_timeout_s: float = 0.01,
+):
+    """Seed a pending discovery on ``origin`` for ``target_instance_id``,
+    feed it a single ROUTE_FOUND ``payload`` via ``_on_route_found``, run
+    the resolver window, and return the resolved ``(path, eph) | None``."""
+    svc = origin.service
+    svc._discovery_timeout_s = discovery_timeout_s
+    loop = asyncio.get_event_loop()
+    fut: asyncio.Future = loop.create_future()
+    request_id = str(payload["request_id"])
+    svc._pending[request_id] = _PendingDiscovery(
+        future=fut,
+        target=target_instance_id,
+    )
+    ev = FederationEvent(
+        msg_id="m-rf-attack",
+        event_type=FederationEventType.SPACE_ROUTE_FOUND,
+        from_instance="relay",
+        to_instance=origin.instance_id,
+        timestamp="2026-06-09T00:00:00Z",
+        payload=payload,
+    )
+    await svc._on_route_found(ev)
+    # Run the collection window (if a response was collected, the first
+    # one scheduled the resolver; drive it directly so the test is
+    # deterministic regardless of scheduling).
+    await svc._resolve_after_window(request_id)
+    if fut.done():
+        return fut.result()
+    return None
+
+
+async def test_forged_route_found_substituting_attacker_key_is_rejected():
+    """REGRESSION (vuln): a confirmed relay forges ROUTE_FOUND for target
+    T carrying its OWN ephemeral + its OWN (validly self-signed) identity
+    key. Because ``derive_instance_id(attacker_identity) != T``, the
+    origin DROPS it — ``discover_route`` resolves to None, NOT the
+    attacker's key, so no space content is ever sealed under it."""
+    nodes = _build_mesh({"origin": [], "target": [], "attacker": []})
+    origin = nodes["origin"]
+    target_id = nodes["target"].instance_id
+    attacker = nodes["attacker"]
+
+    # Attacker mints its own eph + signs it with its own identity — a
+    # perfectly valid self-signature, just for the WRONG identity.
+    attacker_eph = attacker.service._generate_target_eph(time.monotonic())
+    forged = _signed_route_found_payload(
+        request_id="rid-attack",
+        path=[origin.instance_id, attacker.instance_id],
+        target_eph_pk_b64=attacker_eph,
+        signer_seed=attacker.fed.own_identity_seed,
+        signer_pk=attacker.fed.own_identity_pk,
+    )
+
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=forged
+    )
+    assert result is None, (
+        "origin accepted an attacker-substituted target_eph_pk — relay MITM not closed"
+    )
+    # And nothing was collected.
+    assert origin.service._pending["rid-attack"].responses == []
+
+
+async def test_legit_signed_route_found_is_accepted():
+    """A ROUTE_FOUND genuinely signed by the target identity (whose
+    ``derive_instance_id == target``) over THIS request, with
+    ``path[-1] == target``, is collected and resolves to
+    ``(path, target_eph)``."""
+    nodes = _build_mesh({"origin": [], "target": []})
+    origin = nodes["origin"]
+    target = nodes["target"]
+    target_id = target.instance_id
+
+    target_eph = target.service._generate_target_eph(time.monotonic())
+    legit = _signed_route_found_payload(
+        request_id="rid-legit",
+        path=[origin.instance_id, target_id],
+        target_eph_pk_b64=target_eph,
+        signer_seed=target.fed.own_identity_seed,
+        signer_pk=target.fed.own_identity_pk,
+    )
+
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=legit
+    )
+    assert result == ([origin.instance_id, target_id], target_eph)
+
+
+async def test_route_found_with_tampered_signature_is_dropped():
+    """A response carrying the genuine target identity key but a
+    corrupted signature is dropped."""
+    nodes = _build_mesh({"origin": [], "target": []})
+    origin = nodes["origin"]
+    target = nodes["target"]
+    target_id = target.instance_id
+    target_eph = target.service._generate_target_eph(time.monotonic())
+    payload = _signed_route_found_payload(
+        request_id="rid-tampered",
+        path=[origin.instance_id, target_id],
+        target_eph_pk_b64=target_eph,
+        signer_seed=target.fed.own_identity_seed,
+        signer_pk=target.fed.own_identity_pk,
+    )
+    # Flip the signature bytes.
+    bad = bytearray(b64url_decode(payload["target_eph_sig"]))
+    bad[0] ^= 0xFF
+    payload["target_eph_sig"] = b64url_encode(bytes(bad))
+
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=payload
+    )
+    assert result is None
+
+
+async def test_route_found_signed_by_wrong_key_for_target_is_dropped():
+    """A response whose ``target_identity_pk`` hashes to the right
+    target id is required; a different (valid, self-consistent) identity
+    signing for the target is dropped because its id != target."""
+    nodes = _build_mesh({"origin": [], "target": [], "other": []})
+    origin = nodes["origin"]
+    target_id = nodes["target"].instance_id
+    other = nodes["other"]
+    other_eph = other.service._generate_target_eph(time.monotonic())
+    # 'other' signs correctly for ITS OWN key, claims path ends at target.
+    payload = _signed_route_found_payload(
+        request_id="rid-wrongkey",
+        path=[origin.instance_id, target_id],
+        target_eph_pk_b64=other_eph,
+        signer_seed=other.fed.own_identity_seed,
+        signer_pk=other.fed.own_identity_pk,
+    )
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=payload
+    )
+    assert result is None
+
+
+async def test_route_found_missing_identity_fields_is_dropped():
+    """A legacy/sub-v_N ROUTE_FOUND with no ``target_identity_pk`` /
+    ``target_eph_sig`` is dropped (fail-closed)."""
+    nodes = _build_mesh({"origin": [], "target": []})
+    origin = nodes["origin"]
+    target_id = nodes["target"].instance_id
+    payload = {
+        "request_id": "rid-legacy",
+        "path": [origin.instance_id, target_id],
+        "target_eph_pk": "some-eph-b64",
+        # No target_identity_pk / target_eph_sig.
+    }
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=payload
+    )
+    assert result is None
+
+
+async def test_route_found_path_not_ending_at_target_is_dropped():
+    """Even a perfectly valid signature over the eph key is dropped when
+    ``path[-1] != target`` — the route must actually terminate at the
+    asked-for target."""
+    nodes = _build_mesh({"origin": [], "target": []})
+    origin = nodes["origin"]
+    target = nodes["target"]
+    target_id = target.instance_id
+    target_eph = target.service._generate_target_eph(time.monotonic())
+    payload = _signed_route_found_payload(
+        request_id="rid-badpath",
+        # Genuinely signed by the target, but the path ends elsewhere.
+        path=[origin.instance_id, "some-other-hop"],
+        target_eph_pk_b64=target_eph,
+        signer_seed=target.fed.own_identity_seed,
+        signer_pk=target.fed.own_identity_pk,
+    )
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=payload
+    )
+    assert result is None
+
+
+async def test_route_found_malformed_hex_identity_is_dropped():
+    """A non-hex ``target_identity_pk`` is dropped without raising."""
+    nodes = _build_mesh({"origin": [], "target": []})
+    origin = nodes["origin"]
+    target_id = nodes["target"].instance_id
+    payload = {
+        "request_id": "rid-badhex",
+        "path": [origin.instance_id, target_id],
+        "target_eph_pk": "some-eph-b64",
+        "target_identity_pk": "nothex!!",
+        "target_eph_sig": "also-bad",
+    }
+    result = await _drive_origin_route_found(
+        origin, target_instance_id=target_id, payload=payload
+    )
+    assert result is None
