@@ -134,6 +134,8 @@ async def _publish_known_space(client, space_id: str) -> None:
 
 
 async def test_publish_happy_path_delivers_zero_when_no_subscribers(client):
+    # The space must exist and be owned by the publisher (peer.home).
+    await _publish_known_space(client, "sp-empty")
     body = {
         "space_id": "sp-empty",
         "event_type": "TEST",
@@ -144,6 +146,19 @@ async def test_publish_happy_path_delivers_zero_when_no_subscribers(client):
     assert resp.status == 200
     payload = await resp.json()
     assert payload["delivered_to"] == []
+
+
+async def test_publish_unknown_space_is_403(client):
+    """A validly-signed event for a space the GFS never published is rejected
+    (no auto-mint of an ownership row from an event)."""
+    body = {
+        "space_id": "sp-never-published",
+        "event_type": "TEST",
+        "payload": {"x": 1},
+        "from_instance": "peer.home",
+    }
+    resp = await client.post("/gfs/publish", json=_sign(body, client._seed))
+    assert resp.status == 403
 
 
 async def test_publish_missing_field_is_400(client):

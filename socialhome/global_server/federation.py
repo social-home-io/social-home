@@ -101,10 +101,22 @@ class GfsFederationService:
         for *from_instance*. Returns the list of instance_ids successfully
         notified.
 
-        Raises :class:`PermissionError` when *from_instance* is unknown or
-        the signature is missing / malformed / invalid. The signature is
-        MANDATORY: an empty signature is rejected (a registered peer must
-        not be able to publish another household's space content unsigned).
+        Raises :class:`PermissionError` when *from_instance* is unknown,
+        the signature is missing / malformed / invalid, the space was never
+        published, or *from_instance* is not the space's owning instance.
+        The signature is MANDATORY: an empty signature is rejected (a
+        registered peer must not be able to publish another household's
+        space content unsigned).
+
+        Only the space's **owning instance** may relay events for it. The
+        GFS has no space-membership roster (it knows registered instances,
+        space ``owning_instance``, and subscribers — not who joined), so the
+        owning instance is the only relationship it can authoritatively
+        check. A non-owner peer that catches a space_id (they travel in
+        discovery links) must not be able to inject events into another
+        household's space fan-out, even with a signature valid for its own
+        key. A multi-publisher model would be a deliberate feature (the GFS
+        learning membership), not an implicit allow-any-registered-instance.
         """
         inst = await self._repo.get_instance(from_instance)
         if inst is None:
@@ -130,16 +142,14 @@ class GfsFederationService:
         if not verify_ed25519(raw_key, canonical, raw_sig):
             raise PermissionError("Invalid Ed25519 signature")
 
-        # Preserve existing row data if present; otherwise create a minimal
-        # pending row. Admin portal fleshes the metadata out on accept.
+        # The space must already be published (no auto-mint of an ownership
+        # row from an event — mirrors subscribe), and only its owning
+        # instance may relay events for it.
         existing = await self._repo.get_space(space_id)
         if existing is None:
-            await self._repo.upsert_space(
-                GlobalSpace(
-                    space_id=space_id,
-                    owning_instance=from_instance,
-                )
-            )
+            raise PermissionError("space not published")
+        if existing.owning_instance != from_instance:
+            raise PermissionError("not the owner of this space")
 
         subscribers = await self._repo.list_subscribers(
             space_id,
