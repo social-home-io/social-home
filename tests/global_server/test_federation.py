@@ -248,7 +248,13 @@ async def test_publish_unknown_instance_raises_permission_error(svc):
 async def test_publish_with_no_subscribers_returns_empty_list(svc):
     """publish_event() with zero subscribers returns an empty delivered list."""
     seed, pk = _make_keypair()
-    await svc.register_instance("inst-pub", pk.hex(), "http://pub.example.com/wh")
+    await svc.register_instance(
+        "inst-pub", pk.hex(), "http://pub.example.com/wh", auto_accept=True
+    )
+    # The space must exist and be owned by the publisher.
+    await _publish_known_space(
+        svc, seed, owning_instance="inst-pub", space_id="space-nosubs"
+    )
 
     payload_dict = {
         "space_id": "space-nosubs",
@@ -263,6 +269,82 @@ async def test_publish_with_no_subscribers_returns_empty_list(svc):
         {"text": "hello"},
         "inst-pub",
         sig,
+    )
+    assert delivered == []
+
+
+async def test_publish_event_unknown_space_rejected(svc):
+    """publish_event() rejects an event for a space the GFS never saw — no
+    auto-creation of an ownership row from an event (mirrors subscribe)."""
+    seed, pk = _make_keypair()
+    await svc.register_instance(
+        "inst-unk", pk.hex(), "http://unk.example.com/wh", auto_accept=True
+    )
+    sig = _sign(
+        seed,
+        {
+            "space_id": "space-never",
+            "event_type": "post.created",
+            "payload": {"text": "hi"},
+            "from_instance": "inst-unk",
+        },
+    )
+    with pytest.raises(PermissionError, match="not published"):
+        await svc.publish_event(
+            "space-never", "post.created", {"text": "hi"}, "inst-unk", sig
+        )
+
+
+async def test_publish_event_from_non_owner_rejected(svc):
+    """Only the space's owning instance may relay events for it: a registered
+    peer that is not the owner is rejected even with a valid signature."""
+    owner_seed, owner_pk = _make_keypair()
+    other_seed, other_pk = _make_keypair()
+    await svc.register_instance(
+        "owner-e", owner_pk.hex(), "http://owner.example.com/wh", auto_accept=True
+    )
+    await svc.register_instance(
+        "other-e", other_pk.hex(), "http://other.example.com/wh", auto_accept=True
+    )
+    await _publish_known_space(
+        svc, owner_seed, owning_instance="owner-e", space_id="space-owned"
+    )
+    # other-e signs a valid event for owner-e's space — must be rejected.
+    sig = _sign(
+        other_seed,
+        {
+            "space_id": "space-owned",
+            "event_type": "post.created",
+            "payload": {"text": "hi"},
+            "from_instance": "other-e",
+        },
+    )
+    with pytest.raises(PermissionError, match="not the owner"):
+        await svc.publish_event(
+            "space-owned", "post.created", {"text": "hi"}, "other-e", sig
+        )
+
+
+async def test_publish_event_from_owner_succeeds(svc):
+    """The owning instance can relay events for its own space."""
+    seed, pk = _make_keypair()
+    await svc.register_instance(
+        "owner-ok", pk.hex(), "http://ok.example.com/wh", auto_accept=True
+    )
+    await _publish_known_space(
+        svc, seed, owning_instance="owner-ok", space_id="space-ok"
+    )
+    sig = _sign(
+        seed,
+        {
+            "space_id": "space-ok",
+            "event_type": "post.created",
+            "payload": {"text": "hi"},
+            "from_instance": "owner-ok",
+        },
+    )
+    delivered = await svc.publish_event(
+        "space-ok", "post.created", {"text": "hi"}, "owner-ok", sig
     )
     assert delivered == []
 
