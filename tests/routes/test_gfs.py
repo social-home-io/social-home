@@ -71,6 +71,21 @@ async def _seed_gfs(client, gfs_id: str = "gfs-1", *, status: str = "active"):
     await repo.save(_make_conn(gfs_id, status=status))
 
 
+async def _seed_space(client, space_id: str = "sp-1") -> None:
+    """Create a real local space row so publish can build + sign a body.
+
+    The GFS now mandates a signed publish body, so the HFS refuses to
+    publish a space it doesn't hold locally (``GfsConnectionError`` →
+    422). A publish test therefore needs the space to actually exist.
+    """
+    await client._db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username, "
+        "identity_public_key, space_type) "
+        "VALUES(?, 'Space One', 'iid', 'admin', ?, 'household')",
+        (space_id, "aa" * 32),
+    )
+
+
 # ─── GET /api/gfs/connections ────────────────────────────────────────
 
 
@@ -233,6 +248,7 @@ async def test_publish_gfs_not_found(client):
 
 async def test_publish_returns_publication_with_status(client):
     await _seed_gfs(client, "gfs-1")
+    await _seed_space(client, "sp-1")
     _stub_session(client, status=200, body={"status": "pending"})
     r = await client.post(
         "/api/spaces/sp-1/publish/gfs-1",
@@ -246,8 +262,24 @@ async def test_publish_returns_publication_with_status(client):
     assert "published_at" in body
 
 
+async def test_publish_unknown_space_is_rejected(client):
+    """Fail-closed: the GFS mandates a signed publish body describing a real
+    space, so publishing a space the HFS doesn't hold locally is a 422 — it
+    must NOT fall back to an unsigned, metadata-less ``{space_id}`` body."""
+    await _seed_gfs(client, "gfs-1")
+    _stub_session(client, status=200, body={"status": "active"})
+    r = await client.post(
+        "/api/spaces/sp-nonexistent/publish/gfs-1",
+        headers=_auth(client._tok),
+    )
+    assert r.status == 422
+    body = await r.json()
+    assert body["error"]["code"] == "GFS_PUBLISH_FAILED"
+
+
 async def test_publish_returns_422_when_gfs_rejects(client):
     await _seed_gfs(client, "gfs-1")
+    await _seed_space(client, "sp-1")
     _stub_session(client, status=500)
     r = await client.post(
         "/api/spaces/sp-1/publish/gfs-1",
@@ -285,6 +317,7 @@ async def test_space_publications_requires_admin(client):
 
 async def test_space_publications_returns_array(client):
     await _seed_gfs(client, "gfs-1")
+    await _seed_space(client, "sp-1")
     _stub_session(client, status=200, body={"status": "active"})
     # Publish so there's a row to list.
     pr = await client.post(
