@@ -133,6 +133,11 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         "pin",
         "unpin",
         "set_alias",
+        # At-rest key accessor — self-gates on ownership: returns the stored
+        # seed, or only mints/persists one for a space THIS household owns
+        # (``owner_instance_id == own_instance_id``); a non-owned space with a
+        # NULL seed yields None. No actor-membership shape applies.
+        "ensure_space_seed",
     }
 )
 
@@ -184,8 +189,10 @@ async def stack(tmp_dir):
         (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
     )
     bus = EventBus()
+    from socialhome.infrastructure.key_manager import KeyManager
+
     user_repo = SqliteUserRepo(db)
-    space_repo = SqliteSpaceRepo(db)
+    space_repo = SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0c" * 32))
     space_post_repo = SqliteSpacePostRepo(db)
     user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
     space_svc = SpaceService(

@@ -36,9 +36,12 @@ async def stack(tmp_dir):
            identity_public_key, routing_secret) VALUES(?,?,?,?)""",
         (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
     )
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    km = KeyManager(b"\x09" * 32)
     bus = EventBus()
     user_repo = SqliteUserRepo(db)
-    space_repo = SqliteSpaceRepo(db)
+    space_repo = SqliteSpaceRepo(db, key_manager=km)
     space_post_repo = SqliteSpacePostRepo(db)
     user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
     space_svc = SpaceService(
@@ -55,6 +58,7 @@ async def stack(tmp_dir):
     s.space_repo = space_repo
     s.space_post_repo = space_post_repo
     s.iid = iid
+    s.km = km
 
     async def provision_user(username, **kw):
         return await user_svc.provision(username=username, display_name=username, **kw)
@@ -1658,9 +1662,11 @@ async def test_dissolve_hard_deletes_content_and_unlinks_media(tmp_dir):
            identity_public_key, routing_secret) VALUES(?,?,?,?)""",
         (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
     )
+    from socialhome.infrastructure.key_manager import KeyManager
+
     bus = EventBus()
     user_repo = SqliteUserRepo(db)
-    space_repo = SqliteSpaceRepo(db)
+    space_repo = SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0b" * 32))
     post_repo = SqliteSpacePostRepo(db)
     gallery = SqliteGalleryRepo(db)
     bazaar = SqliteBazaarRepo(db)
@@ -2314,3 +2320,108 @@ async def test_unarchive_remote_terminated_space_is_rejected(stack):
         await stack.space_svc.unarchive_space(space.id, actor_username="anna")
     # Still archived — the guard refused before applying.
     assert (await stack.space_repo.get(space.id)).archived is True
+
+
+# ── Space authority key (Ed25519 seed persistence, phase 0) ──────────────────
+
+
+async def test_create_space_stores_seed_matching_public_key(stack):
+    """create_space persists a private seed whose signature verifies against
+    the published identity_public_key (the stored private matches the public)."""
+    from socialhome.crypto import sign_ed25519, verify_ed25519
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+
+    seed = await stack.space_repo.get_space_seed(space.id)
+    assert seed is not None
+    assert len(seed) == 32
+
+    msg = b"space-authority-test"
+    sig = sign_ed25519(seed, msg)
+    pub = bytes.fromhex(space.identity_public_key)
+    assert verify_ed25519(pub, msg, sig)
+
+
+async def test_ensure_space_seed_returns_existing(stack):
+    """ensure_space_seed returns the already-stored seed for an owned space
+    without minting a new one (the pubkey is unchanged)."""
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+    stored = await stack.space_repo.get_space_seed(space.id)
+
+    got = await stack.space_svc.ensure_space_seed(space.id)
+    assert got == stored
+    # identity_public_key untouched.
+    assert (await stack.space_repo.get(space.id)).identity_public_key == (
+        space.identity_public_key
+    )
+
+
+async def test_ensure_space_seed_mints_for_owned_null_seed(stack):
+    """A pre-upgrade owned space (seed column NULL) gets a fresh keypair minted;
+    the new pubkey replaces identity_public_key and verifies against the seed."""
+    from socialhome.crypto import sign_ed25519, verify_ed25519
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+    old_pub = space.identity_public_key
+    # Simulate a pre-upgrade row: the private key was discarded.
+    await stack.db.enqueue(
+        "UPDATE spaces SET identity_private_key=NULL WHERE id=?", (space.id,)
+    )
+    assert await stack.space_repo.get_space_seed(space.id) is None
+
+    seed = await stack.space_svc.ensure_space_seed(space.id)
+    assert seed is not None and len(seed) == 32
+
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.identity_public_key != old_pub
+    sig = sign_ed25519(seed, b"x")
+    assert verify_ed25519(bytes.fromhex(refreshed.identity_public_key), b"x", sig)
+    # And it's now durably stored.
+    assert await stack.space_repo.get_space_seed(space.id) == seed
+
+
+async def test_ensure_space_seed_never_mints_for_non_owned_space(stack):
+    """A space owned by another household with a NULL seed → never mint;
+    returns None (or raises) and leaves identity_public_key untouched."""
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+    old_pub = space.identity_public_key
+    # Make it a remote-owned space with no stored seed.
+    await stack.db.enqueue(
+        "UPDATE spaces SET owner_instance_id='other-household',"
+        " identity_private_key=NULL WHERE id=?",
+        (space.id,),
+    )
+
+    result = await stack.space_svc.ensure_space_seed(space.id)
+    assert result is None
+    # Untouched — no fresh identity minted for a space we don't own.
+    assert (await stack.space_repo.get(space.id)).identity_public_key == old_pub
+    assert await stack.space_repo.get_space_seed(space.id) is None
+
+
+async def test_seed_never_appears_in_federation_snapshot(stack):
+    """The private seed must never leak into the federation snapshot."""
+    from socialhome.services.space_service import (
+        build_space_snapshot_for_federation,
+    )
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+    seed = await stack.space_repo.get_space_seed(space.id)
+    assert seed is not None
+
+    snap = await build_space_snapshot_for_federation(
+        space,
+        space_repo=stack.space_repo,
+        remote_member_repo=None,
+        user_repo=stack.space_svc._users,
+        own_instance_id=stack.iid,
+    )
+    blob = repr(snap)
+    assert seed.hex() not in blob
+    assert "identity_private_key" not in blob
+    assert "private_key" not in blob

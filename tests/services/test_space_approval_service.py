@@ -45,8 +45,10 @@ async def stack(tmp_dir):
         (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
     )
     bus = EventBus()
+    from socialhome.infrastructure.key_manager import KeyManager
+
     user_repo = SqliteUserRepo(db)
-    space_repo = SqliteSpaceRepo(db)
+    space_repo = SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0c" * 32))
     remote_repo = SqliteSpaceRemoteMemberRepo(db)
     proposal_repo = SqliteSpaceProposalRepo(db)
     user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)

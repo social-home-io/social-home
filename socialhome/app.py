@@ -1960,6 +1960,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # 1. KEK — encrypts identity_private_key at rest.
         key_manager = KeyManager.from_data_dir(config.data_dir)
         app[K.key_manager_key] = key_manager
+        # The space repo wraps each space's Ed25519 seed under this KEK; it
+        # was built in ``_build_repos`` before the KEK existed, so wire it now.
+        space_repo.attach_key_manager(key_manager)
 
         # 2. Identity bootstrap — generates row on first start, returns
         #    decrypted seed + public key + derived instance_id. When the

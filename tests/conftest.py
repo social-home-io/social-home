@@ -362,6 +362,7 @@ from socialhome.repositories.post_repo import SqlitePostRepo  # noqa: E402
 from socialhome.repositories.space_post_repo import SqliteSpacePostRepo  # noqa: E402
 from socialhome.repositories.space_repo import SqliteSpaceRepo  # noqa: E402
 from socialhome.repositories.user_repo import SqliteUserRepo  # noqa: E402
+from socialhome.infrastructure.key_manager import KeyManager  # noqa: E402
 from socialhome.services.feed_service import FeedService  # noqa: E402
 from socialhome.services.space_service import SpaceService  # noqa: E402
 from socialhome.services.user_service import UserService  # noqa: E402
@@ -416,7 +417,7 @@ def post_repo(db):
 
 @pytest.fixture
 def space_repo(db):
-    return SqliteSpaceRepo(db)
+    return SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0c" * 32))
 
 
 @pytest.fixture
@@ -457,7 +458,7 @@ async def feed_service(seeded_db, bus):
 async def space_service(seeded_db, bus):
     db, iid = seeded_db
     return SpaceService(
-        SqliteSpaceRepo(db),
+        SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0c" * 32)),
         SqliteSpacePostRepo(db),
         SqliteUserRepo(db),
         bus,

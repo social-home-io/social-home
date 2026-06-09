@@ -64,9 +64,11 @@ async def space_stack(tmp_dir):
                ) VALUES(?,?,?,?)""",
             (iid, kp.private_key.hex(), kp.public_key.hex(), "aa" * 32),
         )
+        from socialhome.infrastructure.key_manager import KeyManager
+
         bus = EventBus()
         user_repo = SqliteUserRepo(db)
-        space_repo = SqliteSpaceRepo(db)
+        space_repo = SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0c" * 32))
         user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
         await user_svc.provision(username="alice", display_name="Alice")
         svc = SpaceService(

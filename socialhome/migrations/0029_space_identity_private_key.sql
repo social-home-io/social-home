@@ -1,0 +1,29 @@
+-- Space Ed25519 identity PRIVATE seed, KEK-wrapped at rest (space-authority key, phase 0).
+--
+-- Every space already publishes an Ed25519 ``identity_public_key`` (0001),
+-- but ``create_space`` historically discarded the matching private seed —
+-- only the public half was kept. A space cannot sign space-authority events
+-- (the upcoming phase-1 surface) without holding its own private key, so we
+-- persist it here, KEK-wrapped exactly like the per-space content keys in
+-- ``space_keys`` (see ``KeyManager`` / ``space_crypto_service``).
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. ``space_repo`` (``save`` upsert + ``_row_to_space``)
+--       and ``space_service.create_space`` are the only writers of the
+--       space identity; ``federation``/snapshot paths read only the *public*
+--       key. No existing column or federation event can carry a private seed
+--       — by the Encryption-First rule a private key MUST NOT federate, so
+--       there is nowhere else it could live.
+--   (2) Alternative rejected. Re-deriving the seed at read time is impossible
+--       (a private key is not a function of the public key). Stashing it in a
+--       federation event is forbidden (it would leak the secret). The only
+--       home is a local, KEK-wrapped at-rest column.
+--   (3) Smallest change. One additive NULLable TEXT column. NULL = no stored
+--       seed: a pre-upgrade owned space (whose seed was discarded — lazily
+--       re-minted by ``ensure_space_seed``) OR a non-owned (remote) space we
+--       never had the private key for. No backfill, no table rewrite.
+--
+-- Value domain:
+--   NULL  → no stored seed (pre-upgrade owned space, or a non-owned space)
+--   text  → KEK-wrapped 32-byte Ed25519 seed (``b64url(nonce):b64url(ct)``)
+ALTER TABLE spaces ADD COLUMN identity_private_key TEXT;

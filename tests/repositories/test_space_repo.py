@@ -44,11 +44,15 @@ async def env(tmp_dir):
     class E:
         pass
 
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    km = KeyManager(b"\x07" * 32)
     e = E()
     e.db = db
     e.kp = kp
     e.iid = iid
-    e.repo = SqliteSpaceRepo(db)
+    e.km = km
+    e.repo = SqliteSpaceRepo(db, key_manager=km)
     yield e
     await db.shutdown()
 
@@ -96,6 +100,87 @@ async def test_save_and_get_space(env):
     fetched = await env.repo.get("sp-1")
     assert fetched is not None
     assert fetched.name == "TestSpace"
+
+
+async def test_set_and_get_space_seed_round_trips(env):
+    """set_space_seed persists a non-NULL column; get_space_seed returns the
+    original 32-byte seed; the stored column is KEK-wrapped (≠ plaintext)."""
+    from socialhome.crypto import generate_identity_keypair
+
+    space = _space("sp-seed")
+    await env.repo.save(space)
+    kp = generate_identity_keypair()
+    await env.repo.set_space_seed("sp-seed", kp.private_key)
+
+    # Round-trips to the original raw seed.
+    got = await env.repo.get_space_seed("sp-seed")
+    assert got == kp.private_key
+
+    # The stored column is non-NULL and is the wrapped form, not the raw seed.
+    row = await env.db.fetchone(
+        "SELECT identity_private_key FROM spaces WHERE id=?", ("sp-seed",)
+    )
+    stored = row["identity_private_key"]
+    assert stored is not None
+    assert stored != kp.private_key.hex()
+    assert kp.private_key.hex() not in stored
+
+
+async def test_get_space_seed_none_when_column_null(env):
+    """A space saved without a seed → get_space_seed returns None."""
+    space = _space("sp-noseed")
+    await env.repo.save(space)
+    assert await env.repo.get_space_seed("sp-noseed") is None
+
+
+async def test_space_seed_is_bound_to_space_id_at_rest(env):
+    """The wrapped seed is AES-GCM-bound to its space_id (associated data), so a
+    wrapped blob copied into another space's row can't be decrypted — defends
+    against a cross-row seed swap at the storage layer."""
+    from socialhome.crypto import generate_identity_keypair
+
+    await env.repo.save(_space("sp-a"))
+    await env.repo.save(_space("sp-b"))
+    kp = generate_identity_keypair()
+    await env.repo.set_space_seed("sp-a", kp.private_key)
+
+    # Physically copy sp-a's wrapped blob into sp-b's row.
+    row = await env.db.fetchone(
+        "SELECT identity_private_key FROM spaces WHERE id=?", ("sp-a",)
+    )
+    await env.db.enqueue(
+        "UPDATE spaces SET identity_private_key=? WHERE id=?",
+        (row["identity_private_key"], "sp-b"),
+    )
+    # sp-a still decrypts; sp-b's stolen blob fails the AD check.
+    assert await env.repo.get_space_seed("sp-a") == kp.private_key
+    with pytest.raises(Exception):
+        await env.repo.get_space_seed("sp-b")
+
+
+async def test_set_space_pubkey_targeted_update(env):
+    """set_space_pubkey replaces only identity_public_key (the mint path); a
+    normal save no longer mutates the pubkey, so it can't be clobbered."""
+    space = _space("sp-pk")
+    await env.repo.save(space)
+    await env.repo.set_space_pubkey("sp-pk", "bb" * 32)
+    assert (await env.repo.get("sp-pk")).identity_public_key == "bb" * 32
+    # A re-save carrying a different (e.g. empty) pubkey must NOT overwrite it.
+    await env.repo.save(replace(space, identity_public_key=""))
+    assert (await env.repo.get("sp-pk")).identity_public_key == "bb" * 32
+
+
+async def test_save_preserves_existing_seed(env):
+    """A subsequent save (ON CONFLICT update) must not clobber a stored seed."""
+    from socialhome.crypto import generate_identity_keypair
+
+    space = _space("sp-keep")
+    await env.repo.save(space)
+    kp = generate_identity_keypair()
+    await env.repo.set_space_seed("sp-keep", kp.private_key)
+    # Re-save the same space (e.g. a config update).
+    await env.repo.save(replace(space, name="Renamed"))
+    assert await env.repo.get_space_seed("sp-keep") == kp.private_key
 
 
 async def test_allowed_post_types_round_trip_including_event_location_highlight(env):
