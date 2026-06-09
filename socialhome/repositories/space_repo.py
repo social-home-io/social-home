@@ -306,6 +306,7 @@ class SqliteSpaceRepo:
                 posts_access, pages_access, stickies_access,
                 calendar_access, tasks_access,
                 allow_subscriber_comment, allow_subscriber_react,
+                delegated_admin_authority,
                 allow_post_text, allow_post_image, allow_post_video,
                 allow_post_transcript, allow_post_poll, allow_post_schedule,
                 allow_post_file, allow_post_bazaar,
@@ -314,7 +315,7 @@ class SqliteSpaceRepo:
                 dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
                 min_age, target_audience
             ) VALUES(
-                -- 50 placeholders, one per column listed above.
+                -- 51 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
@@ -324,6 +325,7 @@ class SqliteSpaceRepo:
                 ?, ?, ?,                      -- posts_access, pages_access, stickies_access
                 ?, ?,                         -- calendar_access, tasks_access
                 ?, ?,                         -- allow_subscriber_comment, allow_subscriber_react
+                ?,                            -- delegated_admin_authority
                 ?, ?, ?,                      -- allow_post_text, allow_post_image, allow_post_video
                 ?, ?, ?,                      -- allow_post_transcript, allow_post_poll, allow_post_schedule
                 ?, ?,                         -- allow_post_file, allow_post_bazaar
@@ -357,6 +359,7 @@ class SqliteSpaceRepo:
                 tasks_access=excluded.tasks_access,
                 allow_subscriber_comment=excluded.allow_subscriber_comment,
                 allow_subscriber_react=excluded.allow_subscriber_react,
+                delegated_admin_authority=excluded.delegated_admin_authority,
                 allow_post_text=excluded.allow_post_text,
                 allow_post_image=excluded.allow_post_image,
                 allow_post_video=excluded.allow_post_video,
@@ -411,6 +414,7 @@ class SqliteSpaceRepo:
                 cols["tasks_access"],
                 cols["allow_subscriber_comment"],
                 cols["allow_subscriber_react"],
+                cols["delegated_admin_authority"],
                 cols["allow_post_text"],
                 cols["allow_post_image"],
                 cols["allow_post_video"],

@@ -55,6 +55,8 @@ class AbstractSpaceRemoteMemberRepo(Protocol):
 
     async def list_for_space(self, space_id: str) -> list[SpaceRemoteMember]: ...
 
+    async def list_admin_instances(self, space_id: str) -> list[str]: ...
+
     async def list_for_user(
         self,
         instance_id: str,
@@ -124,6 +126,21 @@ class SqliteSpaceRemoteMemberRepo:
             (space_id,),
         )
         return [_row(r) for r in rows_to_dicts(rows)]
+
+    async def list_admin_instances(self, space_id: str) -> list[str]:
+        """DISTINCT instance_ids of remote members with role ADMIN.
+
+        Used by the delegated-admin signing-seed share (v_22): when the
+        owner flips ``delegated_admin_authority`` on, the seed is
+        distributed to every current remote *admin* household. A
+        household with several admins appears once.
+        """
+        rows = await self._db.fetchall(
+            "SELECT DISTINCT instance_id FROM space_remote_members "
+            "WHERE space_id=? AND role='admin'",
+            (space_id,),
+        )
+        return [r["instance_id"] for r in rows_to_dicts(rows)]
 
     async def list_for_user(
         self,

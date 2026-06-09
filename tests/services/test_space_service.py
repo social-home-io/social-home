@@ -742,6 +742,58 @@ async def test_update_config_branches(stack):
     assert updated6.retention_days is None
 
 
+async def test_update_config_persists_delegated_admin_authority(stack):
+    """update_config with features enabling delegated_admin_authority persists
+    and reloads True (Phase 1a flag plumbing — no key-share behaviour yet)."""
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Deleg")
+    # Default is OFF on a fresh space.
+    assert space.features.delegated_admin_authority is False
+
+    updated = await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+    assert updated.features.delegated_admin_authority is True
+
+    reloaded = await stack.space_repo.get(space.id)
+    assert reloaded is not None
+    assert reloaded.features.delegated_admin_authority is True
+
+
+async def test_delegated_admin_authority_flip_is_owner_only(stack):
+    """Toggling delegated_admin_authority is OWNER-only — a non-owner local
+    admin cannot enact the owner's delegation policy (which distributes the
+    space signing seed). Other config edits by that admin still work."""
+    from socialhome.domain.space import SpaceRole
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Deleg")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    await stack.space_svc.set_role(
+        space.id, actor_username="anna", user_id=bob.user_id, role=SpaceRole.ADMIN
+    )
+
+    # Admin bob may edit normal config…
+    await stack.space_svc.update_config(
+        space.id, actor_username="bob", description="bob edited"
+    )
+    # …but must NOT be able to flip delegated_admin_authority on.
+    with pytest.raises(SpacePermissionError):
+        await stack.space_svc.update_config(
+            space.id,
+            actor_username="bob",
+            features=SpaceFeatures(delegated_admin_authority=True),
+        )
+    reloaded = await stack.space_repo.get(space.id)
+    assert reloaded is not None
+    assert reloaded.features.delegated_admin_authority is False
+
+
 async def test_update_config_accepts_retention_exempt_types(stack):
     """retention_exempt_types round-trips through the repo."""
     await stack.provision_user("anna")
@@ -2190,6 +2242,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Remote admin actions",
         "Multi-admin approvals",
         "Authenticated mesh route discovery",
+        "Space delegated admin authority",
     )
     assert len(c.behind_members) == 1
     bm = c.behind_members[0]
@@ -2201,6 +2254,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Remote admin actions",
         "Multi-admin approvals",
         "Authenticated mesh route discovery",
+        "Space delegated admin authority",
     )
 
 
@@ -2222,7 +2276,10 @@ async def test_space_version_compat_excludes_mid_handshake_member(stack):
     # member legitimately lags the v_21 authenticated-route-discovery
     # space feature, so it surfaces in behind_members.
     assert c.min_member_proto_version == 18
-    assert c.lagging_features == ("Authenticated mesh route discovery",)
+    assert c.lagging_features == (
+        "Authenticated mesh route discovery",
+        "Space delegated admin authority",
+    )
     assert len(c.behind_members) == 1
     assert c.behind_members[0].instance_id == "peer-up"
 
@@ -2256,9 +2313,12 @@ async def test_space_version_compat_omits_nonspace_features(stack):
 
     c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
     assert c.min_member_proto_version == 16
-    # Only the space-scoped gap surfaces; non-space gaps (v17/v18/v19/v20)
+    # Only the space-scoped gaps surface; non-space gaps (v17/v18/v19/v20)
     # do not.
-    assert c.lagging_features == ("Authenticated mesh route discovery",)
+    assert c.lagging_features == (
+        "Authenticated mesh route discovery",
+        "Space delegated admin authority",
+    )
     assert "App federation channel" not in c.lagging_features
     assert "App user routing" not in c.lagging_features
     assert "Instance resync request" not in c.lagging_features
@@ -2425,3 +2485,264 @@ async def test_seed_never_appears_in_federation_snapshot(stack):
     assert seed.hex() not in blob
     assert "identity_private_key" not in blob
     assert "private_key" not in blob
+
+
+# ─── Delegated-admin signing-seed share — outbound (v_22) ──────────────
+
+
+def _seed_share_fed(*, supports=True):
+    """An AsyncMock federation service whose peer_supports + send paths
+    are wired for the SPACE_ADMIN_KEY_SHARE outbound assertions."""
+    from unittest.mock import AsyncMock
+
+    from socialhome.domain.federation import DeliveryResult
+
+    fed = AsyncMock()
+    fed.peer_supports = AsyncMock(return_value=supports)
+    fed.send_with_mesh_fallback = AsyncMock(
+        return_value=DeliveryResult(instance_id="x", ok=True)
+    )
+    fed.broadcast_to_space_members = AsyncMock()
+    return fed
+
+
+async def _wire_remote_members(stack):
+    """Attach a real SqliteSpaceRemoteMemberRepo so list_admin_instances
+    + role writes hit the same DB the service reads."""
+    from socialhome.repositories.space_remote_member_repo import (
+        SqliteSpaceRemoteMemberRepo,
+    )
+
+    repo = SqliteSpaceRemoteMemberRepo(stack.db)
+    stack.space_svc._remote_members = repo
+    return repo
+
+
+async def test_promote_remote_admin_shares_seed_when_delegation_on(stack):
+    """Promoting a remote member to ADMIN in a delegation-ON owned space
+    ships SPACE_ADMIN_KEY_SHARE to that admin's household with the space's
+    32-byte signing seed (b64url) + the ed25519-seed suite tag."""
+    import base64
+
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+    fed = _seed_share_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-x",
+        user_id="ru1",
+        user_pk=None,
+        display_name=None,
+    )
+
+    await stack.space_svc.set_remote_member_role(
+        space.id,
+        actor_username="anna",
+        instance_id="peer-x",
+        user_id="ru1",
+        role=SpaceRole.ADMIN,
+    )
+
+    # The role-changed broadcast still fires.
+    fed.broadcast_to_space_members.assert_awaited()
+    # The seed share went via the encrypted peer-pair path, to peer-x only.
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    kw = fed.send_with_mesh_fallback.await_args.kwargs
+    assert kw["to_instance_id"] == "peer-x"
+    assert kw["event_type"] is FederationEventType.SPACE_ADMIN_KEY_SHARE
+    p = kw["payload"]
+    assert p["space_id"] == space.id
+    assert p["seed_suite"] == "ed25519-seed"
+    decoded = base64.urlsafe_b64decode(p["space_seed"])
+    assert len(decoded) == 32
+    # It matches the locally-stored seed.
+    assert decoded == await stack.space_repo.get_space_seed(space.id)
+
+
+async def test_promote_remote_admin_no_share_when_delegation_off(stack):
+    """Delegation OFF → promotion still federates the role, but NO seed
+    share is sent."""
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=False),
+    )
+    fed = _seed_share_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-x",
+        user_id="ru1",
+        user_pk=None,
+        display_name=None,
+    )
+
+    await stack.space_svc.set_remote_member_role(
+        space.id,
+        actor_username="anna",
+        instance_id="peer-x",
+        user_id="ru1",
+        role=SpaceRole.ADMIN,
+    )
+
+    fed.send_with_mesh_fallback.assert_not_awaited()
+
+
+async def test_promote_local_admin_sends_no_seed(stack):
+    """A LOCAL admin's household already holds the seed — promoting a
+    local member via set_role sends no SPACE_ADMIN_KEY_SHARE."""
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    fed = _seed_share_fed()
+    stack.space_svc._federation = fed
+    await _wire_remote_members(stack)
+
+    await stack.space_svc.set_role(
+        space.id, actor_username="anna", user_id=bob.user_id, role=SpaceRole.ADMIN
+    )
+
+    fed.send_with_mesh_fallback.assert_not_awaited()
+
+
+async def test_promote_remote_admin_skips_share_for_old_peer(stack, caplog):
+    """A sub-v_22 admin household → the role still federates, but the seed
+    share is SKIPPED (no send), logged at WARNING — the admin just can't
+    act offline yet."""
+    import logging
+
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+    fed = _seed_share_fed(supports=False)
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-old",
+        user_id="ru1",
+        user_pk=None,
+        display_name=None,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="socialhome.services.space_service"):
+        await stack.space_svc.set_remote_member_role(
+            space.id,
+            actor_username="anna",
+            instance_id="peer-old",
+            user_id="ru1",
+            role=SpaceRole.ADMIN,
+        )
+
+    fed.send_with_mesh_fallback.assert_not_awaited()
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+async def test_flag_flip_distributes_seed_to_all_remote_admins(stack):
+    """Flipping delegated_admin_authority False→True on an owned space
+    distributes the seed to EVERY current remote admin household (once
+    each), but not to remote plain members."""
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=False),
+    )
+    fed = _seed_share_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    for inst, uid, role in [
+        ("peer-a", "u1", SpaceRole.ADMIN),
+        ("peer-a", "u2", SpaceRole.ADMIN),  # second admin, same household
+        ("peer-b", "u3", SpaceRole.ADMIN),
+        ("peer-c", "u4", SpaceRole.MEMBER),  # plain member — excluded
+    ]:
+        await remote.add(
+            space_id=space.id,
+            instance_id=inst,
+            user_id=uid,
+            user_pk=None,
+            display_name=None,
+        )
+        await remote.set_role(space.id, inst, uid, role)
+
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+
+    targets = {
+        c.kwargs["to_instance_id"]
+        for c in fed.send_with_mesh_fallback.await_args_list
+        if c.kwargs["event_type"] is FederationEventType.SPACE_ADMIN_KEY_SHARE
+    }
+    assert targets == {"peer-a", "peer-b"}
+
+
+async def test_flag_flip_true_to_false_sends_nothing(stack):
+    """Turning delegation OFF does NOT send (already-shared seeds persist;
+    deeper revocation is a later phase)."""
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(
+        owner_username="anna",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+    fed = _seed_share_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-a",
+        user_id="u1",
+        user_pk=None,
+        display_name=None,
+    )
+    await remote.set_role(space.id, "peer-a", "u1", SpaceRole.ADMIN)
+
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(delegated_admin_authority=False),
+    )
+
+    shares = [
+        c
+        for c in fed.send_with_mesh_fallback.await_args_list
+        if c.kwargs.get("event_type") is FederationEventType.SPACE_ADMIN_KEY_SHARE
+    ]
+    assert shares == []

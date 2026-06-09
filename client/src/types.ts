@@ -332,6 +332,11 @@ export interface SpaceFeatures {
    *  reactions / comments without promoting them to full members. */
   allow_subscriber_comment?: boolean
   allow_subscriber_react?: boolean
+  /** Owner opt-in (delegated-admin epic, Phase 1a). When true the owner
+   *  has authorised the space's admins to act on the owner's behalf
+   *  (moderate / invite / publish) while the owner is offline. Defaults
+   *  false (least-privilege). Absent → treat as false. */
+  delegated_admin_authority?: boolean
   /** Post types members may compose in this space (§23.49). An admin
    *  toggles these in space settings to hide post kinds the space
    *  doesn't want (e.g. no polls). Absent → treat as all-allowed

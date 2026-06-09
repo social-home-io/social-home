@@ -296,7 +296,29 @@ from __future__ import annotations
 #:   and the local short-circuit are unaffected (no relayed ROUTE_FOUND
 #:   to trust). Space-scoped: a behind member household can't be reached
 #:   over the mesh, so it warns in the per-space compatibility banner.
-OURS: int = 21
+#: * **v_22** (2026-06-09) — delegated-admin signing-seed share.
+#:   :data:`FederationEventType.SPACE_ADMIN_KEY_SHARE` ships the space's
+#:   Ed25519 signing seed (the private half of ``identity_public_key``)
+#:   from the owner household to a REMOTE admin household when the owner
+#:   has opted into ``SpaceFeatures.delegated_admin_authority``. The
+#:   recipient can then sign space-authority events even while the owner
+#:   is offline. The seed travels ONLY over the encrypted peer-pair path
+#:   (``send_with_mesh_fallback`` → directional session key), never
+#:   broadcast; the payload carries a ``seed_suite`` tag
+#:   (``"ed25519-seed"``) so an unknown suite is rejected, and the
+#:   receiver fails closed — it stores the seed only when the event
+#:   came from the authentic owner instance AND its own local copy of
+#:   the space has ``delegated_admin_authority`` enabled. **No fallback,
+#:   fail-closed.** The owner gates the send on
+#:   :data:`FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE`; a
+#:   sub-v_22 admin household has no handler, so the owner skips the
+#:   send and logs at WARNING (the admin simply can't act offline yet)
+#:   rather than blasting a seed at a peer that would drop it. Already-
+#:   shared seeds persist when the flag is later turned off — deeper
+#:   revocation (seed rotation) is a later phase. Space-scoped: a behind
+#:   admin household can't receive delegated authority, so it warns in
+#:   the per-space compatibility banner.
+OURS: int = 22
 
 
 class FederationCapability:
@@ -474,6 +496,17 @@ class FederationCapability:
     #: the relay-MITM where a confirmed peer substituted its own key.
     MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY = 21
 
+    #: Minimum proto_version where the admin household registers a handler
+    #: for :data:`FederationEventType.SPACE_ADMIN_KEY_SHARE` — the
+    #: delegated-admin signing-seed share. The owner gates the send on
+    #: this; a sub-v_22 admin household has no handler, so the owner SKIPS
+    #: the send and logs at WARNING (the admin can't sign space-authority
+    #: events offline yet) rather than shipping a signing seed at a peer
+    #: that would drop it. Fail-closed, no fallback — there is no safe
+    #: degraded way to distribute a private key to a peer that can't
+    #: validate it.
+    MIN_FOR_SPACE_ADMIN_KEY_SHARE = 22
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -513,6 +546,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (
         FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
         "Authenticated mesh route discovery",
+    ),
+    (
+        FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
+        "Space delegated admin authority",
     ),
 ]
 
@@ -557,6 +594,7 @@ SPACE_SCOPED_MIN_VERSIONS: frozenset[int] = frozenset(
         FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION,
         FederationCapability.MIN_FOR_ADMIN_PROPOSALS,
         FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
+        FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
     }
 )
 

@@ -195,6 +195,14 @@ export function SpaceSettings({
   const allowSubscriberReact = useSignal(
     Boolean(space.features?.allow_subscriber_react),
   )
+  // Owner opt-in (delegated-admin epic, Phase 1a). Defaults OFF
+  // (least-privilege): authorises the space's admins to act on the
+  // owner's behalf (moderate / invite / publish) while the owner is
+  // offline. This flag is the persisted policy switch only; the
+  // seed-share behaviour it gates ships in a later task.
+  const delegatedAdminAuthority = useSignal(
+    Boolean(space.features?.delegated_admin_authority),
+  )
   // Per-space post-type allow-list (§23.49). A missing list means a
   // freshly-stubbed space the host config hasn't reached yet — treat
   // that as all-allowed so the checkboxes don't render everything off.
@@ -272,6 +280,7 @@ export function SpaceSettings({
           location_mode: locationMode.value,
           allow_subscriber_comment: allowSubscriberComment.value,
           allow_subscriber_react: allowSubscriberReact.value,
+          delegated_admin_authority: delegatedAdminAuthority.value,
           allowed_post_types: allowedPostTypesPayload,
         },
       })
@@ -590,6 +599,34 @@ export function SpaceSettings({
             Posting (text, images, polls, etc.) always stays member-only.
           </p>
         </fieldset>
+
+        {/* Delegated admin authority — owner-only policy switch
+         *  (delegated-admin epic, Phase 1a). Off by default; only
+         *  meaningful for a space hosted here, so hidden on a remote stub. */}
+        {!isRemoteSpace && (
+          <fieldset class="sh-form-fieldset">
+            <legend>🛡️ Admin authority</legend>
+            <p class="sh-muted" style={{ marginTop: 0 }}>
+              Off by default. Turn it on only if you want your admins to keep
+              the space running without you.
+            </p>
+            <label>
+              <input
+                type="checkbox"
+                checked={delegatedAdminAuthority.value}
+                onChange={(e) => {
+                  delegatedAdminAuthority.value =
+                    (e.target as HTMLInputElement).checked
+                }}
+              />
+              Delegated admin authority
+            </label>
+            <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-xs)' }}>
+              Let space admins act (moderate, invite, publish) when you're
+              offline.
+            </p>
+          </fieldset>
+        )}
 
         <div class="sh-form-actions">
           <Button onClick={save}>Save changes</Button>

@@ -6,7 +6,21 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 21
+    assert fc.OURS == 22
+
+
+def test_space_admin_key_share_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE == 22
+    assert fc.FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE <= fc.OURS
+
+
+def test_space_admin_key_share_feature_label():
+    labels = dict(fc.CAPABILITY_FEATURES).values()
+    assert "Space delegated admin authority" in labels
+    assert "Space delegated admin authority" in fc.features_missing_below(21)
+    assert "Space delegated admin authority" not in fc.features_missing_below(22)
+    # Space-scoped: a behind admin household can't receive the signing seed.
+    assert "Space delegated admin authority" in fc.space_features_missing_below(21)
 
 
 def test_authenticated_route_discovery_capability_threshold():

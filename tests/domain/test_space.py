@@ -60,6 +60,31 @@ def test_space_features_gallery_default_on_missing_column():
     assert f.gallery is True
 
 
+def test_space_features_delegated_admin_authority_default_false():
+    """The delegated-admin-authority opt-in defaults OFF (least-privilege)."""
+    assert SpaceFeatures().delegated_admin_authority is False
+
+
+def test_space_features_delegated_admin_authority_roundtrip():
+    """delegated_admin_authority survives to_columns/from_row + the wire."""
+    on = SpaceFeatures(delegated_admin_authority=True)
+    off = SpaceFeatures(delegated_admin_authority=False)
+    assert SpaceFeatures.from_row(on.to_columns()).delegated_admin_authority is True
+    assert SpaceFeatures.from_row(off.to_columns()).delegated_admin_authority is False
+    assert on.to_wire_dict()["delegated_admin_authority"] is True
+    assert off.to_wire_dict()["delegated_admin_authority"] is False
+    assert (
+        SpaceFeatures.from_wire_dict(on.to_wire_dict()).delegated_admin_authority
+        is True
+    )
+
+
+def test_space_features_delegated_admin_authority_back_compat():
+    """A row / wire dict missing the flag (older peer) defaults to False."""
+    assert SpaceFeatures.from_row({}).delegated_admin_authority is False
+    assert SpaceFeatures.from_wire_dict({}).delegated_admin_authority is False
+
+
 def test_space_features_access_decision():
     """access_decision returns proceed/queue/deny based on access level and admin status."""
     f = SpaceFeatures(posts_access=SpaceFeatureAccess.MODERATED)

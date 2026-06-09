@@ -19,6 +19,7 @@ accept / decline buttons, and on accept wires the invitee as a
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,7 @@ from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..repositories.space_remote_location_repo import SpaceRemoteLocation
 from ..services.space_service import (
+    SUPPORTED_SEED_SUITES,
     apply_space_content_key_from_metadata,
     apply_space_cover_from_metadata,
     apply_space_icon_from_metadata,
@@ -166,6 +168,10 @@ class PrivateSpaceInviteHandler:
         registry.register(
             FederationEventType.SPACE_LOCATION_UPDATED,
             self._on_space_location_updated,
+        )
+        registry.register(
+            FederationEventType.SPACE_ADMIN_KEY_SHARE,
+            self._on_admin_key_share,
         )
 
     # ── Receive ─────────────────────────────────────────────────────────
@@ -695,4 +701,99 @@ class PrivateSpaceInviteHandler:
             space_id,
             meta=event.payload,
             space_crypto_service=self._space_crypto,
+        )
+
+    async def _on_admin_key_share(self, event: "FederationEvent") -> None:
+        """Delegated-admin signing-seed share from the space owner (v_22).
+
+        Receiver is a remote admin household; sender is the space's owner.
+        The seed is the space's PRIVATE Ed25519 signing key, so this handler
+        is SECURITY-SENSITIVE and fails closed — it stores the seed ONLY
+        when every check passes, and drops (log + return) otherwise:
+
+        * The local copy of the space must exist AND the §24.11-verified
+          ``from_instance`` must be the space's ``owner_instance_id`` — only
+          the authentic owner may hand out the signing key. A confirmed peer
+          that isn't the owner is rejected even though its envelope signature
+          is valid.
+        * The local copy must have ``features.delegated_admin_authority``
+          enabled — the seed is only accepted into a space whose owner-policy
+          (as we know it) authorises delegation. This second gate means a
+          stale/forged ON flag on the *wire* can't force acceptance: we
+          consult our own persisted space row, not the payload.
+        * ``seed_suite`` must be a recognised suite (crypto-suite rule — no
+          default fallback for an unknown scheme).
+        * The seed must b64url-decode to exactly 32 bytes; the decode is
+          wrapped so a malformed string drops rather than raises.
+
+        On success the seed is persisted via
+        :meth:`AbstractSpaceRepo.set_space_seed` and the receipt logged at
+        INFO — this is the key-blast-radius audit event.
+        """
+        p = event.payload
+        space_id = str(p.get("space_id") or "") or (event.space_id or "")
+        if not space_id:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE from %s missing space_id — dropping",
+                event.from_instance,
+            )
+            return
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE: no local space %s — dropping share from %s",
+                space_id,
+                event.from_instance,
+            )
+            return
+        # SECURITY: only the authentic owner may distribute the signing seed.
+        if space.owner_instance_id != event.from_instance:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE: %s is not the owner of %s (owner=%s) "
+                "— refusing signing-seed share",
+                event.from_instance,
+                space_id,
+                space.owner_instance_id,
+            )
+            return
+        # SECURITY: only accept when our own copy authorises delegation.
+        if not space.features.delegated_admin_authority:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE: delegated_admin_authority is OFF "
+                "locally for %s — refusing signing-seed share from %s",
+                space_id,
+                event.from_instance,
+            )
+            return
+        suite = str(p.get("seed_suite") or "")
+        if suite not in SUPPORTED_SEED_SUITES:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE: unknown seed_suite %r for %s — dropping",
+                suite,
+                space_id,
+            )
+            return
+        seed_b64 = str(p.get("space_seed") or "")
+        try:
+            seed = base64.urlsafe_b64decode(seed_b64)
+        except Exception:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE: malformed seed for %s — dropping",
+                space_id,
+            )
+            return
+        if len(seed) != 32:
+            log.warning(
+                "SPACE_ADMIN_KEY_SHARE: seed for %s is %d bytes (want 32) — dropping",
+                space_id,
+                len(seed),
+            )
+            return
+        await self._space_repo.set_space_seed(space_id, seed)
+        log.info(
+            "SPACE_ADMIN_KEY_SHARE: stored delegated-admin signing seed for "
+            "%s (from owner %s) — this household can now sign space-authority "
+            "events offline",
+            space_id,
+            event.from_instance,
         )

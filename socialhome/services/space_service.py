@@ -128,6 +128,25 @@ log = logging.getLogger(__name__)
 _UNSET_MEMBER_PROFILE = object()
 
 
+#: Wire-suite tag for the delegated-admin signing-seed share (v_22).
+#: The ``space_seed`` field of a ``SPACE_ADMIN_KEY_SHARE`` payload carries
+#: the raw 32-byte Ed25519 seed, b64url-encoded. The suite tag travels
+#: alongside it so a future seed format (e.g. a hybrid PQ signing key) is a
+#: suite-bump rather than a breaking change; receivers reject unknown
+#: suites (crypto-suite rule, CLAUDE.md) — there is no default fallback.
+SEED_SUITE_ED25519 = "ed25519-seed"
+
+#: Supported ``seed_suite`` values a receiver accepts. Unknown → drop.
+SUPPORTED_SEED_SUITES: frozenset[str] = frozenset({SEED_SUITE_ED25519})
+
+
+class UnsupportedSeedSuite(ValueError):
+    """Raised when a ``SPACE_ADMIN_KEY_SHARE`` carries an unknown
+    ``seed_suite``. The receiver drops the event rather than guessing the
+    seed format — distributing/accepting a signing key under an
+    unrecognised scheme would be a fail-open hazard."""
+
+
 #: Upper bound on simultaneously-advertised public spaces per instance
 #: (spec §13). Enforced at ``create_space`` time for PUBLIC spaces.
 MAX_PUBLIC_SPACES = 5
@@ -699,6 +718,93 @@ class SpaceService(SpaceMemberGuardMixin):
         )
         return True
 
+    async def _share_admin_signing_seed(
+        self,
+        space: Space,
+        *,
+        instance_id: str,
+    ) -> None:
+        """Ship the space's Ed25519 signing seed to a REMOTE admin household
+        (delegated-admin authority, v_22).
+
+        SECURITY: this distributes the space's PRIVATE signing key, so it is
+        narrowly gated and fail-closed:
+
+        * Only when this household OWNS the space (the owner is the sole
+          authoritative holder of the seed).
+        * Only when ``features.delegated_admin_authority`` is enabled — the
+          owner's explicit opt-in.
+        * Only to the admin's ``instance_id``, via the encrypted peer-pair
+          path (:meth:`FederationService.send_with_mesh_fallback` → the
+          directional session key). The seed is NEVER broadcast.
+        * Only when the admin household advertises
+          :data:`FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE`; a
+          sub-v_22 peer has no handler, so we SKIP the send and warn rather
+          than blast a private key at a peer that would drop it.
+
+        Callers MUST pre-check ownership + the flag (the
+        ``set_remote_member_role`` / ``update_config`` call sites do); this
+        helper re-asserts ownership defensively and no-ops if it can't mint
+        the seed. Failures are logged and swallowed — a missed share never
+        breaks the triggering role/config write; the admin simply can't act
+        offline until a later re-share succeeds.
+        """
+        if self._federation is None:
+            return
+        if (
+            self._own_instance_id is None
+            or space.owner_instance_id != self._own_instance_id
+        ):
+            # Not the owner — we don't hold the authoritative seed.
+            return
+        if not await self._federation.peer_supports(
+            instance_id,
+            min_version=FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
+        ):
+            log.warning(
+                "delegated-admin: skipping signing-seed share to %s for space "
+                "%s — peer is below v_%d (can't act on space authority offline "
+                "until it upgrades)",
+                instance_id,
+                space.id,
+                FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
+            )
+            return
+        seed = await self.ensure_space_seed(space.id)
+        if seed is None:
+            log.warning(
+                "delegated-admin: no signing seed available for space %s — "
+                "cannot share to %s",
+                space.id,
+                instance_id,
+            )
+            return
+        payload = {
+            "space_id": space.id,
+            "space_seed": base64.urlsafe_b64encode(seed).decode("ascii"),
+            "seed_suite": SEED_SUITE_ED25519,
+        }
+        try:
+            # Audit: log the key-blast radius at INFO (recipient + space).
+            log.info(
+                "delegated-admin: sharing space signing seed for %s to admin "
+                "household %s",
+                space.id,
+                instance_id,
+            )
+            await self._federation.send_with_mesh_fallback(
+                to_instance_id=instance_id,
+                event_type=FederationEventType.SPACE_ADMIN_KEY_SHARE,
+                payload=payload,
+                space_id=space.id,
+            )
+        except Exception:
+            log.exception(
+                "delegated-admin: signing-seed share to %s for space %s failed",
+                instance_id,
+                space.id,
+            )
+
     async def archive_space(self, space_id: str, *, actor_username: str) -> None:
         """Archive a space (owner / admin) — a soft, reversible removal.
 
@@ -828,6 +934,20 @@ class SpaceService(SpaceMemberGuardMixin):
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
 
+        # SECURITY: toggling delegated_admin_authority is OWNER-only — it is
+        # the owner's policy switch that authorises (and triggers distribution
+        # of) the space signing seed to admin households. A host-local admin
+        # must not be able to enact it, and on a member household no local user
+        # holds OWNER so this also blocks a remote admin from initiating the
+        # flip (the gate runs before the cross-household forward below, so it
+        # can't be laundered through the host's re-execute-as-owner path).
+        if (
+            features is not None
+            and features.delegated_admin_authority
+            != space.features.delegated_admin_authority
+        ):
+            await self._require_owner(space, actor_username)
+
         # Cross-household admin config edit — forward to the host (v_15+).
         # Build a wire-serialised params dict of only the provided fields,
         # mirroring the per-field gates below, and let the host run the
@@ -877,6 +997,7 @@ class SpaceService(SpaceMemberGuardMixin):
             payload["emoji"] = new_fields["emoji"]
         location_mode_changed = False
         location_feature_just_enabled = False
+        delegated_admin_just_enabled = False
         if features is not None:
             location_mode_changed = (
                 features.location_mode != space.features.location_mode
@@ -884,6 +1005,14 @@ class SpaceService(SpaceMemberGuardMixin):
             # Track OFF→ON transition so we can nudge members after the write.
             location_feature_just_enabled = (
                 not space.features.location and features.location
+            )
+            # Track delegated-admin OFF→ON so we can distribute the space's
+            # signing seed to remote admins after the write (v_22). Only the
+            # False→True edge triggers a share — True→False leaves already-
+            # shared seeds in place (deeper revocation is a later phase).
+            delegated_admin_just_enabled = (
+                not space.features.delegated_admin_authority
+                and features.delegated_admin_authority
             )
             new_fields["features"] = features
             payload["features"] = features.to_wire_dict()
@@ -973,6 +1102,23 @@ class SpaceService(SpaceMemberGuardMixin):
                     actor_user_id=actor_user_id,
                 )
             )
+        # Delegated-admin authority just flipped ON: distribute the space's
+        # signing seed to every current REMOTE admin household (v_22). Only
+        # the owner holds the authoritative seed, so this is a no-op on a
+        # member household editing config remotely (which forwarded the edit
+        # to the host above and returned before reaching here).
+        if (
+            delegated_admin_just_enabled
+            and space.owner_instance_id == self._own_instance_id
+            and self._federation is not None
+            and self._remote_members is not None
+        ):
+            for admin_instance in await self._remote_members.list_admin_instances(
+                space_id
+            ):
+                await self._share_admin_signing_seed(
+                    updated, instance_id=admin_instance
+                )
         return updated
 
     # ── Membership ─────────────────────────────────────────────────────
@@ -1574,6 +1720,18 @@ class SpaceService(SpaceMemberGuardMixin):
                 "role": role,
             },
         )
+        # Delegated-admin authority (v_22): when the owner has opted in and
+        # this newly-promoted remote member is an ADMIN, ship the space's
+        # Ed25519 signing seed to that admin's household so it can sign
+        # space-authority events with the owner offline. Owner-only (the
+        # local set_role path needs no share — a local admin's household
+        # already holds the seed) and gated on the recipient's capability.
+        if (
+            role == SpaceRole.ADMIN
+            and space.features.delegated_admin_authority
+            and space.owner_instance_id == self._own_instance_id
+        ):
+            await self._share_admin_signing_seed(space, instance_id=instance_id)
 
     # ── Per-space profile (§4.1.6) ─────────────────────────────────────
 

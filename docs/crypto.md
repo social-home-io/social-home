@@ -175,6 +175,23 @@ is about strengthening the *delivery channel*, not the AEAD primitive.
 Receivers reject unknown `key_suite` values rather than fall back —
 see `apply_space_content_key_from_metadata` for the validator.
 
+**Delegated-admin signing-seed delivery** (`SPACE_ADMIN_KEY_SHARE`,
+`services/space_service.py`, v_22) — when the owner opts into
+`SpaceFeatures.delegated_admin_authority`, the space's Ed25519 signing
+*seed* (the private half of `identity_public_key`) is shipped to a
+remote admin household so it can sign space-authority events offline.
+The seed rides the encrypted peer-pair path (the directional session
+key, same AES-256-GCM channel as every other federation event to that
+peer) addressed to that one household — **never broadcast**. The
+payload carries a `seed_suite` field (today only `"ed25519-seed"`,
+validated against `SUPPORTED_SEED_SUITES`, rejected-not-defaulted on
+unknown) so a future hybrid PQ signing key is a wire-additive suite
+bump. The receiver fails closed — it accepts the seed only from the
+authentic owner instance into a space whose *local* copy has
+delegation enabled, and only when the b64url payload decodes to
+exactly 32 bytes. See `_share_admin_signing_seed` (sender) /
+`PrivateSpaceInviteHandler._on_admin_key_share` (receiver).
+
 **Sealed-sender envelope** (`federation/sealed_sender.py`) wears the
 ``aead_suite`` field (today only ``"aesgcm-256"``) on its wire shape;
 receivers reject unknown values via ``UnsupportedAeadSuite``. The
