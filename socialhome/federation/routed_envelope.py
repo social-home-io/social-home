@@ -83,6 +83,16 @@ TargetEphLookup = Callable[[str], str | None]
 #: doesn't accumulate state. Matches ``_seen_routes``.
 _DEFAULT_EPH_TTL_S: float = 60.0
 
+#: Hard ceiling on the number of hops in a SPACE_ROUTED ``path``. Route
+#: discovery (``route_discovery.RouteDiscoveryService``) produces paths of at
+#: most ``max_hops`` (default 3) intermediate hops + the target, i.e. ≤ 4
+#: nodes. We accept a generous margin but reject anything longer: a relay
+#: trusts the (confirmed-peer-signed) ``path`` it receives, so without a cap a
+#: misbehaving confirmed peer could submit an arbitrarily long distinct-node
+#: path and have each hop forward it once. The cycle guard + per-hop §24.11
+#: gate already bound this, but a length cap closes the amplification tail.
+_MAX_ROUTED_PATH_LEN: int = 8
+
 
 class SpaceRoutedHandler:
     """Wraps + unwraps :data:`FederationEventType.SPACE_ROUTED`."""
@@ -308,6 +318,16 @@ class SpaceRoutedHandler:
         if not route_id or not path:
             log.debug("SPACE_ROUTED: missing route_id/path; dropping")
             return
+        if len(path) > _MAX_ROUTED_PATH_LEN:
+            # A relay trusts the path it's handed; cap its length so a
+            # misbehaving confirmed peer can't submit an over-long chain.
+            log.warning(
+                "SPACE_ROUTED route_id=%s: path too long (%d > %d); dropping",
+                route_id[:8],
+                len(path),
+                _MAX_ROUTED_PATH_LEN,
+            )
+            return
         if not isinstance(sealed_raw, dict):
             log.debug(
                 "SPACE_ROUTED route_id=%s: missing/non-dict sealed blob; dropping",
@@ -358,17 +378,22 @@ class SpaceRoutedHandler:
         self_id = self._federation.own_instance_id
         next_index = position + 1
         next_hop = path[next_index]
-        # Defensive: we expect ``path[position]`` to be the sender — if
-        # not, the envelope was mis-routed (or somebody is spoofing).
-        # We continue based on ``next_hop`` anyway since that's the
-        # field the protocol uses, but log so a misconfigured chain
-        # is visible.
+        # Anti-spoof: the previous hop named at ``path[position]`` must be
+        # the (§24.11-authenticated) sender. A mismatch means the envelope
+        # was mis-routed or someone is replaying it off-path — drop rather
+        # than forward. (The seal binds content to the target, so a
+        # mismatched relay still couldn't read it; this just stops a stray
+        # envelope from being re-fanned down the chain.)
         if path[position] != event.from_instance:
-            log.debug(
-                "SPACE_ROUTED: path[position]=%s != from_instance=%s",
+            log.warning(
+                "SPACE_ROUTED route_id=%s: path[%d]=%s != from_instance=%s; "
+                "dropping (mis-route/spoof)",
+                route_id[:8],
+                position,
                 path[position],
                 event.from_instance,
             )
+            return
         # Cycle: do we appear in the forward path? (Beyond
         # position+1 — being position+1 is the legitimate "we are
         # the next hop" case.)
