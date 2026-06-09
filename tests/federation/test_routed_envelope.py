@@ -379,6 +379,64 @@ async def test_wrong_next_hop_is_dropped():
     assert nodes["b"].dispatched == []
 
 
+async def test_overlong_path_is_dropped():
+    """A SPACE_ROUTED ``path`` longer than the hard cap is dropped before
+    forwarding — a relay trusts the path it's handed, so an over-long chain
+    (beyond what discovery can produce) must not be re-fanned."""
+    nodes = _build_chain(["a", "b", "c"])
+    handler_b = nodes["b"].handler
+    nodes["b"].fed.sent.clear()
+    nodes["b"].dispatched.clear()
+    # 9 distinct nodes > _MAX_ROUTED_PATH_LEN (8); we're at position 0.
+    long_path = ["a", "b"] + [f"n{i}" for i in range(7)]
+    ev = FederationEvent(
+        msg_id="m-long",
+        event_type=FederationEventType.SPACE_ROUTED,
+        from_instance="a",
+        to_instance="b",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={
+            "route_id": "rid-long",
+            "path": long_path,
+            "position": 0,
+            "direction": "forward",
+            "inner_event_type": "space_invite_token_redeem",
+            "sealed": {"kem_suite": "x25519", "ciphertext": "x"},
+        },
+    )
+    await handler_b._on_routed(ev)
+    assert nodes["b"].fed.sent == []
+    assert nodes["b"].dispatched == []
+
+
+async def test_path_position_sender_mismatch_is_dropped():
+    """The previous hop named at ``path[position]`` must be the authenticated
+    sender; a mismatch (mis-route / off-path replay) is dropped, not forwarded.
+    """
+    nodes = _build_chain(["a", "b", "c"])
+    handler_b = nodes["b"].handler
+    nodes["b"].fed.sent.clear()
+    nodes["b"].dispatched.clear()
+    ev = FederationEvent(
+        msg_id="m-mismatch",
+        event_type=FederationEventType.SPACE_ROUTED,
+        from_instance="z",  # NOT path[position]=='a'
+        to_instance="b",
+        timestamp="2026-05-22T00:00:00Z",
+        payload={
+            "route_id": "rid-mismatch",
+            "path": ["a", "b", "c"],
+            "position": 0,
+            "direction": "forward",
+            "inner_event_type": "space_invite_token_redeem",
+            "sealed": {"kem_suite": "x25519", "ciphertext": "x"},
+        },
+    )
+    await handler_b._on_routed(ev)
+    assert nodes["b"].fed.sent == []
+    assert nodes["b"].dispatched == []
+
+
 async def test_send_routed_rejects_short_path():
     """`send_routed` raises on a one-element path — not a route."""
     nodes = _build_chain(["a"])
@@ -733,15 +791,18 @@ async def test_negative_position_is_dropped():
     assert nodes["b"].dispatched == []
 
 
-async def test_from_instance_disagreeing_with_path_position_is_logged_but_processed(
+async def test_from_instance_disagreeing_with_path_position_is_dropped(
     caplog,
 ):
-    """The path[position] vs from_instance mismatch logs but does not
-    abort processing (the next-hop decision uses ``next_index`` only).
+    """The path[position] vs from_instance mismatch is an anti-spoof drop:
+    the previous hop named in the path must be the authenticated sender, or
+    the envelope is mis-routed / replayed off-path and must not be forwarded.
     """
     nodes = _build_chain(["a", "b", "c"])
     handler_b = nodes["b"].handler
-    # path[0] = "z" but from_instance = "a" → defensive log path.
+    nodes["b"].fed.sent.clear()
+    nodes["b"].dispatched.clear()
+    # path[0] = "z" but from_instance = "a" → mismatch → drop.
     ev = FederationEvent(
         msg_id="m-mismatch",
         event_type=FederationEventType.SPACE_ROUTED,
@@ -757,11 +818,15 @@ async def test_from_instance_disagreeing_with_path_position_is_logged_but_proces
             "sealed": {"kem_suite": "x25519", "ciphertext": "x"},
         },
     )
-    with caplog.at_level(logging.DEBUG, logger="socialhome.federation.routed_envelope"):
+    with caplog.at_level(
+        logging.WARNING, logger="socialhome.federation.routed_envelope"
+    ):
         await handler_b._on_routed(ev)
-    # The defensive log message fired.
+    # Dropped: not forwarded, not dispatched, and the mismatch warned.
+    assert nodes["b"].fed.sent == []
+    assert nodes["b"].dispatched == []
     assert any(
-        "path[position]=" in rec.message and "from_instance=" in rec.message
+        "from_instance=" in rec.message and "dropping" in rec.message
         for rec in caplog.records
     )
 
