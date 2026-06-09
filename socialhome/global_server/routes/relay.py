@@ -122,7 +122,12 @@ class InstanceUpdateView(GfsBaseView):
 
 
 class PublishView(GfsBaseView):
-    """``POST /gfs/publish`` — relay an event to a space's subscribers."""
+    """``POST /gfs/publish`` — relay an event to a space's subscribers.
+
+    The Ed25519 signature is mandatory and verified against the
+    ``from_instance``'s registered ``public_key``; unknown instance,
+    missing / malformed / invalid signature all map to ``403``.
+    """
 
     async def post(self) -> web.Response:
         svc = self.svc(K.gfs_federation_key)
@@ -136,21 +141,32 @@ class PublishView(GfsBaseView):
         except KeyError as exc:
             raise web.HTTPBadRequest(reason=f"Missing field: {exc}") from exc
         signature = body.get("signature", "")
-        delivered = await svc.publish_event(
-            space_id,
-            event_type,
-            payload,
-            from_instance,
-            signature,
-            session=session,
-        )
+        try:
+            delivered = await svc.publish_event(
+                space_id,
+                event_type,
+                payload,
+                from_instance,
+                signature,
+                session=session,
+            )
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
         return web.json_response(
             {"status": "published", "delivered_to": delivered},
         )
 
 
 class SubscribeView(GfsBaseView):
-    """``POST /gfs/subscribe`` — subscribe or unsubscribe an instance."""
+    """``POST /gfs/subscribe`` — subscribe or unsubscribe an instance.
+
+    Subscribe is Ed25519-signed (mandatory): body
+    ``{instance_id, space_id, ts, signature}``, signed over the canonical
+    JSON of ``{instance_id, space_id, ts}`` and verified against the
+    registered ``ClientInstance.public_key`` (replay-guarded ±300 s on
+    ``ts``). The signature binds the request to *instance_id* so a caller
+    can only subscribe itself. Auth failures map to ``403``.
+    """
 
     async def post(self) -> web.Response:
         svc = self.svc(K.gfs_federation_key)
@@ -162,9 +178,22 @@ class SubscribeView(GfsBaseView):
             raise web.HTTPBadRequest(reason=f"Missing field: {exc}") from exc
         action = body.get("action", "subscribe")
         if action == "unsubscribe":
-            await svc.unsubscribe(instance_id, space_id)
+            await svc.unsubscribe(str(instance_id), str(space_id))
             return web.json_response({"status": "unsubscribed"})
-        await svc.subscribe(instance_id, space_id)
+        try:
+            ts = body["ts"]
+            signature = body["signature"]
+        except KeyError as exc:
+            raise web.HTTPBadRequest(reason=f"Missing field: {exc}") from exc
+        try:
+            await svc.subscribe(
+                str(instance_id),
+                str(space_id),
+                str(ts),
+                str(signature),
+            )
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
         return web.json_response({"status": "subscribed"})
 
 

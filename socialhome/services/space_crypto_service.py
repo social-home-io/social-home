@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -45,6 +46,7 @@ from ..crypto import (
 from ..domain.events import SpaceContentKeyImported
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.key_manager import KeyManager
+from ..repositories.federation_repo import AbstractFederationRepo
 from ..repositories.space_key_repo import (
     AbstractSpaceKeyRepo,
     SpaceKey,
@@ -91,9 +93,21 @@ class SpaceContentEncryption(BusPublisherMixin):
         Persistence for epoch keys (KEK-encrypted ciphertext at rest).
     key_manager:
         KEK used to wrap epoch keys before persistence.
+    identity_seed:
+        This instance's 32-byte Ed25519 identity seed. Used to sign the
+        ``outer_signature`` on sealed-sender envelopes (:meth:`seal_for_gfs`)
+        so a GFS-relayed event is authenticated to the recipient. Optional
+        only so legacy/test constructions that never seal stay valid;
+        :meth:`seal_for_gfs` raises if it wasn't supplied.
+    federation_repo:
+        Resolves a remote ``instance_id`` to its registered Ed25519
+        identity pubkey, so :meth:`unseal_from_gfs` can authenticate a
+        sealed sender out of the box. Optional only so legacy/test
+        constructions that never unseal stay valid; :meth:`unseal_from_gfs`
+        requires either this repo OR an explicit ``sender_pk_lookup``.
     """
 
-    __slots__ = ("_repo", "_kek", "_bus")
+    __slots__ = ("_repo", "_kek", "_bus", "_identity_seed", "_fed_repo")
 
     def __init__(
         self,
@@ -101,6 +115,8 @@ class SpaceContentEncryption(BusPublisherMixin):
         key_manager: KeyManager,
         *,
         bus: EventBus | None = None,
+        identity_seed: bytes | None = None,
+        federation_repo: AbstractFederationRepo | None = None,
     ) -> None:
         self._repo = space_key_repo
         self._kek = key_manager
@@ -109,6 +125,8 @@ class SpaceContentEncryption(BusPublisherMixin):
         #: can drain any sync chunks that arrived before this epoch's
         #: key was available (#122, out-of-order key arrival).
         self._bus = bus
+        self._identity_seed = identity_seed
+        self._fed_repo = federation_repo
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -332,6 +350,11 @@ class SpaceContentEncryption(BusPublisherMixin):
         space's per-epoch key is unwrapped from the KEK before each call —
         callers never see the raw key material.
         """
+        if self._identity_seed is None:
+            raise RuntimeError(
+                "seal_for_gfs: no identity_seed wired; cannot sign the "
+                "outer_signature that authenticates a sealed sender.",
+            )
         latest = await self._repo.get_latest(space_id)
         if latest is None:
             raise RuntimeError(
@@ -347,15 +370,27 @@ class SpaceContentEncryption(BusPublisherMixin):
             sender_instance_id=sender_instance_id,
             payload_json=payload_json,
             space_content_key=raw_key,
+            signer_seed=self._identity_seed,
         )
         return sealed
 
     async def unseal_from_gfs(
         self,
         envelope: SealedEnvelope,
+        *,
+        sender_pk_lookup: Callable[[str], bytes | None] | None = None,
     ) -> UnsealedContent:
-        """Inverse of :meth:`seal_for_gfs` — fetches the matching epoch
-        key and decrypts the sealed envelope.
+        """Inverse of :meth:`seal_for_gfs` — fetch the matching epoch
+        key, decrypt, AND authenticate the sealed sender.
+
+        The sealed sender is verified against its registered Ed25519
+        identity pubkey (see :func:`unseal_envelope`). The pubkey
+        resolver defaults to a lookup backed by ``federation_repo``
+        (so the service is usable out of the box); a caller may pass an
+        explicit ``sender_pk_lookup`` to override — useful when the
+        sender isn't yet in ``remote_instances`` (e.g. a not-yet-paired
+        public-space peer the caller resolves another way). One of the
+        two MUST be available, else we cannot authenticate and raise.
         """
         key = await self._repo.get(envelope.space_id, envelope.epoch)
         if key is None:
@@ -367,9 +402,34 @@ class SpaceContentEncryption(BusPublisherMixin):
             key.content_key_hex,
             associated_data=envelope.space_id.encode("utf-8"),
         )
+
+        lookup = sender_pk_lookup
+        if lookup is None:
+            if self._fed_repo is None:
+                raise RuntimeError(
+                    "unseal_from_gfs: no federation_repo wired and no "
+                    "sender_pk_lookup supplied; cannot authenticate the "
+                    "sealed sender.",
+                )
+            # Resolve the claimed sender to a pubkey via remote_instances.
+            # ``unseal_envelope`` only asks for ONE id (the decrypted
+            # sender), so pre-load the members of this space into a
+            # sync map the sync callable can read. A sender not in the
+            # map resolves to ``None`` → SealedSenderAuthError, fail-closed.
+            members = await self._fed_repo.list_instances_in_space(
+                envelope.space_id,
+            )
+            pk_by_id = {
+                inst.id: bytes.fromhex(inst.remote_identity_pk)
+                for inst in members
+                if inst.remote_identity_pk
+            }
+            lookup = pk_by_id.get
+
         unsealed = unseal_envelope(
             envelope,
             space_content_key=raw_key,
+            sender_pk_lookup=lookup,
         )
         return unsealed
 

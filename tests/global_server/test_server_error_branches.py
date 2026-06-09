@@ -105,20 +105,45 @@ async def client(tmp_dir):
 # ─── /gfs/publish + /gfs/subscribe + /gfs/register ────────────────────
 
 
-async def test_publish_happy_path_delivers_zero_when_no_subscribers(client):
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _publish_known_space(client, space_id: str) -> None:
+    """Publish a minimal active space owned by the fixture's peer.home."""
+    pub_body = {
+        "owning_instance": "peer.home",
+        "name": "Known",
+        "description": "",
+        "about_markdown": "",
+        "cover_url": "",
+        "icon_url": "",
+        "min_age": 0,
+        "target_audience": "all",
+        "accent_color": "#D2542A",
+        "primary_color": "#D2542A",
+    }
+    signed = _sign({**pub_body, "space_id": space_id}, client._seed)
     resp = await client.post(
-        "/gfs/publish",
-        json={
-            "space_id": "sp-empty",
-            "event_type": "TEST",
-            "payload": {"x": 1},
-            "from_instance": "peer.home",
-            "signature": "",
-        },
+        f"/gfs/spaces/{space_id}/publish",
+        json={**pub_body, "signature": signed["signature"]},
     )
     assert resp.status == 200
-    body = await resp.json()
-    assert body["delivered_to"] == []
+
+
+async def test_publish_happy_path_delivers_zero_when_no_subscribers(client):
+    body = {
+        "space_id": "sp-empty",
+        "event_type": "TEST",
+        "payload": {"x": 1},
+        "from_instance": "peer.home",
+    }
+    resp = await client.post("/gfs/publish", json=_sign(body, client._seed))
+    assert resp.status == 200
+    payload = await resp.json()
+    assert payload["delivered_to"] == []
 
 
 async def test_publish_missing_field_is_400(client):
@@ -126,18 +151,56 @@ async def test_publish_missing_field_is_400(client):
     assert resp.status == 400
 
 
+async def test_publish_unsigned_is_403(client):
+    """A publish with no signature is rejected with 403 (mandatory sig)."""
+    resp = await client.post(
+        "/gfs/publish",
+        json={
+            "space_id": "sp-unsigned",
+            "event_type": "TEST",
+            "payload": {"x": 1},
+            "from_instance": "peer.home",
+            "signature": "",
+        },
+    )
+    assert resp.status == 403
+
+
+async def test_publish_invalid_signature_is_403(client):
+    """A forged / malformed signature is rejected with 403."""
+    resp = await client.post(
+        "/gfs/publish",
+        json={
+            "space_id": "sp-bad",
+            "event_type": "TEST",
+            "payload": {"x": 1},
+            "from_instance": "peer.home",
+            "signature": "!!!not-base64!!!",
+        },
+    )
+    assert resp.status == 403
+
+
 async def test_subscribe_then_unsubscribe(client):
-    # Subscribe first — creates a pending global_space row.
+    # The space must already be published — subscribe no longer mints a row.
+    await _publish_known_space(client, "sp-sub")
+    ts = _now_iso()
+    signed = _sign(
+        {"instance_id": "peer.home", "space_id": "sp-sub", "ts": ts},
+        client._seed,
+    )
     resp = await client.post(
         "/gfs/subscribe",
         json={
             "instance_id": "peer.home",
             "space_id": "sp-sub",
+            "ts": ts,
+            "signature": signed["signature"],
         },
     )
     assert resp.status == 200
     assert (await resp.json())["status"] == "subscribed"
-    # Unsubscribe action.
+    # Unsubscribe action (no signature required).
     resp = await client.post(
         "/gfs/subscribe",
         json={
@@ -552,12 +615,14 @@ async def test_fan_out_delivers_to_real_subscriber_inbox(
         sub_url = str(sub_server.make_url("/wh"))
         gfs_app = create_gfs_app(_config(tmp_path_factory.mktemp("gfs-pub")))
         async with TestClient(TestServer(gfs_app)) as tc:
-            # Seed the subscriber into the fed repo + subscribe to a space.
+            sub_seed, sub_pub = _gen_ed25519()
+            pub_seed, pub_pub = _gen_ed25519()
+            # Seed the subscriber + publisher into the fed repo with real keys.
             await gfs_app[gfs_fed_repo_key].upsert_instance(
                 ClientInstance(
                     instance_id="sub.home",
                     display_name="Sub",
-                    public_key="aa" * 32,
+                    public_key=sub_pub,
                     inbox_url=sub_url,
                     status="active",
                 )
@@ -566,29 +631,52 @@ async def test_fan_out_delivers_to_real_subscriber_inbox(
                 ClientInstance(
                     instance_id="pub.home",
                     display_name="Pub",
-                    public_key="bb" * 32,
+                    public_key=pub_pub,
                     inbox_url="http://pub",
                     status="active",
                 )
+            )
+            # pub.home publishes the space so it's a real subscribe target.
+            pub_body = {
+                "owning_instance": "pub.home",
+                "name": "XYZ",
+                "description": "",
+                "about_markdown": "",
+                "cover_url": "",
+                "icon_url": "",
+                "min_age": 0,
+                "target_audience": "all",
+                "accent_color": "#D2542A",
+                "primary_color": "#D2542A",
+            }
+            signed_pub = _sign({**pub_body, "space_id": "sp-xyz"}, pub_seed)
+            resp = await tc.post(
+                "/gfs/spaces/sp-xyz/publish",
+                json={**pub_body, "signature": signed_pub["signature"]},
+            )
+            assert resp.status == 200
+            ts = _now_iso()
+            signed_sub = _sign(
+                {"instance_id": "sub.home", "space_id": "sp-xyz", "ts": ts},
+                sub_seed,
             )
             resp = await tc.post(
                 "/gfs/subscribe",
                 json={
                     "instance_id": "sub.home",
                     "space_id": "sp-xyz",
+                    "ts": ts,
+                    "signature": signed_sub["signature"],
                 },
             )
             assert resp.status == 200
-            resp = await tc.post(
-                "/gfs/publish",
-                json={
-                    "space_id": "sp-xyz",
-                    "event_type": "POST_PUBLISH",
-                    "payload": {"kind": "hello"},
-                    "from_instance": "pub.home",
-                    "signature": "",
-                },
-            )
+            event_body = {
+                "space_id": "sp-xyz",
+                "event_type": "POST_PUBLISH",
+                "payload": {"kind": "hello"},
+                "from_instance": "pub.home",
+            }
+            resp = await tc.post("/gfs/publish", json=_sign(event_body, pub_seed))
             assert resp.status == 200
             assert (await resp.json())["delivered_to"] == ["sub.home"]
         # Wait for the HTTPS inbox to capture the event.

@@ -50,6 +50,12 @@ def _gen_ed25519() -> tuple[bytes, str]:
     return seed, pub_hex
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _hello(instance_id: str, seed: bytes, *, ts: int | None = None) -> dict:
     if ts is None:
         ts = int(time.time())
@@ -130,22 +136,67 @@ async def test_ws_push_via_fanout_reaches_client(ws_client):
 
         # Subscribe peer.home to a space, then publish from another instance.
         federation = ws_client._app[gfs_federation_key]
+        other_seed, other_pub = _gen_ed25519()
         await ws_client._app[gfs_fed_repo_key].upsert_instance(
             ClientInstance(
                 instance_id="other.home",
                 display_name="Other",
-                public_key="aa" * 32,
+                public_key=other_pub,
                 inbox_url="http://other.home/wh",
                 status="active",
             )
         )
-        await federation.subscribe("peer.home", "space-1")
+        # other.home publishes space-1 so it's a real subscribe target.
+        pub_args = {
+            "space_id": "space-1",
+            "owning_instance": "other.home",
+            "name": "Space One",
+            "description": "",
+            "about_markdown": "",
+            "cover_url": "",
+            "icon_url": "",
+            "min_age": 0,
+            "target_audience": "all",
+            "accent_color": "#D2542A",
+            "primary_color": "#D2542A",
+        }
+        pub_canonical = json.dumps(
+            pub_args, separators=(",", ":"), sort_keys=True
+        ).encode("utf-8")
+        await federation.publish_space(
+            space_id="space-1",
+            owning_instance="other.home",
+            name="Space One",
+            signature=b64url_encode(sign_ed25519(other_seed, pub_canonical)),
+        )
+        sub_ts = _now_iso()
+        sub_canonical = json.dumps(
+            {"instance_id": "peer.home", "space_id": "space-1", "ts": sub_ts},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        await federation.subscribe(
+            "peer.home",
+            "space-1",
+            sub_ts,
+            b64url_encode(sign_ed25519(ws_client._seed, sub_canonical)),
+        )
+        ev_canonical = json.dumps(
+            {
+                "space_id": "space-1",
+                "event_type": "post.created",
+                "payload": {"text": "hello"},
+                "from_instance": "other.home",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
         delivered = await federation.publish_event(
             "space-1",
             "post.created",
             {"text": "hello"},
             "other.home",
-            signature="",
+            signature=b64url_encode(sign_ed25519(other_seed, ev_canonical)),
         )
         assert delivered == ["peer.home"]
 

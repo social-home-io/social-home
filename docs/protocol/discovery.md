@@ -28,7 +28,19 @@ The Social Home ↔ GFS link is split by direction:
 - **SH → GFS** is plain HTTPS REST under `/gfs/*` (`register`,
   `publish`, `subscribe`, `report`, `appeal`, `spaces`). Synchronous
   request / response with explicit status codes; no shared session
-  state.
+  state. **Every mutating call is Ed25519-signed by the originating
+  instance and verified against its registered public key** — there is
+  no unsigned path:
+  - `publish` (relay event) and `spaces/{id}/publish` (space metadata)
+    require a mandatory signature over their canonical body; an empty /
+    malformed / invalid signature is rejected with `403`, so a registered
+    peer can never overwrite another household's listing or fan out under
+    its name.
+  - `subscribe` requires a signature over `{instance_id, space_id, ts}`
+    (replay-guarded ±300 s on `ts`). The signature binds the request to
+    `instance_id`, so a caller can only subscribe **itself**, and the
+    target space must already be published — the GFS no longer mints a
+    pending row from an (unauthenticated) subscribe.
 - **GFS → SH** is a persistent WebSocket the SH opens to
   `wss://<gfs>/gfs/ws`. The first frame is a signed hello
   `{type:"hello", instance_id, ts, sig}`; once accepted the GFS pushes
