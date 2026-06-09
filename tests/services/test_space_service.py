@@ -2183,6 +2183,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Media DataChannel",
         "Remote admin actions",
         "Multi-admin approvals",
+        "Authenticated mesh route discovery",
     )
     assert len(c.behind_members) == 1
     bm = c.behind_members[0]
@@ -2193,6 +2194,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Media DataChannel",
         "Remote admin actions",
         "Multi-admin approvals",
+        "Authenticated mesh route discovery",
     )
 
 
@@ -2209,10 +2211,14 @@ async def test_space_version_compat_excludes_mid_handshake_member(stack):
     )
 
     c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
-    # The seen v18 member is the only counted one — phantom-nag guard.
+    # The seen v18 member is the only counted one — phantom-nag guard
+    # (peer-mystery, never-advertised, is excluded entirely). The v18
+    # member legitimately lags the v_21 authenticated-route-discovery
+    # space feature, so it surfaces in behind_members.
     assert c.min_member_proto_version == 18
-    assert c.lagging_features == ()
-    assert c.behind_members == ()
+    assert c.lagging_features == ("Authenticated mesh route discovery",)
+    assert len(c.behind_members) == 1
+    assert c.behind_members[0].instance_id == "peer-up"
 
 
 async def test_space_version_compat_all_current(stack):
@@ -2231,19 +2237,28 @@ async def test_space_version_compat_all_current(stack):
     assert c.behind_members == ()
 
 
-async def test_space_version_compat_behind_but_only_nonspace_features(stack):
-    """A member at v16 is < OURS but its only missing features are the
-    non-space app channels (v17/v18) — so it counts toward
-    min_member_proto_version yet is excluded from behind_members and never
-    adds a non-space feature to lagging_features."""
+async def test_space_version_compat_omits_nonspace_features(stack):
+    """A member at v16 is < OURS; its missing features include non-space
+    surfaces (app channels v17/v18, instance resync v19, space-sync-reject
+    v20 — deliberately NOT space-scoped) plus the one space surface above
+    it (authenticated route discovery v21). Only the SPACE-scoped gap
+    appears in lagging_features — the non-space ones are never added even
+    though the member lacks them."""
     await stack.provision_user("anna", is_admin=True)
     space = await stack.space_svc.create_space(owner_username="anna", name="S")
     stack.space_svc._federation_repo = _FakeFedRepo([_member("peer-16", 16, seen=True)])
 
     c = await stack.space_svc.space_version_compat(space.id, actor_username="anna")
     assert c.min_member_proto_version == 16
-    assert c.lagging_features == ()
-    assert c.behind_members == ()
+    # Only the space-scoped gap surfaces; non-space gaps (v17/v18/v19/v20)
+    # do not.
+    assert c.lagging_features == ("Authenticated mesh route discovery",)
+    assert "App federation channel" not in c.lagging_features
+    assert "App user routing" not in c.lagging_features
+    assert "Instance resync request" not in c.lagging_features
+    assert "Space sync reject reconcile" not in c.lagging_features
+    assert len(c.behind_members) == 1
+    assert c.behind_members[0].instance_id == "peer-16"
 
 
 async def test_space_version_compat_no_federation_repo(stack):

@@ -274,7 +274,29 @@ from __future__ import annotations
 #:   non-member sync request as before, so a sub-v_20 member relies on the
 #:   normal ``SPACE_DISSOLVED`` broadcast / outbox (unchanged) and may keep
 #:   an orphaned stub until that arrives.
-OURS: int = 20
+#: * **v_21** (2026-06-09) — authenticated mesh route discovery.
+#:   :data:`FederationEventType.SPACE_ROUTE_FOUND` now carries
+#:   ``target_identity_pk`` (the target's Ed25519 identity public key,
+#:   hex) + ``target_eph_sig`` (the target's signature over
+#:   ``space-route-found:v1:<request_id>:<target_eph_pk>``). The origin
+#:   verifies the ephemeral X25519 key it will seal space content under
+#:   is signed by the target's identity (``derive_instance_id(
+#:   target_identity_pk) == target``) and that the path actually ends at
+#:   the target, before collecting the response. Closes a relay-MITM
+#:   (🔴): a malicious confirmed peer on the SPACE_FIND_ROUTE flood could
+#:   reply with its OWN ephemeral key and win the shortest-path
+#:   tie-break, so the origin sealed real space content (post bodies,
+#:   GPS, files — NOT independently encrypted on the mesh path) and the
+#:   §D2 invite token under the attacker's key, letting the relay
+#:   decrypt it. **No fallback — fail-closed.** A patched origin DROPS
+#:   any unsigned / forged / wrong-key ROUTE_FOUND, so a sub-v_21 target
+#:   (which ships no signature) becomes mesh-*unreachable* via discovery
+#:   until it upgrades. The security trade is intentional: a forgeable
+#:   key is strictly worse than a missing route. Direct CONFIRMED peers
+#:   and the local short-circuit are unaffected (no relayed ROUTE_FOUND
+#:   to trust). Space-scoped: a behind member household can't be reached
+#:   over the mesh, so it warns in the per-space compatibility banner.
+OURS: int = 21
 
 
 class FederationCapability:
@@ -441,6 +463,17 @@ class FederationCapability:
     #: broadcast / outbox and may keep an orphaned stub until it arrives.
     MIN_FOR_SPACE_SYNC_REJECTED = 20
 
+    #: Minimum proto_version where the target signs the ephemeral X25519
+    #: key it ships in :data:`FederationEventType.SPACE_ROUTE_FOUND`
+    #: (``target_identity_pk`` + ``target_eph_sig``) so the origin can
+    #: bind the key to the target's identity before sealing space content
+    #: under it. Fail-closed, no fallback: a patched origin drops any
+    #: ROUTE_FOUND whose signature is missing / forged / signed by an
+    #: identity that doesn't derive to the requested target, so a sub-v_21
+    #: target is unreachable via mesh discovery until it upgrades. Closes
+    #: the relay-MITM where a confirmed peer substituted its own key.
+    MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY = 21
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -477,6 +510,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (FederationCapability.MIN_FOR_APP_USER_ROUTING, "App user routing"),
     (FederationCapability.MIN_FOR_INSTANCE_RESYNC, "Instance resync request"),
     (FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED, "Space sync reject reconcile"),
+    (
+        FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
+        "Authenticated mesh route discovery",
+    ),
 ]
 
 
@@ -519,6 +556,7 @@ SPACE_SCOPED_MIN_VERSIONS: frozenset[int] = frozenset(
         FederationCapability.MIN_FOR_MEDIA_CHANNEL,
         FederationCapability.MIN_FOR_REMOTE_ADMIN_ACTION,
         FederationCapability.MIN_FOR_ADMIN_PROPOSALS,
+        FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
     }
 )
 
