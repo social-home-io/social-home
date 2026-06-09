@@ -219,43 +219,156 @@ async def test_healthz_is_public(gfs_client):
     assert resp.status == 200
 
 
-async def test_subscribe_returns_subscribed(gfs_client):
-    """POST /gfs/subscribe returns {"status": "subscribed"}."""
-    # Register first so the instance exists.
-    token = await _fresh_pair_token(gfs_client.server.app, "127.0.0.20")
-    await gfs_client.post(
+def _make_keypair() -> tuple[bytes, bytes]:
+    """Return (private_seed_bytes, public_key_bytes) for an Ed25519 keypair."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    sk = Ed25519PrivateKey.generate()
+    seed = sk.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    pk = sk.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return seed, pk
+
+
+def _sign(seed: bytes, payload: dict) -> str:
+    import base64
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
+        "utf-8"
+    )
+    sig = Ed25519PrivateKey.from_private_bytes(seed).sign(canonical)
+    return base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _register_and_publish(gfs_client, *, instance_id, space_id, client_ip):
+    """Register a real-keyed instance (auto-accept) + publish a known space.
+
+    Returns the instance's private seed so the caller can sign requests.
+    """
+    from socialhome.global_server.app_keys import gfs_admin_repo_key
+
+    app = gfs_client.server.app
+    await app[gfs_admin_repo_key].set_config("auto_accept_clients", "1")
+    seed, pk = _make_keypair()
+    token = await _fresh_pair_token(app, client_ip)
+    reg = await gfs_client.post(
         "/gfs/register",
         json={
             "token": token,
-            "instance_id": "inst-sub",
-            "public_key": "bb" * 32,
+            "instance_id": instance_id,
+            "public_key": pk.hex(),
             "inbox_url": "http://example.com/wh",
         },
     )
+    assert reg.status == 200
+    pub_body = {
+        "owning_instance": instance_id,
+        "name": "Known",
+        "description": "",
+        "about_markdown": "",
+        "cover_url": "",
+        "icon_url": "",
+        "min_age": 0,
+        "target_audience": "all",
+        "accent_color": "#D2542A",
+        "primary_color": "#D2542A",
+    }
+    canonical = {**pub_body, "space_id": space_id}
+    pub = await gfs_client.post(
+        f"/gfs/spaces/{space_id}/publish",
+        json={**pub_body, "signature": _sign(seed, canonical)},
+    )
+    assert pub.status == 200
+    return seed
+
+
+async def test_subscribe_returns_subscribed(gfs_client):
+    """POST /gfs/subscribe with a valid self-signed body returns 'subscribed'."""
+    seed = await _register_and_publish(
+        gfs_client, instance_id="inst-sub", space_id="space-1", client_ip="127.0.0.20"
+    )
+    ts = _now_iso()
+    sig = _sign(seed, {"instance_id": "inst-sub", "space_id": "space-1", "ts": ts})
     resp = await gfs_client.post(
         "/gfs/subscribe",
-        json={"instance_id": "inst-sub", "space_id": "space-1"},
+        json={
+            "instance_id": "inst-sub",
+            "space_id": "space-1",
+            "ts": ts,
+            "signature": sig,
+        },
     )
     assert resp.status == 200
     body = await resp.json()
     assert body["status"] == "subscribed"
 
 
-async def test_subscribe_unsubscribe_roundtrip(gfs_client):
-    """POST /gfs/subscribe then unsubscribe returns correct statuses."""
-    token = await _fresh_pair_token(gfs_client.server.app, "127.0.0.21")
-    await gfs_client.post(
-        "/gfs/register",
+async def test_subscribe_unsigned_rejected(gfs_client):
+    """POST /gfs/subscribe without a signature is rejected with 403."""
+    await _register_and_publish(
+        gfs_client,
+        instance_id="inst-nosig",
+        space_id="space-ns",
+        client_ip="127.0.0.22",
+    )
+    resp = await gfs_client.post(
+        "/gfs/subscribe",
         json={
-            "token": token,
-            "instance_id": "inst-unsub",
-            "public_key": "cc" * 32,
-            "inbox_url": "http://example.com/wh2",
+            "instance_id": "inst-nosig",
+            "space_id": "space-ns",
+            "ts": _now_iso(),
+            "signature": "",
         },
     )
+    assert resp.status == 403
+
+
+async def test_subscribe_missing_signature_field_400(gfs_client):
+    """A subscribe body with no ``signature`` field at all is a 400."""
+    await _register_and_publish(
+        gfs_client, instance_id="inst-mf", space_id="space-mf", client_ip="127.0.0.23"
+    )
+    resp = await gfs_client.post(
+        "/gfs/subscribe",
+        json={"instance_id": "inst-mf", "space_id": "space-mf"},
+    )
+    assert resp.status == 400
+
+
+async def test_subscribe_unsubscribe_roundtrip(gfs_client):
+    """POST /gfs/subscribe then unsubscribe returns correct statuses."""
+    seed = await _register_and_publish(
+        gfs_client,
+        instance_id="inst-unsub",
+        space_id="space-X",
+        client_ip="127.0.0.21",
+    )
+    ts = _now_iso()
+    sig = _sign(seed, {"instance_id": "inst-unsub", "space_id": "space-X", "ts": ts})
     await gfs_client.post(
         "/gfs/subscribe",
-        json={"instance_id": "inst-unsub", "space_id": "space-X"},
+        json={
+            "instance_id": "inst-unsub",
+            "space_id": "space-X",
+            "ts": ts,
+            "signature": sig,
+        },
     )
     resp = await gfs_client.post(
         "/gfs/subscribe",

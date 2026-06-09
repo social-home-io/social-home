@@ -2100,6 +2100,14 @@ def create_app(config: Config | None = None) -> web.Application:
             space_key_repo,
             key_manager,
             bus=bus,
+            # ``identity_seed`` signs the sealed-sender ``outer_signature``
+            # so a GFS-relayed public/global-space event is authenticated
+            # to the recipient; ``federation_repo`` resolves a decrypted
+            # sender_instance_id → its registered Ed25519 pubkey to verify
+            # that signature. Both wired so the GFS path is secure out of
+            # the box (no unauthenticated sealed sender).
+            identity_seed=identity_seed,
+            federation_repo=federation_repo,
         )
         app[K.space_crypto_service_key] = space_crypto
         pending_decrypts_cache = PendingDecryptsCache(bus=bus)

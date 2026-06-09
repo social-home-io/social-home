@@ -138,6 +138,48 @@ def _conn(gfs_id: str = "gfs-1", status: str = "active") -> GfsConnection:
     )
 
 
+class _StubSpaceRepo:
+    """Minimal space repo whose ``get`` returns a publishable space.
+
+    The GFS now mandates a signed publish body, so ``publish_space`` needs
+    a signing identity + a local space row; this stub supplies the row.
+    """
+
+    def __init__(self, space_id: str) -> None:
+        self._space_id = space_id
+
+    async def get(self, space_id: str):
+        from socialhome.domain.space import (
+            JoinMode,
+            Space,
+            SpaceFeatures,
+            SpaceType,
+        )
+
+        if space_id != self._space_id:
+            return None
+        return Space(
+            id=space_id,
+            name="Pubble",
+            owner_instance_id="alpha.home",
+            owner_username="alice",
+            identity_public_key="aa" * 32,
+            config_sequence=0,
+            features=SpaceFeatures(),
+            space_type=SpaceType.GLOBAL,
+            join_mode=JoinMode.OPEN,
+        )
+
+
+def _wire_publish_ctx(svc, space_id: str) -> None:
+    kp = generate_identity_keypair()
+    svc.attach_publish_context(
+        space_repo=_StubSpaceRepo(space_id),
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+
+
 # ─── _client guard ──────────────────────────────────────────────────────
 
 
@@ -271,6 +313,7 @@ async def test_publish_space_success(env):
     await env.save(_conn("g1"))
     session = _StubSession(status=200)
     svc = GfsConnectionService(env, http_client=session)
+    _wire_publish_ctx(svc, "sp1")
     pub = await svc.publish_space("sp1", "g1")
     assert session.calls[0][0] == "POST"
     assert session.calls[0][1].endswith("/gfs/spaces/sp1/publish")
@@ -325,6 +368,7 @@ async def test_publish_space_to_all(env):
     await env.save(_conn("g1"))
     await env.save(_conn("g2"))
     svc = GfsConnectionService(env, http_client=_StubSession(status=200))
+    _wire_publish_ctx(svc, "sp1")
     n = await svc.publish_space_to_all("sp1")
     assert n == 2
 
@@ -356,6 +400,7 @@ async def test_publish_space_to_all_individual_failure_logs(env):
             return _StubResp(200)
 
     svc = GfsConnectionService(env, http_client=_Mixed())
+    _wire_publish_ctx(svc, "sp1")
     n = await svc.publish_space_to_all("sp1")
     # One GFS succeeded, the other raised + was caught: only the
     # success is counted, and the fan-out did not abort.

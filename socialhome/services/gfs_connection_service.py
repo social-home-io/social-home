@@ -331,19 +331,27 @@ class GfsConnectionService:
         return await self._repo.publish_space(space_id, gfs_id, status=status)
 
     async def _build_publish_body(self, space_id: str) -> dict:
-        """Compose + sign the publish body. Falls back to the
-        metadata-less ``{space_id}`` shape when the publish context
-        isn't wired (tests, early boot)."""
-        if self._space_repo is None or not self._own_instance_id:
-            return {"space_id": space_id}
+        """Compose + sign the publish body.
+
+        Fail-closed: the GFS now mandates an Ed25519 signature on every
+        publish, so an instance with no signing key (publish context not
+        wired) or no local space row to describe MUST NOT send an
+        unsigned / metadata-less body — it raises :class:`GfsConnectionError`
+        instead. A signed body is the only thing the GFS will accept.
+        """
+        if (
+            self._space_repo is None
+            or not self._own_instance_id
+            or not self._own_signing_key
+        ):
+            raise GfsConnectionError(
+                "cannot publish to GFS without a wired signing identity",
+            )
         space = await self._space_repo.get(space_id)
         if space is None:
-            return {"space_id": space_id}
-        # Avoid a circular import — these helpers are on the crypto
-        # module; pulling them only at the call site keeps the module
-        # graph clean for tests that stub publish out entirely.
-        from ..crypto import b64url_encode, sign_ed25519
-
+            raise GfsConnectionError(
+                f"cannot publish unknown space {space_id!r} to GFS",
+            )
         # Brand: the GFS public page is unauthenticated and on a different
         # origin, so a host-relative ``/api/spaces/{id}/cover`` path can't
         # load there. Ship the cover + icon as self-contained data URIs
@@ -428,6 +436,63 @@ class GfsConnectionService:
             raise GfsConnectionError(f"Could not reach GFS: {exc}") from exc
 
         await self._repo.unpublish_space(space_id, gfs_id)
+
+    async def subscribe_to_gfs_space(self, space_id: str, gfs_id: str) -> str:
+        """Subscribe this household to a GFS-listed space's relay fan-out.
+
+        The GFS mandates an Ed25519 signature on every subscribe (so a
+        caller can only subscribe itself), so this signs the canonical
+        ``{instance_id, space_id, ts}`` body with the household identity
+        key and POSTs it to ``/gfs/subscribe``. Fail-closed: with no
+        signing identity wired, it raises rather than sending an unsigned
+        body the GFS would reject. Returns the GFS-reported status.
+        """
+        if not self._own_instance_id or not self._own_signing_key:
+            raise GfsConnectionError(
+                "cannot subscribe to a GFS space without a wired signing identity",
+            )
+        conn = await self._repo.get(gfs_id)
+        if conn is None:
+            raise GfsConnectionError(f"GFS connection {gfs_id} not found")
+
+        ts = datetime.now(timezone.utc).isoformat()
+        canonical = json.dumps(
+            {
+                "instance_id": self._own_instance_id,
+                "space_id": space_id,
+                "ts": ts,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        body = {
+            "instance_id": self._own_instance_id,
+            "space_id": space_id,
+            "ts": ts,
+            "signature": b64url_encode(sign_ed25519(self._own_signing_key, canonical)),
+        }
+        client = self._client()
+        url = f"{conn.inbox_url}/gfs/subscribe"
+        try:
+            async with client.post(
+                url,
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    detail = await resp.text()
+                    raise GfsConnectionError(
+                        f"GFS rejected subscribe (HTTP {resp.status}): {detail}",
+                    )
+                try:
+                    data = await resp.json()
+                except Exception:
+                    data = {}
+                if not isinstance(data, dict):
+                    data = {}
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise GfsConnectionError(f"Could not reach GFS: {exc}") from exc
+        return str(data.get("status") or "subscribed")
 
     async def publish_space_to_all(self, space_id: str) -> int:
         """Publish a space to every active GFS connection.

@@ -136,7 +136,20 @@ from one space can't decrypt another.
 **Sealed sender** (`federation/sealed_sender.py`) — for GFS-routed
 events the sender's instance ID is separately encrypted under the
 space key, so a passive GFS operator sees `space_id` + `epoch` for
-routing and nothing else.
+routing and nothing else. Because a public/global space's content key
+is shared widely, encryption alone proves only that the sealer held
+the key — not *who* sealed it. So every envelope also carries an
+`outer_signature`: the sender Ed25519-signs a canonical,
+domain-separated message binding `space_id` + `epoch` + both
+ciphertexts + `aead_suite`, using its **identity** seed (never the
+shared space key). The recipient resolves the decrypted
+`sender_instance_id` to that instance's registered identity pubkey,
+checks `derive_instance_id(pubkey) == sender_instance_id` (binds
+key↔id, 160-bit, mirrors the #596 mesh-route fix), then verifies the
+signature. A key-holder forging content as another member, or a GFS
+substituting/dropping a sealed blob, is detected and rejected
+(`SealedSenderAuthError`); an envelope with no `outer_signature` is
+rejected by `from_dict` (fail-closed — no unauthenticated path).
 
 **Routed-envelope seal** (`federation/routed_crypto.py`) — for
 multi-hop `SPACE_ROUTED` events the inner payload is sealed with a

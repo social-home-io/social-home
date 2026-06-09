@@ -102,27 +102,33 @@ class GfsFederationService:
         notified.
 
         Raises :class:`PermissionError` when *from_instance* is unknown or
-        the signature is invalid.
+        the signature is missing / malformed / invalid. The signature is
+        MANDATORY: an empty signature is rejected (a registered peer must
+        not be able to publish another household's space content unsigned).
         """
         inst = await self._repo.get_instance(from_instance)
         if inst is None:
             raise PermissionError(f"Unknown instance: {from_instance}")
 
-        if signature:
-            canonical = json.dumps(
-                {
-                    "space_id": space_id,
-                    "event_type": event_type,
-                    "payload": payload,
-                    "from_instance": from_instance,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-            raw_key = bytes.fromhex(inst.public_key)
+        if not signature:
+            raise PermissionError("Invalid Ed25519 signature")
+        canonical = json.dumps(
+            {
+                "space_id": space_id,
+                "event_type": event_type,
+                "payload": payload,
+                "from_instance": from_instance,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        raw_key = bytes.fromhex(inst.public_key)
+        try:
             raw_sig = b64url_decode(signature)
-            if not verify_ed25519(raw_key, canonical, raw_sig):
-                raise PermissionError("Invalid Ed25519 signature")
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Invalid Ed25519 signature") from exc
+        if not verify_ed25519(raw_key, canonical, raw_sig):
+            raise PermissionError("Invalid Ed25519 signature")
 
         # Preserve existing row data if present; otherwise create a minimal
         # pending row. Admin portal fleshes the metadata out on accept.
@@ -149,18 +155,70 @@ class GfsFederationService:
 
         return await self._fan_out(subscribers, event_body, session)
 
-    async def subscribe(self, instance_id: str, space_id: str) -> None:
-        """Add *instance_id* as a subscriber of *space_id*."""
+    async def subscribe(
+        self,
+        instance_id: str,
+        space_id: str,
+        ts: str,
+        signature: str,
+    ) -> None:
+        """Add *instance_id* as a subscriber of *space_id*.
+
+        Authenticated the same way as :meth:`update_instance`: the request
+        is signed by *instance_id* over the canonical ``{instance_id,
+        space_id, ts}`` JSON and verified against the instance's registered
+        public key. Because the signature binds to the *instance_id* in the
+        body, a caller can only subscribe **itself** — it can't sign as
+        another household. The signed ``ts`` is replay-guarded (±300 s).
+
+        Rejects (``PermissionError``) an unknown instance, a missing /
+        malformed / invalid signature, a stale timestamp, and a space the
+        GFS has never seen published (no auto-creation of a pending row from
+        an unauthenticated demand signal — a subscription must target a real
+        published space).
+        """
+        inst = await self._repo.get_instance(instance_id)
+        if inst is None:
+            raise PermissionError(f"Unknown instance: {instance_id}")
+
+        if not signature:
+            raise PermissionError("Invalid Ed25519 signature")
+        canonical = json.dumps(
+            {
+                "instance_id": instance_id,
+                "space_id": space_id,
+                "ts": ts,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        raw_key = bytes.fromhex(inst.public_key)
+        try:
+            raw_sig = b64url_decode(signature)
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Invalid Ed25519 signature") from exc
+        if not verify_ed25519(raw_key, canonical, raw_sig):
+            raise PermissionError("Invalid Ed25519 signature")
+
+        # Replay guard: same ±300 s tolerance / tz-aware ISO 8601 rule as
+        # update_instance.
+        try:
+            parsed = datetime.fromisoformat(ts)
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Stale timestamp") from exc
+        if parsed.tzinfo is None:
+            raise PermissionError("Stale timestamp")
+        now = datetime.now(timezone.utc)
+        if abs((now - parsed).total_seconds()) > INSTANCE_UPDATE_TS_SKEW_SECONDS:
+            raise PermissionError("Stale timestamp")
+
+        # A subscription must target a space the GFS already knows about.
+        # Auto-minting a row from an (un)authenticated subscribe let any
+        # caller seed arbitrary space ids — reject unknown ids instead.
         existing = await self._repo.get_space(space_id)
         if existing is None:
-            # Subscription precedes publish — create a pending row so the
-            # admin can see the demand.
-            await self._repo.upsert_space(
-                GlobalSpace(
-                    space_id=space_id,
-                    owning_instance=instance_id,
-                )
-            )
+            raise PermissionError("space not published")
+
         await self._repo.add_subscriber(
             space_id=space_id,
             instance_id=instance_id,
@@ -254,28 +312,35 @@ class GfsFederationService:
             raise PermissionError(
                 f"Unknown owning_instance: {owning_instance}",
             )
-        if signature:
-            canonical = json.dumps(
-                {
-                    "space_id": space_id,
-                    "owning_instance": owning_instance,
-                    "name": name,
-                    "description": description or "",
-                    "about_markdown": about_markdown or "",
-                    "cover_url": cover_url or "",
-                    "icon_url": icon_url or "",
-                    "min_age": min_age,
-                    "target_audience": target_audience,
-                    "accent_color": accent_color,
-                    "primary_color": primary_color,
-                },
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-            raw_key = bytes.fromhex(inst.public_key)
+        # Signature is MANDATORY (same trust model as update_instance): an
+        # empty / malformed / invalid signature is a hard PermissionError, so
+        # a registered peer can't overwrite another household's space listing.
+        if not signature:
+            raise PermissionError("Invalid Ed25519 signature")
+        canonical = json.dumps(
+            {
+                "space_id": space_id,
+                "owning_instance": owning_instance,
+                "name": name,
+                "description": description or "",
+                "about_markdown": about_markdown or "",
+                "cover_url": cover_url or "",
+                "icon_url": icon_url or "",
+                "min_age": min_age,
+                "target_audience": target_audience,
+                "accent_color": accent_color,
+                "primary_color": primary_color,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        raw_key = bytes.fromhex(inst.public_key)
+        try:
             raw_sig = b64url_decode(signature)
-            if not verify_ed25519(raw_key, canonical, raw_sig):
-                raise PermissionError("Invalid Ed25519 signature")
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Invalid Ed25519 signature") from exc
+        if not verify_ed25519(raw_key, canonical, raw_sig):
+            raise PermissionError("Invalid Ed25519 signature")
         # Bound the stored ``about_markdown`` (verified above against the
         # full value, so the signature still holds). The public page caps
         # rendering too; capping at storage avoids DB bloat from a paired
@@ -284,6 +349,14 @@ class GfsFederationService:
         if about_markdown and len(about_markdown) > MAX_ABOUT_MARKDOWN_CHARS:
             about_markdown = about_markdown[:MAX_ABOUT_MARKDOWN_CHARS]
         existing = await self._repo.get_space(space_id)
+        # Owner is immutable after first publish. space_id is a public,
+        # owner-chosen UUID that travels in discovery links, so a registered
+        # peer that learns it could otherwise re-publish the row with
+        # owning_instance=itself — validly signed by its OWN key — and seize
+        # the listing. Reject any publish whose owner differs from the stored
+        # one (first-publisher wins; only that instance can refresh it).
+        if existing is not None and existing.owning_instance != owning_instance:
+            raise PermissionError("space already owned by another instance")
         # Preserve subscriber_count / posts_per_week / published_at from
         # the existing row — those are GFS-side bookkeeping, not the
         # owner's to declare. Only the owner's name / description /

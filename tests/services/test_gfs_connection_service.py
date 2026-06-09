@@ -126,6 +126,43 @@ def _make_conn(
     )
 
 
+async def _publishable_svc(env, session, gfs_id: str, *, space_id: str):
+    """Build a GfsConnectionService with the publish context wired + a real
+    local space row so ``publish_space`` can compose a signed body.
+
+    The GFS now mandates a signature on every publish, so the service must
+    always have a signing identity + a space to describe; this helper sets
+    both up for the publish-path tests.
+    """
+    from socialhome.domain.space import JoinMode, Space, SpaceFeatures, SpaceType
+    from socialhome.repositories.space_repo import SqliteSpaceRepo
+
+    db, conn_repo = env
+    await conn_repo.save(_make_conn(gfs_id))
+    space_repo = SqliteSpaceRepo(db)
+    await space_repo.save(
+        Space(
+            id=space_id,
+            name="Publishable",
+            owner_instance_id="alpha.home",
+            owner_username="alice",
+            identity_public_key="aa" * 32,
+            config_sequence=0,
+            features=SpaceFeatures(),
+            space_type=SpaceType.GLOBAL,
+            join_mode=JoinMode.OPEN,
+        )
+    )
+    kp = generate_identity_keypair()
+    svc = GfsConnectionService(conn_repo, http_client=session)
+    svc.attach_publish_context(
+        space_repo=space_repo,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    return svc
+
+
 # ─── Repo tests ─────────────────────────────────────────────────────────
 
 
@@ -298,10 +335,8 @@ async def test_disconnect_unknown_raises(env):
 
 
 async def test_publish_space_records_local(env):
-    _, repo = env
-    await repo.save(_make_conn("pub-1"))
     session = _StubSession(status=200)
-    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc = await _publishable_svc(env, session, "pub-1", space_id="space-x")
     pub = await svc.publish_space("space-x", "pub-1")
     # Post to publish endpoint happened.
     assert session.calls
@@ -318,10 +353,9 @@ async def test_publish_space_returns_gfs_status(env):
     """The status the GFS returns in the publish body flows back into
     the returned publication AND the persisted row (e.g. ``pending``
     when the GFS requires moderator approval)."""
-    _, repo = env
-    await repo.save(_make_conn("pub-2"))
     session = _StubSession(status=200, body={"status": "pending"})
-    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc = await _publishable_svc(env, session, "pub-2", space_id="space-p")
+    _, repo = env
     pub = await svc.publish_space("space-p", "pub-2")
     assert pub.status == "pending"
     rows = await repo.list_publications_for_space("space-p")
@@ -333,26 +367,23 @@ async def test_publish_space_raises_on_non_2xx_and_skips_local_row(env):
     """A rejecting GFS surfaces as ``GfsConnectionError`` and does NOT
     write a local publication row — a failed publish is no longer
     indistinguishable from success."""
-    _, repo = env
-    await repo.save(_make_conn("pub-3"))
     session = _StubSession(status=500)
-    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc = await _publishable_svc(env, session, "pub-3", space_id="space-e")
+    _, repo = env
     with pytest.raises(GfsConnectionError, match="HTTP 500"):
         await svc.publish_space("space-e", "pub-3")
     assert await repo.list_publications_for_space("space-e") == []
 
 
 async def test_publish_space_raises_on_network_error_and_skips_local_row(env):
-    _, repo = env
-    await repo.save(_make_conn("pub-4"))
-
     class _RaisingSession:
         def post(self, *a, **kw):
             import aiohttp
 
             raise aiohttp.ClientError("unreachable")
 
-    svc = GfsConnectionService(repo, http_client=_RaisingSession())  # type: ignore[arg-type]
+    svc = await _publishable_svc(env, _RaisingSession(), "pub-4", space_id="space-n")
+    _, repo = env
     with pytest.raises(GfsConnectionError, match="reach GFS"):
         await svc.publish_space("space-n", "pub-4")
     assert await repo.list_publications_for_space("space-n") == []
@@ -377,9 +408,8 @@ async def test_publish_space_maps_timeout_to_gfs_error(env):
     """A hung GFS raises a bare ``asyncio.TimeoutError`` from the total
     timeout; ``publish_space`` must map it to ``GfsConnectionError`` (→ 422)
     and leave no local row, not leak the raw timeout (→ 500)."""
+    svc = await _publishable_svc(env, _TimeoutSession(), "pub-to", space_id="space-to")
     _, repo = env
-    await repo.save(_make_conn("pub-to"))
-    svc = GfsConnectionService(repo, http_client=_TimeoutSession())  # type: ignore[arg-type]
     with pytest.raises(GfsConnectionError, match="reach GFS"):
         await svc.publish_space("space-to", "pub-to")
     assert await repo.list_publications_for_space("space-to") == []
@@ -402,9 +432,6 @@ async def test_publish_space_to_all_skips_timed_out_gfs(env):
     """One GFS that times out must NOT abort the whole fan-out — the bare
     ``asyncio.TimeoutError`` is caught as ``GfsConnectionError`` and skipped,
     so the healthy GFS is still published to."""
-    _, repo = env
-    await repo.save(_make_conn("ok-gfs", inbox_url="https://ok.example"))
-    await repo.save(_make_conn("slow-gfs", inbox_url="https://slow.example"))
 
     class _MixedSession:
         """``post`` times out for the slow GFS, succeeds for the healthy one."""
@@ -414,7 +441,11 @@ async def test_publish_space_to_all_skips_timed_out_gfs(env):
                 raise asyncio.TimeoutError
             return _StubResp(200, {"status": "active"})
 
-    svc = GfsConnectionService(repo, http_client=_MixedSession())  # type: ignore[arg-type]
+    svc = await _publishable_svc(env, _MixedSession(), "ok-gfs", space_id="space-fan")
+    _, repo = env
+    # Re-home the first conn's URL + add a second (slow) GFS.
+    await repo.save(_make_conn("ok-gfs", inbox_url="https://ok.example"))
+    await repo.save(_make_conn("slow-gfs", inbox_url="https://slow.example"))
     published = await svc.publish_space_to_all("space-fan")
     assert published == 1
     # Only the healthy GFS got a local publication row.
@@ -427,8 +458,6 @@ async def test_publish_space_handles_non_dict_json_body(env):
     """A GFS that returns valid-but-non-object JSON (e.g. ``[]``) on a 200
     must not crash the status parse — coerce to ``{}`` and default to
     ``active``."""
-    _, repo = env
-    await repo.save(_make_conn("pub-nd"))
 
     class _NonDictResp:
         status = 200
@@ -449,7 +478,8 @@ async def test_publish_space_handles_non_dict_json_body(env):
         def post(self, *a, **kw):
             return _NonDictResp()
 
-    svc = GfsConnectionService(repo, http_client=_NonDictSession())  # type: ignore[arg-type]
+    svc = await _publishable_svc(env, _NonDictSession(), "pub-nd", space_id="space-nd")
+    _, repo = env
     pub = await svc.publish_space("space-nd", "pub-nd")
     assert pub.status == "active"
     rows = await repo.list_publications_for_space("space-nd")
@@ -733,10 +763,9 @@ async def test_list_connections(env):
 
 
 async def test_publish_space_success(env):
-    _, repo = env
-    await repo.save(_make_conn("gfs-1"))
     session = _StubSession(status=200)
-    svc = GfsConnectionService(repo, http_client=session)
+    svc = await _publishable_svc(env, session, "gfs-1", space_id="sp-1")
+    _, repo = env
     pub = await svc.publish_space("sp-1", "gfs-1")
     pubs = await repo.list_publications("gfs-1")
     assert len(pubs) == 1
@@ -871,18 +900,19 @@ async def test_release_signaling_node_no_url_is_noop(env):
 # ── publish-space context (attach_publish_context + _build_publish_body) ──
 
 
-async def test_publish_body_falls_back_when_context_unset(env):
-    """Without ``attach_publish_context``, ``publish_space`` ships only
-    the bare ``{space_id}`` body — preserves the legacy shape so an
-    unmigrated SH (no identity wired) still triggers a ``status='pending'``
-    row on the GFS rather than failing the publish call entirely."""
+async def test_publish_body_raises_when_context_unset(env):
+    """Without ``attach_publish_context`` there's no signing key, so the
+    GFS publish is fail-closed: ``publish_space`` raises rather than send
+    an unsigned body (the GFS now rejects unsigned publishes)."""
     _, repo = env
     await repo.save(_make_conn("gfs-1", inbox_url="https://gfs.example"))
     session = _StubSession(method_responses={"POST": (200, {"status": "pending"})})
     svc = GfsConnectionService(repo, http_client=session)
-    # No attach_publish_context call. publish_space still works.
-    await svc.publish_space("sp-bare", "gfs-1")
-    assert session.calls == [("POST", "https://gfs.example/gfs/spaces/sp-bare/publish")]
+    # No attach_publish_context call → no signing key → must refuse.
+    with pytest.raises(GfsConnectionError):
+        await svc.publish_space("sp-bare", "gfs-1")
+    # And no HTTP request was made.
+    assert session.calls == []
 
 
 async def test_publish_body_carries_metadata_and_signature(env):
@@ -1110,12 +1140,11 @@ async def test_update_display_name_no_context_returns_zero(env):
     assert session.calls == []
 
 
-async def test_publish_body_falls_back_when_space_missing(env):
+async def test_publish_body_raises_when_space_missing(env):
     """``attach_publish_context`` is wired but the local space row is
-    gone — fall back to the legacy ``{space_id}`` body rather than
-    crashing the auto-publish hook. The GFS will still create a
-    pending row keyed on the id; an admin or a re-publish can fill
-    in the metadata later."""
+    gone — a publish with no space metadata can't be signed into a valid
+    body, so fail closed (raise) rather than send a partial / unsigned
+    publish the GFS will reject anyway."""
     from socialhome.repositories.space_repo import SqliteSpaceRepo
 
     db, conn_repo = env
@@ -1128,9 +1157,50 @@ async def test_publish_body_falls_back_when_space_missing(env):
         own_instance_id="alpha.home",
         own_signing_key=kp.private_key,
     )
-    await svc.publish_space("sp-missing", "gfs-3")
-    # We don't have the body-capture in the legacy path; just assert
-    # the request landed and didn't raise.
+    with pytest.raises(GfsConnectionError):
+        await svc.publish_space("sp-missing", "gfs-3")
+    assert session.calls == []
+
+
+async def test_subscribe_to_gfs_space_signs_body(env):
+    """``subscribe_to_gfs_space`` signs the canonical
+    ``{instance_id, space_id, ts}`` body with the household identity key
+    and POSTs it to the GFS ``/gfs/subscribe`` endpoint."""
+    from socialhome.crypto import b64url_decode, verify_ed25519
+
+    _, repo = env
+    await repo.save(_make_conn("gfs-sub", inbox_url="https://gfs.example"))
+    kp = generate_identity_keypair()
+    session = _StubSession(method_responses={"POST": (200, {"status": "subscribed"})})
+    svc = GfsConnectionService(repo, http_client=session)
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    await svc.subscribe_to_gfs_space("sp-join", "gfs-sub")
     assert session.calls == [
-        ("POST", "https://gfs.example/gfs/spaces/sp-missing/publish"),
+        ("POST", "https://gfs.example/gfs/subscribe"),
     ]
+    body = session._last_body  # type: ignore[attr-defined]
+    assert body["instance_id"] == "alpha.home"
+    assert body["space_id"] == "sp-join"
+    assert body["ts"]
+    sig = body["signature"]
+    canonical = json.dumps(
+        {"instance_id": "alpha.home", "space_id": "sp-join", "ts": body["ts"]},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig))
+
+
+async def test_subscribe_to_gfs_space_raises_without_signing_key(env):
+    """No identity wired → fail closed; the GFS rejects unsigned subscribes."""
+    _, repo = env
+    await repo.save(_make_conn("gfs-sub2", inbox_url="https://gfs.example"))
+    session = _StubSession(method_responses={"POST": (200, {"status": "subscribed"})})
+    svc = GfsConnectionService(repo, http_client=session)
+    with pytest.raises(GfsConnectionError):
+        await svc.subscribe_to_gfs_space("sp-join", "gfs-sub2")
+    assert session.calls == []
