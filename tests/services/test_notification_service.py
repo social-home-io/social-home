@@ -17,9 +17,15 @@ from socialhome.repositories.notification_repo import SqliteNotificationRepo
 from socialhome.repositories.post_repo import SqlitePostRepo
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
+from socialhome.infrastructure.key_manager import KeyManager
 from socialhome.services.feed_service import FeedService
 from socialhome.services.notification_service import NotificationService
 from socialhome.services.user_service import UserService
+
+
+def _space_repo(db):
+    """Test space repo wired with a fixed KEK for at-rest seed wrapping."""
+    return SqliteSpaceRepo(db, key_manager=KeyManager(b"\x0c" * 32))
 
 
 @pytest.fixture
@@ -37,7 +43,7 @@ async def stack(tmp_dir):
     bus = EventBus()
     user_repo = SqliteUserRepo(db)
     post_repo = SqlitePostRepo(db)
-    space_repo = SqliteSpaceRepo(db)
+    space_repo = _space_repo(db)
     notif_repo = SqliteNotificationRepo(db, max_per_user=50)
     calendar_repo = SqliteCalendarRepo(db)
     user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
@@ -152,13 +158,12 @@ async def test_comment_notifies_others(stack):
 
 async def test_space_post_notifies_members(stack):
     """SpacePostCreated notifies space members except the author."""
-    from socialhome.repositories.space_repo import SqliteSpaceRepo
     from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
     from socialhome.services.space_service import SpaceService
 
     a = await stack.provision_user("anna")
     b = await stack.provision_user("bob")
-    space_repo = SqliteSpaceRepo(stack.db)
+    space_repo = _space_repo(stack.db)
     spost_repo = SqliteSpacePostRepo(stack.db)
     space_svc = SpaceService(
         space_repo,
@@ -178,13 +183,12 @@ async def test_space_post_notifies_members(stack):
 
 async def test_space_post_respects_muted_notif_pref(stack):
     """Members with level='muted' receive no space-post notification."""
-    from socialhome.repositories.space_repo import SqliteSpaceRepo
     from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
     from socialhome.services.space_service import SpaceService
 
     a = await stack.provision_user("anna")
     b = await stack.provision_user("bob")
-    space_repo = SqliteSpaceRepo(stack.db)
+    space_repo = _space_repo(stack.db)
     spost_repo = SqliteSpacePostRepo(stack.db)
     space_svc = SpaceService(
         space_repo,
@@ -212,13 +216,12 @@ async def test_space_post_mentions_only_skips_non_mention(stack):
     from socialhome.domain.events import SpacePostCreated
     from socialhome.domain.mention import Mention, MentionType
     from socialhome.domain.post import Post
-    from socialhome.repositories.space_repo import SqliteSpaceRepo
     from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
     from socialhome.services.space_service import SpaceService
 
     a = await stack.provision_user("anna")
     b = await stack.provision_user("bob")
-    space_repo = SqliteSpaceRepo(stack.db)
+    space_repo = _space_repo(stack.db)
     spost_repo = SqliteSpacePostRepo(stack.db)
     space_svc = SpaceService(
         space_repo,
@@ -267,14 +270,13 @@ async def test_space_post_mentions_only_skips_non_mention(stack):
 
 async def test_moderation_queued_notifies_admins(stack):
     """SpaceModerationQueued notifies space admins."""
-    from socialhome.repositories.space_repo import SqliteSpaceRepo
     from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
     from socialhome.services.space_service import SpaceService
     from socialhome.domain.space import SpaceFeatures, SpaceFeatureAccess
 
     a = await stack.provision_user("anna")
     b = await stack.provision_user("bob")
-    space_repo = SqliteSpaceRepo(stack.db)
+    space_repo = _space_repo(stack.db)
     spost_repo = SqliteSpacePostRepo(stack.db)
     space_svc = SpaceService(
         space_repo,
@@ -1302,9 +1304,8 @@ async def test_space_location_feature_enabled_notifies_non_actor_members(stack):
     # Need a space service to create a proper space with members.
     kp = generate_identity_keypair()
     iid = derive_instance_id(kp.public_key)
-    from socialhome.repositories.space_repo import SqliteSpaceRepo
 
-    space_repo = SqliteSpaceRepo(stack.db)
+    space_repo = _space_repo(stack.db)
     space_post_repo = SqliteSpacePostRepo(stack.db)
     space_svc = SpaceService(
         space_repo,

@@ -516,6 +516,11 @@ class SpaceService(SpaceMemberGuardMixin):
             radius_km=radius_km,
         )
         await self._spaces.save(space)
+        # Persist the space's Ed25519 PRIVATE seed (KEK-wrapped at rest) so
+        # this household — the space owner — can later sign space-authority
+        # events. The matching public half is published as
+        # ``identity_public_key``; the seed NEVER federates.
+        await self._spaces.set_space_seed(space.id, kp.private_key)
         # Seat the creator as owner.
         await self._spaces.save_member(
             SpaceMember(
@@ -532,6 +537,46 @@ class SpaceService(SpaceMemberGuardMixin):
             is_global=stype is SpaceType.GLOBAL,
         )
         return space
+
+    async def ensure_space_seed(self, space_id: str) -> bytes | None:
+        """Return the space's raw 32-byte Ed25519 seed, minting one if needed.
+
+        * If a seed is already stored, return it unchanged.
+        * If the column is NULL **and this household owns the space**, mint a
+          fresh keypair, persist the KEK-wrapped seed, replace
+          ``identity_public_key`` with the new public half, and return the new
+          seed. Pre-upgrade owned spaces had their private key discarded at
+          create time, so a *fresh* identity is the only recovery — the old
+          public key has no recoverable private half.
+        * If the column is NULL and the space is **not** owned by this
+          household, return ``None`` — we never held its private key and must
+          never mint a new identity for a space hosted elsewhere.
+
+        Not yet called outside tests; this is the accessor a later
+        space-authority signing task wires in.
+        """
+        space = await self._spaces.get(space_id)
+        if space is None:
+            raise KeyError(f"space {space_id!r} not found")
+
+        existing = await self._spaces.get_space_seed(space_id)
+        if existing is not None:
+            return existing
+
+        owned = (
+            self._own_instance_id is not None
+            and space.owner_instance_id == self._own_instance_id
+        )
+        if not owned:
+            return None
+
+        kp = generate_identity_keypair()
+        # Replace the published public key via a targeted update (``save``'s
+        # upsert no longer touches identity_public_key, so a remote stub
+        # re-save can't clobber it), then store the matching wrapped seed.
+        await self._spaces.set_space_pubkey(space_id, kp.public_key.hex())
+        await self._spaces.set_space_seed(space_id, kp.private_key)
+        return kp.private_key
 
     async def dissolve_space(
         self,

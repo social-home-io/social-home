@@ -47,6 +47,9 @@ class AbstractSpaceRepo(Protocol):
     # ── Spaces ─────────────────────────────────────────────────────────
     async def save(self, space: Space) -> Space: ...
     async def get(self, space_id: str) -> Space | None: ...
+    async def set_space_seed(self, space_id: str, seed: bytes) -> None: ...
+    async def set_space_pubkey(self, space_id: str, public_key_hex: str) -> None: ...
+    async def get_space_seed(self, space_id: str) -> bytes | None: ...
     async def set_cover_hash(
         self,
         space_id: str,
@@ -269,10 +272,23 @@ class AbstractSpaceRepo(Protocol):
 
 
 class SqliteSpaceRepo:
-    """SQLite-backed :class:`AbstractSpaceRepo`."""
+    """SQLite-backed :class:`AbstractSpaceRepo`.
 
-    def __init__(self, db: AsyncDatabase) -> None:
+    ``key_manager`` is the household KEK used to wrap each space's Ed25519
+    identity *private* seed at rest (``spaces.identity_private_key``). It is
+    unavailable when the repos are built (the KEK is loaded later, in
+    ``_on_startup``), so it can also be wired post-construction via
+    :meth:`attach_key_manager`. The seed accessors (:meth:`set_space_seed` /
+    :meth:`get_space_seed`) require it; every other method works without it.
+    """
+
+    def __init__(self, db: AsyncDatabase, *, key_manager=None) -> None:
         self._db = db
+        self._kek = key_manager
+
+    def attach_key_manager(self, key_manager) -> None:
+        """Wire the household KEK after construction (see class docstring)."""
+        self._kek = key_manager
 
     # ── Spaces ─────────────────────────────────────────────────────────
 
@@ -462,6 +478,59 @@ class SqliteSpaceRepo:
             (space_id,),
         )
         return _row_to_space(row_to_dict(row))
+
+    async def set_space_seed(self, space_id: str, seed: bytes) -> None:
+        """KEK-wrap the 32-byte Ed25519 ``seed`` and store it in
+        ``spaces.identity_private_key``.
+
+        The seed is the space-authority signing key — it MUST NOT federate.
+        Stored ciphertext is bound to ``space_id`` as associated data so a
+        wrapped seed can't be swapped between rows. Requires the KEK to have
+        been wired (constructor or :meth:`attach_key_manager`).
+        """
+        if self._kek is None:
+            raise RuntimeError("space seed persistence requires a key_manager")
+        if len(seed) != 32:
+            raise ValueError("Ed25519 seed must be 32 bytes")
+        wrapped = self._kek.encrypt(seed, associated_data=space_id.encode("utf-8"))
+        await self._db.enqueue(
+            "UPDATE spaces SET identity_private_key=? WHERE id=?",
+            (wrapped, space_id),
+        )
+
+    async def set_space_pubkey(self, space_id: str, public_key_hex: str) -> None:
+        """Replace ``spaces.identity_public_key`` with ``public_key_hex``.
+
+        A targeted update used only by the owned-space seed mint
+        (:meth:`SpaceService.ensure_space_seed`) — the published public key
+        is otherwise immutable on a normal ``save`` upsert, so a remote stub
+        re-save can never clobber it.
+        """
+        await self._db.enqueue(
+            "UPDATE spaces SET identity_public_key=? WHERE id=?",
+            (public_key_hex, space_id),
+        )
+
+    async def get_space_seed(self, space_id: str) -> bytes | None:
+        """Return the raw 32-byte Ed25519 seed for ``space_id``, or ``None``
+        when the column is NULL (pre-upgrade owned space, or a non-owned
+        space whose private key we never held).
+
+        Decrypts the KEK-wrapped column with the same associated data
+        (``space_id``) used to wrap it.
+        """
+        if self._kek is None:
+            raise RuntimeError("space seed access requires a key_manager")
+        row = await self._db.fetchone(
+            "SELECT identity_private_key FROM spaces WHERE id=?",
+            (space_id,),
+        )
+        if row is None:
+            return None
+        wrapped = row["identity_private_key"]
+        if wrapped is None:
+            return None
+        return self._kek.decrypt(wrapped, associated_data=space_id.encode("utf-8"))
 
     async def list_by_type(self, space_type: SpaceType) -> list[Space]:
         rows = await self._db.fetchall(
