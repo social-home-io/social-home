@@ -532,6 +532,16 @@ bang.
 - Add env-var-gated stubs or dual code paths in production code to ease testing.
   Tests mock at the boundary (`sys.modules` injection or `unittest.mock.patch`);
   production always uses the real dependency.
+- **Add a new key, table, registry, or event when an existing one already proves
+  what you need.** Authorize by verifying a signature against a key the receiver
+  already stores — not a parallel allow-list/roster; reuse an existing content
+  key rather than minting a per-audience variant. New persistent structure (a
+  key, a table, a migration) has a high bar: reach for it only after reusing an
+  existing primitive is shown insufficient. (E.g. the GFS authorizes a space
+  relay by verifying a space-authority signature against the space pubkey it
+  already pins — no publisher-roster table, no separate subscriber key. The
+  §24.11 pipeline + the §"audit before a migration" rule are the same instinct:
+  prefer the existing shape.)
 - Import `aiolibdatachannel` without alias — use `import aiolibdatachannel as rtc`.
 - `import *`.
 - Commit `.env` files or secrets.
