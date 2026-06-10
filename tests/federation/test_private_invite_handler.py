@@ -8,7 +8,7 @@ member removed, plus the missing-field skip branches.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -222,6 +222,57 @@ async def test_member_removed_happy_path(handler):
         "u-bye",
     )
     assert any(isinstance(e, RemoteSpaceMemberRemoved) for e in handler.bus.events)
+
+
+async def test_joined_gossip_registers_broadcast_target(handler):
+    """A JOINED roster-gossip event registers the member's household in
+    ``space_instances`` so this household's broadcast_to_space_members can
+    reach a member it learned ONLY via gossip (no direct invite/accept).
+
+    Regression: without add_space_instance the gossip-learned member was
+    absent from space_instances and the offline-of-owner fan-out skipped them.
+    """
+    payload = {
+        "space_id": "sp-gossip",
+        "user_id": "u-new",
+        "instance_id": "inst-new",
+        "member_version": 3,
+    }
+    ev = _event("SPACE_MEMBER_JOINED", payload, from_instance="inst-new")
+    # Isolate the Fix-B behaviour: bypass the signature/space-key verify leg.
+    with patch.object(
+        PrivateSpaceInviteHandler,
+        "_verify_roster_gossip",
+        AsyncMock(return_value=("sp-gossip", payload)),
+    ):
+        await handler.h._on_space_member_joined(ev)
+
+    handler.remote_members.apply_member_event.assert_awaited_once()
+    handler.space_repo.add_space_instance.assert_awaited_once_with(
+        "sp-gossip", "inst-new"
+    )
+
+
+async def test_left_gossip_does_not_register_broadcast_target(handler):
+    """A LEFT (tombstoned) roster-gossip event still merges the CRDT but must
+    NOT add the household to space_instances (matches the not-tombstoned gate
+    in the fix)."""
+    payload = {
+        "space_id": "sp-gossip",
+        "user_id": "u-bye",
+        "instance_id": "inst-bye",
+        "member_version": 4,
+    }
+    ev = _event("SPACE_MEMBER_LEFT", payload, from_instance="inst-bye")
+    with patch.object(
+        PrivateSpaceInviteHandler,
+        "_verify_roster_gossip",
+        AsyncMock(return_value=("sp-gossip", payload)),
+    ):
+        await handler.h._on_space_member_left(ev)
+
+    handler.remote_members.apply_member_event.assert_awaited_once()
+    handler.space_repo.add_space_instance.assert_not_awaited()
 
 
 async def test_invite_with_roster_seats_remote_members_for_each_peer(handler):

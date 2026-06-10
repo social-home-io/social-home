@@ -1096,6 +1096,21 @@ class PrivateSpaceInviteHandler:
             member_version=member_version,
             tombstoned=tombstoned,
         )
+        # Register the member's household as a broadcast target. Without this a
+        # member learned ONLY via roster gossip (not a direct invite/accept) is
+        # absent from ``space_instances`` — so this household's
+        # ``broadcast_to_space_members`` (config edits, posts, rekeys) would
+        # never reach them. This is exactly the offline-of-owner case: a
+        # delegated admin must be able to fan a change out to every member it
+        # knows, not just the host it accepted from. We do NOT remove on a LEFT
+        # tombstone here — a household may host other live members of the space,
+        # and content access is already gated by epoch rotation, so a lingering
+        # target is harmless (and removal would need an any-other-live-member
+        # check). ``add_space_instance`` is an idempotent upsert and
+        # ``broadcast_to_space_members`` already excludes our own household, so
+        # a gossip row naming our instance is harmless.
+        if not tombstoned:
+            await self._space_repo.add_space_instance(space_id, instance_id)
 
     async def _on_space_member_joined(self, event: "FederationEvent") -> None:
         """Authority-signed roster JOINED (v_23) — apply (upsert) the member."""
