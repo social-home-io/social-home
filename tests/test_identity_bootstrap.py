@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from socialhome.crypto import b64url_decode
+from socialhome.crypto import b64url_decode, verify_ed25519
 from socialhome.federation.keywrap_seal import open_keywrap, seal_to_keywrap
 from socialhome.identity_bootstrap import ensure_instance_identity
 from socialhome.infrastructure.key_manager import KeyManager
@@ -86,3 +86,72 @@ async def test_lazy_mint_for_preexisting_identity_without_keywrap(db, key_manage
 async def test_b64_helper_import_sanity():
     # Guard against an accidental unused-import lint regression in the test.
     assert b64url_decode("AAAA") == b"\x00\x00\x00"
+
+
+# ── keywrap_sig: the identity self-signs its keywrap pubkey ───────────────
+#
+# So a sealer (Phase 5b part B) can verify the GFS-served keywrap key is
+# genuinely bound to the subscriber identity, never trusting the GFS value.
+
+
+async def test_fresh_identity_has_keywrap_sig_signed_by_identity(db, key_manager):
+    mat = await ensure_instance_identity(db, key_manager)
+    assert mat.keywrap_sig
+    assert verify_ed25519(
+        mat.identity_public_key,
+        mat.keywrap_public_key,
+        b64url_decode(mat.keywrap_sig),
+    )
+
+
+async def test_keywrap_sig_is_persisted(db, key_manager):
+    mat = await ensure_instance_identity(db, key_manager)
+    row = await db.fetchone(
+        "SELECT keywrap_sig FROM instance_identity WHERE id='self'",
+    )
+    assert row["keywrap_sig"] == mat.keywrap_sig
+
+
+async def test_keywrap_sig_is_stable_across_calls(db, key_manager):
+    first = await ensure_instance_identity(db, key_manager)
+    second = await ensure_instance_identity(db, key_manager)
+    assert second.keywrap_sig == first.keywrap_sig
+
+
+async def test_lazy_mint_keywrap_sig_for_preexisting_identity(db, key_manager):
+    """A pre-upgrade row that had a keywrap key but no sig gets the sig
+    minted (signed by the existing identity) on next boot."""
+    await ensure_instance_identity(db, key_manager)
+    # Simulate a pre-safeguard row: keywrap key present, but no sig column value.
+    await db.enqueue(
+        "UPDATE instance_identity SET keywrap_sig=NULL WHERE id='self'",
+    )
+
+    mat = await ensure_instance_identity(db, key_manager)
+    assert mat.keywrap_sig
+    assert verify_ed25519(
+        mat.identity_public_key,
+        mat.keywrap_public_key,
+        b64url_decode(mat.keywrap_sig),
+    )
+    row = await db.fetchone(
+        "SELECT keywrap_sig FROM instance_identity WHERE id='self'",
+    )
+    assert row["keywrap_sig"] == mat.keywrap_sig
+
+
+async def test_lazy_minted_keywrap_key_also_gets_a_sig(db, key_manager):
+    """A pre-5b row with NO keywrap key at all → both key and sig minted."""
+    await ensure_instance_identity(db, key_manager)
+    await db.enqueue(
+        "UPDATE instance_identity SET keywrap_private_key=NULL, "
+        "keywrap_public_key=NULL, keywrap_sig=NULL WHERE id='self'",
+    )
+
+    mat = await ensure_instance_identity(db, key_manager)
+    assert mat.keywrap_sig
+    assert verify_ed25519(
+        mat.identity_public_key,
+        mat.keywrap_public_key,
+        b64url_decode(mat.keywrap_sig),
+    )

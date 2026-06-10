@@ -26,10 +26,12 @@ import logging
 from datetime import datetime, timezone
 
 from .crypto import (
+    b64url_encode,
     derive_instance_id,
     generate_identity_keypair,
     generate_routing_secret,
     generate_x25519_keypair,
+    sign_ed25519,
 )
 from .db import AsyncDatabase
 from .federation.crypto_suite import parse_suite
@@ -57,6 +59,7 @@ class IdentityMaterial:
         "pq_public_key",
         "keywrap_private_key",
         "keywrap_public_key",
+        "keywrap_sig",
     )
 
     def __init__(
@@ -69,6 +72,7 @@ class IdentityMaterial:
         pq_public_key: bytes | None = None,
         keywrap_private_key: bytes,
         keywrap_public_key: bytes,
+        keywrap_sig: str,
     ) -> None:
         self.identity_seed = identity_seed
         self.identity_public_key = identity_public_key
@@ -77,6 +81,11 @@ class IdentityMaterial:
         self.pq_public_key = pq_public_key
         self.keywrap_private_key = keywrap_private_key
         self.keywrap_public_key = keywrap_public_key
+        #: ``b64url(sign_ed25519(identity_seed, keywrap_public_key))`` — binds
+        #: the key-wrap pubkey to this identity so a remote sealer can verify
+        #: the GFS-served key-wrap key end-to-end (``verify_keywrap_binding``)
+        #: and never trust a substituted value.
+        self.keywrap_sig = keywrap_sig
 
 
 async def ensure_instance_identity(
@@ -101,7 +110,7 @@ async def ensure_instance_identity(
     row = await db.fetchone(
         "SELECT identity_private_key, identity_public_key, instance_id, "
         "       pq_algorithm, pq_private_key, pq_public_key, "
-        "       keywrap_private_key, keywrap_public_key "
+        "       keywrap_private_key, keywrap_public_key, keywrap_sig "
         "FROM instance_identity WHERE id='self'",
     )
     if row is not None:
@@ -141,13 +150,26 @@ async def ensure_instance_identity(
         # pre-5b row (mirrors the PQ upgrade path above).
         kw_priv: bytes
         kw_pub: bytes
+        kw_sig: str
         existing_kw_pub_hex = row["keywrap_public_key"]
+        existing_kw_sig = row["keywrap_sig"]
         if existing_kw_pub_hex:
             kw_priv = key_manager.decrypt(row["keywrap_private_key"])
             kw_pub = bytes.fromhex(existing_kw_pub_hex)
+            if existing_kw_sig:
+                kw_sig = existing_kw_sig
+            else:
+                # Pre-safeguard row: key-wrap key present but unsigned. Sign it
+                # in-place with the identity seed (binds it for remote sealers).
+                kw_sig = await _mint_keywrap_sig(
+                    db, seed=seed, keywrap_pub=kw_pub, instance_id=instance_id
+                )
         else:
             kw_priv, kw_pub = await _mint_keywrap_keypair(
                 db, key_manager, instance_id=instance_id, upgrade=True
+            )
+            kw_sig = await _mint_keywrap_sig(
+                db, seed=seed, keywrap_pub=kw_pub, instance_id=instance_id
             )
 
         return IdentityMaterial(
@@ -158,6 +180,7 @@ async def ensure_instance_identity(
             pq_public_key=pq_pk,
             keywrap_private_key=kw_priv,
             keywrap_public_key=kw_pub,
+            keywrap_sig=kw_sig,
         )
 
     # First-start path: mint fresh classical + (optionally) PQ keypairs +
@@ -168,6 +191,7 @@ async def ensure_instance_identity(
     routing_secret = generate_routing_secret()
     keywrap = generate_x25519_keypair()
     encrypted_keywrap_priv = key_manager.encrypt(keywrap.private_key)
+    keywrap_sig = b64url_encode(sign_ed25519(keypair.private_key, keywrap.public_key))
 
     pq_algorithm: str | None = None
     pq_private_key_enc: str | None = None
@@ -187,9 +211,9 @@ async def ensure_instance_identity(
             identity_private_key, identity_public_key,
             key_format,
             pq_algorithm, pq_private_key, pq_public_key,
-            keywrap_private_key, keywrap_public_key,
+            keywrap_private_key, keywrap_public_key, keywrap_sig,
             routing_secret, created_at
-        ) VALUES('self', ?, ?, ?, ?, 'encrypted', ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES('self', ?, ?, ?, ?, 'encrypted', ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             instance_id,
@@ -201,6 +225,7 @@ async def ensure_instance_identity(
             pq_public_key_hex,
             encrypted_keywrap_priv,
             keywrap.public_key.hex(),
+            keywrap_sig,
             routing_secret,
             datetime.now(timezone.utc).isoformat(),
         ),
@@ -221,7 +246,33 @@ async def ensure_instance_identity(
         pq_public_key=pq_pk_bytes,
         keywrap_private_key=keywrap.private_key,
         keywrap_public_key=keywrap.public_key,
+        keywrap_sig=keywrap_sig,
     )
+
+
+async def _mint_keywrap_sig(
+    db: AsyncDatabase,
+    *,
+    seed: bytes,
+    keywrap_pub: bytes,
+    instance_id: str,
+) -> str:
+    """Sign + persist the key-wrap pubkey with the identity seed.
+
+    Used on the upgrade paths for a row that has a key-wrap key but no
+    signature (or whose key was just lazily minted). Returns the b64url
+    signature so the caller can put it on the returned material.
+    """
+    sig = b64url_encode(sign_ed25519(seed, keywrap_pub))
+    await db.enqueue(
+        "UPDATE instance_identity SET keywrap_sig=? WHERE id='self'",
+        (sig,),
+    )
+    log.info(
+        "instance_identity: signed key-wrap pubkey for instance_id=%s",
+        instance_id,
+    )
+    return sig
 
 
 async def _mint_keywrap_keypair(

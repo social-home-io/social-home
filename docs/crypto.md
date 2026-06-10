@@ -192,9 +192,27 @@ so a relay can't swap it. A fresh ephemeral per seal means no key
 reuse. Same `kem_suite` contract as the routed seal (`"x25519"` today,
 reject-unknown, PQ migration is a suite-bump). This is the channel
 Phase 5b uses to hand the per-space content key to an unpaired
-subscriber, GFS-blind. (The seal path must additionally verify the
-recipient key-wrap pubkey end-to-end against the household's signed
-identity rather than trusting the GFS-served value.)
+subscriber, GFS-blind.
+
+The key-wrap pubkey is **self-signed by the identity** so the seal path
+never trusts the GFS-served value. At identity setup each household
+produces `keywrap_sig = b64url(sign_ed25519(identity_seed,
+keywrap_public_key))` (stored `instance_identity.keywrap_sig`, published
+at GFS registration → `ClientInstance.keywrap_sig`). Before sealing, the
+sender calls `verify_keywrap_binding(instance_id, identity_pub,
+keywrap_pub, keywrap_sig)` on the GFS-served
+`{instance_id, public_key, keywrap_public_key, keywrap_sig}`, which
+returns true only when **all** hold (fail-closed, never raises):
+`derive_instance_id(identity_pub) == instance_id` (binds the identity
+key to the claimed id — 160-bit, the GFS can't forge it), the key-wrap
+pub is 32 bytes, and the Ed25519 signature over the key-wrap pub
+verifies against `identity_pub`. A malicious GFS that substitutes a
+key-wrap pubkey it controls has no valid signature from the real
+identity → rejected, so it can't read the sealed content key. This
+mirrors the #596 `derive_instance_id`-binding pattern: authorize against
+a key the receiver can bind first-hand, never the directory-served
+value. An older HFS that published no `keywrap_sig` is unsealable
+(graceful degrade).
 
 **Space content key delivery** (`services/space_crypto_service.py`)
 ships the per-space AES-256-GCM key to a new remote member via the

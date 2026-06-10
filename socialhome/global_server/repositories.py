@@ -142,8 +142,8 @@ class SqliteGfsFederationRepo:
             INSERT INTO client_instances(
                 instance_id, display_name, public_key, inbox_url,
                 status, auto_accept, connected_at,
-                keywrap_public_key, kem_suite
-            ) VALUES(?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
+                keywrap_public_key, kem_suite, keywrap_sig
+            ) VALUES(?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?, ?)
             ON CONFLICT(instance_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 public_key   = excluded.public_key,
@@ -151,7 +151,8 @@ class SqliteGfsFederationRepo:
                 status       = excluded.status,
                 auto_accept  = excluded.auto_accept,
                 keywrap_public_key = excluded.keywrap_public_key,
-                kem_suite          = excluded.kem_suite
+                kem_suite          = excluded.kem_suite,
+                keywrap_sig        = excluded.keywrap_sig
             """,
             (
                 instance.instance_id,
@@ -163,6 +164,7 @@ class SqliteGfsFederationRepo:
                 instance.connected_at or None,
                 instance.keywrap_public_key or None,
                 instance.kem_suite or None,
+                instance.keywrap_sig or None,
             ),
         )
 
@@ -1009,6 +1011,7 @@ def _row_to_instance(row: dict | None) -> ClientInstance | None:
         connected_at=row.get("connected_at", ""),
         keywrap_public_key=row.get("keywrap_public_key") or "",
         kem_suite=row.get("kem_suite") or "",
+        keywrap_sig=row.get("keywrap_sig") or "",
     )
 
 

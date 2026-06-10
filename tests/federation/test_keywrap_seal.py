@@ -11,13 +11,20 @@ from __future__ import annotations
 import pytest
 from cryptography.exceptions import InvalidTag
 
-from socialhome.crypto import generate_x25519_keypair
+from socialhome.crypto import (
+    b64url_encode,
+    derive_instance_id,
+    generate_identity_keypair,
+    generate_x25519_keypair,
+    sign_ed25519,
+)
 from socialhome.federation.keywrap_seal import (
     KEM_SUITE_X25519,
     SUPPORTED_KEM_SUITES,
     UnsupportedKemSuite,
     open_keywrap,
     seal_to_keywrap,
+    verify_keywrap_binding,
 )
 
 
@@ -118,3 +125,121 @@ def test_short_recipient_priv_rejected():
     sealed = seal_to_keywrap(recipient_keywrap_pub=kp.public_key, plaintext=b"x")
     with pytest.raises(ValueError):
         open_keywrap(sealed=sealed, recipient_keywrap_priv=b"\x00" * 16)
+
+
+# ── verify_keywrap_binding — the GFS-substitution safeguard ───────────────
+#
+# A sealer learns a subscriber's keywrap pubkey FROM THE GFS. A malicious GFS
+# could swap in a keywrap key it controls and read the sealed content key.
+# ``verify_keywrap_binding`` binds the keywrap key to the subscriber identity
+# end-to-end (mirrors the #596 derive_instance_id pattern) so the sealer never
+# trusts the GFS-served value. Fail-closed: returns False on any bad input.
+
+
+def _genuine_binding():
+    """Mint an identity + keywrap key with a valid self-signature binding."""
+    idkp = generate_identity_keypair()
+    kw = generate_x25519_keypair()
+    sig = b64url_encode(sign_ed25519(idkp.private_key, kw.public_key))
+    return {
+        "instance_id": derive_instance_id(idkp.public_key),
+        "identity_pub": idkp.public_key,
+        "keywrap_pub": kw.public_key,
+        "keywrap_sig": sig,
+    }
+
+
+def test_verify_keywrap_binding_genuine_is_true():
+    b = _genuine_binding()
+    assert verify_keywrap_binding(
+        instance_id=b["instance_id"],
+        identity_pub=b["identity_pub"],
+        keywrap_pub=b["keywrap_pub"],
+        keywrap_sig=b["keywrap_sig"],
+    )
+
+
+def test_verify_keywrap_binding_substituted_keywrap_is_rejected():
+    """The GFS-swap attack: an attacker replaces keywrap_pub with a key it
+    controls. The signature (from the real identity) no longer matches → False,
+    so the sealer never seals the content key to the GFS-controlled key."""
+    b = _genuine_binding()
+    attacker = generate_x25519_keypair()
+    assert (
+        verify_keywrap_binding(
+            instance_id=b["instance_id"],
+            identity_pub=b["identity_pub"],
+            keywrap_pub=attacker.public_key,  # swapped
+            keywrap_sig=b["keywrap_sig"],  # signs the REAL key, not this one
+        )
+        is False
+    )
+
+
+def test_verify_keywrap_binding_instance_id_mismatch_is_rejected():
+    """A GFS that serves an identity key not matching the claimed instance_id
+    is rejected (the id binds the identity key — 160-bit, can't be forged)."""
+    b = _genuine_binding()
+    other = generate_identity_keypair()
+    assert (
+        verify_keywrap_binding(
+            instance_id=derive_instance_id(other.public_key),  # != identity_pub's id
+            identity_pub=b["identity_pub"],
+            keywrap_pub=b["keywrap_pub"],
+            keywrap_sig=b["keywrap_sig"],
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize("bad_len", [31, 33])
+def test_verify_keywrap_binding_wrong_keywrap_length_is_rejected(bad_len):
+    b = _genuine_binding()
+    assert (
+        verify_keywrap_binding(
+            instance_id=b["instance_id"],
+            identity_pub=b["identity_pub"],
+            keywrap_pub=b"\x00" * bad_len,
+            keywrap_sig=b["keywrap_sig"],
+        )
+        is False
+    )
+
+
+def test_verify_keywrap_binding_empty_sig_is_rejected():
+    b = _genuine_binding()
+    assert (
+        verify_keywrap_binding(
+            instance_id=b["instance_id"],
+            identity_pub=b["identity_pub"],
+            keywrap_pub=b["keywrap_pub"],
+            keywrap_sig="",
+        )
+        is False
+    )
+
+
+def test_verify_keywrap_binding_malformed_sig_is_rejected():
+    b = _genuine_binding()
+    assert (
+        verify_keywrap_binding(
+            instance_id=b["instance_id"],
+            identity_pub=b["identity_pub"],
+            keywrap_pub=b["keywrap_pub"],
+            keywrap_sig="!!!not base64!!!",
+        )
+        is False
+    )
+
+
+def test_verify_keywrap_binding_bad_identity_pub_length_is_rejected():
+    b = _genuine_binding()
+    assert (
+        verify_keywrap_binding(
+            instance_id=b["instance_id"],
+            identity_pub=b"\x00" * 16,  # not a 32-byte Ed25519 pub
+            keywrap_pub=b["keywrap_pub"],
+            keywrap_sig=b["keywrap_sig"],
+        )
+        is False
+    )

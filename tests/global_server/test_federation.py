@@ -94,6 +94,22 @@ async def test_register_instance_without_keywrap_defaults_empty(svc):
     assert inst is not None
     assert inst.keywrap_public_key == ""
     assert inst.kem_suite == ""
+    assert inst.keywrap_sig == ""
+
+
+async def test_register_instance_persists_keywrap_sig(svc):
+    """The keywrap self-signature rides registration and round-trips."""
+    await svc.register_instance(
+        "inst-kws",
+        "aa" * 32,
+        "http://kws.example.com/wh",
+        keywrap_public_key="cc" * 32,
+        kem_suite="x25519",
+        keywrap_sig="c2lnbmF0dXJl",
+    )
+    inst = await svc._repo.get_instance("inst-kws")
+    assert inst is not None
+    assert inst.keywrap_sig == "c2lnbmF0dXJl"
 
 
 async def test_list_spaces_empty_initially(svc):

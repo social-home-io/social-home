@@ -66,6 +66,7 @@ class GfsConnectionCollectionView(BaseView):
         own_instance_id = self.request.app[K.instance_id_key]
         own_pk: bytes = self.request.app[K.instance_public_key_key]
         own_keywrap_pk: bytes = self.request.app[K.instance_keywrap_public_key_key]
+        own_keywrap_sig: str = self.request.app[K.instance_keywrap_sig_key]
         config = self.request.app[K.config_key]
         try:
             conn = await svc.pair(
@@ -75,6 +76,7 @@ class GfsConnectionCollectionView(BaseView):
                 own_inbox_url=own_base,
                 own_display_name=config.instance_name,
                 own_keywrap_public_key_hex=own_keywrap_pk.hex(),
+                own_keywrap_sig=own_keywrap_sig,
             )
         except GfsConnectionError as exc:
             return error_response(422, "GFS_PAIRING_FAILED", str(exc))

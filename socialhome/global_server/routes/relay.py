@@ -43,13 +43,16 @@ class RegisterView(GfsBaseView):
     """``POST /gfs/register`` — register or update a client instance.
 
     Body shape: ``{token, instance_id, public_key, inbox_url,
-    display_name?, keywrap_public_key?, kem_suite?}``. The ``token`` is
-    the single-use pairing token from the QR
+    display_name?, keywrap_public_key?, kem_suite?, keywrap_sig?}``. The
+    ``token`` is the single-use pairing token from the QR
     (``PairingTokenService.consume``); the rest is the HFS's own identity.
     ``keywrap_public_key`` + ``kem_suite`` publish the household's X25519
-    key-wrap pubkey (Phase 5b foundation) — omitted by older HFS, in which
-    case that household can't be sealed-to yet. Requests without a valid
-    token are rejected with ``401`` so a stale QR can't be replayed.
+    key-wrap pubkey (Phase 5b foundation); ``keywrap_sig`` is the household's
+    self-signature over that pubkey so a remote sealer can bind it to the
+    household identity end-to-end and never trust the GFS-served value — all
+    omitted by older HFS, in which case that household can't be sealed-to yet.
+    Requests without a valid token are rejected with ``401`` so a stale QR
+    can't be replayed.
     """
 
     async def post(self) -> web.Response:
@@ -74,6 +77,7 @@ class RegisterView(GfsBaseView):
         display_name = str(body.get("display_name") or "")
         keywrap_public_key = str(body.get("keywrap_public_key") or "")
         kem_suite = str(body.get("kem_suite") or "")
+        keywrap_sig = str(body.get("keywrap_sig") or "")
         auto_accept = (await admin_repo.get_config("auto_accept_clients")) == "1"
         await svc.register_instance(
             instance_id,
@@ -83,6 +87,7 @@ class RegisterView(GfsBaseView):
             auto_accept=auto_accept,
             keywrap_public_key=keywrap_public_key,
             kem_suite=kem_suite,
+            keywrap_sig=keywrap_sig,
         )
         return web.json_response(
             {

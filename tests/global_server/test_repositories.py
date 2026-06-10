@@ -86,6 +86,24 @@ async def test_get_instance_legacy_row_without_keywrap_is_empty(fed):
     assert got is not None
     assert got.keywrap_public_key == ""
     assert got.kem_suite == ""
+    assert got.keywrap_sig == ""
+
+
+async def test_upsert_instance_round_trips_keywrap_sig(fed):
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="kws",
+            display_name="KWS",
+            public_key="aa" * 32,
+            inbox_url="http://kws",
+            keywrap_public_key="dd" * 32,
+            kem_suite="x25519",
+            keywrap_sig="c2ln",
+        )
+    )
+    got = await fed.get_instance("kws")
+    assert got is not None
+    assert got.keywrap_sig == "c2ln"
 
 
 async def test_set_instance_display_name_updates_only_name(fed):

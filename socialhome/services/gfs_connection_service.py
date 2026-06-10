@@ -128,6 +128,7 @@ class GfsConnectionService:
         own_inbox_url: str,
         own_display_name: str = "",
         own_keywrap_public_key_hex: str = "",
+        own_keywrap_sig: str = "",
     ) -> GfsConnection:
         """Pair with a GFS using a scanned QR payload.
 
@@ -178,10 +179,13 @@ class GfsConnectionService:
             )
 
         # 2. Register the HFS instance using the QR token. Publish the local
-        #    X25519 key-wrap pubkey + KEM suite (Phase 5b foundation) so a
-        #    future content-key handoff can seal to this household. An HFS
-        #    without a provisioned key-wrap key ships none → the GFS stores an
-        #    empty field and this household just can't be sealed-to yet.
+        #    X25519 key-wrap pubkey + KEM suite (Phase 5b foundation) plus the
+        #    identity's self-signature over that pubkey (``keywrap_sig``) so a
+        #    future content-key handoff can seal to this household AND a remote
+        #    sealer can bind the key-wrap key to this identity end-to-end (never
+        #    trusting the GFS-served value). An HFS without a provisioned
+        #    key-wrap key ships none → the GFS stores empty fields and this
+        #    household just can't be sealed-to yet.
         register_body: dict[str, str] = {
             "token": token,
             "instance_id": own_instance_id,
@@ -192,6 +196,11 @@ class GfsConnectionService:
         if own_keywrap_public_key_hex:
             register_body["keywrap_public_key"] = own_keywrap_public_key_hex
             register_body["kem_suite"] = KEM_SUITE_X25519
+            # The self-signature binding the key-wrap pubkey to this household's
+            # identity (so a remote sealer verifies it end-to-end, never the
+            # GFS-served value). Only meaningful alongside the pubkey it signs.
+            if own_keywrap_sig:
+                register_body["keywrap_sig"] = own_keywrap_sig
         register_url = f"{gfs_url}/gfs/register"
         try:
             async with client.post(

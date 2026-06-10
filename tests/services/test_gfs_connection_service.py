@@ -650,11 +650,13 @@ async def test_pair_ships_keywrap_pubkey_and_kem_suite(env):
         {"gfs_url": "https://gfs.example.com", "token": "tok"},
         **_OWN_PAIR_KW,
         own_keywrap_public_key_hex="ee" * 32,
+        own_keywrap_sig="c2ln",
     )
     body = session._last_body
     assert body is not None
     assert body["keywrap_public_key"] == "ee" * 32
     assert body["kem_suite"] == "x25519"
+    assert body["keywrap_sig"] == "c2ln"
 
 
 async def test_pair_omits_keywrap_when_unavailable(env):
