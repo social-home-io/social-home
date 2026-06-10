@@ -524,6 +524,88 @@ class GfsConnectionService:
                 )
         return published
 
+    async def publish_space_event(
+        self,
+        *,
+        space_id: str,
+        event_type: str,
+        payload: dict,
+        from_instance: str,
+    ) -> int:
+        """Relay a single space-content event to a space's GFS subscribers.
+
+        POSTs ``{space_id, event_type, payload, from_instance, signature}``
+        to ``POST /gfs/publish`` on every GFS the space is published to.
+        The ``payload`` is the caller-built wire envelope — for the Phase-5a2
+        public-post relay it is the already-encrypted + authority-signed
+        ``{space_id, epoch, encrypted_payload, authority_sig, ...}`` dict, so
+        the GFS stays content-blind and authorizes the relay via the embedded
+        space-authority signature (see :class:`SpacePublicOutbound`).
+
+        ``signature`` is THIS household's Ed25519 *transport* signature over
+        the canonical body — the GFS verifies it against the registered
+        instance pubkey to authenticate ``from_instance`` (a separate concern
+        from the content-authority signature inside ``payload``).
+
+        Fail-closed: with no signing identity wired, nothing is sent (returns
+        ``0``). A per-GFS transport/HTTP failure is logged and skipped so one
+        unreachable server doesn't abort the fan-out. Returns the number of
+        GFS instances the event was accepted by.
+        """
+        if self._http_client is None or not self._own_signing_key:
+            log.warning(
+                "publish_space_event: no signing identity wired — "
+                "dropping relay for space %s",
+                space_id,
+            )
+            return 0
+        conns = await self._repo.list_gfs_for_space(space_id)
+        if not conns:
+            return 0
+        body = {
+            "space_id": space_id,
+            "event_type": event_type,
+            "payload": payload,
+            "from_instance": from_instance,
+        }
+        canonical = json.dumps(
+            body,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        body["signature"] = b64url_encode(
+            sign_ed25519(self._own_signing_key, canonical),
+        )
+        delivered = 0
+        for conn in conns:
+            if conn.status != "active":
+                continue
+            url = f"{conn.inbox_url}/gfs/publish"
+            try:
+                async with self._http_client.post(
+                    url,
+                    json=body,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status < 300:
+                        delivered += 1
+                    else:
+                        log.warning(
+                            "publish_space_event: GFS %s rejected relay "
+                            "for space %s — HTTP %d",
+                            conn.id,
+                            space_id,
+                            resp.status,
+                        )
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                log.warning(
+                    "publish_space_event: GFS %s relay failed for space %s: %s",
+                    conn.id,
+                    space_id,
+                    exc,
+                )
+        return delivered
+
     async def unpublish_space_from_all(self, space_id: str) -> int:
         """Unpublish a space from every GFS it was published to.
 

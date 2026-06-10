@@ -1,0 +1,260 @@
+"""Recipient-side consumer for relayed public space posts (Phase 5a2).
+
+Handles ``{type:"relay", event_type:"space_post_public", payload:<envelope>}``
+frames the GFS pushes over the SH↔GFS WebSocket. Mirrors
+:class:`socialhome.services.moment_public_inbound.MomentPublicInbound`.
+
+The pipeline is defence-in-depth — the GFS already verified the authority
+signature before fanning out, but the relay (and the GFS) are never
+trusted by the receiver:
+
+1. **Authority verify** — re-verify the space-authority Ed25519 signature
+   against the locally-mirrored ``spaces.identity_public_key``. A space we
+   don't mirror, a space with no pinned pubkey, or a failed/forged
+   signature → drop (WARNING).
+2. **Decrypt** — decrypt the envelope's ``encrypted_payload`` under the
+   per-space content key for the stated epoch. If we don't hold that
+   epoch's key (subscribers receive it in Phase 5b) → drop gracefully.
+3. **Author self-cert** — verify ``derive_user_id(author_pk, username) ==
+   author_user_id`` so a relay can't forge authorship.
+4. **Dedupe** — the GFS relay is at-least-once and keeps no replay cache
+   (it's content-blind, it can't see the post id). Drop if a post with
+   this id already exists locally (idempotent — the content-layer replay
+   backstop the GFS relay design relies on).
+5. **Persist + publish** — save to ``space_posts`` (the same store the
+   §24.11 inbound path uses) and publish :class:`SpacePostCreated` with
+   ``origin_instance_id`` set (so the local realtime/search surfaces light
+   up AND the federation outbound bridge's loop-guard skips re-fanning).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import TYPE_CHECKING, Any
+
+from cryptography.exceptions import InvalidTag
+
+from ..authority_sig import (
+    AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    UnsupportedAuthoritySuite,
+    strip_authority_sig_fields,
+    verify_authority_event,
+)
+from ..crypto import b64url_decode, derive_user_id, verify_ed25519
+from ..domain.events import SpacePostCreated
+from ..domain.post import LocationData, Post, PostType
+from ..domain.presence import truncate_coord
+from ..infrastructure.event_bus import EventBus
+from ..utils.datetime import parse_iso8601_lenient
+from .space_public_author import author_signing_bytes
+
+if TYPE_CHECKING:
+    from ..repositories.space_post_repo import AbstractSpacePostRepo
+    from ..repositories.space_repo import AbstractSpaceRepo
+    from .space_crypto_service import SpaceContentEncryption
+
+log = logging.getLogger(__name__)
+
+
+class SpacePublicInbound:
+    """GFS-relay → local-persist consumer for public/global space posts."""
+
+    __slots__ = ("_bus", "_spaces", "_crypto", "_posts")
+
+    def __init__(
+        self,
+        *,
+        bus: EventBus,
+        space_repo: "AbstractSpaceRepo",
+        space_crypto: "SpaceContentEncryption",
+        space_post_repo: "AbstractSpacePostRepo",
+    ) -> None:
+        self._bus = bus
+        self._spaces = space_repo
+        self._crypto = space_crypto
+        self._posts = space_post_repo
+
+    async def handle(self, frame: dict[str, Any], *, gfs_id: str | None = None) -> None:
+        """Dispatch one GFS relay frame. Non-``space_post_public`` frames
+        are ignored so this can sit on the generic relay channel."""
+        if frame.get("event_type") != AUTHORITY_EVENT_SPACE_POST_PUBLIC:
+            return
+        envelope = frame.get("payload")
+        if not isinstance(envelope, dict):
+            return
+        from_instance = str(frame.get("from_instance") or "")
+        await self._on_relay(envelope, from_instance=from_instance)
+
+    async def _on_relay(self, envelope: dict, *, from_instance: str) -> None:
+        space_id = str(envelope.get("space_id") or "")
+        if not space_id:
+            return
+        space = await self._spaces.get(space_id)
+        if space is None or not space.identity_public_key:
+            log.warning(
+                "space_public.inbound: no local space / pubkey for %s — dropped",
+                space_id,
+            )
+            return
+        if not self._verify_authority(space_id, envelope, space.identity_public_key):
+            log.warning(
+                "space_public.inbound: authority signature failed for space %s",
+                space_id,
+            )
+            return
+        epoch = envelope.get("epoch")
+        ciphertext = envelope.get("encrypted_payload")
+        if not isinstance(epoch, int) or not isinstance(ciphertext, str):
+            log.warning(
+                "space_public.inbound: malformed envelope for space %s", space_id
+            )
+            return
+        try:
+            pt = await self._crypto.decrypt(space_id, epoch, ciphertext)
+        except (RuntimeError, ValueError, InvalidTag) as exc:
+            # No epoch key held yet (Phase 5b ships subscriber keys), a
+            # malformed ciphertext (ValueError), or a tampered-but-valid-b64
+            # ciphertext whose AEAD tag fails (InvalidTag — NOT a ValueError,
+            # so it would otherwise escape this guard). Drop gracefully, never
+            # crash, per this module's defence-in-depth contract.
+            log.info(
+                "space_public.inbound: cannot decrypt space %s epoch %s: %s",
+                space_id,
+                epoch,
+                exc,
+            )
+            return
+        try:
+            inner = json.loads(pt)
+        except json.JSONDecodeError:
+            log.warning(
+                "space_public.inbound: undecodable inner payload for space %s",
+                space_id,
+            )
+            return
+        if not isinstance(inner, dict):
+            return
+
+        post_id = str(inner.get("post_id") or "")
+        author_user_id = str(inner.get("author_user_id") or "")
+        author_pk_hex = str(inner.get("author_pk") or "")
+        username = str(inner.get("author_username") or "")
+        if not (post_id and author_user_id and author_pk_hex and username):
+            log.warning(
+                "space_public.inbound: missing identity fields for space %s",
+                space_id,
+            )
+            return
+        # Author self-cert: the user id MUST be derivable from the author's
+        # instance pubkey + username. This only binds author_pk ↔ author_user_id
+        # — both are PUBLIC, so on its own it can't prevent a seed-holder from
+        # attributing a post to any member.
+        if not self._self_cert_ok(author_pk_hex, username, author_user_id):
+            log.warning(
+                "space_public.inbound: author self-cert mismatch for post %s",
+                post_id,
+            )
+            return
+        # Per-author signature: the named author's HOUSEHOLD identity key must
+        # have signed the inner content. Only a household holding the author's
+        # identity seed can produce this, so a malicious seed-holder cannot
+        # forge authorship. Fail-closed if missing / malformed / invalid.
+        if not self._author_sig_ok(inner, author_pk_hex):
+            log.warning(
+                "space_public.inbound: author signature failed for post %s",
+                post_id,
+            )
+            return
+        # Dedupe by post id — the GFS relay is at-least-once.
+        if await self._posts.get(post_id) is not None:
+            log.debug("space_public.inbound: duplicate post %s — dropped", post_id)
+            return
+
+        post = self._post_from_inner(post_id, author_user_id, inner)
+        await self._posts.save(space_id, post)
+        await self._bus.publish(
+            SpacePostCreated(
+                post=post,
+                space_id=space_id,
+                origin_instance_id=from_instance
+                or str(inner.get("origin_instance_id") or ""),
+            )
+        )
+
+    # ── Helpers ──────────────────────────────────────────────────────────
+
+    def _verify_authority(
+        self, space_id: str, envelope: dict, space_public_key_hex: str
+    ) -> bool:
+        try:
+            return verify_authority_event(
+                event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+                space_id=space_id,
+                payload=strip_authority_sig_fields(envelope),
+                authority_sig=str(envelope.get("authority_sig") or ""),
+                authority_sig_suite=str(envelope.get("authority_sig_suite") or ""),
+                space_public_key=bytes.fromhex(space_public_key_hex),
+            )
+        except UnsupportedAuthoritySuite, ValueError:
+            # Unknown suite (no default fallback) or malformed pinned pubkey
+            # → unverifiable, fail-closed.
+            return False
+
+    @staticmethod
+    def _self_cert_ok(author_pk_hex: str, username: str, author_user_id: str) -> bool:
+        try:
+            return (
+                derive_user_id(bytes.fromhex(author_pk_hex), username) == author_user_id
+            )
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _author_sig_ok(inner: dict, author_pk_hex: str) -> bool:
+        """Verify the inner ``author_sig`` against ``author_pk`` over the
+        canonical author signing bytes. Fail-closed on missing / malformed /
+        invalid signature."""
+        author_sig = inner.get("author_sig")
+        if not isinstance(author_sig, str) or not author_sig:
+            return False
+        try:
+            author_pk = bytes.fromhex(author_pk_hex)
+            sig = b64url_decode(author_sig)
+        except ValueError:
+            return False
+        return verify_ed25519(author_pk, author_signing_bytes(inner), sig)
+
+    @staticmethod
+    def _post_from_inner(post_id: str, author: str, inner: dict) -> Post:
+        try:
+            post_type = PostType(str(inner.get("type") or "text"))
+        except ValueError:
+            post_type = PostType.TEXT
+        # GPS is re-truncated to 4 dp on receive (never trust the wire
+        # precision) — mirrors federation_inbound_service._post_from_payload.
+        location: LocationData | None = None
+        raw_loc = inner.get("location")
+        if isinstance(raw_loc, dict):
+            try:
+                lat_t = truncate_coord(float(raw_loc["lat"]))
+                lon_t = truncate_coord(float(raw_loc["lon"]))
+                if lat_t is None or lon_t is None:
+                    raise ValueError("nan coordinate")
+                location = LocationData(
+                    lat=lat_t, lon=lon_t, label=raw_loc.get("label")
+                )
+            except KeyError, TypeError, ValueError:
+                location = None
+        image_urls = inner.get("image_urls")
+        return Post(
+            id=post_id,
+            author=author,
+            type=post_type,
+            content=inner.get("content"),
+            media_url=inner.get("media_url"),
+            image_urls=tuple(image_urls) if isinstance(image_urls, list) else (),
+            location=location,
+            created_at=parse_iso8601_lenient(inner.get("created_at")),
+            hidden_from_feed=bool(inner.get("hidden_from_feed", False)),
+        )

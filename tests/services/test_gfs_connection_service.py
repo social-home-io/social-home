@@ -1207,3 +1207,103 @@ async def test_subscribe_to_gfs_space_raises_without_signing_key(env):
     with pytest.raises(GfsConnectionError):
         await svc.subscribe_to_gfs_space("sp-join", "gfs-sub2")
     assert session.calls == []
+
+
+# ─── publish_space_event (Phase 5a2 — relay a space event to the GFS) ──────
+
+
+class _RecordingSession:
+    """aiohttp-session stub that records EVERY POST body + url.
+
+    The shared :class:`_StubSession` keeps only the last body; the
+    fan-out tests need every (url, body) pair to assert the relay hit
+    each published GFS.
+    """
+
+    def __init__(self, status: int = 200) -> None:
+        self._status = status
+        self.posts: list[tuple[str, dict]] = []
+
+    def post(self, url, *, json=None, **_kw):
+        self.posts.append((url, json or {}))
+        return _StubResp(self._status, {"status": "published"})
+
+
+async def _publish_event_svc(env, session, *, space_id: str, gfs_ids: list[str]):
+    """Service wired for publish_space_event, with the space published to
+    each of *gfs_ids* (so ``list_gfs_for_space`` returns them)."""
+    db, conn_repo = env
+    for gid in gfs_ids:
+        await conn_repo.save(_make_conn(gid, inbox_url=f"https://{gid}.example"))
+        await conn_repo.publish_space(space_id, gid)
+    kp = generate_identity_keypair()
+    svc = GfsConnectionService(conn_repo, http_client=session)
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    return svc, kp
+
+
+async def test_publish_space_event_signs_and_fans_to_each_published_gfs(env):
+    """A relay event is POSTed to ``/gfs/publish`` on EVERY GFS the space
+    is published to, carrying the verbatim envelope as ``payload`` and a
+    valid household transport signature over the canonical body."""
+    from socialhome.crypto import b64url_decode, verify_ed25519
+
+    session = _RecordingSession()
+    svc, kp = await _publish_event_svc(
+        env, session, space_id="sp-relay", gfs_ids=["g1", "g2"]
+    )
+    envelope = {"space_id": "sp-relay", "epoch": 0, "encrypted_payload": "ct"}
+    delivered = await svc.publish_space_event(
+        space_id="sp-relay",
+        event_type="space_post_public",
+        payload=envelope,
+        from_instance="alpha.home",
+    )
+    assert delivered == 2
+    urls = sorted(u for u, _ in session.posts)
+    assert urls == ["https://g1.example/gfs/publish", "https://g2.example/gfs/publish"]
+    # Body shape + signature verifies over the canonical {space_id,
+    # event_type, payload, from_instance} (signature stripped).
+    _, body = session.posts[0]
+    assert body["space_id"] == "sp-relay"
+    assert body["event_type"] == "space_post_public"
+    assert body["payload"] == envelope
+    assert body["from_instance"] == "alpha.home"
+    sig = body.pop("signature")
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig))
+
+
+async def test_publish_space_event_returns_zero_without_signing_key(env):
+    """No identity wired → fail closed, no POST."""
+    _, repo = env
+    await repo.save(_make_conn("g-x", inbox_url="https://gx.example"))
+    await repo.publish_space("sp-x", "g-x")
+    session = _RecordingSession()
+    svc = GfsConnectionService(repo, http_client=session)
+    delivered = await svc.publish_space_event(
+        space_id="sp-x",
+        event_type="space_post_public",
+        payload={"space_id": "sp-x"},
+        from_instance="alpha.home",
+    )
+    assert delivered == 0
+    assert session.posts == []
+
+
+async def test_publish_space_event_skips_unpublished_space(env):
+    """A space published to no GFS → nothing sent."""
+    session = _RecordingSession()
+    svc, _ = await _publish_event_svc(env, session, space_id="sp-pub", gfs_ids=[])
+    delivered = await svc.publish_space_event(
+        space_id="sp-none",
+        event_type="space_post_public",
+        payload={"space_id": "sp-none"},
+        from_instance="alpha.home",
+    )
+    assert delivered == 0
+    assert session.posts == []
