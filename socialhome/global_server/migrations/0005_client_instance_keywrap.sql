@@ -1,0 +1,40 @@
+-- Published X25519 KEY-WRAP public key + KEM suite per registered household.
+--
+-- Phase 5b foundation (owner-offline epic): to seal a payload (later the
+-- per-space content key) to a household that is NOT a paired peer, the sender
+-- needs that household's PUBLISHED X25519 key-wrap public key. Households
+-- mint a dedicated key-wrap keypair at identity setup (SH migration 0034,
+-- ``identity_bootstrap``) and publish the PUBLIC half here at ``/gfs/register``.
+-- The GFS itself stays content-blind — it only stores + serves the pubkey so
+-- a future seal can be addressed; it never holds the matching private half.
+--
+-- ``kem_suite`` carries the suite tag (``"x25519"`` today) so the Phase-2 PQ
+-- migration (``x25519+mlkem768`` hybrid, concatenated key material) is a
+-- wire-additive change — receivers reject suites they don't know rather than
+-- assume one. Mirrors the ``sig_suite`` / routed-crypto suite contract
+-- (``docs/crypto.md`` § "The suite contract").
+--
+-- Migration audit (mandatory 3 points, CLAUDE.md):
+--   (1) Audited paths. ``SqliteGfsFederationRepo.upsert_instance`` /
+--       ``get_instance`` (+ ``_row_to_instance``) are the only writer/reader
+--       of ``client_instances``; the registration route (``RegisterView``) and
+--       ``GfsFederationService.register_instance`` feed them. No existing
+--       column carries an X25519 key-wrap key: ``public_key`` is the household
+--       Ed25519 TRANSPORT verify key (wrong algorithm + wrong purpose — it
+--       authenticates the household at the GFS edge, it is not a KEM pubkey).
+--   (2) Non-migration alternative considered + rejected. Reusing ``public_key``
+--       would couple the transport-auth key to key-wrapping and forbid the
+--       independent PQ KEM swap (the whole point of a dedicated key). Carrying
+--       the pubkey only on each event was rejected for the same reason the
+--       space-authority pin was (#599 / SH migration 0029 audit): a published
+--       directory value must persist, not be re-asserted per message.
+--   (3) Smallest possible change. Two additive, NULL-default ``ADD COLUMN``s.
+--       NULL = an older HFS that published no key-wrap pubkey → that household
+--       simply can't be sealed-to yet (graceful; the handoff degrades). No
+--       backfill, no table rewrite, no index.
+--
+-- Value domain:
+--   keywrap_public_key  NULL → none published (older HFS); text → 64 hex chars
+--   kem_suite           NULL → none published; text → e.g. ``"x25519"``
+ALTER TABLE client_instances ADD COLUMN keywrap_public_key TEXT;
+ALTER TABLE client_instances ADD COLUMN kem_suite TEXT;

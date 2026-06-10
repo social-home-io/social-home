@@ -180,6 +180,22 @@ future hybrid (`x25519+mlkem768`, Phase 2) is a suite-bump rather
 than a wire-format break — see [`protocol/spaces.md` → "Mesh
 routing"](protocol/spaces.md#mesh-routing-space_routed).
 
+**Static-recipient key-wrap seal** (`federation/keywrap_seal.py`) — a
+classic sealed-box (ECIES) for sealing to a household that is **not**
+a paired peer and without online ephemeral discovery: the recipient
+publishes a long-lived X25519 *key-wrap* public key (at GFS
+registration → `instance_identity.keywrap_public_key` /
+`ClientInstance.keywrap_public_key`), and the sender does
+`DH(fresh-ephemeral, recipient-keywrap-pub)` → HKDF-SHA256 (info
+``space-keywrap:v1``) → AES-256-GCM, binding the ephemeral pub as AAD
+so a relay can't swap it. A fresh ephemeral per seal means no key
+reuse. Same `kem_suite` contract as the routed seal (`"x25519"` today,
+reject-unknown, PQ migration is a suite-bump). This is the channel
+Phase 5b uses to hand the per-space content key to an unpaired
+subscriber, GFS-blind. (The seal path must additionally verify the
+recipient key-wrap pubkey end-to-end against the household's signed
+identity rather than trusting the GFS-served value.)
+
 **Space content key delivery** (`services/space_crypto_service.py`)
 ships the per-space AES-256-GCM key to a new remote member via the
 §D1b invite/redeem envelope. The payload wears a `key_suite` field

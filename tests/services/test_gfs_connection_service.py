@@ -630,6 +630,61 @@ async def test_pair_success(env):
     assert saved is not None
 
 
+async def test_pair_ships_keywrap_pubkey_and_kem_suite(env):
+    _, repo = env
+    session = _StubSession(
+        method_responses={
+            "GET": (
+                200,
+                {
+                    "gfs_instance_id": "remote-gfs-id",
+                    "public_key": "bb" * 32,
+                    "server_name": "Test GFS",
+                },
+            ),
+            "POST": (200, {"status": "registered"}),
+        },
+    )
+    svc = GfsConnectionService(repo, http_client=session)
+    await svc.pair(
+        {"gfs_url": "https://gfs.example.com", "token": "tok"},
+        **_OWN_PAIR_KW,
+        own_keywrap_public_key_hex="ee" * 32,
+    )
+    body = session._last_body
+    assert body is not None
+    assert body["keywrap_public_key"] == "ee" * 32
+    assert body["kem_suite"] == "x25519"
+
+
+async def test_pair_omits_keywrap_when_unavailable(env):
+    """A caller that passes no key-wrap pubkey → empty field, no kem_suite
+    claim (an older/unprovisioned HFS can't seal yet — graceful)."""
+    _, repo = env
+    session = _StubSession(
+        method_responses={
+            "GET": (
+                200,
+                {
+                    "gfs_instance_id": "remote",
+                    "public_key": "bb" * 32,
+                    "server_name": "GFS",
+                },
+            ),
+            "POST": (200, {"status": "registered"}),
+        },
+    )
+    svc = GfsConnectionService(repo, http_client=session)
+    await svc.pair(
+        {"gfs_url": "https://gfs", "token": "tok"},
+        **_OWN_PAIR_KW,
+    )
+    body = session._last_body
+    assert body is not None
+    assert body.get("keywrap_public_key", "") == ""
+    assert body.get("kem_suite", "") == ""
+
+
 async def test_pair_pending_status(env):
     """A GFS with auto-accept disabled returns ``status="pending"``;
     the local connection lands as ``pending`` (not ``active``) so the

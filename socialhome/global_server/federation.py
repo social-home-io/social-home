@@ -77,8 +77,16 @@ class GfsFederationService:
         *,
         display_name: str = "",
         auto_accept: bool = False,
+        keywrap_public_key: str = "",
+        kem_suite: str = "",
     ) -> None:
-        """Register or update a client household instance."""
+        """Register or update a client household instance.
+
+        ``keywrap_public_key`` + ``kem_suite`` carry the household's published
+        X25519 key-wrap pubkey (Phase 5b foundation) — empty for an older HFS
+        that ships none, in which case that household simply can't be
+        sealed-to yet.
+        """
         await self._repo.upsert_instance(
             ClientInstance(
                 instance_id=instance_id,
@@ -87,6 +95,8 @@ class GfsFederationService:
                 inbox_url=inbox_url,
                 status="active" if auto_accept else "pending",
                 auto_accept=auto_accept,
+                keywrap_public_key=keywrap_public_key,
+                kem_suite=kem_suite,
             )
         )
         log.debug("GFS: registered instance %s inbox=%s", instance_id, inbox_url)

@@ -20,6 +20,16 @@ class ClientInstance:
     status: str = "pending"  # 'pending' | 'active' | 'banned'
     auto_accept: bool = False
     connected_at: str = ""  # ISO 8601
+    #: Published X25519 *key-wrap* public key (hex), used to seal a payload
+    #: (Phase 5b: the per-space content key) to this household when it is not a
+    #: paired peer. Empty when an older HFS published none → such a household
+    #: can't be sealed-to yet (the handoff degrades gracefully). See
+    #: ``federation/keywrap_seal.py``.
+    keywrap_public_key: str = ""
+    #: KEM suite tag for ``keywrap_public_key`` (e.g. ``"x25519"``). Carried so
+    #: the Phase-2 PQ migration (``x25519+mlkem768``) is wire-additive — empty
+    #: when none was published.
+    kem_suite: str = ""
 
 
 @dataclass(slots=True, frozen=True)

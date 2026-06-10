@@ -1991,6 +1991,7 @@ def create_app(config: Config | None = None) -> web.Application:
         app[K.instance_id_key] = real_instance_id
         app[K.instance_signing_key_key] = identity_seed
         app[K.instance_public_key_key] = identity_pk
+        app[K.instance_keywrap_public_key_key] = identity.keywrap_public_key
         # Stamp Momentum rows with the local instance_id so the 3-hop
         # relay can guard against echo loops (origin_instance_id check).
         moment_service.attach_instance_id(real_instance_id)

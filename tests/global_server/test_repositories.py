@@ -56,6 +56,38 @@ async def test_list_instances_filtered_by_status(fed):
     assert {x.instance_id for x in pending} == {"a"}
 
 
+async def test_upsert_instance_round_trips_keywrap_fields(fed):
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="kw",
+            display_name="KW",
+            public_key="aa" * 32,
+            inbox_url="http://kw",
+            keywrap_public_key="dd" * 32,
+            kem_suite="x25519",
+        )
+    )
+    got = await fed.get_instance("kw")
+    assert got is not None
+    assert got.keywrap_public_key == "dd" * 32
+    assert got.kem_suite == "x25519"
+
+
+async def test_get_instance_legacy_row_without_keywrap_is_empty(fed):
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="legacy",
+            display_name="L",
+            public_key="aa" * 32,
+            inbox_url="http://l",
+        )
+    )
+    got = await fed.get_instance("legacy")
+    assert got is not None
+    assert got.keywrap_public_key == ""
+    assert got.kem_suite == ""
+
+
 async def test_set_instance_display_name_updates_only_name(fed):
     await fed.upsert_instance(
         ClientInstance(

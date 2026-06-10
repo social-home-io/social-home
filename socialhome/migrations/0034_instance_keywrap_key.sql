@@ -1,0 +1,46 @@
+-- Per-instance X25519 KEY-WRAP keypair (Phase 5b foundation, owner-offline epic).
+--
+-- A household must be able to seal a payload (Phase 5b: the per-space content
+-- key) to ANOTHER household that is NOT a paired peer and without any online
+-- ephemeral discovery (GFS-blind). The decision (spec owner) is a DEDICATED,
+-- published, suite-tagged X25519 key-wrap key — NOT an Ed25519→X25519
+-- conversion of the identity key — so the PQ migration path stays open
+-- (Phase 2 swaps in x25519+mlkem768 by growing the key-wrap material, with no
+-- coupling to the Ed25519 signing key). See ``federation/keywrap_seal.py``.
+--
+-- The PUBLIC half is published at GFS registration (``keywrap_public_key`` +
+-- ``kem_suite`` on the registration body / ``ClientInstance``). The PRIVATE
+-- half stays local, KEK-wrapped at rest exactly like the Ed25519 identity seed
+-- (``identity_private_key``) and the per-space identity seed
+-- (``spaces.identity_private_key``, migration 0029).
+--
+-- Migration audit (mandatory 3 points, CLAUDE.md):
+--   (1) Audited paths. ``identity_bootstrap.ensure_instance_identity`` is the
+--       sole writer/reader of ``instance_identity``; ``app.py`` reads the
+--       decrypted material from the returned ``IdentityMaterial``. No existing
+--       column carries an X25519 key-wrap key: ``identity_private_key`` is the
+--       Ed25519 SIGNING seed (a different algorithm — converting it would
+--       couple the two and break the independent PQ swap), ``pq_private_key``
+--       is the ML-DSA-65 signing seed, ``routing_secret`` is an HMAC secret
+--       (never a keypair). The key-wrap keypair has no home today.
+--   (2) Non-migration alternative considered + rejected. Deriving an X25519
+--       key from the Ed25519 seed (clamped birational map) is the obvious
+--       no-migration route but is exactly what the spec owner rejected: it
+--       welds the key-wrap algorithm to the signing algorithm, so the Phase-2
+--       PQ KEM swap (ML-KEM-768) could no longer be done independently. A
+--       dedicated, separately-rotatable key-wrap key is the correct home, and
+--       its private half (a secret) cannot live in a federation event nor be
+--       recomputed at read time — it must be a local, KEK-wrapped column.
+--   (3) Smallest possible change. Two additive, NULL-default ``ADD COLUMN``s
+--       on the existing single-row ``instance_identity`` table. NULL = no
+--       key-wrap key yet (a pre-5b row) → lazily minted + persisted on next
+--       ``ensure_instance_identity`` (mirrors the PQ upgrade path on the same
+--       table). No backfill, no table rewrite, no index.
+--
+-- Value domain:
+--   keywrap_private_key  NULL → not minted yet (pre-5b row, lazy-minted next boot)
+--                        text → KEK-wrapped 32-byte X25519 private key
+--                               (``b64url(nonce):b64url(ct)``)
+--   keywrap_public_key   NULL → as above; text → 64 hex chars (32-byte X25519 pub)
+ALTER TABLE instance_identity ADD COLUMN keywrap_private_key TEXT;
+ALTER TABLE instance_identity ADD COLUMN keywrap_public_key TEXT;
