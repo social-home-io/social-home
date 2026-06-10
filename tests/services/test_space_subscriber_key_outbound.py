@@ -27,6 +27,9 @@ from socialhome.authority_sig import (
     strip_authority_sig_fields,
     verify_authority_event,
 )
+from socialhome.authority_sig import (
+    AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
+)
 from socialhome.crypto import (
     b64url_encode,
     derive_instance_id,
@@ -36,6 +39,7 @@ from socialhome.crypto import (
     sign_ed25519,
 )
 from socialhome.db.database import AsyncDatabase
+from socialhome.domain.federation import GfsConnection, GfsSpacePublication
 from socialhome.domain.space import JoinMode, Space, SpaceFeatures, SpaceType
 from socialhome.federation.keywrap_seal import open_keywrap
 from socialhome.infrastructure.key_manager import KeyManager
@@ -280,3 +284,239 @@ async def test_malformed_frame_no_crash(env):
         {"type": "new_subscriber", "space_id": "unknown-space", "subscriber": {}}
     )
     assert env["gfs"].calls == []
+
+
+# ── Phase-5b-c reconcile (owner-offline subscriber-list pull) ──────────────
+
+
+class _FakeConnRepo:
+    """In-memory GFS-connection repo: a connection + its space publications."""
+
+    def __init__(self) -> None:
+        self._conns: dict[str, GfsConnection] = {}
+        self._pubs: dict[str, list[GfsSpacePublication]] = {}
+
+    def add_conn(self, gfs_id: str, *, status: str = "active") -> None:
+        self._conns[gfs_id] = GfsConnection(
+            id=gfs_id,
+            gfs_instance_id=f"{gfs_id}.gfs",
+            display_name=gfs_id,
+            public_key="ee" * 32,
+            inbox_url=f"https://{gfs_id}.example",
+            status=status,
+            paired_at="2026-06-10T00:00:00+00:00",
+        )
+
+    def publish(self, gfs_id: str, space_id: str) -> None:
+        self._pubs.setdefault(gfs_id, []).append(
+            GfsSpacePublication(
+                space_id=space_id,
+                gfs_connection_id=gfs_id,
+                published_at="2026-06-10T00:00:00+00:00",
+            )
+        )
+
+    async def get(self, gfs_id: str) -> GfsConnection | None:
+        return self._conns.get(gfs_id)
+
+    async def list_publications(self, gfs_id: str) -> list[GfsSpacePublication]:
+        return list(self._pubs.get(gfs_id, []))
+
+
+class _FakeResp:
+    def __init__(self, status: int, payload: dict) -> None:
+        self.status = status
+        self._payload = payload
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def json(self):
+        return self._payload
+
+    async def text(self):
+        return json.dumps(self._payload)
+
+
+class _FakeSession:
+    """Captures GET calls + returns a programmed subscribers payload."""
+
+    def __init__(self) -> None:
+        self.gets: list[tuple[str, dict]] = []
+        self.responses: dict[str, _FakeResp] = {}  # by URL path
+
+    def program(self, url: str, status: int, payload: dict) -> None:
+        self.responses[url] = _FakeResp(status, payload)
+
+    def get(self, url, *, params=None, timeout=None):
+        self.gets.append((url, dict(params or {})))
+        return self.responses.get(url, _FakeResp(404, {"error": "not found"}))
+
+
+@pytest.fixture
+async def recon_env(env):
+    """Extend ``env`` with a fake GFS-connection repo + HTTP session wired into
+    the reconcile path."""
+    conn_repo = _FakeConnRepo()
+    session = _FakeSession()
+    svc = env["svc"]
+    svc.attach_reconcile_context(gfs_conn_repo=conn_repo, http_session=session)
+    return {**env, "conn_repo": conn_repo, "session": session}
+
+
+def _subscribers_payload(*subs):
+    return {"subscribers": list(subs)}
+
+
+async def test_reconcile_pulls_and_relays_per_subscriber(recon_env):
+    skp = await recon_env["make_space"]("sp-rec", SpaceType.PUBLIC, with_seed=True)
+    recon_env["conn_repo"].add_conn("gfs-1")
+    recon_env["conn_repo"].publish("gfs-1", "sp-rec")
+
+    id_kp, kw_kp, sub_iid, keywrap_sig = _subscriber_identity()
+    url = "https://gfs-1.example/gfs/spaces/sp-rec/subscribers"
+    recon_env["session"].program(
+        url,
+        200,
+        _subscribers_payload(
+            {
+                "instance_id": sub_iid,
+                "identity_public_key": id_kp.public_key.hex(),
+                "keywrap_public_key": kw_kp.public_key.hex(),
+                "keywrap_sig": keywrap_sig,
+            }
+        ),
+    )
+
+    await recon_env["svc"].reconcile("gfs-1")
+
+    # The query was signed with the SPACE seed under the query event type.
+    assert len(recon_env["session"].gets) == 1
+    got_url, params = recon_env["session"].gets[0]
+    assert got_url == url
+    assert verify_authority_event(
+        event_type=AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
+        space_id="sp-rec",
+        payload={"space_id": "sp-rec", "ts": params["ts"]},
+        authority_sig=params["authority_sig"],
+        authority_sig_suite=params["authority_sig_suite"],
+        space_public_key=skp.public_key,
+    )
+
+    # A sealed handoff was relayed for the subscriber.
+    assert len(recon_env["gfs"].calls) == 1
+    call = recon_env["gfs"].calls[0]
+    assert call["space_id"] == "sp-rec"
+    assert call["payload"]["target_instance_id"] == sub_iid
+    # The subscriber can open the seal.
+    epoch, raw_key = await recon_env["crypto"].export_current_key("sp-rec")
+    pt = open_keywrap(
+        sealed=call["payload"]["sealed"], recipient_keywrap_priv=kw_kp.private_key
+    )
+    meta = json.loads(pt)
+    assert meta["space_content_key"]["epoch"] == epoch
+
+
+async def test_reconcile_skips_space_without_seed(recon_env):
+    """A space published to this GFS but whose seed this household does NOT
+    hold is not reconciled (can't authority-sign the query)."""
+    await recon_env["make_space"]("sp-noseed", SpaceType.PUBLIC, with_seed=False)
+    recon_env["conn_repo"].add_conn("gfs-1")
+    recon_env["conn_repo"].publish("gfs-1", "sp-noseed")
+
+    await recon_env["svc"].reconcile("gfs-1")
+
+    assert recon_env["session"].gets == []
+    assert recon_env["gfs"].calls == []
+
+
+async def test_reconcile_skips_private_space(recon_env):
+    await recon_env["make_space"]("sp-priv", SpaceType.PRIVATE, with_seed=True)
+    recon_env["conn_repo"].add_conn("gfs-1")
+    recon_env["conn_repo"].publish("gfs-1", "sp-priv")
+
+    await recon_env["svc"].reconcile("gfs-1")
+
+    assert recon_env["session"].gets == []
+    assert recon_env["gfs"].calls == []
+
+
+async def test_reconcile_skips_household_space(recon_env):
+    await recon_env["make_space"]("sp-hh", SpaceType.HOUSEHOLD, with_seed=True)
+    recon_env["conn_repo"].add_conn("gfs-1")
+    recon_env["conn_repo"].publish("gfs-1", "sp-hh")
+
+    await recon_env["svc"].reconcile("gfs-1")
+
+    assert recon_env["session"].gets == []
+    assert recon_env["gfs"].calls == []
+
+
+async def test_reconcile_skips_forged_keywrap_binding(recon_env):
+    """A subscriber whose key-wrap self-signature doesn't match its identity is
+    skipped — the content key is never sealed to a substituted key-wrap key."""
+    await recon_env["make_space"]("sp-forge", SpaceType.PUBLIC, with_seed=True)
+    recon_env["conn_repo"].add_conn("gfs-1")
+    recon_env["conn_repo"].publish("gfs-1", "sp-forge")
+
+    id_kp, _kw, sub_iid, _good = _subscriber_identity()
+    attacker_kw = generate_x25519_keypair()
+    attacker_id = generate_identity_keypair()
+    forged_sig = b64url_encode(
+        sign_ed25519(attacker_id.private_key, attacker_kw.public_key)
+    )
+    url = "https://gfs-1.example/gfs/spaces/sp-forge/subscribers"
+    recon_env["session"].program(
+        url,
+        200,
+        _subscribers_payload(
+            {
+                "instance_id": sub_iid,
+                "identity_public_key": id_kp.public_key.hex(),
+                "keywrap_public_key": attacker_kw.public_key.hex(),
+                "keywrap_sig": forged_sig,
+            }
+        ),
+    )
+
+    await recon_env["svc"].reconcile("gfs-1")
+
+    assert len(recon_env["session"].gets) == 1  # queried
+    assert recon_env["gfs"].calls == []  # but nothing sealed/relayed
+
+
+async def test_reconcile_is_idempotent(recon_env):
+    """Re-running reconcile re-seals harmlessly (the subscriber's import is
+    per-epoch idempotent; re-sealing just relays again)."""
+    await recon_env["make_space"]("sp-idem", SpaceType.PUBLIC, with_seed=True)
+    recon_env["conn_repo"].add_conn("gfs-1")
+    recon_env["conn_repo"].publish("gfs-1", "sp-idem")
+
+    id_kp, kw_kp, sub_iid, keywrap_sig = _subscriber_identity()
+    url = "https://gfs-1.example/gfs/spaces/sp-idem/subscribers"
+    recon_env["session"].program(
+        url,
+        200,
+        _subscribers_payload(
+            {
+                "instance_id": sub_iid,
+                "identity_public_key": id_kp.public_key.hex(),
+                "keywrap_public_key": kw_kp.public_key.hex(),
+                "keywrap_sig": keywrap_sig,
+            }
+        ),
+    )
+
+    await recon_env["svc"].reconcile("gfs-1")
+    await recon_env["svc"].reconcile("gfs-1")
+
+    assert len(recon_env["gfs"].calls) == 2  # re-sealed, no crash
+
+
+async def test_reconcile_unknown_gfs_no_crash(recon_env):
+    await recon_env["svc"].reconcile("nope")
+    assert recon_env["session"].gets == []
+    assert recon_env["gfs"].calls == []

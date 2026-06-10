@@ -10,6 +10,7 @@ from socialhome.global_server.domain import (
     ClientInstance,
     GfsAppeal,
     GfsFraudReport,
+    GfsSubscriberWithKeys,
     GlobalSpace,
 )
 from socialhome.global_server.repositories import (
@@ -185,6 +186,68 @@ async def test_remove_subscriber_updates_count(fed):
     await fed.remove_subscriber(space_id="sp", instance_id="sub")
     sp = await fed.get_space("sp")
     assert sp.subscriber_count == 0
+
+
+async def test_list_subscribers_with_keys_joins_client_instances(fed):
+    """The reconcile query JOINs subscribers × client_instances so the
+    seed-holder gets each subscriber's identity + key-wrap material to seal
+    the content key to."""
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="o",
+            display_name="O",
+            public_key="aa" * 32,
+            inbox_url="http://o",
+            status="active",
+        )
+    )
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="sub-kw",
+            display_name="WithKeywrap",
+            public_key="bb" * 32,
+            inbox_url="http://kw",
+            status="active",
+            keywrap_public_key="cc" * 32,
+            kem_suite="x25519",
+            keywrap_sig="sig-kw",
+        )
+    )
+    await fed.upsert_instance(
+        ClientInstance(
+            instance_id="sub-bare",
+            display_name="NoKeywrap",
+            public_key="dd" * 32,
+            inbox_url="http://bare",
+            status="active",
+        )
+    )
+    await fed.upsert_space(
+        GlobalSpace(space_id="sp", owning_instance="o", status="active")
+    )
+    await fed.add_subscriber(space_id="sp", instance_id="sub-kw")
+    await fed.add_subscriber(space_id="sp", instance_id="sub-bare")
+
+    rows = await fed.list_subscribers_with_keys("sp")
+    assert all(isinstance(r, GfsSubscriberWithKeys) for r in rows)
+    by_id = {r.instance_id: r for r in rows}
+    assert set(by_id) == {"sub-kw", "sub-bare"}
+
+    kw = by_id["sub-kw"]
+    assert kw.identity_public_key == "bb" * 32
+    assert kw.keywrap_public_key == "cc" * 32
+    assert kw.keywrap_sig == "sig-kw"
+
+    # A subscriber that registered without a key-wrap key surfaces with empty
+    # key-wrap fields (the seed-holder skips sealing to it).
+    bare = by_id["sub-bare"]
+    assert bare.identity_public_key == "dd" * 32
+    assert bare.keywrap_public_key == ""
+    assert bare.keywrap_sig == ""
+
+
+async def test_list_subscribers_with_keys_unknown_space_is_empty(fed):
+    assert await fed.list_subscribers_with_keys("nope") == []
 
 
 # ── Admin helpers ─────────────────────────────────────────────────────

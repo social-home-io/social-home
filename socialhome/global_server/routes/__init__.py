@@ -62,6 +62,7 @@ from .relay import (
     SpaceDetailView,
     SpacePublishView,
     SpacesListView,
+    SpaceSubscribersView,
     SpaceUnpublishView,
     SubscribeView,
 )
@@ -153,6 +154,7 @@ def register_routes(
     app.router.add_view("/gfs/appeal", AppealView)
     app.router.add_view("/gfs/spaces", SpacesListView)
     app.router.add_view("/gfs/spaces/{space_id}", SpaceDetailView)
+    app.router.add_view("/gfs/spaces/{space_id}/subscribers", SpaceSubscribersView)
     app.router.add_view("/gfs/spaces/{space_id}/publish", SpacePublishView)
     app.router.add_view("/gfs/spaces/{space_id}/unpublish", SpaceUnpublishView)
     app.router.add_view("/healthz", HealthzView)

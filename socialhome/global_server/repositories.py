@@ -33,6 +33,7 @@ from .domain import (
     GfsHighlightToken,
     GfsMomentFollow,
     GfsSubscriber,
+    GfsSubscriberWithKeys,
     GfsUserPicture,
     GfsUserRegistration,
     GlobalSpace,
@@ -112,6 +113,10 @@ class AbstractGfsFederationRepo(Protocol):
         *,
         exclude: str = "",
     ) -> list[GfsSubscriber]: ...
+    async def list_subscribers_with_keys(
+        self,
+        space_id: str,
+    ) -> list[GfsSubscriberWithKeys]: ...
 
     # RTC transport state (spec §24.12)
     async def upsert_rtc_connection(
@@ -368,6 +373,38 @@ class SqliteGfsFederationRepo:
             GfsSubscriber(
                 instance_id=r["instance_id"],
                 inbox_url=r["inbox_url"],
+            )
+            for r in rows
+        ]
+
+    async def list_subscribers_with_keys(
+        self,
+        space_id: str,
+    ) -> list[GfsSubscriberWithKeys]:
+        """Subscribers of *space_id* joined with their registered identity +
+        key-wrap pubkeys (Phase-5b-c reconcile). Only the publicly-registered
+        key material is returned (no inbox URL) — a verified seed-holder uses it
+        to re-seal the content key. A subscriber that registered no key-wrap key
+        surfaces with empty key-wrap fields (the caller skips sealing to it)."""
+        rows = await self._db.fetchall(
+            """
+            SELECT ci.instance_id        AS instance_id,
+                   ci.public_key         AS identity_public_key,
+                   ci.keywrap_public_key AS keywrap_public_key,
+                   ci.keywrap_sig        AS keywrap_sig
+            FROM space_subscribers ss
+            JOIN client_instances ci USING (instance_id)
+            WHERE ss.space_id = ?
+              AND ci.status = 'active'
+            """,
+            (space_id,),
+        )
+        return [
+            GfsSubscriberWithKeys(
+                instance_id=r["instance_id"],
+                identity_public_key=r["identity_public_key"] or "",
+                keywrap_public_key=r["keywrap_public_key"] or "",
+                keywrap_sig=r["keywrap_sig"] or "",
             )
             for r in rows
         ]

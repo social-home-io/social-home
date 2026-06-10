@@ -239,6 +239,54 @@ class SpaceDetailView(GfsBaseView):
         return web.json_response(asdict(space))
 
 
+class SpaceSubscribersView(GfsBaseView):
+    """``GET /gfs/spaces/{space_id}/subscribers`` — release the subscriber
+    list to a verified SEED-HOLDER (Phase-5b-c reconcile).
+
+    SECURITY: the subscriber list is sensitive, so the read is gated on a
+    SPACE-AUTHORITY signature proving the caller holds the space seed (the
+    owner OR a delegated admin) — the SAME pinned-pubkey trust model as the
+    authority relay path, no new roster/key. The caller passes
+    ``?ts=&authority_sig=&authority_sig_suite=`` where the signature is over
+    ``{space_id, ts}`` under ``space_subscribers_query`` and the ``ts`` is
+    replay-guarded (±300 s). Any auth failure (no/forged/stale sig, unknown
+    space, no pinned pubkey) maps to ``403`` — fail-closed.
+
+    The response exposes only each subscriber's already-GFS-registered public
+    material — its instance id, Ed25519 identity pubkey, and X25519 key-wrap
+    pubkey + self-signature — so the seed-holder can re-seal the per-space
+    content key to each (``space_subscriber_reconcile``). No inbox URL, no
+    private data.
+    """
+
+    async def get(self) -> web.Response:
+        svc = self.svc(K.gfs_federation_key)
+        space_id = self.request.match_info["space_id"]
+        q = self.request.query
+        try:
+            subscribers = await svc.list_subscribers_with_keys(
+                space_id,
+                ts=str(q.get("ts") or ""),
+                authority_sig=str(q.get("authority_sig") or ""),
+                authority_sig_suite=str(q.get("authority_sig_suite") or ""),
+            )
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
+        return web.json_response(
+            {
+                "subscribers": [
+                    {
+                        "instance_id": s.instance_id,
+                        "identity_public_key": s.identity_public_key,
+                        "keywrap_public_key": s.keywrap_public_key,
+                        "keywrap_sig": s.keywrap_sig,
+                    }
+                    for s in subscribers
+                ]
+            }
+        )
+
+
 class SpacePublishView(GfsBaseView):
     """``POST /gfs/spaces/{space_id}/publish`` — owning HFS pushes
     space metadata so this GFS can list it on ``/gfs/spaces``.

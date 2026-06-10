@@ -155,7 +155,7 @@ A Phase-5a relay reaches a GFS subscriber, but the subscriber **drops** it —
 it has no content key to decrypt. Phase 5b-b delivers that key, **GFS-blind**,
 on a fast path driven by the GFS `new_subscriber` notify (the owner-offline
 RECONCILE — a seed-holder pulling the subscriber list to catch up missed
-deliveries — is a documented **follow-up, Phase 5b-c**, not built here):
+deliveries — is **Phase 5b-c**, below):
 
 1. **GFS notify.** On a successful `subscribe`, the GFS pushes a
    `new_subscriber` frame to the space **owner** carrying the new subscriber's
@@ -212,6 +212,66 @@ sequenceDiagram
     SUB->>SUB: re-verify authority sig (local pinned key)
     SUB->>SUB: open_keywrap + import_key
     Note over SUB: can now decrypt Phase-5a relay
+```
+
+### Owner-offline reconcile (Phase 5b-c)
+
+The 5b-b notify reaches **only the owner** (the GFS authoritatively knows
+`owning_instance`, so that's the only socket it pushes to). If the owner is
+offline when a household subscribes — or the notify is simply missed — the
+content key is never delivered on the fast path. Phase 5b-c closes the gap with
+a **pull-based reconcile** that any seed-holder can run, so a **delegated admin
+delivers the key while the owner is offline**:
+
+1. **Trigger.** On each GFS-WS `(re)connect` (`gfs_ws_client` `on_connected`),
+   the seed-holder runs `space_subscriber_key_outbound.reconcile(gfs_id)`.
+2. **Enumerate "spaces I hold the seed for on this GFS."** It lists every space
+   **published to that GFS** (`gfs_connection_repo.list_publications(gfs_id)`)
+   and keeps those that are **PUBLIC/GLOBAL** *and* whose **seed this household
+   holds** (`get_space_seed` non-None). A private/household space, or a space it
+   doesn't hold the seed for, is skipped (its key must never leave via the GFS,
+   and only a seed-holder can authority-sign the query).
+3. **Pull the subscriber list under a space-authority signature.** It signs
+   `{space_id, ts}` with the space seed under `space_subscribers_query` and
+   `GET /gfs/spaces/{id}/subscribers?ts=&authority_sig=&authority_sig_suite=`.
+   The GFS verifies that signature against the space's TOFU-pinned
+   `identity_public_key` (the same key that authorizes relay) and a ±300 s
+   replay guard, then returns each subscriber's already-registered
+   `{instance_id, identity_public_key, keywrap_public_key, keywrap_sig}` — no
+   inbox URL, no private data. A forged / stale / unknown-suite signature, an
+   unknown space, or a space with no pinned pubkey → **403** (fail-closed).
+4. **Re-seal per subscriber.** For each subscriber it runs the **identical**
+   verified-seal+relay as 5b-b (`verify_keywrap_binding` anti-substitution gate
+   → `seal_to_keywrap` → authority-sign under `space_subscriber_key_handoff` →
+   relay through the content-blind GFS). A subscriber with no key-wrap key
+   (older HFS) or a forged binding is skipped — never sealed-to.
+
+The reconcile is **idempotent**: the subscriber's `import_key` is per-epoch
+idempotent, so re-sealing on every reconnect is harmless (a re-import is a
+no-op). It is bounded to one pass per connect and fail-soft at every level (an
+unknown/inactive GFS, a per-space transport error, or a per-subscriber seal
+failure is logged and skipped). The `GET` is a **query, not a relay** —
+`space_subscribers_query` is deliberately kept out of the GFS's
+`AUTHORITY_RELAY_EVENT_TYPES`, so a query-signed payload can never be replayed
+onto the relay fan-out (the signing bytes bind the event type).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SUB as HFS subscriber
+    participant G as GFS (content-blind)
+    participant ADM as HFS seed-holder (delegated admin; owner offline)
+    Note over ADM: GFS-WS (re)connect → reconcile(gfs_id)
+    ADM->>ADM: list published spaces I hold the seed for
+    ADM->>G: GET /gfs/spaces/{id}/subscribers<br/>(authority-signed {space_id, ts})
+    G->>G: verify authority sig vs pinned pubkey + ±300 s ts
+    G-->>ADM: subscribers [{instance_id, identity_pk, keywrap_pk, keywrap_sig}…]
+    loop each subscriber
+        ADM->>ADM: verify_keywrap_binding + seal_to_keywrap
+        ADM->>G: publish space_subscriber_key_handoff<br/>(authority-signed; sealed ciphertext only)
+        G->>SUB: relay space_subscriber_key_handoff
+        SUB->>SUB: re-verify + open_keywrap + import_key (idempotent)
+    end
 ```
 
 WebRTC is **not** used for the SH↔GFS leg — the GFS is publicly
