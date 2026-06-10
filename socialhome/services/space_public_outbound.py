@@ -61,11 +61,10 @@ from ..authority_sig import (
     sign_authority_event,
     strip_authority_sig_fields,
 )
-from ..crypto import b64url_encode, sign_ed25519
 from ..domain.events import SpacePostCreated
 from ..domain.space import SpaceType
 from ..infrastructure.event_bus import EventBus
-from .space_public_author import author_signing_bytes
+from .space_public_author import build_signed_author_inner
 
 if TYPE_CHECKING:
     from ..repositories.space_repo import AbstractSpaceRepo
@@ -177,32 +176,19 @@ class SpacePublicOutbound:
             # docstring): it needs the author_sig propagated through the mesh.
             return
 
-        inner: dict[str, object] = {
-            "post_id": post.id,
-            "space_id": event.space_id,
-            "author_user_id": post.author,
-            "author_pk": self._own_instance_pk.hex(),
-            "author_username": author.username,
-            "type": post.type.value,
-            "content": post.content,
-            "media_url": post.media_url,
-            "image_urls": list(post.image_urls),
-            "created_at": post.created_at.isoformat() if post.created_at else None,
-            "hidden_from_feed": post.hidden_from_feed,
-            "origin_instance_id": self._own_instance_id,
-        }
-        if post.location is not None:
-            inner["location"] = {
-                "lat": post.location.lat,
-                "lon": post.location.lon,
-                "label": post.location.label,
-            }
         # Per-author signature: the author's household identity seed signs the
         # canonical, domain-separated bytes over the attributable inner fields
         # (excluding ``author_sig`` itself). Verified by the subscriber against
         # ``author_pk`` so a relaying seed-holder can't forge authorship.
-        inner["author_sig"] = b64url_encode(
-            sign_ed25519(self._own_identity_seed, author_signing_bytes(inner))
+        # Centralised in build_signed_author_inner so the member-broadcast
+        # relay-hint produces a byte-identical signed inner.
+        inner = build_signed_author_inner(
+            post=post,
+            space_id=event.space_id,
+            author_username=author.username,
+            author_pk=self._own_instance_pk,
+            author_identity_seed=self._own_identity_seed,
+            origin_instance_id=self._own_instance_id,
         )
         # Encrypt under the existing per-space epoch key. Raises if no key —
         # we never relay plaintext (Encryption-First Rule).

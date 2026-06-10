@@ -26,6 +26,12 @@ attributable field of the inner payload and EXCLUDES ``author_sig`` itself.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
+
+from ..crypto import b64url_encode, sign_ed25519
+
+if TYPE_CHECKING:
+    from ..domain.post import Post
 
 #: Domain-separation prefix — distinguishes these signing bytes from every
 #: other Ed25519 signature in the system (envelope authority sig, user
@@ -64,3 +70,46 @@ def author_signing_bytes(inner: dict) -> bytes:
     body = {k: inner.get(k) for k in _SIGNED_FIELDS}
     canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return _AUTHOR_SIG_DOMAIN + canonical
+
+
+def build_signed_author_inner(
+    *,
+    post: "Post",
+    space_id: str,
+    author_username: str,
+    author_pk: bytes,
+    author_identity_seed: bytes,
+    origin_instance_id: str,
+) -> dict:
+    """Build the per-author-signed inner payload for a public/global space
+    post (the object the GFS relay encrypts + a subscriber verifies).
+
+    The author's household identity seed signs the canonical author bytes;
+    the resulting ``author_sig`` (b64url) is added to the returned dict.
+    Centralised so the local relay (space_public_outbound) and the
+    member-broadcast relay-hint (space_post_outbound) produce byte-identical
+    signed inners."""
+    inner: dict[str, object] = {
+        "post_id": post.id,
+        "space_id": space_id,
+        "author_user_id": post.author,
+        "author_pk": author_pk.hex(),
+        "author_username": author_username,
+        "type": post.type.value,
+        "content": post.content,
+        "media_url": post.media_url,
+        "image_urls": list(post.image_urls),
+        "created_at": post.created_at.isoformat() if post.created_at else None,
+        "hidden_from_feed": post.hidden_from_feed,
+        "origin_instance_id": origin_instance_id,
+    }
+    if post.location is not None:
+        inner["location"] = {
+            "lat": post.location.lat,
+            "lon": post.location.lon,
+            "label": post.location.label,
+        }
+    inner["author_sig"] = b64url_encode(
+        sign_ed25519(author_identity_seed, author_signing_bytes(inner))
+    )
+    return inner
