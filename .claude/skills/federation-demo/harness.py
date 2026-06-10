@@ -4593,6 +4593,251 @@ def cmd_down() -> None:
 # ─── Entry point ───────────────────────────────────────────────────────────
 
 
+def _accept_remote_invite(state: dict, joiner: str, space_id: str) -> None:
+    """Joiner fetches its pending §D1b remote invites and accepts the one
+    for ``space_id`` — seats a local space stub + the per-epoch content key."""
+    inst = state["instances"][joiner]
+    s, invites = _request(
+        f"http://127.0.0.1:{inst['port']}/api/remote_invites",
+        token=inst["token"],
+    )
+    _must(f"{joiner}: list remote invites", s, invites)
+    rows = invites if isinstance(invites, list) else []
+    match = [r for r in rows if r.get("space_id") == space_id]
+    if not match:
+        raise SystemExit(
+            f"owner-offline: {joiner} has no pending invite for {space_id} — "
+            f"got {rows!r}",
+        )
+    token = match[0]["invite_token"]
+    s, body = _request(
+        f"http://127.0.0.1:{inst['port']}/api/remote_invites/{token}/accept",
+        token=inst["token"],
+        method="POST",
+    )
+    _must(f"{joiner}: accept invite", s, body, ok=(204,))
+
+
+def _space_col(label: str, space_id: str, col: str):
+    """Read a single column off the local ``spaces`` row for ``space_id``."""
+    import sqlite3
+
+    conn = sqlite3.connect(_instance_dir(label) / "socialhome.db")
+    try:
+        rows = list(
+            conn.execute(f"SELECT {col} FROM spaces WHERE id=?", (space_id,))
+        )
+    finally:
+        conn.close()
+    return rows[0][0] if rows else None
+
+
+def cmd_owner_offline() -> None:
+    """Delegated-admin moderation with the OWNING household offline.
+
+    Proves the keystone of the owner-offline-spaces epic end-to-end across
+    live nodes: with the owner process STOPPED, a delegated admin that holds
+    the space signing seed performs an authoritative config change, another
+    member household converges, and the owner reconciles on restart.
+
+    Topology (all paired by ``cmd_pair`` — needs a↔b and a↔c):
+    a = owner, b = delegated admin, c = plain member.
+
+    Sequence:
+    1. a creates a private space + enables ``delegated_admin_authority``
+       (owner-only flag).
+    2. a §D1b-invites b and c; both accept (each seats a local stub + the
+       content key).
+    3. a promotes b to admin → the host ships ``SPACE_ADMIN_KEY_SHARE`` so b
+       receives the space SIGNING SEED.
+    4. Assert b now holds the seed (``spaces.identity_private_key`` non-NULL
+       on b) — "admin authority = holding the private key" (§4.2.3).
+    5. STOP a (SIGTERM the process group) — the owning household is offline.
+    6. b renames the space via ``PATCH /api/spaces/{id}`` — b executes
+       LOCALLY and AUTHORITY-SIGNS (``_executes_locally_as_delegated_admin``),
+       broadcasting ``SPACE_CONFIG_CHANGED`` to every member.
+    7. Assert c's local ``spaces.name`` reflects the rename WHILE a is offline
+       (c accepts it by verifying the space-authority signature, not
+       ``from_instance``).
+    8. Restart a; after the outbox/config settle, assert a's ``spaces.name``
+       also converges (LWW reconcile on reconnect).
+
+    Run after ``up`` + ``pair``. Re-runnable (each run mints a fresh space +
+    a ``time.time_ns()`` rename marker).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' + 'pair' first")
+    a = state["instances"]["a"]
+    b = state["instances"]["b"]
+    c = state["instances"]["c"]
+    marker = f"offline-{time.time_ns()}"
+
+    # 1. a creates a private space + flips on delegated_admin_authority.
+    s, space = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces",
+        token=a["token"],
+        method="POST",
+        body={
+            "name": "Owner-offline lab",
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "emoji": "🛰️",
+        },
+    )
+    space = _must("a create space", s, space, ok=(201,))
+    space_id = space["id"]
+    print(f"  a created space {space_id}")
+
+    s, cur = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}", token=a["token"]
+    )
+    _must("a get space", s, cur)
+    feats = dict(cur.get("features") or {})
+    feats["delegated_admin_authority"] = True
+    s, upd = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}",
+        token=a["token"],
+        method="PATCH",
+        body={"features": feats},
+    )
+    _must("a enable delegation", s, upd, ok=(200,))
+    print("  a enabled delegated_admin_authority ✓")
+
+    # 2. a invites b + c; both accept (seats stub + content key).
+    for label, inst in (("b", b), ("c", c)):
+        s, inv = _request(
+            f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}/remote-invites",
+            token=a["token"],
+            method="POST",
+            body={
+                "invitee_instance_id": inst["instance_id"],
+                "invitee_user_id": inst["user_id"],
+            },
+        )
+        _must(f"a invite {label}", s, inv, ok=(201,))
+    time.sleep(4)  # SPACE_PRIVATE_INVITE federates
+    _accept_remote_invite(state, "b", space_id)
+    _accept_remote_invite(state, "c", space_id)
+    print("  b + c accepted invites (seated + content key) ✓")
+    # Let the a↔b capability exchange settle: the seed share is gated on
+    # ``peer_supports(b, MIN_FOR_SPACE_ADMIN_KEY_SHARE)`` and is NOT retried if
+    # a doesn't yet know b's proto_version when we promote. On a cold boot the
+    # INSTANCE_CAPABILITIES_UPDATED handshake can lag, so give it room.
+    time.sleep(10)
+
+    # 3. a promotes b to admin → SPACE_ADMIN_KEY_SHARE delivers the seed.
+    s, role = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}"
+        f"/remote-members/{b['instance_id']}/{b['user_id']}",
+        token=a["token"],
+        method="PATCH",
+        body={"role": "admin"},
+    )
+    _must("a promote b to admin", s, role, ok=(200,))
+    print("  a promoted b to admin (seed share dispatched)")
+
+    # 4. b must now hold the space signing seed (poll — the share federates
+    #    asynchronously over the b-pair channel / HTTPS inbox).
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if _space_col("b", space_id, "identity_private_key"):
+            break
+        time.sleep(1.0)
+    if not _space_col("b", space_id, "identity_private_key"):
+        raise SystemExit(
+            "owner-offline: b did not receive the space signing seed "
+            "(spaces.identity_private_key NULL on b after 30s) — "
+            "SPACE_ADMIN_KEY_SHARE didn't land",
+        )
+    print("  b holds the space signing seed ✓ (admin authority = private key)")
+
+    # 4b. Let b's stub catch up to a's config_sequence before b edits. b's
+    #     authoritative rename increments from b's local sequence; if that's
+    #     stale (behind a's), b's edit lands at a COLLIDING sequence with a's
+    #     last edit and loses the ``(config_sequence, author)`` LWW tie-break,
+    #     so the owner reverts it on reconnect. A real delegated admin likewise
+    #     acts on a synced view. Poll both DBs until b ≥ a (or timeout).
+    deadline = time.monotonic() + 25.0
+    a_seq = b_seq = None
+    while time.monotonic() < deadline:
+        a_seq = _space_col("a", space_id, "config_sequence")
+        b_seq = _space_col("b", space_id, "config_sequence")
+        if a_seq is not None and b_seq is not None and b_seq >= a_seq:
+            break
+        time.sleep(1.0)
+    print(f"  b config_sequence synced to a (a={a_seq}, b={b_seq})")
+
+    # 5. STOP a — the owning household goes offline.
+    print(f"  stopping a (pid={a['pid']}) — owner offline")
+    try:
+        os.killpg(a["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and _alive(a["pid"]):
+        time.sleep(0.2)
+    if _alive(a["pid"]):
+        try:
+            os.killpg(a["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        time.sleep(0.5)
+
+    # 6. b (delegated admin, holds seed) renames the space offline-of-owner.
+    new_name = f"Renamed by delegated admin {marker}"
+    s, upd = _request(
+        f"http://127.0.0.1:{b['port']}/api/spaces/{space_id}",
+        token=b["token"],
+        method="PATCH",
+        body={"name": new_name},
+    )
+    _must("b rename space offline-of-owner", s, upd, ok=(200,))
+    print(f"  b renamed the space while a offline ({marker}) ✓")
+
+    # 7. c must see the rename despite the owner being offline (poll the
+    #    SPACE_CONFIG_CHANGED broadcast b fanned out to every member household).
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        if _space_col("c", space_id, "name") == new_name:
+            break
+        time.sleep(1.0)
+    c_name = _space_col("c", space_id, "name")
+    if c_name != new_name:
+        raise SystemExit(
+            f"owner-offline: c's space name is {c_name!r}, expected "
+            f"{new_name!r} — delegated-admin config did NOT converge "
+            f"offline-of-owner",
+        )
+    print("  c converged on the delegated-admin rename (owner offline) ✓")
+
+    # 8. Restart a; it must reconcile to the delegated-admin's change (b's
+    #    outbox redelivers the authority-signed SPACE_CONFIG_CHANGED once a's
+    #    inbox is reachable; a applies it by verifying the signature, LWW).
+    new_pid = _spawn("a", a["port"])
+    state["instances"]["a"]["pid"] = new_pid
+    _wait_ready(a["port"])
+    print(f"  a respawned: pid={new_pid}; polling for reconcile…")
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        if _space_col("a", space_id, "name") == new_name:
+            break
+        time.sleep(2.0)
+    a_name = _space_col("a", space_id, "name")
+    if a_name != new_name:
+        raise SystemExit(
+            f"owner-offline: after restart a's space name is {a_name!r}, "
+            f"expected {new_name!r} — owner did NOT reconcile the offline "
+            f"delegated-admin change",
+        )
+    print("  a reconciled to the delegated-admin rename on restart ✓")
+
+    state["owner_offline_ran"] = True
+    state["owner_offline_space_id"] = space_id
+    _save(state)
+    print("owner-offline: ok (delegated admin moderates with the owner offline)")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         print(__doc__, file=sys.stderr)
