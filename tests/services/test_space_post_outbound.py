@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 
+from socialhome.crypto import (
+    b64url_decode,
+    generate_identity_keypair,
+    verify_ed25519,
+)
 from socialhome.domain.events import (
     PostDeleted,
     PostEdited,
@@ -14,8 +20,74 @@ from socialhome.domain.events import (
 )
 from socialhome.domain.federation import FederationEventType
 from socialhome.domain.post import Post, PostType
+from socialhome.domain.space import SpaceType
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.services.space_post_outbound import SpacePostOutbound
+from socialhome.services.space_public_author import author_signing_bytes
+
+
+@dataclass
+class _FakeSpace:
+    space_type: SpaceType
+
+
+@dataclass
+class _FakeUser:
+    username: str
+
+
+class _FakeSpaceRepo:
+    """Minimal space repo — resolves ``get`` for the relay-hint gate."""
+
+    def __init__(self, spaces: dict[str, _FakeSpace] | None = None) -> None:
+        self._spaces = spaces or {}
+
+    async def get(self, space_id: str) -> _FakeSpace | None:
+        return self._spaces.get(space_id)
+
+
+class _FakeUserRepo:
+    """Minimal user repo — resolves ``get_by_user_id`` for the relay hint."""
+
+    def __init__(self, users: dict[str, _FakeUser] | None = None) -> None:
+        self._users = users or {}
+
+    async def get_by_user_id(self, user_id: str) -> _FakeUser | None:
+        return self._users.get(user_id)
+
+
+def _make_outbound(
+    *,
+    bus: EventBus,
+    federation: AsyncMock,
+    space_repo: _FakeSpaceRepo | None = None,
+    user_repo: _FakeUserRepo | None = None,
+    media_sync=None,
+    federation_repo=None,
+    identity=None,
+) -> SpacePostOutbound:
+    """Build a ``SpacePostOutbound`` with the new required repo deps.
+
+    By default no identity is attached, so the ``public_relay`` hint is
+    omitted (existing broadcast tests stay unchanged). Pass ``identity`` (an
+    ``Ed25519Keypair`` + instance id tuple) to opt in to the relay hint.
+    """
+    outbound = SpacePostOutbound(
+        bus=bus,
+        federation_service=federation,
+        space_repo=space_repo or _FakeSpaceRepo(),
+        user_repo=user_repo or _FakeUserRepo(),
+        media_sync=media_sync,
+        federation_repo=federation_repo,
+    )
+    if identity is not None:
+        keypair, instance_id = identity
+        outbound.attach_identity(
+            own_instance_id=instance_id,
+            own_instance_public_key=keypair.public_key,
+            own_identity_seed=keypair.private_key,
+        )
+    return outbound
 
 
 async def test_space_post_created_broadcasts_to_space_members():
@@ -27,7 +99,7 @@ async def test_space_post_created_broadcasts_to_space_members():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="post-xyz",
@@ -65,7 +137,7 @@ async def test_inbound_replay_does_not_loop_back_via_outbound():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="p-from-peer",
@@ -99,7 +171,7 @@ async def test_calendar_event_post_not_re_federated_via_space_bridge():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     bridge_post = Post(
         id="p-from-bridge",
@@ -120,7 +192,7 @@ async def test_household_post_does_not_federate_via_space_bridge():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="p",
@@ -143,7 +215,7 @@ async def test_broadcast_failure_logged_but_swallowed():
     federation.broadcast_to_space_members = AsyncMock(
         side_effect=RuntimeError("transport down")
     )
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="p",
@@ -167,7 +239,7 @@ async def test_post_edited_in_space_broadcasts_update():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="post-edit-1",
@@ -192,7 +264,7 @@ async def test_post_edited_household_only_skipped():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="p",
@@ -211,7 +283,7 @@ async def test_post_edited_inbound_replay_does_not_loop():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="p",
@@ -234,7 +306,7 @@ async def test_post_edited_calendar_post_not_re_federated():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     bridge_post = Post(
         id="p-bridge",
@@ -254,7 +326,7 @@ async def test_post_edited_broadcast_failure_swallowed():
     federation.broadcast_to_space_members = AsyncMock(
         side_effect=RuntimeError("transport down"),
     )
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
     post = Post(
         id="p",
         author="u",
@@ -268,7 +340,7 @@ async def test_post_deleted_in_space_broadcasts_delete():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     await bus.publish(PostDeleted(post_id="post-del-1", space_id="sp-1"))
     federation.broadcast_to_space_members.assert_awaited_once()
@@ -283,7 +355,7 @@ async def test_post_deleted_household_only_skipped():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
     await bus.publish(PostDeleted(post_id="p"))
     federation.broadcast_to_space_members.assert_not_awaited()
 
@@ -292,7 +364,7 @@ async def test_post_deleted_inbound_replay_does_not_loop():
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
     await bus.publish(
         PostDeleted(post_id="p", space_id="sp-1", origin_instance_id="peer-x"),
     )
@@ -305,7 +377,7 @@ async def test_post_deleted_broadcast_failure_swallowed():
     federation.broadcast_to_space_members = AsyncMock(
         side_effect=RuntimeError("transport down"),
     )
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
     await bus.publish(PostDeleted(post_id="p", space_id="sp-1"))
 
 
@@ -324,7 +396,7 @@ async def test_payload_carries_media_fields(type_, extra):
     bus = EventBus()
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
 
     post = Post(
         id="p",
@@ -360,9 +432,9 @@ async def test_space_post_created_enqueues_outbox_per_peer_per_blob():
     )
     media_sync = AsyncMock()
     media_sync.enqueue_for_post = AsyncMock()
-    SpacePostOutbound(
+    _make_outbound(
         bus=bus,
-        federation_service=federation,
+        federation=federation,
         media_sync=media_sync,
         federation_repo=federation_repo,
     )
@@ -397,9 +469,9 @@ async def test_space_post_created_no_media_skips_enqueue():
     federation._own_instance_id = "self-id"
     media_sync = AsyncMock()
     media_sync.enqueue_for_post = AsyncMock()
-    SpacePostOutbound(
+    _make_outbound(
         bus=bus,
-        federation_service=federation,
+        federation=federation,
         media_sync=media_sync,
         federation_repo=AsyncMock(),
     )
@@ -421,7 +493,7 @@ async def test_space_post_created_no_media_sync_wired_is_noop():
     federation = AsyncMock()
     federation.broadcast_to_space_members = AsyncMock()
     # NO media_sync / federation_repo.
-    SpacePostOutbound(bus=bus, federation_service=federation)
+    _make_outbound(bus=bus, federation=federation)
     post = Post(
         id="p",
         author="u",
@@ -431,3 +503,113 @@ async def test_space_post_created_no_media_sync_wired_is_noop():
     )
     # Should not raise.
     await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
+
+
+# ─── public_relay author hint (Phase 5a remote-author relay) ───────────
+
+
+@pytest.mark.parametrize("tier", [SpaceType.PUBLIC, SpaceType.GLOBAL])
+async def test_public_space_post_attaches_signed_public_relay(tier):
+    """A public/global space post by a local author attaches a pre-signed
+    ``public_relay`` inner to the member broadcast. The ``author_sig`` must
+    verify against the attached ``author_pk`` over the canonical author bytes,
+    and the post/author identity fields must match — so a seed-holding member
+    can forward it to the GFS without forging attribution."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    keypair = generate_identity_keypair()
+    space_repo = _FakeSpaceRepo({"sp-1": _FakeSpace(space_type=tier)})
+    user_repo = _FakeUserRepo({"uid-alice": _FakeUser(username="alice")})
+    _make_outbound(
+        bus=bus,
+        federation=federation,
+        space_repo=space_repo,
+        user_repo=user_repo,
+        identity=(keypair, "inst-self"),
+    )
+
+    post = Post(
+        id="post-pub",
+        author="uid-alice",
+        type=PostType.TEXT,
+        content="public hello",
+        created_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
+
+    payload = federation.broadcast_to_space_members.call_args.args[2]
+    relay = payload["public_relay"]
+    assert relay["post_id"] == "post-pub"
+    assert relay["author_user_id"] == "uid-alice"
+    assert relay["author_username"] == "alice"
+    assert relay["author_pk"] == keypair.public_key.hex()
+    assert relay["origin_instance_id"] == "inst-self"
+    # The per-author signature verifies against the attached pubkey over the
+    # canonical, domain-separated signing bytes.
+    assert verify_ed25519(
+        keypair.public_key,
+        author_signing_bytes(relay),
+        b64url_decode(relay["author_sig"]),
+    )
+
+
+async def test_private_space_post_omits_public_relay():
+    """A PRIVATE space never relays to the GFS, so the member broadcast must
+    NOT carry a ``public_relay`` hint."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    keypair = generate_identity_keypair()
+    space_repo = _FakeSpaceRepo({"sp-1": _FakeSpace(space_type=SpaceType.PRIVATE)})
+    user_repo = _FakeUserRepo({"uid-alice": _FakeUser(username="alice")})
+    _make_outbound(
+        bus=bus,
+        federation=federation,
+        space_repo=space_repo,
+        user_repo=user_repo,
+        identity=(keypair, "inst-self"),
+    )
+
+    post = Post(
+        id="p",
+        author="uid-alice",
+        type=PostType.TEXT,
+        content="private",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
+
+    payload = federation.broadcast_to_space_members.call_args.args[2]
+    assert "public_relay" not in payload
+
+
+async def test_public_space_without_identity_omits_public_relay():
+    """If identity isn't attached (empty seed), the producer cannot sign the
+    author hint — it degrades to omitting ``public_relay`` while the normal
+    broadcast still fires."""
+    bus = EventBus()
+    federation = AsyncMock()
+    federation.broadcast_to_space_members = AsyncMock()
+    space_repo = _FakeSpaceRepo({"sp-1": _FakeSpace(space_type=SpaceType.PUBLIC)})
+    user_repo = _FakeUserRepo({"uid-alice": _FakeUser(username="alice")})
+    # No identity attached.
+    _make_outbound(
+        bus=bus,
+        federation=federation,
+        space_repo=space_repo,
+        user_repo=user_repo,
+    )
+
+    post = Post(
+        id="p",
+        author="uid-alice",
+        type=PostType.TEXT,
+        content="public",
+        created_at=datetime(2026, 5, 23, tzinfo=timezone.utc),
+    )
+    await bus.publish(SpacePostCreated(post=post, space_id="sp-1"))
+
+    federation.broadcast_to_space_members.assert_awaited_once()
+    payload = federation.broadcast_to_space_members.call_args.args[2]
+    assert "public_relay" not in payload

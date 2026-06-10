@@ -2350,11 +2350,18 @@ def create_app(config: Config | None = None) -> web.Application:
         # in spaces they belong to. The inbound side was already
         # wired in federation_inbound_service; this is the missing
         # producer.
-        SpacePostOutbound(
+        space_post_outbound = SpacePostOutbound(
             bus=bus,
             federation_service=federation_service,
+            space_repo=space_repo,
+            user_repo=user_repo,
             media_sync=space_media_sync_service,
             federation_repo=repos.federation,
+        )
+        space_post_outbound.attach_identity(
+            own_instance_id=real_instance_id,
+            own_instance_public_key=identity_pk,
+            own_identity_seed=identity_seed,
         )
         # Federate per-edit config changes (rename, emoji, feature
         # toggles, location_mode flips, retention bumps) to remote
