@@ -794,8 +794,350 @@ async def test_delegated_admin_authority_flip_is_owner_only(stack):
     assert reloaded.features.delegated_admin_authority is False
 
 
-async def test_update_config_accepts_retention_exempt_types(stack):
-    """retention_exempt_types round-trips through the repo."""
+async def _seat_remote_delegated_space(stack, *, actor, seed=None):
+    """Create a stub for a space hosted ELSEWHERE with delegated_admin_authority
+    ON, seat ``actor`` locally as ADMIN, and (optionally) store a space seed.
+    Returns the space id."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceMember,
+        SpaceRole,
+        SpaceType,
+    )
+
+    actor_user = await stack.provision_user(actor)
+    space = Space(
+        id="sp-remote-deleg",
+        name="Remote",
+        owner_instance_id="inst-remote-owner",  # hosted elsewhere
+        owner_username="remoteowner",
+        identity_public_key="aa" * 32,
+        config_sequence=3,
+        features=SpaceFeatures(delegated_admin_authority=True),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+    await stack.space_repo.save(space)
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=space.id,
+            user_id=actor_user.user_id,
+            role=SpaceRole.ADMIN,
+            joined_at="2025-01-01T00:00:00",
+        )
+    )
+    if seed is not None:
+        await stack.space_repo.set_space_seed(space.id, seed)
+    return space.id
+
+
+async def test_delegated_admin_with_seed_executes_locally(stack):
+    """v_24: a seed-holding delegated admin editing a REMOTE-owned space with
+    delegation ON executes the edit LOCALLY (no forward) and broadcasts an
+    authority-signed SPACE_CONFIG_CHANGED that verifies against the space key."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.services.space_crypto_service import (
+        strip_authority_sig_fields,
+        verify_authority_event,
+    )
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    # Replace the stub's pubkey with the seed's real public half so the
+    # broadcast signature verifies.
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+
+    fed = MagicMock()
+    fed._own_instance_id = stack.iid
+    fed.broadcast_to_space_members = AsyncMock()
+    fed.peer_supports = AsyncMock(return_value=True)
+    fed.send_with_mesh_fallback = AsyncMock()
+    stack.space_svc._federation = fed
+    # Wire the outbound so the bus event turns into a federation broadcast.
+    from socialhome.services.space_config_outbound import SpaceConfigOutbound
+
+    SpaceConfigOutbound(
+        bus=stack.space_svc._bus,
+        federation_service=fed,
+        space_repo=stack.space_repo,
+    ).wire()
+
+    await stack.space_svc.update_config(sid, actor_username="anna", name="LocalEdit")
+
+    # NOT forwarded as a remote-admin action.
+    forwarded = [
+        c
+        for c in fed.broadcast_to_space_members.await_args_list
+        if c.args[1] is FederationEventType.SPACE_REMOTE_ADMIN_ACTION
+    ]
+    assert forwarded == []
+    # Applied locally + sequence bumped.
+    reloaded = await stack.space_repo.get(sid)
+    assert reloaded.name == "LocalEdit"
+    assert reloaded.config_sequence == 4
+    # An authority-signed SPACE_CONFIG_CHANGED went out and verifies.
+    cfg = [
+        c
+        for c in fed.broadcast_to_space_members.await_args_list
+        if c.args[1] is FederationEventType.SPACE_CONFIG_CHANGED
+    ]
+    assert len(cfg) == 1
+    meta = cfg[0].args[2]["space_meta"]
+    assert verify_authority_event(
+        event_type="space_config_changed",
+        space_id=sid,
+        payload=strip_authority_sig_fields(meta),
+        authority_sig=meta["authority_sig"],
+        authority_sig_suite=meta["authority_sig_suite"],
+        space_public_key=kp.public_key,
+    )
+
+
+async def test_delegated_admin_without_seed_forwards(stack):
+    """Delegation ON but NO seed held → keep today's forward-to-host behaviour
+    (Phase 6 gates that behind owner approval). No local authoritative edit."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=None)
+
+    fed = MagicMock()
+    fed._own_instance_id = stack.iid
+    fed.peer_supports = AsyncMock(return_value=True)
+    fed.send_with_mesh_fallback = AsyncMock()
+    fed.broadcast_to_space_members = AsyncMock()
+    stack.space_svc._federation = fed
+
+    await stack.space_svc.update_config(sid, actor_username="anna", name="Forwarded")
+
+    # The forward path ships a SPACE_REMOTE_ADMIN_ACTION to the host…
+    assert fed.send_with_mesh_fallback.await_count >= 1
+    # …and the local stub is NOT authoritatively mutated by us.
+    reloaded = await stack.space_repo.get(sid)
+    assert reloaded.name == "Remote"
+    assert reloaded.config_sequence == 3
+
+
+@pytest.mark.security
+@pytest.mark.parametrize("tier", ["public", "global"])
+async def test_delegated_admin_local_execute_rejects_space_type(stack, tier):
+    """SECURITY (Defect 1): the v_24 delegated-admin local-execute path must NOT
+    apply a publication-tier (space_type) change locally — tier changes are
+    owner/quorum-gated (v_16) and the v_15 forward path deliberately excludes
+    space_type. A seed-holding delegated admin flipping PRIVATE→PUBLIC/GLOBAL
+    must be rejected, not executed locally with zero quorum."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+
+    before = await stack.space_repo.get(sid)
+    assert before.space_type is SpaceType.PRIVATE
+    assert before.config_sequence == 3
+
+    with pytest.raises(SpacePermissionError, match="publication tier"):
+        await stack.space_svc.update_config(sid, actor_username="anna", space_type=tier)
+
+    # Tier UNCHANGED and no local config bump leaked.
+    after = await stack.space_repo.get(sid)
+    assert after.space_type is SpaceType.PRIVATE
+    assert after.config_sequence == 3
+
+
+async def test_delegated_admin_local_execute_seq_author_recorded(stack):
+    """Defect 2 (unit half): the v_24 local authoritative edit must record THIS
+    household as the last-applied config author, matching what every receiver
+    records from the signed payload — otherwise the editing admin's LWW
+    tie-break key diverges from clean members'."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+
+    await stack.space_svc.update_config(sid, actor_username="anna", name="LocalEdit")
+
+    # The editing household recorded ITSELF as the config author.
+    assert await stack.space_repo.get_config_author(sid) == stack.iid
+
+
+async def test_delegated_admin_local_edit_converges_with_member(stack, tmp_dir):
+    """SECURITY (Defect 2): a seed-holding delegated admin does a local edit
+    reaching seq=N (admin as author), then ingests a concurrent peer's
+    authority-signed SPACE_CONFIG_CHANGED at the SAME seq=N from a DIFFERENT
+    author. The editing admin's row and a clean member household must converge
+    to the SAME deterministic (seq, author) winner — regardless of which author
+    sorts higher. Before the fix the admin's NULL author fell back to
+    owner_instance_id, mis-ordering the tie-break and diverging permanently."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.db.database import AsyncDatabase
+    from socialhome.domain.federation import FederationEvent, FederationEventType
+    from socialhome.infrastructure.event_bus import EventBus
+    from socialhome.repositories.conversation_repo import SqliteConversationRepo
+    from socialhome.repositories.user_repo import SqliteUserRepo
+    from socialhome.services.federation_inbound_service import (
+        FederationInboundService,
+    )
+    from socialhome.services.space_crypto_service import (
+        sign_authority_event,
+        strip_authority_sig_fields,
+    )
+    from datetime import datetime, timezone
+
+    from dataclasses import replace as _replace
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+
+    # The bug bites in the window stack.iid < peer_author < owner_instance_id:
+    # the admin's NULL author falls back to owner_instance_id and DROPS the peer
+    # edit, while a clean member (which recorded the admin's real iid) ACCEPTS
+    # it. Pin a deterministic owner id strictly above the chosen peer_author so
+    # the window exists regardless of the random stack.iid.
+    owner_id = "z" * 40
+    peer_author = stack.iid + "0"  # strictly > stack.iid (prefix extension)
+    assert stack.iid < peer_author < owner_id
+
+    # 1) Admin does a LOCAL authoritative edit → reaches seq=4, author=stack.iid.
+    await stack.space_svc.update_config(sid, actor_username="anna", name="ByAdmin")
+    assert (await stack.space_repo.get(sid)).config_sequence == 4
+    # Pin a deterministic owner id strictly above the chosen peer_author AFTER
+    # the local edit (``update_config`` re-saves the row from the snapshot it
+    # read at entry, which would otherwise revert this). This guarantees the
+    # divergence window exists regardless of the random stack.iid.
+    edited = await stack.space_repo.get(sid)
+    await stack.space_repo.save(_replace(edited, owner_instance_id=owner_id))
+
+    # 2) A concurrent peer edit at the SAME seq=4 from a DIFFERENT author.
+    def _signed_peer_event(space_id):
+        meta = {
+            "name": "ByPeer",
+            "owner_instance_id": owner_id,
+            "owner_username": "remoteowner",
+            "identity_public_key": "ignored-by-stub",
+            "config_sequence": 4,
+            "config_author_instance": peer_author,
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "features": SpaceFeatures(delegated_admin_authority=True).to_wire_dict(),
+        }
+        signed = sign_authority_event(
+            event_type="space_config_changed",
+            space_id=space_id,
+            payload=strip_authority_sig_fields(meta),
+            space_seed=kp.private_key,
+        )
+        meta.update(signed)
+        return FederationEvent(
+            msg_id="msg-peer",
+            event_type=FederationEventType.SPACE_CONFIG_CHANGED,
+            from_instance=peer_author,
+            to_instance="self",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            payload={
+                "space_id": space_id,
+                "sequence": 4,
+                "event_type": "rename",
+                "space_meta": meta,
+            },
+            space_id=space_id,
+        )
+
+    # Editing admin ingests the concurrent peer edit.
+    admin_inbound = FederationInboundService(
+        bus=stack.space_svc._bus,
+        conversation_repo=SqliteConversationRepo(stack.db),
+        space_post_repo=stack.space_post_repo,
+        space_repo=stack.space_repo,
+        user_repo=SqliteUserRepo(stack.db),
+    )
+    await admin_inbound._on_space_config_changed(_signed_peer_event(sid))
+    admin_final = await stack.space_repo.get(sid)
+
+    # 3) A clean member household: same starting stub (seq=3), applies BOTH the
+    # admin's edit (seq=4, author=stack.iid) and the peer's (seq=4, peer_author).
+    db2 = AsyncDatabase(tmp_dir / "member.db", batch_timeout_ms=10)
+    await db2.startup()
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    member_repo = SqliteSpaceRepo(db2, key_manager=KeyManager(b"\x07" * 32))
+    member_inbound = FederationInboundService(
+        bus=EventBus(),
+        conversation_repo=SqliteConversationRepo(db2),
+        space_post_repo=SqliteSpacePostRepo(db2),
+        space_repo=member_repo,
+        user_repo=SqliteUserRepo(db2),
+    )
+    await db2.enqueue(
+        """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
+                              identity_public_key, space_type, join_mode,
+                              config_sequence)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            sid,
+            "Remote",
+            owner_id,
+            "remoteowner",
+            kp.public_key.hex(),
+            SpaceType.PRIVATE.value,
+            JoinMode.INVITE_ONLY.value,
+            3,
+        ),
+    )
+
+    def _signed_admin_event(space_id):
+        meta = {
+            "name": "ByAdmin",
+            "owner_instance_id": owner_id,
+            "owner_username": "remoteowner",
+            "identity_public_key": "ignored-by-stub",
+            "config_sequence": 4,
+            "config_author_instance": stack.iid,
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "features": SpaceFeatures(delegated_admin_authority=True).to_wire_dict(),
+        }
+        signed = sign_authority_event(
+            event_type="space_config_changed",
+            space_id=space_id,
+            payload=strip_authority_sig_fields(meta),
+            space_seed=kp.private_key,
+        )
+        meta.update(signed)
+        return FederationEvent(
+            msg_id="msg-admin",
+            event_type=FederationEventType.SPACE_CONFIG_CHANGED,
+            from_instance=stack.iid,
+            to_instance="self",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            payload={
+                "space_id": space_id,
+                "sequence": 4,
+                "event_type": "rename",
+                "space_meta": meta,
+            },
+            space_id=space_id,
+        )
+
+    # Clean member sees both edits (peer first, then admin's).
+    await member_inbound._on_space_config_changed(_signed_peer_event(sid))
+    await member_inbound._on_space_config_changed(_signed_admin_event(sid))
+    member_final = await member_repo.get(sid)
+    await db2.shutdown()
+
+    # CONVERGENCE: the editing admin and a clean member agree on the winner.
+    # Deterministic (seq, author): peer_author > stack.iid, so "ByPeer" wins on
+    # BOTH. Before the fix the admin's NULL→owner_id fallback (owner_id >
+    # peer_author) wrongly dropped the peer edit, leaving the admin on "ByAdmin"
+    # while the clean member converged on "ByPeer" — permanent divergence.
+    assert admin_final.name == member_final.name
+    assert admin_final.name == "ByPeer"
     await stack.provision_user("anna")
     space = await stack.space_svc.create_space(
         owner_username="anna",
@@ -2250,6 +2592,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
         "Space roster gossip",
+        "Admin authoritative config offline",
     )
     assert len(c.behind_members) == 1
     bm = c.behind_members[0]
@@ -2263,6 +2606,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
         "Space roster gossip",
+        "Admin authoritative config offline",
     )
 
 
@@ -2288,6 +2632,7 @@ async def test_space_version_compat_excludes_mid_handshake_member(stack):
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
         "Space roster gossip",
+        "Admin authoritative config offline",
     )
     assert len(c.behind_members) == 1
     assert c.behind_members[0].instance_id == "peer-up"
@@ -2328,6 +2673,7 @@ async def test_space_version_compat_omits_nonspace_features(stack):
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
         "Space roster gossip",
+        "Admin authoritative config offline",
     )
     assert "App federation channel" not in c.lagging_features
     assert "App user routing" not in c.lagging_features

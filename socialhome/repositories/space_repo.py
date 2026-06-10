@@ -77,6 +77,8 @@ class AbstractSpaceRepo(Protocol):
     ) -> None: ...
     async def purge(self, space_id: str) -> None: ...
     async def increment_config_sequence(self, space_id: str) -> int: ...
+    async def get_config_author(self, space_id: str) -> str | None: ...
+    async def set_config_author(self, space_id: str, instance_id: str) -> None: ...
     async def update_age_gate(
         self,
         space_id: str,
@@ -749,6 +751,33 @@ class SqliteSpaceRepo:
             return int(row[0])
 
         return await self._db.transact(_run)
+
+    async def get_config_author(self, space_id: str) -> str | None:
+        """Return the instance id that authored the last config edit we APPLIED.
+
+        v_24 last-writer-wins tie-break key for concurrent same-sequence config
+        edits from different admins (see migration 0032). ``None`` for a fresh
+        space (never an applied edit) or an unknown space — NULL sorts below any
+        real instance id, so an owner's first signed edit always wins the tie.
+        """
+        row = await self._db.fetchone(
+            "SELECT config_author_instance FROM spaces WHERE id=?",
+            (space_id,),
+        )
+        if row is None:
+            return None
+        return row["config_author_instance"]
+
+    async def set_config_author(self, space_id: str, instance_id: str) -> None:
+        """Record ``instance_id`` as the author of the last applied config edit.
+
+        Written by the inbound apply path (and the local authoritative edit
+        path) so a later equal-sequence edit can deterministically tie-break.
+        """
+        await self._db.enqueue(
+            "UPDATE spaces SET config_author_instance=? WHERE id=?",
+            (instance_id, space_id),
+        )
 
     # ── Members ────────────────────────────────────────────────────────
 

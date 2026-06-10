@@ -373,6 +373,22 @@ async def test_increment_config_sequence_concurrent(env):
     assert sorted(results) == [1, 2, 3]
 
 
+async def test_config_author_default_none_and_roundtrip(env):
+    """The last-applied config author (v_24 LWW tie-break) defaults to NULL
+    on a fresh space and round-trips through set/get_config_author."""
+    await env.repo.save(_space("sp-author"))
+    assert await env.repo.get_config_author("sp-author") is None
+    await env.repo.set_config_author("sp-author", "peer-b")
+    assert await env.repo.get_config_author("sp-author") == "peer-b"
+    # Overwrite (a later applied edit) replaces it.
+    await env.repo.set_config_author("sp-author", "peer-c")
+    assert await env.repo.get_config_author("sp-author") == "peer-c"
+
+
+async def test_get_config_author_none_for_unknown_space(env):
+    assert await env.repo.get_config_author("nope") is None
+
+
 # ── Members ────────────────────────────────────────────────────────────────
 
 

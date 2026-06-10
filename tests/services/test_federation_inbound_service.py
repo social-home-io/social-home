@@ -1616,3 +1616,313 @@ async def test_space_config_changed_ignored_after_remote_dissolve(db, bus, inbou
     assert row["name"] == "Cfg Space"  # snapshot ignored, no rename
     assert row["archived"] == 1
     assert row["archived_reason"] == "dissolved"
+
+
+# ─── v_24: authority-signed config from a non-owner delegated admin ──────
+
+
+async def _seed_signed_space(db, *, space_id, owner_instance, space_pub_hex, seq=0):
+    """Seed a stub whose ``identity_public_key`` is a REAL Ed25519 pub so an
+    authority signature actually verifies."""
+    await db.enqueue(
+        """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
+                              identity_public_key, space_type, join_mode,
+                              config_sequence)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            space_id,
+            "Cfg Space",
+            owner_instance,
+            "owner",
+            space_pub_hex,
+            SpaceType.PRIVATE.value,
+            JoinMode.INVITE_ONLY.value,
+            seq,
+        ),
+    )
+
+
+def _signed_cfg_event(
+    *,
+    space_id,
+    from_instance,
+    owner_instance,
+    sequence,
+    name,
+    seed,
+    author=None,
+    tamper=False,
+    bad_sig=False,
+):
+    """Build a SPACE_CONFIG_CHANGED whose ``space_meta`` is authority-signed
+    with the space seed. ``author`` records the config_author_instance carried
+    in the (signed) meta; defaults to ``from_instance``."""
+    from socialhome.services.space_crypto_service import (
+        sign_authority_event,
+        strip_authority_sig_fields,
+    )
+
+    author = author if author is not None else from_instance
+    meta = {
+        "name": name,
+        "owner_instance_id": owner_instance,
+        "owner_username": "owner",
+        "identity_public_key": "ignored-by-stub",
+        "config_sequence": sequence,
+        "config_author_instance": author,
+        "space_type": "private",
+        "join_mode": "invite_only",
+        "features": {
+            "calendar": True,
+            "todo": True,
+            "location": False,
+            "location_mode": "gps",
+            "stickies": True,
+            "pages": True,
+            "gallery": True,
+        },
+    }
+    signed = sign_authority_event(
+        event_type="space_config_changed",
+        space_id=space_id,
+        payload=strip_authority_sig_fields(meta),
+        space_seed=seed,
+    )
+    meta.update(signed)
+    if tamper:
+        # Mutate a signed field AFTER signing → signature no longer matches.
+        meta["name"] = name + " (tampered)"
+    if bad_sig:
+        meta["authority_sig"] = "AAAA" + meta["authority_sig"][4:]
+    return _event(
+        FederationEventType.SPACE_CONFIG_CHANGED,
+        {
+            "space_id": space_id,
+            "sequence": sequence,
+            "event_type": "rename",
+            "space_meta": meta,
+        },
+        from_instance=from_instance,
+        space_id=space_id,
+    )
+
+
+async def test_config_from_nonowner_authority_signed_applies(db, bus, inbound):
+    """A delegated admin (NOT the owner) signs a config change with the space
+    seed; the receiver accepts it by verifying against the space pubkey, NOT by
+    checking from_instance == owner."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-auth",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-auth",
+            from_instance="admin-i",  # a delegated admin household, not owner
+            owner_instance="owner-i",
+            sequence=6,
+            name="RenamedByAdmin",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name, config_sequence, config_author_instance FROM spaces WHERE id=?",
+        ("sp-auth",),
+    )
+    assert row["name"] == "RenamedByAdmin"
+    assert row["config_sequence"] == 6
+    assert row["config_author_instance"] == "admin-i"
+
+
+@pytest.mark.security
+async def test_config_from_nonowner_tampered_sig_drops(db, bus, inbound):
+    """SECURITY: a non-owner config whose signed payload was mutated after
+    signing must be DROPPED — the signature no longer verifies."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-auth",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-auth",
+            from_instance="admin-i",
+            owner_instance="owner-i",
+            sequence=6,
+            name="Evil",
+            seed=kp.private_key,
+            tamper=True,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name, config_sequence FROM spaces WHERE id=?",
+        ("sp-auth",),
+    )
+    assert row["name"] == "Cfg Space"  # dropped, no apply
+    assert row["config_sequence"] == 5
+
+
+@pytest.mark.security
+async def test_config_from_nonowner_bad_sig_drops(db, bus, inbound):
+    """SECURITY: a non-owner config with a corrupt authority_sig is DROPPED —
+    a present-but-invalid sig never falls through to the owner gate."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-auth",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-auth",
+            from_instance="admin-i",
+            owner_instance="owner-i",
+            sequence=6,
+            name="Evil",
+            seed=kp.private_key,
+            bad_sig=True,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name FROM spaces WHERE id=?",
+        ("sp-auth",),
+    )
+    assert row["name"] == "Cfg Space"
+
+
+async def test_config_from_nonowner_no_sig_drops(db, bus, inbound):
+    """A non-owner config with NO authority signature is dropped (today's
+    owner-only behaviour) — only a signature relaxes the gate."""
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=5)
+    await inbound._on_space_config_changed(
+        _cfg_event(
+            space_id="sp-cfg",
+            from_instance="peer-b",  # not owner, no sig
+            sequence=10,
+            name="Spoofed",
+        )
+    )
+    row = await db.fetchone("SELECT name FROM spaces WHERE id=?", ("sp-cfg",))
+    assert row["name"] == "Cfg Space"
+
+
+async def test_config_from_owner_without_sig_still_applies(db, bus, inbound):
+    """Back-compat: an owner-originated config with no authority signature
+    still applies through the legacy from_instance == owner path."""
+    await _seed_space(db, space_id="sp-cfg", from_instance="peer-a", seq=5)
+    await inbound._on_space_config_changed(
+        _cfg_event(
+            space_id="sp-cfg",
+            from_instance="peer-a",  # the owner
+            sequence=6,
+            name="OwnerRename",
+        )
+    )
+    row = await db.fetchone("SELECT name FROM spaces WHERE id=?", ("sp-cfg",))
+    assert row["name"] == "OwnerRename"
+
+
+async def test_config_lww_same_sequence_deterministic_tiebreak(db, bus, inbound):
+    """Two concurrent same-sequence edits from different admins converge to the
+    SAME winner regardless of arrival order — the higher author id wins; a
+    lower-(seq,author) is dropped. Run both orderings and assert identical
+    final state."""
+    from socialhome.crypto import generate_space_keypair
+
+    async def _converge(first_author, second_author):
+        kp = generate_space_keypair()
+        sid = f"sp-lww-{first_author}-{second_author}"
+        await _seed_signed_space(
+            db,
+            space_id=sid,
+            owner_instance="owner-i",
+            space_pub_hex=kp.public_key.hex(),
+            seq=5,
+        )
+        # Both edits bump from base 5 → seq 6, different authors.
+        await inbound._on_space_config_changed(
+            _signed_cfg_event(
+                space_id=sid,
+                from_instance=first_author,
+                owner_instance="owner-i",
+                sequence=6,
+                name=f"By-{first_author}",
+                author=first_author,
+                seed=kp.private_key,
+            )
+        )
+        await inbound._on_space_config_changed(
+            _signed_cfg_event(
+                space_id=sid,
+                from_instance=second_author,
+                owner_instance="owner-i",
+                sequence=6,
+                name=f"By-{second_author}",
+                author=second_author,
+                seed=kp.private_key,
+            )
+        )
+        row = await db.fetchone(
+            "SELECT name, config_author_instance FROM spaces WHERE id=?",
+            (sid,),
+        )
+        return row["name"], row["config_author_instance"]
+
+    # Higher author id ("admin-z") must win in both arrival orders.
+    order1 = await _converge("admin-a", "admin-z")
+    order2 = await _converge("admin-z", "admin-a")
+    assert order1 == order2 == ("By-admin-z", "admin-z")
+
+
+async def test_config_lww_lower_author_at_equal_seq_dropped(db, bus, inbound):
+    """A second edit at the same sequence but a LOWER author id is dropped."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-lww2",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-lww2",
+            from_instance="admin-z",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByZ",
+            author="admin-z",
+            seed=kp.private_key,
+        )
+    )
+    # Lower author, same seq → must NOT clobber.
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-lww2",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByA",
+            author="admin-a",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone("SELECT name FROM spaces WHERE id=?", ("sp-lww2",))
+    assert row["name"] == "ByZ"
