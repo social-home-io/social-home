@@ -21,6 +21,7 @@ from socialhome.domain.space import (
     SpaceRole,
     SpaceType,
 )
+from socialhome.domain.events import SpaceProposalUpdated
 from socialhome.domain.space_proposal import ProposalAction, ProposalStatus
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
@@ -61,6 +62,7 @@ async def stack(tmp_dir):
     exec_svc = MagicMock()
     exec_svc.dissolve_space = AsyncMock()
     exec_svc.update_config = AsyncMock()
+    exec_svc.apply_approved_admin_action = AsyncMock()
     fed = MagicMock()
     fed.send_with_mesh_fallback = AsyncMock()
     fed.broadcast_to_space_members = AsyncMock()
@@ -455,3 +457,154 @@ async def test_mirror_update_drops_resolved_proposal(stack):
     assert len(await stack.approvals.list_for_space(stub.id)) == 1
     await stack.approvals.apply_mirror_update(stub.id, {**base, "status": "rejected"})
     assert await stack.approvals.list_for_space(stub.id) == []
+
+
+# ── owner-only approval of a forwarded remote-admin action (Phase 6a) ──
+
+
+async def test_enqueue_owner_approval_creates_pending_no_vote(stack):
+    """A forwarded remote-admin action becomes a PENDING owner-only proposal
+    carrying the forwarded action in params, with NO vote recorded."""
+    space = await _space(stack)
+    seen: list = []
+
+    async def _capture(e):
+        seen.append(e)
+
+    stack.bus.subscribe(SpaceProposalUpdated, _capture)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={"user_id": "u-victim"},
+    )
+    listed = await stack.approvals.list_for_space(space.id)
+    assert len(listed) == 1
+    v = listed[0]
+    assert v["action"] == ProposalAction.REMOTE_ADMIN_ACTION.value
+    assert v["status"] == ProposalStatus.PENDING.value
+    assert v["params"]["fwd_action"] == "ban_member"
+    assert v["params"]["fwd_params"] == {"user_id": "u-victim"}
+    assert v["params"]["actor_instance"] == "host-B"
+    assert v["params"]["actor_user"] == "ben"
+    # No vote recorded.
+    assert await stack.proposals.list_votes(v["id"]) == []
+    # An update event was emitted.
+    assert any(e.proposal_id == v["id"] for e in seen)
+
+
+async def test_enqueue_owner_approval_no_dedup(stack):
+    """Two successive enqueues create two distinct pending proposals."""
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={"user_id": "a"},
+    )
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={"user_id": "b"},
+    )
+    listed = await stack.approvals.list_for_space(space.id)
+    assert len(listed) == 2
+    assert {p["id"] for p in listed} == set(p["id"] for p in listed)
+    assert len({p["id"] for p in listed}) == 2
+
+
+async def test_enqueue_owner_approval_noop_when_not_host(stack):
+    stub = await _remote_stub(stack)
+    await stack.approvals.enqueue_owner_approval(
+        stub.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={},
+    )
+    assert await stack.approvals.list_for_space(stub.id) == []
+
+
+async def test_owner_approve_executes_forwarded_action(stack):
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={"user_id": "u-victim"},
+    )
+    pid = (await stack.approvals.list_for_space(space.id))[0]["id"]
+    out = await stack.approvals.vote(
+        space.id, pid, actor_username="alice", approve=True
+    )
+    assert out["status"] == ProposalStatus.EXECUTED.value
+    stack.exec.apply_approved_admin_action.assert_awaited_once()
+    kwargs = stack.exec.apply_approved_admin_action.call_args.kwargs
+    assert kwargs["action"] == "ban_member"
+    assert kwargs["params"] == {"user_id": "u-victim"}
+
+
+async def test_owner_reject_does_not_execute(stack):
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={},
+    )
+    pid = (await stack.approvals.list_for_space(space.id))[0]["id"]
+    out = await stack.approvals.vote(
+        space.id, pid, actor_username="alice", approve=False
+    )
+    assert out["status"] == ProposalStatus.REJECTED.value
+    stack.exec.apply_approved_admin_action.assert_not_awaited()
+
+
+async def test_non_owner_admin_cannot_vote_owner_only(stack):
+    """A non-owner admin's vote on an owner-only proposal is dropped; the
+    proposal stays pending and is not executed."""
+    space = await _space(stack)
+    await _add_admin(stack, space.id, "bob")
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={},
+    )
+    pid = (await stack.approvals.list_for_space(space.id))[0]["id"]
+    out = await stack.approvals.vote(space.id, pid, actor_username="bob", approve=True)
+    assert out["status"] == ProposalStatus.PENDING.value
+    stack.exec.apply_approved_admin_action.assert_not_awaited()
+    # No vote recorded for the non-owner.
+    assert await stack.proposals.list_votes(pid) == []
+
+
+async def test_owner_only_view_exposes_owner_only_fields(stack):
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban_member",
+        fwd_params={"user_id": "u-victim"},
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["owner_only"] is True
+    assert v["fwd_action"] == "ban_member"
+    assert v["fwd_params"] == {"user_id": "u-victim"}
+    assert v["total_admins"] == 1
+    assert v["needed"] == 1
+    assert v["approvals"] == 0
+    # After the owner approves, approvals flips 0 → 1 in the emitted view.
+    pid = v["id"]
+    out = await stack.approvals.vote(
+        space.id, pid, actor_username="alice", approve=True
+    )
+    assert out["approvals"] == 1
