@@ -608,3 +608,125 @@ async def test_owner_only_view_exposes_owner_only_fields(stack):
         space.id, pid, actor_username="alice", approve=True
     )
     assert out["approvals"] == 1
+
+
+# ── fwd_target_label: resolve the target's name for the owner's card ──
+
+
+async def test_owner_only_view_labels_ban_target_remote_member(stack):
+    """A ban targeting a seated remote member resolves to that member's
+    display_name."""
+    space = await _space(stack)
+    await stack.remote.add(
+        space_id=space.id,
+        instance_id="host-B",
+        user_id="u-victim",
+        user_pk=None,
+        display_name="Alice",
+    )
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban",
+        fwd_params={"user_id": "u-victim"},
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["fwd_target_label"] == "Alice"
+
+
+async def test_owner_only_view_labels_ban_target_local_user(stack):
+    """A ban targeting a local user resolves to that user's display_name."""
+    space = await _space(stack)
+    victim = await _user(stack, "victimlocal")
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban",
+        fwd_params={"user_id": victim.user_id},
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["fwd_target_label"] == "victimlocal"
+
+
+async def test_owner_only_view_label_none_for_unknown_ban_target(stack):
+    """A ban whose target is neither a member nor a known user → None."""
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="ban",
+        fwd_params={"user_id": "u-nobody"},
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["fwd_target_label"] is None
+
+
+async def test_owner_only_view_label_none_for_invite_without_remote_record(stack):
+    """An invite to an unknown invitee resolves to None (no remote-user row)."""
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="invite",
+        fwd_params={
+            "invitee_instance_id": "host-C",
+            "invitee_user_id": "u-newbie",
+        },
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["fwd_target_label"] is None
+
+
+async def test_owner_only_view_labels_invite_target_from_remote_user(stack):
+    """An invite resolves to a cached remote-user record's display_name."""
+    from socialhome.domain.user import RemoteUser
+
+    space = await _space(stack)
+    await stack.db.enqueue(
+        """
+        INSERT INTO remote_instances(
+            id, display_name, remote_identity_pk,
+            key_self_to_remote, key_remote_to_self,
+            remote_inbox_url, local_inbox_id, status, source
+        ) VALUES('host-C', 'C', 'aa', 'k', 'k', 'https://x', 'wh',
+                 'confirmed', 'manual')
+        """,
+    )
+    await stack.approvals._users.upsert_remote(
+        RemoteUser(
+            user_id="u-newbie",
+            instance_id="host-C",
+            remote_username="newbie",
+            display_name="Newbie Bob",
+        )
+    )
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="invite",
+        fwd_params={
+            "invitee_instance_id": "host-C",
+            "invitee_user_id": "u-newbie",
+        },
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["fwd_target_label"] == "Newbie Bob"
+
+
+async def test_owner_only_view_label_none_for_targetless_action(stack):
+    """An update_config/archive action has no target → None."""
+    space = await _space(stack)
+    await stack.approvals.enqueue_owner_approval(
+        space.id,
+        actor_instance="host-B",
+        actor_user="ben",
+        fwd_action="archive",
+        fwd_params={},
+    )
+    v = (await stack.approvals.list_for_space(space.id))[0]
+    assert v["fwd_target_label"] is None
