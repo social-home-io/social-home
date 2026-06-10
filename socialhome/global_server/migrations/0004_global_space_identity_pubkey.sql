@@ -1,0 +1,33 @@
+-- TOFU pin of a published space's Ed25519 IDENTITY public key on the GFS.
+--
+-- 3-point migration audit (CLAUDE.md "Before adding a SQL migration"):
+--
+-- 1. Audited every code path touching this data. The GFS today stores
+--    ``global_spaces`` rows from the owner's signed ``publish_space`` body and
+--    relays ``publish_event`` ONLY from ``owning_instance`` (locked in #598).
+--    No existing column carries the space's *authority* verify key: the
+--    ``client_instances.public_key`` is a HOUSEHOLD transport key, not the
+--    per-space signing key the HFS uses for ``sign_authority_event``. To let a
+--    delegated admin (a non-owner seed-holder) relay space content while the
+--    GFS stays blind to content, the GFS must be able to verify the
+--    space-authority signature — which requires the space's PUBLIC key.
+--
+-- 2. Non-migration alternatives considered + rejected:
+--      * Reuse ``client_instances.public_key`` — wrong key (household, not
+--        space) and wrong cardinality (one household hosts many spaces).
+--      * Carry the pubkey on every ``publish_event`` and verify against it —
+--        self-asserted, TOFU-less: an attacker could ship its own pubkey + a
+--        matching authority sig and relay forged content. The pin MUST be
+--        established once (first publish) and held immutable thereafter.
+--      * Compute at read time — a verify key is not derivable from any stored
+--        field. It must be persisted.
+--    Pinning on the existing ``global_spaces`` row (set on first publish,
+--    immutable after) is the smallest correct home.
+--
+-- 3. Smallest possible change: a single additive, NULL-default ``ADD COLUMN``.
+--    No backfill (older HFS publishes leave it NULL → that space simply can't
+--    use authority-signed relay; only owner-from_instance relay, unchanged).
+--    No destructive rewrite, no index.
+
+ALTER TABLE global_spaces
+    ADD COLUMN identity_public_key TEXT;

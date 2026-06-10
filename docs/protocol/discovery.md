@@ -32,10 +32,39 @@ The Social Home ↔ GFS link is split by direction:
   instance and verified against its registered public key** — there is
   no unsigned path:
   - `publish` (relay event) and `spaces/{id}/publish` (space metadata)
-    require a mandatory signature over their canonical body; an empty /
-    malformed / invalid signature is rejected with `403`, so a registered
-    peer can never overwrite another household's listing or fan out under
-    its name.
+    require a mandatory household signature over their canonical body; an
+    empty / malformed / invalid signature is rejected with `403`, so a
+    registered peer can never overwrite another household's listing or fan
+    out under its name.
+  - `spaces/{id}/publish` additionally carries the space's Ed25519
+    **authority** verify key (`identity_public_key`, hex). The GFS
+    **TOFU-pins** it on the first publish and holds it immutable — a later
+    publish offering a different key keeps the pinned one.
+  - `publish` (relay) is authorized by **either** the owner path
+    (`from_instance` == the space's owning instance) **or** a valid
+    **space-authority signature** carried in `payload` (`authority_sig` +
+    `authority_sig_suite`, event type `space_post_public`) verified against
+    the pinned `identity_public_key`. Because any seed-holder — the owner or
+    a delegated admin — can produce that signature, a space keeps relaying
+    while its owner is offline (the owner-offline-spaces epic). The GFS stays
+    blind to space content: it verifies the signature over the opaque
+    `payload` and fans out, never decrypting. Fail-closed — a
+    present-but-invalid authority sig, an unknown suite, a non-owner relaying
+    a space with no pinned pubkey, **or a non-owner whose wire `event_type`
+    isn't `space_post_public`** (the only type the authority sig authorizes)
+    are each rejected with `403`. The owner path is exempt and may relay any
+    `event_type`.
+  - **Replay / dedupe contract.** The authority signature binds the space id
+    and the (opaque) `payload`, but **no timestamp, nonce, or epoch**, and the
+    GFS keeps **no replay cache**, so `publish` relay is idempotent /
+    at-least-once: a captured authority-signed payload can be re-POSTed and
+    re-fanned-out (a property the owner relay already had under #598, widened
+    by the non-owner authority path). The GFS deliberately adds **no** replay
+    machinery — it is content-blind and can't read the post id inside the
+    encrypted payload. The content-layer backstop is **subscriber-side dedupe
+    by the post id** carried inside the payload, enforced by the HFS
+    `space_public_inbound` consumer (the same way moments dedupe by
+    `moment_id`).
   - `subscribe` requires a signature over `{instance_id, space_id, ts}`
     (replay-guarded ±300 s on `ts`). The signature binds the request to
     `instance_id`, so a caller can only subscribe **itself**, and the

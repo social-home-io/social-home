@@ -79,9 +79,19 @@ async def test_list_spaces_empty_initially(svc):
 
 
 async def _publish_known_space(
-    svc, seed: bytes, *, owning_instance: str, space_id: str
+    svc,
+    seed: bytes,
+    *,
+    owning_instance: str,
+    space_id: str,
+    identity_public_key: str = "",
 ):
-    """Publish a minimal active space so a subscribe target exists."""
+    """Publish a minimal active space so a subscribe target exists.
+
+    ``identity_public_key`` (hex) is the space's Ed25519 authority verify key;
+    when supplied it is TOFU-pinned on the GFS row so authority-signed relays
+    can be verified. Empty (default) mirrors an older HFS that ships none.
+    """
     body = {
         "space_id": space_id,
         "owning_instance": owning_instance,
@@ -94,6 +104,7 @@ async def _publish_known_space(
         "target_audience": "all",
         "accent_color": "#D2542A",
         "primary_color": "#D2542A",
+        "identity_public_key": identity_public_key,
     }
     sig = _sign(seed, body)
     await svc.publish_space(
@@ -101,6 +112,7 @@ async def _publish_known_space(
         owning_instance=owning_instance,
         name="Known",
         signature=sig,
+        identity_public_key=identity_public_key,
     )
 
 
@@ -394,7 +406,9 @@ async def test_publish_event_malformed_signature_rejected(svc):
 # ── publish_space (signed space-metadata publish) ───────────────────────────────
 
 
-def _publish_space_args(owning_instance: str, space_id: str) -> dict:
+def _publish_space_args(
+    owning_instance: str, space_id: str, *, identity_public_key: str = ""
+) -> dict:
     return {
         "space_id": space_id,
         "owning_instance": owning_instance,
@@ -407,6 +421,7 @@ def _publish_space_args(owning_instance: str, space_id: str) -> dict:
         "target_audience": "all",
         "accent_color": "#D2542A",
         "primary_color": "#D2542A",
+        "identity_public_key": identity_public_key,
     }
 
 
@@ -536,6 +551,404 @@ async def test_publish_space_owner_can_refresh_own_space(svc):
     )
     row = await svc.get_space("refresh-space")
     assert row is not None and row.owning_instance == "owner2-inst"
+
+
+# ── publish_space TOFU-pin of identity_public_key (Phase 5a) ────────────────────
+
+
+async def test_publish_space_pins_identity_public_key_on_first_publish(svc):
+    """The space's Ed25519 authority pubkey is TOFU-pinned on first publish."""
+    seed, pk = _make_keypair()
+    _, space_pk = _make_keypair()
+    space_pk_hex = space_pk.hex()
+    await svc.register_instance(
+        "inst-pin", pk.hex(), "http://pin.example.com/wh", auto_accept=True
+    )
+    args = _publish_space_args(
+        "inst-pin", "space-pin", identity_public_key=space_pk_hex
+    )
+    sig = _sign(seed, args)
+    await svc.publish_space(
+        space_id="space-pin",
+        owning_instance="inst-pin",
+        name="My Space",
+        identity_public_key=space_pk_hex,
+        signature=sig,
+    )
+    row = await svc.get_space("space-pin")
+    assert row is not None
+    assert row.identity_public_key == space_pk_hex
+
+
+async def test_publish_space_does_not_change_pinned_pubkey(svc):
+    """Once pinned, a later publish with a DIFFERENT pubkey does not change it."""
+    seed, pk = _make_keypair()
+    _, space_pk = _make_keypair()
+    _, other_space_pk = _make_keypair()
+    pinned_hex = space_pk.hex()
+    other_hex = other_space_pk.hex()
+    await svc.register_instance(
+        "inst-pin2", pk.hex(), "http://pin2.example.com/wh", auto_accept=True
+    )
+    args1 = _publish_space_args(
+        "inst-pin2", "space-pin2", identity_public_key=pinned_hex
+    )
+    await svc.publish_space(
+        space_id="space-pin2",
+        owning_instance="inst-pin2",
+        name="My Space",
+        identity_public_key=pinned_hex,
+        signature=_sign(seed, args1),
+    )
+    # Same owner re-publishes with a DIFFERENT pubkey — the pin must hold.
+    args2 = _publish_space_args(
+        "inst-pin2", "space-pin2", identity_public_key=other_hex
+    )
+    await svc.publish_space(
+        space_id="space-pin2",
+        owning_instance="inst-pin2",
+        name="My Space",
+        identity_public_key=other_hex,
+        signature=_sign(seed, args2),
+    )
+    row = await svc.get_space("space-pin2")
+    assert row is not None
+    assert row.identity_public_key == pinned_hex
+
+
+async def test_publish_space_same_pubkey_refresh_ok(svc):
+    """Re-publishing with the SAME pinned pubkey is fine (idempotent)."""
+    seed, pk = _make_keypair()
+    _, space_pk = _make_keypair()
+    pinned_hex = space_pk.hex()
+    await svc.register_instance(
+        "inst-pin3", pk.hex(), "http://pin3.example.com/wh", auto_accept=True
+    )
+    args = _publish_space_args(
+        "inst-pin3", "space-pin3", identity_public_key=pinned_hex
+    )
+    await svc.publish_space(
+        space_id="space-pin3",
+        owning_instance="inst-pin3",
+        name="My Space",
+        identity_public_key=pinned_hex,
+        signature=_sign(seed, args),
+    )
+    await svc.publish_space(
+        space_id="space-pin3",
+        owning_instance="inst-pin3",
+        name="My Space",
+        identity_public_key=pinned_hex,
+        signature=_sign(seed, args),
+    )
+    row = await svc.get_space("space-pin3")
+    assert row is not None
+    assert row.identity_public_key == pinned_hex
+
+
+# ── publish_event authorized by a SPACE-AUTHORITY signature (Phase 5a) ──────────
+
+
+class _RecordingWsRegistry:
+    """A ws-registry stub whose ``send`` always succeeds, so fan-out marks
+    delivery without a real network hop — lets a relay-authorized test assert
+    the event actually reached the subscriber set."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, dict]] = []
+
+    async def send(self, instance_id: str, frame: dict) -> bool:
+        self.sent.append((instance_id, frame))
+        return True
+
+
+def _sign_authority(space_seed: bytes, *, space_id: str, payload: dict) -> dict:
+    """Produce the authority-sig wire fields for a space-content relay payload."""
+    from socialhome.services.space_crypto_service import (
+        AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+        sign_authority_event,
+    )
+
+    return sign_authority_event(
+        event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+        space_id=space_id,
+        payload=payload,
+        space_seed=space_seed,
+    )
+
+
+async def _setup_authority_relay(svc, *, space_id: str):
+    """Owner publishes a space pinning a SPACE authority pubkey; a separate
+    non-owner (delegated-admin) household registers + subscribes a third
+    household so a fan-out target exists. Returns the space seed + the
+    non-owner's (seed, instance_id)."""
+    owner_seed, owner_pk = _make_keypair()
+    space_seed, space_pk = _make_keypair()
+    admin_seed, admin_pk = _make_keypair()
+    sub_seed, sub_pk = _make_keypair()
+    await svc.register_instance(
+        "owner-a", owner_pk.hex(), "http://owner-a.example.com/wh", auto_accept=True
+    )
+    await svc.register_instance(
+        "admin-a", admin_pk.hex(), "http://admin-a.example.com/wh", auto_accept=True
+    )
+    await svc.register_instance(
+        "sub-a", sub_pk.hex(), "http://sub-a.example.com/wh", auto_accept=True
+    )
+    await _publish_known_space(
+        svc,
+        owner_seed,
+        owning_instance="owner-a",
+        space_id=space_id,
+        identity_public_key=space_pk.hex(),
+    )
+    ts = _now_iso()
+    sig = _sign(sub_seed, {"instance_id": "sub-a", "space_id": space_id, "ts": ts})
+    await svc.subscribe("sub-a", space_id, ts, sig)
+    return space_seed, admin_seed
+
+
+async def test_publish_event_non_owner_valid_authority_sig_relays(gfs_db):
+    """A non-owner (delegated admin) with a VALID space-authority signature
+    over the payload relays the event (fans out to subscribers)."""
+    ws = _RecordingWsRegistry()
+    svc = GfsFederationService(SqliteGfsFederationRepo(gfs_db), ws_registry=ws)
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-ok")
+    payload = {"ciphertext": "opaque-blob"}
+    payload.update(_sign_authority(space_seed, space_id="sp-auth-ok", payload=payload))
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-auth-ok",
+            "event_type": "space_post_public",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    delivered = await svc.publish_event(
+        "sp-auth-ok",
+        "space_post_public",
+        payload,
+        "admin-a",
+        transport_sig,
+    )
+    assert "sub-a" in delivered
+
+
+async def test_publish_event_non_owner_no_authority_sig_rejected(svc):
+    """A non-owner with no authority signature is rejected (legacy owner-only)."""
+    _space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-none")
+    payload = {"ciphertext": "opaque-blob"}
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-auth-none",
+            "event_type": "space_post_public",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    with pytest.raises(PermissionError, match="not the owner"):
+        await svc.publish_event(
+            "sp-auth-none",
+            "space_post_public",
+            payload,
+            "admin-a",
+            transport_sig,
+        )
+
+
+async def test_publish_event_non_owner_tampered_authority_sig_rejected(svc):
+    """A present-but-invalid authority sig is rejected — no fall-through to the
+    owner check."""
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-bad")
+    payload = {"ciphertext": "opaque-blob"}
+    payload.update(_sign_authority(space_seed, space_id="sp-auth-bad", payload=payload))
+    # Tamper with the content AFTER signing — the authority sig no longer matches.
+    payload["ciphertext"] = "tampered-blob"
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-auth-bad",
+            "event_type": "space_post_public",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    with pytest.raises(PermissionError, match="authority"):
+        await svc.publish_event(
+            "sp-auth-bad",
+            "space_post_public",
+            payload,
+            "admin-a",
+            transport_sig,
+        )
+
+
+async def test_publish_event_unknown_authority_suite_rejected(svc):
+    """An authority sig advertising an unknown suite is rejected (no fallback)."""
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-suite")
+    payload = {"ciphertext": "opaque-blob"}
+    payload.update(
+        _sign_authority(space_seed, space_id="sp-auth-suite", payload=payload)
+    )
+    payload["authority_sig_suite"] = "ed25519+future-pq"  # not in SUPPORTED set
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-auth-suite",
+            "event_type": "space_post_public",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    with pytest.raises(PermissionError, match="authority"):
+        await svc.publish_event(
+            "sp-auth-suite",
+            "space_post_public",
+            payload,
+            "admin-a",
+            transport_sig,
+        )
+
+
+async def test_publish_event_owner_still_relays_without_authority_sig(gfs_db):
+    """Back-compat: the owning instance relays its own space content with no
+    authority sig, even when the space has a pinned authority pubkey (the
+    owner-from_instance path is unchanged)."""
+    ws = _RecordingWsRegistry()
+    svc = GfsFederationService(SqliteGfsFederationRepo(gfs_db), ws_registry=ws)
+    owner_seed, owner_pk = _make_keypair()
+    _space_seed, space_pk = _make_keypair()
+    sub_seed, sub_pk = _make_keypair()
+    await svc.register_instance(
+        "owner-bc", owner_pk.hex(), "http://owner-bc.example.com/wh", auto_accept=True
+    )
+    await svc.register_instance(
+        "sub-bc", sub_pk.hex(), "http://sub-bc.example.com/wh", auto_accept=True
+    )
+    await _publish_known_space(
+        svc,
+        owner_seed,
+        owning_instance="owner-bc",
+        space_id="sp-auth-owner",
+        identity_public_key=space_pk.hex(),
+    )
+    ts = _now_iso()
+    sig = _sign(
+        sub_seed, {"instance_id": "sub-bc", "space_id": "sp-auth-owner", "ts": ts}
+    )
+    await svc.subscribe("sub-bc", "sp-auth-owner", ts, sig)
+    payload = {"ciphertext": "opaque-blob"}  # no authority_sig fields
+    transport_sig = _sign(
+        owner_seed,
+        {
+            "space_id": "sp-auth-owner",
+            "event_type": "space_post_public",
+            "payload": payload,
+            "from_instance": "owner-bc",
+        },
+    )
+    delivered = await svc.publish_event(
+        "sp-auth-owner",
+        "space_post_public",
+        payload,
+        "owner-bc",
+        transport_sig,
+    )
+    assert "sub-bc" in delivered
+
+
+async def test_publish_event_null_pinned_pubkey_non_owner_rejected(svc):
+    """A space with NULL pinned pubkey + a non-owner relay is rejected — the
+    GFS can't verify authority, so only the owner may relay until a pubkey is
+    pinned."""
+    owner_seed, owner_pk = _make_keypair()
+    space_seed, _space_pk = _make_keypair()
+    admin_seed, admin_pk = _make_keypair()
+    await svc.register_instance(
+        "owner-null",
+        owner_pk.hex(),
+        "http://owner-null.example.com/wh",
+        auto_accept=True,
+    )
+    await svc.register_instance(
+        "admin-null",
+        admin_pk.hex(),
+        "http://admin-null.example.com/wh",
+        auto_accept=True,
+    )
+    # First publish ships NO pubkey (older HFS) → row.identity_public_key NULL.
+    await _publish_known_space(
+        svc, owner_seed, owning_instance="owner-null", space_id="sp-null"
+    )
+    payload = {"ciphertext": "opaque-blob"}
+    payload.update(_sign_authority(space_seed, space_id="sp-null", payload=payload))
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-null",
+            "event_type": "space_post_public",
+            "payload": payload,
+            "from_instance": "admin-null",
+        },
+    )
+    with pytest.raises(PermissionError):
+        await svc.publish_event(
+            "sp-null",
+            "space_post_public",
+            payload,
+            "admin-null",
+            transport_sig,
+        )
+
+
+async def test_publish_event_authority_sig_still_requires_transport_sig(svc):
+    """The household transport signature stays MANDATORY even with a valid
+    authority sig — an unsigned (or bad-household-sig) publish_event still 403s."""
+    space_seed, _admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-tx")
+    payload = {"ciphertext": "opaque-blob"}
+    payload.update(_sign_authority(space_seed, space_id="sp-auth-tx", payload=payload))
+    # Empty transport signature → rejected before any authority check.
+    with pytest.raises(PermissionError, match="Invalid Ed25519 signature"):
+        await svc.publish_event(
+            "sp-auth-tx",
+            "space_post_public",
+            payload,
+            "admin-a",
+            signature="",
+        )
+
+
+async def test_publish_event_authority_sig_wrong_wire_event_type_rejected(svc):
+    """A non-owner holding a VALID ``space_post_public`` authority sig must NOT
+    be able to relay the payload under a DIFFERENT wire ``event_type``. The
+    authority sig authorizes the space + payload, not the event type — so the
+    GFS must bind the wire event_type to ``space_post_public`` on the authority
+    (non-owner) relay path and reject any other type with PermissionError (no
+    fan-out)."""
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-evt")
+    payload = {"ciphertext": "opaque-blob"}
+    # Sign under the ONLY authorized authority event type.
+    payload.update(_sign_authority(space_seed, space_id="sp-auth-evt", payload=payload))
+    # But relay under a different wire event_type (e.g. an admin action).
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-auth-evt",
+            "event_type": "space_admin_action",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    with pytest.raises(PermissionError):
+        await svc.publish_event(
+            "sp-auth-evt",
+            "space_admin_action",
+            payload,
+            "admin-a",
+            transport_sig,
+        )
 
 
 # ── update_instance (signed display-name change) ────────────────────────────────

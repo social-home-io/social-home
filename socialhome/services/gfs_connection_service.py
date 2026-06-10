@@ -372,6 +372,12 @@ class GfsConnectionService:
             "target_audience": "all",
             "accent_color": accent,
             "primary_color": primary,
+            # Phase 5a: ship the space's Ed25519 authority verify key so the GFS
+            # can TOFU-pin it on first publish and later authorize a
+            # space-authority-signed relay from any seed-holder (owner or
+            # delegated admin) without learning the space content. Inside the
+            # already-signed canonical body — no new signing step.
+            "identity_public_key": space.identity_public_key or "",
         }
         canonical = json.dumps(
             body,
