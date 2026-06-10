@@ -22,19 +22,38 @@ import { showToast } from './Toast'
 
 export interface SpaceProposal {
   id: string
-  action: 'dissolve' | 'set_public_tier'
+  action: 'dissolve' | 'set_public_tier' | 'remote_admin_action'
   params?: { space_type?: string }
   status: 'pending' | 'executed' | 'rejected' | 'expired'
   approvals: number
   total_admins: number
   needed: number
   proposed_by_user: string
+  /** Owner-only proposals (forwarded admin actions) may be approved only
+   *  by the space owner — a co-admin's vote is rejected by the host. */
+  owner_only?: boolean
+  /** The forwarded admin action a remote admin asked the owner to run. */
+  fwd_action?: string
+  fwd_params?: Record<string, unknown>
 }
 
 interface Props {
   spaceId: string
   /** Viewer can vote (owner / admin on any household). */
   canVote: boolean
+  /** Viewer is the space owner — required to vote on owner-only proposals. */
+  isOwner: boolean
+}
+
+/** Human-readable phrase for a forwarded admin action. Reads after
+ *  "wants to …" / "A proposal to …". */
+const FWD_ACTION_COPY: Record<string, string> = {
+  ban: 'remove a member',
+  unban: 'reinstate a member',
+  update_config: "change this space's settings",
+  archive: 'archive this space',
+  unarchive: 'restore this space',
+  invite: 'invite a member to this space',
 }
 
 function describe(p: SpaceProposal): string {
@@ -45,10 +64,15 @@ function describe(p: SpaceProposal): string {
       ? `change the publication tier to “${tier}”`
       : 'change the publication tier'
   }
+  if (p.action === 'remote_admin_action') {
+    return (
+      (p.fwd_action && FWD_ACTION_COPY[p.fwd_action]) || 'perform an admin action'
+    )
+  }
   return 'make a critical change'
 }
 
-export function SpaceProposalsBanner({ spaceId, canVote }: Props) {
+export function SpaceProposalsBanner({ spaceId, canVote, isOwner }: Props) {
   const [proposals, setProposals] = useState<SpaceProposal[]>([])
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -96,45 +120,72 @@ export function SpaceProposalsBanner({ spaceId, canVote }: Props) {
 
   return (
     <div class="sh-space-proposals" role="region" aria-label="Pending approvals">
-      {proposals.map((p) => (
-        <div key={p.id} class="sh-proposal-banner" role="status">
-          <div class="sh-proposal-banner__body">
-            <span class="sh-proposal-banner__icon" aria-hidden="true">
-              {p.action === 'dissolve' ? '🗑️' : '🌐'}
-            </span>
-            <div class="sh-proposal-banner__text">
-              <strong>Admin approval needed</strong>
-              <p class="sh-muted">
-                A proposal to {describe(p)} needs a majority of admins to
-                approve. <strong>{p.approvals} of {p.needed}</strong> approvals
-                so far ({p.total_admins} admins).
+      {proposals.map((p) => {
+        const icon =
+          p.action === 'dissolve'
+            ? '🗑️'
+            : p.action === 'set_public_tier'
+              ? '🌐'
+              : '🛡️'
+        // Owner-only proposals (forwarded admin actions) are votable by the
+        // owner alone; other proposals follow the admin-quorum rule.
+        const canVoteThis = canVote && (!p.owner_only || isOwner)
+        return (
+          <div key={p.id} class="sh-proposal-banner" role="status">
+            <div class="sh-proposal-banner__body">
+              <span class="sh-proposal-banner__icon" aria-hidden="true">
+                {icon}
+              </span>
+              <div class="sh-proposal-banner__text">
+                <strong>
+                  {p.owner_only ? 'Owner approval needed' : 'Admin approval needed'}
+                </strong>
+                {p.owner_only ? (
+                  <p class="sh-muted">
+                    A proposal to {describe(p)} needs the space owner to
+                    approve.
+                  </p>
+                ) : (
+                  <p class="sh-muted">
+                    A proposal to {describe(p)} needs a majority of admins to
+                    approve. <strong>{p.approvals} of {p.needed}</strong>{' '}
+                    approvals so far ({p.total_admins} admins).
+                  </p>
+                )}
+                {p.action === 'remote_admin_action' && (
+                  <p class="sh-muted sh-proposal-banner__requester">
+                    Requested by {p.proposed_by_user}
+                  </p>
+                )}
+              </div>
+            </div>
+            {canVoteThis ? (
+              <div class="sh-proposal-banner__actions">
+                <Button
+                  variant="secondary"
+                  disabled={busy === p.id}
+                  onClick={() => void vote(p, false)}
+                >
+                  Reject
+                </Button>
+                <Button
+                  variant={p.action === 'dissolve' ? 'danger' : 'primary'}
+                  disabled={busy === p.id}
+                  onClick={() => void vote(p, true)}
+                >
+                  Approve
+                </Button>
+              </div>
+            ) : (
+              <p class="sh-muted sh-proposal-banner__note">
+                {p.owner_only
+                  ? 'Waiting for the space owner to decide.'
+                  : 'Waiting for the space admins to decide.'}
               </p>
-            </div>
+            )}
           </div>
-          {canVote ? (
-            <div class="sh-proposal-banner__actions">
-              <Button
-                variant="secondary"
-                disabled={busy === p.id}
-                onClick={() => void vote(p, false)}
-              >
-                Reject
-              </Button>
-              <Button
-                variant={p.action === 'dissolve' ? 'danger' : 'primary'}
-                disabled={busy === p.id}
-                onClick={() => void vote(p, true)}
-              >
-                Approve
-              </Button>
-            </div>
-          ) : (
-            <p class="sh-muted sh-proposal-banner__note">
-              Waiting for the space admins to decide.
-            </p>
-          )}
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

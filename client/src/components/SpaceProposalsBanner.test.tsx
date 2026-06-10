@@ -44,7 +44,7 @@ describe('SpaceProposalsBanner', () => {
   it('renders a pending dissolve proposal with the tally', async () => {
     apiGet.mockResolvedValue({ proposals: [proposal()] })
     const { container } = render(
-      <SpaceProposalsBanner spaceId="s1" canVote={true} />,
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={false} />,
     )
     await waitFor(() =>
       expect(container.textContent).toContain('Admin approval needed'),
@@ -56,7 +56,7 @@ describe('SpaceProposalsBanner', () => {
   it('shows Approve/Reject only when the viewer can vote', async () => {
     apiGet.mockResolvedValue({ proposals: [proposal()] })
     const { container, rerender } = render(
-      <SpaceProposalsBanner spaceId="s1" canVote={false} />,
+      <SpaceProposalsBanner spaceId="s1" canVote={false} isOwner={false} />,
     )
     await waitFor(() =>
       expect(container.textContent).toContain('Waiting for the space admins'),
@@ -64,7 +64,7 @@ describe('SpaceProposalsBanner', () => {
     expect(container.querySelector('button')).toBeNull()
 
     apiGet.mockResolvedValue({ proposals: [proposal()] })
-    rerender(<SpaceProposalsBanner spaceId="s1" canVote={true} />)
+    rerender(<SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={false} />)
     await waitFor(() => expect(container.querySelector('button')).not.toBeNull())
   })
 
@@ -72,7 +72,7 @@ describe('SpaceProposalsBanner', () => {
     apiGet.mockResolvedValue({ proposals: [proposal()] })
     apiPost.mockResolvedValue({})
     const { getByText } = render(
-      <SpaceProposalsBanner spaceId="s1" canVote={true} />,
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={false} />,
     )
     await waitFor(() => getByText('Approve'))
     fireEvent.click(getByText('Approve'))
@@ -87,7 +87,7 @@ describe('SpaceProposalsBanner', () => {
   it('drops the banner when a WS frame resolves the proposal', async () => {
     apiGet.mockResolvedValue({ proposals: [proposal()] })
     const { container } = render(
-      <SpaceProposalsBanner spaceId="s1" canVote={true} />,
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={false} />,
     )
     await waitFor(() =>
       expect(container.textContent).toContain('Admin approval needed'),
@@ -95,6 +95,83 @@ describe('SpaceProposalsBanner', () => {
     wsHandler?.({ space_id: 's1', proposal: proposal({ status: 'executed' }) })
     await waitFor(() =>
       expect(container.textContent).not.toContain('Admin approval needed'),
+    )
+  })
+
+  function ownerActionProposal(over: Record<string, unknown> = {}) {
+    return proposal({
+      id: 'pa1',
+      action: 'remote_admin_action',
+      owner_only: true,
+      fwd_action: 'ban',
+      fwd_params: { user_id: 'u9' },
+      total_admins: 1,
+      needed: 1,
+      approvals: 0,
+      proposed_by_user: 'bob',
+      ...over,
+    })
+  }
+
+  it('renders a remote_admin_action proposal with copy + requester', async () => {
+    apiGet.mockResolvedValue({ proposals: [ownerActionProposal()] })
+    const { container } = render(
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={true} />,
+    )
+    await waitFor(() =>
+      expect(container.textContent).toContain('Owner approval needed'),
+    )
+    expect(container.textContent).toContain('remove a member')
+    expect(container.textContent).toContain('Requested by bob')
+  })
+
+  it('shows vote buttons on an owner_only proposal to the owner', async () => {
+    apiGet.mockResolvedValue({ proposals: [ownerActionProposal()] })
+    const { container, getByText } = render(
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={true} />,
+    )
+    await waitFor(() => getByText('Approve'))
+    expect(getByText('Reject')).not.toBeNull()
+    expect(container.textContent).toContain('remove a member')
+  })
+
+  it('hides vote buttons on an owner_only proposal from a non-owner admin', async () => {
+    apiGet.mockResolvedValue({ proposals: [ownerActionProposal()] })
+    const { container } = render(
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={false} />,
+    )
+    await waitFor(() =>
+      expect(container.textContent).toContain('Owner approval needed'),
+    )
+    // Tally / description still visible…
+    expect(container.textContent).toContain('remove a member')
+    expect(container.textContent).toContain('Waiting for the space owner')
+    // …but no Approve / Reject for a co-admin.
+    expect(container.querySelector('button')).toBeNull()
+  })
+
+  it('still shows buttons for a non-owner-only proposal to a non-owner admin', async () => {
+    apiGet.mockResolvedValue({ proposals: [proposal()] })
+    const { container } = render(
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={false} />,
+    )
+    await waitFor(() => expect(container.querySelector('button')).not.toBeNull())
+    expect(container.textContent).toContain('Admin approval needed')
+  })
+
+  it('POSTs a vote on Approve for a remote_admin_action', async () => {
+    apiGet.mockResolvedValue({ proposals: [ownerActionProposal()] })
+    apiPost.mockResolvedValue({})
+    const { getByText } = render(
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={true} />,
+    )
+    await waitFor(() => getByText('Approve'))
+    fireEvent.click(getByText('Approve'))
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith(
+        '/api/spaces/s1/proposals/pa1/vote',
+        { approve: true },
+      ),
     )
   })
 })
