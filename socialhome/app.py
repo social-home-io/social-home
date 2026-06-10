@@ -2111,6 +2111,9 @@ def create_app(config: Config | None = None) -> web.Application:
             # the box (no unauthenticated sealed sender).
             identity_seed=identity_seed,
             federation_repo=federation_repo,
+            # Phase 4b — stamp every locally-minted epoch with this household's
+            # id so concurrent delegated-admin rotations converge deterministically.
+            own_instance_id=identity.instance_id,
         )
         app[K.space_crypto_service_key] = space_crypto
         pending_decrypts_cache = PendingDecryptsCache(bus=bus)

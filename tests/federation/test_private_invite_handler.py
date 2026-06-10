@@ -31,12 +31,15 @@ class _RecordingBus:
 
 
 def _event(event_type: str, payload: dict, *, from_instance: str = "peer-1"):
-    # FederationEvent is a dataclass, but we only use .payload and
-    # .from_instance attrs — a namespace is cheaper and clearer.
+    # FederationEvent is a dataclass, but we only use .payload,
+    # .from_instance, and .space_id attrs — a namespace is cheaper and
+    # clearer. ``space_id`` mirrors the real envelope's routing field
+    # (None here unless a test sets it via the payload).
     return SimpleNamespace(
         event_type=event_type,
         payload=payload,
         from_instance=from_instance,
+        space_id=payload.get("space_id"),
     )
 
 
@@ -903,6 +906,13 @@ async def test_key_exchange_rekey_imports_new_epoch_key():
     future SPACE_POST_CREATED inbounds decrypt with the new key."""
     bus = _RecordingBus()
     space_repo = AsyncMock()
+    # Owner back-compat path: the §24.11-authenticated from_instance ("peer-1",
+    # the _event default) IS the space owner, so an UNSIGNED rekey applies.
+    space_repo.get = AsyncMock(
+        return_value=SimpleNamespace(
+            owner_instance_id="peer-1", identity_public_key="00" * 32
+        )
+    )
     remote_members = AsyncMock()
     space_crypto = AsyncMock()
     space_crypto.import_key = AsyncMock()
@@ -929,7 +939,51 @@ async def test_key_exchange_rekey_imports_new_epoch_key():
         },
     )
     await h._on_key_exchange_rekey(ev)
-    space_crypto.import_key.assert_awaited_once_with("sp-rekey", 7, new_key)
+    space_crypto.import_key.assert_awaited_once_with(
+        "sp-rekey", 7, new_key, rotated_by=None
+    )
+
+
+async def test_key_exchange_rekey_threads_rotated_by_through():
+    """Phase 4b: the rekey handler passes the minting household's id
+    (``rotated_by``) through to ``import_key`` so the receiver's
+    collision-safe tiebreak can converge two concurrent rotations."""
+    import base64
+    from unittest.mock import AsyncMock
+
+    space_repo = AsyncMock()
+    # Owner back-compat path (from_instance "peer-1" == owner): an unsigned
+    # rekey with a non-empty rotated_by applies and threads the minter through.
+    space_repo.get = AsyncMock(
+        return_value=SimpleNamespace(
+            owner_instance_id="peer-1", identity_public_key="00" * 32
+        )
+    )
+    space_crypto = AsyncMock()
+    space_crypto.import_key = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=space_repo,
+        remote_member_repo=AsyncMock(),
+        space_crypto_service=space_crypto,
+    )
+    new_key = bytes(range(32))
+    ev = _event(
+        "SPACE_KEY_EXCHANGE_REKEY",
+        {
+            "space_id": "sp-rekey",
+            "space_content_key": {
+                "epoch": 4,
+                "key_suite": "aesgcm-256",
+                "key_base64": base64.b64encode(new_key).decode("ascii"),
+                "rotated_by": "inst-minter-7",
+            },
+        },
+    )
+    await h._on_key_exchange_rekey(ev)
+    space_crypto.import_key.assert_awaited_once_with(
+        "sp-rekey", 4, new_key, rotated_by="inst-minter-7"
+    )
 
 
 async def test_key_exchange_rekey_missing_space_id_skipped():
