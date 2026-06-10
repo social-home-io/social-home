@@ -6,7 +6,22 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 23
+    assert fc.OURS == 24
+
+
+def test_admin_authoritative_ops_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS == 24
+    assert fc.FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS <= fc.OURS
+
+
+def test_admin_authoritative_ops_feature_label():
+    labels = dict(fc.CAPABILITY_FEATURES).values()
+    assert "Admin authoritative config offline" in labels
+    assert "Admin authoritative config offline" in fc.features_missing_below(23)
+    assert "Admin authoritative config offline" not in fc.features_missing_below(24)
+    # Space-scoped: a behind member household won't accept a delegated
+    # admin's offline config edit.
+    assert "Admin authoritative config offline" in fc.space_features_missing_below(23)
 
 
 def test_space_roster_gossip_capability_threshold():

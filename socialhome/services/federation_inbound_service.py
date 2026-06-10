@@ -68,6 +68,11 @@ from ..infrastructure.event_bus import EventBus
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
+from .space_crypto_service import (
+    UnsupportedAuthoritySuite,
+    strip_authority_sig_fields,
+    verify_authority_event,
+)
 from .space_service import stub_space_from_metadata
 from ..utils.datetime import parse_iso8601_lenient
 
@@ -1440,41 +1445,146 @@ class FederationInboundService:
             # member, so creating one here would surface a card the
             # user never joined. Bail.
             return
-        if existing.owner_instance_id != event.from_instance:
-            return
         if existing.archived_reason:
             # Terminal state: the host dissolved this space (or removed us). A
             # later config snapshot must not revive it — ignore further config
             # changes for a remote-terminated space.
             return
-        # Out-of-order delivery guard: with #459, every config edit
-        # broadcasts a SPACE_CONFIG_CHANGED, AND the §D1b catch-up
-        # path (_push_config_to) still ships a snapshot on demand. If
-        # a stale catch-up reply races a newer realtime broadcast the
-        # older could clobber the newer — drop incoming snapshots
-        # whose sequence is ≤ what we already have. ``config_sequence``
-        # is monotonic on the host (incremented per edit) and ships
-        # in the payload + space_meta for exactly this purpose.
+        # ── Authorization (v_24) ────────────────────────────────────────────
+        # Two ways an inbound config edit is authorised to mutate our stub:
         #
-        # Equality is treated as "no-op" (same sequence = same state)
-        # rather than "apply" because the receiver-side save is an
-        # UPSERT and an equal-sequence apply is purely wasted work.
-        incoming_seq = _coerce_sequence(meta, event.payload)
-        if incoming_seq is not None and incoming_seq <= existing.config_sequence:
-            log.debug(
-                "SPACE_CONFIG_CHANGED for %s: incoming seq %d <= existing %d "
-                "— dropping (out-of-order or replay)",
-                space_id,
-                incoming_seq,
-                existing.config_sequence,
-            )
+        #   (a) Legacy owner path — the §24.11-authenticated ``from_instance``
+        #       is the row's ``owner_instance_id``. This is the host pushing its
+        #       own config (rename / catch-up snapshot). Unchanged, no signature
+        #       required (back-compat with pre-v_24 senders).
+        #
+        #   (b) Authority-signed path — the payload carries an
+        #       ``authority_sig`` produced with the space's Ed25519 seed
+        #       (:func:`sign_authority_event`). A seed-holding delegated admin
+        #       can change config while the owner is offline; the trust root is
+        #       the SIGNATURE verified against ``spaces.identity_public_key``,
+        #       not ``from_instance``, so any member household (including the
+        #       offline owner on reconnect) accepts it regardless of relay.
+        #
+        # SECURITY — fail-closed:
+        #   * If a signature is PRESENT it MUST verify. A present-but-invalid /
+        #     unknown-suite / wrong-key signature DROPS the event — it never
+        #     falls through to the owner gate (otherwise an attacker could
+        #     attach garbage and rely on (a) for an owner-spoofed envelope).
+        #   * A NON-owner with NO signature is dropped (today's behaviour) —
+        #     only a valid signature relaxes the owner-only gate.
+        is_owner = existing.owner_instance_id == event.from_instance
+        authority_sig = str(meta.get("authority_sig") or "")
+        authority_sig_suite = str(meta.get("authority_sig_suite") or "")
+        authority_verified = False
+        if authority_sig or authority_sig_suite:
+            if not (authority_sig and authority_sig_suite):
+                log.warning(
+                    "SPACE_CONFIG_CHANGED for %s from %s: partial authority "
+                    "signature — dropping",
+                    space_id,
+                    event.from_instance,
+                )
+                return
+            try:
+                authority_verified = verify_authority_event(
+                    event_type="space_config_changed",
+                    space_id=space_id,
+                    payload=strip_authority_sig_fields(meta),
+                    authority_sig=authority_sig,
+                    authority_sig_suite=authority_sig_suite,
+                    space_public_key=bytes.fromhex(existing.identity_public_key),
+                )
+            except UnsupportedAuthoritySuite:
+                log.warning(
+                    "SPACE_CONFIG_CHANGED for %s: unknown authority_sig_suite "
+                    "%r — dropping",
+                    space_id,
+                    authority_sig_suite,
+                )
+                return
+            except Exception:
+                log.warning(
+                    "SPACE_CONFIG_CHANGED for %s: malformed space public key / "
+                    "signature — dropping",
+                    space_id,
+                )
+                return
+            if not authority_verified:
+                log.warning(
+                    "SPACE_CONFIG_CHANGED for %s from %s: authority signature "
+                    "did not verify against the space key — dropping",
+                    space_id,
+                    event.from_instance,
+                )
+                return
+        if not (is_owner or authority_verified):
+            # Non-owner, no valid signature → not authorised.
             return
+        # ── Last-writer-wins ordering (v_24) ────────────────────────────────
+        # With #459, every config edit broadcasts a SPACE_CONFIG_CHANGED, AND
+        # the §D1b catch-up path (_push_config_to) still ships a snapshot on
+        # demand — out-of-order delivery is normal. With v_24, two delegated
+        # admins (or owner + admin) editing while offline of each other can
+        # produce two DIFFERENT edits at the SAME ``config_sequence``. A bare
+        # ``incoming_seq > existing`` guard would then let whichever arrived
+        # LAST win per receiver — non-deterministic divergence.
+        #
+        # So order on the lexicographic pair ``(config_sequence, author)`` and
+        # apply iff it is STRICTLY GREATER than what we last applied (equal →
+        # no-op). The author is read out of the AUTHORITY-SIGNED meta
+        # (``config_author_instance``), so it can't be forged independently of
+        # the signature; the owner legacy path (no signed author) falls back to
+        # ``from_instance``. ``None`` author / missing seq sort lowest, matching
+        # the prior fail-soft default for older senders.
+        incoming_seq = _coerce_sequence(meta, event.payload)
+        # The tie-break author MUST be authenticated. On the authority-signed
+        # path the ``config_author_instance`` field is INSIDE the signed bytes,
+        # so a relay can't forge it; trust it. On the legacy owner path there is
+        # no signed author, so fall back to the §24.11-authenticated
+        # ``from_instance`` (the owner) rather than an unsigned payload field an
+        # owner could otherwise stuff to mis-order the LWW.
+        if authority_verified:
+            incoming_author = str(
+                meta.get("config_author_instance") or event.from_instance or ""
+            )
+        else:
+            incoming_author = str(event.from_instance or "")
+        if incoming_seq is not None:
+            # An unrecorded author (pre-v_24 row, or a stub seated before any
+            # config edit) was, by construction, last written by the host —
+            # default to ``owner_instance_id`` so an owner's equal-sequence
+            # re-push stays a no-op (it doesn't out-rank itself) while a
+            # delegated admin's higher-id concurrent edit can still win.
+            existing_author = (
+                await self._space_repo.get_config_author(space_id)
+                or existing.owner_instance_id
+                or ""
+            )
+            if (incoming_seq, incoming_author) <= (
+                existing.config_sequence,
+                existing_author,
+            ):
+                log.debug(
+                    "SPACE_CONFIG_CHANGED for %s: (seq=%d, author=%s) <= "
+                    "(seq=%d, author=%s) — dropping (out-of-order or replay)",
+                    space_id,
+                    incoming_seq,
+                    incoming_author,
+                    existing.config_sequence,
+                    existing_author,
+                )
+                return
         refreshed = stub_space_from_metadata(
             space_id,
             host_instance_id=event.from_instance,
             meta=meta,
         )
         await self._space_repo.save(refreshed)
+        # Record the author of the edit we just applied so a later
+        # equal-sequence edit can deterministically tie-break (v_24 LWW).
+        if incoming_author:
+            await self._space_repo.set_config_author(space_id, incoming_author)
 
     async def _on_space_member_profile_updated(
         self,

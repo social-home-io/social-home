@@ -1,0 +1,43 @@
+-- Last-applied config author for deterministic LWW (owner-offline spaces epic, Phase 4a).
+--
+-- v_24 lets a seed-holding delegated admin change a space's config while the
+-- owner is offline. The change federates as a space-authority-signed
+-- ``SPACE_CONFIG_CHANGED``. Every member household (including the offline owner
+-- on reconnect) accepts it by verifying the signature, NOT by checking
+-- ``from_instance == owner_instance_id``. That means two admins can now produce
+-- two *different* config edits at the SAME ``config_sequence`` (each bumped from
+-- the same base while offline of each other). A pure ``incoming_seq >
+-- existing_seq`` guard would let whichever arrived LAST win on each receiver —
+-- non-deterministic, so two member households could diverge permanently.
+--
+-- This column records the instance id that authored the last config edit we
+-- APPLIED. The inbound handler then applies an incoming config iff
+-- ``(incoming_seq, incoming_author) > (existing_seq, stored_author)``
+-- lexicographically (equal → no-op). The author is read out of the
+-- authority-SIGNED ``space_meta`` (so it can't be forged independently of the
+-- signature), giving every receiver the same total order and identical
+-- convergence regardless of delivery order.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. Everything reading/writing ``spaces`` config goes through
+--       ``repositories/space_repo.py`` (``save`` upsert, ``increment_config_sequence``,
+--       ``_row_to_space``). The inbound apply is ``services/federation_inbound_service.py::
+--       _on_space_config_changed``; the outbound sign is ``services/space_config_outbound.py``
+--       + ``services/space_service.py::update_config``. No existing column records
+--       WHICH instance authored the last applied config — ``owner_instance_id`` is the
+--       host identity (constant), ``config_sequence`` is the version (not the author).
+--       There is nothing to reuse for the tie-break key.
+--   (2) Alternative rejected. (a) Tie-break on the author carried only in the
+--       payload, storing nothing — insufficient: a later equal-(seq) event from a
+--       LOWER-id author must be dropped, which requires comparing against the
+--       author we already applied; without a stored value the receiver can't tell
+--       "already applied a higher author at this seq" from "first time at this seq".
+--       (b) Reuse ``config_sequence`` alone — that is exactly the non-deterministic
+--       LWW this fixes. (c) Compute at read time — there is no derivable source for
+--       "who last wrote". So one additive NULL-defaulted column on ``spaces``,
+--       alongside the sequence it disambiguates, is the correct minimal home.
+--   (3) Smallest change. One additive ``TEXT NULL`` column. No backfill (pre-existing
+--       rows are owner-authored single-writer spaces; NULL sorts below any real
+--       instance id, so an owner's first signed edit always applies — the right
+--       default). No index, no table rewrite, no destructive change.
+ALTER TABLE spaces ADD COLUMN config_author_instance TEXT;

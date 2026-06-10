@@ -1096,11 +1096,35 @@ class SpaceService(SpaceMemberGuardMixin):
         ):
             await self._require_owner(space, actor_username)
 
-        # Cross-household admin config edit — forward to the host (v_15+).
-        # Build a wire-serialised params dict of only the provided fields,
-        # mirroring the per-field gates below, and let the host run the
-        # real edit so the change federates back to every member.
-        if space.owner_instance_id and space.owner_instance_id != self._own_instance_id:
+        # Delegated-admin authoritative path (v_24): when this space has
+        # ``delegated_admin_authority`` ON and THIS household holds the space
+        # signing seed (delivered to a remote admin via SPACE_ADMIN_KEY_SHARE,
+        # or already held by the owner), a local admin can change config
+        # AUTHORITATIVELY even while the owner is offline. We do NOT forward to
+        # the host — we execute locally (bump config_sequence, persist) and the
+        # SpaceConfigOutbound broadcast carries the space-authority signature so
+        # every member household (including the offline owner on reconnect)
+        # accepts it by verifying the signature, not by trusting from_instance.
+        #
+        # ``_require_admin_or_owner`` above already proved the actor is an
+        # admin/owner; the delegated_admin_authority flip itself stayed
+        # OWNER-only (gate above), so this never lets a non-owner enact the
+        # delegation policy. When delegation is OFF or no seed is held, fall
+        # through to today's v_15 forward-to-host behaviour.
+        is_remote_host = bool(space.owner_instance_id) and (
+            space.owner_instance_id != self._own_instance_id
+        )
+        holds_seed = False
+        if is_remote_host and space.features.delegated_admin_authority:
+            try:
+                holds_seed = await self._spaces.get_space_seed(space_id) is not None
+            except Exception:
+                log.exception("update_config: get_space_seed failed for %s", space_id)
+                holds_seed = False
+
+        # Cross-household admin config edit — forward to the host (v_15+) unless
+        # we are an authoritative seed-holding delegated admin (handled locally).
+        if is_remote_host and not holds_seed:
             fwd: dict = {}
             if name is not None:
                 fwd["name"] = name
@@ -1126,6 +1150,26 @@ class SpaceService(SpaceMemberGuardMixin):
                 space, actor_username, "update_config", fwd
             ):
                 return space
+
+        # SECURITY (v_24): the publication tier (``space_type``) is owner/quorum
+        # gated (v_16 ``SpaceApprovalService``) and the v_15 forward path
+        # deliberately EXCLUDES it from ``_REMOTE_CONFIG_FIELDS`` so the host
+        # drops a remote admin's tier change. The v_24 delegated-admin
+        # local-execute path runs the full body below, so without this guard a
+        # seed-holding delegated admin on a remote-owned space could flip
+        # PRIVATE→PUBLIC/GLOBAL locally with ZERO quorum. Mirror the forward-path
+        # exclusion: a non-owner-host caller may NOT enact a tier change — it
+        # must go through the owner / multi-admin approval flow. (The owner-host
+        # path and the quorum proposal flow are unchanged; this only blocks the
+        # local-execute shortcut.)
+        if (
+            is_remote_host
+            and space_type is not None
+            and _coerce_space_type(space_type) is not space.space_type
+        ):
+            raise SpacePermissionError(
+                "publication tier change requires owner / multi-admin approval",
+            )
 
         payload: dict = {}
         new_fields: dict = {}
@@ -1209,6 +1253,17 @@ class SpaceService(SpaceMemberGuardMixin):
         updated = replace(space, **new_fields)
         await self._spaces.save(updated)
         sequence = await self._spaces.increment_config_sequence(space_id)
+        # v_24 LWW: record THIS household as the last-applied config author so
+        # the ``(config_sequence, author)`` tie-break key matches what every
+        # receiver records from the signed broadcast (SpaceConfigOutbound ships
+        # ``config_author_instance = own``). Without this, a local authoritative
+        # edit leaves the author NULL → fallback ``owner_instance_id``, which
+        # mis-orders a concurrent same-sequence peer edit on the editing
+        # household while clean members order it correctly → permanent
+        # divergence. The owner host records itself here too (it is the author
+        # of its own edits), consistent with what its broadcast signs.
+        if self._own_instance_id:
+            await self._spaces.set_config_author(space_id, self._own_instance_id)
         if "space_type" in new_fields:
             event_type = SpaceConfigEventType.PUBLIC_MODE_CHANGED.value
         elif set(payload.keys()) == {"name"}:

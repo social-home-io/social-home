@@ -59,6 +59,10 @@ def fed():
 def space_repo():
     r = MagicMock()
     r.get = AsyncMock(return_value=_make_space())
+    # Default: no signing seed held → broadcasts go out UNSIGNED (back-compat
+    # path for a pre-v_24 / pre-Phase-0 owned space). v_24 signing tests set a
+    # real seed on the repo explicitly.
+    r.get_space_seed = AsyncMock(return_value=None)
     return r
 
 
@@ -130,6 +134,7 @@ async def test_config_changed_skipped_when_not_owner(fed):
     remote_owned = _make_space(owner_instance_id="inst-remote")
     space_repo = MagicMock()
     space_repo.get = AsyncMock(return_value=remote_owned)
+    space_repo.get_space_seed = AsyncMock(return_value=None)
     SpaceConfigOutbound(
         bus=bus,
         federation_service=fed,
@@ -150,6 +155,7 @@ async def test_config_changed_skipped_when_space_missing(fed):
     bus = EventBus()
     space_repo = MagicMock()
     space_repo.get = AsyncMock(return_value=None)
+    space_repo.get_space_seed = AsyncMock(return_value=None)
     SpaceConfigOutbound(
         bus=bus,
         federation_service=fed,
@@ -187,6 +193,97 @@ async def test_config_changed_broadcast_failure_is_swallowed(space_repo):
             sequence=1,
         ),
     )
+
+
+# ─── v_24: authority-signed config broadcasts ──────────────────────────
+
+
+async def test_config_changed_authority_signed_when_seed_held(fed):
+    """A seed-holder (owner OR delegated admin) signs the broadcast — the
+    space_meta carries an authority_sig that verifies against the space pubkey,
+    and the broadcast is gated on MIN_FOR_ADMIN_AUTHORITATIVE_OPS."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.domain.federation_capabilities import FederationCapability
+    from socialhome.services.space_crypto_service import (
+        strip_authority_sig_fields,
+        verify_authority_event,
+    )
+
+    kp = generate_space_keypair()
+    # A space hosted ELSEWHERE for which THIS household holds the seed
+    # (delegated admin) — the owner is offline.
+    space = _make_space(owner_instance_id="inst-remote")
+    space = type(space)(  # rebuild with the real space pubkey
+        **{
+            **{f: getattr(space, f) for f in space.__slots__},
+            "identity_public_key": kp.public_key.hex(),
+        }
+    )
+    space_repo = MagicMock()
+    space_repo.get = AsyncMock(return_value=space)
+    space_repo.get_space_seed = AsyncMock(return_value=kp.private_key)
+
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=space_repo,
+    ).wire()
+    await bus.publish(
+        SpaceConfigChanged(
+            space_id="sp-1",
+            event_type="rename",
+            payload={"name": "Living Room"},
+            sequence=5,
+        ),
+    )
+
+    fed.broadcast_to_space_members.assert_awaited_once()
+    call = fed.broadcast_to_space_members.await_args
+    payload = call.args[2]
+    meta = payload["space_meta"]
+    assert meta["authority_sig"]
+    assert meta["authority_sig_suite"] == "ed25519"
+    # The signed author is THIS household (the editing seed-holder).
+    assert meta["config_author_instance"] == "inst-self"
+    # The signature verifies against the space public key.
+    assert verify_authority_event(
+        event_type="space_config_changed",
+        space_id="sp-1",
+        payload=strip_authority_sig_fields(meta),
+        authority_sig=meta["authority_sig"],
+        authority_sig_suite=meta["authority_sig_suite"],
+        space_public_key=kp.public_key,
+    )
+    # Gated on the v_24 capability.
+    assert (
+        call.kwargs.get("min_proto_version")
+        == FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS
+    )
+
+
+async def test_config_changed_unsigned_when_no_seed(fed, space_repo):
+    """Owner host without a stored seed (pre-Phase-0) still broadcasts, but
+    UNSIGNED — back-compat. No authority_sig, no version gate."""
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=space_repo,
+    ).wire()
+    await bus.publish(
+        SpaceConfigChanged(
+            space_id="sp-1",
+            event_type="rename",
+            payload={"name": "Living Room"},
+            sequence=5,
+        ),
+    )
+    fed.broadcast_to_space_members.assert_awaited_once()
+    call = fed.broadcast_to_space_members.await_args
+    meta = call.args[2]["space_meta"]
+    assert "authority_sig" not in meta
+    assert call.kwargs.get("min_proto_version") is None
 
 
 # ─── §CP.F1: age-gate changes federate to member stubs ──────────────────

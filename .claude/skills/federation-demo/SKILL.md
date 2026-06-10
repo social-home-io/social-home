@@ -127,7 +127,11 @@ That single command runs the full sequence:
 
 4. ``verify`` — assertions across all three households:
    - Every confirmed peer advertises the build's current ``OURS``
-     ``proto_version`` (the capability-bump tripwire — now v_23, which adds
+     ``proto_version`` (the capability-bump tripwire — now v_24, which makes
+     ``SPACE_CONFIG_CHANGED`` space-authority-signed so a seed-holding delegated
+     admin can change a space's config with the owner offline and every member
+     household (incl. the offline owner on reconnect) accepts it by verifying
+     the signature, not ``from_instance == owner``. v_23 adds
      peer-replicated, space-authority-signed roster gossip:
      ``SPACE_MEMBER_JOINED`` / ``SPACE_MEMBER_LEFT`` broadcast on every roster
      mutation so every member household converges its roster, verified against

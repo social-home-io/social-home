@@ -26,6 +26,24 @@ them on every roster mutation and broadcasts to every member household so
 each household's roster converges (not just the host's). See "Roster gossip"
 below.
 
+From v_24, `SPACE_CONFIG_CHANGED` is itself **space-authority-signed**: the
+emitter (owner host OR a seed-holding delegated admin) signs the config
+`space_meta` with the space's Ed25519 seed, and the receiver
+(`_on_space_config_changed`) accepts the edit by verifying the signature
+against `spaces.identity_public_key` — **the trust root is the authority
+signature, not `from_instance == owner`**. This lets a delegated admin change
+a space's config (name / description / emoji / features / join-mode /
+retention / about) while the owner is offline; every member household,
+including the offline owner on reconnect, accepts it. A present-but-invalid
+signature is dropped (fail-closed); a non-owner edit with no signature is
+dropped (legacy behaviour); an owner edit with no signature still applies via
+the legacy `from_instance == owner` path. Concurrent same-`config_sequence`
+edits from two admins converge by a deterministic
+`(config_sequence, config_author_instance)` last-writer-wins tie-break
+(recorded in `spaces.config_author_instance`). Toggling
+`delegated_admin_authority` itself stays **owner-only**. See "Authority
+signing" below.
+
 **Key exchange**
 
 `SPACE_KEY_EXCHANGE`, `SPACE_KEY_EXCHANGE_ACK`,
@@ -465,6 +483,39 @@ always invite, regardless of the flag. If a delegation-ON, non-owner
 space ever lacks a seed (the Phase-1 share never landed) the roster
 gossip is skipped gracefully but logged at WARNING — an anomaly, not a
 silent drop.
+
+#### Config edits offline-of-owner (`SPACE_CONFIG_CHANGED`, v_24+)
+
+Phase 4a extends the same authority-signature model to a space's
+**config** (name / description / emoji / features / join-mode /
+retention / about). When a seed-holding delegated admin runs
+`update_config` on a `delegated_admin_authority`-ON space hosted
+elsewhere, `SpaceService.update_config` does **not** forward the v_15
+`SPACE_REMOTE_ADMIN_ACTION` to the host — it executes the edit
+**locally and authoritatively**: bumps `config_sequence`, persists the
+row, and the `SpaceConfigOutbound` broadcast signs the config
+`space_meta` with the space seed (`sign_authority_event`). With
+delegation OFF or no seed held, it keeps today's v_15 forward-to-host
+behaviour (a later phase gates that forward behind owner approval).
+
+Every member household — including the offline owner on reconnect —
+applies the edit in `_on_space_config_changed` by verifying the
+signature against `spaces.identity_public_key`, **not** by checking
+`from_instance == owner_instance_id`. Fail-closed: a present-but-invalid
+/ unknown-suite / wrong-key signature is dropped (never falls through to
+the owner gate); a non-owner edit with no signature is dropped; an
+owner edit with no signature still applies via the legacy path
+(back-compat). The signed `space_meta` carries `config_author_instance`
+(the editing household); two admins editing concurrently from the same
+base `config_sequence` converge deterministically by a
+`(config_sequence, config_author_instance)` lexicographic
+last-writer-wins tie-break, recorded on each receiver in
+`spaces.config_author_instance` (migration 0032). Toggling
+`delegated_admin_authority` itself stays **owner-only** (it is the
+owner's policy switch that distributes the seed). Gated on
+`FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS`; a sub-v_24
+member falls back to the owner-only gate and reconciles when the owner
+re-broadcasts / §25.6 sync runs.
 
 ### Cross-household kick (phase 2, v_9+)
 

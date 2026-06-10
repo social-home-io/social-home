@@ -345,7 +345,36 @@ from __future__ import annotations
 #:   gracefully (falls back to today's behaviour). Space-scoped: a behind
 #:   member household won't converge its roster, so it warns in the
 #:   per-space compatibility banner.
-OURS: int = 23
+#: * **v_24** (2026-06-10) — admin-authoritative offline config edits.
+#:   :data:`FederationEventType.SPACE_CONFIG_CHANGED` payloads are now
+#:   **space-authority-signed**: the emitter (owner host OR a seed-holding
+#:   delegated admin) signs the config ``space_meta`` with the space's
+#:   Ed25519 seed (:func:`sign_authority_event`), and the receiver accepts
+#:   the change by verifying against ``spaces.identity_public_key`` rather
+#:   than requiring ``from_instance == owner_instance_id``. This lets a
+#:   delegated admin change a space's config (name / description / emoji /
+#:   features / join-mode / retention / …) and have every member household
+#:   — including the offline owner on reconnect — accept it, the
+#:   foundational step for owner-offline spaces. An emitter that holds the
+#:   seed for a ``delegated_admin_authority``-ON space executes the edit
+#:   LOCALLY + authoritatively (bumps ``config_sequence``, broadcasts the
+#:   signed event) instead of forwarding to the host; without the flag or
+#:   the seed it keeps the v_15 forward-to-host behaviour. Concurrent
+#:   same-sequence edits by two admins converge via a deterministic
+#:   ``(config_sequence, author_instance_id)`` lexicographic last-writer-
+#:   wins tiebreak recorded on the receiver. Toggling
+#:   ``delegated_admin_authority`` itself stays OWNER-only (unchanged).
+#:   **Best-effort, gated.** The owner / seed-holder gates the signed
+#:   broadcast on :data:`FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS`;
+#:   a sub-v_24 member household has no authority-verify path so it falls
+#:   back to the legacy owner-only gate (a non-owner's signed edit is
+#:   dropped there) and reconciles via the §25.6 sync / owner re-broadcast
+#:   when the owner next comes online. The owner host still signs every
+#:   edit, so an owner-originated change applies on a sub-v_24 peer through
+#:   the legacy ``from_instance == owner`` gate (back-compat). Space-scoped:
+#:   a behind member household won't accept a delegated admin's offline
+#:   config edit, so it warns in the per-space compatibility banner.
+OURS: int = 24
 
 
 class FederationCapability:
@@ -544,6 +573,18 @@ class FederationCapability:
     #: stale member list until the next sync) rather than a hard failure.
     MIN_FOR_SPACE_ROSTER_GOSSIP = 23
 
+    #: Minimum proto_version where the member household verifies a
+    #: **space-authority-signed** :data:`FederationEventType.SPACE_CONFIG_CHANGED`
+    #: against ``spaces.identity_public_key`` and so accepts a config edit from
+    #: a NON-owner seed-holder (a delegated admin) — the foundational gate for
+    #: owner-offline config. The owner / seed-holder gates the signed broadcast
+    #: on this; a sub-v_24 household has no authority-verify path, so it falls
+    #: back to the legacy owner-only gate (a delegated admin's offline edit is
+    #: dropped there until the owner re-broadcasts / §25.6 sync reconciles).
+    #: Owner-originated edits still apply on a sub-v_24 peer via the legacy
+    #: ``from_instance == owner`` path (back-compat). Best-effort, space-scoped.
+    MIN_FOR_ADMIN_AUTHORITATIVE_OPS = 24
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -592,6 +633,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
         FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP,
         "Space roster gossip",
     ),
+    (
+        FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS,
+        "Admin authoritative config offline",
+    ),
 ]
 
 
@@ -637,6 +682,7 @@ SPACE_SCOPED_MIN_VERSIONS: frozenset[int] = frozenset(
         FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
         FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
         FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP,
+        FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS,
     }
 )
 
