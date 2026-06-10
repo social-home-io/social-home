@@ -3698,9 +3698,13 @@ async def test_offline_owner_delegated_admin_invite_works(stack):
 
 
 async def test_offline_owner_delegated_admin_invite_gated_when_off(stack):
-    """The SAME non-owner ADMIN in a delegation-OFF space is BLOCKED — invite
-    raises SpacePermissionError (owner approval required) and NO envelope is
-    sent."""
+    """The SAME non-owner ADMIN in a delegation-OFF space cannot mint locally —
+    instead the invite is FORWARDED to the host as an owner-approval request
+    (Phase 6). ``invite_remote_user`` returns "" and a SPACE_REMOTE_ADMIN_ACTION
+    with action="invite" + the invitee params was sent to the host. No local
+    SPACE_PRIVATE_INVITE envelope is minted here."""
+    from socialhome.domain.federation import FederationEventType
+
     space = await _make_delegated_admin_space(stack, delegation=False)
     fed, fed_repo = _invite_fed()
     stack.space_svc.attach_federation(
@@ -3709,14 +3713,25 @@ async def test_offline_owner_delegated_admin_invite_gated_when_off(stack):
         remote_member_repo=(await _wire_remote_members(stack)),
     )
 
-    with pytest.raises(SpacePermissionError, match="owner approval required"):
-        await stack.space_svc.invite_remote_user(
-            space.id,
-            actor_username="deladmin",
-            invitee_instance_id="peer",
-            invitee_user_id="bob",
-        )
-    fed.send_with_mesh_fallback.assert_not_awaited()
+    token = await stack.space_svc.invite_remote_user(
+        space.id,
+        actor_username="deladmin",
+        invitee_instance_id="peer",
+        invitee_user_id="bob",
+    )
+    # No local token minted — the invite was forwarded for owner approval.
+    assert token == ""
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    call = fed.send_with_mesh_fallback.await_args
+    assert call.kwargs["event_type"] is (FederationEventType.SPACE_REMOTE_ADMIN_ACTION)
+    assert call.kwargs["to_instance_id"] == "remote-owner-host"
+    payload = call.kwargs["payload"]
+    assert payload["action"] == "invite"
+    assert payload["params"] == {
+        "invitee_instance_id": "peer",
+        "invitee_user_id": "bob",
+    }
+    assert payload["space_id"] == space.id
 
 
 async def test_owner_invite_unaffected_by_flag(stack):
@@ -4103,3 +4118,110 @@ async def test_remote_admin_action_unknown_action_dropped(stack):
         refreshed = await stack.space_repo.get(space.id)
         assert refreshed.name == "S"
         assert refreshed.archived is False
+
+
+async def test_invite_is_a_forwardable_admin_action():
+    """ "invite" must be in the forwardable allow-list so a forwarded invite is
+    not DROPPED at the host's door."""
+    from socialhome.services.space_service import SpaceService
+
+    assert "invite" in SpaceService._FORWARDABLE_ADMIN_ACTIONS
+
+
+async def test_remote_admin_invite_needs_approval_when_delegation_off(stack):
+    """Host side: a forwarded invite from a remote admin in a delegation-OFF
+    space → NEEDS_OWNER_APPROVAL and NO SPACE_PRIVATE_INVITE was minted."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    fed, fed_repo = _invite_fed()
+    stack.space_svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        remote_member_repo=(await _wire_remote_members(stack)),
+    )
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="invite",
+        params={"invitee_instance_id": "peer", "invitee_user_id": "bob"},
+    )
+    assert outcome is RemoteAdminOutcome.NEEDS_OWNER_APPROVAL
+    fed.send_with_mesh_fallback.assert_not_awaited()
+
+
+async def test_remote_admin_invite_executes_when_delegation_on(stack):
+    """Host side: a forwarded invite from a remote admin in a delegation-ON
+    space → EXECUTED and a SPACE_PRIVATE_INVITE was sent to the invitee, run as
+    owner (no re-entry into the OFF forward branch)."""
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    space = await _host_space_with_remote_admin(stack, delegation=True)
+    fed, fed_repo = _invite_fed()
+    stack.space_svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        remote_member_repo=(await _wire_remote_members(stack)),
+    )
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="invite",
+        params={"invitee_instance_id": "peer", "invitee_user_id": "bob"},
+    )
+    assert outcome is RemoteAdminOutcome.EXECUTED
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    call = fed.send_with_mesh_fallback.await_args
+    assert call.kwargs["event_type"] is FederationEventType.SPACE_PRIVATE_INVITE
+    assert call.kwargs["to_instance_id"] == "peer"
+    assert call.kwargs["payload"]["invitee_user_id"] == "bob"
+
+
+async def test_apply_approved_invite_mints_as_owner(stack):
+    """apply_approved_admin_action(action="invite") mints the invite as owner —
+    a SPACE_PRIVATE_INVITE envelope is sent to the invitee household."""
+    from socialhome.domain.federation import FederationEventType
+
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    fed, fed_repo = _invite_fed()
+    stack.space_svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        remote_member_repo=(await _wire_remote_members(stack)),
+    )
+    await stack.space_svc.apply_approved_admin_action(
+        space.id,
+        action="invite",
+        params={"invitee_instance_id": "peer", "invitee_user_id": "bob"},
+    )
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    call = fed.send_with_mesh_fallback.await_args
+    assert call.kwargs["event_type"] is FederationEventType.SPACE_PRIVATE_INVITE
+    assert call.kwargs["to_instance_id"] == "peer"
+    assert call.kwargs["payload"]["invitee_user_id"] == "bob"
+
+
+async def test_remote_admin_invite_missing_params_noop(stack):
+    """Host side: a forwarded invite missing invitee params is a no-op in
+    _run_admin_action (delegation ON) — no envelope minted."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    space = await _host_space_with_remote_admin(stack, delegation=True)
+    fed, fed_repo = _invite_fed()
+    stack.space_svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        remote_member_repo=(await _wire_remote_members(stack)),
+    )
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="invite",
+        params={"invitee_instance_id": "", "invitee_user_id": ""},
+    )
+    assert outcome is RemoteAdminOutcome.EXECUTED
+    fed.send_with_mesh_fallback.assert_not_awaited()
