@@ -329,6 +329,56 @@ The role assignment is the foundation. The actual cross-household
 admin *action* (kick) rides `SPACE_REMOTE_ADMIN_KICK` documented
 below.
 
+### Delegated-admin signing-seed share (`SPACE_ADMIN_KEY_SHARE`, v_22+)
+
+A space's authority events are signed with the space's Ed25519 seed
+(the private half of `identity_public_key`), which normally lives only
+on the owner household. When the owner opts into
+`SpaceFeatures.delegated_admin_authority`, `SPACE_ADMIN_KEY_SHARE`
+hands that seed to a **remote admin** household so it can sign
+space-authority events with the owner offline.
+
+The owner sends on two edges: promoting a remote member to ADMIN
+(`set_remote_member_role`), and flipping the flag False→True
+(`update_config` distributes to every current remote admin household,
+deduped by instance via `space_remote_members.role == 'admin'`). The
+payload is `{space_id, space_seed: b64url(32-byte seed),
+seed_suite: "ed25519-seed"}` and it travels **only** over the
+encrypted peer-pair path (`send_with_mesh_fallback`) addressed to that
+one household — **never broadcast**, because a non-member relay must
+never see the signing key.
+
+The receiver **fails closed**: it stores the seed only when the
+§24.11-verified `from_instance` is the space's `owner_instance_id`,
+its *own* local copy of the space has `delegated_admin_authority` ON,
+the `seed_suite` is recognised (`SUPPORTED_SEED_SUITES`, no default
+fallback), and the seed b64url-decodes to exactly 32 bytes. Anything
+else is dropped (logged) and nothing is stored. Receipt is logged at
+INFO as the key-blast-radius audit event. Turning the flag back off
+does **not** revoke already-shared seeds — deeper revocation (seed
+rotation) is a later phase.
+
+Gated on `FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE`: against
+a sub-v_22 admin household (no handler) the owner SKIPS the send and
+logs at WARNING rather than blasting a private key at a peer that
+would drop it. There is no safe degraded path for distributing a
+private signing key.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant O as HFS O (owner)
+    participant A as HFS A (remote admin)
+    participant R as HFS R (relay / non-member)
+    Note over O: delegated_admin_authority ON<br/>+ promote A to ADMIN (or flag flips on)
+    O->>O: peer_supports(A, v_22)?
+    O-->>A: SPACE_ADMIN_KEY_SHARE<br/>(encrypted peer-pair; seed + ed25519-seed suite)
+    Note over R: never on the path — seed is<br/>NEVER broadcast / relayed
+    A->>A: verify from_instance == owner<br/>+ local flag ON + 32-byte seed
+    A->>A: set_space_seed(space_id, seed)<br/>(INFO audit log)
+    Note over A: A can now sign space-authority<br/>events with O offline
+```
+
 ### Cross-household kick (phase 2, v_9+)
 
 `SPACE_REMOTE_ADMIN_KICK` (PR #435, #114 phase 2) lets a promoted

@@ -944,4 +944,5 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
         FederationEventType.SPACE_ADMIN_PROPOSAL_UPDATED,
         FederationEventType.SPACE_LOCATION_UPDATED,
+        FederationEventType.SPACE_ADMIN_KEY_SHARE,
     }

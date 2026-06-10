@@ -131,6 +131,16 @@ class SpaceFeatures:
     allow_subscriber_comment: bool = False
     allow_subscriber_react: bool = False
 
+    #: Owner opt-in (§ delegated-admin epic). When ON, the space owner has
+    #: authorised admins to act on the space's behalf (moderate, invite,
+    #: publish) even while the owner is offline. Flipping it on distributes
+    #: the space's Ed25519 signing seed to remote admin households via
+    #: ``SPACE_ADMIN_KEY_SHARE`` (v_22); flipping it off leaves already-shared
+    #: seeds in place (deeper revocation is a later phase). Toggling it is
+    #: OWNER-only (a host-local admin can't enact it). Defaults OFF
+    #: (least-privilege). Older peers that omit the field default to False.
+    delegated_admin_authority: bool = False
+
     allowed_post_types: tuple[str, ...] = _ALL_POST_TYPES
 
     # ── Helpers ──────────────────────────────────────────────────────────
@@ -208,6 +218,7 @@ class SpaceFeatures:
             tasks_access=SpaceFeatureAccess(row.get("tasks_access", "open")),
             allow_subscriber_comment=bool(row.get("allow_subscriber_comment", 0)),
             allow_subscriber_react=bool(row.get("allow_subscriber_react", 0)),
+            delegated_admin_authority=bool(row.get("delegated_admin_authority", 0)),
             allowed_post_types=allowed or ("text",),
         )
 
@@ -228,6 +239,7 @@ class SpaceFeatures:
             "tasks_access": self.tasks_access.value,
             "allow_subscriber_comment": int(self.allow_subscriber_comment),
             "allow_subscriber_react": int(self.allow_subscriber_react),
+            "delegated_admin_authority": int(self.delegated_admin_authority),
             "allow_post_text": int("text" in self.allowed_post_types),
             "allow_post_image": int("image" in self.allowed_post_types),
             "allow_post_video": int("video" in self.allowed_post_types),
@@ -261,6 +273,7 @@ class SpaceFeatures:
             "tasks_access": self.tasks_access.value,
             "allow_subscriber_comment": self.allow_subscriber_comment,
             "allow_subscriber_react": self.allow_subscriber_react,
+            "delegated_admin_authority": self.delegated_admin_authority,
             "allowed_post_types": list(self.allowed_post_types),
         }
 
@@ -315,6 +328,9 @@ class SpaceFeatures:
             ),
             allow_subscriber_react=bool(
                 raw.get("allow_subscriber_react", defaults.allow_subscriber_react)
+            ),
+            delegated_admin_authority=bool(
+                raw.get("delegated_admin_authority", defaults.delegated_admin_authority)
             ),
             allowed_post_types=allowed,
         )

@@ -1,0 +1,28 @@
+-- Per-space "delegated admin authority" owner opt-in (delegated-admin epic, Phase 1a).
+--
+-- A space owner can authorise the space's admins to act on the space's behalf
+-- (moderate, invite, publish) even while the owner is offline. This is a
+-- least-privilege OPT-IN: it defaults OFF so an existing space gains no new
+-- delegated authority until the owner deliberately flips it on. This migration
+-- wires the persisted owner-policy flag ONLY; the behaviour it gates — sharing
+-- the space signing seed to admins — is a SEPARATE later task and ships no
+-- federation event here.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. The only code that reads/writes per-space feature flags
+--       is ``SpaceFeatures`` (``to_columns`` / ``from_row`` / ``to_wire_dict`` /
+--       ``from_wire_dict`` in ``domain/space.py``), the ``space_repo`` ``save``
+--       upsert + ``_row_to_space``, and ``space_service.update_config`` (which
+--       passes the whole ``SpaceFeatures`` through to ``save``). No existing
+--       column carries an owner's delegation policy — it's a brand-new switch.
+--   (2) Alternative rejected. There is no column to reuse (every existing
+--       ``feature_*`` / ``*_access`` flag is a distinct, occupied concept) and
+--       the value can't be derived at read time — it is owner intent with no
+--       computable source. A federation event can't substitute for a locally
+--       persisted policy the host reads on every config decision. So a column
+--       on ``spaces`` (where every other feature flag already lives) is correct.
+--   (3) Smallest change. One additive NOT NULL column with a 0 (OFF) default
+--       and a CHECK constraining it to {0,1}. No backfill needed — the default
+--       0 is exactly the correct value for every pre-existing space (none had
+--       delegated authority). No table rewrite.
+ALTER TABLE spaces ADD COLUMN delegated_admin_authority INTEGER NOT NULL DEFAULT 0 CHECK(delegated_admin_authority IN (0,1));

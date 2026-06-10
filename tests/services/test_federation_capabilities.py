@@ -12,20 +12,21 @@ from socialhome.domain.federation_capabilities import (
 )
 
 
-def test_ours_is_v21_with_authenticated_route_discovery_capability():
-    """v_21 introduces authenticated mesh route discovery (v_20 added
-    SPACE_SYNC_REJECTED, v_19 added INSTANCE_RESYNC)."""
-    assert OURS == 21
+def test_ours_is_v22_with_space_admin_key_share_capability():
+    """v_22 introduces the delegated-admin signing-seed share (v_21 added
+    authenticated mesh route discovery, v_20 added SPACE_SYNC_REJECTED)."""
+    assert OURS == 22
     assert FederationCapability.MIN_FOR_INSTANCE_RESYNC == 19
     assert FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED == 20
     assert FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY == 21
-    assert (
-        FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED,
-        "Space sync reject reconcile",
-    ) in CAPABILITY_FEATURES
+    assert FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE == 22
     assert (
         FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
         "Authenticated mesh route discovery",
+    ) in CAPABILITY_FEATURES
+    assert (
+        FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
+        "Space delegated admin authority",
     ) in CAPABILITY_FEATURES
 
 
@@ -97,18 +98,22 @@ def test_space_features_missing_below_v13():
         "Remote admin actions",
         "Multi-admin approvals",
         "Authenticated mesh route discovery",
+        "Space delegated admin authority",
     ]
 
 
 def test_space_features_missing_below_v16():
-    """The only space-scoped feature above v16 is authenticated route
-    discovery (v_21) — a v16 member household lacks just that."""
-    assert space_features_missing_below(16) == ["Authenticated mesh route discovery"]
+    """Above v16 the space-scoped features are authenticated route
+    discovery (v_21) and delegated admin authority (v_22)."""
+    assert space_features_missing_below(16) == [
+        "Authenticated mesh route discovery",
+        "Space delegated admin authority",
+    ]
 
 
-def test_space_features_missing_below_v21_is_empty():
-    """Nothing space-scoped lives above v21 — a v21 member lacks none."""
-    assert space_features_missing_below(21) == []
+def test_space_features_missing_below_v22_is_empty():
+    """Nothing space-scoped lives above v22 — a v22 member lacks none."""
+    assert space_features_missing_below(22) == []
 
 
 def test_space_scoped_min_versions_are_capability_constants():

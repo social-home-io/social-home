@@ -222,6 +222,37 @@ async def test_allowed_post_types_round_trip_including_event_location_highlight(
         assert again.features.allows(t)
 
 
+async def test_delegated_admin_authority_round_trips_and_toggles(env):
+    """The delegated-admin-authority opt-in persists, defaults OFF, and can
+    be flipped on for an existing space via the ON CONFLICT update path."""
+    # Fresh space defaults OFF.
+    await env.repo.save(_space("sp-deleg"))
+    fresh = await env.repo.get("sp-deleg")
+    assert fresh is not None and fresh.features.delegated_admin_authority is False
+
+    # Save with the flag True → reload True.
+    await env.repo.save(
+        replace(
+            _space("sp-deleg-on"),
+            features=SpaceFeatures(delegated_admin_authority=True),
+        )
+    )
+    on = await env.repo.get("sp-deleg-on")
+    assert on is not None and on.features.delegated_admin_authority is True
+
+    # Toggle it on for an existing space via save (ON CONFLICT UPDATE).
+    toggled = await env.repo.get("sp-deleg")
+    assert toggled is not None
+    await env.repo.save(
+        replace(
+            toggled,
+            features=replace(toggled.features, delegated_admin_authority=True),
+        )
+    )
+    after = await env.repo.get("sp-deleg")
+    assert after is not None and after.features.delegated_admin_authority is True
+
+
 async def test_feature_bazaar_round_trips(env):
     """The Bazaar tab toggle persists like the other feature flags."""
     space = replace(
