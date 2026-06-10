@@ -11,6 +11,7 @@ from socialhome.app_keys import db_key as _db_key
 from socialhome.auth import sha256_token_hash
 from socialhome.config import Config
 from socialhome.crypto import derive_user_id
+from socialhome.routes.spaces import _features_from_body
 
 
 def _auth(token: str) -> dict:
@@ -224,6 +225,53 @@ async def test_get_includes_retention_fields(client):
     body = await got.json()
     assert body["retention_days"] is None
     assert body["retention_exempt_types"] == []
+
+
+async def test_patch_sets_delegated_admin_authority(client):
+    """PATCH features.delegated_admin_authority=true persists and is echoed
+    back on GET.
+
+    Regression: the toggle round-tripped 200 OK but _features_from_body
+    dropped the key, so the owner-offline delegation opt-in never flipped and
+    the whole epic was unreachable via the real API.
+    """
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "DelegSpace"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    # Fresh space defaults the flag OFF.
+    got0 = await client.get(
+        f"/api/spaces/{sid}",
+        headers=_auth(client._admin_token),
+    )
+    assert (await got0.json())["features"]["delegated_admin_authority"] is False
+
+    resp = await client.patch(
+        f"/api/spaces/{sid}",
+        json={"features": {"delegated_admin_authority": True}},
+        headers=_auth(client._admin_token),
+    )
+    assert resp.status == 200
+    got = await client.get(
+        f"/api/spaces/{sid}",
+        headers=_auth(client._admin_token),
+    )
+    body = await got.json()
+    assert body["features"]["delegated_admin_authority"] is True
+
+
+def test_features_from_body_carries_delegated_admin_authority():
+    """Unit: _features_from_body rehydrates delegated_admin_authority from the
+    PATCH body (True when set, False when omitted)."""
+    assert (
+        _features_from_body(
+            {"delegated_admin_authority": True}
+        ).delegated_admin_authority
+        is True
+    )
+    assert _features_from_body({}).delegated_admin_authority is False
 
 
 async def test_create_space_accepts_retention_days(client):

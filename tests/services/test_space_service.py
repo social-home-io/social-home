@@ -2422,6 +2422,54 @@ async def test_archive_federates_via_space_meta(stack):
     assert stub.archived is True
 
 
+async def test_delegated_admin_authority_federates_via_space_meta(stack):
+    """The owner's delegated_admin_authority opt-in rides the federation
+    metadata snapshot AND a joiner's stub carries it locally.
+
+    Regression: a multi-node demo found the flag never crossed the wire —
+    _space_metadata_for_federation dropped it and stub_space_from_metadata
+    defaulted it OFF, so a §D1b joiner / config-flip receiver never enabled
+    delegation locally and rejected the space signing seed.
+    """
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Deleg")
+    await stack.space_svc.update_config(
+        space.id,
+        actor_username="anna",
+        features=SpaceFeatures(delegated_admin_authority=True),
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.features.delegated_admin_authority is True
+
+    # Fix A.2 — the metadata snapshot carries the flag.
+    meta = _space_metadata_for_federation(refreshed)
+    assert meta["features"]["delegated_admin_authority"] is True
+
+    # Fix A.3 — the receiver-side stub reads it back as True.
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=refreshed.owner_instance_id, meta=meta
+    )
+    assert stub.features.delegated_admin_authority is True
+
+
+async def test_delegated_admin_authority_missing_from_meta_defaults_false(stack):
+    """Fail-soft: an older sender omits delegated_admin_authority → the stub
+    defaults it OFF (the strict, owner-must-opt-in contract)."""
+    from socialhome.services.space_service import stub_space_from_metadata
+
+    stub = stub_space_from_metadata(
+        "sp-legacy",
+        host_instance_id="h",
+        meta={"name": "Legacy", "features": {}},
+    )
+    assert stub.features.delegated_admin_authority is False
+
+
 async def test_min_age_federates_via_space_meta_and_persists(stack):
     """§CP.F1 — the host's age gate rides the federation metadata, the stub
     carries it, and a save()/get() round-trip persists it (so a member

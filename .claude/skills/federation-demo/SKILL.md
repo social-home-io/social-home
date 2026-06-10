@@ -352,6 +352,43 @@ harness.py up`` / ``pair`` / ``traffic`` / ``calendar`` / ``verify``
 ``remote-invite-decline`` / ``replay``);
 state is persisted to ``/tmp/sh-demo/state.json`` between calls.
 
+## Owner-offline delegated authority — opt-in (``owner-offline``)
+
+Proves the keystone of the owner-offline-spaces epic across live nodes: a
+**delegated admin moderates a space with the owning household stopped**, and
+another member converges. HFS-only (no GFS needed). Run after ``up`` + ``pair``:
+
+```bash
+python .claude/skills/federation-demo/harness.py owner-offline
+```
+
+Topology: **a** = owner, **b** = delegated admin, **c** = plain member. The step:
+
+1. a creates a private space + enables ``delegated_admin_authority`` (owner-only).
+2. a §D1b-invites b and c; both accept (stub + content key).
+3. a promotes b to admin → ``SPACE_ADMIN_KEY_SHARE`` ships b the space SIGNING SEED.
+4. Asserts b now holds the seed (``spaces.identity_private_key`` non-NULL) —
+   *admin authority = holding the private key* (§4.2.3).
+5. **Stops a** (SIGTERM the process group). The owner is offline.
+6. b renames the space — b executes LOCALLY and authority-signs
+   (``_executes_locally_as_delegated_admin``), broadcasting ``SPACE_CONFIG_CHANGED``.
+7. Asserts **c converges on the rename while a is offline** (c verifies the
+   space-authority signature, not ``from_instance``). ← the headline proof.
+8. Restarts a; asserts a reconciles to b's offline change (b's outbox redelivers
+   the authority-signed config; a applies it by LWW).
+
+This step found two real bugs the unit suite missed (it crosses the HTTP + wire
+boundary the unit tests bypass): ``delegated_admin_authority`` was dropped at
+every hand-rolled ``features`` wire dict (route parser, federation metadata, stub
+builder) so the flag never persisted/federated; and ``_apply_roster_gossip`` never
+registered a gossip-learned member in ``space_instances`` so a delegated admin's
+``broadcast_to_space_members`` couldn't reach them. Both are fixed (with CI
+regression tests). NOTE on step 8: b's offline edit must out-sequence the owner's
+last config edit; if ``config_sequence`` collides, the ``(config_sequence, author)``
+LWW tie-break decides — the step waits for b to sync first, but a host config bump
+that doesn't federate its sequence to members can still force a collision (a
+documented convergence follow-up). Steps 1–7 are the deterministic core.
+
 ## GFS (Global Federation Server) — opt-in subcommands
 
 The skill also wires up the **GFS** path as a separate, opt-in flow

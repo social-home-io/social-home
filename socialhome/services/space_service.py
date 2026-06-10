@@ -4087,6 +4087,12 @@ def _space_metadata_for_federation(space: Space) -> dict:
             # behaviour), so this is additive and fail-soft: no new event
             # type or capability bump.
             "allowed_post_types": list(space.features.allowed_post_types),
+            # Owner opt-in for the delegated-admin epic (Phase 1a). MUST
+            # federate: a §D1b joiner's stub (and a member applying the
+            # config-flip broadcast) needs delegation ON locally before its
+            # SPACE_ADMIN_KEY_SHARE handler will accept the space signing seed.
+            # Missing on an older sender → receiver defaults OFF (fail-soft).
+            "delegated_admin_authority": space.features.delegated_admin_authority,
         },
         "tz": space.tz,
         # §CP.F1 — federate the host's age gate so member households enforce
@@ -4311,6 +4317,12 @@ def stub_space_from_metadata(
         pages=bool(feats_in.get("pages", True)),
         gallery=bool(feats_in.get("gallery", True)),
         bazaar=bool(feats_in.get("bazaar", True)),
+        # Owner opt-in (delegated-admin epic, Phase 1a). Mirror the host's
+        # flag onto the stub so this household's SPACE_ADMIN_KEY_SHARE handler
+        # accepts the signing seed. Missing on an older sender → OFF.
+        delegated_admin_authority=bool(
+            feats_in.get("delegated_admin_authority", False)
+        ),
         **allowed_kwargs,
     )
     return Space(

@@ -102,6 +102,11 @@ def _features_from_body(raw: object) -> SpaceFeatures | None:
         # contract subscribers used to ship with.
         "allow_subscriber_comment": bool(raw.get("allow_subscriber_comment", False)),
         "allow_subscriber_react": bool(raw.get("allow_subscriber_react", False)),
+        # Owner opt-in for the delegated-admin epic (Phase 1a). Without this
+        # the SpaceSettings toggle round-tripped as 200 OK but never flipped —
+        # the whole owner-offline delegation surface was unreachable via the
+        # API. The owner-only flip is re-asserted in SpaceService.update_config.
+        "delegated_admin_authority": bool(raw.get("delegated_admin_authority", False)),
     }
     if allowed is not None:
         kwargs["allowed_post_types"] = allowed
