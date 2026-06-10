@@ -18,6 +18,7 @@ from socialhome.domain.events import (
     RemoteSpaceInviteReceived,
     RemoteSpaceMemberRemoved,
 )
+from socialhome.domain.space import RemoteAdminOutcome
 from socialhome.federation.private_invite_handler import PrivateSpaceInviteHandler
 from socialhome.infrastructure.event_bus import EventBus
 
@@ -709,6 +710,184 @@ async def test_remote_admin_action_non_dict_params_coerced():
     )
     await h._on_remote_admin_action(ev)
     assert space_service.apply_remote_admin_action.call_args.kwargs["params"] == {}
+
+
+async def test_remote_admin_action_needs_owner_approval_enqueues():
+    """Delegation OFF: ``apply_remote_admin_action`` returns
+    NEEDS_OWNER_APPROVAL → the handler records a pending owner approval,
+    binding the actor to the *signed* envelope (from_instance)."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock(
+        return_value=RemoteAdminOutcome.NEEDS_OWNER_APPROVAL,
+    )
+    approval_service = AsyncMock()
+    approval_service.enqueue_owner_approval = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    h.attach_approval_service(approval_service)
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp-cfg",
+            "actor_user_id": "u-admin",
+            "actor_instance_id": "instance-FORGED",  # ignored
+            "action": "update_config",
+            "params": {"name": "Renamed"},
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)
+    approval_service.enqueue_owner_approval.assert_awaited_once_with(
+        "sp-cfg",
+        actor_instance="instance-A",
+        actor_user="u-admin",
+        fwd_action="update_config",
+        fwd_params={"name": "Renamed"},
+    )
+
+
+async def test_remote_admin_action_executed_does_not_enqueue():
+    """Delegation ON: EXECUTED → no owner approval recorded."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock(
+        return_value=RemoteAdminOutcome.EXECUTED,
+    )
+    approval_service = AsyncMock()
+    approval_service.enqueue_owner_approval = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    h.attach_approval_service(approval_service)
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "action": "archive",
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)
+    approval_service.enqueue_owner_approval.assert_not_awaited()
+
+
+async def test_remote_admin_action_dropped_does_not_enqueue():
+    """A DROPPED action (validation failed inside the service) must NOT
+    create a pending proposal — the actor-is-admin check front-runs."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock(
+        return_value=RemoteAdminOutcome.DROPPED,
+    )
+    approval_service = AsyncMock()
+    approval_service.enqueue_owner_approval = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    h.attach_approval_service(approval_service)
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "action": "archive",
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)
+    approval_service.enqueue_owner_approval.assert_not_awaited()
+
+
+async def test_remote_admin_action_needs_approval_without_approval_service():
+    """NEEDS_OWNER_APPROVAL but no approval_service wired → log + return,
+    no crash and nothing enqueued."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock(
+        return_value=RemoteAdminOutcome.NEEDS_OWNER_APPROVAL,
+    )
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    assert h._approval_service is None
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "action": "archive",
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)  # Should not raise.
+
+
+async def test_remote_admin_action_propose_still_routes_to_approval():
+    """Regression: the ``propose`` verb still routes to the approval
+    service and never touches apply_remote_admin_action."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    approval_service = AsyncMock()
+    approval_service.apply_remote_propose = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    h.attach_approval_service(approval_service)
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "action": "propose",
+            "params": {"action": "dissolve", "params": {}},
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)
+    approval_service.apply_remote_propose.assert_awaited_once()
+    space_service.apply_remote_admin_action.assert_not_awaited()
+
+
+async def test_remote_admin_action_vote_still_routes_to_approval():
+    """Regression: the ``vote`` verb still routes to the approval service."""
+    space_service = AsyncMock()
+    space_service.apply_remote_admin_action = AsyncMock()
+    approval_service = AsyncMock()
+    approval_service.apply_remote_vote = AsyncMock()
+    h = PrivateSpaceInviteHandler(
+        bus=_RecordingBus(),  # type: ignore[arg-type]
+        space_repo=AsyncMock(),
+        remote_member_repo=AsyncMock(),
+        space_service=space_service,
+    )
+    h.attach_approval_service(approval_service)
+    ev = _event(
+        "SPACE_REMOTE_ADMIN_ACTION",
+        {
+            "space_id": "sp",
+            "actor_user_id": "u",
+            "action": "vote",
+            "params": {"proposal_id": "p1", "vote": "approve"},
+        },
+        from_instance="instance-A",
+    )
+    await h._on_remote_admin_action(ev)
+    approval_service.apply_remote_vote.assert_awaited_once()
+    space_service.apply_remote_admin_action.assert_not_awaited()
 
 
 async def test_attach_space_service_wires_post_construction():
