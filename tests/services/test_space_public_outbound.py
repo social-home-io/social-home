@@ -358,6 +358,25 @@ async def test_remote_authored_self_cert_mismatch_not_relayed(env):
     assert env["gfs"].calls == []
 
 
+async def test_remote_authored_cross_space_inner_not_relayed(env):
+    """A validly-signed inner authored for space X must NOT be relayed under
+    space Y's envelope — cross-space injection. The inner's signed
+    ``space_id`` ("sp-other") differs from the broadcast space ("sp-pub"),
+    so the relay is refused (GFS never called)."""
+    await env["make_space"]("sp-pub", SpaceType.PUBLIC, with_seed=True)
+    # Inner is validly signed FOR a different space ("sp-other").
+    _kp, author_user_id, relay = _remote_relay(space_id="sp-other")
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(author_user_id),
+            space_id="sp-pub",
+            origin_instance_id="beta.home",
+            public_relay=relay,
+        )
+    )
+    assert env["gfs"].calls == []
+
+
 async def test_remote_authored_private_space_not_relayed(env):
     await env["make_space"]("sp-priv", SpaceType.PRIVATE, with_seed=True)
     _kp, author_user_id, relay = _remote_relay(space_id="sp-priv")

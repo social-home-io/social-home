@@ -210,3 +210,23 @@ def test_verify_signed_author_inner_rejects_wrong_signing_key():
 
 def test_verify_signed_author_inner_fail_closed_on_non_dict():
     assert verify_signed_author_inner({}) is False
+
+
+def test_hidden_from_feed_is_signed_and_roundtrips():
+    """``hidden_from_feed`` is bound to the author signature so a relayer
+    cannot flip feed visibility undetectably."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, username)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+    )
+    # Round-trips with hidden_from_feed signed.
+    assert verify_signed_author_inner(inner) is True
+    # Flipping hidden_from_feed after signing breaks verification.
+    inner["hidden_from_feed"] = not inner["hidden_from_feed"]
+    assert verify_signed_author_inner(inner) is False

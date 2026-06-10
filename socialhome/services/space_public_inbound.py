@@ -151,6 +151,19 @@ class SpacePublicInbound:
                 post_id,
             )
             return
+        # Cross-space injection guard: the inner's signed ``space_id`` MUST
+        # equal the outer envelope's space. A validly-signed inner authored for
+        # space X must never be persisted under space Y (the relay decrypts +
+        # authority-signs under Y but the author never posted in Y).
+        if str(inner.get("space_id") or "") != space_id:
+            log.warning(
+                "space_public.inbound: inner space_id mismatch "
+                "(inner=%s envelope=%s) for post %s — dropped",
+                inner.get("space_id"),
+                space_id,
+                post_id,
+            )
+            return
         # Dedupe by post id — the GFS relay is at-least-once.
         if await self._posts.get(post_id) is not None:
             log.debug("space_public.inbound: duplicate post %s — dropped", post_id)

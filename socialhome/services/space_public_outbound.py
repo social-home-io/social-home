@@ -67,7 +67,7 @@ from ..authority_sig import (
     strip_authority_sig_fields,
 )
 from ..domain.events import SpacePostCreated
-from ..domain.space import SpaceType
+from ..domain.space import PUBLIC_SPACE_TIERS
 from ..infrastructure.event_bus import EventBus
 from .space_public_author import (
     build_signed_author_inner,
@@ -81,11 +81,6 @@ if TYPE_CHECKING:
     from .space_crypto_service import SpaceContentEncryption
 
 log = logging.getLogger(__name__)
-
-#: Only these tiers relay to the GFS public-relay path. PRIVATE / HOUSEHOLD
-#: spaces are never publicly discoverable, so a post in one must not leave
-#: the member households.
-_PUBLIC_TIERS: frozenset[SpaceType] = frozenset({SpaceType.PUBLIC, SpaceType.GLOBAL})
 
 
 class SpacePublicOutbound:
@@ -159,7 +154,7 @@ class SpacePublicOutbound:
         if post.linked_event_id is not None:
             return
         space = await self._spaces.get(event.space_id)
-        if space is None or space.space_type not in _PUBLIC_TIERS:
+        if space is None or space.space_type not in PUBLIC_SPACE_TIERS:
             return
         # Only a seed-holder (owner or delegated admin) relays. A NULL seed
         # means this household can't authority-sign — skip silently.
@@ -258,7 +253,7 @@ class SpacePublicOutbound:
         if not event.space_id:
             return
         space = await self._spaces.get(event.space_id)
-        if space is None or space.space_type not in _PUBLIC_TIERS:
+        if space is None or space.space_type not in PUBLIC_SPACE_TIERS:
             return
         seed = await self._spaces.get_space_seed(event.space_id)
         if seed is None:
@@ -278,6 +273,17 @@ class SpacePublicOutbound:
             log.warning(
                 "space_public.outbound: public_relay failed verification for "
                 "space=%s — not relaying",
+                event.space_id,
+            )
+            return
+        # Cross-space injection guard: the inner's signed ``space_id`` MUST
+        # equal the space we're relaying under. A validly-signed inner from
+        # space X must never be relayed/persisted under space Y.
+        if str(relay.get("space_id") or "") != event.space_id:
+            log.warning(
+                "space_public.outbound: public_relay space_id mismatch "
+                "(inner=%s envelope=%s) — not relaying",
+                relay.get("space_id"),
                 event.space_id,
             )
             return

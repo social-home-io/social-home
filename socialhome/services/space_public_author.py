@@ -46,8 +46,9 @@ _AUTHOR_SIG_DOMAIN: bytes = b"space-post-author:v1:"
 
 #: The inner-payload fields the author signs over — everything attributable.
 #: ``author_pk`` is included so a swap of (pk, sig) pair can't re-target the
-#: post; ``author_sig`` itself is excluded (it signs the rest). Anything not
-#: listed (e.g. ``hidden_from_feed``) is presentation, not attribution.
+#: post; ``author_sig`` itself is excluded (it signs the rest).
+#: ``hidden_from_feed`` is signed too — it binds presentation intent to the
+#: author so a relayer can't flip feed visibility undetectably.
 _SIGNED_FIELDS: tuple[str, ...] = (
     "post_id",
     "space_id",
@@ -61,6 +62,7 @@ _SIGNED_FIELDS: tuple[str, ...] = (
     "created_at",
     "location",
     "origin_instance_id",
+    "hidden_from_feed",
 )
 
 

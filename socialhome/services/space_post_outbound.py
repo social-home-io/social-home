@@ -38,9 +38,9 @@ from ..domain.events import (
     SpacePostCreated,
 )
 from ..domain.federation import FederationEventType
+from ..domain.space import PUBLIC_SPACE_TIERS
 from ..infrastructure.event_bus import EventBus
 from .space_public_author import build_signed_author_inner
-from .space_public_outbound import _PUBLIC_TIERS
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
@@ -192,7 +192,7 @@ class SpacePostOutbound:
         space = await self._spaces.get(event.space_id)
         if (
             space is not None
-            and space.space_type in _PUBLIC_TIERS
+            and space.space_type in PUBLIC_SPACE_TIERS
             and self._own_instance_id
             and self._own_instance_pk
             and self._own_identity_seed
