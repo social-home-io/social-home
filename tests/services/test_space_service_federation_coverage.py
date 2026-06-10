@@ -1125,10 +1125,21 @@ async def test_remote_admin_action_raises_when_host_too_old(stack):
 # ── apply_remote_admin_action (host side) ───────────────────────────
 
 
-async def _host_space_with_remote_admin(stack):
-    """Host-owned space + a remote admin seated on instance-A."""
+async def _host_space_with_remote_admin(stack, *, delegation=True):
+    """Host-owned space + a remote admin seated on instance-A.
+
+    ``delegation`` flips ``delegated_admin_authority`` so the host-side gate
+    auto-executes a forwarded action (Phase 6a). Defaults ON because these
+    coverage tests exercise the execute path.
+    """
     await _user(stack, "alicehost")
     space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    if delegation:
+        await stack.svc.update_config(
+            space.id,
+            actor_username="alicehost",
+            features=SpaceFeatures(delegated_admin_authority=True),
+        )
     await stack.svc._remote_members.add(
         space_id=space.id,
         instance_id="instance-A",

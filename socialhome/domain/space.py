@@ -48,6 +48,15 @@ class SpaceRole(StrEnum):
     SUBSCRIBER = "subscriber"
 
 
+class RemoteAdminOutcome(StrEnum):
+    """Result of a host receiving a forwarded ``SPACE_REMOTE_ADMIN_ACTION``."""
+
+    EXECUTED = "executed"  # delegation ON → ran as owner
+    NEEDS_OWNER_APPROVAL = "needs_owner_approval"  # delegation OFF → owner must approve
+    DROPPED = "dropped"  # validation failed (unknown space / not hosted here /
+    # not an admin / federation not attached)
+
+
 # ─── Space feature access levels (§4.3) ───────────────────────────────────
 
 

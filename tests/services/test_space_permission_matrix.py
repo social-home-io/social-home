@@ -128,6 +128,11 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         # ``space_remote_members.role`` before running the real (already
         # gated) host method; no actor-username to thread through.
         "apply_remote_admin_action",
+        # Owner-approval execution hook (Phase 6a) — called by the approval
+        # service AFTER the owner approves a held SPACE_REMOTE_ADMIN_ACTION.
+        # Self-gates on the space still being hosted here; the actor-role and
+        # owner-approval checks happened upstream. No actor-username to thread.
+        "apply_approved_admin_action",
         # Personal sidebar state — keyed on the calling user_id, no
         # space-permission shape.
         "pin",

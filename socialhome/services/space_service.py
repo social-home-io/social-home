@@ -94,6 +94,7 @@ from ..domain.space import (
     ModerationAlreadyDecidedError,
     ModerationStatus,
     PublicSpaceLimitError,
+    RemoteAdminOutcome,
     Space,
     SpaceConfigEventType,
     SpaceFeatures,
@@ -1841,36 +1842,46 @@ class SpaceService(SpaceMemberGuardMixin):
         actor_user_id: str,
         action: str,
         params: dict | None = None,
-    ) -> None:
-        """Host-side dispatch for ``SPACE_REMOTE_ADMIN_ACTION`` (v_15+).
+    ) -> RemoteAdminOutcome:
+        """Host-side gate for ``SPACE_REMOTE_ADMIN_ACTION`` (v_15+).
 
         Generalises :meth:`apply_remote_admin_kick`: the §24.11 pipeline
         already verified the envelope signature, so this validates the
         actor's *role* in ``space_remote_members.role`` and, if the actor
-        is an admin, runs the real host-side admin method **as the owner**
-        — the result then federates back to every member through the
-        normal outbounds (``SPACE_CONFIG_CHANGED`` etc.).
+        is an admin, decides whether to run the action **now** or hold it
+        for the owner.
+
+        The decision is the space's ``delegated_admin_authority`` opt-in:
+
+        * **ON** → run the real host-side admin method **as the owner**
+          immediately (returns :attr:`RemoteAdminOutcome.EXECUTED`); the
+          result federates back to every member through the normal
+          outbounds (``SPACE_CONFIG_CHANGED`` etc.).
+        * **OFF** (default, least-privilege) → do NOT execute; return
+          :attr:`RemoteAdminOutcome.NEEDS_OWNER_APPROVAL` so the caller
+          can enqueue an owner-approval (the enqueue is a later task).
 
         Scope is admin-level mutations only: ``update_config``,
         ``archive`` / ``unarchive``, ``ban`` / ``unban``. Owner-only
         actions (dissolve, transfer-ownership, role assignment) are NOT
         forwardable and never reach this dispatcher. Unknown actions,
         unauthenticated actors, and spaces not hosted here are silently
-        dropped — no differential errors, same posture as the kick path
-        (the most likely cause is a promotion that's since been revoked).
+        dropped (:attr:`RemoteAdminOutcome.DROPPED`) — no differential
+        errors, same posture as the kick path (the most likely cause is a
+        promotion that's since been revoked).
         """
         if self._remote_members is None:
             log.warning(
                 "apply_remote_admin_action: federation not attached; dropping",
             )
-            return
+            return RemoteAdminOutcome.DROPPED
         space = await self._spaces.get(space_id)
         if space is None:
             log.debug(
                 "apply_remote_admin_action: unknown space=%s — dropping",
                 space_id,
             )
-            return
+            return RemoteAdminOutcome.DROPPED
         if (
             self._own_instance_id is None
             or space.owner_instance_id != self._own_instance_id
@@ -1879,7 +1890,7 @@ class SpaceService(SpaceMemberGuardMixin):
                 "apply_remote_admin_action: space=%s not hosted here — dropping",
                 space_id,
             )
-            return
+            return RemoteAdminOutcome.DROPPED
         actor = await self._remote_members.get(
             space_id,
             actor_instance_id,
@@ -1893,9 +1904,53 @@ class SpaceService(SpaceMemberGuardMixin):
                 actor_instance_id,
                 space_id,
             )
+            return RemoteAdminOutcome.DROPPED
+        if not space.features.delegated_admin_authority:
+            log.info(
+                "apply_remote_admin_action: delegation OFF for space=%s — "
+                "holding action=%r for owner approval",
+                space_id,
+                action,
+            )
+            return RemoteAdminOutcome.NEEDS_OWNER_APPROVAL
+        await self._run_admin_action(space, space.owner_username, action, params or {})
+        return RemoteAdminOutcome.EXECUTED
+
+    async def apply_approved_admin_action(
+        self,
+        space_id: str,
+        *,
+        action: str,
+        params: dict | None = None,
+    ) -> None:
+        """Execute a previously owner-approved forwarded admin action as the owner.
+
+        The owner-approval gate has already passed; this just re-validates the
+        space is still hosted here and runs the action (same path as the
+        delegation-ON case).
+        """
+        space = await self._spaces.get(space_id)
+        if space is None:
             return
-        owner = space.owner_username
-        p = params or {}
+        if (
+            self._own_instance_id is None
+            or space.owner_instance_id != self._own_instance_id
+        ):
+            return
+        await self._run_admin_action(space, space.owner_username, action, params or {})
+
+    async def _run_admin_action(
+        self,
+        space: Space,
+        owner_username: str,
+        action: str,
+        params: dict,
+    ) -> None:
+        """Run a forwarded admin action as the owner. The actor-role gate and
+        the delegation/approval decision have already passed."""
+        space_id = space.id
+        owner = owner_username
+        p = params
         match action:
             case "update_config":
                 kwargs = {k: v for k, v in p.items() if k in self._REMOTE_CONFIG_FIELDS}
