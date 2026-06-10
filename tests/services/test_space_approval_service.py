@@ -476,7 +476,7 @@ async def test_enqueue_owner_approval_creates_pending_no_vote(stack):
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={"user_id": "u-victim"},
     )
     listed = await stack.approvals.list_for_space(space.id)
@@ -484,7 +484,7 @@ async def test_enqueue_owner_approval_creates_pending_no_vote(stack):
     v = listed[0]
     assert v["action"] == ProposalAction.REMOTE_ADMIN_ACTION.value
     assert v["status"] == ProposalStatus.PENDING.value
-    assert v["params"]["fwd_action"] == "ban_member"
+    assert v["params"]["fwd_action"] == "ban"
     assert v["params"]["fwd_params"] == {"user_id": "u-victim"}
     assert v["params"]["actor_instance"] == "host-B"
     assert v["params"]["actor_user"] == "ben"
@@ -501,14 +501,14 @@ async def test_enqueue_owner_approval_no_dedup(stack):
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={"user_id": "a"},
     )
     await stack.approvals.enqueue_owner_approval(
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={"user_id": "b"},
     )
     listed = await stack.approvals.list_for_space(space.id)
@@ -523,7 +523,7 @@ async def test_enqueue_owner_approval_noop_when_not_host(stack):
         stub.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={},
     )
     assert await stack.approvals.list_for_space(stub.id) == []
@@ -535,7 +535,7 @@ async def test_owner_approve_executes_forwarded_action(stack):
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={"user_id": "u-victim"},
     )
     pid = (await stack.approvals.list_for_space(space.id))[0]["id"]
@@ -545,7 +545,7 @@ async def test_owner_approve_executes_forwarded_action(stack):
     assert out["status"] == ProposalStatus.EXECUTED.value
     stack.exec.apply_approved_admin_action.assert_awaited_once()
     kwargs = stack.exec.apply_approved_admin_action.call_args.kwargs
-    assert kwargs["action"] == "ban_member"
+    assert kwargs["action"] == "ban"
     assert kwargs["params"] == {"user_id": "u-victim"}
 
 
@@ -555,7 +555,7 @@ async def test_owner_reject_does_not_execute(stack):
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={},
     )
     pid = (await stack.approvals.list_for_space(space.id))[0]["id"]
@@ -575,7 +575,7 @@ async def test_non_owner_admin_cannot_vote_owner_only(stack):
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={},
     )
     pid = (await stack.approvals.list_for_space(space.id))[0]["id"]
@@ -592,12 +592,12 @@ async def test_owner_only_view_exposes_owner_only_fields(stack):
         space.id,
         actor_instance="host-B",
         actor_user="ben",
-        fwd_action="ban_member",
+        fwd_action="ban",
         fwd_params={"user_id": "u-victim"},
     )
     v = (await stack.approvals.list_for_space(space.id))[0]
     assert v["owner_only"] is True
-    assert v["fwd_action"] == "ban_member"
+    assert v["fwd_action"] == "ban"
     assert v["fwd_params"] == {"user_id": "u-victim"}
     assert v["total_admins"] == 1
     assert v["needed"] == 1

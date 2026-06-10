@@ -16,6 +16,7 @@ from socialhome.crypto import derive_instance_id, generate_identity_keypair
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.federation import (
     DeliveryResult,
+    FederationEvent,
     FederationEventType,
     InstanceSource,
     PairingStatus,
@@ -29,13 +30,17 @@ from socialhome.domain.space import (
     SpaceRole,
     SpaceType,
 )
+from socialhome.domain.space_proposal import ProposalAction, ProposalStatus
+from socialhome.federation.private_invite_handler import PrivateSpaceInviteHandler
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+from socialhome.repositories.space_proposal_repo import SqliteSpaceProposalRepo
 from socialhome.repositories.space_remote_member_repo import (
     SqliteSpaceRemoteMemberRepo,
 )
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
+from socialhome.services.space_approval_service import SpaceApprovalService
 from socialhome.services.space_service import SpaceService
 from socialhome.services.user_service import UserService
 
@@ -1358,3 +1363,126 @@ async def test_apply_remote_admin_action_unknown_space_drops(stack):
         action="archive",
         params={},
     )  # Should not raise.
+
+
+# ── owner-approval gate end-to-end (Phase 6a) ──────────────────────
+#
+# The seams above are exercised in isolation; this drives the WHOLE
+# chain with REAL services and no execute-path mocks: the real
+# ``PrivateSpaceInviteHandler._on_remote_admin_action`` receives a
+# forwarded ``SPACE_REMOTE_ADMIN_ACTION``, the real
+# ``SpaceService.apply_remote_admin_action`` returns
+# ``NEEDS_OWNER_APPROVAL`` (delegation OFF), the real
+# ``SpaceApprovalService.enqueue_owner_approval`` records a pending
+# owner-only proposal, and the OWNER's real ``vote`` runs it through
+# ``apply_approved_admin_action`` → ``_run_admin_action`` for real.
+
+
+def _remote_admin_action_event(
+    *, space_id, from_instance, actor_user_id, action, params
+):
+    """A fully-validated inbound SPACE_REMOTE_ADMIN_ACTION as the §24.11
+    pipeline would hand it to the handler. ``from_instance`` is the signed
+    sender; the handler binds the actor's household to it (never trusts a
+    payload-supplied instance id)."""
+    return FederationEvent(
+        msg_id="m-1",
+        event_type=FederationEventType.SPACE_REMOTE_ADMIN_ACTION,
+        from_instance=from_instance,
+        to_instance="host-self",
+        timestamp="2026-06-10T00:00:00+00:00",
+        payload={
+            "space_id": space_id,
+            "actor_user_id": actor_user_id,
+            "action": action,
+            "params": params,
+        },
+        space_id=space_id,
+    )
+
+
+async def test_owner_approval_gate_end_to_end_real_services(stack):
+    """delegation OFF: a forwarded ban is held for the owner, then runs
+    for real only after the OWNER approves — REAL handler + approval
+    service + space service, no execute-path mocks."""
+    # 1. Host-owned space (delegation OFF by default) + a remote ADMIN on
+    #    household B, plus a local target member to ban.
+    await _user(stack, "alicehost")
+    space = await stack.svc.create_space(owner_username="alicehost", name="S")
+    assert space.features.delegated_admin_authority is False
+    await stack.svc._remote_members.add(
+        space_id=space.id,
+        instance_id="household-B",
+        user_id="bob-admin",
+        user_pk=None,
+        display_name="Bob",
+    )
+    await stack.svc._remote_members.set_role(
+        space.id, "household-B", "bob-admin", "admin"
+    )
+    victim = await _user(stack, "victimlocal")
+    await stack.svc.add_member(
+        space.id, actor_username="alicehost", user_id=victim.user_id, role="member"
+    )
+
+    # 2. REAL approval service wired to the REAL space service, sharing the
+    #    same repos/bus/instance id (mirrors app.py `_build_services`).
+    approvals = SpaceApprovalService(
+        SqliteSpaceProposalRepo(stack.db),
+        stack.svc._spaces,
+        stack.svc._remote_members,
+        stack.svc._users,
+        stack.svc._bus,
+        own_instance_id=stack.svc._own_instance_id,
+    )
+    approvals.attach(space_service=stack.svc)
+
+    # 3. REAL inbound handler — drive the forwarded action through it.
+    handler = PrivateSpaceInviteHandler(
+        bus=stack.svc._bus,
+        space_repo=stack.svc._spaces,
+        remote_member_repo=stack.svc._remote_members,
+        space_service=stack.svc,
+    )
+    handler.attach_approval_service(approvals)
+    event = _remote_admin_action_event(
+        space_id=space.id,
+        from_instance="household-B",
+        actor_user_id="bob-admin",
+        action="ban",
+        params={"user_id": victim.user_id, "reason": "spam"},
+    )
+    await handler._on_remote_admin_action(event)
+
+    # 4. A pending OWNER-ONLY proposal now exists; the ban has NOT run.
+    listed = await approvals.list_for_space(space.id)
+    assert len(listed) == 1
+    proposal = listed[0]
+    assert proposal["action"] == ProposalAction.REMOTE_ADMIN_ACTION.value
+    assert proposal["status"] == ProposalStatus.PENDING.value
+    assert proposal["owner_only"] is True
+    assert proposal["fwd_action"] == "ban"
+    assert proposal["fwd_params"] == {"user_id": victim.user_id, "reason": "spam"}
+    assert await stack.space_repo.get_member(space.id, victim.user_id) is not None
+
+    # 5. NEGATIVE leg: a non-owner admin's vote must NOT execute; the
+    #    proposal stays pending and the victim stays a member.
+    nonowner = await _user(stack, "bobadmin")
+    await stack.svc.add_member(
+        space.id, actor_username="alicehost", user_id=nonowner.user_id, role="admin"
+    )
+    out = await approvals.vote(
+        space.id, proposal["id"], actor_username="bobadmin", approve=True
+    )
+    assert out["status"] == ProposalStatus.PENDING.value
+    assert await stack.space_repo.get_member(space.id, victim.user_id) is not None
+
+    # 6. OWNER approves → executes for real through
+    #    apply_approved_admin_action → _run_admin_action.
+    out = await approvals.vote(
+        space.id, proposal["id"], actor_username="alicehost", approve=True
+    )
+    assert out["status"] == ProposalStatus.EXECUTED.value
+
+    # 7. The ban actually ran as the owner: the target is no longer a member.
+    assert await stack.space_repo.get_member(space.id, victim.user_id) is None
