@@ -633,6 +633,87 @@ async def test_space_post_admin_only(stack):
         )
 
 
+async def _seat_remote_space_with_posts_access(stack, *, actor, posts_access):
+    """Create a stub for a space hosted ELSEWHERE with the given ``posts_access``,
+    seat ``actor`` locally as a non-admin MEMBER. Returns the space id."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceMember,
+        SpaceRole,
+        SpaceType,
+    )
+
+    actor_user = await stack.provision_user(actor)
+    space = Space(
+        id="sp-remote-posts",
+        name="RemotePosts",
+        owner_instance_id="inst-remote-owner",  # hosted elsewhere, != stack.iid
+        owner_username="remoteowner",
+        identity_public_key="aa" * 32,
+        config_sequence=2,
+        features=SpaceFeatures(posts_access=posts_access),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+    await stack.space_repo.save(space)
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=space.id,
+            user_id=actor_user.user_id,
+            role=SpaceRole.MEMBER,
+            joined_at="2025-01-01T00:00:00",
+        )
+    )
+    return space.id, actor_user.user_id
+
+
+async def test_remote_stub_moderated_post_proceeds_not_queued(stack):
+    """posts_access is HOST-authoritative: on a REMOTE stub a non-admin member's
+    post proceeds (returns a real Post) and is NOT dropped into a local
+    moderation queue the host can't resolve."""
+    from socialhome.domain.events import SpaceModerationQueued
+
+    sid, uid = await _seat_remote_space_with_posts_access(
+        stack, actor="bob", posts_access=SpaceFeatureAccess.MODERATED
+    )
+    queued: list[SpaceModerationQueued] = []
+    stack.space_svc._bus.subscribe(SpaceModerationQueued, queued.append)
+
+    result = await stack.space_svc.create_post(
+        sid,
+        author_user_id=uid,
+        type=PostType.TEXT,
+        content="hello from remote member",
+    )
+
+    assert result is not None
+    assert result.content == "hello from remote member"
+    assert result.author == uid
+    assert queued == []
+    # No moderation row was written.
+    assert await stack.space_repo.list_moderation_queue(sid) == []
+
+
+async def test_remote_stub_admin_only_post_proceeds(stack):
+    """On a REMOTE stub with ADMIN_ONLY posts_access, a non-admin member's post
+    no longer raises — the host applies its own policy to content it hosts."""
+    sid, uid = await _seat_remote_space_with_posts_access(
+        stack, actor="bob", posts_access=SpaceFeatureAccess.ADMIN_ONLY
+    )
+
+    result = await stack.space_svc.create_post(
+        sid,
+        author_user_id=uid,
+        type=PostType.TEXT,
+        content="remote member post",
+    )
+
+    assert result is not None
+    assert result.content == "remote member post"
+
+
 async def test_transfer_ownership(stack):
     """Transferring ownership makes the new owner's role 'owner' and demotes the old one."""
     anna = await stack.provision_user("anna")

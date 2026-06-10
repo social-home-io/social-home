@@ -3216,7 +3216,21 @@ class SpaceService(SpaceMemberGuardMixin):
             image_urls_tuple,
         )
         is_admin = member.role in (SpaceRole.OWNER, SpaceRole.ADMIN)
-        decision = space.features.access_decision("posts", is_admin=is_admin)
+        is_host = (
+            self._own_instance_id is not None
+            and space.owner_instance_id == self._own_instance_id
+        )
+        # posts_access (deny / moderation-queue) is HOST-authoritative: a remote
+        # member composes into their local stub and the post federates to the host.
+        # Enforcing the host's MODERATED/ADMIN_ONLY policy locally would dead-end the
+        # post in a moderation queue this household can't resolve (the queue isn't
+        # federated to the host's admins). The host applies its own policy to content
+        # it hosts. On a stub, proceed.
+        decision = (
+            space.features.access_decision("posts", is_admin=is_admin)
+            if is_host
+            else "allow"
+        )
         if decision == "deny":
             raise SpacePermissionError("posting is admin-only in this space")
 
