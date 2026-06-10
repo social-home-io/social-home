@@ -43,6 +43,12 @@ class GlobalSpace:
     subscriber_count: int = 0
     posts_per_week: float = 0.0
     published_at: str = ""  # ISO 8601
+    #: The space's Ed25519 *authority* verify key (hex), TOFU-pinned on first
+    #: publish (Phase 5a). Lets the GFS authorize a relay by a space-authority
+    #: signature (any seed-holder — owner or delegated admin) without learning
+    #: the space content. Empty when an older HFS published no pubkey → such a
+    #: space can only be relayed by its owning instance.
+    identity_public_key: str = ""
 
 
 @dataclass(slots=True, frozen=True)

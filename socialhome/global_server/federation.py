@@ -18,6 +18,12 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
+from ..authority_sig import (
+    AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    UnsupportedAuthoritySuite,
+    strip_authority_sig_fields,
+    verify_authority_event,
+)
 from ..crypto import b64url_decode, verify_ed25519
 from .domain import ClientInstance, GfsSubscriber, GlobalSpace
 from .repositories import AbstractGfsFederationRepo
@@ -143,13 +149,32 @@ class GfsFederationService:
             raise PermissionError("Invalid Ed25519 signature")
 
         # The space must already be published (no auto-mint of an ownership
-        # row from an event — mirrors subscribe), and only its owning
-        # instance may relay events for it.
+        # row from an event — mirrors subscribe).
         existing = await self._repo.get_space(space_id)
         if existing is None:
             raise PermissionError("space not published")
-        if existing.owning_instance != from_instance:
-            raise PermissionError("not the owner of this space")
+
+        # Authorize the relay. The household transport signature above proved
+        # WHO sent the bytes (anti-spoof at the GFS edge, #597/#598); this
+        # step decides whether that sender may relay content for *this* space.
+        #
+        # Two acceptable proofs (Phase 5a):
+        #   1. Legacy/owner: from_instance IS the space's owning instance.
+        #   2. Space-authority: the payload carries a space-authority
+        #      signature over its own bytes, verifiable against the TOFU-pinned
+        #      space public key. Any seed-holder (owner OR delegated admin) can
+        #      produce one, so the space keeps working while the owner is
+        #      offline. The GFS stays BLIND to the content — it only verifies
+        #      the signature over the opaque payload bytes, never decrypts.
+        #
+        # Fail-closed: a present-but-invalid authority sig is a hard reject
+        # (no fall-through to the owner check); an unknown suite is a reject; a
+        # non-owner against a space with no pinned pubkey is a reject (the GFS
+        # cannot verify authority, so only the owner may relay until a pubkey
+        # is pinned on a later publish).
+        is_owner = existing.owning_instance == from_instance
+        if not is_owner:
+            self._authorize_authority_relay(space_id, event_type, payload, existing)
 
         subscribers = await self._repo.list_subscribers(
             space_id,
@@ -164,6 +189,81 @@ class GfsFederationService:
         }
 
         return await self._fan_out(subscribers, event_body, session)
+
+    def _authorize_authority_relay(
+        self,
+        space_id: str,
+        event_type: str,
+        payload: object,
+        existing: GlobalSpace,
+    ) -> None:
+        """Authorize a NON-owner relay via the space-authority signature.
+
+        Raises :class:`PermissionError` unless the ``payload`` carries a valid
+        space-authority signature verifiable against the space's TOFU-pinned
+        public key. Fail-closed in every other case:
+
+        * wire ``event_type`` isn't the one the authority sig authorizes
+          (``space_post_public``) → reject;
+        * payload isn't a signed dict / no ``authority_sig`` → reject;
+        * no pinned pubkey on the space → reject (GFS can't verify authority);
+        * unknown authority suite → reject (no default fallback);
+        * signature present but doesn't verify → reject.
+
+        The GFS never decrypts ``payload`` — it only verifies the Ed25519
+        authority signature over the payload bytes (with the two signature
+        fields stripped, mirroring the signer).
+
+        Replay/dedupe contract: the authority signature binds the space id +
+        payload but NO timestamp / nonce / epoch, and the GFS keeps no replay
+        cache, so this relay is idempotent / at-least-once — a captured
+        authority-signed payload can be re-POSTed and re-fanned-out (a property
+        the owner relay already had under #598, widened here). We deliberately
+        do NOT add GFS-side replay machinery: the GFS is content-blind and
+        can't see a post id inside the (encrypted) payload. The content-layer
+        backstop is SUBSCRIBER-side dedupe by the post id carried inside the
+        payload — enforced by the HFS ``space_public_inbound`` consumer (the
+        same way moments dedupe by moment_id). See ``docs/protocol/discovery.md``.
+        """
+        if not isinstance(payload, dict) or "authority_sig" not in payload:
+            raise PermissionError("not the owner of this space")
+        # The authority signature authorizes ONLY the ``space_post_public``
+        # event type (that is the event type signed over, below). Bind the
+        # caller-supplied WIRE event_type to it so a non-owner holding one
+        # valid ``space_post_public``-signed payload can't relay it under an
+        # arbitrary type (e.g. ``space_admin_action``). The owner path is
+        # exempt (handled by the caller) and keeps relaying any type.
+        if event_type != AUTHORITY_EVENT_SPACE_POST_PUBLIC:
+            raise PermissionError(
+                "authority relay only permits the "
+                f"{AUTHORITY_EVENT_SPACE_POST_PUBLIC!r} event type",
+            )
+        if not existing.identity_public_key:
+            # No TOFU-pinned key → the GFS cannot verify a space-authority
+            # signature, so only the owner may relay (rejected above).
+            raise PermissionError(
+                "no pinned authority key for this space",
+            )
+        authority_sig = payload.get("authority_sig") or ""
+        authority_sig_suite = payload.get("authority_sig_suite") or ""
+        try:
+            ok = verify_authority_event(
+                event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+                space_id=space_id,
+                payload=strip_authority_sig_fields(payload),
+                authority_sig=str(authority_sig),
+                authority_sig_suite=str(authority_sig_suite),
+                space_public_key=bytes.fromhex(existing.identity_public_key),
+            )
+        except UnsupportedAuthoritySuite as exc:
+            raise PermissionError(
+                f"unknown authority signature suite: {exc}",
+            ) from exc
+        except ValueError as exc:
+            # Malformed pinned pubkey hex — treat as unverifiable, fail-closed.
+            raise PermissionError("invalid authority key") from exc
+        if not ok:
+            raise PermissionError("invalid authority signature")
 
     async def subscribe(
         self,
@@ -288,6 +388,7 @@ class GfsFederationService:
                 subscriber_count=existing.subscriber_count,
                 posts_per_week=existing.posts_per_week,
                 published_at=existing.published_at,
+                identity_public_key=existing.identity_public_key,
             )
         )
 
@@ -305,6 +406,7 @@ class GfsFederationService:
         target_audience: str = "all",
         accent_color: str = "#D2542A",
         primary_color: str = "#D2542A",
+        identity_public_key: str = "",
         signature: str = "",
     ) -> GlobalSpace:
         """Register / refresh a space row from the owning instance.
@@ -340,6 +442,7 @@ class GfsFederationService:
                 "target_audience": target_audience,
                 "accent_color": accent_color,
                 "primary_color": primary_color,
+                "identity_public_key": identity_public_key or "",
             },
             separators=(",", ":"),
             sort_keys=True,
@@ -367,6 +470,27 @@ class GfsFederationService:
         # one (first-publisher wins; only that instance can refresh it).
         if existing is not None and existing.owning_instance != owning_instance:
             raise PermissionError("space already owned by another instance")
+        # TOFU-pin the space's authority public key. The FIRST publish that
+        # carries one pins it; thereafter it is IMMUTABLE — a later publish
+        # offering a DIFFERENT pubkey keeps the pinned one (and logs a warning
+        # so a swap attempt is diagnosable). This is what lets the GFS trust an
+        # authority-signed relay from a non-owner seed-holder: the verify key
+        # is established once by the owner and can't be silently rotated by a
+        # later (possibly compromised-transport) publish. A first publish with
+        # an empty pubkey leaves it NULL — that space can't use authority-signed
+        # relay until a pubkey is pinned. The owner is already immutable
+        # (checked above), so only the legit owner could ever pin/refresh.
+        pinned_pubkey = identity_public_key or ""
+        if existing is not None and existing.identity_public_key:
+            if pinned_pubkey and pinned_pubkey != existing.identity_public_key:
+                log.warning(
+                    "GFS: ignoring attempt to change pinned authority pubkey "
+                    "for space %s (pinned=%s…, offered=%s…)",
+                    space_id,
+                    existing.identity_public_key[:8],
+                    pinned_pubkey[:8],
+                )
+            pinned_pubkey = existing.identity_public_key
         # Preserve subscriber_count / posts_per_week / published_at from
         # the existing row — those are GFS-side bookkeeping, not the
         # owner's to declare. Only the owner's name / description /
@@ -390,6 +514,7 @@ class GfsFederationService:
             subscriber_count=existing.subscriber_count if existing else 0,
             posts_per_week=existing.posts_per_week if existing else 0.0,
             published_at=existing.published_at if existing else "",
+            identity_public_key=pinned_pubkey,
         )
         await self._repo.upsert_space(space)
         log.info(

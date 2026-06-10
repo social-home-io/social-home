@@ -70,6 +70,10 @@ def _sign_publish_body(body: dict, *, seed: bytes) -> dict:
     canonicalises before verifying — sorted keys, no whitespace,
     no ``signature`` field included in the signed bytes.
     """
+    # The service canonicalises ``identity_public_key`` (Phase 5a TOFU pin)
+    # into the signed body, defaulting to "" when none is supplied; mirror that
+    # here so the recomputed canonical matches.
+    body = {"identity_public_key": "", **body}
     canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return {**body, "signature": b64url_encode(sign_ed25519(seed, canonical))}
 

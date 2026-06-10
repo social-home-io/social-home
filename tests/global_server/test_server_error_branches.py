@@ -125,7 +125,12 @@ async def _publish_known_space(client, space_id: str) -> None:
         "accent_color": "#D2542A",
         "primary_color": "#D2542A",
     }
-    signed = _sign({**pub_body, "space_id": space_id}, client._seed)
+    # Phase 5a: ``identity_public_key`` (default "") is folded into the signed
+    # canonical body by the service.
+    signed = _sign(
+        {**pub_body, "space_id": space_id, "identity_public_key": ""},
+        client._seed,
+    )
     resp = await client.post(
         f"/gfs/spaces/{space_id}/publish",
         json={**pub_body, "signature": signed["signature"]},
@@ -664,7 +669,10 @@ async def test_fan_out_delivers_to_real_subscriber_inbox(
                 "accent_color": "#D2542A",
                 "primary_color": "#D2542A",
             }
-            signed_pub = _sign({**pub_body, "space_id": "sp-xyz"}, pub_seed)
+            signed_pub = _sign(
+                {**pub_body, "space_id": "sp-xyz", "identity_public_key": ""},
+                pub_seed,
+            )
             resp = await tc.post(
                 "/gfs/spaces/sp-xyz/publish",
                 json={**pub_body, "signature": signed_pub["signature"]},

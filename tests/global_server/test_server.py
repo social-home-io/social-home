@@ -289,7 +289,9 @@ async def _register_and_publish(gfs_client, *, instance_id, space_id, client_ip)
         "accent_color": "#D2542A",
         "primary_color": "#D2542A",
     }
-    canonical = {**pub_body, "space_id": space_id}
+    # Phase 5a: the service folds ``identity_public_key`` (default "") into the
+    # signed canonical body, so include it here too.
+    canonical = {**pub_body, "space_id": space_id, "identity_public_key": ""}
     pub = await gfs_client.post(
         f"/gfs/spaces/{space_id}/publish",
         json={**pub_body, "signature": _sign(seed, canonical)},

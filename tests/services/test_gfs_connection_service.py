@@ -965,6 +965,9 @@ async def test_publish_body_carries_metadata_and_signature(env):
     assert body["owning_instance"] == "alpha.home"
     assert body["name"] == "Local Birds"
     assert body["description"] == "everyday birds in the neighbourhood"
+    # Phase 5a: the publish body ships the space's Ed25519 authority verify key
+    # so the GFS can TOFU-pin it for space-authority-signed relays.
+    assert body["identity_public_key"] == "aa" * 32
     sig_b64 = body.pop("signature")
     canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig_b64))

@@ -220,9 +220,9 @@ class SqliteGfsFederationRepo:
                 space_id, owning_instance, name, description, about_markdown,
                 cover_url, icon_url, min_age, target_audience, accent_color,
                 primary_color, status, subscriber_count, posts_per_week,
-                published_at
+                published_at, identity_public_key
             ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                     COALESCE(?, datetime('now')))
+                     COALESCE(?, datetime('now')), ?)
             ON CONFLICT(space_id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -235,7 +235,8 @@ class SqliteGfsFederationRepo:
                 primary_color = excluded.primary_color,
                 status = excluded.status,
                 subscriber_count = excluded.subscriber_count,
-                posts_per_week = excluded.posts_per_week
+                posts_per_week = excluded.posts_per_week,
+                identity_public_key = excluded.identity_public_key
             """,
             (
                 space.space_id,
@@ -253,6 +254,7 @@ class SqliteGfsFederationRepo:
                 space.subscriber_count,
                 space.posts_per_week,
                 space.published_at or None,
+                space.identity_public_key or None,
             ),
         )
 
@@ -1022,6 +1024,7 @@ def _row_to_space(row: dict | None) -> GlobalSpace | None:
         subscriber_count=int(row.get("subscriber_count") or 0),
         posts_per_week=float(row.get("posts_per_week") or 0.0),
         published_at=row.get("published_at", ""),
+        identity_public_key=row.get("identity_public_key") or "",
     )
 
 

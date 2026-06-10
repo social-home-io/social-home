@@ -159,6 +159,7 @@ async def test_ws_push_via_fanout_reaches_client(ws_client):
             "target_audience": "all",
             "accent_color": "#D2542A",
             "primary_color": "#D2542A",
+            "identity_public_key": "",
         }
         pub_canonical = json.dumps(
             pub_args, separators=(",", ":"), sort_keys=True
