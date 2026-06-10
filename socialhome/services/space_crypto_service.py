@@ -43,6 +43,8 @@ from ..federation.sealed_sender import (
 # without dragging in this module's HFS crypto stack (sealed_sender, AESGCM).
 from ..authority_sig import (
     AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF,
+    AUTHORITY_RELAY_EVENT_TYPES,
     AUTHORITY_SIG_SUITE_ED25519,
     SUPPORTED_AUTHORITY_SIG_SUITES,
     UnsupportedAuthoritySuite,
@@ -573,6 +575,8 @@ def verify_space_config(
 
 __all__ = [
     "AUTHORITY_EVENT_SPACE_POST_PUBLIC",
+    "AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF",
+    "AUTHORITY_RELAY_EVENT_TYPES",
     "AUTHORITY_SIG_SUITE_ED25519",
     "SUPPORTED_AUTHORITY_SIG_SUITES",
     "KEY_SUITE_AESGCM_256",

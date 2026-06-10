@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import aiohttp
 
 from ..authority_sig import (
-    AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    AUTHORITY_RELAY_EVENT_TYPES,
     UnsupportedAuthoritySuite,
     strip_authority_sig_fields,
     verify_authority_event,
@@ -218,8 +218,9 @@ class GfsFederationService:
         space-authority signature verifiable against the space's TOFU-pinned
         public key. Fail-closed in every other case:
 
-        * wire ``event_type`` isn't the one the authority sig authorizes
-          (``space_post_public``) → reject;
+        * wire ``event_type`` isn't one the authority sig authorizes (the
+          ``AUTHORITY_RELAY_EVENT_TYPES`` set — ``space_post_public`` or
+          ``space_subscriber_key_handoff``) → reject;
         * payload isn't a signed dict / no ``authority_sig`` → reject;
         * no pinned pubkey on the space → reject (GFS can't verify authority);
         * unknown authority suite → reject (no default fallback);
@@ -242,16 +243,19 @@ class GfsFederationService:
         """
         if not isinstance(payload, dict) or "authority_sig" not in payload:
             raise PermissionError("not the owner of this space")
-        # The authority signature authorizes ONLY the ``space_post_public``
-        # event type (that is the event type signed over, below). Bind the
-        # caller-supplied WIRE event_type to it so a non-owner holding one
-        # valid ``space_post_public``-signed payload can't relay it under an
-        # arbitrary type (e.g. ``space_admin_action``). The owner path is
+        # The authority signature authorizes only the event types in
+        # ``AUTHORITY_RELAY_EVENT_TYPES`` (``space_post_public`` and the
+        # Phase-5b ``space_subscriber_key_handoff``). Bind the caller-supplied
+        # WIRE event_type to one of those AND verify the signature under that
+        # SAME type below — a non-owner holding one valid payload can't relay
+        # it under an arbitrary type (e.g. ``space_admin_action``), and a
+        # payload signed for one allowed type can't be replayed under the
+        # other (the signing bytes bind the event type). The owner path is
         # exempt (handled by the caller) and keeps relaying any type.
-        if event_type != AUTHORITY_EVENT_SPACE_POST_PUBLIC:
+        if event_type not in AUTHORITY_RELAY_EVENT_TYPES:
             raise PermissionError(
                 "authority relay only permits the "
-                f"{AUTHORITY_EVENT_SPACE_POST_PUBLIC!r} event type",
+                f"{sorted(AUTHORITY_RELAY_EVENT_TYPES)!r} event types",
             )
         if not existing.identity_public_key:
             # No TOFU-pinned key → the GFS cannot verify a space-authority
@@ -263,7 +267,7 @@ class GfsFederationService:
         authority_sig_suite = payload.get("authority_sig_suite") or ""
         try:
             ok = verify_authority_event(
-                event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+                event_type=event_type,
                 space_id=space_id,
                 payload=strip_authority_sig_fields(payload),
                 authority_sig=str(authority_sig),
@@ -349,6 +353,57 @@ class GfsFederationService:
             instance_id=instance_id,
         )
         log.debug("GFS: %s subscribed to space %s", instance_id, space_id)
+
+        # Phase 5b-b — best-effort notify the space OWNER so a seed-holder can
+        # seal the per-space content key to this new subscriber (the GFS stays
+        # blind: it only forwards the subscriber's already-published identity +
+        # key-wrap material, never the key). Only the owner is notified here
+        # because the GFS authoritatively knows ``owning_instance``; a
+        # delegated admin catches up via the 5b-c reconcile (pulling the
+        # subscriber list). If the owner is offline (no WS), the frame is
+        # dropped — that, too, is the reconcile's job, NOT a subscribe failure.
+        await self._notify_owner_new_subscriber(
+            existing.owning_instance, space_id, inst
+        )
+
+    async def _notify_owner_new_subscriber(
+        self,
+        owning_instance: str,
+        space_id: str,
+        subscriber: ClientInstance,
+    ) -> None:
+        """Push a ``new_subscriber`` frame to the space owner's WS (best-effort).
+
+        Carries the subscriber's registered Ed25519 identity ``public_key`` +
+        its published key-wrap pubkey/suite/self-signature so the owner can
+        verify the key-wrap binding end-to-end (``verify_keywrap_binding``,
+        anti-GFS-substitution) before sealing. Never raises — a missing socket
+        or a send error is logged and swallowed (the 5b-c reconcile backstops
+        an offline owner)."""
+        if self._ws_registry is None:
+            return
+        try:
+            await self._ws_registry.send(
+                owning_instance,
+                {
+                    "type": "new_subscriber",
+                    "space_id": space_id,
+                    "subscriber": {
+                        "instance_id": subscriber.instance_id,
+                        "identity_public_key": subscriber.public_key,
+                        "keywrap_public_key": subscriber.keywrap_public_key,
+                        "kem_suite": subscriber.kem_suite,
+                        "keywrap_sig": subscriber.keywrap_sig,
+                    },
+                },
+            )
+        except Exception as exc:  # defensive — never fail a subscribe on notify
+            log.warning(
+                "GFS: new_subscriber notify to owner %s for space %s failed: %s",
+                owning_instance,
+                space_id,
+                exc,
+            )
 
     async def unsubscribe(self, instance_id: str, space_id: str) -> None:
         """Remove *instance_id* from subscribers of *space_id*."""

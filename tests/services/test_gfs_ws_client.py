@@ -366,6 +366,117 @@ async def test_client_dispatches_moment_public_frames(fake_gfs, http_session):
         await client.stop()
 
 
+async def test_client_dispatches_new_subscriber_frames(fake_gfs, http_session):
+    """``new_subscriber`` frames (the Phase-5b GFS notify) go to the dedicated
+    handler so a seed-holder can seal the content key to the new subscriber."""
+    seed, _pub = _gen_keypair()
+    subs: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    async def on_new_subscriber(frame: dict) -> None:
+        subs.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ns",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        on_new_subscriber=on_new_subscriber,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {
+                "type": "new_subscriber",
+                "space_id": "sp-1",
+                "subscriber": {"instance_id": "sub-1"},
+            },
+        )
+        for _ in range(100):
+            if subs:
+                break
+            await asyncio.sleep(0.02)
+        assert len(subs) == 1
+        assert subs[0]["space_id"] == "sp-1"
+        assert subs[0]["subscriber"]["instance_id"] == "sub-1"
+    finally:
+        await client.stop()
+
+
+async def test_client_attach_new_subscriber_handler_late_binds(fake_gfs, http_session):
+    """The handler can be attached after construction (startup wiring order)."""
+    seed, _pub = _gen_keypair()
+    subs: list[dict] = []
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    async def on_new_subscriber(frame: dict) -> None:
+        subs.append(frame)
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ns2",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+    )
+    client.attach_new_subscriber_handler(on_new_subscriber)
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {"type": "new_subscriber", "space_id": "sp-2", "subscriber": {}},
+        )
+        for _ in range(100):
+            if subs:
+                break
+            await asyncio.sleep(0.02)
+        assert len(subs) == 1
+    finally:
+        await client.stop()
+
+
+async def test_client_drops_new_subscriber_when_no_handler(fake_gfs, http_session):
+    """A ``new_subscriber`` frame with no handler attached is dropped, not
+    crashed."""
+    seed, _pub = _gen_keypair()
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ns3",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+    )
+    await client.start()
+    try:
+        for _ in range(100):
+            if client.connected:
+                break
+            await asyncio.sleep(0.02)
+        await fake_gfs.outbound.put(
+            {"type": "new_subscriber", "space_id": "sp-3", "subscriber": {}},
+        )
+        await asyncio.sleep(0.2)
+        assert client.connected  # loop survived
+    finally:
+        await client.stop()
+
+
 async def test_client_dispatches_moment_signal_frames(fake_gfs, http_session):
     """``moment_signal`` frames (the §Momentum-public answerer) go to the
     dedicated handler, mirroring the highlight_signal branch."""
