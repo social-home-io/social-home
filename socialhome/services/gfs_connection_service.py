@@ -30,6 +30,7 @@ import aiohttp
 
 from ..crypto import b64url_encode, sign_ed25519
 from ..domain.federation import GfsConnection, GfsSpacePublication
+from ..federation.keywrap_seal import KEM_SUITE_X25519
 from ..repositories.gfs_connection_repo import AbstractGfsConnectionRepo
 
 log = logging.getLogger(__name__)
@@ -126,6 +127,7 @@ class GfsConnectionService:
         own_public_key_hex: str,
         own_inbox_url: str,
         own_display_name: str = "",
+        own_keywrap_public_key_hex: str = "",
     ) -> GfsConnection:
         """Pair with a GFS using a scanned QR payload.
 
@@ -175,18 +177,26 @@ class GfsConnectionService:
                 "GFS /gfs/info did not return gfs_instance_id and public_key",
             )
 
-        # 2. Register the HFS instance using the QR token.
+        # 2. Register the HFS instance using the QR token. Publish the local
+        #    X25519 key-wrap pubkey + KEM suite (Phase 5b foundation) so a
+        #    future content-key handoff can seal to this household. An HFS
+        #    without a provisioned key-wrap key ships none → the GFS stores an
+        #    empty field and this household just can't be sealed-to yet.
+        register_body: dict[str, str] = {
+            "token": token,
+            "instance_id": own_instance_id,
+            "public_key": own_public_key_hex,
+            "inbox_url": own_inbox_url,
+            "display_name": own_display_name,
+        }
+        if own_keywrap_public_key_hex:
+            register_body["keywrap_public_key"] = own_keywrap_public_key_hex
+            register_body["kem_suite"] = KEM_SUITE_X25519
         register_url = f"{gfs_url}/gfs/register"
         try:
             async with client.post(
                 register_url,
-                json={
-                    "token": token,
-                    "instance_id": own_instance_id,
-                    "public_key": own_public_key_hex,
-                    "inbox_url": own_inbox_url,
-                    "display_name": own_display_name,
-                },
+                json=register_body,
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status != 200:

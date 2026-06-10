@@ -72,6 +72,30 @@ async def test_register_instance_idempotent(svc):
     await svc.register_instance("inst-dup", "bb" * 32, "http://new.example.com/wh")
 
 
+async def test_register_instance_persists_keywrap_pubkey(svc):
+    """The key-wrap pubkey + KEM suite ride registration and round-trip."""
+    await svc.register_instance(
+        "inst-kw",
+        "aa" * 32,
+        "http://kw.example.com/wh",
+        keywrap_public_key="cc" * 32,
+        kem_suite="x25519",
+    )
+    inst = await svc._repo.get_instance("inst-kw")
+    assert inst is not None
+    assert inst.keywrap_public_key == "cc" * 32
+    assert inst.kem_suite == "x25519"
+
+
+async def test_register_instance_without_keywrap_defaults_empty(svc):
+    """An older HFS that ships no key-wrap pubkey → empty fields, no crash."""
+    await svc.register_instance("inst-old", "aa" * 32, "http://old.example.com/wh")
+    inst = await svc._repo.get_instance("inst-old")
+    assert inst is not None
+    assert inst.keywrap_public_key == ""
+    assert inst.kem_suite == ""
+
+
 async def test_list_spaces_empty_initially(svc):
     """list_spaces() returns an empty list when no spaces exist."""
     spaces = await svc.list_spaces()

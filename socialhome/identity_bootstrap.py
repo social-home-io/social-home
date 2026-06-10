@@ -29,6 +29,7 @@ from .crypto import (
     derive_instance_id,
     generate_identity_keypair,
     generate_routing_secret,
+    generate_x25519_keypair,
 )
 from .db import AsyncDatabase
 from .federation.crypto_suite import parse_suite
@@ -41,9 +42,11 @@ log = logging.getLogger(__name__)
 class IdentityMaterial:
     """Return value from :func:`ensure_instance_identity`.
 
-    Bundles the classical Ed25519 seed + public key plus optional PQ
-    (ML-DSA-65) seed + public key. Uses ``__slots__`` so it's cheap
-    and readonly-in-spirit.
+    Bundles the classical Ed25519 seed + public key, optional PQ
+    (ML-DSA-65) seed + public key, and the per-instance X25519 *key-wrap*
+    keypair (Phase 5b foundation — used to seal a payload to another
+    household's published key-wrap pubkey). Uses ``__slots__`` so it's
+    cheap and readonly-in-spirit.
     """
 
     __slots__ = (
@@ -52,6 +55,8 @@ class IdentityMaterial:
         "instance_id",
         "pq_seed",
         "pq_public_key",
+        "keywrap_private_key",
+        "keywrap_public_key",
     )
 
     def __init__(
@@ -62,12 +67,16 @@ class IdentityMaterial:
         *,
         pq_seed: bytes | None = None,
         pq_public_key: bytes | None = None,
+        keywrap_private_key: bytes,
+        keywrap_public_key: bytes,
     ) -> None:
         self.identity_seed = identity_seed
         self.identity_public_key = identity_public_key
         self.instance_id = instance_id
         self.pq_seed = pq_seed
         self.pq_public_key = pq_public_key
+        self.keywrap_private_key = keywrap_private_key
+        self.keywrap_public_key = keywrap_public_key
 
 
 async def ensure_instance_identity(
@@ -91,7 +100,8 @@ async def ensure_instance_identity(
 
     row = await db.fetchone(
         "SELECT identity_private_key, identity_public_key, instance_id, "
-        "       pq_algorithm, pq_private_key, pq_public_key "
+        "       pq_algorithm, pq_private_key, pq_public_key, "
+        "       keywrap_private_key, keywrap_public_key "
         "FROM instance_identity WHERE id='self'",
     )
     if row is not None:
@@ -127,19 +137,37 @@ async def ensure_instance_identity(
                 "instance_identity: minted PQ keypair (mldsa65) for instance_id=%s",
                 instance_id,
             )
+        # Key-wrap keypair: present on a 5b+ row; lazily minted on a
+        # pre-5b row (mirrors the PQ upgrade path above).
+        kw_priv: bytes
+        kw_pub: bytes
+        existing_kw_pub_hex = row["keywrap_public_key"]
+        if existing_kw_pub_hex:
+            kw_priv = key_manager.decrypt(row["keywrap_private_key"])
+            kw_pub = bytes.fromhex(existing_kw_pub_hex)
+        else:
+            kw_priv, kw_pub = await _mint_keywrap_keypair(
+                db, key_manager, instance_id=instance_id, upgrade=True
+            )
+
         return IdentityMaterial(
             seed,
             public_key,
             instance_id,
             pq_seed=pq_seed,
             pq_public_key=pq_pk,
+            keywrap_private_key=kw_priv,
+            keywrap_public_key=kw_pub,
         )
 
-    # First-start path: mint fresh classical + (optionally) PQ keypairs.
+    # First-start path: mint fresh classical + (optionally) PQ keypairs +
+    # the per-instance X25519 key-wrap keypair.
     keypair = generate_identity_keypair()
     instance_id = derive_instance_id(keypair.public_key)
     encrypted_seed = key_manager.encrypt(keypair.private_key)
     routing_secret = generate_routing_secret()
+    keywrap = generate_x25519_keypair()
+    encrypted_keywrap_priv = key_manager.encrypt(keywrap.private_key)
 
     pq_algorithm: str | None = None
     pq_private_key_enc: str | None = None
@@ -159,8 +187,9 @@ async def ensure_instance_identity(
             identity_private_key, identity_public_key,
             key_format,
             pq_algorithm, pq_private_key, pq_public_key,
+            keywrap_private_key, keywrap_public_key,
             routing_secret, created_at
-        ) VALUES('self', ?, ?, ?, ?, 'encrypted', ?, ?, ?, ?, ?)
+        ) VALUES('self', ?, ?, ?, ?, 'encrypted', ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             instance_id,
@@ -170,6 +199,8 @@ async def ensure_instance_identity(
             pq_algorithm,
             pq_private_key_enc,
             pq_public_key_hex,
+            encrypted_keywrap_priv,
+            keywrap.public_key.hex(),
             routing_secret,
             datetime.now(timezone.utc).isoformat(),
         ),
@@ -188,4 +219,35 @@ async def ensure_instance_identity(
         instance_id,
         pq_seed=pq_seed_bytes,
         pq_public_key=pq_pk_bytes,
+        keywrap_private_key=keywrap.private_key,
+        keywrap_public_key=keywrap.public_key,
     )
+
+
+async def _mint_keywrap_keypair(
+    db: AsyncDatabase,
+    key_manager: KeyManager,
+    *,
+    instance_id: str,
+    upgrade: bool,
+) -> tuple[bytes, bytes]:
+    """Mint + persist a fresh X25519 key-wrap keypair on the ``'self'`` row.
+
+    Used both on the first-start path (via the INSERT above) and on the
+    upgrade path for a pre-5b row whose key-wrap columns are NULL — the
+    private half is KEK-wrapped, the public half stored as hex. Returns
+    ``(private_key, public_key)`` raw bytes.
+    """
+    keywrap = generate_x25519_keypair()
+    await db.enqueue(
+        "UPDATE instance_identity "
+        "   SET keywrap_private_key=?, keywrap_public_key=? "
+        " WHERE id='self'",
+        (key_manager.encrypt(keywrap.private_key), keywrap.public_key.hex()),
+    )
+    if upgrade:
+        log.info(
+            "instance_identity: minted X25519 key-wrap keypair for instance_id=%s",
+            instance_id,
+        )
+    return keywrap.private_key, keywrap.public_key
