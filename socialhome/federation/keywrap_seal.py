@@ -56,7 +56,9 @@ from ..crypto import (
     X25519Keypair,
     b64url_decode,
     b64url_encode,
+    derive_instance_id,
     generate_x25519_keypair,
+    verify_ed25519,
     x25519_exchange,
 )
 
@@ -171,10 +173,55 @@ def open_keywrap(
     )
 
 
+def verify_keywrap_binding(
+    *,
+    instance_id: str,
+    identity_pub: bytes,
+    keywrap_pub: bytes,
+    keywrap_sig: str,
+) -> bool:
+    """Verify a subscriber's key-wrap pubkey is bound to its identity, E2E.
+
+    A sealer (Phase 5b content-key handoff) learns a subscriber's key-wrap
+    pubkey *from the GFS*. A malicious GFS could substitute a key-wrap pubkey
+    **it** controls and read the sealed content key. This safeguard binds the
+    key-wrap key to the subscriber identity so the sealer never trusts the
+    GFS-served value — it MUST call this on the GFS-served
+    ``{instance_id, identity public_key, keywrap_public_key, keywrap_sig}``
+    *before* sealing. Mirrors the #596 ``derive_instance_id`` trust pattern.
+
+    Returns ``True`` only when ALL hold (else ``False`` — fail-closed, never
+    raises on bad input):
+
+    1. ``derive_instance_id(identity_pub) == instance_id`` — binds the
+       identity key to the claimed id (160-bit; the GFS can't forge an
+       identity key whose id matches a substituted instance_id);
+    2. ``len(keywrap_pub) == 32`` — a well-formed X25519 public key;
+    3. ``verify_ed25519(identity_pub, keywrap_pub, b64url_decode(keywrap_sig))``
+       — the key-wrap key is genuinely self-signed by that identity.
+
+    A substituted key-wrap key (no valid signature from the real identity)
+    fails (3); a forged identity fails (1) — so the GFS-swap attack is
+    rejected at the sealer.
+    """
+    try:
+        if derive_instance_id(identity_pub) != instance_id:
+            return False
+        if len(keywrap_pub) != 32:
+            return False
+        if not keywrap_sig:
+            return False
+        raw_sig = b64url_decode(keywrap_sig)
+        return verify_ed25519(identity_pub, keywrap_pub, raw_sig)
+    except ValueError, TypeError:
+        return False
+
+
 __all__ = [
     "KEM_SUITE_X25519",
     "SUPPORTED_KEM_SUITES",
     "UnsupportedKemSuite",
     "open_keywrap",
     "seal_to_keywrap",
+    "verify_keywrap_binding",
 ]

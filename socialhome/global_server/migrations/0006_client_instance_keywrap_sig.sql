@@ -1,0 +1,38 @@
+-- Self-signature binding a household's published X25519 KEY-WRAP pubkey to its
+-- Ed25519 identity (Phase 5b handoff safeguard, owner-offline epic).
+--
+-- The GFS already stores each household's published key-wrap pubkey (migration
+-- 0005) and its Ed25519 identity ``public_key``. The Phase 5b content-key
+-- handoff has a seed-holder seal the per-space content key to a SUBSCRIBER's
+-- key-wrap pubkey learnt FROM THIS GFS — so a malicious/compromised GFS could
+-- substitute a key-wrap pubkey IT controls and read the sealed content key. To
+-- close that, the household self-signs its key-wrap pubkey with its identity
+-- seed (``keywrap_sig = b64url(sign_ed25519(identity_seed, keywrap_pub))``) and
+-- publishes the signature here at ``/gfs/register``. The GFS stays content-blind
+-- — it only stores + serves the signature so a sealer can verify, end-to-end,
+-- that the served ``{instance_id, public_key, keywrap_public_key, keywrap_sig}``
+-- is internally consistent (``federation/keywrap_seal.verify_keywrap_binding``)
+-- BEFORE sealing. A GFS-substituted key-wrap key has no valid signature from the
+-- real identity → rejected at the sealer.
+--
+-- Migration audit (mandatory 3 points, CLAUDE.md):
+--   (1) Audited paths. ``SqliteGfsFederationRepo.upsert_instance`` /
+--       ``get_instance`` (+ ``_row_to_instance``) are the only writer/reader of
+--       ``client_instances``; ``RegisterView`` + ``register_instance`` feed them.
+--       The pubkey + the identity ``public_key`` already live here (migrations
+--       0005 + 0001); the SIGNATURE over the key-wrap pubkey has no column.
+--   (2) Non-migration alternative considered + rejected. The GFS could re-derive
+--       nothing here — it lacks the household identity SEED (by design: it never
+--       holds private material), so it cannot recompute the signature. Carrying
+--       it only on each relayed event was rejected for the same reason the
+--       pubkey was (migration 0005 audit): a published directory value persists,
+--       not re-asserted per message. An additive stored column is the home.
+--   (3) Smallest possible change. One additive, NULL-default ``ADD COLUMN``.
+--       NULL = an older HFS that published no signature → that household can't
+--       be sealed-to yet (graceful; the handoff degrades, part B). No backfill,
+--       no table rewrite, no index.
+--
+-- Value domain:
+--   keywrap_sig  NULL → none published (older HFS); text → b64url(Ed25519 sig
+--                over the 32-byte key-wrap pub)
+ALTER TABLE client_instances ADD COLUMN keywrap_sig TEXT;

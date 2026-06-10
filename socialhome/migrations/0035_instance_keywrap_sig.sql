@@ -1,0 +1,45 @@
+-- Self-signature binding the X25519 KEY-WRAP pubkey to the Ed25519 identity
+-- (Phase 5b handoff safeguard, owner-offline epic).
+--
+-- The Phase 5b content-key handoff has a seed-holder seal the per-space content
+-- key to a SUBSCRIBER's key-wrap pubkey that it learns FROM THE GFS. A malicious
+-- GFS could substitute a key-wrap pubkey IT controls → read the sealed content
+-- key. To close that, each household self-signs its own key-wrap pubkey with its
+-- Ed25519 identity seed: ``keywrap_sig = b64url(sign_ed25519(identity_seed,
+-- keywrap_public_key_bytes))``. A sealer verifies, end-to-end,
+-- ``derive_instance_id(identity_pub) == instance_id`` AND that signature against
+-- the identity key it learns alongside (``federation/keywrap_seal``
+-- ``verify_keywrap_binding``) BEFORE sealing — so a GFS-substituted key-wrap key
+-- (no valid signature from the real identity) is rejected. Mirrors the #596
+-- derive_instance_id trust pattern: authorize against a key the receiver can
+-- bind first-hand, never the directory-served value.
+--
+-- Migration audit (mandatory 3 points, CLAUDE.md):
+--   (1) Audited paths. ``identity_bootstrap.ensure_instance_identity`` is the
+--       sole writer/reader of ``instance_identity``; ``app.py`` reads the
+--       returned ``IdentityMaterial``. The key-wrap key + the identity seed both
+--       already live on this single-row table (migration 0034 + the original
+--       row); the SIGNATURE over the key-wrap pubkey has no home — no existing
+--       column carries an Ed25519 signature value (``identity_private_key`` /
+--       ``pq_private_key`` are seeds, ``routing_secret`` is an HMAC secret,
+--       ``keywrap_public_key`` is the bare pubkey).
+--   (2) Non-migration alternative considered + rejected. The signature is
+--       deterministic given (identity seed, key-wrap pubkey), so it COULD be
+--       recomputed at read time instead of stored. Rejected: recomputing needs
+--       the KEK-decrypted identity SEED on every registration/read path that
+--       only otherwise needs the public material, widening seed exposure for a
+--       value that never changes once minted. Carrying it only on a federation
+--       event was rejected for the same reason the published key-wrap pubkey was
+--       (migration 0005 audit): a published directory value persists, it isn't
+--       re-asserted per message. A stored, additive column is the smallest safe
+--       home.
+--   (3) Smallest possible change. One additive, NULL-default ``ADD COLUMN`` on
+--       the existing single-row ``instance_identity`` table. NULL = no signature
+--       yet (a pre-safeguard row) → lazily minted + persisted on next
+--       ``ensure_instance_identity`` (mirrors the key-wrap lazy-mint path on the
+--       same table, migration 0034). No backfill, no table rewrite, no index.
+--
+-- Value domain:
+--   keywrap_sig  NULL → not signed yet (pre-safeguard row; lazy-minted next boot)
+--                text → b64url(Ed25519 signature over the 32-byte key-wrap pub)
+ALTER TABLE instance_identity ADD COLUMN keywrap_sig TEXT;

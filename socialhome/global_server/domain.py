@@ -30,6 +30,13 @@ class ClientInstance:
     #: the Phase-2 PQ migration (``x25519+mlkem768``) is wire-additive — empty
     #: when none was published.
     kem_suite: str = ""
+    #: ``b64url(sign_ed25519(identity_seed, keywrap_public_key))`` — the
+    #: household's self-signature over its key-wrap pubkey. Lets a remote sealer
+    #: verify the GFS-served key-wrap key is bound to this household's identity
+    #: end-to-end (``federation/keywrap_seal.verify_keywrap_binding``) and never
+    #: trust a substituted value. Empty when an older HFS published none → that
+    #: household can't be sealed-to yet (the handoff degrades gracefully).
+    keywrap_sig: str = ""
 
 
 @dataclass(slots=True, frozen=True)
