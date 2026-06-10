@@ -190,9 +190,14 @@ registration → `instance_identity.keywrap_public_key` /
 ``space-keywrap:v1``) → AES-256-GCM, binding the ephemeral pub as AAD
 so a relay can't swap it. A fresh ephemeral per seal means no key
 reuse. Same `kem_suite` contract as the routed seal (`"x25519"` today,
-reject-unknown, PQ migration is a suite-bump). This is the channel
-Phase 5b uses to hand the per-space content key to an unpaired
-subscriber, GFS-blind.
+reject-unknown, PQ migration is a suite-bump). This is the channel the
+Phase-5b-b subscriber content-key handoff
+(`space_subscriber_key_handoff`, `services/space_subscriber_key_outbound.py`
+→ `space_subscriber_key_inbound.py`) uses to hand the per-space content
+key to an unpaired GFS subscriber, GFS-blind: the seed-holder seals the
+`{space_content_key:{…}}` meta to the subscriber's key-wrap pubkey and
+authority-signs the sealed envelope so the content-blind GFS relays it
+without learning the key.
 
 The key-wrap pubkey is **self-signed by the identity** so the seal path
 never trusts the GFS-served value. At identity setup each household

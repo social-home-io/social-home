@@ -172,6 +172,8 @@ from .services.space_config_outbound import SpaceConfigOutbound
 from .services.space_post_outbound import SpacePostOutbound
 from .services.space_public_inbound import SpacePublicInbound
 from .services.space_public_outbound import SpacePublicOutbound
+from .services.space_subscriber_key_inbound import SpaceSubscriberKeyInbound
+from .services.space_subscriber_key_outbound import SpaceSubscriberKeyOutbound
 from .services.moment_public_inbound import MomentPublicInbound
 from .repositories.moment_public_repo import (
     SqliteMomentPublicFollowRepo,
@@ -289,6 +291,7 @@ from .services.peer_home_sharing_service import PeerHomeSharingService
 from .services.pending_decrypts_cache import PendingDecryptsCache
 from .services.space_crypto_service import (
     AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF,
     SpaceContentEncryption,
 )
 from .services.storage_quota_service import StorageQuotaService
@@ -1697,6 +1700,11 @@ def create_app(config: Config | None = None) -> web.Application:
     # the identity seed + KEK are available at startup.
     space_public_outbound: SpacePublicOutbound | None = None
     space_public_inbound: SpacePublicInbound | None = None
+    # Phase 5b-b: deliver the per-space content key to a GFS subscriber so it
+    # can decrypt the Phase-5a public relay. Same late-build reason as above
+    # (both depend on ``space_crypto``).
+    space_subscriber_key_outbound: SpaceSubscriberKeyOutbound | None = None
+    space_subscriber_key_inbound: SpaceSubscriberKeyInbound | None = None
     profile_sync_service = ProfileSyncService(
         bus=bus,
         registration_repo=moment_public_registration_repo,
@@ -2144,6 +2152,7 @@ def create_app(config: Config | None = None) -> web.Application:
         # Built here (not in create_app) because both depend on
         # ``space_crypto``, which only exists once the seed/KEK are wired.
         nonlocal space_public_outbound, space_public_inbound
+        nonlocal space_subscriber_key_outbound, space_subscriber_key_inbound
         space_public_outbound = SpacePublicOutbound(
             bus=bus,
             space_repo=space_repo,
@@ -2162,6 +2171,25 @@ def create_app(config: Config | None = None) -> web.Application:
             space_repo=space_repo,
             space_crypto=space_crypto,
             space_post_repo=space_post_repo,
+        )
+        # Phase 5b-b — subscriber content-key delivery. Outbound: a seed-holder
+        # seals + relays the content key on a GFS ``new_subscriber`` notify.
+        # Inbound: the subscriber unseals + imports the relayed handoff.
+        space_subscriber_key_outbound = SpaceSubscriberKeyOutbound(
+            space_repo=space_repo,
+            space_crypto=space_crypto,
+            gfs_service=gfs_connection_service,
+        )
+        space_subscriber_key_outbound.attach_identity(
+            own_instance_id=real_instance_id,
+        )
+        space_subscriber_key_inbound = SpaceSubscriberKeyInbound(
+            space_repo=space_repo,
+            space_crypto=space_crypto,
+        )
+        space_subscriber_key_inbound.attach_identity(
+            own_instance_id=real_instance_id,
+            keywrap_private_key=identity.keywrap_private_key,
         )
 
         # 5. Federation stack — FederationService + sync manager + typing/dm/
@@ -2480,6 +2508,13 @@ def create_app(config: Config | None = None) -> web.Application:
                 and space_public_inbound is not None
             ):
                 await space_public_inbound.handle(frame)
+            # Phase 5b-b subscriber content-key handoff: the subscriber unseals
+            # + imports the relayed content key so it can decrypt the relay.
+            elif (
+                frame.get("event_type") == AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF
+                and space_subscriber_key_inbound is not None
+            ):
+                await space_subscriber_key_inbound.handle(frame)
 
         # Re-fetch the GFS's current server_name on each WS (re)connect and
         # refresh the stored display_name if the operator renamed the
@@ -2497,6 +2532,7 @@ def create_app(config: Config | None = None) -> web.Application:
             on_highlight_signal=highlight_signaling_handler.handle_signal,
             on_moment_signal=moment_public_signaling_handler.handle_signal,
             on_moment_public=moment_public_inbound.handle,
+            on_new_subscriber=space_subscriber_key_outbound.handle,
             on_connected=_on_gfs_connected,
         )
         await gfs_ws_supervisor.start()

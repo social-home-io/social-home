@@ -317,6 +317,15 @@ class FederationEventType(str, enum.Enum):
     SPACE_PRIVATE_INVITE_DECLINE = "space_private_invite_decline"
     SPACE_REMOTE_MEMBER_REMOVED = "space_remote_member_removed"
 
+    # ── GFS subscriber content-key handoff (Phase 5b-b) ──
+    # A seed-holder seals the per-space content key to a new GFS subscriber's
+    # published key-wrap pubkey and relays it through the content-blind GFS
+    # (authorized by the space-authority signature, like ``space_post_public``).
+    # Rides the GFS relay rather than a direct peer event — so no proto-version
+    # bump (the OURS gate is for direct-peer fields an older peer can't
+    # fail-soft against; a non-subscriber simply never receives this frame).
+    SPACE_SUBSCRIBER_KEY_HANDOFF = "space_subscriber_key_handoff"
+
     # ── Moderation ──
     SPACE_REPORT = "space_report"
 

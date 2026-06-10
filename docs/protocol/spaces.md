@@ -73,6 +73,21 @@ See "Mesh routing (SPACE_ROUTED)" below.
 `SPACE_SYNC_REJECTED` is the membership backstop covered under "Dissolution"
 below; the rest are the WebRTC/HTTPS content-streaming dance.
 
+**GFS public-content relay (Phase 5)**
+
+`SPACE_SUBSCRIBER_KEY_HANDOFF` (`space_subscriber_key_handoff`). These ride the
+**content-blind GFS relay** (not a direct peer event), authorized by the
+space-authority signature rather than `proto_version`, so they carry **no
+`OURS` bump** — a non-subscriber simply never receives the frame.
+`space_post_public` relays a public/global post (encrypted under the space
+content key); `space_subscriber_key_handoff` (Phase 5b-b) delivers that content
+key to a new GFS subscriber, **sealed** to the subscriber's published X25519
+key-wrap pubkey (binding verified end-to-end before sealing — anti-GFS-
+substitution) so the GFS never learns the key. The receiver re-verifies the
+authority signature against its locally-pinned `spaces.identity_public_key`,
+unseals with its key-wrap private key, and imports the key. Full flow:
+[discovery.md](./discovery.md#subscriber-content-key-handoff-phase-5b-b).
+
 ## Flow — create + join
 
 ```mermaid

@@ -43,17 +43,20 @@ The Social Home ↔ GFS link is split by direction:
   - `publish` (relay) is authorized by **either** the owner path
     (`from_instance` == the space's owning instance) **or** a valid
     **space-authority signature** carried in `payload` (`authority_sig` +
-    `authority_sig_suite`, event type `space_post_public`) verified against
-    the pinned `identity_public_key`. Because any seed-holder — the owner or
-    a delegated admin — can produce that signature, a space keeps relaying
-    while its owner is offline (the owner-offline-spaces epic). The GFS stays
-    blind to space content: it verifies the signature over the opaque
-    `payload` and fans out, never decrypting. Fail-closed — a
-    present-but-invalid authority sig, an unknown suite, a non-owner relaying
-    a space with no pinned pubkey, **or a non-owner whose wire `event_type`
-    isn't `space_post_public`** (the only type the authority sig authorizes)
-    are each rejected with `403`. The owner path is exempt and may relay any
-    `event_type`.
+    `authority_sig_suite`) verified against the pinned `identity_public_key`.
+    Because any seed-holder — the owner or a delegated admin — can produce that
+    signature, a space keeps relaying while its owner is offline (the
+    owner-offline-spaces epic). The GFS stays blind to space content: it
+    verifies the signature over the opaque `payload` and fans out, never
+    decrypting. The authority path authorizes a fixed set of event types
+    (`AUTHORITY_RELAY_EVENT_TYPES`): `space_post_public` (Phase 5a) and
+    `space_subscriber_key_handoff` (Phase 5b-b — see below); the signature is
+    always verified under the caller's **wire** `event_type`, which must be in
+    that set, so a payload signed for one type can't be replayed under another.
+    Fail-closed — a present-but-invalid authority sig, an unknown suite, a
+    non-owner relaying a space with no pinned pubkey, **or a non-owner whose
+    wire `event_type` is not in the authorized set** are each rejected with
+    `403`. The owner path is exempt and may relay any `event_type`.
   - **Replay / dedupe contract.** The authority signature binds the space id
     and the (opaque) `payload`, but **no timestamp, nonce, or epoch**, and the
     GFS keeps **no replay cache**, so `publish` relay is idempotent /
@@ -76,7 +79,12 @@ The Social Home ↔ GFS link is split by direction:
   `{type:"relay", space_id, event_type, payload, from_instance}`
   frames as fan-out happens. When no WebSocket is open the GFS falls
   back to an HTTPS POST callback to the instance's registered
-  `inbox_url`.
+  `inbox_url`. The GFS also pushes a `{type:"new_subscriber", space_id,
+  subscriber:{instance_id, identity_public_key, keywrap_public_key,
+  kem_suite, keywrap_sig}}` frame to a space **owner** when a household
+  subscribes, so a seed-holder can hand the new subscriber the content key
+  (Phase 5b-b, below). This frame is best-effort — dropped if the owner has
+  no socket; the 5b-c reconcile backstops an offline owner.
 
 ### HFS producer + consumer for public space content (Phase 5a2)
 
@@ -125,8 +133,9 @@ boundary on both ends:
   re-verifies the authority signature against the locally-mirrored
   `spaces.identity_public_key`, (2) decrypts under the per-space content
   key for the stated epoch (dropping gracefully — including a tampered
-  ciphertext whose AEAD tag fails — if the key isn't held yet, since
-  subscriber keys arrive in Phase 5b), (3) **self-certifies the author**
+  ciphertext whose AEAD tag fails — if the key isn't held yet; a GFS
+  subscriber receives its content key via the Phase-5b-b handoff below),
+  (3) **self-certifies the author**
   (`derive_user_id(author_pk, username) == author_user_id` — binds pk↔user_id
   only), (4) **verifies the per-author `author_sig`** against `author_pk` over
   `author_signing_bytes` (fail-closed if missing, malformed, or invalid — this
@@ -139,6 +148,71 @@ boundary on both ends:
 The HTTPS-inbox fallback for relayed `space_post_public` events is a
 follow-up; today the consumer is wired on the WebSocket path (mirroring
 the public-moments inbound).
+
+### Subscriber content-key handoff (Phase 5b-b)
+
+A Phase-5a relay reaches a GFS subscriber, but the subscriber **drops** it —
+it has no content key to decrypt. Phase 5b-b delivers that key, **GFS-blind**,
+on a fast path driven by the GFS `new_subscriber` notify (the owner-offline
+RECONCILE — a seed-holder pulling the subscriber list to catch up missed
+deliveries — is a documented **follow-up, Phase 5b-c**, not built here):
+
+1. **GFS notify.** On a successful `subscribe`, the GFS pushes a
+   `new_subscriber` frame to the space **owner** carrying the new subscriber's
+   registered Ed25519 `identity_public_key` + its published key-wrap pubkey /
+   suite / self-signature (`keywrap_public_key`, `kem_suite`, `keywrap_sig`).
+   Only the owner is notified (the GFS authoritatively knows `owning_instance`;
+   a delegated admin catches up via 5b-c). Offline owner → frame dropped, the
+   subscribe still succeeds.
+2. **Seed-holder seals + relays** (`services/space_subscriber_key_outbound.py`).
+   Acting only if this household **holds the space seed** and the space is
+   PUBLIC/GLOBAL, it first **verifies the key-wrap binding** end-to-end
+   (`federation/keywrap_seal.py:verify_keywrap_binding` — `derive_instance_id`
+   + the key-wrap key's self-signature + 32-byte check). This is the
+   **anti-substitution gate**: the key-wrap pubkey was learned *from the GFS*,
+   so a malicious GFS could substitute one it controls; a failed binding →
+   **DROP, never seal**. It then `export_current_key`s the per-space content
+   key, builds the standard `{space_content_key:{key_suite, epoch, key_base64,
+   rotated_by}}` meta (the same shape `apply_space_content_key_from_metadata`
+   consumes), **seals** it to the verified key-wrap pubkey
+   (`seal_to_keywrap` → `{kem_suite, eph_pk, ciphertext}`), wraps
+   `{space_id, target_instance_id, sealed}` and **authority-signs** it with the
+   space seed under `space_subscriber_key_handoff`, and relays it through the
+   content-blind GFS (`publish_space_event`). **No plaintext key ever leaves
+   the household** — only the sealed ciphertext travels; the GFS authorizes the
+   relay by the space-authority signature (same path as `space_post_public`)
+   and fans it out. Non-target subscribers it reaches drop it
+   (`target_instance_id` ≠ self, and they can't `open_keywrap` it anyway).
+3. **Subscriber unseals + imports**
+   (`services/space_subscriber_key_inbound.py`). On the relayed
+   `space_subscriber_key_handoff` frame: drop unless `target_instance_id` is
+   us; **re-verify** the space-authority signature against the
+   locally-mirrored `spaces.identity_public_key` (never trust the relay/GFS) —
+   a forged signature → drop, no import; `open_keywrap` with our key-wrap
+   private key (a payload sealed to a different key → `InvalidTag` → dropped
+   gracefully); parse the meta and `apply_space_content_key_from_metadata`
+   (idempotent per epoch — a double delivery imports once). After the import
+   the subscriber can decrypt the Phase-5a relay (a later relay/backfill
+   decodes; backfill is out of scope).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant SUB as HFS subscriber
+    participant G as GFS (content-blind)
+    participant SH as HFS seed-holder (owner)
+    SUB->>G: POST /gfs/subscribe (signed)
+    G->>G: add_subscriber
+    G->>SH: new_subscriber<br/>(subscriber identity + keywrap pub + sig)
+    SH->>SH: verify_keywrap_binding (anti-substitution)
+    SH->>SH: export_current_key + seal_to_keywrap
+    SH->>G: publish space_subscriber_key_handoff<br/>(authority-signed; sealed ciphertext only)
+    G->>G: verify authority sig vs pinned pubkey
+    G->>SUB: relay space_subscriber_key_handoff
+    SUB->>SUB: re-verify authority sig (local pinned key)
+    SUB->>SUB: open_keywrap + import_key
+    Note over SUB: can now decrypt Phase-5a relay
+```
 
 WebRTC is **not** used for the SH↔GFS leg — the GFS is publicly
 reachable, so NAT traversal buys nothing while DTLS plus per-connection
@@ -212,6 +286,14 @@ contest a ban.
   `socialhome/global_server/federation.py` — GFS directory.
 - `socialhome/federation/peer_directory_handler.py` — peer
   directory sync on HFS.
+- `socialhome/services/space_public_outbound.py`,
+  `socialhome/services/space_public_inbound.py` — Phase 5a public
+  space-content relay producer/consumer.
+- `socialhome/services/space_subscriber_key_outbound.py`,
+  `socialhome/services/space_subscriber_key_inbound.py` — Phase 5b-b
+  subscriber content-key handoff (seal + relay / unseal + import).
+- `socialhome/federation/keywrap_seal.py` — `seal_to_keywrap` /
+  `open_keywrap` / `verify_keywrap_binding` (static-recipient sealed box).
 - `socialhome/global_server/routes/public.py`,
   `socialhome/global_server/routes/admin/*.py` — GFS REST +
   admin API.

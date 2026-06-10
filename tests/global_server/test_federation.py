@@ -775,6 +775,40 @@ async def test_publish_event_non_owner_valid_authority_sig_relays(gfs_db):
     assert "sub-a" in delivered
 
 
+async def test_publish_event_authority_sig_in_set_cross_type_rejected(gfs_db):
+    """Both space_post_public and space_subscriber_key_handoff are in the
+    authority-relay allow-set, but the authority sig is verified UNDER the wire
+    event_type — so a payload signed for space_post_public CANNOT be relayed as
+    space_subscriber_key_handoff (the event_type is bound into the signed
+    bytes). Pins the in-set cross-type rejection (a refactor that verified under
+    a hardcoded type would silently reopen the hole)."""
+    ws = _RecordingWsRegistry()
+    svc = GfsFederationService(SqliteGfsFederationRepo(gfs_db), ws_registry=ws)
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-xtype")
+    payload = {"ciphertext": "opaque-blob"}
+    # _sign_authority signs for AUTHORITY_EVENT_SPACE_POST_PUBLIC.
+    payload.update(_sign_authority(space_seed, space_id="sp-xtype", payload=payload))
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-xtype",
+            "event_type": "space_subscriber_key_handoff",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    # Relayed under a DIFFERENT (but in-set) wire event_type than it was signed
+    # for → the authority sig fails to verify under the wire type → rejected.
+    with pytest.raises(PermissionError):
+        await svc.publish_event(
+            "sp-xtype",
+            "space_subscriber_key_handoff",
+            payload,
+            "admin-a",
+            transport_sig,
+        )
+
+
 async def test_publish_event_non_owner_no_authority_sig_rejected(svc):
     """A non-owner with no authority signature is rejected (legacy owner-only)."""
     _space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-auth-none")
@@ -985,6 +1019,182 @@ async def test_publish_event_authority_sig_wrong_wire_event_type_rejected(svc):
         await svc.publish_event(
             "sp-auth-evt",
             "space_admin_action",
+            payload,
+            "admin-a",
+            transport_sig,
+        )
+
+
+# ── subscribe → owner ``new_subscriber`` notify (Phase 5b-b) ────────────────────
+
+
+def _sign_authority_typed(
+    space_seed: bytes, *, event_type: str, space_id: str, payload: dict
+) -> dict:
+    """Authority-sig wire fields under an explicit ``event_type``."""
+    from socialhome.services.space_crypto_service import sign_authority_event
+
+    return sign_authority_event(
+        event_type=event_type,
+        space_id=space_id,
+        payload=payload,
+        space_seed=space_seed,
+    )
+
+
+async def test_subscribe_notifies_owner_with_subscriber_keywrap(gfs_db):
+    """On a successful subscribe, the GFS best-effort pushes a
+    ``new_subscriber`` frame to the space OWNER's WS carrying the new
+    subscriber's identity public_key + keywrap pubkey + keywrap_sig (so a
+    seed-holding owner can verify the binding and seal the content key)."""
+    ws = _RecordingWsRegistry()
+    svc = GfsFederationService(SqliteGfsFederationRepo(gfs_db), ws_registry=ws)
+    owner_seed, owner_pk = _make_keypair()
+    sub_seed, sub_pk = _make_keypair()
+    await svc.register_instance(
+        "owner-ns", owner_pk.hex(), "http://owner-ns.example.com/wh", auto_accept=True
+    )
+    await svc.register_instance(
+        "sub-ns",
+        sub_pk.hex(),
+        "http://sub-ns.example.com/wh",
+        auto_accept=True,
+        keywrap_public_key="cc" * 32,
+        kem_suite="x25519",
+        keywrap_sig="a2V5d3JhcHNpZw",
+    )
+    await _publish_known_space(
+        svc, owner_seed, owning_instance="owner-ns", space_id="sp-ns"
+    )
+    ts = _now_iso()
+    sig = _sign(sub_seed, {"instance_id": "sub-ns", "space_id": "sp-ns", "ts": ts})
+    await svc.subscribe("sub-ns", "sp-ns", ts, sig)
+
+    # Exactly one frame, to the owner, of type new_subscriber.
+    notifies = [
+        (inst, frame)
+        for inst, frame in ws.sent
+        if frame.get("type") == "new_subscriber"
+    ]
+    assert len(notifies) == 1
+    inst, frame = notifies[0]
+    assert inst == "owner-ns"
+    assert frame["space_id"] == "sp-ns"
+    sub = frame["subscriber"]
+    assert sub["instance_id"] == "sub-ns"
+    assert sub["identity_public_key"] == sub_pk.hex()
+    assert sub["keywrap_public_key"] == "cc" * 32
+    assert sub["keywrap_sig"] == "a2V5d3JhcHNpZw"
+
+
+async def test_subscribe_owner_offline_no_crash(gfs_db):
+    """When the owner has no WS socket (offline), the notify is dropped and the
+    subscribe still completes normally — the 5b-c reconcile catches it up."""
+
+    class _OfflineWsRegistry:
+        async def send(self, instance_id: str, frame: dict) -> bool:
+            return False  # nobody connected
+
+    svc = GfsFederationService(
+        SqliteGfsFederationRepo(gfs_db), ws_registry=_OfflineWsRegistry()
+    )
+    owner_seed, owner_pk = _make_keypair()
+    sub_seed, sub_pk = _make_keypair()
+    await svc.register_instance(
+        "owner-off", owner_pk.hex(), "http://owner-off.example.com/wh", auto_accept=True
+    )
+    await svc.register_instance(
+        "sub-off", sub_pk.hex(), "http://sub-off.example.com/wh", auto_accept=True
+    )
+    await _publish_known_space(
+        svc, owner_seed, owning_instance="owner-off", space_id="sp-off"
+    )
+    ts = _now_iso()
+    sig = _sign(sub_seed, {"instance_id": "sub-off", "space_id": "sp-off", "ts": ts})
+    await svc.subscribe("sub-off", "sp-off", ts, sig)  # must not raise
+    subs = await svc._repo.list_subscribers("sp-off")
+    assert any(s.instance_id == "sub-off" for s in subs)
+
+
+async def test_subscribe_no_ws_registry_no_crash(svc):
+    """A GFS built without a ws_registry simply skips the notify."""
+    seed, pk = _make_keypair()
+    await svc.register_instance(
+        "inst-nows", pk.hex(), "http://nows.example.com/wh", auto_accept=True
+    )
+    await _publish_known_space(
+        svc, seed, owning_instance="inst-nows", space_id="sp-nows"
+    )
+    ts = _now_iso()
+    sig = _sign(seed, {"instance_id": "inst-nows", "space_id": "sp-nows", "ts": ts})
+    await svc.subscribe("inst-nows", "sp-nows", ts, sig)  # must not raise
+
+
+# ── publish_event accepts the subscriber-key-handoff authority relay ────────────
+
+
+async def test_publish_event_subscriber_key_handoff_relays(gfs_db):
+    """A space-authority-signed ``space_subscriber_key_handoff`` relay from a
+    non-owner seed-holder is authorized + fanned out (the second allowed
+    authority event type alongside ``space_post_public``)."""
+    ws = _RecordingWsRegistry()
+    svc = GfsFederationService(SqliteGfsFederationRepo(gfs_db), ws_registry=ws)
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-handoff")
+    payload = {"target_instance_id": "sub-a", "sealed": {"ciphertext": "x:y"}}
+    payload.update(
+        _sign_authority_typed(
+            space_seed,
+            event_type="space_subscriber_key_handoff",
+            space_id="sp-handoff",
+            payload=payload,
+        )
+    )
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-handoff",
+            "event_type": "space_subscriber_key_handoff",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    delivered = await svc.publish_event(
+        "sp-handoff",
+        "space_subscriber_key_handoff",
+        payload,
+        "admin-a",
+        transport_sig,
+    )
+    assert "sub-a" in delivered
+
+
+async def test_publish_event_unknown_authority_event_type_still_rejected(svc):
+    """The authority path stays strict: an event type that is neither
+    ``space_post_public`` nor ``space_subscriber_key_handoff`` is rejected even
+    with a valid authority signature over the payload."""
+    space_seed, admin_seed = await _setup_authority_relay(svc, space_id="sp-unk-evt")
+    payload = {"ciphertext": "opaque-blob"}
+    payload.update(
+        _sign_authority_typed(
+            space_seed,
+            event_type="space_unknown_relay",
+            space_id="sp-unk-evt",
+            payload=payload,
+        )
+    )
+    transport_sig = _sign(
+        admin_seed,
+        {
+            "space_id": "sp-unk-evt",
+            "event_type": "space_unknown_relay",
+            "payload": payload,
+            "from_instance": "admin-a",
+        },
+    )
+    with pytest.raises(PermissionError):
+        await svc.publish_event(
+            "sp-unk-evt",
+            "space_unknown_relay",
             payload,
             "admin-a",
             transport_sig,

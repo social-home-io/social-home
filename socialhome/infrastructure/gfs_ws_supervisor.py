@@ -45,6 +45,7 @@ class GfsWebSocketSupervisor:
         "_on_moment_signal",
         "_on_moment_public",
         "_on_follow_changed",
+        "_on_new_subscriber",
         "_on_connected",
         "_interval",
         "_clients",
@@ -65,6 +66,7 @@ class GfsWebSocketSupervisor:
         on_moment_signal: Callable[[dict], Awaitable[None]] | None = None,
         on_moment_public: Callable[..., Awaitable[None]] | None = None,
         on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
+        on_new_subscriber: Callable[[dict], Awaitable[None]] | None = None,
         on_connected: Callable[[str], Awaitable[None]] | None = None,
         reconcile_interval_seconds: float = DEFAULT_RECONCILE_INTERVAL_SECONDS,
     ) -> None:
@@ -77,6 +79,7 @@ class GfsWebSocketSupervisor:
         self._on_moment_signal = on_moment_signal
         self._on_moment_public = on_moment_public
         self._on_follow_changed = on_follow_changed
+        self._on_new_subscriber = on_new_subscriber
         self._on_connected = on_connected
         self._interval = reconcile_interval_seconds
         self._clients: dict[str, GfsWebSocketClient] = {}
@@ -115,6 +118,17 @@ class GfsWebSocketSupervisor:
         self._on_follow_changed = handler
         for client in list(self._clients.values()):
             client.attach_follow_changed_handler(handler)
+
+    def attach_new_subscriber_handler(
+        self,
+        handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        """Late-bound — attaches the Phase-5b subscriber key-handoff producer
+        to every running client and to clients started later by the
+        reconciler."""
+        self._on_new_subscriber = handler
+        for client in list(self._clients.values()):
+            client.attach_new_subscriber_handler(handler)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -208,6 +222,7 @@ class GfsWebSocketSupervisor:
             on_moment_signal=self._on_moment_signal,
             on_moment_public=wrapped_moment_public,
             on_follow_changed=self._on_follow_changed,
+            on_new_subscriber=self._on_new_subscriber,
             on_connected=wrapped_on_connected,
         )
         async with self._lock:

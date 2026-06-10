@@ -57,6 +57,30 @@ class UnsupportedAuthoritySuite(ValueError):
 AUTHORITY_EVENT_SPACE_POST_PUBLIC: str = "space_post_public"
 
 
+#: Authority event-type for the Phase-5b subscriber content-key handoff: a
+#: seed-holder seals the per-space content key to a new GFS subscriber's
+#: key-wrap pubkey and authority-signs the (opaque) sealed envelope so the GFS
+#: authorizes the relay against the same TOFU-pinned space public key — without
+#: ever learning the key. The signer (``space_subscriber_key_outbound``) and
+#: verifier (GFS + ``space_subscriber_key_inbound``) reference this one name so
+#: the canonical signing bytes stay in lock-step.
+AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF: str = "space_subscriber_key_handoff"
+
+
+#: The set of event types the GFS will authorize on the space-authority relay
+#: path (a NON-owner seed-holder relaying content the GFS stays blind to). Both
+#: are space-authority-signed and content-blind to the GFS; anything else is
+#: rejected (no default fan-out for an unknown type). The signature is always
+#: verified under the caller's WIRE event type, which MUST be in this set, so a
+#: payload signed for one type can't be replayed under another.
+AUTHORITY_RELAY_EVENT_TYPES: frozenset[str] = frozenset(
+    {
+        AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+        AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF,
+    }
+)
+
+
 #: The two wire fields :func:`sign_authority_event` produces and the sender
 #: merges into the event payload. The signature is computed over the payload
 #: with these removed, so the verifier MUST strip the SAME two keys before

@@ -68,6 +68,7 @@ class GfsWebSocketClient:
         "_on_moment_signal",
         "_on_moment_public",
         "_on_follow_changed",
+        "_on_new_subscriber",
         "_on_connected",
         "_reconnect_delays",
         "_stop",
@@ -87,6 +88,7 @@ class GfsWebSocketClient:
         on_moment_signal: Callable[[dict], Awaitable[None]] | None = None,
         on_moment_public: Callable[[dict], Awaitable[None]] | None = None,
         on_follow_changed: Callable[[dict], Awaitable[None]] | None = None,
+        on_new_subscriber: Callable[[dict], Awaitable[None]] | None = None,
         on_connected: Callable[[], Awaitable[None]] | None = None,
         reconnect_delays: tuple[float, ...] = RECONNECT_DELAYS,
     ) -> None:
@@ -99,6 +101,7 @@ class GfsWebSocketClient:
         self._on_moment_signal = on_moment_signal
         self._on_moment_public = on_moment_public
         self._on_follow_changed = on_follow_changed
+        self._on_new_subscriber = on_new_subscriber
         self._on_connected = on_connected
         self._reconnect_delays = reconnect_delays
         self._stop = asyncio.Event()
@@ -153,6 +156,21 @@ class GfsWebSocketClient:
         """Receive ``follow_changed`` frames from the GFS — the
         author's UI uses these to keep follower counts live."""
         self._on_follow_changed = handler
+
+    def attach_new_subscriber_handler(
+        self,
+        handler: Callable[[dict], Awaitable[None]],
+    ) -> None:
+        """Late-bound wiring for the Phase-5b subscriber key-handoff producer.
+
+        The GFS pushes a ``new_subscriber`` frame when a household subscribes
+        to a space this household owns; a seed-holder answers by sealing the
+        per-space content key to the new subscriber. The
+        :class:`SpaceSubscriberKeyOutbound` service is constructed after the
+        WS client (it depends on the space crypto, wired during startup), so
+        this lets startup attach the handler without re-creating the client.
+        """
+        self._on_new_subscriber = handler
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -326,6 +344,23 @@ class GfsWebSocketClient:
             except Exception as exc:  # defensive
                 log.warning(
                     "gfs.ws.client: on_follow_changed handler raised for %s: %s",
+                    self._gfs_url,
+                    exc,
+                )
+            return
+        if frame_type == "new_subscriber":
+            if self._on_new_subscriber is None:
+                log.debug(
+                    "gfs.ws.client: dropping new_subscriber — no handler "
+                    "attached on %s",
+                    self._gfs_url,
+                )
+                return
+            try:
+                await self._on_new_subscriber(frame)
+            except Exception as exc:  # defensive
+                log.warning(
+                    "gfs.ws.client: on_new_subscriber handler raised for %s: %s",
                     self._gfs_url,
                     exc,
                 )
