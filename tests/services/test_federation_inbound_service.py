@@ -463,6 +463,98 @@ async def test_space_post_created_persists(db, bus, inbound):
     assert len(captured) == 1
     assert captured[0].post.id == "post-1"
     assert captured[0].space_id == "sp-1"
+    # No public_relay in the payload ⇒ event carries None.
+    assert captured[0].public_relay is None
+
+
+_SEED_SPACE_SQL = """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
+                          identity_public_key, space_type, join_mode)
+       VALUES(?,?,?,?,?,?,?)"""
+
+
+def _seed_space_args(space_id):
+    return (
+        space_id,
+        "Space",
+        "peer-a",
+        "owner",
+        "aa" * 32,
+        SpaceType.HOUSEHOLD.value,
+        JoinMode.INVITE_ONLY.value,
+    )
+
+
+async def test_space_post_created_threads_public_relay(db, bus, inbound):
+    """A public/global member broadcast carries the author household's
+    pre-signed Phase-5a inner payload; inbound threads it verbatim onto
+    the SpacePostCreated bus event (Phase 5a relay)."""
+    await db.enqueue(_SEED_SPACE_SQL, _seed_space_args("sp-relay"))
+    captured: list[SpacePostCreated] = []
+    bus.subscribe(SpacePostCreated, captured.append)
+
+    relay = {"signed": "inner-payload", "sig": "abc"}
+    await inbound._on_space_post_created(
+        _event(
+            FederationEventType.SPACE_POST_CREATED,
+            {
+                "id": "post-relay",
+                "author": "user-remote",
+                "type": "text",
+                "content": "hello",
+                "public_relay": relay,
+            },
+            space_id="sp-relay",
+        )
+    )
+    assert len(captured) == 1
+    assert captured[0].public_relay == relay
+    # public_relay must NOT leak into the persisted Post.
+    assert not hasattr(captured[0].post, "public_relay")
+
+
+async def test_space_post_created_no_public_relay_is_none(db, bus, inbound):
+    await db.enqueue(_SEED_SPACE_SQL, _seed_space_args("sp-norelay"))
+    captured: list[SpacePostCreated] = []
+    bus.subscribe(SpacePostCreated, captured.append)
+
+    await inbound._on_space_post_created(
+        _event(
+            FederationEventType.SPACE_POST_CREATED,
+            {
+                "id": "post-norelay",
+                "author": "user-remote",
+                "type": "text",
+                "content": "hello",
+            },
+            space_id="sp-norelay",
+        )
+    )
+    assert len(captured) == 1
+    assert captured[0].public_relay is None
+
+
+async def test_space_post_created_non_dict_public_relay_coerced_to_none(
+    db, bus, inbound
+):
+    await db.enqueue(_SEED_SPACE_SQL, _seed_space_args("sp-badrelay"))
+    captured: list[SpacePostCreated] = []
+    bus.subscribe(SpacePostCreated, captured.append)
+
+    await inbound._on_space_post_created(
+        _event(
+            FederationEventType.SPACE_POST_CREATED,
+            {
+                "id": "post-badrelay",
+                "author": "user-remote",
+                "type": "text",
+                "content": "hello",
+                "public_relay": "not-a-dict",
+            },
+            space_id="sp-badrelay",
+        )
+    )
+    assert len(captured) == 1
+    assert captured[0].public_relay is None
 
 
 async def test_space_post_created_carries_location(db, bus, inbound):

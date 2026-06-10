@@ -137,6 +137,12 @@ class SpacePostCreated(DomainEvent):
     #: subscribers (realtime WS, search index, HA bridge) ignore
     #: this field and broadcast for every event regardless.
     origin_instance_id: str | None = None
+    #: For a public/global space post received from another member household,
+    #: the author-household's pre-signed Phase-5a inner payload (see
+    #: space_public_author.build_signed_author_inner). A seed-holding receiver
+    #: relays it verbatim to the GFS so the post reaches subscribers even when
+    #: the owner is offline. None for local posts and private-space posts.
+    public_relay: dict | None = None
 
 
 @dataclass(slots=True, frozen=True)

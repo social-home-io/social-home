@@ -1009,12 +1009,15 @@ class FederationInboundService:
         post = self._post_from_payload(event.payload)
         if post is None:
             return
+        raw_relay = event.payload.get("public_relay")
+        public_relay = raw_relay if isinstance(raw_relay, dict) else None
         await self._space_post_repo.save(space_id, post)
         await self._bus.publish(
             SpacePostCreated(
                 post=post,
                 space_id=space_id,
                 origin_instance_id=event.from_instance,
+                public_relay=public_relay,
             )
         )
 

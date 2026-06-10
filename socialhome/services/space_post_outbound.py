@@ -38,10 +38,14 @@ from ..domain.events import (
     SpacePostCreated,
 )
 from ..domain.federation import FederationEventType
+from ..domain.space import PUBLIC_SPACE_TIERS
 from ..infrastructure.event_bus import EventBus
+from .space_public_author import build_signed_author_inner
 
 if TYPE_CHECKING:
     from ..federation.federation_service import FederationService
+    from ..repositories.space_repo import AbstractSpaceRepo
+    from ..repositories.user_repo import AbstractUserRepo
     from .space_media_sync_service import SpaceMediaSyncService
 
 log = logging.getLogger(__name__)
@@ -50,18 +54,40 @@ log = logging.getLogger(__name__)
 class SpacePostOutbound:
     """Bus-event → federation broadcaster for space posts."""
 
-    __slots__ = ("_bus", "_federation", "_media_sync", "_federation_repo")
+    __slots__ = (
+        "_bus",
+        "_federation",
+        "_media_sync",
+        "_federation_repo",
+        "_spaces",
+        "_users",
+        "_own_instance_id",
+        "_own_instance_pk",
+        "_own_identity_seed",
+    )
 
     def __init__(
         self,
         *,
         bus: EventBus,
         federation_service: "FederationService",
+        space_repo: "AbstractSpaceRepo",
+        user_repo: "AbstractUserRepo",
         media_sync: "SpaceMediaSyncService | None" = None,
         federation_repo=None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
+        self._spaces = space_repo
+        self._users = user_repo
+        #: Identity for the per-author relay-hint signature. Empty until
+        #: :meth:`attach_identity` wires the real instance id / pubkey /
+        #: seed (mirrors :class:`SpacePublicOutbound`). Without it the
+        #: ``public_relay`` hint is omitted and the normal broadcast still
+        #: fires.
+        self._own_instance_id: str = ""
+        self._own_instance_pk: bytes = b""
+        self._own_identity_seed: bytes = b""
         #: Optional — when wired, ``SPACE_POST_CREATED`` broadcasts
         #: are followed by per-peer outbox enqueues for every
         #: referenced media URL. The sync service's scheduler reads
@@ -83,6 +109,20 @@ class SpacePostOutbound:
         self._bus.subscribe(CommentAdded, self._on_comment_added)
         self._bus.subscribe(CommentUpdated, self._on_comment_updated)
         self._bus.subscribe(CommentDeleted, self._on_comment_deleted)
+
+    def attach_identity(
+        self,
+        *,
+        own_instance_id: str,
+        own_instance_public_key: bytes,
+        own_identity_seed: bytes,
+    ) -> None:
+        """Wire this household's identity so the member broadcast can carry a
+        pre-signed ``public_relay`` author hint (mirrors
+        :meth:`SpacePublicOutbound.attach_identity`)."""
+        self._own_instance_id = own_instance_id
+        self._own_instance_pk = own_instance_public_key
+        self._own_identity_seed = own_identity_seed
 
     async def _on_space_post_created(self, event: SpacePostCreated) -> None:
         """Fan ``SPACE_POST_CREATED`` to every member household.
@@ -145,6 +185,28 @@ class SpacePostOutbound:
                 "original_name": post.file_meta.original_name,
                 "size_bytes": post.file_meta.size_bytes,
             }
+        # Attach a pre-signed relay hint so a seed-holding member can forward this
+        # public/global post to the GFS subscribers even when the owner is offline
+        # (remote-author relay). Built only for a public/global space + a local
+        # author we can sign for; private spaces never relay to the GFS.
+        space = await self._spaces.get(event.space_id)
+        if (
+            space is not None
+            and space.space_type in PUBLIC_SPACE_TIERS
+            and self._own_instance_id
+            and self._own_instance_pk
+            and self._own_identity_seed
+        ):
+            author = await self._users.get_by_user_id(post.author)
+            if author is not None:
+                payload["public_relay"] = build_signed_author_inner(
+                    post=post,
+                    space_id=event.space_id,
+                    author_username=author.username,
+                    author_pk=self._own_instance_pk,
+                    author_identity_seed=self._own_identity_seed,
+                    origin_instance_id=self._own_instance_id,
+                )
         try:
             await self._federation.broadcast_to_space_members(
                 event.space_id,

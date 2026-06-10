@@ -128,6 +128,7 @@ async def _make_envelope(
     )
     inner = {
         "post_id": post_id,
+        "space_id": space_id,
         "author_user_id": author_user_id,
         "author_pk": author_pk.hex(),
         "author_username": "bob",
@@ -351,6 +352,43 @@ async def test_unknown_local_space_dropped(env):
         "authority_sig_suite": "ed25519",
     }
     await env["inbound"].handle(_frame(envelope), gfs_id="g1")
+    assert env["events"] == []
+
+
+async def test_cross_space_inner_dropped(env):
+    """A relayed envelope for space "sp-1" whose decrypted inner is validly
+    signed for a DIFFERENT space ("sp-other") → cross-space injection. The
+    subscriber drops it (post not persisted, no event published) — the inner's
+    signed ``space_id`` must equal the outer envelope ``space_id``."""
+    # Build an inner author-signed for "sp-other" (a valid, self-certifying
+    # author sig — only the space_id differs from the envelope below).
+    inner = {
+        "post_id": "post-1",
+        "space_id": "sp-other",
+        "author_user_id": env["author_user_id"],
+        "author_pk": env["author_kp"].public_key.hex(),
+        "author_username": "bob",
+        "type": "text",
+        "content": "secret space content",
+        "created_at": datetime(2026, 6, 10, tzinfo=timezone.utc).isoformat(),
+        "origin_instance_id": "remote.home",
+    }
+    inner["author_sig"] = b64url_encode(
+        sign_ed25519(env["author_kp"].private_key, author_signing_bytes(inner))
+    )
+    # Encrypt + authority-sign under the OUTER space ("sp-1").
+    epoch, ct = await env["crypto"].encrypt("sp-1", json.dumps(inner).encode())
+    envelope = {"space_id": "sp-1", "epoch": epoch, "encrypted_payload": ct}
+    envelope.update(
+        sign_authority_event(
+            event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+            space_id="sp-1",
+            payload=strip_authority_sig_fields(envelope),
+            space_seed=env["space_kp"].private_key,
+        )
+    )
+    await env["inbound"].handle(_frame(envelope), gfs_id="g1")
+    assert await env["post_repo"].get("post-1") is None
     assert env["events"] == []
 
 

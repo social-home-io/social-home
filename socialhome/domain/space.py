@@ -577,6 +577,15 @@ class SpaceType(StrEnum):
     GLOBAL = "global"
 
 
+#: The space tiers that relay content to the GFS public-relay path. PRIVATE /
+#: HOUSEHOLD spaces are never publicly discoverable, so a post in one must
+#: never leave the member households. Shared by the public-relay producers
+#: (``space_public_outbound`` + ``space_post_outbound``).
+PUBLIC_SPACE_TIERS: frozenset["SpaceType"] = frozenset(
+    {SpaceType.PUBLIC, SpaceType.GLOBAL}
+)
+
+
 class JoinMode(StrEnum):
     INVITE_ONLY = "invite_only"
     OPEN = "open"

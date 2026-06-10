@@ -109,12 +109,8 @@ boundary on both ends:
   (Encryption-First Rule). The envelope is **space-authority**-signed with
   the space seed under `space_post_public` and POSTed to every GFS the space
   is published to (`gfs_connection_service.publish_space_event`). Skipped: a
-  household without the seed (a plain member's public post reaches
-  subscribers only once a seed-holder relays — accepted for 5a), a
-  non-public space, an inbound-driven (`origin_instance_id` set) event (loop
-  guard), and a post whose author is **not a local user** — the producer
-  only relays its OWN household's posts, since only it holds the author's
-  identity seed and can produce `author_sig`.
+  household without the seed, a non-public space, and an inbound-driven
+  (`origin_instance_id` set) event with no relay hint (pure loop guard).
 
   Two independent signatures protect a relayed post: the **space-authority**
   signature on the envelope (a seed-holder, verified against the pinned space
@@ -122,11 +118,29 @@ boundary on both ends:
   on the inner content (the author's household key, verified against
   `author_pk` — proves the named author wrote it). The self-cert only binds
   `author_pk ↔ author_user_id`; both are public, so without `author_sig` a
-  seed-holder could attribute any post to any member. **Follow-up
-  (out of scope):** relaying a *remote* member's post needs the author's
-  `author_sig` propagated through the mesh to the relaying seed-holder (which
-  lacks the remote author's seed); until then the local-author guard skips
-  remote-authored posts.
+  seed-holder could attribute any post to any member. The per-author signing
+  bytes cover `hidden_from_feed` too, so a relay can't flip a post's
+  feed-presentation intent.
+
+- **Remote-author relay** (owner-offline-capable). A plain member's public
+  post no longer waits for the owner: when **any** member creates a
+  public/global-space post, the author's household builds the same per-author
+  signed inner (`space_public_author.build_signed_author_inner`) and attaches
+  it as a `public_relay` hint on the member-to-member `SPACE_POST_CREATED`
+  broadcast (public/global spaces only — a private space never attaches one).
+  Any **seed-holding** household (owner or delegated admin) that receives the
+  broadcast (`space_public_outbound`, inbound-driven branch) verifies the hint
+  end-to-end — the author's `author_sig` + self-cert
+  (`verify_signed_author_inner`) **and** that the inner's signed `space_id`
+  matches the event's space (cross-space injection guard) — then relays the
+  inner **verbatim** to the GFS under **its own** space-authority envelope
+  signature. So a member's public post reaches subscribers even when the
+  owner *and* the author are offline. The relay stays content-blind (it never
+  re-signs the author bytes, only the envelope), the GFS stays content-blind,
+  and subscribers dedupe by `post_id` (a post relayed by several seed-holders
+  imports once). The `public_relay` field is **fail-soft** — an older peer
+  that doesn't understand it simply ignores it and the broadcast still
+  delivers; no new event type and no capability bump.
 - **Consumer** (`services/space_public_inbound.py`) handles the relayed
   `space_post_public` frame off the SH↔GFS WebSocket. Defence-in-depth —
   the GFS already verified, but the relay is never trusted: it (1)
@@ -144,6 +158,24 @@ boundary on both ends:
   backstop), then persists to `space_posts` and republishes
   `SpacePostCreated` (with `origin_instance_id` set) so realtime/search
   light up and the federation outbound bridge skips re-fanning.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AUTH as HFS author (plain member; owner offline)
+    participant SH as HFS seed-holder (owner or delegated admin)
+    participant G as GFS (content-blind)
+    participant SUB as HFS subscriber
+    AUTH->>AUTH: build_signed_author_inner (author_sig + self-cert)
+    AUTH->>SH: SPACE_POST_CREATED broadcast<br/>(public_relay hint attached; fail-soft)
+    SH->>SH: verify author_sig + self-cert + space_id binding
+    SH->>SH: encrypt inner under space content key + authority-sign envelope
+    SH->>G: publish space_post_public<br/>(authority-signed; ciphertext only)
+    G->>G: verify authority sig vs pinned pubkey
+    G->>SUB: relay space_post_public
+    SUB->>SUB: re-verify authority sig + decrypt + self-cert + author_sig
+    SUB->>SUB: dedupe by post_id, persist
+```
 
 The HTTPS-inbox fallback for relayed `space_post_public` events is a
 follow-up; today the consumer is wired on the WebSocket path (mirroring
