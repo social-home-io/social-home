@@ -1152,6 +1152,181 @@ async def test_delegated_admin_local_edit_converges_with_member(stack, tmp_dir):
     assert updated.retention_exempt_types == ("list", "poll", "schedule")
 
 
+# ─── Delegated-admin ban/remove offline-of-owner (Phase 4b) ──────────────
+
+
+async def _seat_target_member(stack, sid, *, username, role=None):
+    """Seat ``username`` as a member of the (remote-owned) stub space ``sid``
+    so the delegated admin has someone local to remove/ban. Returns the user."""
+    from socialhome.domain.space import SpaceMember, SpaceRole
+
+    user = await stack.provision_user(username)
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=sid,
+            user_id=user.user_id,
+            role=role or SpaceRole.MEMBER,
+            joined_at="2025-01-02T00:00:00",
+        )
+    )
+    return user
+
+
+def _wire_local_fed_and_crypto(stack):
+    """Wire a MagicMock federation + AsyncMock crypto onto the stack so a
+    delegated-admin local-execute path can broadcast + rotate. Returns
+    ``(fed, crypto)``."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    fed = MagicMock()
+    fed._own_instance_id = stack.iid
+    fed.broadcast_to_space_members = AsyncMock()
+    fed.peer_supports = AsyncMock(return_value=True)
+    fed.send_with_mesh_fallback = AsyncMock()
+    crypto = AsyncMock()
+    crypto.rotate_epoch = AsyncMock(return_value=9)
+    crypto.export_current_key = AsyncMock(return_value=(9, bytes(range(32))))
+    stack.space_svc._federation = fed
+    stack.space_svc.attach_space_crypto_service(crypto)
+    return fed, crypto
+
+
+async def test_delegated_admin_ban_offline_executes_locally(stack):
+    """Phase 4b: a seed-holding delegated admin (delegation ON) bans a member
+    while the owner is offline → the ban is applied LOCALLY (not forwarded), an
+    authority-signed SPACE_MEMBER_LEFT gossip fires (verifies against the space
+    pubkey), AND the forward-secret rekey rotation runs."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.services.space_crypto_service import (
+        strip_authority_sig_fields,
+        verify_authority_event,
+    )
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+    target = await _seat_target_member(stack, sid, username="bob")
+    fed, crypto = _wire_local_fed_and_crypto(stack)
+
+    await stack.space_svc.ban(sid, actor_username="anna", user_id=target.user_id)
+
+    # NOT forwarded as a remote-admin action.
+    assert fed.send_with_mesh_fallback.await_count == 0
+    # Member is tombstoned + banned locally.
+    assert await stack.space_repo.get_member(sid, target.user_id) is None
+    assert await stack.space_repo.is_banned(sid, target.user_id)
+    # An authority-signed SPACE_MEMBER_LEFT went out + verifies against the space.
+    left = [
+        c
+        for c in fed.broadcast_to_space_members.await_args_list
+        if c.args[1] is FederationEventType.SPACE_MEMBER_LEFT
+    ]
+    assert len(left) == 1
+    p = left[0].args[2]
+    assert verify_authority_event(
+        event_type="space_member_left",
+        space_id=sid,
+        payload=strip_authority_sig_fields(p),
+        authority_sig=p["authority_sig"],
+        authority_sig_suite=p["authority_sig_suite"],
+        space_public_key=kp.public_key,
+    )
+    # Forward-secret rekey ran.
+    crypto.rotate_epoch.assert_awaited_once_with(sid)
+    assert any(
+        c.args[1] is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+        for c in fed.broadcast_to_space_members.await_args_list
+    )
+
+
+async def test_delegated_admin_remove_offline_executes_locally(stack):
+    """Phase 4b: remove_member mirrors ban — a seed-holding delegated admin
+    removes a member locally (no SPACE_REMOTE_ADMIN_KICK forward) + rotates."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.domain.federation import FederationEventType
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+    target = await _seat_target_member(stack, sid, username="bob")
+    fed, crypto = _wire_local_fed_and_crypto(stack)
+
+    await stack.space_svc.remove_member(
+        sid, actor_username="anna", user_id=target.user_id
+    )
+
+    # NOT forwarded as a remote-admin kick.
+    kicks = [
+        c
+        for c in fed.send_with_mesh_fallback.await_args_list
+        if c.kwargs.get("event_type") is FederationEventType.SPACE_REMOTE_ADMIN_KICK
+    ]
+    assert kicks == []
+    assert await stack.space_repo.get_member(sid, target.user_id) is None
+    crypto.rotate_epoch.assert_awaited_once_with(sid)
+
+
+async def test_delegated_admin_ban_without_seed_forwards_no_rotation(stack):
+    """Delegation ON but NO seed held → ban forwards to the host (v_15) and does
+    NOT rotate locally (the host owns the authoritative rotation)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=None)
+    target = await _seat_target_member(stack, sid, username="bob")
+
+    fed = MagicMock()
+    fed._own_instance_id = stack.iid
+    fed.peer_supports = AsyncMock(return_value=True)
+    fed.send_with_mesh_fallback = AsyncMock()
+    fed.broadcast_to_space_members = AsyncMock()
+    crypto = AsyncMock()
+    crypto.rotate_epoch = AsyncMock(return_value=1)
+    stack.space_svc._federation = fed
+    stack.space_svc.attach_space_crypto_service(crypto)
+
+    await stack.space_svc.ban(sid, actor_username="anna", user_id=target.user_id)
+
+    # Forwarded; the local stub is NOT authoritatively mutated by us.
+    assert fed.send_with_mesh_fallback.await_count >= 1
+    crypto.rotate_epoch.assert_not_awaited()
+
+
+async def test_delegated_admin_remove_tombstones_before_rotate(stack):
+    """Forward secrecy ordering: on the delegated local-remove path the removed
+    member is gone from ``space_members`` BEFORE the rekey rotation runs, so the
+    member who lost access can't be counted into the new-key fan-out. Assert the
+    member row is already deleted at the moment ``rotate_epoch`` is invoked."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.domain.federation import FederationEventType
+
+    kp = generate_space_keypair()
+    sid = await _seat_remote_delegated_space(stack, actor="anna", seed=kp.private_key)
+    await stack.space_repo.set_space_pubkey(sid, kp.public_key.hex())
+    target = await _seat_target_member(stack, sid, username="bob")
+    fed, crypto = _wire_local_fed_and_crypto(stack)
+
+    gone_at_rotate = {}
+
+    async def _capture(space_id):
+        gone_at_rotate["bob_present"] = (
+            await stack.space_repo.get_member(space_id, target.user_id) is not None
+        )
+        return 9
+
+    crypto.rotate_epoch.side_effect = _capture
+
+    await stack.space_svc.remove_member(
+        sid, actor_username="anna", user_id=target.user_id
+    )
+    # Bob was already tombstoned by the time the rekey rotation ran.
+    assert gone_at_rotate["bob_present"] is False
+    assert any(
+        c.args[1] is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+        for c in fed.broadcast_to_space_members.await_args_list
+    )
+
+
 async def test_public_space_requires_coordinates(stack):
     """Creating a public space without lat/lon raises ValueError."""
     await stack.provision_user("a")
@@ -1954,8 +2129,25 @@ async def test_remove_member_rotates_and_distributes_key(stack):
     assert len(rekey_calls) == 1
     payload = rekey_calls[0].args[2]
     assert payload["space_id"] == space.id
-    assert payload["space_content_key"]["epoch"] == 7
-    assert payload["space_content_key"]["key_suite"] == "aesgcm-256"
+    meta = payload["space_content_key"]
+    assert meta["epoch"] == 7
+    assert meta["key_suite"] == "aesgcm-256"
+    # SECURITY (rekey authority gate): the owner host signs the rekey meta with
+    # the space seed so receivers authenticate the rotator before importing.
+    from socialhome.services.space_crypto_service import (
+        strip_authority_sig_fields,
+        verify_authority_event,
+    )
+
+    stored = await stack.space_repo.get(space.id)
+    assert verify_authority_event(
+        event_type="space_key_exchange_rekey",
+        space_id=space.id,
+        payload=strip_authority_sig_fields(meta),
+        authority_sig=meta["authority_sig"],
+        authority_sig_suite=meta["authority_sig_suite"],
+        space_public_key=bytes.fromhex(stored.identity_public_key),
+    )
 
 
 async def test_ban_rotates_and_distributes_key(stack):

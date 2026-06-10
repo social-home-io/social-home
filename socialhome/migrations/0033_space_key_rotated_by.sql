@@ -1,0 +1,47 @@
+-- Deterministic convergence for concurrent space-key rotations (owner-offline
+-- spaces epic, Phase 4b).
+--
+-- v_22+ lets a seed-holding delegated admin remove/ban a member while the owner
+-- is offline. Removal triggers forward-secret key rotation
+-- (``_rotate_and_distribute_space_key``): the acting household mints a NEW epoch
+-- (N+1) and broadcasts ``SPACE_KEY_EXCHANGE_REKEY`` to remaining members. With
+-- delegation ON, TWO admins can each remove a member concurrently — each mints
+-- epoch N+1 with a DIFFERENT random AES key and broadcasts it. ``import_key`` was
+-- a BLIND upsert by ``(space_id, epoch)``, so whichever rekey arrived LAST won on
+-- each receiver — non-deterministic, so two member households could keep
+-- different epoch-(N+1) keys forever and fail to decrypt each other's content.
+--
+-- This column records the instance id that MINTED the epoch's key. ``import_key``
+-- becomes collision-safe: at an existing ``(space_id, epoch)`` it KEEPS the row
+-- whose ``rotated_by`` sorts lexicographically SMALLEST (equal/own row → no-op),
+-- so every receiver converges to the SAME key regardless of arrival order. A
+-- NULL/absent incoming ``rotated_by`` (pre-Phase-4b peer) never clobbers a row
+-- that has one; when both are NULL we degrade to today's last-writer-wins.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. Everything reading/writing ``space_keys`` goes through
+--       ``repositories/space_key_repo.py`` (``save`` upsert, ``get`` / ``get_latest``
+--       / ``next_epoch``). The minting path is
+--       ``services/space_crypto_service.py::rotate_epoch``; the receive path is
+--       ``import_key`` (driven by ``apply_space_content_key_from_metadata`` and the
+--       ``SPACE_KEY_EXCHANGE_REKEY`` handler in
+--       ``federation/private_invite_handler.py``). No existing column records WHICH
+--       household minted an epoch — ``space_id``/``epoch`` are the version key,
+--       ``content_key_hex`` is the (KEK-wrapped) secret, ``created_at`` is a wall
+--       clock (non-deterministic across hosts, so unusable as a tiebreak).
+--   (2) Alternative rejected. (a) Tiebreak on ``created_at`` — wall clocks aren't
+--       synchronised across households, so two hosts could disagree on order →
+--       still divergent. (b) Tiebreak on a hash of ``content_key_hex`` — the
+--       KEK wrap is per-receiver, so the ciphertext differs on every host for the
+--       SAME raw key; not a stable cross-host total order. (c) Carry the minter only
+--       in the payload, store nothing — insufficient: a later equal-epoch import
+--       from a LARGER minter must be dropped, which requires comparing against the
+--       minter already applied; without a stored value the receiver can't tell
+--       "already applied a smaller minter at this epoch" from "first time". So one
+--       additive NULL-defaulted column on ``space_keys`` is the correct minimal home.
+--   (3) Smallest change. One additive ``TEXT NULL`` column. No backfill (pre-existing
+--       rows are owner-minted single-writer keys; NULL means "unknown minter" and
+--       the import logic treats an existing NULL as clobberable only by another
+--       NULL, so legacy rows behave exactly as before until a stamped rotation
+--       supersedes them at a new epoch). No index, no table rewrite.
+ALTER TABLE space_keys ADD COLUMN rotated_by TEXT;

@@ -106,9 +106,22 @@ class SpaceContentEncryption(BusPublisherMixin):
         sealed sender out of the box. Optional only so legacy/test
         constructions that never unseal stay valid; :meth:`unseal_from_gfs`
         requires either this repo OR an explicit ``sender_pk_lookup``.
+    own_instance_id:
+        This household's instance id. Stamped on every locally-minted epoch
+        (:meth:`rotate_epoch`) as ``rotated_by`` so concurrent rotations by
+        two delegated admins converge deterministically (Phase 4b). Optional
+        only so legacy/test constructions stay valid — a ``None`` minter
+        records ``rotated_by = None``, degrading to last-writer-wins.
     """
 
-    __slots__ = ("_repo", "_kek", "_bus", "_identity_seed", "_fed_repo")
+    __slots__ = (
+        "_repo",
+        "_kek",
+        "_bus",
+        "_identity_seed",
+        "_fed_repo",
+        "_own_instance_id",
+    )
 
     def __init__(
         self,
@@ -118,6 +131,7 @@ class SpaceContentEncryption(BusPublisherMixin):
         bus: EventBus | None = None,
         identity_seed: bytes | None = None,
         federation_repo: AbstractFederationRepo | None = None,
+        own_instance_id: str | None = None,
     ) -> None:
         self._repo = space_key_repo
         self._kek = key_manager
@@ -128,6 +142,7 @@ class SpaceContentEncryption(BusPublisherMixin):
         self._bus = bus
         self._identity_seed = identity_seed
         self._fed_repo = federation_repo
+        self._own_instance_id = own_instance_id
 
     # ─── Lifecycle ────────────────────────────────────────────────────────
 
@@ -142,7 +157,13 @@ class SpaceContentEncryption(BusPublisherMixin):
         return await self.rotate_epoch(space_id)
 
     async def rotate_epoch(self, space_id: str) -> int:
-        """Generate a fresh AES key, persist it, return the new epoch."""
+        """Generate a fresh AES key, persist it, return the new epoch.
+
+        Stamps ``rotated_by`` with this household's instance id (Phase 4b) so
+        that when two delegated admins rotate to the SAME epoch concurrently,
+        every receiver's :meth:`import_key` can converge on the same key by a
+        deterministic smallest-``rotated_by`` tiebreak.
+        """
         epoch = await self._repo.next_epoch(space_id)
         raw = AESGCM.generate_key(bit_length=256)
         wrapped = self._kek.encrypt(raw, associated_data=space_id.encode("utf-8"))
@@ -151,6 +172,7 @@ class SpaceContentEncryption(BusPublisherMixin):
                 space_id=space_id,
                 epoch=epoch,
                 content_key_hex=wrapped,
+                rotated_by=self._own_instance_id,
             )
         )
         log.info("space_crypto: rotated %s to epoch %d", space_id, epoch)
@@ -193,15 +215,46 @@ class SpaceContentEncryption(BusPublisherMixin):
         space_id: str,
         epoch: int,
         raw_key: bytes,
+        *,
+        rotated_by: str | None = None,
     ) -> None:
         """Persist a key received from a federated peer.
 
         KEK-wraps with the *receiver's* key manager so the local
-        ``space_keys`` row matches the at-rest invariant. Idempotent —
-        a repeated import for the same ``(space_id, epoch)`` upserts.
+        ``space_keys`` row matches the at-rest invariant.
+
+        Collision-safe (Phase 4b): two delegated admins can rotate to the
+        SAME epoch concurrently with DIFFERENT keys (each minting epoch N+1
+        on a member removal while the owner is offline). A blind upsert would
+        let whichever rekey arrived LAST win on each receiver — divergent. So
+        when a row already exists at ``(space_id, epoch)`` we keep the
+        deterministic winner: the lexicographically **smallest**
+        ``rotated_by`` wins, so every receiver converges on the same key
+        regardless of arrival order.
+
+        Back-compat (NULL ``rotated_by``): a pre-Phase-4b peer ships no
+        ``rotated_by``. An incoming NULL never clobbers an existing row that
+        carries one (the stamped winner stands); when BOTH are NULL we
+        degrade to today's last-writer-wins. The local stamp on
+        :meth:`rotate_epoch` means once everyone ships the field this
+        default-on-missing branch becomes the migration tripwire.
         """
         if len(raw_key) != 32:
             raise ValueError("space content key must be 32 bytes")
+        existing = await self._repo.get(space_id, epoch)
+        if existing is not None and not self._rekey_should_apply(
+            existing_rotated_by=existing.rotated_by,
+            incoming_rotated_by=rotated_by,
+        ):
+            log.info(
+                "space_crypto: keeping existing epoch %d key for %s "
+                "(existing rotated_by=%r beats incoming %r)",
+                epoch,
+                space_id,
+                existing.rotated_by,
+                rotated_by,
+            )
+            return
         wrapped = self._kek.encrypt(
             raw_key,
             associated_data=space_id.encode("utf-8"),
@@ -211,16 +264,45 @@ class SpaceContentEncryption(BusPublisherMixin):
                 space_id=space_id,
                 epoch=epoch,
                 content_key_hex=wrapped,
+                rotated_by=rotated_by,
             )
         )
         log.info(
-            "space_crypto: imported epoch %d for %s from peer",
+            "space_crypto: imported epoch %d for %s from peer (rotated_by=%r)",
             epoch,
             space_id,
+            rotated_by,
         )
         await self._emit(
             SpaceContentKeyImported(space_id=space_id, epoch=epoch),
         )
+
+    @staticmethod
+    def _rekey_should_apply(
+        *,
+        existing_rotated_by: str | None,
+        incoming_rotated_by: str | None,
+    ) -> bool:
+        """Decide whether an incoming rekey replaces an existing same-epoch row.
+
+        Deterministic convergence rule (Phase 4b):
+
+        * existing has no minter (NULL):
+            - incoming has one → APPLY (the stamped winner supersedes the
+              legacy/unknown row).
+            - incoming also NULL → APPLY (last-writer-wins, legacy contract).
+        * existing has a minter:
+            - incoming NULL → KEEP existing (an older peer must not clobber a
+              deterministic winner).
+            - incoming has one → APPLY only if it sorts STRICTLY SMALLER
+              (smallest ``rotated_by`` wins; equal/own row → no-op rewrite is
+              harmless but we skip it to avoid a redundant write + event).
+        """
+        if existing_rotated_by is None:
+            return True
+        if incoming_rotated_by is None:
+            return False
+        return incoming_rotated_by < existing_rotated_by
 
     # ─── Encrypt / decrypt ────────────────────────────────────────────────
 

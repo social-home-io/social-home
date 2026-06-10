@@ -702,25 +702,135 @@ class PrivateSpaceInviteHandler:
         await self._approval_service.apply_mirror_update(space_id, view)
 
     async def _on_key_exchange_rekey(self, event: "FederationEvent") -> None:
-        """Forward-secrecy rekey from the host (#121).
+        """Forward-secrecy rekey from the host or a delegated admin (#121).
 
-        Triggered every time the host removes a member (local kick,
-        ban, or §D1b cross-household kick) — the host rotates the
-        space's epoch and ships the fresh AES-256 content key to
-        every remaining member household. We persist via
-        :func:`apply_space_content_key_from_metadata`, which re-wraps
-        the bytes under our own KEK so the new ``space_keys`` row
+        Triggered every time a member is removed (local kick, ban, or §D1b
+        cross-household kick) — the rotator mints a fresh epoch + ships the
+        new AES-256 content key to every remaining member household. We
+        persist via :func:`apply_space_content_key_from_metadata`, which
+        re-wraps the bytes under our own KEK so the new ``space_keys`` row
         matches the at-rest invariant.
 
-        Idempotent. A repeated REKEY for the same epoch upserts (the
-        bytes will match — both sides derived from the host's
-        original key). If we receive a REKEY whose ``space_id`` we
-        don't own a stub for, the import is a no-op for us; the
-        host's broadcast set is computed off ``space_instances``, so
-        our membership state agrees with theirs.
+        SECURITY — fail-closed (mirrors the Phase-4a ``SPACE_CONFIG_CHANGED``
+        authority gate). A rekey PINS the current epoch onto whatever key it
+        carries (Phase-4b smallest-``rotated_by`` wins). Importing one from
+        ANY confirmed peer would let a routing relay or a removed-but-meshed
+        ex-member force every member household onto an attacker-chosen key
+        (a persistent content-key hijack + DoS). So before importing we
+        AUTHENTICATE the rotator two ways — exactly like config:
+
+          (a) Owner back-compat — the §24.11-authenticated ``from_instance``
+              is the space's ``owner_instance_id``. The host pushing its own
+              rekey; unsigned accepted (pre-authority owners).
+          (b) Authority-signed — the inner ``space_content_key`` meta carries
+              an ``authority_sig`` produced with the space's Ed25519 seed
+              (held by the owner AND delegated admins). The trust root is the
+              SIGNATURE verified against ``spaces.identity_public_key``, NOT
+              ``from_instance``, so a delegated admin can rotate while the
+              owner is offline and any member (incl. the offline owner on
+              reconnect) accepts it regardless of relay.
+
+        A present-but-invalid / unknown-suite / wrong-key signature DROPS
+        (never falls through to the owner gate). A non-owner rekey with NO
+        signature DROPS. A non-owner authority-signed rekey with a blank
+        ``rotated_by`` DROPS (a legit rotator always stamps its real id; this
+        keeps the smallest-wins tiebreak comparing only authenticated
+        non-empty ids — defence-in-depth against a ``rotated_by=""`` pin).
+
+        Idempotent. A repeated REKEY for the same epoch upserts.
+
+        NOTE: this gate is scoped to the REKEY path only. The §D1b INITIAL
+        key handoff (``SPACE_PRIVATE_INVITE`` snapshot →
+        :func:`apply_space_content_key_from_metadata`) is authenticated by
+        the invite envelope/flow and is unaffected — the gate lives here at
+        the rekey call site, not inside the shared import helper.
         """
-        space_id = str(event.payload.get("space_id") or "")
+        space_id = str(event.payload.get("space_id") or "") or (event.space_id or "")
         if not space_id:
+            return
+        meta = event.payload.get("space_content_key")
+        if not isinstance(meta, dict):
+            return
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            # No local row → no public key to verify against and no owner to
+            # back-compat against. Drop (the import would be a no-op anyway).
+            log.warning(
+                "SPACE_KEY_EXCHANGE_REKEY for unknown space %s from %s — dropping",
+                space_id,
+                event.from_instance,
+            )
+            return
+        # ── Authorization (mirrors Phase-4a config gate) ─────────────────────
+        is_owner = space.owner_instance_id == event.from_instance
+        authority_sig = str(meta.get("authority_sig") or "")
+        authority_sig_suite = str(meta.get("authority_sig_suite") or "")
+        authority_verified = False
+        if authority_sig or authority_sig_suite:
+            if not (authority_sig and authority_sig_suite):
+                log.warning(
+                    "SPACE_KEY_EXCHANGE_REKEY for %s from %s: partial "
+                    "authority signature — dropping",
+                    space_id,
+                    event.from_instance,
+                )
+                return
+            try:
+                authority_verified = verify_authority_event(
+                    event_type="space_key_exchange_rekey",
+                    space_id=space_id,
+                    payload=strip_authority_sig_fields(meta),
+                    authority_sig=authority_sig,
+                    authority_sig_suite=authority_sig_suite,
+                    space_public_key=bytes.fromhex(space.identity_public_key),
+                )
+            except UnsupportedAuthoritySuite:
+                log.warning(
+                    "SPACE_KEY_EXCHANGE_REKEY for %s: unknown "
+                    "authority_sig_suite %r — dropping",
+                    space_id,
+                    authority_sig_suite,
+                )
+                return
+            except Exception:
+                log.warning(
+                    "SPACE_KEY_EXCHANGE_REKEY for %s: malformed space public "
+                    "key / signature — dropping",
+                    space_id,
+                )
+                return
+            if not authority_verified:
+                log.warning(
+                    "SPACE_KEY_EXCHANGE_REKEY for %s from %s: authority "
+                    "signature did not verify against the space key — dropping",
+                    space_id,
+                    event.from_instance,
+                )
+                return
+        if not (is_owner or authority_verified):
+            # Non-owner, no valid signature → not authorised.
+            log.warning(
+                "SPACE_KEY_EXCHANGE_REKEY for %s from %s: non-owner rekey "
+                "with no authority signature — dropping",
+                space_id,
+                event.from_instance,
+            )
+            return
+        # Defence-in-depth on the smallest-wins tiebreak: an authority-signed
+        # (non-owner) rekey MUST stamp a non-empty minter id. A blank
+        # ``rotated_by`` on the authenticated path is a degenerate pin attempt
+        # — drop it. NULL/absent is tolerated ONLY on the owner back-compat
+        # path (older owners ship no minter).
+        rotated_by = meta.get("rotated_by")
+        if authority_verified and (
+            not isinstance(rotated_by, str) or not rotated_by.strip()
+        ):
+            log.warning(
+                "SPACE_KEY_EXCHANGE_REKEY for %s from %s: authority-signed "
+                "rekey with blank rotated_by — dropping",
+                space_id,
+                event.from_instance,
+            )
             return
         await apply_space_content_key_from_metadata(
             space_id,

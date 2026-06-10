@@ -258,6 +258,29 @@ Receivers persist via the same
 `apply_space_content_key_from_metadata` helper the §D1b accept path
 uses (re-wraps under local KEK so the at-rest invariant holds).
 
+**Receiver authenticates the rotator before importing (security gate).**
+A rekey *pins* the current epoch onto whatever key it carries (the
+smallest-`rotated_by` collision rule below), so importing one from any
+confirmed peer would let a routing relay or a removed-but-still-meshed
+ex-member force every member household onto an attacker-chosen key — a
+persistent content-key hijack + DoS. The inner `space_content_key` meta is
+therefore **space-authority-signed**, exactly like `SPACE_CONFIG_CHANGED`
+(Phase 4a): the rotator signs it with the space's Ed25519 seed
+(`authority_sig` / `authority_sig_suite`), and the receiver accepts the
+rekey only if **(a)** the §24.11-authenticated `from_instance` is the
+space's `owner_instance_id` (owner back-compat — pre-authority owners emit
+an unsigned rekey) **OR (b)** a valid `authority_sig` verifies against
+`spaces.identity_public_key`. The trust root is the *signature*, not the
+sender, so a delegated admin (seed-holder) can rotate while the owner is
+offline. Fail-closed: a present-but-invalid / wrong-key / unknown-suite
+signature DROPS (never falls through to the owner gate); a non-owner rekey
+with no signature DROPS; and an authority-signed rekey with a blank
+`rotated_by` DROPS (defence-in-depth — a legit rotator always stamps its
+real instance id, so the smallest-wins tiebreak only ever compares
+authenticated non-empty ids). The gate is scoped to the rekey handler
+(`_on_key_exchange_rekey`); the §D1b *initial* key handoff in the invite
+snapshot is authenticated by the invite flow and is unaffected.
+
 The flow is fire-and-forget — no separate ACK event. If a peer misses
 the broadcast (transport blip, household offline), the §25.6 direct-
 space-sync handshake refreshes the key on the next sync cycle. Old
@@ -270,6 +293,29 @@ the kicked household itself, because removing the member also drops
 the local `space_members` row that gated their read access. A
 malicious user with raw DB access still has the old keys (single KEK
 per household), which is the documented at-rest threat model.
+
+**Delegated admin + concurrent rotation (Phase 4b).** With
+`delegated_admin_authority` ON, a seed-holding delegated admin can
+ban/remove a member while the owner is offline: it tombstones the member
+locally (the `SPACE_MEMBER_LEFT` roster gossip is space-authority-signed,
+so every household — including the owner on reconnect — accepts it by
+verifying the signature, not `from_instance`) and runs the same
+`rotate_epoch` + `SPACE_KEY_EXCHANGE_REKEY` forward-secret rotation
+instead of forwarding to the host. Two admins can therefore each mint
+epoch N+1 with a *different* random key concurrently. To converge, every
+`SPACE_KEY_EXCHANGE_REKEY` carries `rotated_by` (the minting household's
+id), and `import_key` keeps the row whose `rotated_by` sorts
+lexicographically **smallest** at an existing `(space_id, epoch)` — so
+every receiver lands on the same key regardless of arrival order. A
+NULL/absent `rotated_by` (pre-Phase-4b peer) never clobbers a stamped
+row; both NULL degrades to last-writer-wins. The acting household's local
+removal drops the member from `space_members` *before* rotation, so the
+forward-secrecy ordering holds on the delegated path too. (Delegation
+OFF / no seed → the old v_15 forward-to-host path; the host owns
+rotation.) `rotated_by` and the authority signature fields
+(`authority_sig` / `authority_sig_suite`) are additive optional fields on
+an existing event — an older peer ignores them and imports via the owner
+back-compat path — so no capability bump is required.
 
 ```mermaid
 sequenceDiagram

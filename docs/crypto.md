@@ -131,7 +131,23 @@ settles on classical for that pair.
 `services/space_crypto_service.py` owns an AES-256-GCM key per space
 per epoch. Epochs rotate on membership change; old keys are retained
 for historical decryption. `space_id` is the GCM AAD so a key lifted
-from one space can't decrypt another.
+from one space can't decrypt another. Each epoch row also records
+`rotated_by` — the household that minted it — so that when delegation
+is enabled two admins can rotate to the same epoch concurrently (owner
+offline) and still converge: `import_key` keeps the key whose
+`rotated_by` sorts lexicographically smallest at a given
+`(space_id, epoch)`, deterministically on every receiver. A NULL
+`rotated_by` (legacy/owner-minted, or a pre-rotation peer) never
+clobbers a stamped row; both-NULL degrades to last-writer-wins.
+Because a rekey *pins* the epoch onto its key, the `SPACE_KEY_EXCHANGE_REKEY`
+that ships it is **space-authority-signed** (`authority_sig` over the inner
+`space_content_key` meta, same `sign_authority_event` helper as
+`SPACE_CONFIG_CHANGED`): the receiver imports only when the sender is the
+space owner (`from_instance == owner_instance_id`, back-compat) or the
+signature verifies against `spaces.identity_public_key` — so a relay or
+removed ex-member can't hijack the content key. An authority-signed rekey
+with a blank `rotated_by` is rejected (the smallest-wins tiebreak compares
+only authenticated, non-empty minter ids).
 
 **Sealed sender** (`federation/sealed_sender.py`) — for GFS-routed
 events the sender's instance ID is separately encrypted under the

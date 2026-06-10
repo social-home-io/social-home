@@ -172,6 +172,78 @@ async def test_import_key_rejects_wrong_length(crypto_env):
         await crypto.import_key("sp-1", 0, b"too short")
 
 
+# ─── Concurrent-rekey collision safety (Phase 4b) ────────────────────────
+
+
+async def test_rotate_epoch_records_own_instance_as_rotated_by(tmp_dir):
+    """A locally-minted rotation stamps THIS household's instance id on the
+    new epoch row so concurrent rotations have a deterministic tiebreak."""
+    db = AsyncDatabase(tmp_dir / "rb.db", batch_timeout_ms=10)
+    await db.startup()
+    await db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key) VALUES('sp-rb', 'T', 'inst-x', 'p', ?)",
+        ("cd" * 32,),
+    )
+    repo = SqliteSpaceKeyRepo(db)
+    kek = KeyManager.from_data_dir(tmp_dir)
+    crypto = SpaceContentEncryption(repo, kek, own_instance_id="inst-AAA")
+    epoch = await crypto.rotate_epoch("sp-rb")
+    row = await repo.get("sp-rb", epoch)
+    assert row.rotated_by == "inst-AAA"
+    await db.shutdown()
+
+
+async def test_import_key_collision_smaller_rotated_by_wins_both_orders(
+    crypto_env,
+):
+    """Two admins rotate to the SAME epoch with DIFFERENT keys. Every receiver
+    must converge to the lexicographically-smallest ``rotated_by``'s key,
+    regardless of arrival order — so the space doesn't diverge."""
+    crypto, _, _ = crypto_env
+    key_lo = b"L" * 32  # from instance "aaa" (smaller)
+    key_hi = b"H" * 32  # from instance "zzz" (larger)
+
+    # Order 1: high first, then low → low must win.
+    await crypto.import_key("sp-1", 5, key_hi, rotated_by="zzz")
+    await crypto.import_key("sp-1", 5, key_lo, rotated_by="aaa")
+    assert (await crypto.export_current_key("sp-1")) == (5, key_lo)
+
+
+async def test_import_key_collision_low_then_high_keeps_low(crypto_env):
+    """Reverse arrival order converges to the same winner — low arrives
+    first, the later high-``rotated_by`` import must NOT clobber it."""
+    crypto, _, _ = crypto_env
+    key_lo = b"L" * 32
+    key_hi = b"H" * 32
+    await crypto.import_key("sp-1", 5, key_lo, rotated_by="aaa")
+    await crypto.import_key("sp-1", 5, key_hi, rotated_by="zzz")
+    assert (await crypto.export_current_key("sp-1")) == (5, key_lo)
+
+
+async def test_import_key_null_rotated_by_does_not_clobber_existing(crypto_env):
+    """Back-compat: an incoming key with NO ``rotated_by`` (older peer) must
+    NOT overwrite an existing row that DOES carry one — otherwise an older
+    peer's blind upsert would re-introduce the divergence this fixes."""
+    crypto, _, _ = crypto_env
+    key_known = b"K" * 32
+    key_anon = b"A" * 32
+    await crypto.import_key("sp-1", 5, key_known, rotated_by="aaa")
+    await crypto.import_key("sp-1", 5, key_anon, rotated_by=None)
+    assert (await crypto.export_current_key("sp-1")) == (5, key_known)
+
+
+async def test_import_key_null_rotated_by_applies_when_existing_also_null(
+    crypto_env,
+):
+    """When neither side carries ``rotated_by`` the behaviour degrades to
+    today's last-writer-wins (the pre-Phase-4b contract for legacy peers)."""
+    crypto, _, _ = crypto_env
+    await crypto.import_key("sp-1", 5, b"1" * 32, rotated_by=None)
+    await crypto.import_key("sp-1", 5, b"2" * 32, rotated_by=None)
+    assert (await crypto.export_current_key("sp-1")) == (5, b"2" * 32)
+
+
 async def test_apply_space_content_key_rejects_unknown_suite(crypto_env):
     """Forward-compat — receivers MUST reject suites they don't know
     rather than fall back to a default. Mirrors the kem_suite

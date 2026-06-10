@@ -720,6 +720,40 @@ class SpaceService(SpaceMemberGuardMixin):
         )
         return True
 
+    async def _executes_locally_as_delegated_admin(self, space: Space) -> bool:
+        """Whether this household may execute an admin action LOCALLY +
+        authoritatively instead of forwarding to the (offline) owner host.
+
+        True iff ALL hold (owner-offline-spaces epic, Phase 4a/4b):
+
+        * the space is hosted on ANOTHER household (we're not the owner host);
+        * the owner opted in via ``features.delegated_admin_authority``; and
+        * THIS household holds the space's Ed25519 signing seed (delivered via
+          SPACE_ADMIN_KEY_SHARE, v_22) — so any roster/config event we emit is
+          space-authority-signed and every member (incl. the offline owner on
+          reconnect) accepts it by verifying the signature, not ``from_instance``.
+
+        When False, the caller falls through to the v_15
+        ``_forward_admin_action_if_remote`` path (Phase 6 gates that behind
+        owner approval). Fail-closed: any error resolving the seed → False, so
+        we forward rather than mutate a non-authoritative local stub. Used by
+        both :meth:`update_config` and the removal-class actions (ban / remove)
+        so the local-vs-forward decision stays uniform.
+        """
+        is_remote_host = bool(space.owner_instance_id) and (
+            space.owner_instance_id != self._own_instance_id
+        )
+        if not is_remote_host or not space.features.delegated_admin_authority:
+            return False
+        try:
+            return await self._spaces.get_space_seed(space.id) is not None
+        except Exception:
+            log.exception(
+                "_executes_locally_as_delegated_admin: get_space_seed failed for %s",
+                space.id,
+            )
+            return False
+
     async def _share_admin_signing_seed(
         self,
         space: Space,
@@ -1114,17 +1148,11 @@ class SpaceService(SpaceMemberGuardMixin):
         is_remote_host = bool(space.owner_instance_id) and (
             space.owner_instance_id != self._own_instance_id
         )
-        holds_seed = False
-        if is_remote_host and space.features.delegated_admin_authority:
-            try:
-                holds_seed = await self._spaces.get_space_seed(space_id) is not None
-            except Exception:
-                log.exception("update_config: get_space_seed failed for %s", space_id)
-                holds_seed = False
+        executes_locally = await self._executes_locally_as_delegated_admin(space)
 
         # Cross-household admin config edit — forward to the host (v_15+) unless
         # we are an authoritative seed-holding delegated admin (handled locally).
-        if is_remote_host and not holds_seed:
+        if is_remote_host and not executes_locally:
             fwd: dict = {}
             if name is not None:
                 fwd["name"] = name
@@ -1568,9 +1596,16 @@ class SpaceService(SpaceMemberGuardMixin):
         is_self = actor.user_id == user_id
         if not is_self:
             await self._require_admin_or_owner(space, actor_username)
-        # Cross-household admin kick — forward to the host.
+        # Cross-household admin kick — forward to the host, UNLESS this household
+        # is a seed-holding delegated admin (delegation ON) acting while the
+        # owner is offline (Phase 4b): then we tombstone LOCALLY, the
+        # SPACE_MEMBER_LEFT gossip below is space-authority-signed, and the rekey
+        # runs for forward secrecy — no forward. Delegation OFF / no seed keeps
+        # the v_15 forward path (Phase 6 gates that behind owner approval).
+        delegated_local = await self._executes_locally_as_delegated_admin(space)
         if (
             not is_self
+            and not delegated_local
             and self._own_instance_id is not None
             and space.owner_instance_id
             and space.owner_instance_id != self._own_instance_id
@@ -2174,10 +2209,17 @@ class SpaceService(SpaceMemberGuardMixin):
     ) -> None:
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
-        if await self._forward_admin_action_if_remote(
-            space, actor_username, "ban", {"user_id": user_id, "reason": reason}
-        ):
-            return
+        # Owner-offline-spaces epic (Phase 4b): a seed-holding delegated admin
+        # on a remote-owned space with delegation ON bans LOCALLY +
+        # authoritatively (the SPACE_MEMBER_LEFT gossip below is
+        # space-authority-signed + the rekey runs for forward secrecy), instead
+        # of forwarding to the offline owner. Delegation OFF / no seed → keep
+        # the v_15 forward-to-host path (Phase 6 gates that behind approval).
+        if not await self._executes_locally_as_delegated_admin(space):
+            if await self._forward_admin_action_if_remote(
+                space, actor_username, "ban", {"user_id": user_id, "reason": reason}
+            ):
+                return
         target = await self._spaces.get_member(space_id, user_id)
         if target is not None and target.role == SpaceRole.OWNER:
             raise SpacePermissionError("cannot ban the owner")
@@ -2342,14 +2384,42 @@ class SpaceService(SpaceMemberGuardMixin):
                 new_epoch,
                 epoch,
             )
-        payload = {
-            "space_id": space_id,
-            "space_content_key": {
-                "epoch": epoch,
-                "key_suite": KEY_SUITE_AESGCM_256,
-                "key_base64": base64.b64encode(raw_key).decode("ascii"),
-            },
+        meta = {
+            "epoch": epoch,
+            "key_suite": KEY_SUITE_AESGCM_256,
+            "key_base64": base64.b64encode(raw_key).decode("ascii"),
+            # Phase 4b — the minting household, so concurrent rotations to
+            # the same epoch converge on the smallest-``rotated_by`` key on
+            # every receiver. Additive optional field: an older peer simply
+            # ignores it and falls back to last-writer-wins.
+            "rotated_by": self._own_instance_id,
         }
+        # SECURITY (rekey authority gate): a rekey PINS the epoch onto its key,
+        # so the receiver authenticates the rotator before importing. Sign the
+        # inner ``space_content_key`` meta with the space's Ed25519 seed — held
+        # by the owner AND by delegated admins (Phase-1 SPACE_ADMIN_KEY_SHARE),
+        # so both legit rotators can sign. Use the SAME helpers +
+        # ``strip_authority_sig_fields`` config uses so the canonical bytes
+        # match on both sides. The OWNER host with NO seed (pre-Phase-0 owned
+        # space) ships UNSIGNED — the receiver accepts it via the legacy
+        # ``from_instance == owner`` back-compat path.
+        try:
+            seed = await self._spaces.get_space_seed(space_id)
+        except Exception:
+            log.exception(
+                "rotate_and_distribute_space_key: get_space_seed failed for %s",
+                space_id,
+            )
+            seed = None
+        if seed is not None:
+            signed = sign_authority_event(
+                event_type="space_key_exchange_rekey",
+                space_id=space_id,
+                payload=strip_authority_sig_fields(meta),
+                space_seed=seed,
+            )
+            meta.update(signed)
+        payload = {"space_id": space_id, "space_content_key": meta}
         try:
             await self._federation.broadcast_to_space_members(
                 space_id,
@@ -3970,6 +4040,13 @@ async def apply_space_content_key_from_metadata(
     key_b64 = payload.get("key_base64")
     if not isinstance(key_b64, str) or epoch is None:
         return
+    # Phase 4b — the minting household, used by ``import_key`` as a
+    # deterministic tiebreak when two delegated admins rotate to the same
+    # epoch concurrently. Absent on a pre-Phase-4b sender → None (degrades to
+    # last-writer-wins, the historical behaviour).
+    rotated_by = payload.get("rotated_by")
+    if rotated_by is not None and not isinstance(rotated_by, str):
+        rotated_by = None
     try:
         raw = base64.b64decode(key_b64)
     except Exception:  # pragma: no cover — defensive
@@ -3986,7 +4063,9 @@ async def apply_space_content_key_from_metadata(
         )
         return
     try:
-        await space_crypto_service.import_key(space_id, int(epoch), raw)
+        await space_crypto_service.import_key(
+            space_id, int(epoch), raw, rotated_by=rotated_by
+        )
     except Exception:  # pragma: no cover — defensive
         log.exception(
             "apply_space_content_key_from_metadata: import_key raised for %s",

@@ -42,12 +42,20 @@ class SqliteSpaceKeyRepo:
         created = key.created_at or datetime.now(timezone.utc).isoformat()
         await self._db.enqueue(
             """
-            INSERT INTO space_keys(space_id, epoch, content_key_hex, created_at)
-            VALUES(?, ?, ?, ?)
+            INSERT INTO space_keys(space_id, epoch, content_key_hex, created_at,
+                                   rotated_by)
+            VALUES(?, ?, ?, ?, ?)
             ON CONFLICT(space_id, epoch) DO UPDATE SET
-                content_key_hex=excluded.content_key_hex
+                content_key_hex=excluded.content_key_hex,
+                rotated_by=excluded.rotated_by
             """,
-            (key.space_id, key.epoch, key.content_key_hex, created),
+            (
+                key.space_id,
+                key.epoch,
+                key.content_key_hex,
+                created,
+                key.rotated_by,
+            ),
         )
 
     async def get(self, space_id: str, epoch: int) -> SpaceKey | None:
@@ -85,4 +93,5 @@ def _row(row) -> SpaceKey:
         epoch=int(row["epoch"]),
         content_key_hex=row["content_key_hex"],
         created_at=row["created_at"],
+        rotated_by=row["rotated_by"] if "rotated_by" in row.keys() else None,
     )

@@ -13,3 +13,8 @@ class SpaceKey:
     epoch: int
     content_key_hex: str  # KEK-encrypted ciphertext (hex)
     created_at: str | None = None
+    #: Instance id of the household that MINTED this epoch's key (Phase 4b).
+    #: Used as a deterministic tiebreak when two delegated admins rotate to
+    #: the same epoch concurrently — the smallest ``rotated_by`` wins so every
+    #: receiver converges. ``None`` for legacy/owner-minted rows.
+    rotated_by: str | None = None
