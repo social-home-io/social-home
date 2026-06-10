@@ -1838,7 +1838,7 @@ class SpaceService(SpaceMemberGuardMixin):
     #: substrate only makes sense for these; anything else is dropped at the
     #: door so no phantom owner-approval is ever enqueued).
     _FORWARDABLE_ADMIN_ACTIONS = frozenset(
-        {"update_config", "archive", "unarchive", "ban", "unban"}
+        {"update_config", "archive", "unarchive", "ban", "unban", "invite"}
     )
 
     async def apply_remote_admin_action(
@@ -1869,7 +1869,8 @@ class SpaceService(SpaceMemberGuardMixin):
           can enqueue an owner-approval (the enqueue is a later task).
 
         Scope is admin-level mutations only: ``update_config``,
-        ``archive`` / ``unarchive``, ``ban`` / ``unban``. Owner-only
+        ``archive`` / ``unarchive``, ``ban`` / ``unban``, ``invite``.
+        Owner-only
         actions (dissolve, transfer-ownership, role assignment) are NOT
         forwardable and never reach this dispatcher. Unknown actions,
         unauthenticated actors, and spaces not hosted here are silently
@@ -2003,6 +2004,19 @@ class SpaceService(SpaceMemberGuardMixin):
                 if not target_id:
                     return
                 await self.unban(space_id, actor_username=owner, user_id=target_id)
+            case "invite":
+                invitee_instance_id = str(p.get("invitee_instance_id") or "")
+                invitee_user_id = str(p.get("invitee_user_id") or "")
+                if not invitee_instance_id or not invitee_user_id:
+                    return
+                # Run AS OWNER (is_owner_host True) → invite_remote_user mints
+                # directly and never re-enters the OFF forward branch, so no loop.
+                await self.invite_remote_user(
+                    space.id,
+                    actor_username=owner,
+                    invitee_instance_id=invitee_instance_id,
+                    invitee_user_id=invitee_user_id,
+                )
             case _:
                 log.info(
                     "apply_remote_admin_action: unknown action=%r for "
@@ -2527,7 +2541,8 @@ class SpaceService(SpaceMemberGuardMixin):
         space metadata rides inside the encrypted payload; see
         :data:`FederationEventType.SPACE_PRIVATE_INVITE`).
         Returns the invite token so callers can echo it in their own
-        audit log.
+        audit log, or an empty string when the invite was forwarded to the
+        host for owner approval (delegation OFF).
         """
         if self._federation is None or self._federation_repo is None:
             raise RuntimeError(
@@ -2553,8 +2568,26 @@ class SpaceService(SpaceMemberGuardMixin):
             and actor_member.role == SpaceRole.ADMIN
             and not space.features.delegated_admin_authority
         ):
-            # Phase 6: replace this raise with a forward-to-owner-for-approval
-            # path (the delegated admin asks the host to seat the invitee).
+            # Delegation OFF: the delegated admin can't mint authoritatively, so
+            # forward the invite to the host as an owner-approval request
+            # (Phase 6). On the owner's approval the host mints the real
+            # SPACE_PRIVATE_INVITE as owner. No local token exists yet — return
+            # "" to signal "forwarded". If the host is too old to handle remote
+            # admin actions, _forward_admin_action_if_remote raises
+            # SpacePermissionError — let it propagate (correct fallback).
+            forwarded = await self._forward_admin_action_if_remote(
+                space,
+                actor_username,
+                "invite",
+                {
+                    "invitee_instance_id": invitee_instance_id,
+                    "invitee_user_id": invitee_user_id,
+                },
+            )
+            if forwarded:
+                return ""
+            # Entered the OFF gate but couldn't forward (degenerate: no host
+            # instance id) — never mint locally; fail closed.
             raise SpacePermissionError(
                 "delegated admin authority is not enabled for this space — "
                 "owner approval required",

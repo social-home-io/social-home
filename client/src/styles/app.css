@@ -14912,6 +14912,11 @@ a.sh-welcome-card:hover {
   font-size: var(--sh-font-size-xs);
   flex-shrink: 0;
 }
+/* "Requested by …" line on a forwarded-admin-action (owner-approval) row. */
+.sh-proposal-banner__requester {
+  margin: var(--sh-space-xs) 0 0;
+  font-size: var(--sh-font-size-xs);
+}
 /* On a narrow phone the actions wrap under the text and stretch full-width
    so the tap targets stay ≥ 36 px and reachable. */
 @media (max-width: 480px) {

@@ -536,14 +536,20 @@ it never had to process the accept.
 The gate is delegation-aware. A **non-owner ADMIN** household may mint an
 authoritative invite **only** when its local copy of the space has
 `delegated_admin_authority` ON (it then holds the seed, so its JOINED
-gossip is valid). With the flag OFF the invite raises
-`SpacePermissionError` (*"delegated admin authority is not enabled for
-this space — owner approval required"*); a later phase replaces that
-raise with a forward-to-owner-for-approval path. The **owner/host** can
-always invite, regardless of the flag. If a delegation-ON, non-owner
-space ever lacks a seed (the Phase-1 share never landed) the roster
-gossip is skipped gracefully but logged at WARNING — an anomaly, not a
-silent drop.
+gossip is valid). With the flag OFF the invite is **forwarded to the host
+as an owner-approval request** (Phase 6): `invite_remote_user` rides the
+existing v_15 `SPACE_REMOTE_ADMIN_ACTION` with action `"invite"` and
+params `{invitee_instance_id, invitee_user_id}` (no new event, no
+capability bump), and the REST route returns `202
+{"status":"pending_owner_approval"}`. The host records a pending
+`remote_admin_action` proposal; on the owner's **approve** the host mints
+the real `SPACE_PRIVATE_INVITE` as owner. (If the host is too old to
+handle remote admin actions the forward raises `SpacePermissionError` —
+the correct fail-closed fallback.) The **owner/host** can always invite,
+regardless of the flag, minting directly and returning `201 {token}`. If
+a delegation-ON, non-owner space ever lacks a seed (the Phase-1 share
+never landed) the roster gossip is skipped gracefully but logged at
+WARNING — an anomaly, not a silent drop.
 
 #### Config edits offline-of-owner (`SPACE_CONFIG_CHANGED`, v_24+)
 
@@ -618,7 +624,10 @@ learns via the existing `SPACE_MEMBER_LEFT` outbound).
 
 `SPACE_REMOTE_ADMIN_ACTION` generalises the kick to every other
 admin-level mutation: **config edit** (name / emoji / features /
-join-mode / retention), **ban / unban**, **archive / unarchive**. The
+join-mode / retention), **ban / unban**, **archive / unarchive**, and
+**invite** (a §D1b cross-household invite forwarded for owner approval
+when delegation is OFF — see "Cross-household private invite" above; on
+approve the host mints the `SPACE_PRIVATE_INVITE` as owner). The
 remote admin's `SpaceService` method detects the space is hosted
 elsewhere (`owner_instance_id != own`) and, via
 `_forward_admin_action_if_remote`, ships an intent envelope carrying

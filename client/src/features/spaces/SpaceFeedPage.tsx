@@ -404,6 +404,7 @@ export default function SpaceFeedPage() {
           canVote={
             viewerRole.value === 'owner' || viewerRole.value === 'admin'
           }
+          isOwner={viewerRole.value === 'owner'}
         />
       )}
       {s &&

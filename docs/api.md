@@ -178,7 +178,7 @@ events these routes fire.
 | POST | `/api/spaces/{id}/invite-tokens` | Mint an invite token. |
 | GET | `/api/spaces/{id}/join-requests` | Pending requests. |
 | POST | `/api/spaces/{id}/join-requests/{req_id}/{approve\|reject}` | Decide. |
-| POST | `/api/spaces/{id}/remote-invites` | Invite a user on another HFS. |
+| POST | `/api/spaces/{id}/remote-invites` | Invite a user on another HFS. Returns `201 {token}` when minted directly (owner, or a seed-holding delegated admin on a delegation-ON space); returns `202 {"status":"pending_owner_approval"}` when a non-owner admin invites on a delegation-OFF space — the invite is forwarded to the host for owner approval (rides `SPACE_REMOTE_ADMIN_ACTION`, action `invite`). |
 | PATCH | `/api/spaces/{id}/remote-members/{instance_id}/{user_id}` | Owner-only: promote/demote a remote member (`{"role":"admin"\|"member"}`). Federates as `SPACE_MEMBER_ROLE_CHANGED`. |
 | DELETE | `/api/spaces/{id}/remote-members/{instance_id}/{user_id}` | Admin/owner: kick a remote member from the host's side. Routes through `SpaceService.remove_remote_member` — federates `SPACE_REMOTE_MEMBER_REMOVED` and rotates the epoch. |
 | GET | `/api/remote_invites` | Remote invites pending for this household. |

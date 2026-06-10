@@ -1187,6 +1187,9 @@ class SpaceRemoteInviteView(BaseView):
             invitee_instance_id=str(invitee_instance_id),
             invitee_user_id=str(invitee_user_id),
         )
+        if token == "":
+            # Forwarded to the host for owner approval (delegation OFF).
+            return web.json_response({"status": "pending_owner_approval"}, status=202)
         return web.json_response({"token": token}, status=201)
 
 
