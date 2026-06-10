@@ -2183,6 +2183,13 @@ def create_app(config: Config | None = None) -> web.Application:
         space_subscriber_key_outbound.attach_identity(
             own_instance_id=real_instance_id,
         )
+        # Phase 5b-c reconcile deps: the GFS-connection repo (to enumerate
+        # published spaces) + the shared HTTP session (to pull the subscriber
+        # list). Hooked to the GFS-WS on_connected below.
+        space_subscriber_key_outbound.attach_reconcile_context(
+            gfs_conn_repo=repos.gfs_connection,
+            http_session=http_session,
+        )
         space_subscriber_key_inbound = SpaceSubscriberKeyInbound(
             space_repo=space_repo,
             space_crypto=space_crypto,
@@ -2521,6 +2528,12 @@ def create_app(config: Config | None = None) -> web.Application:
         # server (a rename typically restarts the GFS → forces a reconnect).
         async def _on_gfs_connected(gfs_id: str) -> None:
             await gfs_connection_service.refresh_connection_metadata(gfs_id)
+            # Phase 5b-c reconcile: pull this GFS's subscriber list for every
+            # seed-held public/global space and re-seal the content key to each
+            # — delivering keys missed while no seed-holder was online (works
+            # owner-offline via any delegated admin). Fail-soft (never raises).
+            if space_subscriber_key_outbound is not None:
+                await space_subscriber_key_outbound.reconcile(gfs_id)
 
         nonlocal gfs_ws_supervisor
         gfs_ws_supervisor = GfsWebSocketSupervisor(

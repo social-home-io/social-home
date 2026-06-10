@@ -19,6 +19,8 @@ import pytest
 
 from socialhome.authority_sig import (
     AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
+    AUTHORITY_RELAY_EVENT_TYPES,
     AUTHORITY_SIG_SUITE_ED25519,
     SUPPORTED_AUTHORITY_SIG_SUITES,
     UnsupportedAuthoritySuite,
@@ -61,6 +63,15 @@ def test_verify_rejects_unknown_suite():
             space_public_key=kp.public_key,
         )
     assert "ed25519+future-pq" not in SUPPORTED_AUTHORITY_SIG_SUITES
+
+
+def test_subscribers_query_event_type_is_not_a_relay_type():
+    """The subscriber-list query is a READ authenticated by a space-authority
+    signature — but it is NOT a relay event type. Keeping it out of
+    ``AUTHORITY_RELAY_EVENT_TYPES`` ensures a query-signed payload can never be
+    replayed onto the GFS relay fan-out (and vice-versa)."""
+    assert AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY == "space_subscribers_query"
+    assert AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY not in AUTHORITY_RELAY_EVENT_TYPES
 
 
 def test_strip_removes_only_the_two_sig_keys():

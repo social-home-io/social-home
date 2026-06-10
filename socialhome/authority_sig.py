@@ -67,6 +67,16 @@ AUTHORITY_EVENT_SPACE_POST_PUBLIC: str = "space_post_public"
 AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF: str = "space_subscriber_key_handoff"
 
 
+#: Authority event-type for the Phase-5b-c subscriber-list RECONCILE query: a
+#: seed-holder proves it holds the space seed by signing ``{space_id, ts}`` with
+#: it, so the GFS will release the space's subscriber list (instance ids + their
+#: already-registered identity / key-wrap pubkeys) to a verified owner OR
+#: delegated admin. This is a READ, NOT a relay — it is deliberately kept OUT of
+#: ``AUTHORITY_RELAY_EVENT_TYPES`` so a query-signed payload can never be
+#: replayed onto the relay fan-out (the signing bytes bind the event type).
+AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY: str = "space_subscribers_query"
+
+
 #: The set of event types the GFS will authorize on the space-authority relay
 #: path (a NON-owner seed-holder relaying content the GFS stays blind to). Both
 #: are space-authority-signed and content-blind to the GFS; anything else is

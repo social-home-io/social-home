@@ -680,6 +680,7 @@ selected transparently by the server.  See [protocol/apps.md](./protocol/apps.md
 | POST | `/gfs/report` | File a fraud / abuse report. |
 | POST | `/gfs/appeal` | Appeal a ban. |
 | GET | `/gfs/spaces` | Public directory listing. |
+| GET | `/gfs/spaces/{id}/subscribers` | Release the space's subscriber list to a verified **seed-holder** (owner OR delegated admin) — the Phase-5b-c reconcile. Query params `{ts, authority_sig, authority_sig_suite}`; the **space-authority signature** is over canonical JSON of `{space_id, ts}` under event type `space_subscribers_query` and verified against the space's TOFU-pinned `identity_public_key` (the same key `/gfs/publish` pins), replay-guarded (±300 s on `ts`). Returns `{subscribers: [{instance_id, identity_public_key, keywrap_public_key, keywrap_sig}…]}` — only each subscriber's already-registered public key material (no inbox URL), so the seed-holder can re-seal the per-space content key to each. Fail-closed — missing / forged / stale signature, unknown suite, unknown space, or a space with no pinned pubkey → 403. |
 | GET | `/healthz` | Liveness. |
 
 **Public-Momentum directory** (§Momentum-public)

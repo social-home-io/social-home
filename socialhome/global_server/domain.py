@@ -77,6 +77,24 @@ class GfsSubscriber:
 
 
 @dataclass(slots=True, frozen=True)
+class GfsSubscriberWithKeys:
+    """A subscriber joined with its registered identity + key-wrap keys.
+
+    Returned by the Phase-5b-c reconcile query (``GET /gfs/spaces/{id}/
+    subscribers``) so a verified seed-holder can re-seal the per-space content
+    key to each subscriber. Carries only already-GFS-registered public material
+    (the subscriber's Ed25519 identity pubkey + its X25519 key-wrap pubkey +
+    the self-signature binding them) — no inbox URL, no private data.
+    ``keywrap_public_key`` / ``keywrap_sig`` are empty for an older subscriber
+    that registered no key-wrap key (it can't be sealed-to yet → skipped)."""
+
+    instance_id: str
+    identity_public_key: str
+    keywrap_public_key: str = ""
+    keywrap_sig: str = ""
+
+
+@dataclass(slots=True, frozen=True)
 class GfsFraudReport:
     """A household-admin fraud report against a space or instance."""
 

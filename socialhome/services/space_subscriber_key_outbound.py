@@ -38,9 +38,13 @@ Pipeline (fail-closed at every step):
    non-target subscribers it fans out to drop it (``target_instance_id`` ≠
    self, and they can't ``open_keywrap`` it anyway).
 
-Out of scope (Phase 5b-c follow-up): the owner-offline RECONCILE, where a
-seed-holder pulls the GFS subscriber list to catch up handoffs missed while
-no seed-holder was online. This service is the notify-driven fast path only.
+Phase 5b-c adds the owner-offline RECONCILE (:meth:`reconcile`): on each GFS-WS
+(re)connect, a seed-holder pulls the GFS subscriber list for every local
+PUBLIC/GLOBAL space it holds the seed of + has published to that GFS, and runs
+the SAME verified-seal+relay for each subscriber. This catches handoffs missed
+while no seed-holder was online (e.g. the owner was offline at subscribe time
+and only a delegated admin is up now) and is idempotent — the subscriber's
+key import is per-epoch idempotent, so re-sealing is harmless.
 """
 
 from __future__ import annotations
@@ -48,10 +52,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+
+import aiohttp
 
 from ..authority_sig import (
     AUTHORITY_EVENT_SPACE_SUBSCRIBER_KEY_HANDOFF,
+    AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
     sign_authority_event,
     strip_authority_sig_fields,
 )
@@ -60,6 +68,7 @@ from ..federation.keywrap_seal import seal_to_keywrap, verify_keywrap_binding
 from ..services.space_crypto_service import KEY_SUITE_AESGCM_256
 
 if TYPE_CHECKING:
+    from ..repositories.gfs_connection_repo import AbstractGfsConnectionRepo
     from ..repositories.space_repo import AbstractSpaceRepo
     from .gfs_connection_service import GfsConnectionService
     from .space_crypto_service import SpaceContentEncryption
@@ -75,7 +84,14 @@ _PUBLIC_TIERS: frozenset[SpaceType] = frozenset({SpaceType.PUBLIC, SpaceType.GLO
 class SpaceSubscriberKeyOutbound:
     """``new_subscriber`` GFS frame → sealed content-key handoff producer."""
 
-    __slots__ = ("_spaces", "_crypto", "_gfs", "_own_instance_id")
+    __slots__ = (
+        "_spaces",
+        "_crypto",
+        "_gfs",
+        "_own_instance_id",
+        "_gfs_conn_repo",
+        "_http_session",
+    )
 
     def __init__(
         self,
@@ -88,9 +104,26 @@ class SpaceSubscriberKeyOutbound:
         self._crypto = space_crypto
         self._gfs = gfs_service
         self._own_instance_id: str = ""
+        # Reconcile-only deps, wired lazily (the GFS-connection repo + the
+        # shared HTTP session aren't available at the same step as the rest).
+        # Until attached, :meth:`reconcile` no-ops.
+        self._gfs_conn_repo: "AbstractGfsConnectionRepo | None" = None
+        self._http_session: aiohttp.ClientSession | None = None
 
     def attach_identity(self, *, own_instance_id: str) -> None:
         self._own_instance_id = own_instance_id
+
+    def attach_reconcile_context(
+        self,
+        *,
+        gfs_conn_repo: "AbstractGfsConnectionRepo",
+        http_session: aiohttp.ClientSession,
+    ) -> None:
+        """Wire the Phase-5b-c reconcile dependencies (the GFS-connection repo
+        for enumerating published spaces + the shared HTTP session for pulling
+        the subscriber list). Without this, :meth:`reconcile` no-ops."""
+        self._gfs_conn_repo = gfs_conn_repo
+        self._http_session = http_session
 
     async def handle(self, frame: dict[str, Any]) -> None:
         """Handle one GFS ``new_subscriber`` frame. Never raises."""
@@ -116,10 +149,33 @@ class SpaceSubscriberKeyOutbound:
             )
             return
 
-        target_instance_id = str(sub.get("instance_id") or "")
-        identity_pub_hex = str(sub.get("identity_public_key") or "")
-        keywrap_pub_hex = str(sub.get("keywrap_public_key") or "")
-        keywrap_sig = str(sub.get("keywrap_sig") or "")
+        await self._seal_and_relay(
+            space_id=space_id,
+            seed=seed,
+            target_instance_id=str(sub.get("instance_id") or ""),
+            identity_pub_hex=str(sub.get("identity_public_key") or ""),
+            keywrap_pub_hex=str(sub.get("keywrap_public_key") or ""),
+            keywrap_sig=str(sub.get("keywrap_sig") or ""),
+        )
+
+    async def _seal_and_relay(
+        self,
+        *,
+        space_id: str,
+        seed: bytes,
+        target_instance_id: str,
+        identity_pub_hex: str,
+        keywrap_pub_hex: str,
+        keywrap_sig: str,
+    ) -> None:
+        """Verify the subscriber's key-wrap binding, seal the current content
+        key to it, authority-sign, and relay one ``space_subscriber_key_handoff``.
+
+        Shared by the notify-driven :meth:`handle` and the Phase-5b-c
+        :meth:`reconcile` so both run the identical anti-substitution gate +
+        seal + sign + relay. Caller guarantees the space is a seed-held
+        PUBLIC/GLOBAL space and ``self._own_instance_id`` is set. Never raises —
+        a per-subscriber failure is logged and swallowed."""
         if not target_instance_id or not identity_pub_hex:
             return
         # A subscriber that published no key-wrap key (older HFS) can't be
@@ -210,4 +266,105 @@ class SpaceSubscriberKeyOutbound:
                 "space_subscriber_key.outbound: relay failed for space=%s target=%s",
                 space_id,
                 target_instance_id,
+            )
+
+    async def reconcile(self, gfs_id: str) -> None:
+        """Owner-offline RECONCILE (Phase-5b-c). Never raises.
+
+        Triggered on each GFS-WS (re)connect. For every PUBLIC/GLOBAL space
+        this household (a) holds the seed for and (b) has published to *gfs_id*,
+        pull the GFS subscriber list under a space-authority-signed query and
+        re-seal the content key to each subscriber via :meth:`_seal_and_relay`.
+        This delivers the key to subscribers whose owner was offline at
+        subscribe time (any delegated admin can do it) and catches notifies
+        missed while no seed-holder was online. Idempotent — the subscriber's
+        import is per-epoch idempotent, so re-sealing is harmless.
+
+        Fail-soft at every level: a missing reconcile context, an unknown /
+        inactive GFS, a per-space transport error, or a per-subscriber seal
+        failure is logged and skipped — never aborts the whole pass.
+        """
+        if (
+            self._gfs_conn_repo is None
+            or self._http_session is None
+            or not self._own_instance_id
+        ):
+            return
+        # Fail-soft on the lookups too, so the "never raises" contract holds on
+        # the unwrapped on_connected invocation paths (a repo hiccup here must
+        # not propagate into the reconnect loop).
+        try:
+            conn = await self._gfs_conn_repo.get(gfs_id)
+            if conn is None or conn.status != "active":
+                return
+            publications = await self._gfs_conn_repo.list_publications(gfs_id)
+        except Exception:
+            log.exception(
+                "space_subscriber_key.reconcile: lookup failed for gfs %s", gfs_id
+            )
+            return
+        for pub in publications:
+            try:
+                await self._reconcile_space(conn.inbox_url, pub.space_id)
+            except Exception:
+                log.exception(
+                    "space_subscriber_key.reconcile: space %s on gfs %s failed",
+                    pub.space_id,
+                    gfs_id,
+                )
+
+    async def _reconcile_space(self, gfs_base_url: str, space_id: str) -> None:
+        """Pull + re-seal for one published space. Skips a space this household
+        doesn't hold the seed for, or a non-PUBLIC/GLOBAL space (its key must
+        never leave via the GFS). Only reached after :meth:`reconcile` has
+        confirmed the HTTP session is wired."""
+        if self._http_session is None:
+            return
+        space = await self._spaces.get(space_id)
+        if space is None or space.space_type not in _PUBLIC_TIERS:
+            return
+        seed = await self._spaces.get_space_seed(space_id)
+        if seed is None:
+            return
+
+        ts = datetime.now(timezone.utc).isoformat()
+        sig = sign_authority_event(
+            event_type=AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
+            space_id=space_id,
+            payload={"space_id": space_id, "ts": ts},
+            space_seed=seed,
+        )
+        params = {
+            "ts": ts,
+            "authority_sig": sig["authority_sig"],
+            "authority_sig_suite": sig["authority_sig_suite"],
+        }
+        url = f"{gfs_base_url}/gfs/spaces/{space_id}/subscribers"
+        async with self._http_session.get(
+            url,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                log.warning(
+                    "space_subscriber_key.reconcile: GFS returned HTTP %d for "
+                    "space %s subscriber list",
+                    resp.status,
+                    space_id,
+                )
+                return
+            data = await resp.json()
+        subscribers = data.get("subscribers") if isinstance(data, dict) else None
+        if not isinstance(subscribers, list):
+            return
+        for sub in subscribers:
+            if not isinstance(sub, dict):
+                continue
+            await self._seal_and_relay(
+                space_id=space_id,
+                seed=seed,
+                target_instance_id=str(sub.get("instance_id") or ""),
+                identity_pub_hex=str(sub.get("identity_public_key") or ""),
+                keywrap_pub_hex=str(sub.get("keywrap_public_key") or ""),
+                keywrap_sig=str(sub.get("keywrap_sig") or ""),
             )

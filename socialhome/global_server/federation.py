@@ -19,13 +19,19 @@ from typing import TYPE_CHECKING
 import aiohttp
 
 from ..authority_sig import (
+    AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
     AUTHORITY_RELAY_EVENT_TYPES,
     UnsupportedAuthoritySuite,
     strip_authority_sig_fields,
     verify_authority_event,
 )
 from ..crypto import b64url_decode, verify_ed25519
-from .domain import ClientInstance, GfsSubscriber, GlobalSpace
+from .domain import (
+    ClientInstance,
+    GfsSubscriber,
+    GfsSubscriberWithKeys,
+    GlobalSpace,
+)
 from .repositories import AbstractGfsFederationRepo
 
 if TYPE_CHECKING:
@@ -404,6 +410,73 @@ class GfsFederationService:
                 space_id,
                 exc,
             )
+
+    async def list_subscribers_with_keys(
+        self,
+        space_id: str,
+        *,
+        ts: str,
+        authority_sig: str,
+        authority_sig_suite: str,
+    ) -> list[GfsSubscriberWithKeys]:
+        """Release the subscriber list to a verified SEED-HOLDER (Phase-5b-c).
+
+        Authorization mirrors the space-authority relay path: the caller proves
+        it holds the space seed (owner OR delegated admin) by signing
+        ``{space_id, ts}`` under :data:`AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY`
+        with the seed; the GFS verifies it against the TOFU-pinned space public
+        key it already stores (``global_spaces.identity_public_key``) — no new
+        roster or key. Fail-closed (:class:`PermissionError`) on every failure:
+
+        * unknown space, or a space with no pinned authority pubkey (the GFS
+          can't verify a seed-holder, so it releases nothing);
+        * stale ``ts`` (±300 s replay guard, same window as ``subscribe``);
+        * missing / malformed / unknown-suite / non-verifying signature.
+
+        The signing bytes bind the event type AND the space id, so a query
+        signed for another space (or under the relay event type) can't be
+        replayed here. Returns the subscriber rows (instance ids + their
+        already-registered identity / key-wrap pubkeys) on success.
+        """
+        existing = await self._repo.get_space(space_id)
+        if existing is None or not existing.identity_public_key:
+            # No row, or no pinned key → nothing verifiable → release nothing.
+            raise PermissionError("no pinned authority key for this space")
+
+        # Replay guard FIRST (cheap, and independent of the signature): a
+        # fresh, tz-aware ISO 8601 ``ts`` within ±300 s of now. Naive /
+        # unparseable timestamps are rejected (a missing offset is untrusted).
+        try:
+            parsed = datetime.fromisoformat(ts)
+        except (ValueError, TypeError) as exc:
+            raise PermissionError("Stale timestamp") from exc
+        if parsed.tzinfo is None:
+            raise PermissionError("Stale timestamp")
+        now = datetime.now(timezone.utc)
+        if abs((now - parsed).total_seconds()) > INSTANCE_UPDATE_TS_SKEW_SECONDS:
+            raise PermissionError("Stale timestamp")
+
+        if not authority_sig:
+            raise PermissionError("invalid authority signature")
+        try:
+            ok = verify_authority_event(
+                event_type=AUTHORITY_EVENT_SPACE_SUBSCRIBERS_QUERY,
+                space_id=space_id,
+                payload={"space_id": space_id, "ts": ts},
+                authority_sig=authority_sig,
+                authority_sig_suite=authority_sig_suite,
+                space_public_key=bytes.fromhex(existing.identity_public_key),
+            )
+        except UnsupportedAuthoritySuite as exc:
+            raise PermissionError(
+                f"unknown authority signature suite: {exc}",
+            ) from exc
+        except ValueError as exc:
+            raise PermissionError("invalid authority key") from exc
+        if not ok:
+            raise PermissionError("invalid authority signature")
+
+        return await self._repo.list_subscribers_with_keys(space_id)
 
     async def unsubscribe(self, instance_id: str, space_id: str) -> None:
         """Remove *instance_id* from subscribers of *space_id*."""
