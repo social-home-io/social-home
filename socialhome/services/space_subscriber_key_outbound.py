@@ -63,7 +63,7 @@ from ..authority_sig import (
     sign_authority_event,
     strip_authority_sig_fields,
 )
-from ..domain.space import SpaceType
+from ..domain.space import PUBLIC_SPACE_TIERS
 from ..federation.keywrap_seal import seal_to_keywrap, verify_keywrap_binding
 from ..services.space_crypto_service import KEY_SUITE_AESGCM_256
 
@@ -74,11 +74,6 @@ if TYPE_CHECKING:
     from .space_crypto_service import SpaceContentEncryption
 
 log = logging.getLogger(__name__)
-
-#: Only these tiers ship a content key via the GFS handoff. PRIVATE /
-#: HOUSEHOLD spaces are never publicly discoverable, so their key must not
-#: leave the member households through a public relay.
-_PUBLIC_TIERS: frozenset[SpaceType] = frozenset({SpaceType.PUBLIC, SpaceType.GLOBAL})
 
 
 class SpaceSubscriberKeyOutbound:
@@ -135,7 +130,7 @@ class SpaceSubscriberKeyOutbound:
             return
 
         space = await self._spaces.get(space_id)
-        if space is None or space.space_type not in _PUBLIC_TIERS:
+        if space is None or space.space_type not in PUBLIC_SPACE_TIERS:
             return
         # Only a seed-holder (owner or delegated admin) can authority-sign.
         seed = await self._spaces.get_space_seed(space_id)
@@ -321,7 +316,7 @@ class SpaceSubscriberKeyOutbound:
         if self._http_session is None:
             return
         space = await self._spaces.get(space_id)
-        if space is None or space.space_type not in _PUBLIC_TIERS:
+        if space is None or space.space_type not in PUBLIC_SPACE_TIERS:
             return
         seed = await self._spaces.get_space_seed(space_id)
         if seed is None:

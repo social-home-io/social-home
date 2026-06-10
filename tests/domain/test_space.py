@@ -43,6 +43,38 @@ def test_space_features_wire_roundtrip():
     assert SpaceFeatures.from_wire_dict(f.to_wire_dict()) == f
 
 
+def test_space_features_wire_roundtrip_every_field_non_default():
+    """CI guard: every SpaceFeatures field flipped to a NON-default value
+    survives ``from_wire_dict(to_wire_dict())``.
+
+    This fails the moment a field is dropped from either ``to_wire_dict``
+    or ``from_wire_dict`` — the convergence point that previously let
+    ``delegated_admin_authority`` (and the access / subscriber fields) be
+    silently lost on the wire. Construct with EVERY field non-default so a
+    missing field round-trips to its default and the equality breaks.
+    """
+    f = SpaceFeatures(
+        calendar=False,  # default True
+        todo=False,  # default True
+        location=True,  # default False
+        location_mode="zone_only",  # default "gps"
+        stickies=False,  # default True
+        pages=False,  # default True
+        gallery=False,  # default True
+        bazaar=False,  # default True
+        posts_access=SpaceFeatureAccess.MODERATED,  # default OPEN
+        pages_access=SpaceFeatureAccess.ADMIN_ONLY,  # default OPEN
+        stickies_access=SpaceFeatureAccess.MODERATED,  # default OPEN
+        calendar_access=SpaceFeatureAccess.ADMIN_ONLY,  # default OPEN
+        tasks_access=SpaceFeatureAccess.MODERATED,  # default OPEN
+        allow_subscriber_comment=True,  # default False
+        allow_subscriber_react=True,  # default False
+        delegated_admin_authority=True,  # default False
+        allowed_post_types=("image", "text"),  # default _ALL_POST_TYPES
+    )
+    assert SpaceFeatures.from_wire_dict(f.to_wire_dict()) == f
+
+
 def test_space_features_from_wire_dict_defaults_on_partial():
     """A partial / older-shaped wire dict falls back to class defaults
     rather than raising, and an unknown access level degrades to OPEN."""

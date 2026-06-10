@@ -9,6 +9,7 @@ from socialhome.db.database import AsyncDatabase
 from socialhome.domain.post import PostType
 from socialhome.domain.space import (
     JoinMode,
+    Space,
     SpaceFeatureAccess,
     SpaceFeatures,
     SpacePermissionError,
@@ -2614,6 +2615,68 @@ def test_stub_space_defaults_all_post_types_when_meta_omits_them():
         meta={"name": "X", "features": {"pages": True}},
     )
     assert stub.features.allowed_post_types == _ALL_POST_TYPES
+
+
+def test_federation_features_pair_roundtrips_every_wire_field():
+    """CI guard for the federation send/receive pair: every field
+    ``SpaceFeatures.to_wire_dict`` carries survives
+    ``_space_metadata_for_federation`` → ``stub_space_from_metadata``.
+
+    Fails the moment either function drops a feature field from the wire
+    (the bug that silently lost ``delegated_admin_authority`` at the
+    hand-rolled federation send site). Builds a Space whose features are
+    ALL non-default so a dropped field round-trips to its default and the
+    per-field assert breaks.
+    """
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    features = SpaceFeatures(
+        calendar=False,
+        todo=False,
+        location=True,
+        location_mode="zone_only",
+        stickies=False,
+        pages=False,
+        gallery=False,
+        bazaar=False,
+        posts_access=SpaceFeatureAccess.MODERATED,
+        pages_access=SpaceFeatureAccess.ADMIN_ONLY,
+        stickies_access=SpaceFeatureAccess.MODERATED,
+        calendar_access=SpaceFeatureAccess.ADMIN_ONLY,
+        tasks_access=SpaceFeatureAccess.MODERATED,
+        allow_subscriber_comment=True,
+        allow_subscriber_react=True,
+        delegated_admin_authority=True,
+        allowed_post_types=("image", "text"),
+    )
+    space = Space(
+        id="sp-fed",
+        name="Fed",
+        owner_instance_id="host-inst",
+        owner_username="anna",
+        identity_public_key="pk",
+        config_sequence=3,
+        features=features,
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+
+    meta = _space_metadata_for_federation(space)
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=space.owner_instance_id, meta=meta
+    )
+
+    # Assert per-field equality for every key to_wire_dict carries, so a
+    # future drop in EITHER half of the pair fails on the missing field.
+    for field_name in features.to_wire_dict():
+        assert getattr(stub.features, field_name) == getattr(features, field_name), (
+            f"federation pair dropped feature field {field_name!r}"
+        )
+    # And the whole object round-trips.
+    assert stub.features == features
 
 
 # ─── §CP.F1: age gate on EVERY seating path ──────────────────────────────
