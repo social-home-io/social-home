@@ -753,50 +753,6 @@ async def test_space_post_deleted_soft_deletes_and_publishes(db, bus, inbound):
     assert len(captured) == 1
 
 
-async def test_space_member_join_and_leave(db, inbound):
-    # Seed space
-    await db.enqueue(
-        """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
-                              identity_public_key, space_type, join_mode)
-           VALUES(?,?,?,?,?,?,?)""",
-        (
-            "sp-1",
-            "Space 1",
-            "peer-a",
-            "owner",
-            "aa" * 32,
-            SpaceType.HOUSEHOLD.value,
-            JoinMode.INVITE_ONLY.value,
-        ),
-    )
-
-    await inbound._on_space_member_joined(
-        _event(
-            FederationEventType.SPACE_MEMBER_JOINED,
-            {"user_id": "u-1", "role": "member"},
-            space_id="sp-1",
-        )
-    )
-    row = await db.fetchone(
-        "SELECT role FROM space_members WHERE space_id=? AND user_id=?",
-        ("sp-1", "u-1"),
-    )
-    assert row["role"] == "member"
-
-    await inbound._on_space_member_left(
-        _event(
-            FederationEventType.SPACE_MEMBER_LEFT,
-            {"user_id": "u-1"},
-            space_id="sp-1",
-        )
-    )
-    row = await db.fetchone(
-        "SELECT 1 FROM space_members WHERE space_id=? AND user_id=?",
-        ("sp-1", "u-1"),
-    )
-    assert row is None
-
-
 async def _seed_role_space(db, *, owner="peer-a"):
     await db.enqueue(
         """INSERT INTO spaces(id, name, owner_instance_id, owner_username,
@@ -892,8 +848,12 @@ async def test_attach_registers_handlers_on_federation_service(db, bus):
     assert FederationEventType.SPACE_POST_DELETED in registered_types
     assert FederationEventType.SPACE_COMMENT_CREATED in registered_types
     assert FederationEventType.SPACE_COMMENT_DELETED in registered_types
-    assert FederationEventType.SPACE_MEMBER_JOINED in registered_types
-    assert FederationEventType.SPACE_MEMBER_LEFT in registered_types
+    # v_23: SPACE_MEMBER_JOINED / SPACE_MEMBER_LEFT are intentionally NOT
+    # registered here — the authority-verifying gossip handler in
+    # PrivateSpaceInviteHandler is their sole handler (unsigned roster
+    # mutations must never apply).
+    assert FederationEventType.SPACE_MEMBER_JOINED not in registered_types
+    assert FederationEventType.SPACE_MEMBER_LEFT not in registered_types
     assert FederationEventType.USERS_SYNC in registered_types
     assert FederationEventType.USER_UPDATED in registered_types
     assert FederationEventType.USER_REMOVED in registered_types

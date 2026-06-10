@@ -18,9 +18,15 @@ from socialhome.repositories.space_key_repo import (
     SqliteSpaceKeyRepo,
 )
 from socialhome.services.space_crypto_service import (
+    AUTHORITY_SIG_SUITE_ED25519,
+    SUPPORTED_AUTHORITY_SIG_SUITES,
     SpaceContentEncryption,
+    UnsupportedAuthoritySuite,
+    authority_signing_bytes,
     create_space_identity,
+    sign_authority_event,
     sign_space_config,
+    verify_authority_event,
     verify_space_config,
 )
 
@@ -520,6 +526,214 @@ def test_verify_space_config_returns_false_for_bad_base64():
             b"payload",
             "not-valid-base64-!@#",
             space_public_key=pk,
+        )
+        is False
+    )
+
+
+# ─── Space-authority signature primitives ─────────────────────────────────
+
+
+def _authority_args():
+    return {
+        "event_type": "SPACE_MEMBER_GOSSIP",
+        "space_id": "sp-abc",
+        "payload": {"user_id": "u1", "role": "member", "member_version": 3},
+    }
+
+
+def test_authority_sig_suite_constant_and_set():
+    assert AUTHORITY_SIG_SUITE_ED25519 == "ed25519"
+    assert AUTHORITY_SIG_SUITE_ED25519 in SUPPORTED_AUTHORITY_SIG_SUITES
+
+
+def test_strip_authority_sig_fields_removes_only_the_two_sig_keys():
+    """The strip helper returns a copy without the two signature fields and
+    leaves the original payload untouched (used identically on sign + verify
+    sides so canonical bytes match)."""
+    from socialhome.services.space_crypto_service import strip_authority_sig_fields
+
+    payload = {
+        "space_id": "sp-abc",
+        "user_id": "u1",
+        "role": "member",
+        "member_version": 3,
+        "authority_sig": "AAA",
+        "authority_sig_suite": "ed25519",
+    }
+    stripped = strip_authority_sig_fields(payload)
+    assert stripped == {
+        "space_id": "sp-abc",
+        "user_id": "u1",
+        "role": "member",
+        "member_version": 3,
+    }
+    # A copy — the original keeps its sig fields.
+    assert "authority_sig" in payload
+    assert stripped is not payload
+
+
+def test_strip_authority_sig_fields_noop_when_absent():
+    """Stripping a payload with no sig fields returns an equal copy."""
+    from socialhome.services.space_crypto_service import strip_authority_sig_fields
+
+    payload = {"space_id": "sp", "user_id": "u"}
+    stripped = strip_authority_sig_fields(payload)
+    assert stripped == payload
+    assert stripped is not payload
+
+
+def test_signed_payload_verifies_after_stripping_the_merged_sig_fields():
+    """End-to-end: sign over the bare payload, merge the sig fields in, then
+    verify by stripping them back out — the canonical bytes round-trip. This
+    is the exact sign/verify symmetry the gossip path depends on."""
+    from socialhome.services.space_crypto_service import strip_authority_sig_fields
+
+    seed, pk, _ = create_space_identity()
+    bare = {
+        "space_id": "sp-abc",
+        "user_id": "u1",
+        "role": "member",
+        "member_version": 4,
+    }
+    signed = sign_authority_event(
+        event_type="SPACE_MEMBER_GOSSIP",
+        space_id="sp-abc",
+        payload=bare,
+        space_seed=seed,
+    )
+    wire = {**bare, **signed}  # what travels on the wire
+    assert (
+        verify_authority_event(
+            event_type="SPACE_MEMBER_GOSSIP",
+            space_id="sp-abc",
+            payload=strip_authority_sig_fields(wire),
+            authority_sig=wire["authority_sig"],
+            authority_sig_suite=wire["authority_sig_suite"],
+            space_public_key=pk,
+        )
+        is True
+    )
+
+
+def test_authority_signing_bytes_is_domain_separated_and_canonical():
+    msg = authority_signing_bytes(**_authority_args())
+    assert msg.startswith(b"space-authority:v1:")
+    # Canonical: field order in the payload dict must not change the bytes.
+    reordered = {
+        "event_type": "SPACE_MEMBER_GOSSIP",
+        "space_id": "sp-abc",
+        "payload": {"role": "member", "member_version": 3, "user_id": "u1"},
+    }
+    assert authority_signing_bytes(**reordered) == msg
+
+
+def test_sign_and_verify_authority_event_roundtrip():
+    seed, pk, _ = create_space_identity()
+    args = _authority_args()
+    signed = sign_authority_event(space_seed=seed, **args)
+    assert signed["authority_sig_suite"] == AUTHORITY_SIG_SUITE_ED25519
+    assert isinstance(signed["authority_sig"], str)
+    assert (
+        verify_authority_event(
+            authority_sig=signed["authority_sig"],
+            authority_sig_suite=signed["authority_sig_suite"],
+            space_public_key=pk,
+            **args,
+        )
+        is True
+    )
+
+
+def test_verify_authority_event_rejects_wrong_pubkey():
+    seed, _, _ = create_space_identity()
+    _, other_pk, _ = create_space_identity()
+    args = _authority_args()
+    signed = sign_authority_event(space_seed=seed, **args)
+    assert (
+        verify_authority_event(
+            authority_sig=signed["authority_sig"],
+            authority_sig_suite=signed["authority_sig_suite"],
+            space_public_key=other_pk,
+            **args,
+        )
+        is False
+    )
+
+
+def test_verify_authority_event_rejects_tampered_payload():
+    seed, pk, _ = create_space_identity()
+    args = _authority_args()
+    signed = sign_authority_event(space_seed=seed, **args)
+    tampered = dict(args)
+    tampered["payload"] = {**args["payload"], "role": "admin"}
+    assert (
+        verify_authority_event(
+            authority_sig=signed["authority_sig"],
+            authority_sig_suite=signed["authority_sig_suite"],
+            space_public_key=pk,
+            **tampered,
+        )
+        is False
+    )
+
+
+def test_verify_authority_event_rejects_tampered_event_type():
+    seed, pk, _ = create_space_identity()
+    args = _authority_args()
+    signed = sign_authority_event(space_seed=seed, **args)
+    tampered = dict(args)
+    tampered["event_type"] = "SPACE_MEMBER_REMOVED"
+    assert (
+        verify_authority_event(
+            authority_sig=signed["authority_sig"],
+            authority_sig_suite=signed["authority_sig_suite"],
+            space_public_key=pk,
+            **tampered,
+        )
+        is False
+    )
+
+
+def test_verify_authority_event_rejects_tampered_space_id():
+    seed, pk, _ = create_space_identity()
+    args = _authority_args()
+    signed = sign_authority_event(space_seed=seed, **args)
+    tampered = dict(args)
+    tampered["space_id"] = "sp-other"
+    assert (
+        verify_authority_event(
+            authority_sig=signed["authority_sig"],
+            authority_sig_suite=signed["authority_sig_suite"],
+            space_public_key=pk,
+            **tampered,
+        )
+        is False
+    )
+
+
+def test_verify_authority_event_raises_on_unknown_suite():
+    seed, pk, _ = create_space_identity()
+    args = _authority_args()
+    signed = sign_authority_event(space_seed=seed, **args)
+    with pytest.raises(UnsupportedAuthoritySuite):
+        verify_authority_event(
+            authority_sig=signed["authority_sig"],
+            authority_sig_suite="ed25519+mldsa65",
+            space_public_key=pk,
+            **args,
+        )
+
+
+def test_verify_authority_event_returns_false_on_malformed_sig():
+    _, pk, _ = create_space_identity()
+    args = _authority_args()
+    assert (
+        verify_authority_event(
+            authority_sig="not-valid-base64-!@#",
+            authority_sig_suite=AUTHORITY_SIG_SUITE_ED25519,
+            space_public_key=pk,
+            **args,
         )
         is False
     )

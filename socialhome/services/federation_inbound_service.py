@@ -56,7 +56,7 @@ from ..domain.events import (
 )
 from ..domain.post import Comment, CommentType, LocationData, Post, PostType
 from ..domain.presence import truncate_coord
-from ..domain.space import SpaceConfigEventType, SpaceMember, SpaceRole
+from ..domain.space import SpaceConfigEventType, SpaceRole
 from ..domain.highlight import (
     Highlight,
     HighlightAudience,
@@ -282,8 +282,8 @@ class FederationInboundService:
         """Register inbound handlers on the federation event registry."""
         from ..domain.federation import FederationEventType as FET
 
-        # Stash so _on_space_member_joined can read own_instance_id
-        # without us having to thread it through every handler call.
+        # Stash so handlers (role-change routing, member-profile gating) can
+        # read own_instance_id without threading it through every call.
         self._federation_service = federation_service
         registry = federation_service._event_registry
         registry.register(FET.DM_MESSAGE, self._on_dm_message)
@@ -299,8 +299,12 @@ class FederationInboundService:
         registry.register(FET.SPACE_COMMENT_UPDATED, self._on_space_comment_updated)
         registry.register(FET.SPACE_COMMENT_DELETED, self._on_space_comment_deleted)
 
-        registry.register(FET.SPACE_MEMBER_JOINED, self._on_space_member_joined)
-        registry.register(FET.SPACE_MEMBER_LEFT, self._on_space_member_left)
+        # v_23: SPACE_MEMBER_JOINED / SPACE_MEMBER_LEFT are owned SOLELY by the
+        # authority-verifying gossip handler in PrivateSpaceInviteHandler — it
+        # rejects any event whose payload isn't signed by the space seed. There
+        # is intentionally NO legacy handler here: an unsigned roster mutation
+        # must never be applied (a confirmed peer could otherwise forge/evict a
+        # roster entry). Role changes stay host-authoritative below.
         registry.register(
             FET.SPACE_MEMBER_ROLE_CHANGED, self._on_space_member_role_changed
         )
@@ -1303,60 +1307,6 @@ class FederationInboundService:
 
     # ── Space membership handlers ──────────────────────────────────────
 
-    async def _on_space_member_joined(self, event: "FederationEvent") -> None:
-        space_id = event.space_id or str(event.payload.get("space_id") or "")
-        user_id = str(event.payload.get("user_id") or "")
-        if not space_id or not user_id:
-            return
-        role = str(event.payload.get("role") or "member")
-        joined_at = event.payload.get("occurred_at") or _now_iso()
-        # #117 — route the write to the right table. The new member's
-        # home instance arrives in the payload (B2-style remote-stub
-        # tracking); when missing, fall back to the envelope's
-        # ``from_instance`` since the joiner's own instance is the
-        # canonical sender of a SPACE_MEMBER_JOINED for their own user.
-        member_instance = str(event.payload.get("instance_id") or "") or (
-            event.from_instance
-        )
-        own = (
-            self._federation_service.own_instance_id
-            if self._federation_service is not None
-            else None
-        )
-        if own is not None and member_instance and member_instance != own:
-            # Remote member — write into space_remote_members so the
-            # host-side member-list merge from PR #424 picks them up
-            # without polluting the local ``space_members`` table.
-            if self._space_remote_member_repo is None:
-                return
-            await self._space_remote_member_repo.add(
-                space_id=space_id,
-                instance_id=member_instance,
-                user_id=user_id,
-                user_pk=(
-                    str(event.payload["user_pk"])
-                    if event.payload.get("user_pk")
-                    else None
-                ),
-                display_name=(
-                    str(event.payload["display_name"])
-                    if event.payload.get("display_name")
-                    else None
-                ),
-            )
-            return
-        # Local-to-us join (rare on this path; the legacy code wrote
-        # here unconditionally). Kept for back-compat with any handler
-        # that legitimately echoes a local SPACE_MEMBER_JOINED back to
-        # itself — ``save_member`` is upsert so re-entry is a no-op.
-        member = SpaceMember(
-            space_id=space_id,
-            user_id=user_id,
-            role=role,
-            joined_at=str(joined_at),
-        )
-        await self._space_repo.save_member(member)
-
     async def _on_space_member_role_changed(self, event: "FederationEvent") -> None:
         """Apply a host's admin promotion/demotion locally (§13, multi-admin).
 
@@ -1435,33 +1385,6 @@ class FederationInboundService:
                 sequence=space.config_sequence,
             )
         )
-
-    async def _on_space_member_left(self, event: "FederationEvent") -> None:
-        space_id = event.space_id or str(event.payload.get("space_id") or "")
-        user_id = str(event.payload.get("user_id") or "")
-        if not space_id or not user_id:
-            return
-        # #117 — symmetric to ``_on_space_member_joined``: route the
-        # delete to the right table.
-        member_instance = str(event.payload.get("instance_id") or "") or (
-            event.from_instance
-        )
-        own = (
-            self._federation_service.own_instance_id
-            if self._federation_service is not None
-            else None
-        )
-        if (
-            own is not None
-            and member_instance
-            and member_instance != own
-            and self._space_remote_member_repo is not None
-        ):
-            await self._space_remote_member_repo.remove(
-                space_id, member_instance, user_id
-            )
-            return
-        await self._space_repo.delete_member(space_id, user_id)
 
     async def _on_space_config_changed(
         self,
@@ -1561,6 +1484,39 @@ class FederationInboundService:
         space_id = event.space_id or str(p.get("space_id") or "")
         user_id = str(p.get("user_id") or "")
         if not space_id or not user_id:
+            return
+        # SECURITY: a member's per-space display name / picture may only be
+        # mutated by that member's OWN home instance. ``SpaceMemberProfileUpdated``
+        # is a self-profile broadcast (see SpaceMemberProfileFederationOutbound),
+        # so the §24.11-authenticated ``from_instance`` MUST be the member's home
+        # instance — otherwise any confirmed peer could spoof another member's
+        # display fields. We resolve the member's home instance from our OWN
+        # stored roster (never the attacker-supplied payload): the remote-member
+        # mirror records it for a federated member, and a purely-local member's
+        # home is this instance. Drop a mismatch.
+        member_home: str | None = None
+        if self._space_remote_member_repo is not None:
+            remote = await self._space_remote_member_repo.get_including_tombstones(
+                space_id, user_id
+            )
+            if remote is not None:
+                member_home = remote.instance_id
+        if member_home is None:
+            # Not in the remote mirror → a local member; their home is us.
+            member_home = (
+                self._federation_service.own_instance_id
+                if self._federation_service is not None
+                else None
+            )
+        if member_home is None or event.from_instance != member_home:
+            log.warning(
+                "SPACE_MEMBER_PROFILE_UPDATED for %s in %s from %s != member home "
+                "%s — dropping (possible spoof)",
+                user_id,
+                space_id,
+                event.from_instance,
+                member_home,
+            )
             return
         member = await self._space_repo.get_member(space_id, user_id)
         if member is None:

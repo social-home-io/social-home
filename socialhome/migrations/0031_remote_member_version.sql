@@ -1,0 +1,42 @@
+-- Versioned + tombstoned remote-member roster (owner-offline spaces epic, Phase 2 foundation).
+--
+-- Today ``space_remote_members`` is host-pushed with no per-member version, so
+-- concurrent join/leave decisions from multiple admins (a later phase, once
+-- admins can act while the owner is offline) cannot deterministically converge:
+-- a replayed stale JOIN could resurrect a removed member, and two admins racing
+-- on the same member have no tie-break. This migration adds the CRDT-style merge
+-- substrate now — a monotonic per-member version plus a tombstone bit — so the
+-- gossip handler that lands next can apply a last-writer-wins / removal-wins-tie
+-- merge. No federation event ships here; this is pure schema groundwork.
+--
+-- ``member_version`` is a per-(space_id,user_id) monotonic counter bumped on
+-- every authoritative mutation (add/role-change/remove). ``tombstoned`` marks a
+-- removed member whose row is RETAINED (not DELETEd) so a later lower-version
+-- JOIN can't undo the removal; live-roster reads filter tombstoned rows out.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. Everything that touches ``space_remote_members`` goes
+--       through ``repositories/space_remote_member_repo.py`` (add / remove /
+--       get / set_role / list_for_space / list_for_user / list_admin_instances).
+--       Callers: ``federation/private_invite_handler.py``,
+--       ``federation/invite_token_redeem.py``,
+--       ``services/federation_inbound_service.py``,
+--       ``services/space_service.py``, ``services/space_approval_service.py``.
+--       No existing column carries a per-member version or a removal tombstone —
+--       ``joined_at`` is a creation timestamp (not monotonic per mutation) and
+--       ``role`` is orthogonal. There is nothing to reuse.
+--   (2) Alternative rejected. (a) Derive a version at read time — impossible,
+--       there is no monotonic source; concurrent admin writes need a stored,
+--       comparable counter. (b) Reuse ``joined_at`` as the version — wrong, it
+--       does not advance on role change or removal and two events can share a
+--       second. (c) Keep removal as a hard DELETE and carry the tombstone only
+--       in a federation event — a replayed older JOIN would then resurrect the
+--       row, exactly the convergence bug this prevents; the tombstone must be
+--       durable on disk. So two additive columns on the existing table are the
+--       correct, minimal home (alongside the data they version).
+--   (3) Smallest change. Two additive NOT NULL columns with 0 defaults. No
+--       backfill: every pre-existing row is correctly version 0 and live
+--       (``tombstoned=0``) — the defaults are the right value. No index, no
+--       table rewrite, no destructive change.
+ALTER TABLE space_remote_members ADD COLUMN member_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE space_remote_members ADD COLUMN tombstoned INTEGER NOT NULL DEFAULT 0;

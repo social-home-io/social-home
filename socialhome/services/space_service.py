@@ -117,6 +117,8 @@ from .space_crypto_service import (
     KEY_SUITE_AESGCM_256,
     SUPPORTED_KEY_SUITES,
     UnsupportedKeySuite,
+    sign_authority_event,
+    strip_authority_sig_fields,
 )
 from .space_member_guard import SpaceMemberGuardMixin
 
@@ -805,6 +807,136 @@ class SpaceService(SpaceMemberGuardMixin):
                 space.id,
             )
 
+    async def broadcast_remote_member_joined(
+        self,
+        space_id: str,
+        *,
+        instance_id: str,
+        user_id: str,
+        user_pk: str | None,
+        display_name: str | None,
+        role: str = SpaceRole.MEMBER,
+    ) -> None:
+        """Host-side roster JOINED gossip for a newly-accepted remote member
+        (v_23). Called by :meth:`PrivateSpaceInviteHandler._on_accept` after it
+        seats the accepting peer, so every member household converges its
+        roster. No-ops gracefully if the space is gone or we hold no seed."""
+        space = await self._spaces.get(space_id)
+        if space is None:
+            return
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=instance_id,
+            display_name=display_name,
+            user_pk=user_pk,
+            role=role,
+            tombstoned=False,
+        )
+
+    async def _emit_member_roster_gossip(
+        self,
+        space: Space,
+        *,
+        user_id: str,
+        instance_id: str,
+        display_name: str | None,
+        user_pk: str | None,
+        role: str,
+        tombstoned: bool,
+    ) -> None:
+        """Broadcast an authority-signed roster event to every member household.
+
+        Peer-replicates one roster mutation (v_23) so EVERY member household
+        converges its local view, not just the host. A seat / role-change ships
+        :data:`FederationEventType.SPACE_MEMBER_JOINED` (the join doubles as the
+        role upsert); a removal / kick / ban ships
+        :data:`FederationEventType.SPACE_MEMBER_LEFT`.
+
+        Trust model — **authority-signed, not sender-gated.** The payload is
+        signed with the space's Ed25519 seed (:func:`sign_authority_event`);
+        any receiver trusts it by verifying against
+        ``spaces.identity_public_key`` regardless of which household relayed it.
+        Only a seed-holder (this phase: the owner host) can sign — if we don't
+        hold the seed (non-owned / pre-upgrade non-owner space) we SKIP signing
+        + gossip gracefully and fall back to today's host-only behaviour.
+
+        Versioning — ``member_version`` and ``roster_version`` are both sourced
+        from the space's atomic ``config_sequence`` (bumped once here), the
+        simplest monotonic-per-space counter we already maintain. The receiver's
+        version-guarded CRDT merge (``apply_member_event``) uses
+        ``member_version`` to converge regardless of delivery order; a
+        replayed/stale event is dropped. Sharing the counter is intentional: a
+        ``set_role`` / ``ban`` path that also edits config double-bumps the
+        sequence, but that is benign — gossip only needs a value that strictly
+        increases per accepted event, and the ``<=`` drop guard simply tolerates
+        the (still monotonic) values it consumes.
+
+        Delivery — fan-out via :meth:`FederationService.broadcast_to_space_members`
+        which targets ``space_instances`` (member households only — the
+        non-member-relay rule holds; NEVER ``broadcast_to_all``), gated per
+        recipient on :data:`FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP`
+        so a sub-v_23 household is skipped silently (it keeps learning the
+        roster via the snapshot / §25.6 sync path). Failures are logged and
+        swallowed — a missed gossip never breaks the triggering write; the next
+        sync reconciles.
+        """
+        if self._federation is None:
+            return
+        # Only a seed-holder can sign. ensure_space_seed returns None for a
+        # space this household doesn't own (and can't recover a seed for) —
+        # skip gossip rather than crash.
+        try:
+            seed = await self.ensure_space_seed(space.id)
+        except Exception:
+            log.exception("roster-gossip: ensure_space_seed failed for %s", space.id)
+            return
+        if seed is None:
+            return
+        try:
+            version = await self._spaces.increment_config_sequence(space.id)
+        except Exception:
+            log.exception("roster-gossip: config_sequence bump failed for %s", space.id)
+            return
+        event_type = (
+            FederationEventType.SPACE_MEMBER_LEFT
+            if tombstoned
+            else FederationEventType.SPACE_MEMBER_JOINED
+        )
+        payload: dict = {
+            "space_id": space.id,
+            "user_id": user_id,
+            "instance_id": instance_id,
+            "display_name": display_name,
+            "user_pk": user_pk,
+            "role": role,
+            "member_version": version,
+            "roster_version": version,
+        }
+        # Sign over the bare payload (no sig fields), then merge the two sig
+        # fields in. strip_authority_sig_fields is used identically on the
+        # verify side so the canonical bytes match.
+        signed = sign_authority_event(
+            event_type=event_type.value,
+            space_id=space.id,
+            payload=strip_authority_sig_fields(payload),
+            space_seed=seed,
+        )
+        payload.update(signed)
+        try:
+            await self._federation.broadcast_to_space_members(
+                space.id,
+                event_type,
+                payload,
+                min_proto_version=(FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP),
+            )
+        except Exception:
+            log.exception(
+                "roster-gossip: %s broadcast failed for %s",
+                event_type.value,
+                space.id,
+            )
+
     async def archive_space(self, space_id: str, *, actor_username: str) -> None:
         """Archive a space (owner / admin) — a soft, reversible removal.
 
@@ -1163,6 +1295,20 @@ class SpaceService(SpaceMemberGuardMixin):
                 role=role,
             )
         )
+        # v_23 — peer-replicate the seat to every member household so their
+        # rosters converge (not just the host's). A local user's home instance
+        # is ours.
+        joined_users = await self._users.list_by_ids({user_id})
+        joined_user = joined_users[0] if joined_users else None
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=self._own_instance_id or "",
+            display_name=joined_user.display_name if joined_user else None,
+            user_pk=joined_user.public_key if joined_user else None,
+            role=role,
+            tombstoned=False,
+        )
         # §CP audit — record joined action for minors. No-op when the
         # user isn't CP-covered or when CP isn't wired.
         if self._child_protection is not None:
@@ -1388,6 +1534,17 @@ class SpaceService(SpaceMemberGuardMixin):
                 user_id=user_id,
             )
         )
+        # v_23 — peer-replicate the removal so every member household
+        # tombstones this user in their roster.
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=self._own_instance_id or "",
+            display_name=None,
+            user_pk=None,
+            role=target.role,
+            tombstoned=True,
+        )
         if self._child_protection is not None:
             await self._child_protection.record_membership_change(
                 user_id=user_id,
@@ -1429,6 +1586,19 @@ class SpaceService(SpaceMemberGuardMixin):
                 payload={"user_id": user_id, "role": role},
                 sequence=sequence,
             )
+        )
+        # v_23 — peer-replicate the role change (a JOINED gossip doubles as the
+        # role upsert) so every member household's roster reflects the new role.
+        role_users = await self._users.list_by_ids({user_id})
+        role_user = role_users[0] if role_users else None
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=self._own_instance_id or "",
+            display_name=role_user.display_name if role_user else None,
+            user_pk=role_user.public_key if role_user else None,
+            role=role,
+            tombstoned=False,
         )
 
     async def apply_remote_admin_kick(
@@ -1720,6 +1890,19 @@ class SpaceService(SpaceMemberGuardMixin):
                 "role": role,
             },
         )
+        # v_23 — peer-replicate the role change as an authority-signed JOINED
+        # gossip (doubles as the role upsert) so every member household's
+        # roster converges, not just the witnesses of the legacy
+        # SPACE_MEMBER_ROLE_CHANGED broadcast above.
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=instance_id,
+            display_name=target.display_name,
+            user_pk=target.user_pk,
+            role=role,
+            tombstoned=False,
+        )
         # Delegated-admin authority (v_22): when the owner has opted in and
         # this newly-promoted remote member is an ADMIN, ship the space's
         # Ed25519 signing seed to that admin's household so it can sign
@@ -1943,6 +2126,17 @@ class SpaceService(SpaceMemberGuardMixin):
                 payload={"user_id": user_id, "reason": reason},
                 sequence=sequence,
             )
+        )
+        # v_23 — a ban is a removal: peer-replicate a LEFT gossip so every
+        # member household tombstones the banned user in their roster.
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=self._own_instance_id or "",
+            display_name=None,
+            user_pk=None,
+            role=target.role if target is not None else SpaceRole.MEMBER,
+            tombstoned=True,
         )
         if self._child_protection is not None:
             await self._child_protection.record_membership_change(
@@ -2315,6 +2509,9 @@ class SpaceService(SpaceMemberGuardMixin):
             raise RuntimeError("federation not attached")
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+        # Capture role/display BEFORE the tombstone so the LEFT gossip carries
+        # the member's last-known attributes.
+        removed = await self._remote_members.get(space_id, instance_id, user_id)
         await self._remote_members.remove(space_id, instance_id, user_id)
         # Audit-fix (HIGH from PR #429 review): if that was the
         # last remote member from this peer instance, also drop the
@@ -2334,6 +2531,17 @@ class SpaceService(SpaceMemberGuardMixin):
             to_instance_id=instance_id,
             event_type=FederationEventType.SPACE_REMOTE_MEMBER_REMOVED,
             payload={"space_id": space_id, "user_id": user_id},
+        )
+        # v_23 — peer-replicate the kick so every member household tombstones
+        # this user in their roster.
+        await self._emit_member_roster_gossip(
+            space,
+            user_id=user_id,
+            instance_id=instance_id,
+            display_name=removed.display_name if removed else None,
+            user_pk=removed.user_pk if removed else None,
+            role=removed.role if removed else SpaceRole.MEMBER,
+            tombstoned=True,
         )
         await self._rotate_and_distribute_space_key(space_id)
 
@@ -3486,6 +3694,11 @@ async def build_space_snapshot_for_federation(
                 "display_name": name_by_id.get(m.user_id, ""),
                 "role": m.role,
                 "joined_at": m.joined_at,
+                # v_23 — local members have no per-row gossip version yet
+                # (the column lives on space_remote_members, not
+                # space_members), so they ship as 0; the receiver's merge
+                # treats any later gossip as strictly newer.
+                "member_version": 0,
             }
         )
     if remote_member_repo is not None:
@@ -3495,15 +3708,23 @@ async def build_space_snapshot_for_federation(
                     "user_id": r.user_id,
                     "instance_id": r.instance_id,
                     "display_name": r.display_name or "",
-                    "role": "member",
+                    "role": r.role,
                     "joined_at": r.joined_at or "",
                     # Federated peers carry a public_key on the host
                     # side; ship it so the joiner can record it too
                     # and later verify signed events from this user.
                     "user_pk": r.user_pk,
+                    # v_23 — the merged convergence version so a freshly-
+                    # invited joiner starts already at the host's roster
+                    # state and a later in-flight gossip can't regress it.
+                    "member_version": r.member_version,
                 }
             )
     meta["roster"] = roster
+    # v_23 — the space's monotonic config_sequence doubles as the
+    # roster_version so a receiver can detect a stale snapshot vs a
+    # later gossip event.
+    meta["roster_version"] = space.config_sequence
     # §D1b cover federation (#116) — ship the actual WebP bytes
     # alongside ``cover_hash``. Without them, the joiner's stub
     # renders the gradient fallback even when the host has a

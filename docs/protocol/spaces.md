@@ -20,6 +20,12 @@ may span any number of paired HFS instances.
 `SPACE_MEMBER_JOINED`, `SPACE_MEMBER_LEFT`, `SPACE_MEMBER_BANNED`,
 `SPACE_MEMBER_UNBANNED`, `SPACE_INSTANCE_LEFT`, `SPACE_AGE_GATE_UPDATED`.
 
+From v_23, `SPACE_MEMBER_JOINED` / `SPACE_MEMBER_LEFT` are the
+**peer-replicated, space-authority-signed roster gossip** — the host emits
+them on every roster mutation and broadcasts to every member household so
+each household's roster converges (not just the host's). See "Roster gossip"
+below.
+
 **Key exchange**
 
 `SPACE_KEY_EXCHANGE`, `SPACE_KEY_EXCHANGE_ACK`,
@@ -300,6 +306,58 @@ stashing them would mask a real attack.
 current key material — used when ownership is transferred or a
 co-admin is added so the new admin can decrypt pre-existing content
 without a full resync.
+
+## Roster gossip (v_23+)
+
+The space roster is **peer-replicated** so every member household converges
+its view, not just the host. On every roster mutation the host emits an
+**authority-signed** `SPACE_MEMBER_JOINED` (seat / role upsert) or
+`SPACE_MEMBER_LEFT` (remove / kick / ban) and broadcasts it to every member
+household via `broadcast_to_space_members` (targets `space_instances` — the
+non-member-relay rule holds; **never** `broadcast_to_all`). Before v_23 a
+join/leave was host-only and other households learned implicitly via §25.6
+sync or a fresh invite.
+
+Trust is in the **signature, not the sender**. The payload carries
+`authority_sig` + `authority_sig_suite` produced with the space's Ed25519
+seed (`sign_authority_event`); a receiver verifies against the space's PUBLIC
+key (`spaces.identity_public_key`) regardless of which household relayed it
+(any seed-holder may emit — the owner today, delegated admins in later
+phases). The signature is computed over the payload with the two signature
+fields stripped via `strip_authority_sig_fields` — used identically on both
+sides so the canonical bytes match.
+
+Payload:
+`{space_id, user_id, instance_id, display_name, user_pk, role,
+member_version, roster_version, authority_sig, authority_sig_suite}`.
+`member_version` (monotonic per `(space_id, user_id)`) and `roster_version`
+are both sourced from the space's atomic `config_sequence`. The receiver's
+version-guarded CRDT merge (`apply_member_event`) converges regardless of
+delivery order: a strictly-greater version wins, removal wins an
+equal-version tie, and a stale/replayed event is dropped (a removed member is
+never resurrected). The §D1b invite snapshot ships `member_version` per
+roster entry + a `roster_version` so a freshly-invited joiner starts
+already-converged. Gated per recipient on
+`FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP`; a sub-v_23 household is
+skipped silently and keeps learning the roster via the snapshot / sync path.
+
+A receiver DROPS the event (logged at WARNING) when the space is unknown
+locally, the signature is absent / forged / signed by a key other than the
+space seed, or the suite is unknown (crypto-suite rule — no default fallback).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant H as HFS H (host / seed-holder)
+    participant A as HFS A (member)
+    participant W as HFS W (member)
+    H->>H: roster mutation<br/>(add / remove / role / ban)
+    H->>H: sign payload with space Ed25519 seed<br/>(member_version = config_sequence)
+    H->>A: SPACE_MEMBER_JOINED / _LEFT<br/>(authority_sig over the bare payload)
+    H->>W: SPACE_MEMBER_JOINED / _LEFT
+    Note over A,W: verify authority_sig against<br/>spaces.identity_public_key (NOT from_instance)
+    Note over A,W: apply_member_event — version-guarded merge<br/>(removal-wins-tie; stale dropped)
+```
 
 ## Cross-household admin promotion
 

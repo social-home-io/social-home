@@ -138,6 +138,12 @@ UNGATED_METHODS: frozenset[str] = frozenset(
         # (``owner_instance_id == own_instance_id``); a non-owned space with a
         # NULL seed yields None. No actor-membership shape applies.
         "ensure_space_seed",
+        # Federation inbound hook (v_23) — called by the §24.11-validated
+        # private-invite accept handler after it seats the accepting peer, to
+        # emit the authority-signed roster JOINED gossip. Self-gates on holding
+        # the space signing seed (only the owner/seed-holder signs); no
+        # actor-username to thread through ``_require_admin``.
+        "broadcast_remote_member_joined",
     }
 )
 

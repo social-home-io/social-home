@@ -132,6 +132,47 @@ async def test_accept_happy_path(handler):
     assert any(isinstance(e, RemoteSpaceInviteAccepted) for e in handler.bus.events)
 
 
+async def test_accept_broadcasts_member_joined_gossip(handler):
+    """v_23: seating an accepting peer on the host side broadcasts a
+    SPACE_MEMBER_JOINED roster gossip to every member household so their
+    rosters converge — delegated to SpaceService when wired."""
+    handler.space_repo.get_invitation_by_token.return_value = {
+        "id": 7,
+        "space_id": "sp-a",
+    }
+    space_service = AsyncMock()
+    handler.h.attach_space_service(space_service)
+    ev = _event(
+        "SPACE_PRIVATE_INVITE_ACCEPT",
+        {
+            "invite_token": "abc",
+            "invitee_user_id": "u1",
+            "invitee_public_key": "pk",
+            "invitee_display_name": "Bob",
+        },
+    )
+    await handler.h._on_accept(ev)
+    space_service.broadcast_remote_member_joined.assert_awaited_once()
+    kw = space_service.broadcast_remote_member_joined.await_args.kwargs
+    assert kw["instance_id"] == "peer-1"
+    assert kw["user_id"] == "u1"
+
+
+async def test_accept_without_space_service_still_seats(handler):
+    """No SpaceService wired (early boot / unit stack) → accept still seats
+    the member; the gossip is just skipped."""
+    handler.space_repo.get_invitation_by_token.return_value = {
+        "id": 8,
+        "space_id": "sp-a",
+    }
+    ev = _event(
+        "SPACE_PRIVATE_INVITE_ACCEPT",
+        {"invite_token": "abc", "invitee_user_id": "u1"},
+    )
+    await handler.h._on_accept(ev)
+    handler.remote_members.add.assert_awaited_once()
+
+
 async def test_decline_no_token_noops(handler):
     ev = _event("SPACE_PRIVATE_INVITE_DECLINE", {})
     await handler.h._on_decline(ev)
@@ -945,4 +986,6 @@ async def test_attach_to_registers_handlers():
         FederationEventType.SPACE_ADMIN_PROPOSAL_UPDATED,
         FederationEventType.SPACE_LOCATION_UPDATED,
         FederationEventType.SPACE_ADMIN_KEY_SHARE,
+        FederationEventType.SPACE_MEMBER_JOINED,
+        FederationEventType.SPACE_MEMBER_LEFT,
     }

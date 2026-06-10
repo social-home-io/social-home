@@ -295,32 +295,29 @@ async def test_space_report_with_service(svc):
 # ── Space membership ────────────────────────────────────────────────
 
 
-async def test_space_member_joined_missing_fields(svc):
-    await svc.svc._on_space_member_joined(_evt("SPACE_MEMBER_JOINED", {}))
-    svc.sp_repo.save_member.assert_not_awaited()
+# NOTE: SPACE_MEMBER_JOINED / SPACE_MEMBER_LEFT no longer have a handler on
+# FederationInboundService — the authority-verifying gossip handler in
+# PrivateSpaceInviteHandler is the SOLE handler (it drops any event not signed
+# by the space seed). The old unsigned-add tests were removed; the
+# unsigned-injection regression lives in
+# tests/federation/test_space_roster_gossip.py.
 
 
-async def test_space_member_joined_happy(svc):
-    await svc.svc._on_space_member_joined(
-        _evt(
-            "SPACE_MEMBER_JOINED",
-            {"user_id": "u", "role": "member"},
-            space_id="sp",
-        ),
+def _wire_profile_gate(svc, *, member_home="peer-1", own="this-household"):
+    """Wire the member-profile spoof gate's dependencies:
+
+    * a remote-member mirror reporting the member's home instance, and
+    * ``own_instance_id`` on the federation service.
+
+    The gate requires ``event.from_instance == member's home instance``.
+    """
+    remote_repo = AsyncMock()
+    remote_repo.get_including_tombstones.return_value = SimpleNamespace(
+        instance_id=member_home,
     )
-    svc.sp_repo.save_member.assert_awaited_once()
-
-
-async def test_space_member_left_missing_fields(svc):
-    await svc.svc._on_space_member_left(_evt("SPACE_MEMBER_LEFT", {}))
-    svc.sp_repo.delete_member.assert_not_awaited()
-
-
-async def test_space_member_left_happy(svc):
-    await svc.svc._on_space_member_left(
-        _evt("SPACE_MEMBER_LEFT", {"user_id": "u"}, space_id="sp"),
-    )
-    svc.sp_repo.delete_member.assert_awaited_once()
+    svc.svc._space_remote_member_repo = remote_repo
+    svc.svc._federation_service = SimpleNamespace(own_instance_id=own)
+    return remote_repo
 
 
 async def test_space_member_profile_updated_missing_fields(svc):
@@ -331,11 +328,13 @@ async def test_space_member_profile_updated_missing_fields(svc):
 
 
 async def test_space_member_profile_updated_unknown_member_noops(svc):
+    _wire_profile_gate(svc, member_home="peer-1")
     svc.sp_repo.get_member.return_value = None
     await svc.svc._on_space_member_profile_updated(
         _evt(
             "SPACE_MEMBER_PROFILE_UPDATED",
             {"user_id": "u", "space_display_name": "X"},
+            from_instance="peer-1",
             space_id="sp",
         ),
     )
@@ -343,6 +342,8 @@ async def test_space_member_profile_updated_unknown_member_noops(svc):
 
 
 async def test_space_member_profile_updated_happy(svc):
+    # The update arrives from the member's OWN home instance — applied.
+    _wire_profile_gate(svc, member_home="peer-1")
     svc.sp_repo.get_member.return_value = SpaceMember(
         space_id="sp",
         user_id="u",
@@ -357,11 +358,54 @@ async def test_space_member_profile_updated_happy(svc):
                 "space_display_name": "Alt",
                 "picture_hash": "abcd",
             },
+            from_instance="peer-1",
             space_id="sp",
         ),
     )
     svc.sp_repo.set_member_profile.assert_awaited_once()
     assert any(isinstance(e, SpaceMemberProfileUpdated) for e in svc.bus.events)
+
+
+async def test_space_member_profile_updated_spoof_from_other_instance_dropped(svc):
+    """SECURITY: a profile update for member X from a DIFFERENT instance than
+    X's home is dropped — a confirmed peer can't spoof another member's
+    display fields."""
+    _wire_profile_gate(svc, member_home="peer-1")
+    svc.sp_repo.get_member.return_value = SpaceMember(
+        space_id="sp",
+        user_id="u",
+        role="member",
+        joined_at="2020-01-01",
+    )
+    await svc.svc._on_space_member_profile_updated(
+        _evt(
+            "SPACE_MEMBER_PROFILE_UPDATED",
+            {"user_id": "u", "space_display_name": "Spoofed"},
+            from_instance="attacker-instance",  # NOT peer-1 (X's home)
+            space_id="sp",
+        ),
+    )
+    svc.sp_repo.set_member_profile.assert_not_awaited()
+    svc.sp_repo.get_member.assert_not_awaited()
+
+
+async def test_space_member_profile_updated_local_member_remote_sender_dropped(svc):
+    """SECURITY: a purely-local member (not in the remote mirror) has this
+    instance as their home; a remote sender must not touch their profile."""
+    remote_repo = AsyncMock()
+    remote_repo.get_including_tombstones.return_value = None  # local member
+    svc.svc._space_remote_member_repo = remote_repo
+    svc.svc._federation_service = SimpleNamespace(own_instance_id="this-household")
+    await svc.svc._on_space_member_profile_updated(
+        _evt(
+            "SPACE_MEMBER_PROFILE_UPDATED",
+            {"user_id": "u", "space_display_name": "Spoofed"},
+            from_instance="peer-1",  # remote — local member's home is us
+            space_id="sp",
+        ),
+    )
+    svc.sp_repo.set_member_profile.assert_not_awaited()
+    svc.sp_repo.get_member.assert_not_awaited()
 
 
 # ── User events ─────────────────────────────────────────────────────

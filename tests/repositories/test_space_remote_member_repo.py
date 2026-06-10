@@ -73,3 +73,121 @@ async def test_list_admin_instances_empty_when_no_admins(repo):
         space_id="sp1", instance_id="i-a", user_id="u1", user_pk=None, display_name=None
     )
     assert await repo.list_admin_instances("sp1") == []
+
+
+# ─── member_version + tombstone convergence ───────────────────────────────
+
+
+def _evt(**over):
+    base = dict(
+        space_id="sp1",
+        user_id="u1",
+        instance_id="i-a",
+        display_name="Anna",
+        user_pk="pk1",
+        role="member",
+        member_version=1,
+        tombstoned=False,
+    )
+    base.update(over)
+    return base
+
+
+async def test_add_defaults_to_version_zero_live(repo):
+    await repo.add(
+        space_id="sp1", instance_id="i-a", user_id="u1", user_pk=None, display_name=None
+    )
+    row = await repo.get("sp1", "i-a", "u1")
+    assert row is not None
+    assert row.member_version == 0
+    assert row.tombstoned is False
+
+
+async def test_apply_member_event_applies_higher_version(repo):
+    assert await repo.apply_member_event(**_evt(member_version=1)) is True
+    assert await repo.apply_member_event(**_evt(member_version=2, role="admin")) is True
+    row = await repo.get("sp1", "i-a", "u1")
+    assert row.member_version == 2
+    assert row.role == "admin"
+
+
+async def test_apply_member_event_ignores_lower_version(repo):
+    assert await repo.apply_member_event(**_evt(member_version=5, role="admin")) is True
+    # Stale lower-version event must be ignored.
+    assert (
+        await repo.apply_member_event(**_evt(member_version=3, role="member")) is False
+    )
+    row = await repo.get("sp1", "i-a", "u1")
+    assert row.member_version == 5
+    assert row.role == "admin"
+
+
+async def test_apply_member_event_ignores_equal_version_non_tombstone(repo):
+    assert (
+        await repo.apply_member_event(**_evt(member_version=2, role="member")) is True
+    )
+    assert (
+        await repo.apply_member_event(**_evt(member_version=2, role="admin")) is False
+    )
+    row = await repo.get("sp1", "i-a", "u1")
+    assert row.role == "member"
+
+
+async def test_apply_member_event_equal_version_tombstone_wins(repo):
+    assert await repo.apply_member_event(**_evt(member_version=2)) is True
+    # Removal-wins-tie: equal version + tombstone beats a live row.
+    assert (
+        await repo.apply_member_event(**_evt(member_version=2, tombstoned=True)) is True
+    )
+    # Tombstoned → hidden from live roster, but persists in the table.
+    assert await repo.get("sp1", "i-a", "u1") is None
+    assert await repo.list_for_space("sp1") == []
+
+
+async def test_apply_member_event_no_resurrection(repo):
+    # Removed at version 3 (tombstone).
+    assert (
+        await repo.apply_member_event(**_evt(member_version=3, tombstoned=True)) is True
+    )
+    # A replayed older JOINED for the same user must NOT resurrect them.
+    assert (
+        await repo.apply_member_event(**_evt(member_version=2, tombstoned=False))
+        is False
+    )
+    assert await repo.get("sp1", "i-a", "u1") is None
+    # A higher-version JOIN legitimately re-adds them.
+    assert (
+        await repo.apply_member_event(**_evt(member_version=4, tombstoned=False))
+        is True
+    )
+    row = await repo.get("sp1", "i-a", "u1")
+    assert row is not None and row.member_version == 4
+
+
+async def test_list_for_space_hides_tombstones(repo):
+    await repo.add(
+        space_id="sp1", instance_id="i-a", user_id="u1", user_pk=None, display_name=None
+    )
+    await repo.add(
+        space_id="sp1", instance_id="i-b", user_id="u2", user_pk=None, display_name=None
+    )
+    await repo.remove("sp1", "i-a", "u1")
+    live = await repo.list_for_space("sp1")
+    assert [m.user_id for m in live] == ["u2"]
+    # The tombstoned row is retained and visible to the convergence path.
+    everything = await repo.list_for_space_including_tombstones("sp1")
+    assert sorted(m.user_id for m in everything) == ["u1", "u2"]
+
+
+async def test_remove_tombstones_rather_than_deletes(repo):
+    await repo.add(
+        space_id="sp1", instance_id="i-a", user_id="u1", user_pk=None, display_name=None
+    )
+    await repo.remove("sp1", "i-a", "u1")
+    # Live reads treat it as gone.
+    assert await repo.get("sp1", "i-a", "u1") is None
+    # But the row persists as a version-bumped tombstone.
+    rows = await repo.list_for_space_including_tombstones("sp1")
+    assert len(rows) == 1
+    assert rows[0].tombstoned is True
+    assert rows[0].member_version >= 1

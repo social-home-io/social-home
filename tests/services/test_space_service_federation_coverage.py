@@ -710,10 +710,16 @@ async def test_set_remote_member_role_promotes_and_broadcasts(stack):
     member = await stack.svc._remote_members.get(space.id, "peer-bob", "bob")
     assert member is not None
     assert member.role == "admin"
-    stack.fed_svc.broadcast_to_space_members.assert_awaited_once()
-    args = stack.fed_svc.broadcast_to_space_members.call_args
+    # A role change now ALSO emits a SPACE_MEMBER_JOINED roster gossip (v_23),
+    # so assert the SPACE_MEMBER_ROLE_CHANGED broadcast specifically.
+    role_calls = [
+        c
+        for c in stack.fed_svc.broadcast_to_space_members.await_args_list
+        if c.args[1] is FederationEventType.SPACE_MEMBER_ROLE_CHANGED
+    ]
+    assert len(role_calls) == 1
+    args = role_calls[0]
     assert args.args[0] == space.id
-    assert args.args[1] is FederationEventType.SPACE_MEMBER_ROLE_CHANGED
     assert args.args[2]["role"] == "admin"
     assert args.args[2]["instance_id"] == "peer-bob"
     assert args.args[2]["user_id"] == "bob"
