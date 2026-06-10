@@ -1602,10 +1602,15 @@ async def test_remove_member_rotates_and_distributes_key(stack):
     )
 
     space_crypto.rotate_epoch.assert_awaited_once_with(space.id)
-    federation.broadcast_to_space_members.assert_awaited_once()
-    call = federation.broadcast_to_space_members.call_args
-    assert call.args[1] is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
-    payload = call.args[2]
+    # Removal now also emits a SPACE_MEMBER_LEFT roster gossip (v_23), so the
+    # rekey is one of the broadcasts — assert it fired with the right payload.
+    rekey_calls = [
+        c
+        for c in federation.broadcast_to_space_members.await_args_list
+        if c.args[1] is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+    ]
+    assert len(rekey_calls) == 1
+    payload = rekey_calls[0].args[2]
     assert payload["space_id"] == space.id
     assert payload["space_content_key"]["epoch"] == 7
     assert payload["space_content_key"]["key_suite"] == "aesgcm-256"
@@ -1637,10 +1642,11 @@ async def test_ban_rotates_and_distributes_key(stack):
     )
 
     space_crypto.rotate_epoch.assert_awaited_once_with(space.id)
-    federation.broadcast_to_space_members.assert_awaited_once()
-    assert (
-        federation.broadcast_to_space_members.call_args.args[1]
-        is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+    # Ban now also emits a SPACE_MEMBER_LEFT roster gossip (v_23); assert the
+    # rekey is among the broadcasts.
+    assert any(
+        c.args[1] is FederationEventType.SPACE_KEY_EXCHANGE_REKEY
+        for c in federation.broadcast_to_space_members.await_args_list
     )
 
 
@@ -2243,6 +2249,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Multi-admin approvals",
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
+        "Space roster gossip",
     )
     assert len(c.behind_members) == 1
     bm = c.behind_members[0]
@@ -2255,6 +2262,7 @@ async def test_space_version_compat_flags_behind_member(stack):
         "Multi-admin approvals",
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
+        "Space roster gossip",
     )
 
 
@@ -2279,6 +2287,7 @@ async def test_space_version_compat_excludes_mid_handshake_member(stack):
     assert c.lagging_features == (
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
+        "Space roster gossip",
     )
     assert len(c.behind_members) == 1
     assert c.behind_members[0].instance_id == "peer-up"
@@ -2318,6 +2327,7 @@ async def test_space_version_compat_omits_nonspace_features(stack):
     assert c.lagging_features == (
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
+        "Space roster gossip",
     )
     assert "App federation channel" not in c.lagging_features
     assert "App user routing" not in c.lagging_features
@@ -2485,6 +2495,48 @@ async def test_seed_never_appears_in_federation_snapshot(stack):
     assert seed.hex() not in blob
     assert "identity_private_key" not in blob
     assert "private_key" not in blob
+
+
+async def test_snapshot_carries_member_versions_and_roster_version(stack):
+    """The §D1b snapshot ships a roster_version + a member_version per roster
+    entry (v_23) so a freshly-invited joiner starts already-converged."""
+    from socialhome.repositories.space_remote_member_repo import (
+        SqliteSpaceRemoteMemberRepo,
+    )
+    from socialhome.services.space_service import (
+        build_space_snapshot_for_federation,
+    )
+
+    anna = await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+    remote = SqliteSpaceRemoteMemberRepo(stack.db)
+    # Seat a remote member with a known member_version via the merge path.
+    await remote.apply_member_event(
+        space_id=space.id,
+        user_id="ru1",
+        instance_id="peer-x",
+        display_name="R",
+        user_pk=None,
+        role="member",
+        member_version=5,
+        tombstoned=False,
+    )
+
+    snap = await build_space_snapshot_for_federation(
+        space,
+        space_repo=stack.space_repo,
+        remote_member_repo=remote,
+        user_repo=stack.space_svc._users,
+        own_instance_id=stack.iid,
+    )
+
+    assert "roster_version" in snap
+    assert isinstance(snap["roster_version"], int)
+    roster = {r["user_id"]: r for r in snap["roster"]}
+    # Local owner entry carries a member_version (0 default for a row never
+    # gossiped) and the remote entry carries its merged version.
+    assert "member_version" in roster[anna.user_id]
+    assert roster["ru1"]["member_version"] == 5
 
 
 # ─── Delegated-admin signing-seed share — outbound (v_22) ──────────────
@@ -2746,3 +2798,230 @@ async def test_flag_flip_true_to_false_sends_nothing(stack):
         if c.kwargs.get("event_type") is FederationEventType.SPACE_ADMIN_KEY_SHARE
     ]
     assert shares == []
+
+
+# ─── Space roster gossip — outbound (v_23) ─────────────────────────────
+
+
+def _roster_gossip_fed():
+    """AsyncMock federation service wired for the roster-gossip broadcast
+    assertions (broadcast_to_space_members captures every gossip call)."""
+    from unittest.mock import AsyncMock
+
+    fed = AsyncMock()
+    fed.peer_supports = AsyncMock(return_value=True)
+    fed.broadcast_to_space_members = AsyncMock()
+    return fed
+
+
+def _gossip_calls(fed, event_type):
+    """Filter broadcast_to_space_members calls down to one event type."""
+    return [
+        c
+        for c in fed.broadcast_to_space_members.await_args_list
+        if c.args[1] is event_type
+    ]
+
+
+async def test_add_member_broadcasts_signed_joined(stack):
+    """Seating a local member broadcasts a SPACE_MEMBER_JOINED to member
+    households, gated on the roster-gossip capability, with a payload that
+    carries a monotonic member_version + a valid authority signature."""
+    from socialhome.crypto import verify_ed25519
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.federation_capabilities import FederationCapability
+    from socialhome.services.space_crypto_service import (
+        authority_signing_bytes,
+        strip_authority_sig_fields,
+    )
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    joined = _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED)
+    assert len(joined) == 1
+    call = joined[0]
+    assert call.args[0] == space.id
+    # Gated on the roster-gossip capability.
+    assert (
+        call.kwargs.get("min_proto_version")
+        == FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP
+    )
+    p = call.args[2]
+    assert p["space_id"] == space.id
+    assert p["user_id"] == bob.user_id
+    assert p["instance_id"] == stack.iid
+    assert p["role"] == "member"
+    assert isinstance(p["member_version"], int) and p["member_version"] >= 1
+    assert "roster_version" in p
+    # Authority signature verifies against the space's public key, over the
+    # payload with the two sig fields stripped.
+    space_row = await stack.space_repo.get(space.id)
+    pub = bytes.fromhex(space_row.identity_public_key)
+    from socialhome.crypto import b64url_decode
+
+    sig = b64url_decode(p["authority_sig"])
+    bare = strip_authority_sig_fields(p)
+    msg = authority_signing_bytes(
+        event_type=FederationEventType.SPACE_MEMBER_JOINED.value,
+        space_id=space.id,
+        payload=bare,
+    )
+    assert verify_ed25519(pub, msg, sig) is True
+
+
+async def test_remove_member_broadcasts_signed_left(stack):
+    """Removing a local member broadcasts a SPACE_MEMBER_LEFT gossip."""
+    from socialhome.domain.federation import FederationEventType
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+
+    await stack.space_svc.remove_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    left = _gossip_calls(fed, FederationEventType.SPACE_MEMBER_LEFT)
+    assert len(left) == 1
+    p = left[0].args[2]
+    assert p["space_id"] == space.id
+    assert p["user_id"] == bob.user_id
+    assert p["authority_sig"]
+
+
+async def test_member_version_is_monotonic_across_emits(stack):
+    """Two roster mutations for the same user emit strictly increasing
+    member_version values (the convergence-merge ordering source)."""
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import SpaceRole
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+    await stack.space_svc.set_role(
+        space.id, actor_username="anna", user_id=bob.user_id, role=SpaceRole.ADMIN
+    )
+
+    joined = _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED)
+    assert len(joined) == 2  # add + role-change both emit JOINED
+    v1 = joined[0].args[2]["member_version"]
+    v2 = joined[1].args[2]["member_version"]
+    assert v2 > v1
+    # The role-change JOINED carries the new role (upsert semantics).
+    assert joined[1].args[2]["role"] == SpaceRole.ADMIN
+
+
+async def test_set_remote_member_role_broadcasts_joined(stack):
+    """Changing a remote member's role broadcasts a SPACE_MEMBER_JOINED gossip
+    carrying the new role (the join event doubles as the role upsert)."""
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-x",
+        user_id="ru1",
+        user_pk=None,
+        display_name="R",
+    )
+
+    await stack.space_svc.set_remote_member_role(
+        space.id,
+        actor_username="anna",
+        instance_id="peer-x",
+        user_id="ru1",
+        role=SpaceRole.ADMIN,
+    )
+
+    joined = _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED)
+    assert len(joined) == 1
+    p = joined[0].args[2]
+    assert p["user_id"] == "ru1"
+    assert p["instance_id"] == "peer-x"
+    assert p["role"] == SpaceRole.ADMIN
+
+
+async def test_remove_remote_member_broadcasts_left(stack):
+    """Kicking a remote member broadcasts a SPACE_MEMBER_LEFT gossip."""
+    from unittest.mock import AsyncMock
+
+    from socialhome.domain.federation import DeliveryResult, FederationEventType
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    fed = _roster_gossip_fed()
+    fed.send_with_mesh_fallback = AsyncMock(
+        return_value=DeliveryResult(instance_id="peer-x", ok=True)
+    )
+    stack.space_svc._federation = fed
+    from unittest.mock import MagicMock
+
+    stack.space_svc._federation_repo = MagicMock()
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-x",
+        user_id="ru1",
+        user_pk=None,
+        display_name="R",
+    )
+
+    await stack.space_svc.remove_remote_member(
+        space.id, actor_username="anna", instance_id="peer-x", user_id="ru1"
+    )
+
+    left = _gossip_calls(fed, FederationEventType.SPACE_MEMBER_LEFT)
+    assert len(left) == 1
+    p = left[0].args[2]
+    assert p["user_id"] == "ru1"
+    assert p["instance_id"] == "peer-x"
+
+
+async def test_no_seed_skips_gossip_gracefully(stack):
+    """A space we don't own (no signing seed) skips signing + gossip rather
+    than crashing — falls back to today's host-only behaviour."""
+    from socialhome.domain.federation import FederationEventType
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    # Simulate a non-owned space (seed NULL + owner elsewhere) so
+    # ensure_space_seed returns None and the gossip emit must no-op.
+    await stack.db.enqueue(
+        "UPDATE spaces SET identity_private_key=NULL, owner_instance_id=? WHERE id=?",
+        ("some-other-host", space.id),
+    )
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+
+    # add_member requires admin; anna is still owner_username locally so the
+    # guard passes — the gossip emit is what must no-op.
+    await stack.space_svc.add_member(
+        space.id, actor_username="anna", user_id=bob.user_id
+    )
+
+    assert _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED) == []

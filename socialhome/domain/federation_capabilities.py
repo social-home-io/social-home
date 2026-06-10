@@ -318,7 +318,34 @@ from __future__ import annotations
 #:   revocation (seed rotation) is a later phase. Space-scoped: a behind
 #:   admin household can't receive delegated authority, so it warns in
 #:   the per-space compatibility banner.
-OURS: int = 22
+#: * **v_23** (2026-06-10) — peer-replicated space roster gossip.
+#:   :data:`FederationEventType.SPACE_MEMBER_JOINED` /
+#:   :data:`SPACE_MEMBER_LEFT` are now emitted by the host on every roster
+#:   mutation (local + remote member add / remove / role change) and
+#:   broadcast to every member household via ``broadcast_to_space_members``
+#:   (targets ``space_instances`` — the non-member-relay rule holds; never
+#:   ``broadcast_to_all``). Each event is **space-authority-signed** — the
+#:   payload carries ``authority_sig`` + ``authority_sig_suite`` produced
+#:   with the space's Ed25519 seed (:func:`sign_authority_event`) — so any
+#:   receiver trusts it by verifying against ``spaces.identity_public_key``
+#:   regardless of which household relayed it (the trust root is the
+#:   signature, not ``from_instance``). The payload carries a monotonic
+#:   ``member_version`` (per ``(space_id, user_id)``) + a ``roster_version``,
+#:   both sourced from the space's atomic ``config_sequence``, so the
+#:   receiver's version-guarded CRDT merge
+#:   (:meth:`AbstractSpaceRemoteMemberRepo.apply_member_event`) converges
+#:   regardless of delivery order (removal-wins-tie; a replayed/stale event
+#:   is ignored). Before this, a join / leave was host-only and other
+#:   member households learned implicitly via §25.6 sync or fresh invites.
+#:   **Best-effort, gated.** The host gates the broadcast on
+#:   :data:`FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP`; a sub-v_23
+#:   member household is skipped silently and keeps learning the roster via
+#:   the snapshot / sync path (today's behaviour). Only the owner / seed-
+#:   holder can sign — a non-owner without the seed skips signing + gossip
+#:   gracefully (falls back to today's behaviour). Space-scoped: a behind
+#:   member household won't converge its roster, so it warns in the
+#:   per-space compatibility banner.
+OURS: int = 23
 
 
 class FederationCapability:
@@ -507,6 +534,16 @@ class FederationCapability:
     #: validate it.
     MIN_FOR_SPACE_ADMIN_KEY_SHARE = 22
 
+    #: Minimum proto_version where the member household registers handlers
+    #: for the authority-signed roster gossip
+    #: (:data:`FederationEventType.SPACE_MEMBER_JOINED` /
+    #: :data:`SPACE_MEMBER_LEFT`) so its local roster converges peer-to-peer.
+    #: The host gates the broadcast on this; a sub-v_23 household is skipped
+    #: silently and keeps learning the roster via the §D1b snapshot / §25.6
+    #: sync path (today's behaviour) — best-effort, so a lag is benign (a
+    #: stale member list until the next sync) rather than a hard failure.
+    MIN_FOR_SPACE_ROSTER_GOSSIP = 23
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -550,6 +587,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (
         FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
         "Space delegated admin authority",
+    ),
+    (
+        FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP,
+        "Space roster gossip",
     ),
 ]
 
@@ -595,6 +636,7 @@ SPACE_SCOPED_MIN_VERSIONS: frozenset[int] = frozenset(
         FederationCapability.MIN_FOR_ADMIN_PROPOSALS,
         FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
         FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
+        FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP,
     }
 )
 

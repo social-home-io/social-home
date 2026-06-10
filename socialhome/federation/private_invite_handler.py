@@ -32,6 +32,11 @@ from ..domain.events import (
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from ..repositories.space_remote_location_repo import SpaceRemoteLocation
+from ..services.space_crypto_service import (
+    UnsupportedAuthoritySuite,
+    strip_authority_sig_fields,
+    verify_authority_event,
+)
 from ..services.space_service import (
     SUPPORTED_SEED_SUITES,
     apply_space_content_key_from_metadata,
@@ -172,6 +177,14 @@ class PrivateSpaceInviteHandler:
         registry.register(
             FederationEventType.SPACE_ADMIN_KEY_SHARE,
             self._on_admin_key_share,
+        )
+        registry.register(
+            FederationEventType.SPACE_MEMBER_JOINED,
+            self._on_space_member_joined,
+        )
+        registry.register(
+            FederationEventType.SPACE_MEMBER_LEFT,
+            self._on_space_member_left,
         )
 
     # ── Receive ─────────────────────────────────────────────────────────
@@ -333,6 +346,18 @@ class PrivateSpaceInviteHandler:
             invite["id"],
             "accepted",
         )
+        # v_23 — peer-replicate the new seat to every member household so
+        # their rosters converge (not just the host's). Delegated to
+        # SpaceService (the seed-holder) when wired; skipped gracefully on a
+        # stack that didn't attach it.
+        if self._space_service is not None:
+            await self._space_service.broadcast_remote_member_joined(
+                invite["space_id"],
+                instance_id=event.from_instance,
+                user_id=invitee_user_id,
+                user_pk=str(invitee_pk) if invitee_pk else None,
+                display_name=str(invitee_display) if invitee_display else None,
+            )
         await self._bus.publish(
             RemoteSpaceInviteAccepted(
                 space_id=invite["space_id"],
@@ -797,3 +822,155 @@ class PrivateSpaceInviteHandler:
             space_id,
             event.from_instance,
         )
+
+    # ── Space roster gossip (v_23) ──────────────────────────────────────
+
+    async def _verify_roster_gossip(
+        self,
+        event: "FederationEvent",
+    ) -> tuple[str, dict] | None:
+        """Authenticate an inbound roster-gossip event. Returns
+        ``(space_id, payload)`` on success, or ``None`` (logged at WARNING)
+        when the event must be dropped.
+
+        SECURITY: trust is in the SIGNATURE, not the sender — any seed-holder
+        may emit (the owner today, delegated admins in later phases), so we do
+        NOT gate on ``from_instance == owner`` here. The space's PUBLIC key
+        (``spaces.identity_public_key``) is the trust root. We drop when:
+
+        * the space is unknown locally (no public key to verify against);
+        * ``authority_sig`` is absent / forged / signed by a key other than
+          the space seed;
+        * ``authority_sig_suite`` is unknown (crypto-suite rule — no default
+          fallback).
+
+        CRITICAL: the signature is verified over the payload with the two
+        signature fields stripped, using the SAME
+        :func:`strip_authority_sig_fields` helper the signer used, so the
+        canonical bytes match.
+        """
+        p = event.payload
+        space_id = str(p.get("space_id") or "") or (event.space_id or "")
+        if not space_id:
+            log.warning(
+                "roster-gossip %s from %s missing space_id — dropping",
+                event.event_type,
+                event.from_instance,
+            )
+            return None
+        space = await self._space_repo.get(space_id)
+        if space is None:
+            log.warning(
+                "roster-gossip %s for unknown space %s from %s — dropping",
+                event.event_type,
+                space_id,
+                event.from_instance,
+            )
+            return None
+        authority_sig = str(p.get("authority_sig") or "")
+        authority_sig_suite = str(p.get("authority_sig_suite") or "")
+        if not authority_sig or not authority_sig_suite:
+            log.warning(
+                "roster-gossip %s for %s from %s missing authority signature "
+                "— dropping",
+                event.event_type,
+                space_id,
+                event.from_instance,
+            )
+            return None
+        try:
+            verified = verify_authority_event(
+                event_type=(
+                    event.event_type.value
+                    if hasattr(event.event_type, "value")
+                    else str(event.event_type)
+                ),
+                space_id=space_id,
+                payload=strip_authority_sig_fields(p),
+                authority_sig=authority_sig,
+                authority_sig_suite=authority_sig_suite,
+                space_public_key=bytes.fromhex(space.identity_public_key),
+            )
+        except UnsupportedAuthoritySuite:
+            log.warning(
+                "roster-gossip %s for %s: unknown authority_sig_suite %r — dropping",
+                event.event_type,
+                space_id,
+                authority_sig_suite,
+            )
+            return None
+        except Exception:
+            log.warning(
+                "roster-gossip %s for %s: malformed space public key — dropping",
+                event.event_type,
+                space_id,
+            )
+            return None
+        if not verified:
+            log.warning(
+                "roster-gossip %s for %s from %s: authority signature did not "
+                "verify against the space key — dropping",
+                event.event_type,
+                space_id,
+                event.from_instance,
+            )
+            return None
+        return space_id, p
+
+    async def _apply_roster_gossip(
+        self,
+        event: "FederationEvent",
+        *,
+        tombstoned: bool,
+    ) -> None:
+        """Verify then version-guard-merge an inbound roster-gossip event.
+
+        On a verified event, hand off to
+        :meth:`AbstractSpaceRemoteMemberRepo.apply_member_event` — the CRDT
+        merge that converges concurrent/out-of-order join/leave decisions
+        (strictly-greater version wins; removal wins an equal-version tie; a
+        stale event is dropped). Idempotent + order-insensitive.
+        """
+        result = await self._verify_roster_gossip(event)
+        if result is None:
+            return
+        space_id, p = result
+        user_id = str(p.get("user_id") or "")
+        instance_id = str(p.get("instance_id") or "")
+        if not user_id or not instance_id:
+            log.warning(
+                "roster-gossip %s for %s missing user_id/instance_id — dropping",
+                event.event_type,
+                space_id,
+            )
+            return
+        try:
+            member_version = int(p.get("member_version") or 0)
+        except TypeError, ValueError:
+            log.warning(
+                "roster-gossip %s for %s: non-integer member_version — dropping",
+                event.event_type,
+                space_id,
+            )
+            return
+        role = str(p.get("role") or "member")
+        display_name = p.get("display_name")
+        user_pk = p.get("user_pk")
+        await self._remote_members.apply_member_event(
+            space_id=space_id,
+            user_id=user_id,
+            instance_id=instance_id,
+            display_name=str(display_name) if display_name else None,
+            user_pk=str(user_pk) if user_pk else None,
+            role=role,
+            member_version=member_version,
+            tombstoned=tombstoned,
+        )
+
+    async def _on_space_member_joined(self, event: "FederationEvent") -> None:
+        """Authority-signed roster JOINED (v_23) — apply (upsert) the member."""
+        await self._apply_roster_gossip(event, tombstoned=False)
+
+    async def _on_space_member_left(self, event: "FederationEvent") -> None:
+        """Authority-signed roster LEFT (v_23) — tombstone the member."""
+        await self._apply_roster_gossip(event, tombstoned=True)

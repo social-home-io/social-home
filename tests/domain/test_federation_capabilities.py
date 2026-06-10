@@ -6,7 +6,21 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 22
+    assert fc.OURS == 23
+
+
+def test_space_roster_gossip_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP == 23
+    assert fc.FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP <= fc.OURS
+
+
+def test_space_roster_gossip_feature_label():
+    labels = dict(fc.CAPABILITY_FEATURES).values()
+    assert "Space roster gossip" in labels
+    assert "Space roster gossip" in fc.features_missing_below(22)
+    assert "Space roster gossip" not in fc.features_missing_below(23)
+    # Space-scoped: a behind member household won't converge its roster.
+    assert "Space roster gossip" in fc.space_features_missing_below(22)
 
 
 def test_space_admin_key_share_capability_threshold():

@@ -127,8 +127,12 @@ That single command runs the full sequence:
 
 4. ``verify`` — assertions across all three households:
    - Every confirmed peer advertises the build's current ``OURS``
-     ``proto_version`` (the capability-bump tripwire — now v_21, which adds
-     authenticated mesh route discovery: a v_21 target signs the
+     ``proto_version`` (the capability-bump tripwire — now v_23, which adds
+     peer-replicated, space-authority-signed roster gossip:
+     ``SPACE_MEMBER_JOINED`` / ``SPACE_MEMBER_LEFT`` broadcast on every roster
+     mutation so every member household converges its roster, verified against
+     the space's public key. v_22 ships the delegated-admin signing-seed share;
+     v_21 adds authenticated mesh route discovery: a v_21 target signs the
      ``target_eph_pk`` it ships in ``SPACE_ROUTE_FOUND`` so the origin won't
      seal space content under a relay-substituted key. v_20 guards the
      ``SPACE_SYNC_REJECTED`` reconnect-reconcile backstop: a host only sends

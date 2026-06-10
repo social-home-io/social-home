@@ -12,21 +12,23 @@ from socialhome.domain.federation_capabilities import (
 )
 
 
-def test_ours_is_v22_with_space_admin_key_share_capability():
-    """v_22 introduces the delegated-admin signing-seed share (v_21 added
-    authenticated mesh route discovery, v_20 added SPACE_SYNC_REJECTED)."""
-    assert OURS == 22
+def test_ours_is_v23_with_space_roster_gossip_capability():
+    """v_23 introduces peer-replicated space roster gossip (v_22 added the
+    delegated-admin signing-seed share, v_21 authenticated mesh route
+    discovery, v_20 SPACE_SYNC_REJECTED)."""
+    assert OURS == 23
     assert FederationCapability.MIN_FOR_INSTANCE_RESYNC == 19
     assert FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED == 20
     assert FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY == 21
     assert FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE == 22
-    assert (
-        FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY,
-        "Authenticated mesh route discovery",
-    ) in CAPABILITY_FEATURES
+    assert FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP == 23
     assert (
         FederationCapability.MIN_FOR_SPACE_ADMIN_KEY_SHARE,
         "Space delegated admin authority",
+    ) in CAPABILITY_FEATURES
+    assert (
+        FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP,
+        "Space roster gossip",
     ) in CAPABILITY_FEATURES
 
 
@@ -99,21 +101,29 @@ def test_space_features_missing_below_v13():
         "Multi-admin approvals",
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
+        "Space roster gossip",
     ]
 
 
 def test_space_features_missing_below_v16():
     """Above v16 the space-scoped features are authenticated route
-    discovery (v_21) and delegated admin authority (v_22)."""
+    discovery (v_21), delegated admin authority (v_22), and roster
+    gossip (v_23)."""
     assert space_features_missing_below(16) == [
         "Authenticated mesh route discovery",
         "Space delegated admin authority",
+        "Space roster gossip",
     ]
 
 
-def test_space_features_missing_below_v22_is_empty():
-    """Nothing space-scoped lives above v22 — a v22 member lacks none."""
-    assert space_features_missing_below(22) == []
+def test_space_features_missing_below_v22():
+    """A v22 member household still lacks roster gossip (v_23)."""
+    assert space_features_missing_below(22) == ["Space roster gossip"]
+
+
+def test_space_features_missing_below_v23_is_empty():
+    """Nothing space-scoped lives above v23 — a v23 member lacks none."""
+    assert space_features_missing_below(23) == []
 
 
 def test_space_scoped_min_versions_are_capability_constants():
