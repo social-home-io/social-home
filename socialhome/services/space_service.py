@@ -1834,6 +1834,13 @@ class SpaceService(SpaceMemberGuardMixin):
         }
     )
 
+    #: The admin actions a remote household may forward (the gate / approval
+    #: substrate only makes sense for these; anything else is dropped at the
+    #: door so no phantom owner-approval is ever enqueued).
+    _FORWARDABLE_ADMIN_ACTIONS = frozenset(
+        {"update_config", "archive", "unarchive", "ban", "unban"}
+    )
+
     async def apply_remote_admin_action(
         self,
         space_id: str,
@@ -1905,6 +1912,13 @@ class SpaceService(SpaceMemberGuardMixin):
                 space_id,
             )
             return RemoteAdminOutcome.DROPPED
+        if action not in self._FORWARDABLE_ADMIN_ACTIONS:
+            log.info(
+                "apply_remote_admin_action: unknown action=%r for space=%s — dropping",
+                action,
+                space_id,
+            )
+            return RemoteAdminOutcome.DROPPED
         if not space.features.delegated_admin_authority:
             log.info(
                 "apply_remote_admin_action: delegation OFF for space=%s — "
@@ -1956,7 +1970,18 @@ class SpaceService(SpaceMemberGuardMixin):
                 kwargs = {k: v for k, v in p.items() if k in self._REMOTE_CONFIG_FIELDS}
                 feats = kwargs.get("features")
                 if feats is not None:
-                    kwargs["features"] = SpaceFeatures.from_wire_dict(feats)
+                    new_features = SpaceFeatures.from_wire_dict(feats)
+                    # delegated_admin_authority is OWNER-ONLY: a remote-forwarded
+                    # config edit must never change it (otherwise an approved /
+                    # self-authorized edit could grant or revoke delegation
+                    # itself). Pin it to the space's current value regardless of
+                    # the wire.
+                    kwargs["features"] = replace(
+                        new_features,
+                        delegated_admin_authority=(
+                            space.features.delegated_admin_authority
+                        ),
+                    )
                 await self.update_config(space_id, actor_username=owner, **kwargs)
             case "archive":
                 await self.archive_space(space_id, actor_username=owner)

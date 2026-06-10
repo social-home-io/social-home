@@ -4035,3 +4035,71 @@ async def test_apply_approved_admin_action_noop_when_not_hosted_here(stack):
     # Member still present, not banned — the no-op held.
     assert await stack.space_repo.get_member(space.id, victim.user_id) is not None
     assert await stack.space_repo.is_banned(space.id, victim.user_id) is False
+
+
+async def test_remote_admin_update_config_cannot_flip_delegation_flag(stack):
+    """H1: a forwarded update_config that flips delegated_admin_authority must
+    NOT change the owner-only flag, even with delegation ON (self-authorized).
+    A benign field in the same edit still applies, proving the edit ran."""
+    from socialhome.domain.space import RemoteAdminOutcome, SpaceFeatures
+
+    space = await _host_space_with_remote_admin(stack, delegation=True)
+    assert space.features.delegated_admin_authority is True
+    # The wire tries to REVOKE delegation (True -> False) while also changing
+    # a benign feature (calendar_enabled) and the name.
+    wire = SpaceFeatures(delegated_admin_authority=False, location=True).to_wire_dict()
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "Benign Rename", "features": wire},
+    )
+    assert outcome is RemoteAdminOutcome.EXECUTED
+    refreshed = await stack.space_repo.get(space.id)
+    # The owner-only flag is pinned to its current value, NOT the wire's.
+    assert refreshed.features.delegated_admin_authority is True
+    # …but the rest of the edit applied.
+    assert refreshed.name == "Benign Rename"
+    assert refreshed.features.location is True
+
+
+async def test_approved_admin_update_config_cannot_flip_delegation_flag(stack):
+    """H1 (OFF -> owner-approved path): an approved forwarded update_config
+    carrying a flipped delegated_admin_authority leaves the flag unchanged."""
+    from socialhome.domain.space import SpaceFeatures
+
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    assert space.features.delegated_admin_authority is False
+    # The wire tries to GRANT delegation (False -> True).
+    wire = SpaceFeatures(delegated_admin_authority=True, location=True).to_wire_dict()
+    await stack.space_svc.apply_approved_admin_action(
+        space.id,
+        action="update_config",
+        params={"name": "Approved Rename", "features": wire},
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.features.delegated_admin_authority is False
+    assert refreshed.name == "Approved Rename"
+    assert refreshed.features.location is True
+
+
+async def test_remote_admin_action_unknown_action_dropped(stack):
+    """H2: a non-forwardable action (e.g. dissolve) is DROPPED at the door for
+    both delegation states — never NEEDS_OWNER_APPROVAL or EXECUTED — and ON
+    causes no mutation."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    for delegation in (True, False):
+        space = await _host_space_with_remote_admin(stack, delegation=delegation)
+        outcome = await stack.space_svc.apply_remote_admin_action(
+            space.id,
+            actor_instance_id="instance-A",
+            actor_user_id="u-admin",
+            action="dissolve",
+            params={},
+        )
+        assert outcome is RemoteAdminOutcome.DROPPED
+        refreshed = await stack.space_repo.get(space.id)
+        assert refreshed.name == "S"
+        assert refreshed.archived is False
