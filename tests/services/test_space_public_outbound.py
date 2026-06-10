@@ -26,7 +26,10 @@ from socialhome.crypto import (
     generate_space_keypair,
     verify_ed25519,
 )
-from socialhome.services.space_public_author import author_signing_bytes
+from socialhome.services.space_public_author import (
+    author_signing_bytes,
+    build_signed_author_inner,
+)
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.events import SpacePostCreated
 from socialhome.domain.post import Post, PostType
@@ -231,6 +234,154 @@ async def test_inbound_origin_post_not_relayed_loop_guard(env):
             post=_post(env["author_user_id"]),
             space_id="sp-loop",
             origin_instance_id="beta.home",
+        )
+    )
+    assert env["gfs"].calls == []
+
+
+def _remote_relay(*, post_id="rpost-1", content="remote authored", space_id="sp-pub"):
+    """Build a VALID public_relay inner authored by a DIFFERENT household."""
+    author_kp = generate_identity_keypair()
+    username = "bob"
+    author_user_id = derive_user_id(author_kp.public_key, username)
+    post = Post(
+        id=post_id,
+        author=author_user_id,
+        type=PostType.TEXT,
+        content=content,
+        created_at=datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc),
+    )
+    inner = build_signed_author_inner(
+        post=post,
+        space_id=space_id,
+        author_username=username,
+        author_pk=author_kp.public_key,
+        author_identity_seed=author_kp.private_key,
+        origin_instance_id="beta.home",
+    )
+    return author_kp, author_user_id, inner
+
+
+async def test_remote_authored_relay_happy_path(env):
+    skp = await env["make_space"]("sp-pub", SpaceType.PUBLIC, with_seed=True)
+    author_kp, author_user_id, relay = _remote_relay()
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(author_user_id),
+            space_id="sp-pub",
+            origin_instance_id="beta.home",
+            public_relay=relay,
+        )
+    )
+    assert len(env["gfs"].calls) == 1
+    call = env["gfs"].calls[0]
+    assert call["event_type"] == AUTHORITY_EVENT_SPACE_POST_PUBLIC
+    assert call["from_instance"] == env["own_iid"]
+    envelope = call["payload"]
+    assert set(envelope) == {
+        "space_id",
+        "epoch",
+        "encrypted_payload",
+        "authority_sig",
+        "authority_sig_suite",
+    }
+    # GFS-blind: no plaintext content leaks.
+    blob = json.dumps(envelope)
+    assert "remote authored" not in blob
+    # Authority signature is THIS seed-holder's, verifiable against space pubkey.
+    assert verify_authority_event(
+        event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+        space_id="sp-pub",
+        payload=strip_authority_sig_fields(envelope),
+        authority_sig=envelope["authority_sig"],
+        authority_sig_suite=envelope["authority_sig_suite"],
+        space_public_key=skp.public_key,
+    )
+    # Decrypts to the ORIGINAL inner — author_sig intact, author_pk = original.
+    pt = await env["crypto"].decrypt(
+        "sp-pub", envelope["epoch"], envelope["encrypted_payload"]
+    )
+    inner = json.loads(pt)
+    assert inner == relay
+    assert inner["author_pk"] == author_kp.public_key.hex()
+    assert inner["author_user_id"] == author_user_id
+    assert verify_ed25519(
+        author_kp.public_key,
+        author_signing_bytes(inner),
+        b64url_decode(inner["author_sig"]),
+    )
+
+
+async def test_remote_authored_not_seed_holder_not_relayed(env):
+    await env["make_space"]("sp-pub", SpaceType.PUBLIC, with_seed=False)
+    _kp, author_user_id, relay = _remote_relay()
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(author_user_id),
+            space_id="sp-pub",
+            origin_instance_id="beta.home",
+            public_relay=relay,
+        )
+    )
+    assert env["gfs"].calls == []
+
+
+async def test_remote_authored_forged_relay_not_relayed(env):
+    await env["make_space"]("sp-pub", SpaceType.PUBLIC, with_seed=True)
+    _kp, author_user_id, relay = _remote_relay()
+    # Tamper a signed field AFTER signing → author_sig no longer verifies.
+    relay["content"] = "tampered after signing"
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(author_user_id),
+            space_id="sp-pub",
+            origin_instance_id="beta.home",
+            public_relay=relay,
+        )
+    )
+    assert env["gfs"].calls == []
+
+
+async def test_remote_authored_self_cert_mismatch_not_relayed(env):
+    await env["make_space"]("sp-pub", SpaceType.PUBLIC, with_seed=True)
+    _kp, author_user_id, relay = _remote_relay()
+    # author_user_id no longer derives from (author_pk, author_username).
+    relay["author_user_id"] = "not-the-derived-id"
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(author_user_id),
+            space_id="sp-pub",
+            origin_instance_id="beta.home",
+            public_relay=relay,
+        )
+    )
+    assert env["gfs"].calls == []
+
+
+async def test_remote_authored_private_space_not_relayed(env):
+    await env["make_space"]("sp-priv", SpaceType.PRIVATE, with_seed=True)
+    _kp, author_user_id, relay = _remote_relay(space_id="sp-priv")
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(author_user_id),
+            space_id="sp-priv",
+            origin_instance_id="beta.home",
+            public_relay=relay,
+        )
+    )
+    assert env["gfs"].calls == []
+
+
+async def test_inbound_no_public_relay_not_relayed(env):
+    """An inbound event with no public_relay is the pure loop guard — never
+    re-fan, no crash."""
+    await env["make_space"]("sp-pub", SpaceType.PUBLIC, with_seed=True)
+    await env["bus"].publish(
+        SpacePostCreated(
+            post=_post(env["author_user_id"]),
+            space_id="sp-pub",
+            origin_instance_id="beta.home",
+            public_relay=None,
         )
     )
     assert env["gfs"].calls == []

@@ -6,13 +6,17 @@ from datetime import datetime, timezone
 
 from socialhome.crypto import (
     b64url_decode,
+    b64url_encode,
+    derive_user_id,
     generate_identity_keypair,
+    sign_ed25519,
     verify_ed25519,
 )
 from socialhome.domain.post import LocationData, Post, PostType
 from socialhome.services.space_public_author import (
     author_signing_bytes,
     build_signed_author_inner,
+    verify_signed_author_inner,
 )
 
 
@@ -138,3 +142,71 @@ def test_build_signed_author_inner_with_location_roundtrip():
         author_signing_bytes(inner),
         b64url_decode(inner["author_sig"]),
     )
+
+
+def _signed_inner(**over):
+    """A well-formed, self-certifying, author-signed inner for verify tests."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, username)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+    )
+    inner.update(over)
+    return kp, inner
+
+
+def test_verify_signed_author_inner_accepts_valid():
+    _kp, inner = _signed_inner()
+    assert verify_signed_author_inner(inner) is True
+
+
+def test_verify_signed_author_inner_rejects_missing_identity_fields():
+    _kp, inner = _signed_inner()
+    for field_name in ("post_id", "author_user_id", "author_pk", "author_username"):
+        bad = dict(inner)
+        bad.pop(field_name)
+        assert verify_signed_author_inner(bad) is False
+
+
+def test_verify_signed_author_inner_rejects_self_cert_mismatch():
+    # author_user_id does not derive from (author_pk, author_username).
+    _kp, inner = _signed_inner(author_user_id="not-the-right-id")
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_verify_signed_author_inner_rejects_tampered_content():
+    # author_sig was computed over the original content; tampering breaks it.
+    _kp, inner = _signed_inner()
+    inner["content"] = "tampered"
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_verify_signed_author_inner_rejects_missing_sig():
+    _kp, inner = _signed_inner()
+    inner.pop("author_sig")
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_verify_signed_author_inner_rejects_malformed_sig():
+    _kp, inner = _signed_inner()
+    inner["author_sig"] = "!!!not base64!!!"
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_verify_signed_author_inner_rejects_wrong_signing_key():
+    # author_pk is the real author, but the sig was made by a different key.
+    impostor = generate_identity_keypair()
+    kp, inner = _signed_inner()
+    inner["author_sig"] = b64url_encode(
+        sign_ed25519(impostor.private_key, author_signing_bytes(inner))
+    )
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_verify_signed_author_inner_fail_closed_on_non_dict():
+    assert verify_signed_author_inner({}) is False

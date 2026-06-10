@@ -41,13 +41,12 @@ from ..authority_sig import (
     strip_authority_sig_fields,
     verify_authority_event,
 )
-from ..crypto import b64url_decode, derive_user_id, verify_ed25519
 from ..domain.events import SpacePostCreated
 from ..domain.post import LocationData, Post, PostType
 from ..domain.presence import truncate_coord
 from ..infrastructure.event_bus import EventBus
 from ..utils.datetime import parse_iso8601_lenient
-from .space_public_author import author_signing_bytes
+from .space_public_author import verify_signed_author_inner
 
 if TYPE_CHECKING:
     from ..repositories.space_post_repo import AbstractSpacePostRepo
@@ -138,31 +137,17 @@ class SpacePublicInbound:
 
         post_id = str(inner.get("post_id") or "")
         author_user_id = str(inner.get("author_user_id") or "")
-        author_pk_hex = str(inner.get("author_pk") or "")
-        username = str(inner.get("author_username") or "")
-        if not (post_id and author_user_id and author_pk_hex and username):
+        # Self-cert (author_pk ↔ author_user_id, both PUBLIC) + per-author
+        # signature (the named author's HOUSEHOLD identity key must have signed
+        # the inner content — only a household holding the author's identity
+        # seed can produce it). The relaying seed-holder applies the IDENTICAL
+        # check before relaying (space_public_author.verify_signed_author_inner),
+        # so the two sites can't drift. Fail-closed on missing identity fields,
+        # self-cert mismatch, or missing/malformed/invalid signature.
+        if not verify_signed_author_inner(inner):
             log.warning(
-                "space_public.inbound: missing identity fields for space %s",
+                "space_public.inbound: author verification failed for space %s post %s",
                 space_id,
-            )
-            return
-        # Author self-cert: the user id MUST be derivable from the author's
-        # instance pubkey + username. This only binds author_pk ↔ author_user_id
-        # — both are PUBLIC, so on its own it can't prevent a seed-holder from
-        # attributing a post to any member.
-        if not self._self_cert_ok(author_pk_hex, username, author_user_id):
-            log.warning(
-                "space_public.inbound: author self-cert mismatch for post %s",
-                post_id,
-            )
-            return
-        # Per-author signature: the named author's HOUSEHOLD identity key must
-        # have signed the inner content. Only a household holding the author's
-        # identity seed can produce this, so a malicious seed-holder cannot
-        # forge authorship. Fail-closed if missing / malformed / invalid.
-        if not self._author_sig_ok(inner, author_pk_hex):
-            log.warning(
-                "space_public.inbound: author signature failed for post %s",
                 post_id,
             )
             return
@@ -200,30 +185,6 @@ class SpacePublicInbound:
             # Unknown suite (no default fallback) or malformed pinned pubkey
             # → unverifiable, fail-closed.
             return False
-
-    @staticmethod
-    def _self_cert_ok(author_pk_hex: str, username: str, author_user_id: str) -> bool:
-        try:
-            return (
-                derive_user_id(bytes.fromhex(author_pk_hex), username) == author_user_id
-            )
-        except ValueError:
-            return False
-
-    @staticmethod
-    def _author_sig_ok(inner: dict, author_pk_hex: str) -> bool:
-        """Verify the inner ``author_sig`` against ``author_pk`` over the
-        canonical author signing bytes. Fail-closed on missing / malformed /
-        invalid signature."""
-        author_sig = inner.get("author_sig")
-        if not isinstance(author_sig, str) or not author_sig:
-            return False
-        try:
-            author_pk = bytes.fromhex(author_pk_hex)
-            sig = b64url_decode(author_sig)
-        except ValueError:
-            return False
-        return verify_ed25519(author_pk, author_signing_bytes(inner), sig)
 
     @staticmethod
     def _post_from_inner(post_id: str, author: str, inner: dict) -> Post:

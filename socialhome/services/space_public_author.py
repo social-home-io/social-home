@@ -28,7 +28,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from ..crypto import b64url_encode, sign_ed25519
+from ..crypto import (
+    b64url_decode,
+    b64url_encode,
+    derive_user_id,
+    sign_ed25519,
+    verify_ed25519,
+)
 
 if TYPE_CHECKING:
     from ..domain.post import Post
@@ -113,3 +119,44 @@ def build_signed_author_inner(
         sign_ed25519(author_identity_seed, author_signing_bytes(inner))
     )
     return inner
+
+
+def verify_signed_author_inner(inner: dict) -> bool:
+    """True iff ``inner`` is a well-formed, self-certifying, author-signed
+    public-post payload: required identity fields present, the ``author_pk``
+    self-certifies the ``author_user_id`` (:func:`derive_user_id`), and
+    ``author_sig`` verifies against ``author_pk`` over the canonical author
+    bytes. Fail-closed.
+
+    Mirrors the subscriber-side self-cert + author-sig checks
+    (``SpacePublicInbound._self_cert_ok`` / ``_author_sig_ok``) so a relaying
+    seed-holder and a receiving subscriber apply the IDENTICAL verification —
+    the two can't drift.
+    """
+    if not isinstance(inner, dict):
+        return False
+    post_id = str(inner.get("post_id") or "")
+    author_user_id = str(inner.get("author_user_id") or "")
+    author_pk_hex = str(inner.get("author_pk") or "")
+    username = str(inner.get("author_username") or "")
+    if not (post_id and author_user_id and author_pk_hex and username):
+        return False
+    # Author self-cert: the user id MUST be derivable from author_pk + username
+    # (binds author_pk ↔ author_user_id — both PUBLIC, so on its own this can't
+    # prevent attribution forgery; the author_sig below closes that hole).
+    try:
+        if derive_user_id(bytes.fromhex(author_pk_hex), username) != author_user_id:
+            return False
+    except ValueError:
+        return False
+    # Per-author signature: the named author's household identity key must have
+    # signed the inner content. Fail-closed on missing / malformed / invalid.
+    author_sig = inner.get("author_sig")
+    if not isinstance(author_sig, str) or not author_sig:
+        return False
+    try:
+        author_pk = bytes.fromhex(author_pk_hex)
+        sig = b64url_decode(author_sig)
+    except ValueError:
+        return False
+    return verify_ed25519(author_pk, author_signing_bytes(inner), sig)

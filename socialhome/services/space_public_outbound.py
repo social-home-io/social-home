@@ -37,12 +37,17 @@ subscribers only when a seed-holder (owner or delegated admin) relays —
 accepted for this phase. Deletes/edits are a follow-up (the GFS relay is
 created-only today).
 
-Follow-up (out of scope): relaying a *remote* member's post — where this
-seed-holder does NOT hold the author's identity seed — needs the author's
-``author_sig`` propagated from the author's household through the mesh to the
-relaying seed-holder, then carried unchanged into the inner payload. Until
-that exists, a remote member's public post is not relayed (the local-author
-guard below skips it).
+Remote-author relay (Phase 5a relay): a *remote* member's public post — where
+this seed-holder does NOT hold the author's identity seed — is relayed when it
+arrives carrying the author household's pre-signed inner as
+``SpacePostCreated.public_relay`` (built by
+:func:`build_signed_author_inner` on the author's household and propagated
+through the mesh). :meth:`_relay_remote_authored` re-verifies the author's
+self-cert + signature (:func:`verify_signed_author_inner`) — never relaying
+forgeable / unverifiable content — re-encrypts the inner under the existing
+per-space content key, and authority-signs the GFS envelope with the space
+seed. An inbound event with no ``public_relay`` is the pure loop guard and is
+never re-fanned.
 
 This service is the encryption boundary: the cleartext post never leaves
 in a GFS-bound envelope (CLAUDE.md Encryption-First Rule). If the space
@@ -64,7 +69,10 @@ from ..authority_sig import (
 from ..domain.events import SpacePostCreated
 from ..domain.space import SpaceType
 from ..infrastructure.event_bus import EventBus
-from .space_public_author import build_signed_author_inner
+from .space_public_author import (
+    build_signed_author_inner,
+    verify_signed_author_inner,
+)
 
 if TYPE_CHECKING:
     from ..repositories.space_repo import AbstractSpaceRepo
@@ -135,10 +143,12 @@ class SpacePublicOutbound:
         self._bus.subscribe(SpacePostCreated, self._on_space_post_created)
 
     async def _on_space_post_created(self, event: SpacePostCreated) -> None:
-        # Loop guard: an inbound-driven publish (re-emitted by the
-        # federation inbound after receiving a post) carries
-        # ``origin_instance_id`` — never fan it back out.
+        # Inbound (another member's post). Relay it to the GFS subscribers
+        # only when it carries a verified, author-signed public_relay hint and
+        # we hold the space seed (remote-author relay, owner-offline). Otherwise
+        # this is the loop guard — never re-fan an inbound post.
         if event.origin_instance_id is not None:
+            await self._relay_remote_authored(event)
             return
         if not event.space_id:
             return
@@ -228,4 +238,81 @@ class SpacePublicOutbound:
                 "space_public.outbound: relay failed for space=%s post=%s",
                 event.space_id,
                 post.id,
+            )
+
+    async def _relay_remote_authored(self, event: SpacePostCreated) -> None:
+        """Relay another member household's public/global post to the GFS
+        subscribers — owner-offline path.
+
+        A remote member's public post can't reach subscribers on its own
+        (only a seed-holder can authority-sign the GFS relay). When such a post
+        reaches THIS household and we hold the space seed, we re-wrap the
+        author's pre-signed inner (carried as ``event.public_relay``) under our
+        authority signature. We verify the original author's self-cert +
+        signature first — never relay forgeable / unverifiable content — and
+        re-encrypt under the existing per-space content key (Encryption-First).
+        """
+        relay = event.public_relay
+        if not isinstance(relay, dict):
+            return
+        if not event.space_id:
+            return
+        space = await self._spaces.get(event.space_id)
+        if space is None or space.space_type not in _PUBLIC_TIERS:
+            return
+        seed = await self._spaces.get_space_seed(event.space_id)
+        if seed is None:
+            return  # not a seed-holder — can't authority-sign the relay
+        if not self._own_instance_id:
+            log.warning(
+                "space_public.outbound: identity not attached — cannot relay "
+                "remote-authored post for space %s",
+                event.space_id,
+            )
+            return
+        # Verify the ORIGINAL author's signature + self-cert before relaying —
+        # never relay unverifiable / forgeable content (the subscriber
+        # re-verifies, but we fail-closed here too and don't waste a GFS
+        # round-trip).
+        if not verify_signed_author_inner(relay):
+            log.warning(
+                "space_public.outbound: public_relay failed verification for "
+                "space=%s — not relaying",
+                event.space_id,
+            )
+            return
+        try:
+            epoch, ct = await self._crypto.encrypt(
+                event.space_id, json.dumps(relay).encode("utf-8")
+            )
+        except RuntimeError:
+            log.warning(
+                "space_public.outbound: no content key for space %s — "
+                "cannot relay remote-authored post",
+                event.space_id,
+            )
+            return
+        envelope: dict = {
+            "space_id": event.space_id,
+            "epoch": epoch,
+            "encrypted_payload": ct,
+        }
+        sig = sign_authority_event(
+            event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+            space_id=event.space_id,
+            payload=strip_authority_sig_fields(envelope),
+            space_seed=seed,
+        )
+        envelope.update(sig)
+        try:
+            await self._gfs.publish_space_event(
+                space_id=event.space_id,
+                event_type=AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+                payload=envelope,
+                from_instance=self._own_instance_id,
+            )
+        except Exception:
+            log.exception(
+                "space_public.outbound: remote-author relay failed for space=%s",
+                event.space_id,
             )
