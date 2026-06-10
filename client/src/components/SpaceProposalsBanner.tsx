@@ -35,6 +35,8 @@ export interface SpaceProposal {
   /** The forwarded admin action a remote admin asked the owner to run. */
   fwd_action?: string
   fwd_params?: Record<string, unknown>
+  /** Resolved display name of the forwarded action's target, when known. */
+  fwd_target_label?: string
 }
 
 interface Props {
@@ -65,9 +67,9 @@ function describe(p: SpaceProposal): string {
       : 'change the publication tier'
   }
   if (p.action === 'remote_admin_action') {
-    return (
+    const base =
       (p.fwd_action && FWD_ACTION_COPY[p.fwd_action]) || 'perform an admin action'
-    )
+    return p.fwd_target_label ? `${base} (${p.fwd_target_label})` : base
   }
   return 'make a critical change'
 }

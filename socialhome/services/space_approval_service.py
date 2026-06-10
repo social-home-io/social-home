@@ -459,6 +459,40 @@ class SpaceApprovalService:
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
+    async def _resolve_fwd_target_label(
+        self, space_id: str, fwd_action, fwd_params
+    ) -> str | None:
+        """Human-readable target of a forwarded admin action for the owner's
+        approval card. Best-effort: None when nothing resolvable (the card
+        falls back to the generic phrase). Host-side only."""
+        if not isinstance(fwd_params, dict):
+            return None
+        if fwd_action in ("ban", "unban"):
+            uid = str(fwd_params.get("user_id") or "")
+            return await self._user_label(space_id, uid) if uid else None
+        if fwd_action == "invite":
+            # The invitee isn't a member yet; best-effort from a known
+            # remote-user record.
+            uid = str(fwd_params.get("invitee_user_id") or "")
+            if not uid:
+                return None
+            ru = await self._users.get_remote(uid)
+            return ru.display_name if ru and ru.display_name else None
+        return None
+
+    async def _user_label(self, space_id: str, user_id: str) -> str | None:
+        # A current remote member of this space carries a display_name.
+        for rm in await self._remote_members.list_for_space(space_id):
+            if rm.user_id == user_id and rm.display_name:
+                return rm.display_name
+        # A local user.
+        u = await self._users.get_by_user_id(user_id)
+        if u and u.display_name:
+            return u.display_name
+        # A cached remote user (no longer / not a member of this space).
+        ru = await self._users.get_remote(user_id)
+        return ru.display_name if ru and ru.display_name else None
+
     async def _admin_keys(self, space_id: str) -> set[tuple[str, str]]:
         """The (instance_id, user_id) of every current admin (owner counts),
         local + remote — the electorate the majority is computed against."""
@@ -561,6 +595,9 @@ class SpaceApprovalService:
                 "owner_only": True,
                 "fwd_action": p.get("fwd_action"),
                 "fwd_params": p.get("fwd_params"),
+                "fwd_target_label": await self._resolve_fwd_target_label(
+                    proposal.space_id, p.get("fwd_action"), p.get("fwd_params")
+                ),
                 "approvals": approvals,
                 "total_admins": 1,
                 "needed": 1,

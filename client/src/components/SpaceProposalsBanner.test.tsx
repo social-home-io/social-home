@@ -123,6 +123,21 @@ describe('SpaceProposalsBanner', () => {
     )
     expect(container.textContent).toContain('remove a member')
     expect(container.textContent).toContain('Requested by bob')
+    // No fwd_target_label → no trailing "(name)".
+    expect(container.textContent).not.toContain('remove a member (')
+  })
+
+  it('appends the target name when fwd_target_label is present', async () => {
+    apiGet.mockResolvedValue({
+      proposals: [ownerActionProposal({ fwd_target_label: 'Alice' })],
+    })
+    const { container } = render(
+      <SpaceProposalsBanner spaceId="s1" canVote={true} isOwner={true} />,
+    )
+    await waitFor(() =>
+      expect(container.textContent).toContain('Owner approval needed'),
+    )
+    expect(container.textContent).toContain('remove a member (Alice)')
   })
 
   it('shows vote buttons on an owner_only proposal to the owner', async () => {
