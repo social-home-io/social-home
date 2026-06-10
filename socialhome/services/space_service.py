@@ -1869,7 +1869,8 @@ class SpaceService(SpaceMemberGuardMixin):
           can enqueue an owner-approval (the enqueue is a later task).
 
         Scope is admin-level mutations only: ``update_config``,
-        ``archive`` / ``unarchive``, ``ban`` / ``unban``. Owner-only
+        ``archive`` / ``unarchive``, ``ban`` / ``unban``, ``invite``.
+        Owner-only
         actions (dissolve, transfer-ownership, role assignment) are NOT
         forwardable and never reach this dispatcher. Unknown actions,
         unauthenticated actors, and spaces not hosted here are silently
@@ -2585,6 +2586,12 @@ class SpaceService(SpaceMemberGuardMixin):
             )
             if forwarded:
                 return ""
+            # Entered the OFF gate but couldn't forward (degenerate: no host
+            # instance id) — never mint locally; fail closed.
+            raise SpacePermissionError(
+                "delegated admin authority is not enabled for this space — "
+                "owner approval required",
+            )
         actor = await self._users.get(actor_username)
         assert actor is not None
 

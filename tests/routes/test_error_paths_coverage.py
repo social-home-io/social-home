@@ -1689,6 +1689,53 @@ async def test_space_remote_invites_missing_fields_422(client):
     assert r.status == 422
 
 
+async def test_space_remote_invites_delegation_off_admin_forwards_202(client):
+    """A non-owner ADMIN on a space hosted ELSEWHERE with
+    ``delegated_admin_authority`` OFF can't mint the invite locally —
+    the route forwards it to the host for owner approval and returns
+    ``202 {"status": "pending_owner_approval"}`` (Phase 6)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from socialhome.app_keys import space_service_key
+
+    # Space hosted on ANOTHER household (owner_instance_id != our own),
+    # delegation OFF (no feature_delegated_admin_authority flag), and the
+    # local admin user seated as a plain ADMIN.
+    sid = "sp-remote-off"
+    await client._db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key)"
+        " VALUES(?, 'Remote', 'inst-remote-owner', 'remoteowner', ?)",
+        (sid, "ab" * 32),
+    )
+    await client._db.enqueue(
+        "INSERT INTO space_members(space_id, user_id, role) VALUES(?, ?, 'admin')",
+        (sid, client._uid),
+    )
+
+    # Stub the federation boundary so _forward_admin_action_if_remote can
+    # ship the SPACE_REMOTE_ADMIN_ACTION intent to the (remote) host.
+    svc = client.server.app[space_service_key]
+    fed = MagicMock()
+    fed._own_instance_id = svc._own_instance_id
+    fed.peer_supports = AsyncMock(return_value=True)
+    fed.send_with_mesh_fallback = AsyncMock()
+    svc._federation = fed
+
+    r = await client.post(
+        f"/api/spaces/{sid}/remote-invites",
+        json={
+            "invitee_instance_id": "inst-invitee",
+            "invitee_user_id": "user-invitee",
+        },
+        headers=_auth(client._tok),
+    )
+    assert r.status == 202
+    assert await r.json() == {"status": "pending_owner_approval"}
+    # The intent was actually forwarded to the host.
+    assert fed.send_with_mesh_fallback.await_count == 1
+
+
 # ─── public_spaces ─────────────────────────────────────────────────────────
 
 
