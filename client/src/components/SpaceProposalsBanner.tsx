@@ -46,7 +46,7 @@ interface Props {
 }
 
 /** Human-readable phrase for a forwarded admin action. Reads after
- *  "wants to …" / "A proposal to …". */
+ *  "A proposal to …". */
 const FWD_ACTION_COPY: Record<string, string> = {
   ban: 'remove a member',
   unban: 'reinstate a member',
