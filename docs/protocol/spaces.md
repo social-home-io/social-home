@@ -437,6 +437,35 @@ sequenceDiagram
     Note over A: A can now sign space-authority<br/>events with O offline
 ```
 
+#### Membership ops offline-of-owner (delegated invite + seat)
+
+Once a delegated admin holds the seed, it can run the **full
+invite → seat → key-handoff → roster-converge** flow with the owner
+offline — no new event type and no capability bump; only the
+*authorization* widens. `SpaceService.invite_remote_user` is gated by
+`_require_admin_or_owner` (admin **or** owner, not owner-only): it mints
+a local invite token and ships `SPACE_PRIVATE_INVITE` whose encrypted
+`space_meta` already carries the current content key
+(`build_space_snapshot_for_federation` → `export_current_key`). When the
+invitee accepts, the seating household emits an authority-signed
+`SPACE_MEMBER_JOINED` roster gossip (signed with the space seed via
+`ensure_space_seed`); every member household verifies it against the
+space public key and CRDT-merges (`apply_member_event`), so an owner that
+was offline at seat-time converges its roster purely from the gossip —
+it never had to process the accept.
+
+The gate is delegation-aware. A **non-owner ADMIN** household may mint an
+authoritative invite **only** when its local copy of the space has
+`delegated_admin_authority` ON (it then holds the seed, so its JOINED
+gossip is valid). With the flag OFF the invite raises
+`SpacePermissionError` (*"delegated admin authority is not enabled for
+this space — owner approval required"*); a later phase replaces that
+raise with a forward-to-owner-for-approval path. The **owner/host** can
+always invite, regardless of the flag. If a delegation-ON, non-owner
+space ever lacks a seed (the Phase-1 share never landed) the roster
+gossip is skipped gracefully but logged at WARNING — an anomaly, not a
+silent drop.
+
 ### Cross-household kick (phase 2, v_9+)
 
 `SPACE_REMOTE_ADMIN_KICK` (PR #435, #114 phase 2) lets a promoted

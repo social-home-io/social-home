@@ -892,6 +892,22 @@ class SpaceService(SpaceMemberGuardMixin):
             log.exception("roster-gossip: ensure_space_seed failed for %s", space.id)
             return
         if seed is None:
+            # A delegation-ON space whose host ISN'T us but for which we hold
+            # no seed is an anomaly — Phase-1 SPACE_ADMIN_KEY_SHARE should have
+            # delivered it, so a delegated admin can't sign roster gossip and
+            # offline-of-owner convergence silently regresses. Surface it at
+            # WARNING so it's diagnosable; still skip gracefully (don't crash).
+            is_owner_host = (
+                self._own_instance_id is not None
+                and space.owner_instance_id == self._own_instance_id
+            )
+            if space.features.delegated_admin_authority and not is_owner_host:
+                log.warning(
+                    "roster-gossip: no signing seed for delegated-admin space "
+                    "%s — Phase-1 key share missing; skipping authority gossip "
+                    "(roster won't converge offline-of-owner)",
+                    space.id,
+                )
             return
         try:
             version = await self._spaces.increment_config_sequence(space.id)
@@ -2314,7 +2330,30 @@ class SpaceService(SpaceMemberGuardMixin):
                 "remote invites require a live FederationService",
             )
         space = await self._require_space(space_id)
-        await self._require_admin_or_owner(space, actor_username)
+        actor_member = await self._require_admin_or_owner(space, actor_username)
+        # §D3 (Phase 3) — delegated-admin authority gate. The owner/host of a
+        # space can always invite. A NON-owner ADMIN (a delegated admin whose
+        # household doesn't host the space) may only mint an authoritative
+        # invite when the owner opted in via ``delegated_admin_authority`` —
+        # otherwise the invite would seat + key-hand-off a member behind the
+        # owner's back. The flag-ON path works today because the delegated
+        # admin holds the space signing seed (Phase-1 SPACE_ADMIN_KEY_SHARE),
+        # so the JOINED roster gossip it emits is authority-signed.
+        is_owner_host = (
+            self._own_instance_id is not None
+            and space.owner_instance_id == self._own_instance_id
+        )
+        if (
+            not is_owner_host
+            and actor_member.role == SpaceRole.ADMIN
+            and not space.features.delegated_admin_authority
+        ):
+            # Phase 6: replace this raise with a forward-to-owner-for-approval
+            # path (the delegated admin asks the host to seat the invitee).
+            raise SpacePermissionError(
+                "delegated admin authority is not enabled for this space — "
+                "owner approval required",
+            )
         actor = await self._users.get(actor_username)
         assert actor is not None
 
