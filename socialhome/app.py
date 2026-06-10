@@ -170,6 +170,8 @@ from .services.profile_sync_service import ProfileSyncService
 from .services.moment_public_outbound import MomentPublicOutbound
 from .services.space_config_outbound import SpaceConfigOutbound
 from .services.space_post_outbound import SpacePostOutbound
+from .services.space_public_inbound import SpacePublicInbound
+from .services.space_public_outbound import SpacePublicOutbound
 from .services.moment_public_inbound import MomentPublicInbound
 from .repositories.moment_public_repo import (
     SqliteMomentPublicFollowRepo,
@@ -285,7 +287,10 @@ from .services.search_service import SearchService
 from .services.shopping_service import ShoppingService
 from .services.peer_home_sharing_service import PeerHomeSharingService
 from .services.pending_decrypts_cache import PendingDecryptsCache
-from .services.space_crypto_service import SpaceContentEncryption
+from .services.space_crypto_service import (
+    AUTHORITY_EVENT_SPACE_POST_PUBLIC,
+    SpaceContentEncryption,
+)
 from .services.storage_quota_service import StorageQuotaService
 from .services.setup_service import SetupService
 from .services.stt_service import SttService
@@ -1686,6 +1691,12 @@ def create_app(config: Config | None = None) -> web.Application:
         moment_repo=moment_repo,
         follow_repo=moment_public_follow_repo,
     )
+    # Public space-content relay (Phase 5a2) is constructed in
+    # ``_on_startup`` — its producer/consumer both depend on
+    # ``space_crypto`` (SpaceContentEncryption), which is only built once
+    # the identity seed + KEK are available at startup.
+    space_public_outbound: SpacePublicOutbound | None = None
+    space_public_inbound: SpacePublicInbound | None = None
     profile_sync_service = ProfileSyncService(
         bus=bus,
         registration_repo=moment_public_registration_repo,
@@ -2124,6 +2135,33 @@ def create_app(config: Config | None = None) -> web.Application:
         # empty and every SPACE_POST_CREATED inbound raises.
         real_space_service.attach_space_crypto_service(space_crypto)
 
+        # Public space-content relay (Phase 5a2). Producer fans a
+        # PUBLIC/GLOBAL space post out to the GFS as an encrypted,
+        # authority-signed envelope (GFS stays content-blind); consumer
+        # verifies + decrypts + dedupes the relayed envelope on receive.
+        # Built here (not in create_app) because both depend on
+        # ``space_crypto``, which only exists once the seed/KEK are wired.
+        nonlocal space_public_outbound, space_public_inbound
+        space_public_outbound = SpacePublicOutbound(
+            bus=bus,
+            space_repo=space_repo,
+            space_crypto=space_crypto,
+            user_repo=user_repo,
+            gfs_service=gfs_connection_service,
+        )
+        space_public_outbound.attach_identity(
+            own_instance_id=real_instance_id,
+            own_instance_public_key=identity_pk,
+            own_identity_seed=identity_seed,
+        )
+        space_public_outbound.wire()
+        space_public_inbound = SpacePublicInbound(
+            bus=bus,
+            space_repo=space_repo,
+            space_crypto=space_crypto,
+            space_post_repo=space_post_repo,
+        )
+
         # 5. Federation stack — FederationService + sync manager + typing/dm/
         #    presence attach + inbound bridge + pairing-relay queue.
         fed = _wire_federation_stack(
@@ -2431,6 +2469,15 @@ def create_app(config: Config | None = None) -> web.Application:
                 frame.get("event_type"),
                 frame.get("from_instance"),
             )
+            # Public space-content relay (Phase 5a2): a ``space_post_public``
+            # frame carries an encrypted, authority-signed post envelope.
+            # The inbound consumer verifies + decrypts + dedupes; other
+            # event types remain logged-only until their consumers land.
+            if (
+                frame.get("event_type") == AUTHORITY_EVENT_SPACE_POST_PUBLIC
+                and space_public_inbound is not None
+            ):
+                await space_public_inbound.handle(frame)
 
         # Re-fetch the GFS's current server_name on each WS (re)connect and
         # refresh the stored display_name if the operator renamed the

@@ -78,6 +78,68 @@ The Social Home ↔ GFS link is split by direction:
   back to an HTTPS POST callback to the instance's registered
   `inbox_url`.
 
+### HFS producer + consumer for public space content (Phase 5a2)
+
+The GFS only *relays* — the HFS owns the encryption and authorship
+boundary on both ends:
+
+- **Producer** (`services/space_public_outbound.py`) subscribes to
+  `SpacePostCreated`. When a post lands in a **PUBLIC/GLOBAL** space on a
+  household that **holds the space seed** (owner or delegated admin), it
+  builds an inner content payload — `{post_id, space_id, author_user_id,
+  author_pk, author_username, content, media refs, created_at, author_sig,
+  …}` — and AES-256-GCM-encrypts it under the space's **existing** content
+  key (`space_crypto_service.encrypt`, no new key). `author_sig` is a
+  **per-author** Ed25519 signature: the author's **household identity seed**
+  signs the canonical, domain-separated bytes over the attributable inner
+  fields (`services/space_public_author.py:author_signing_bytes`, prefix
+  `space-post-author:v1:`, sorted compact JSON, excluding `author_sig`
+  itself). It rides **inside** the ciphertext, so the GFS never sees it. The
+  wire envelope is only `{space_id, epoch, encrypted_payload, authority_sig,
+  authority_sig_suite}` — **no plaintext content, author, or author_sig ever
+  leaves the household**, so the GFS and any relay stay content-blind
+  (Encryption-First Rule). The envelope is **space-authority**-signed with
+  the space seed under `space_post_public` and POSTed to every GFS the space
+  is published to (`gfs_connection_service.publish_space_event`). Skipped: a
+  household without the seed (a plain member's public post reaches
+  subscribers only once a seed-holder relays — accepted for 5a), a
+  non-public space, an inbound-driven (`origin_instance_id` set) event (loop
+  guard), and a post whose author is **not a local user** — the producer
+  only relays its OWN household's posts, since only it holds the author's
+  identity seed and can produce `author_sig`.
+
+  Two independent signatures protect a relayed post: the **space-authority**
+  signature on the envelope (a seed-holder, verified against the pinned space
+  key — proves the relay is authorised) and the **per-author** `author_sig`
+  on the inner content (the author's household key, verified against
+  `author_pk` — proves the named author wrote it). The self-cert only binds
+  `author_pk ↔ author_user_id`; both are public, so without `author_sig` a
+  seed-holder could attribute any post to any member. **Follow-up
+  (out of scope):** relaying a *remote* member's post needs the author's
+  `author_sig` propagated through the mesh to the relaying seed-holder (which
+  lacks the remote author's seed); until then the local-author guard skips
+  remote-authored posts.
+- **Consumer** (`services/space_public_inbound.py`) handles the relayed
+  `space_post_public` frame off the SH↔GFS WebSocket. Defence-in-depth —
+  the GFS already verified, but the relay is never trusted: it (1)
+  re-verifies the authority signature against the locally-mirrored
+  `spaces.identity_public_key`, (2) decrypts under the per-space content
+  key for the stated epoch (dropping gracefully — including a tampered
+  ciphertext whose AEAD tag fails — if the key isn't held yet, since
+  subscriber keys arrive in Phase 5b), (3) **self-certifies the author**
+  (`derive_user_id(author_pk, username) == author_user_id` — binds pk↔user_id
+  only), (4) **verifies the per-author `author_sig`** against `author_pk` over
+  `author_signing_bytes` (fail-closed if missing, malformed, or invalid — this
+  is what actually prevents a seed-holder from forging authorship), (5)
+  **dedupes by `post_id`** (the at-least-once relay's content-layer
+  backstop), then persists to `space_posts` and republishes
+  `SpacePostCreated` (with `origin_instance_id` set) so realtime/search
+  light up and the federation outbound bridge skips re-fanning.
+
+The HTTPS-inbox fallback for relayed `space_post_public` events is a
+follow-up; today the consumer is wired on the WebSocket path (mirroring
+the public-moments inbound).
+
 WebRTC is **not** used for the SH↔GFS leg — the GFS is publicly
 reachable, so NAT traversal buys nothing while DTLS plus per-connection
 PeerConnection state would be much more resource-hungry than a plain
