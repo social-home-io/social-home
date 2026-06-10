@@ -3889,3 +3889,217 @@ async def test_owned_no_seed_gossip_stays_silent(stack, caplog):
         r.levelno == logging.WARNING and "no signing seed" in r.getMessage()
         for r in caplog.records
     )
+
+
+# ─── Phase 6a — owner-approval gate for SPACE_REMOTE_ADMIN_ACTION ──────────
+
+
+async def _host_space_with_remote_admin(stack, *, delegation, admin=True):
+    """Host-owned space + a remote member seated on instance-A.
+
+    ``delegation`` flips ``delegated_admin_authority``; ``admin`` decides
+    whether the remote actor is seated as an admin (vs a plain member)."""
+    from socialhome.domain.space import SpaceFeatures, SpaceRole
+
+    await stack.provision_user("alicehost")
+    space = await stack.space_svc.create_space(
+        owner_username="alicehost",
+        name="S",
+        features=SpaceFeatures(delegated_admin_authority=delegation),
+    )
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="instance-A",
+        user_id="u-admin",
+        user_pk=None,
+        display_name=None,
+    )
+    if admin:
+        await remote.set_role(space.id, "instance-A", "u-admin", SpaceRole.ADMIN)
+    return space
+
+
+async def test_remote_admin_action_executes_when_delegation_on(stack):
+    """Delegation ON + a valid remote admin → EXECUTED and the action ran."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    space = await _host_space_with_remote_admin(stack, delegation=True)
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "From Remote Admin"},
+    )
+    assert outcome is RemoteAdminOutcome.EXECUTED
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.name == "From Remote Admin"
+
+
+async def test_remote_admin_action_needs_approval_when_delegation_off(stack):
+    """Delegation OFF + a valid remote admin → NEEDS_OWNER_APPROVAL and the
+    action did NOT run (config unchanged)."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "Should Not Apply"},
+    )
+    assert outcome is RemoteAdminOutcome.NEEDS_OWNER_APPROVAL
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.name == "S"
+
+
+async def test_remote_admin_action_dropped_for_non_admin(stack):
+    """A non-admin remote actor → DROPPED with no execution, regardless of
+    the delegation flag."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    for delegation in (True, False):
+        space = await _host_space_with_remote_admin(
+            stack, delegation=delegation, admin=False
+        )
+        outcome = await stack.space_svc.apply_remote_admin_action(
+            space.id,
+            actor_instance_id="instance-A",
+            actor_user_id="u-admin",
+            action="update_config",
+            params={"name": "Hacked"},
+        )
+        assert outcome is RemoteAdminOutcome.DROPPED
+        refreshed = await stack.space_repo.get(space.id)
+        assert refreshed.name == "S"
+
+
+async def test_remote_admin_action_dropped_when_not_hosted_here(stack):
+    """A space hosted on another household → DROPPED, even with a seated
+    admin and delegation ON."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    space = await _host_space_with_remote_admin(stack, delegation=True)
+    await stack.db.enqueue(
+        "UPDATE spaces SET owner_instance_id=? WHERE id=?",
+        ("some-other-household", space.id),
+    )
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="archive",
+        params={},
+    )
+    assert outcome is RemoteAdminOutcome.DROPPED
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.archived is False
+
+
+async def test_apply_approved_admin_action_runs_as_owner(stack):
+    """apply_approved_admin_action executes the held action as the owner on a
+    hosted space (the owner-approval gate is assumed already passed)."""
+    victim = await stack.provision_user("victimlocal")
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    await stack.space_svc.add_member(
+        space.id, actor_username="alicehost", user_id=victim.user_id, role="member"
+    )
+    await stack.space_svc.apply_approved_admin_action(
+        space.id,
+        action="ban",
+        params={"user_id": victim.user_id, "reason": "approved"},
+    )
+    assert await stack.space_repo.get_member(space.id, victim.user_id) is None
+    assert await stack.space_repo.is_banned(space.id, victim.user_id) is True
+
+
+async def test_apply_approved_admin_action_noop_when_not_hosted_here(stack):
+    """apply_approved_admin_action is a no-op when the space is not hosted
+    here — it never runs the action against a non-authoritative stub."""
+    victim = await stack.provision_user("victimlocal")
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    await stack.space_svc.add_member(
+        space.id, actor_username="alicehost", user_id=victim.user_id, role="member"
+    )
+    await stack.db.enqueue(
+        "UPDATE spaces SET owner_instance_id=? WHERE id=?",
+        ("some-other-household", space.id),
+    )
+    await stack.space_svc.apply_approved_admin_action(
+        space.id,
+        action="ban",
+        params={"user_id": victim.user_id},
+    )
+    # Member still present, not banned — the no-op held.
+    assert await stack.space_repo.get_member(space.id, victim.user_id) is not None
+    assert await stack.space_repo.is_banned(space.id, victim.user_id) is False
+
+
+async def test_remote_admin_update_config_cannot_flip_delegation_flag(stack):
+    """H1: a forwarded update_config that flips delegated_admin_authority must
+    NOT change the owner-only flag, even with delegation ON (self-authorized).
+    A benign field in the same edit still applies, proving the edit ran."""
+    from socialhome.domain.space import RemoteAdminOutcome, SpaceFeatures
+
+    space = await _host_space_with_remote_admin(stack, delegation=True)
+    assert space.features.delegated_admin_authority is True
+    # The wire tries to REVOKE delegation (True -> False) while also changing
+    # a benign feature (calendar_enabled) and the name.
+    wire = SpaceFeatures(delegated_admin_authority=False, location=True).to_wire_dict()
+    outcome = await stack.space_svc.apply_remote_admin_action(
+        space.id,
+        actor_instance_id="instance-A",
+        actor_user_id="u-admin",
+        action="update_config",
+        params={"name": "Benign Rename", "features": wire},
+    )
+    assert outcome is RemoteAdminOutcome.EXECUTED
+    refreshed = await stack.space_repo.get(space.id)
+    # The owner-only flag is pinned to its current value, NOT the wire's.
+    assert refreshed.features.delegated_admin_authority is True
+    # …but the rest of the edit applied.
+    assert refreshed.name == "Benign Rename"
+    assert refreshed.features.location is True
+
+
+async def test_approved_admin_update_config_cannot_flip_delegation_flag(stack):
+    """H1 (OFF -> owner-approved path): an approved forwarded update_config
+    carrying a flipped delegated_admin_authority leaves the flag unchanged."""
+    from socialhome.domain.space import SpaceFeatures
+
+    space = await _host_space_with_remote_admin(stack, delegation=False)
+    assert space.features.delegated_admin_authority is False
+    # The wire tries to GRANT delegation (False -> True).
+    wire = SpaceFeatures(delegated_admin_authority=True, location=True).to_wire_dict()
+    await stack.space_svc.apply_approved_admin_action(
+        space.id,
+        action="update_config",
+        params={"name": "Approved Rename", "features": wire},
+    )
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.features.delegated_admin_authority is False
+    assert refreshed.name == "Approved Rename"
+    assert refreshed.features.location is True
+
+
+async def test_remote_admin_action_unknown_action_dropped(stack):
+    """H2: a non-forwardable action (e.g. dissolve) is DROPPED at the door for
+    both delegation states — never NEEDS_OWNER_APPROVAL or EXECUTED — and ON
+    causes no mutation."""
+    from socialhome.domain.space import RemoteAdminOutcome
+
+    for delegation in (True, False):
+        space = await _host_space_with_remote_admin(stack, delegation=delegation)
+        outcome = await stack.space_svc.apply_remote_admin_action(
+            space.id,
+            actor_instance_id="instance-A",
+            actor_user_id="u-admin",
+            action="dissolve",
+            params={},
+        )
+        assert outcome is RemoteAdminOutcome.DROPPED
+        refreshed = await stack.space_repo.get(space.id)
+        assert refreshed.name == "S"
+        assert refreshed.archived is False

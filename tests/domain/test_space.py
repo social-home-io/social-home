@@ -6,11 +6,19 @@ import pytest
 
 from socialhome.domain.space import (
     HouseholdFeatures,
+    RemoteAdminOutcome,
     SpaceConfigGapError,
     SpaceFeatureAccess,
     SpaceFeatures,
     SpacePermissionError,
 )
+
+
+def test_remote_admin_outcome_values():
+    """The host's gate signals three outcomes by stable string value."""
+    assert RemoteAdminOutcome.EXECUTED == "executed"
+    assert RemoteAdminOutcome.NEEDS_OWNER_APPROVAL == "needs_owner_approval"
+    assert RemoteAdminOutcome.DROPPED == "dropped"
 
 
 def test_space_features_roundtrip():

@@ -20,6 +20,12 @@ class ProposalAction(StrEnum):
     #: Change the publication tier (``space_type`` → public / global /
     #: private), which advertises the space or auto-publishes it to GFS.
     SET_PUBLIC_TIER = "set_public_tier"
+    #: Owner-only approval of a forwarded remote-admin action (delegation
+    #: OFF): a remote admin's moderation/config action is held as a pending
+    #: proposal that only the *owner* can approve. ``params`` carry the
+    #: forwarded action: ``fwd_action`` / ``fwd_params`` / ``actor_instance``
+    #: / ``actor_user``.
+    REMOTE_ADMIN_ACTION = "remote_admin_action"
 
 
 class ProposalStatus(StrEnum):

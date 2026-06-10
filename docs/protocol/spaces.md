@@ -556,8 +556,10 @@ elsewhere, `SpaceService.update_config` does **not** forward the v_15
 **locally and authoritatively**: bumps `config_sequence`, persists the
 row, and the `SpaceConfigOutbound` broadcast signs the config
 `space_meta` with the space seed (`sign_authority_event`). With
-delegation OFF or no seed held, it keeps today's v_15 forward-to-host
-behaviour (a later phase gates that forward behind owner approval).
+delegation OFF or no seed held, it keeps the v_15 forward-to-host
+behaviour — where, with delegation OFF, the host now records a pending
+**owner-approval** rather than auto-executing (Phase 6a, see
+"Cross-household admin actions" above).
 
 Every member household — including the offline owner on reconnect —
 applies the edit in `_on_space_config_changed` by verifying the
@@ -623,25 +625,59 @@ elsewhere (`owner_instance_id != own`) and, via
 `{action, params}` to the host instead of mutating the local stub
 (which isn't authoritative and wouldn't federate). The host's
 `apply_remote_admin_action` re-validates the actor's
-`space_remote_members.role == admin`, then runs the **real host method
-as the owner** — so the result federates back to every member through
-the normal outbounds (`SPACE_CONFIG_CHANGED`, ban/unban, archive
-`space_meta`). One event type carries all actions; the host whitelists
-the verb + (for config) the field names.
+`space_remote_members.role == admin`, whitelists the verb (+ for config
+the field names), then **gates on the space's
+`delegated_admin_authority` flag** (Phase 6a):
+
+- **ON** (owner opted in) → the host runs the **real host method as the
+  owner** immediately, so the result federates back to every member
+  through the normal outbounds (`SPACE_CONFIG_CHANGED`, ban/unban,
+  archive `space_meta`). (A seed-holding delegated admin normally signs
+  authoritatively and acts locally rather than forwarding — see the
+  v_24 config-edit path below — so this branch is the back-compat path
+  for an admin household that still forwards.)
+- **OFF** (default, least-privilege) → the host does **not** auto-execute.
+  It records a **pending owner-approval**, reusing the v_16
+  `space_admin_proposals` substrate as an **owner-only**
+  `remote_admin_action` proposal (NOT a majority quorum). Only the space
+  **owner** can approve it, via the normal proposal/vote route. On the
+  owner's APPROVE the host runs the action as owner
+  (`apply_approved_admin_action`) and it federates through the normal
+  outbounds; an owner REJECT or the 7-day proposal expiry drops it.
+
+This completes the `delegated_admin_authority` two-mode switch: ON =
+admins act offline-of-owner autonomously; OFF = forwarded admin actions
+become owner-approval requests. One event type carries all actions.
+
+Hardening: a forwarded `update_config` can never change
+`delegated_admin_authority` itself — it's owner-only and the host pins
+it to the space's current value before running the edit, so neither a
+delegation-ON self-authorized edit nor an owner-approved one can grant
+or revoke delegation. Unknown / non-forwardable actions are dropped at
+the door (no phantom approval is recorded).
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant A as HFS A (remote admin)
     participant H as HFS H (host)
+    participant O as Owner (on H)
     participant W as HFS W (other member)
     A->>A: PATCH /api/spaces/{id}  (or ban / archive)
     Note over A: update_config sees<br/>owner_instance_id != self
     A->>H: SPACE_REMOTE_ADMIN_ACTION<br/>{action, params, actor=A.user}
-    Note over H: lookup actor.role in<br/>space_remote_members<br/>(must be 'admin')
-    H->>H: run real method as owner<br/>(update_config / ban / archive…)
-    H->>W: SPACE_CONFIG_CHANGED (+ rekey for ban)
-    H->>A: SPACE_CONFIG_CHANGED
+    Note over H: lookup actor.role in<br/>space_remote_members<br/>(must be 'admin')<br/>whitelist verb + fields
+    alt delegated_admin_authority ON
+        H->>H: run real method as owner<br/>(update_config / ban / archive…)
+        H->>W: SPACE_CONFIG_CHANGED (+ rekey for ban)
+        H->>A: SPACE_CONFIG_CHANGED
+    else delegated_admin_authority OFF (default)
+        H->>H: record pending owner-approval<br/>(owner-only remote_admin_action proposal)
+        O->>H: APPROVE
+        H->>H: run real method as owner
+        H->>W: SPACE_CONFIG_CHANGED (+ rekey for ban)
+        H->>A: SPACE_CONFIG_CHANGED
+    end
 ```
 
 Scope is admin-level only. **Owner-only** actions — dissolve,

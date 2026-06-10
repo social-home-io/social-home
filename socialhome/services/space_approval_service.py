@@ -258,6 +258,41 @@ class SpaceApprovalService:
             SpaceProposalUpdated(space_id=space_id, proposal_id=pid, view=view)
         )
 
+    async def enqueue_owner_approval(
+        self,
+        space_id: str,
+        *,
+        actor_instance: str,
+        actor_user: str,
+        fwd_action: str,
+        fwd_params: dict | None = None,
+    ) -> None:
+        """Record a forwarded remote-admin action as a pending OWNER approval
+        (delegation OFF). No auto-approve, no dedup — each request is its own
+        proposal. The owner approves via the normal vote route; on approval
+        :meth:`_execute` runs it as owner."""
+        if not await self._host_owns(space_id):
+            return
+        now = _now()
+        proposal = SpaceAdminProposal(
+            id=str(uuid.uuid4()),
+            space_id=space_id,
+            action=ProposalAction.REMOTE_ADMIN_ACTION,
+            params={
+                "fwd_action": fwd_action,
+                "fwd_params": fwd_params or {},
+                "actor_instance": actor_instance,
+                "actor_user": actor_user,
+            },
+            proposed_by_instance=actor_instance,
+            proposed_by_user=actor_user,
+            status=ProposalStatus.PENDING,
+            created_at=now,
+            expires_at=(datetime.now(timezone.utc) + PROPOSAL_TTL).isoformat(),
+        )
+        await self._proposals.upsert(proposal)
+        await self._emit(proposal, ProposalStatus.PENDING)
+
     # ── Host-side core ───────────────────────────────────────────────────
 
     async def _host_propose(
@@ -315,7 +350,18 @@ class SpaceApprovalService:
         if proposal.expires_at <= _now():
             await self._proposals.set_status(proposal.id, ProposalStatus.EXPIRED)
             return await self._emit(proposal, ProposalStatus.EXPIRED)
-        if (voter_instance, voter_user) not in await self._admin_keys(
+        if proposal.action == ProposalAction.REMOTE_ADMIN_ACTION:
+            if (voter_instance, voter_user) != await self._owner_key(proposal.space_id):
+                log.info(
+                    "vote: %s@%s not the owner of owner-only proposal=%s "
+                    "(space=%s) — dropping",
+                    voter_user,
+                    voter_instance,
+                    proposal.id,
+                    proposal.space_id,
+                )
+                return await self._view(proposal)
+        elif (voter_instance, voter_user) not in await self._admin_keys(
             proposal.space_id
         ):
             log.info(
@@ -339,6 +385,8 @@ class SpaceApprovalService:
     async def _evaluate(self, proposal: SpaceAdminProposal) -> dict:
         """Recompute the threshold against the current admin set and, if
         met, execute. Returns the SPA view with the resolved status."""
+        if proposal.action == ProposalAction.REMOTE_ADMIN_ACTION:
+            return await self._evaluate_owner_only(proposal)
         admins = await self._admin_keys(proposal.space_id)
         votes = await self._proposals.list_votes(proposal.id)
         relevant = [v for v in votes if (v.voter_instance, v.voter_user) in admins]
@@ -348,6 +396,24 @@ class SpaceApprovalService:
         approvals = sum(1 for v in relevant if v.vote == ProposalVote.APPROVE)
         total = len(admins)
         if total > 0 and approvals * 2 > total:
+            await self._proposals.set_status(proposal.id, ProposalStatus.EXECUTED)
+            view = await self._emit(proposal, ProposalStatus.EXECUTED)
+            await self._execute(proposal)
+            return view
+        return await self._emit(proposal, ProposalStatus.PENDING)
+
+    async def _evaluate_owner_only(self, proposal: SpaceAdminProposal) -> dict:
+        """Owner is the sole authority: an owner REJECT cancels, an owner
+        APPROVE executes; any other vote leaves it pending."""
+        owner_key = await self._owner_key(proposal.space_id)
+        votes = await self._proposals.list_votes(proposal.id)
+        owner_votes = [
+            v for v in votes if (v.voter_instance, v.voter_user) == owner_key
+        ]
+        if any(v.vote == ProposalVote.REJECT for v in owner_votes):
+            await self._proposals.set_status(proposal.id, ProposalStatus.REJECTED)
+            return await self._emit(proposal, ProposalStatus.REJECTED)
+        if any(v.vote == ProposalVote.APPROVE for v in owner_votes):
             await self._proposals.set_status(proposal.id, ProposalStatus.EXECUTED)
             view = await self._emit(proposal, ProposalStatus.EXECUTED)
             await self._execute(proposal)
@@ -373,6 +439,17 @@ class SpaceApprovalService:
                     await self._space_service.update_config(
                         proposal.space_id, actor_username=owner, space_type=st
                     )
+            elif proposal.action == ProposalAction.REMOTE_ADMIN_ACTION:
+                p = proposal.params
+                await self._space_service.apply_approved_admin_action(
+                    proposal.space_id,
+                    action=str(p.get("fwd_action") or ""),
+                    params=(
+                        p.get("fwd_params")
+                        if isinstance(p.get("fwd_params"), dict)
+                        else {}
+                    ),
+                )
         except Exception:
             log.exception(
                 "approval execute failed for proposal=%s action=%s",
@@ -394,6 +471,17 @@ class SpaceApprovalService:
             if rm.role == SpaceRole.ADMIN:
                 keys.add((rm.instance_id, rm.user_id))
         return keys
+
+    async def _owner_key(self, space_id: str) -> tuple[str, str] | None:
+        """(own_instance_id, owner_user_id) for the space, or None.
+        The single authority for an owner-only (REMOTE_ADMIN_ACTION) proposal."""
+        space = await self._spaces.get(space_id)
+        if space is None:
+            return None
+        owner = await self._users.get(space.owner_username)
+        if owner is None:
+            return None
+        return (self._own_instance_id or "", owner.user_id)
 
     async def _require_space(self, space_id: str):
         space = await self._spaces.get(space_id)
@@ -449,6 +537,36 @@ class SpaceApprovalService:
         # status is taken from the local row.
         if proposal.host_view is not None:
             return {**proposal.host_view, "status": proposal.status.value}
+        if proposal.action == ProposalAction.REMOTE_ADMIN_ACTION:
+            owner_key = await self._owner_key(proposal.space_id)
+            votes = await self._proposals.list_votes(proposal.id)
+            approvals = (
+                1
+                if any(
+                    (v.voter_instance, v.voter_user) == owner_key
+                    and v.vote == ProposalVote.APPROVE
+                    for v in votes
+                )
+                else 0
+            )
+            p = proposal.params
+            return {
+                "id": proposal.id,
+                "space_id": proposal.space_id,
+                "action": proposal.action.value,
+                "params": proposal.params,
+                "status": proposal.status.value,
+                "proposed_by_instance": proposal.proposed_by_instance,
+                "proposed_by_user": proposal.proposed_by_user,
+                "owner_only": True,
+                "fwd_action": p.get("fwd_action"),
+                "fwd_params": p.get("fwd_params"),
+                "approvals": approvals,
+                "total_admins": 1,
+                "needed": 1,
+                "created_at": proposal.created_at,
+                "expires_at": proposal.expires_at,
+            }
         admins = await self._admin_keys(proposal.space_id)
         votes = await self._proposals.list_votes(proposal.id)
         relevant = [v for v in votes if (v.voter_instance, v.voter_user) in admins]

@@ -30,6 +30,7 @@ from ..domain.events import (
     RemoteSpaceMemberRemoved,
 )
 from ..domain.federation import FederationEventType
+from ..domain.space import RemoteAdminOutcome
 from ..infrastructure.event_bus import EventBus
 from ..repositories.space_remote_location_repo import SpaceRemoteLocation
 from ..services.space_crypto_service import (
@@ -674,13 +675,32 @@ class PrivateSpaceInviteHandler:
                 "SPACE_REMOTE_ADMIN_ACTION: no space_service wired — dropping",
             )
             return
-        await self._space_service.apply_remote_admin_action(
+        outcome = await self._space_service.apply_remote_admin_action(
             space_id,
             actor_instance_id=actor_instance_id,
             actor_user_id=actor_user_id,
             action=action,
             params=params,
         )
+        if outcome is RemoteAdminOutcome.NEEDS_OWNER_APPROVAL:
+            # delegation OFF: the host doesn't auto-execute — record a pending
+            # owner-approval (the owner approves via the normal proposal/vote
+            # flow, then the host executes it as owner). actor_instance_id is
+            # the signed envelope's from_instance (already bound to the
+            # verified signer above), so the enqueue inherits that authority.
+            if self._approval_service is None:
+                log.warning(
+                    "SPACE_REMOTE_ADMIN_ACTION needs owner approval but no "
+                    "approval_service wired — dropping",
+                )
+                return
+            await self._approval_service.enqueue_owner_approval(
+                space_id,
+                actor_instance=actor_instance_id,
+                actor_user=actor_user_id,
+                fwd_action=action,
+                fwd_params=params,
+            )
 
     async def _on_proposal_mirror(self, event: "FederationEvent") -> None:
         """Member-household side of ``SPACE_ADMIN_PROPOSAL_UPDATED`` (v_16).
