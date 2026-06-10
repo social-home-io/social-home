@@ -3025,3 +3025,329 @@ async def test_no_seed_skips_gossip_gracefully(stack):
     )
 
     assert _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED) == []
+
+
+# ─── Membership ops offline-of-owner — delegated-admin gate (Phase 3) ──────
+
+
+def _invite_fed():
+    """AsyncMock federation service wired for invite + gossip assertions.
+
+    ``send_with_mesh_fallback`` (used by ``_send_invite_envelope``) returns a
+    successful DeliveryResult; ``broadcast_to_space_members`` captures the
+    authority gossip; ``peer_supports`` is True so the gossip isn't gated out.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from socialhome.domain.federation import DeliveryResult
+
+    fed = AsyncMock()
+    fed.send_with_mesh_fallback = AsyncMock(
+        return_value=DeliveryResult(instance_id="peer", ok=True)
+    )
+    fed.broadcast_to_space_members = AsyncMock()
+    fed.peer_supports = AsyncMock(return_value=True)
+    return fed, MagicMock()
+
+
+async def _make_delegated_admin_space(stack, *, delegation: bool):
+    """Seat a local ADMIN of a space whose owner household is REMOTE.
+
+    Builds the offline-of-owner shape: create the space locally (mints a real
+    Ed25519 seed + matching pubkey), then flip ``owner_instance_id`` to a
+    remote host and ``delegated_admin_authority`` to ``delegation``. The local
+    actor ``"admin"`` is seated as a non-owner ADMIN; the stored seed stays put
+    so ``ensure_space_seed`` returns it (delegated key-share simulated).
+
+    Returns the reloaded :class:`Space`.
+    """
+    from socialhome.domain.space import SpaceMember, SpaceRole
+
+    admin = await stack.provision_user("deladmin")
+    space = await stack.space_svc.create_space(owner_username="deladmin", name="S")
+    # The owner is actually a remote household; we are a delegated admin.
+    await stack.db.enqueue(
+        "UPDATE spaces SET owner_instance_id=?, delegated_admin_authority=? WHERE id=?",
+        ("remote-owner-host", int(delegation), space.id),
+    )
+    # Re-seat the local actor as a non-owner ADMIN (create_space made them OWNER).
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=space.id,
+            user_id=admin.user_id,
+            role=SpaceRole.ADMIN,
+            joined_at="2026-01-01T00:00:00+00:00",
+        )
+    )
+    reloaded = await stack.space_repo.get(space.id)
+    # Sanity: we hold the seed (Phase-1 share simulated) but are not the host.
+    assert await stack.space_repo.get_space_seed(space.id) is not None
+    assert reloaded.owner_instance_id != stack.iid
+    return reloaded
+
+
+async def test_offline_owner_delegated_admin_invite_works(stack):
+    """A non-owner ADMIN who holds the seed in a delegation-ON space can invite
+    a remote user (owner offline) — the invite envelope ships the content key,
+    and the seat-time JOINED gossip is authority-signed (verifies against the
+    space pubkey)."""
+    from socialhome.crypto import b64url_decode
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.services.space_crypto_service import verify_authority_event
+
+    from unittest.mock import AsyncMock
+
+    space = await _make_delegated_admin_space(stack, delegation=True)
+    fed, fed_repo = _invite_fed()
+    stack.space_svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        remote_member_repo=(await _wire_remote_members(stack)),
+    )
+    # Attach a crypto service so the snapshot embeds the content key — the
+    # delegated admin holds it (Phase-1) and hands it to the invitee.
+    crypto = AsyncMock()
+    crypto.export_current_key = AsyncMock(return_value=(7, bytes(range(32))))
+    stack.space_svc.attach_space_crypto_service(crypto)
+
+    token = await stack.space_svc.invite_remote_user(
+        space.id,
+        actor_username="deladmin",
+        invitee_instance_id="peer",
+        invitee_user_id="bob",
+    )
+    assert token
+    # The invite envelope was sent and carries the content key in space_meta.
+    fed.send_with_mesh_fallback.assert_awaited_once()
+    payload = fed.send_with_mesh_fallback.await_args.kwargs["payload"]
+    assert payload["invitee_user_id"] == "bob"
+    assert payload["invite_token"] == token
+    meta = payload["space_meta"]
+    # build_space_snapshot_for_federation embeds the current content key.
+    assert "space_content_key" in meta
+    assert meta["space_content_key"]["epoch"] == 7
+
+    # Now the host-side accept seats the member and gossips a SIGNED JOINED.
+    await stack.space_svc.broadcast_remote_member_joined(
+        space.id,
+        instance_id="peer",
+        user_id="bob",
+        user_pk=None,
+        display_name="Bob",
+    )
+    joined = _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED)
+    assert len(joined) == 1
+    p = joined[0].args[2]
+    assert p["user_id"] == "bob"
+    pub = bytes.fromhex((await stack.space_repo.get(space.id)).identity_public_key)
+    assert (
+        verify_authority_event(
+            event_type=FederationEventType.SPACE_MEMBER_JOINED.value,
+            space_id=space.id,
+            payload={
+                k: v
+                for k, v in p.items()
+                if k not in ("authority_sig", "authority_sig_suite")
+            },
+            authority_sig=p["authority_sig"],
+            authority_sig_suite=p["authority_sig_suite"],
+            space_public_key=pub,
+        )
+        is True
+    )
+    # Belt-and-suspenders: the b64url sig decodes to a 64-byte Ed25519 sig.
+    assert len(b64url_decode(p["authority_sig"])) == 64
+
+
+async def test_offline_owner_delegated_admin_invite_gated_when_off(stack):
+    """The SAME non-owner ADMIN in a delegation-OFF space is BLOCKED — invite
+    raises SpacePermissionError (owner approval required) and NO envelope is
+    sent."""
+    space = await _make_delegated_admin_space(stack, delegation=False)
+    fed, fed_repo = _invite_fed()
+    stack.space_svc.attach_federation(
+        federation_service=fed,
+        federation_repo=fed_repo,
+        remote_member_repo=(await _wire_remote_members(stack)),
+    )
+
+    with pytest.raises(SpacePermissionError, match="owner approval required"):
+        await stack.space_svc.invite_remote_user(
+            space.id,
+            actor_username="deladmin",
+            invitee_instance_id="peer",
+            invitee_user_id="bob",
+        )
+    fed.send_with_mesh_fallback.assert_not_awaited()
+
+
+async def test_owner_invite_unaffected_by_flag(stack):
+    """The OWNING household can invite regardless of the flag (OFF and ON)."""
+
+    async def _owner_can_invite(delegation: bool):
+        await stack.provision_user("anna")
+        space = await stack.space_svc.create_space(owner_username="anna", name="S")
+        await stack.db.enqueue(
+            "UPDATE spaces SET delegated_admin_authority=? WHERE id=?",
+            (int(delegation), space.id),
+        )
+        fed, fed_repo = _invite_fed()
+        stack.space_svc.attach_federation(
+            federation_service=fed,
+            federation_repo=fed_repo,
+            remote_member_repo=(await _wire_remote_members(stack)),
+        )
+        token = await stack.space_svc.invite_remote_user(
+            space.id,
+            actor_username="anna",
+            invitee_instance_id="peer",
+            invitee_user_id="bob",
+        )
+        assert token
+        fed.send_with_mesh_fallback.assert_awaited_once()
+
+    await _owner_can_invite(delegation=False)
+    await _owner_can_invite(delegation=True)
+
+
+async def test_offline_seated_owner_converges_via_admin_gossip(stack):
+    """An OWNER household that was offline at seat-time applies the delegated
+    admin's authority-signed SPACE_MEMBER_JOINED on receipt and ends with the
+    new member in its roster — even though it never processed the accept."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.domain.federation import FederationEventType
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceType,
+    )
+    from socialhome.federation.private_invite_handler import (
+        PrivateSpaceInviteHandler,
+    )
+    from socialhome.repositories.space_remote_member_repo import (
+        SqliteSpaceRemoteMemberRepo,
+    )
+    from socialhome.services.space_crypto_service import (
+        sign_authority_event,
+        strip_authority_sig_fields,
+    )
+
+    # The owner household holds the space with its public key (it IS the host).
+    kp = generate_space_keypair()
+    space_id = "sp-converge"
+    await stack.space_repo.save(
+        Space(
+            id=space_id,
+            name="S",
+            owner_instance_id=stack.iid,  # owner = this household
+            owner_username="anna",
+            identity_public_key=kp.public_key.hex(),
+            config_sequence=0,
+            features=SpaceFeatures(delegated_admin_authority=True),
+            space_type=SpaceType.PRIVATE,
+            join_mode=JoinMode.INVITE_ONLY,
+        )
+    )
+    remote = SqliteSpaceRemoteMemberRepo(stack.db)
+    handler = PrivateSpaceInviteHandler(
+        bus=AsyncMock(),
+        space_repo=stack.space_repo,
+        remote_member_repo=remote,
+    )
+
+    # The delegated admin (a DIFFERENT household) signs a JOINED with the seed.
+    bare = {
+        "space_id": space_id,
+        "user_id": "bob",
+        "instance_id": "invitee-host",
+        "display_name": "Bob",
+        "user_pk": None,
+        "role": "member",
+        "member_version": 7,
+        "roster_version": 7,
+    }
+    signed = sign_authority_event(
+        event_type=FederationEventType.SPACE_MEMBER_JOINED.value,
+        space_id=space_id,
+        payload=strip_authority_sig_fields(bare),
+        space_seed=kp.private_key,
+    )
+    event = SimpleNamespace(
+        event_type=FederationEventType.SPACE_MEMBER_JOINED,
+        payload={**bare, **signed},
+        from_instance="delegated-admin-host",  # NOT the owner — relayed
+        space_id=space_id,
+    )
+
+    # Owner was offline at seat-time: it never saw the accept. It now receives
+    # the admin's gossip and converges.
+    assert await remote.get(space_id, "invitee-host", "bob") is None
+    await handler._on_space_member_joined(event)
+    seated = await remote.get(space_id, "invitee-host", "bob")
+    assert seated is not None
+    assert seated.member_version == 7
+    assert seated.tombstoned is False
+
+
+async def test_delegated_no_seed_gossip_warns(stack, caplog):
+    """A delegation-ON space whose host isn't us but for which we hold no seed
+    is an anomaly (Phase-1 share missing) — the gossip skip is logged at
+    WARNING (still graceful, no crash, no broadcast)."""
+    import logging
+
+    from socialhome.domain.federation import FederationEventType
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    # Delegation ON, owner is REMOTE, and we hold NO seed — the anomaly.
+    await stack.db.enqueue(
+        "UPDATE spaces SET identity_private_key=NULL, owner_instance_id=?, "
+        "delegated_admin_authority=1 WHERE id=?",
+        ("remote-owner-host", space.id),
+    )
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+
+    with caplog.at_level(logging.WARNING, logger="socialhome.services.space_service"):
+        await stack.space_svc.add_member(
+            space.id, actor_username="anna", user_id=bob.user_id
+        )
+
+    # No gossip broadcast (graceful skip), but a diagnosable WARNING fired.
+    assert _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED) == []
+    assert any(
+        r.levelno == logging.WARNING and space.id in r.getMessage()
+        for r in caplog.records
+    )
+
+
+async def test_owned_no_seed_gossip_stays_silent(stack, caplog):
+    """For an owner-local space with no seed the skip stays silent (today's
+    behaviour) — the WARNING is reserved for the delegated anomaly."""
+    import logging
+
+    await stack.provision_user("anna")
+    bob = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    # Non-owned + delegation OFF → no warning expected (the silent fallback).
+    await stack.db.enqueue(
+        "UPDATE spaces SET identity_private_key=NULL, owner_instance_id=? WHERE id=?",
+        ("remote-owner-host", space.id),
+    )
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+
+    with caplog.at_level(logging.WARNING, logger="socialhome.services.space_service"):
+        await stack.space_svc.add_member(
+            space.id, actor_username="anna", user_id=bob.user_id
+        )
+
+    assert not any(
+        r.levelno == logging.WARNING and "no signing seed" in r.getMessage()
+        for r in caplog.records
+    )
