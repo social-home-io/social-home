@@ -9,6 +9,7 @@ from socialhome.db.database import AsyncDatabase
 from socialhome.domain.post import PostType
 from socialhome.domain.space import (
     JoinMode,
+    Space,
     SpaceFeatureAccess,
     SpaceFeatures,
     SpacePermissionError,
@@ -630,6 +631,87 @@ async def test_space_post_admin_only(stack):
             type=PostType.TEXT,
             content="denied",
         )
+
+
+async def _seat_remote_space_with_posts_access(stack, *, actor, posts_access):
+    """Create a stub for a space hosted ELSEWHERE with the given ``posts_access``,
+    seat ``actor`` locally as a non-admin MEMBER. Returns the space id."""
+    from socialhome.domain.space import (
+        JoinMode,
+        Space,
+        SpaceFeatures,
+        SpaceMember,
+        SpaceRole,
+        SpaceType,
+    )
+
+    actor_user = await stack.provision_user(actor)
+    space = Space(
+        id="sp-remote-posts",
+        name="RemotePosts",
+        owner_instance_id="inst-remote-owner",  # hosted elsewhere, != stack.iid
+        owner_username="remoteowner",
+        identity_public_key="aa" * 32,
+        config_sequence=2,
+        features=SpaceFeatures(posts_access=posts_access),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+    await stack.space_repo.save(space)
+    await stack.space_repo.save_member(
+        SpaceMember(
+            space_id=space.id,
+            user_id=actor_user.user_id,
+            role=SpaceRole.MEMBER,
+            joined_at="2025-01-01T00:00:00",
+        )
+    )
+    return space.id, actor_user.user_id
+
+
+async def test_remote_stub_moderated_post_proceeds_not_queued(stack):
+    """posts_access is HOST-authoritative: on a REMOTE stub a non-admin member's
+    post proceeds (returns a real Post) and is NOT dropped into a local
+    moderation queue the host can't resolve."""
+    from socialhome.domain.events import SpaceModerationQueued
+
+    sid, uid = await _seat_remote_space_with_posts_access(
+        stack, actor="bob", posts_access=SpaceFeatureAccess.MODERATED
+    )
+    queued: list[SpaceModerationQueued] = []
+    stack.space_svc._bus.subscribe(SpaceModerationQueued, queued.append)
+
+    result = await stack.space_svc.create_post(
+        sid,
+        author_user_id=uid,
+        type=PostType.TEXT,
+        content="hello from remote member",
+    )
+
+    assert result is not None
+    assert result.content == "hello from remote member"
+    assert result.author == uid
+    assert queued == []
+    # No moderation row was written.
+    assert await stack.space_repo.list_moderation_queue(sid) == []
+
+
+async def test_remote_stub_admin_only_post_proceeds(stack):
+    """On a REMOTE stub with ADMIN_ONLY posts_access, a non-admin member's post
+    no longer raises — the host applies its own policy to content it hosts."""
+    sid, uid = await _seat_remote_space_with_posts_access(
+        stack, actor="bob", posts_access=SpaceFeatureAccess.ADMIN_ONLY
+    )
+
+    result = await stack.space_svc.create_post(
+        sid,
+        author_user_id=uid,
+        type=PostType.TEXT,
+        content="remote member post",
+    )
+
+    assert result is not None
+    assert result.content == "remote member post"
 
 
 async def test_transfer_ownership(stack):
@@ -2614,6 +2696,68 @@ def test_stub_space_defaults_all_post_types_when_meta_omits_them():
         meta={"name": "X", "features": {"pages": True}},
     )
     assert stub.features.allowed_post_types == _ALL_POST_TYPES
+
+
+def test_federation_features_pair_roundtrips_every_wire_field():
+    """CI guard for the federation send/receive pair: every field
+    ``SpaceFeatures.to_wire_dict`` carries survives
+    ``_space_metadata_for_federation`` → ``stub_space_from_metadata``.
+
+    Fails the moment either function drops a feature field from the wire
+    (the bug that silently lost ``delegated_admin_authority`` at the
+    hand-rolled federation send site). Builds a Space whose features are
+    ALL non-default so a dropped field round-trips to its default and the
+    per-field assert breaks.
+    """
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    features = SpaceFeatures(
+        calendar=False,
+        todo=False,
+        location=True,
+        location_mode="zone_only",
+        stickies=False,
+        pages=False,
+        gallery=False,
+        bazaar=False,
+        posts_access=SpaceFeatureAccess.MODERATED,
+        pages_access=SpaceFeatureAccess.ADMIN_ONLY,
+        stickies_access=SpaceFeatureAccess.MODERATED,
+        calendar_access=SpaceFeatureAccess.ADMIN_ONLY,
+        tasks_access=SpaceFeatureAccess.MODERATED,
+        allow_subscriber_comment=True,
+        allow_subscriber_react=True,
+        delegated_admin_authority=True,
+        allowed_post_types=("image", "text"),
+    )
+    space = Space(
+        id="sp-fed",
+        name="Fed",
+        owner_instance_id="host-inst",
+        owner_username="anna",
+        identity_public_key="pk",
+        config_sequence=3,
+        features=features,
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+
+    meta = _space_metadata_for_federation(space)
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=space.owner_instance_id, meta=meta
+    )
+
+    # Assert per-field equality for every key to_wire_dict carries, so a
+    # future drop in EITHER half of the pair fails on the missing field.
+    for field_name in features.to_wire_dict():
+        assert getattr(stub.features, field_name) == getattr(features, field_name), (
+            f"federation pair dropped feature field {field_name!r}"
+        )
+    # And the whole object round-trips.
+    assert stub.features == features
 
 
 # ─── §CP.F1: age gate on EVERY seating path ──────────────────────────────

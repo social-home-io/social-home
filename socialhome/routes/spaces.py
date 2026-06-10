@@ -36,7 +36,6 @@ from ..app_keys import (
 from ..domain.events import SpaceMemberLocationOptedIn
 from ..domain.post import LocationData, PostType
 from ..domain.space import (
-    SpaceFeatureAccess,
     SpaceFeatures,
     SpacePermissionError,
     SpaceZone,
@@ -65,52 +64,16 @@ def _features_from_body(raw: object) -> SpaceFeatures | None:
     """
     if not isinstance(raw, dict):
         return None
-
-    def access(name: str, default: SpaceFeatureAccess) -> SpaceFeatureAccess:
-        v = raw.get(name)
-        if v is None:
-            return default
-        try:
-            return SpaceFeatureAccess(v)
-        except ValueError:
-            return default
-
-    location_mode_raw = raw.get("location_mode", "gps")
-    location_mode = "zone_only" if location_mode_raw == "zone_only" else "gps"
-    allowed_raw = raw.get("allowed_post_types")
-    allowed = (
-        tuple(sorted(str(t) for t in allowed_raw))
-        if isinstance(allowed_raw, (list, tuple)) and allowed_raw
-        else None
-    )
-    kwargs: dict = {
-        "calendar": bool(raw.get("calendar", False)),
-        "todo": bool(raw.get("todo", True)),
-        "location": bool(raw.get("location", False)),
-        "location_mode": location_mode,
-        "stickies": bool(raw.get("stickies", False)),
-        "pages": bool(raw.get("pages", True)),
-        "gallery": bool(raw.get("gallery", True)),
-        "bazaar": bool(raw.get("bazaar", True)),
-        "posts_access": access("posts_access", SpaceFeatureAccess.OPEN),
-        "pages_access": access("pages_access", SpaceFeatureAccess.OPEN),
-        "stickies_access": access("stickies_access", SpaceFeatureAccess.OPEN),
-        "calendar_access": access("calendar_access", SpaceFeatureAccess.OPEN),
-        "tasks_access": access("tasks_access", SpaceFeatureAccess.OPEN),
-        # Subscriber-engagement opt-ins (§23.49). Default to ``False``
-        # so omitting either flag preserves the strict read-only
-        # contract subscribers used to ship with.
-        "allow_subscriber_comment": bool(raw.get("allow_subscriber_comment", False)),
-        "allow_subscriber_react": bool(raw.get("allow_subscriber_react", False)),
-        # Owner opt-in for the delegated-admin epic (Phase 1a). Without this
-        # the SpaceSettings toggle round-tripped as 200 OK but never flipped —
-        # the whole owner-offline delegation surface was unreachable via the
-        # API. The owner-only flip is re-asserted in SpaceService.update_config.
-        "delegated_admin_authority": bool(raw.get("delegated_admin_authority", False)),
-    }
-    if allowed is not None:
-        kwargs["allowed_post_types"] = allowed
-    return SpaceFeatures(**kwargs)
+    # The SPA always PATCHes the FULL features dict (SpaceSettings spreads the
+    # existing ``space.features`` then overrides the edited keys), and no other
+    # caller sends a partial ``features`` block, so deferring to the canonical
+    # ``from_wire_dict`` is behaviour-neutral while removing a hand-rolled
+    # second copy of the wire shape (the landmine that dropped
+    # ``delegated_admin_authority``). NOTE: ``from_wire_dict`` defaults
+    # ``calendar`` / ``stickies`` to True when absent (dataclass default),
+    # versus this parser's historical False — harmless given the full-dict
+    # contract above, and the correct canonical default.
+    return SpaceFeatures.from_wire_dict(raw)
 
 
 # Earth's mean radius — used by the zone-match helper. Mirrors the

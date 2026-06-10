@@ -290,12 +290,13 @@ class SpaceFeatures:
     def from_wire_dict(cls, raw: dict) -> "SpaceFeatures":
         """Faithful inverse of :meth:`to_wire_dict`.
 
-        Used by the cross-household admin-action host dispatcher
-        (``SPACE_REMOTE_ADMIN_ACTION``) to rebuild the
-        :class:`SpaceFeatures` a remote admin forwarded. Each field
-        falls back to the class default when absent so a partial /
-        older-shaped dict still produces a valid object. Unknown access
-        levels fall back to ``OPEN`` rather than raising.
+        The single canonical wire-dict → :class:`SpaceFeatures` parser:
+        the route PATCH body, federation receive (remote-space stub
+        builder), and the cross-household admin-action host dispatcher
+        (``SPACE_REMOTE_ADMIN_ACTION``) all rebuild features through here.
+        Each field falls back to the class default when absent so a
+        partial / older-shaped dict still produces a valid object.
+        Unknown access levels fall back to ``OPEN`` rather than raising.
         """
         defaults = cls()
 

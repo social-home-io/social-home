@@ -11,6 +11,7 @@ from socialhome.app_keys import db_key as _db_key
 from socialhome.auth import sha256_token_hash
 from socialhome.config import Config
 from socialhome.crypto import derive_user_id
+from socialhome.domain.space import SpaceFeatureAccess, SpaceFeatures
 from socialhome.routes.spaces import _features_from_body
 
 
@@ -272,6 +273,41 @@ def test_features_from_body_carries_delegated_admin_authority():
         is True
     )
     assert _features_from_body({}).delegated_admin_authority is False
+
+
+def test_features_from_body_roundtrips_every_wire_field():
+    """CI guard for the route parser: a full features wire dict (every field
+    non-default) rehydrates with no field dropped.
+
+    The SPA always PATCHes the full features dict, so this is the contract
+    the parser must uphold — fails the moment ``_features_from_body`` drops a
+    field from the wire shape.
+    """
+    f = SpaceFeatures(
+        calendar=False,
+        todo=False,
+        location=True,
+        location_mode="zone_only",
+        stickies=False,
+        pages=False,
+        gallery=False,
+        bazaar=False,
+        posts_access=SpaceFeatureAccess.MODERATED,
+        pages_access=SpaceFeatureAccess.ADMIN_ONLY,
+        stickies_access=SpaceFeatureAccess.MODERATED,
+        calendar_access=SpaceFeatureAccess.ADMIN_ONLY,
+        tasks_access=SpaceFeatureAccess.MODERATED,
+        allow_subscriber_comment=True,
+        allow_subscriber_react=True,
+        delegated_admin_authority=True,
+        allowed_post_types=("image", "text"),
+    )
+    parsed = _features_from_body(f.to_wire_dict())
+    for field_name in f.to_wire_dict():
+        assert getattr(parsed, field_name) == getattr(f, field_name), (
+            f"_features_from_body dropped feature field {field_name!r}"
+        )
+    assert parsed == f
 
 
 async def test_create_space_accepts_retention_days(client):

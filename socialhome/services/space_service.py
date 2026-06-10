@@ -31,7 +31,7 @@ import unicodedata
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from ..crypto import generate_identity_keypair
 
@@ -90,6 +90,7 @@ from ..domain.post import (
 )
 from ..domain.presence import truncate_coord
 from ..domain.space import (
+    PUBLIC_SPACE_TIERS,
     JoinMode,
     ModerationAlreadyDecidedError,
     ModerationStatus,
@@ -3215,7 +3216,21 @@ class SpaceService(SpaceMemberGuardMixin):
             image_urls_tuple,
         )
         is_admin = member.role in (SpaceRole.OWNER, SpaceRole.ADMIN)
-        decision = space.features.access_decision("posts", is_admin=is_admin)
+        is_host = (
+            self._own_instance_id is not None
+            and space.owner_instance_id == self._own_instance_id
+        )
+        # posts_access (deny / moderation-queue) is HOST-authoritative: a remote
+        # member composes into their local stub and the post federates to the host.
+        # Enforcing the host's MODERATED/ADMIN_ONLY policy locally would dead-end the
+        # post in a moderation queue this household can't resolve (the queue isn't
+        # federated to the host's admins). The host applies its own policy to content
+        # it hosts. On a stub, proceed.
+        decision = (
+            space.features.access_decision("posts", is_admin=is_admin)
+            if is_host
+            else "allow"
+        )
         if decision == "deny":
             raise SpacePermissionError("posting is admin-only in this space")
 
@@ -3693,7 +3708,7 @@ class SpaceService(SpaceMemberGuardMixin):
 
     async def subscribe_to_space(self, user_id: str, space_id: str) -> None:
         space = await self._require_space(space_id)
-        if space.space_type not in (SpaceType.PUBLIC, SpaceType.GLOBAL):
+        if space.space_type not in PUBLIC_SPACE_TIERS:
             raise SpacePermissionError(
                 "only public / global spaces can be subscribed to",
             )
@@ -4069,31 +4084,20 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "config_sequence": space.config_sequence,
         "space_type": space.space_type.value,
         "join_mode": space.join_mode.value,
-        "features": {
-            "pages": space.features.pages,
-            "calendar": space.features.calendar,
-            "todo": space.features.todo,
-            "location": space.features.location,
-            "location_mode": space.features.location_mode,
-            "stickies": space.features.stickies,
-            "gallery": space.features.gallery,
-            "bazaar": space.features.bazaar,
-            # Per-space post-type allow-list (§23.49). Federated so a
-            # member household enforces the same restriction locally when
-            # its users compose — without it the host's "no polls here"
-            # rule wouldn't reach remote members (each instance gates
-            # `create_post` against its own stub). Missing on an older
-            # sender → the receiver defaults to all-allowed (the historical
-            # behaviour), so this is additive and fail-soft: no new event
-            # type or capability bump.
-            "allowed_post_types": list(space.features.allowed_post_types),
-            # Owner opt-in for the delegated-admin epic (Phase 1a). MUST
-            # federate: a §D1b joiner's stub (and a member applying the
-            # config-flip broadcast) needs delegation ON locally before its
-            # SPACE_ADMIN_KEY_SHARE handler will accept the space signing seed.
-            # Missing on an older sender → receiver defaults OFF (fail-soft).
-            "delegated_admin_authority": space.features.delegated_admin_authority,
-        },
+        # Canonical full wire form (all SpaceFeatures fields) so no toggle is
+        # silently dropped — receivers ignore unknown keys, so adding the
+        # access-level + subscriber fields here is additive and fail-soft.
+        # Notable consumers of the now-federated fields:
+        # * ``allowed_post_types`` (§23.49) + the ``*_access`` levels — a member
+        #   household enforces the host's per-feature restriction locally when
+        #   its users compose (each instance gates ``create_post`` against its
+        #   own stub). An older sender omitting a field → the receiver defaults
+        #   to all-allowed / OPEN (the historical behaviour).
+        # * ``delegated_admin_authority`` — a §D1b joiner's stub (and a member
+        #   applying the config-flip broadcast) needs delegation ON locally
+        #   before its SPACE_ADMIN_KEY_SHARE handler accepts the signing seed.
+        #   Missing on an older sender → receiver defaults OFF (fail-soft).
+        "features": space.features.to_wire_dict(),
         "tz": space.tz,
         # §CP.F1 — federate the host's age gate so member households enforce
         # it on their own join paths (a protected minor below ``min_age`` is
@@ -4294,37 +4298,15 @@ def stub_space_from_metadata(
     resulting Space's ``owner_instance_id != my_instance`` is the runtime
     signal for "this is a remote space" downstream.
     """
+    # Faithful inverse of ``_space_metadata_for_federation``'s
+    # ``to_wire_dict``. ``from_wire_dict`` parses ``location_mode`` +
+    # ``allowed_post_types`` with the SAME defaults this used to do by hand
+    # (calendar=True, etc.) and ALSO reconstructs the access-level +
+    # subscriber + delegated-admin fields the host now ships. A field absent
+    # on an older sender falls back to the dataclass default (all-allowed /
+    # OPEN / OFF), so absent-field behaviour is unchanged.
     feats_in = meta.get("features") or {}
-    raw_mode = feats_in.get("location_mode")
-    location_mode: "Literal['gps', 'zone_only']" = (
-        "zone_only" if raw_mode == "zone_only" else "gps"
-    )
-    # Reconstruct the post-type allow-list when the sender includes it.
-    # Older senders omit the key → fall back to the dataclass default
-    # (all types allowed), matching the pre-federation behaviour.
-    raw_allowed = feats_in.get("allowed_post_types")
-    allowed_kwargs: dict = {}
-    if isinstance(raw_allowed, (list, tuple)) and raw_allowed:
-        allowed_kwargs["allowed_post_types"] = tuple(
-            sorted(str(t) for t in raw_allowed)
-        )
-    features = SpaceFeatures(
-        calendar=bool(feats_in.get("calendar", True)),
-        todo=bool(feats_in.get("todo", True)),
-        location=bool(feats_in.get("location", False)),
-        location_mode=location_mode,
-        stickies=bool(feats_in.get("stickies", True)),
-        pages=bool(feats_in.get("pages", True)),
-        gallery=bool(feats_in.get("gallery", True)),
-        bazaar=bool(feats_in.get("bazaar", True)),
-        # Owner opt-in (delegated-admin epic, Phase 1a). Mirror the host's
-        # flag onto the stub so this household's SPACE_ADMIN_KEY_SHARE handler
-        # accepts the signing seed. Missing on an older sender → OFF.
-        delegated_admin_authority=bool(
-            feats_in.get("delegated_admin_authority", False)
-        ),
-        **allowed_kwargs,
-    )
+    features = SpaceFeatures.from_wire_dict(feats_in)
     return Space(
         id=space_id,
         name=str(meta.get("name") or "Untitled space"),
