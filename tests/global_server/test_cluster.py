@@ -232,6 +232,110 @@ async def test_handle_heartbeat_without_payload_is_compat(
     assert "node-b" not in enabled_cluster._active_sync_count
 
 
+# ─── connected_clients gossip ─────────────────────────────────────────
+
+
+class _StubWsRegistry:
+    """Minimal ws-registry stub exposing only ``connection_count()``."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def connection_count(self) -> int:
+        return self._count
+
+
+async def test_handle_heartbeat_stores_connected_clients(
+    enabled_cluster,
+    gfs_db,
+):
+    """NODE_HEARTBEAT carrying connected_clients records it in-memory."""
+    repo = SqliteClusterRepo(gfs_db)
+    await repo.upsert_node(
+        ClusterNode(node_id="node-b", url="https://b.gfs.test", status="online"),
+    )
+    await enabled_cluster.handle_heartbeat(
+        "node-b",
+        {"connected_clients": 42},
+    )
+    assert enabled_cluster._connected_clients["node-b"] == 42
+
+
+async def test_handle_heartbeat_missing_connected_clients_no_clobber(
+    enabled_cluster,
+    gfs_db,
+):
+    """An older peer omitting connected_clients does not overwrite a prior value."""
+    repo = SqliteClusterRepo(gfs_db)
+    await repo.upsert_node(
+        ClusterNode(node_id="node-b", url="https://b.gfs.test", status="online"),
+    )
+    await enabled_cluster.handle_heartbeat("node-b", {"connected_clients": 7})
+    assert enabled_cluster._connected_clients["node-b"] == 7
+    # Subsequent heartbeat without the key must NOT clobber the stored value.
+    await enabled_cluster.handle_heartbeat("node-b", {"active_sync_sessions": 1})
+    assert enabled_cluster._connected_clients["node-b"] == 7
+
+
+async def test_admin_cluster_includes_self_and_peer_counts(gfs_db):
+    """admin_cluster() returns all nodes; self carries the live ws count."""
+    repo = SqliteClusterRepo(gfs_db)
+    svc = ClusterService(
+        repo,
+        node_id="node-a",
+        self_url="https://a.gfs.test",
+        peers=(),
+        enabled=True,
+        ws_registry=_StubWsRegistry(11),
+    )
+    await repo.upsert_node(
+        ClusterNode(node_id="node-b", url="https://b.gfs.test", status="online"),
+    )
+    svc._connected_clients["node-b"] = 5
+    svc._active_sync_count["node-b"] = 3
+
+    result = await svc.admin_cluster()
+    assert result["node_id"] == "node-a"
+    assert result["status"] == "online"
+    nodes = result["nodes"]
+    self_entry = next(n for n in nodes if n["is_self"])
+    assert self_entry["node_id"] == "node-a"
+    assert self_entry["connected_clients"] == 11
+    peer_entry = next(n for n in nodes if n["node_id"] == "node-b")
+    assert peer_entry["is_self"] is False
+    assert peer_entry["connected_clients"] == 5
+    assert peer_entry["active_sync_sessions"] == 3
+
+
+async def test_admin_cluster_self_with_row_emitted_once(gfs_db):
+    """When self already has a cluster_nodes row, it appears exactly once
+    and still carries the LIVE ws count (not the persisted row value)."""
+    repo = SqliteClusterRepo(gfs_db)
+    svc = ClusterService(
+        repo,
+        node_id="node-a",
+        self_url="https://a.gfs.test",
+        peers=(),
+        enabled=True,
+        ws_registry=_StubWsRegistry(11),
+    )
+    # self is announced into the table (the enabled-cluster case)
+    await repo.upsert_node(
+        ClusterNode(node_id="node-a", url="https://a.gfs.test", status="online"),
+    )
+    await repo.upsert_node(
+        ClusterNode(node_id="node-b", url="https://b.gfs.test", status="online"),
+    )
+
+    result = await svc.admin_cluster()
+    nodes = result["nodes"]
+    self_entries = [n for n in nodes if n["is_self"]]
+    assert len(self_entries) == 1
+    assert self_entries[0]["node_id"] == "node-a"
+    # live ws count, not the row's default of 0
+    assert self_entries[0]["connected_clients"] == 11
+
+
 # ─── Spec §4.4.6 — partition catchup ──────────────────────────────────
 
 

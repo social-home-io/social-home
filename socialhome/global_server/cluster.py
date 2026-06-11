@@ -30,6 +30,7 @@ if TYPE_CHECKING:
         AbstractGfsAdminRepo,
         AbstractGfsFederationRepo,
     )
+    from .ws_registry import GfsWebSocketRegistry
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +90,8 @@ class ClusterService:
         "_active_sync_count",
         "_local_last_relay_ts",
         "_partition_gaps",
+        "_ws_registry",
+        "_connected_clients",
     )
 
     def __init__(
@@ -103,6 +106,7 @@ class ClusterService:
         signing_key: bytes = b"",
         own_public_key_hex: str = "",
         enabled: bool = False,
+        ws_registry: "GfsWebSocketRegistry | None" = None,
     ) -> None:
         self._repo = repo
         self._admin_repo = admin_repo
@@ -137,6 +141,18 @@ class ClusterService:
         #: :meth:`pending_partition_gaps` so SH-side fan-out can drain
         #: them after a partition heals.
         self._partition_gaps: dict[str, dict] = {}
+        self._ws_registry = ws_registry
+        #: Spec §24.10 — local view of each peer's live connected-client
+        #: count (the GFS-side WebSocket sessions, one per paired SH
+        #: household). Own count is read live from the ws-registry; peer
+        #: counts are refreshed from incoming ``NODE_HEARTBEAT`` payloads.
+        #: In-memory only — ephemeral, never persisted.
+        self._connected_clients: dict[str, int] = {}
+
+    def _own_connected_clients(self) -> int:
+        return (
+            self._ws_registry.connection_count() if self._ws_registry is not None else 0
+        )
 
     @property
     def own_public_key_hex(self) -> str:
@@ -205,6 +221,68 @@ class ClusterService:
                 }
                 for r in rows
             ],
+        }
+
+    async def admin_cluster(self) -> dict:
+        """Return the enriched cluster view for the admin portal.
+
+        Richer than the public :meth:`health` — includes THIS node plus
+        every peer, with live connected-client counts and the in-memory
+        sync-signaling load. Admin-only. ``connected_clients`` for self is
+        read live from the ws-registry; peer counts come from the most
+        recent ``NODE_HEARTBEAT`` (0 if none seen yet). All counts are
+        ephemeral, never persisted.
+        """
+        rows = await self._repo.list_nodes()
+        self_status = "online" if self._enabled else "single-node"
+        nodes: list[dict] = []
+        saw_self = False
+        for r in rows:
+            is_self = r.node_id == self._node_id
+            if is_self:
+                saw_self = True
+            nodes.append(
+                {
+                    "node_id": r.node_id,
+                    "url": r.url,
+                    "status": self_status if is_self else r.status,
+                    "last_seen": r.last_seen,
+                    "connected_clients": (
+                        self._own_connected_clients()
+                        if is_self
+                        else self._connected_clients.get(r.node_id, 0)
+                    ),
+                    "active_sync_sessions": (
+                        self._active_sync_count.get(r.node_id, 0)
+                        if is_self
+                        else self._active_sync_count.get(
+                            r.node_id,
+                            int(r.active_sync_sessions or 0),
+                        )
+                    ),
+                    "is_self": is_self,
+                }
+            )
+        if not saw_self:
+            nodes.insert(
+                0,
+                {
+                    "node_id": self._node_id,
+                    "url": self._self_url,
+                    "status": self_status,
+                    "last_seen": None,
+                    "connected_clients": self._own_connected_clients(),
+                    "active_sync_sessions": self._active_sync_count.get(
+                        self._node_id,
+                        0,
+                    ),
+                    "is_self": True,
+                },
+            )
+        return {
+            "node_id": self._node_id,
+            "status": self_status,
+            "nodes": nodes,
         }
 
     # ─── Sync-signaling round-robin (spec §24.10.7) ───────────────────
@@ -432,6 +510,14 @@ class ClusterService:
                 peer_count = max(0, int(payload["active_sync_sessions"]))
             except TypeError, ValueError:
                 peer_count = None
+        # Connected-client count is fail-soft: absent on older peers, in
+        # which case we leave any prior value untouched (never clobber to 0).
+        peer_clients: int | None = None
+        if isinstance(payload, dict) and "connected_clients" in payload:
+            try:
+                peer_clients = max(0, int(payload["connected_clients"]))
+            except TypeError, ValueError:
+                peer_clients = None
         rows = await self._repo.list_nodes()
         for r in rows:
             if r.node_id == from_node_id:
@@ -452,6 +538,8 @@ class ClusterService:
                         from_node_id,
                         peer_count,
                     )
+                if peer_clients is not None:
+                    self._connected_clients[from_node_id] = peer_clients
                 return
 
     async def apply_sync_client(
@@ -716,6 +804,7 @@ class ClusterService:
                                         self._node_id,
                                         0,
                                     ),
+                                    "connected_clients": self._own_connected_clients(),
                                 },
                                 session=None,
                             )

@@ -165,6 +165,12 @@ caller's preferred GFS. Spec §24.10.7.
 
 Counters are local-per-node (no consensus). They propagate via
 `NODE_HEARTBEAT` so peers' selectors see fresh load on the next pick.
+The same heartbeat also carries each node's live connected-client count
+(GFS↔SH WebSocket sessions); peers mirror it in memory so the admin
+portal's Cluster tab shows per-node load across the whole cluster. That
+count is ephemeral (never persisted) and fail-soft — a heartbeat that
+omits it leaves the last-known value untouched, so an older peer never
+clobbers it to zero.
 A node at `MAX_SIGNALING_SESSIONS = 200` is filtered out of the
 candidate set; if every node is at the cap the GFS replies with
 `503 {reason: "node_capacity"}` and the SH provider falls back to

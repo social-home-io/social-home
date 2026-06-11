@@ -357,11 +357,11 @@ class AdminAuditView(GfsBaseView):
 
 
 class AdminClusterCollectionView(GfsBaseView):
-    """``GET /admin/api/cluster`` — node + peer list."""
+    """``GET /admin/api/cluster`` — enriched node + peer list."""
 
     async def get(self) -> web.Response:
         svc = self.svc(K.gfs_cluster_key)
-        return web.json_response(await svc.health())
+        return web.json_response(await svc.admin_cluster())
 
 
 class AdminClusterPeerCollectionView(GfsBaseView):

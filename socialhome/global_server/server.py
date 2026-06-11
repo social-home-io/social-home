@@ -187,6 +187,7 @@ class GfsApp:
             signing_key=signing_key,
             own_public_key_hex=own_pk_hex,
             enabled=config.cluster_enabled,
+            ws_registry=ws_registry,
         )
         admin.attach_cluster(cluster)
         highlight_pubs = HighlightPublicationRegistry(

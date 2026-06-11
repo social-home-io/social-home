@@ -21,11 +21,12 @@ import { AppealsPanel } from './panels/Appeals'
 import { PolicyPanel } from './panels/Policy'
 import { BrandingPanel } from './panels/Branding'
 import { AuditPanel } from './panels/Audit'
+import { ClusterPanel } from './panels/Cluster'
 import './index.css'
 
 
 type TabKey = 'overview' | 'clients' | 'spaces' | 'reports' | 'appeals' |
-  'policy' | 'branding' | 'audit'
+  'policy' | 'branding' | 'audit' | 'cluster'
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
@@ -36,6 +37,7 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'policy',   label: 'Policy' },
   { key: 'branding', label: 'Branding' },
   { key: 'audit',    label: 'Audit log' },
+  { key: 'cluster',  label: 'Cluster' },
 ]
 
 
@@ -214,6 +216,7 @@ function Panel({
     case 'policy':   return <PolicyPanel />
     case 'branding': return <BrandingPanel onSaved={onBrandingSaved} />
     case 'audit':    return <AuditPanel />
+    case 'cluster':  return <ClusterPanel />
   }
 }
 
