@@ -373,6 +373,59 @@ async def test_increment_config_sequence_concurrent(env):
     assert sorted(results) == [1, 2, 3]
 
 
+async def test_increment_roster_sequence_atomic(env):
+    """increment_roster_sequence returns a strictly increasing sequence."""
+    await env.repo.save(_space("sp-rseq"))
+    v1 = await env.repo.increment_roster_sequence("sp-rseq")
+    v2 = await env.repo.increment_roster_sequence("sp-rseq")
+    assert v1 == 1
+    assert v2 == 2
+
+
+async def test_increment_roster_sequence_concurrent(env):
+    """Concurrent roster increments each return a unique sequence number."""
+    await env.repo.save(_space("sp-rconc"))
+    results = await asyncio.gather(
+        env.repo.increment_roster_sequence("sp-rconc"),
+        env.repo.increment_roster_sequence("sp-rconc"),
+        env.repo.increment_roster_sequence("sp-rconc"),
+    )
+    assert sorted(results) == [1, 2, 3]
+
+
+async def test_roster_sequence_independent_of_config_sequence(env):
+    """Bumping config_sequence must not move roster_sequence and vice versa."""
+    await env.repo.save(_space("sp-indep"))
+    # Bump config twice, roster once.
+    await env.repo.increment_config_sequence("sp-indep")
+    await env.repo.increment_config_sequence("sp-indep")
+    r1 = await env.repo.increment_roster_sequence("sp-indep")
+    space = await env.repo.get("sp-indep")
+    assert space is not None
+    assert space.config_sequence == 2
+    assert space.roster_sequence == 1
+    assert r1 == 1
+
+
+async def test_roster_sequence_round_trips_through_save_and_get(env):
+    """roster_sequence persists through the spaces upsert + row read."""
+    sp = replace(_space("sp-rrt"), roster_sequence=7)
+    await env.repo.save(sp)
+    loaded = await env.repo.get("sp-rrt")
+    assert loaded is not None
+    assert loaded.roster_sequence == 7
+    # Upsert preserves an updated value too.
+    await env.repo.save(replace(sp, roster_sequence=9))
+    loaded2 = await env.repo.get("sp-rrt")
+    assert loaded2 is not None
+    assert loaded2.roster_sequence == 9
+
+
+async def test_increment_roster_sequence_unknown_space_raises(env):
+    with pytest.raises(KeyError):
+        await env.repo.increment_roster_sequence("nope")
+
+
 async def test_config_author_default_none_and_roundtrip(env):
     """The last-applied config author (v_24 LWW tie-break) defaults to NULL
     on a fresh space and round-trips through set/get_config_author."""

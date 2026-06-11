@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 
 import pytest
 
 from socialhome.db.migrations import (
+    MIGRATIONS_DIR,
     MigrationError,
     discover_migrations,
     run_migrations,
@@ -119,4 +121,48 @@ def test_run_python_migration(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='table' AND name='py_test'"
     ).fetchone()
     assert row is not None
+    conn.close()
+
+
+def test_0036_backfills_roster_sequence_from_config_sequence(tmp_path):
+    """Migration 0036 seeds roster_sequence from each existing space's
+    config_sequence (continuity: existing member_versions were sourced from
+    config_sequence, so a fresh 0 would emit stale roster events)."""
+    import shutil
+
+    staged = tmp_path / "migrations"
+    staged.mkdir()
+    # Stage every real migration BEFORE 0036.
+    for path in sorted(MIGRATIONS_DIR.iterdir()):
+        m = re.match(r"^(\d{4})_", path.name)
+        if m and int(m.group(1)) < 36:
+            shutil.copy(path, staged / path.name)
+
+    conn = sqlite3.connect(str(tmp_path / "test.db"))
+    conn.row_factory = sqlite3.Row
+    run_migrations(conn, directory=staged)
+
+    # Seed a pre-0036 space with a non-zero config_sequence (no roster column).
+    conn.execute(
+        """
+        INSERT INTO spaces(
+            id, name, owner_instance_id, owner_username,
+            identity_public_key, config_sequence
+        ) VALUES('sp-bf', 'BF', 'inst-x', 'alice', 'aabb', 4)
+        """
+    )
+    conn.commit()
+
+    # Now stage + apply 0036.
+    for path in MIGRATIONS_DIR.iterdir():
+        if path.name.startswith("0036_"):
+            shutil.copy(path, staged / path.name)
+    applied = run_migrations(conn, directory=staged)
+    assert any(m.version == 36 for m in applied)
+
+    row = conn.execute(
+        "SELECT config_sequence, roster_sequence FROM spaces WHERE id='sp-bf'"
+    ).fetchone()
+    assert row["config_sequence"] == 4
+    assert row["roster_sequence"] == 4  # backfilled to match
     conn.close()

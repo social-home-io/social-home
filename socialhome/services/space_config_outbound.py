@@ -41,6 +41,21 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+#: Roster / moderation events that ride the LOCAL bus (for realtime/UI) but
+#: must NOT federate as ``SPACE_CONFIG_CHANGED``. Their roster effect federates
+#: via authority-signed roster gossip (``SPACE_MEMBER_JOINED`` / ``LEFT``) or
+#: is host-local only (unban clears a host-side ban flag the stubs never held).
+#: Federating them as config — now that they no longer advance
+#: ``config_sequence`` — would at best be a no-op and at worst perturb a
+#: receiver's ``config_author`` at an equal sequence (a non-deterministic LWW
+#: tie-break). So skip the federation outbound for them.
+_ROSTER_EVENT_TYPES = {
+    SpaceConfigEventType.ADMIN_GRANTED.value,
+    SpaceConfigEventType.ADMIN_REVOKED.value,
+    SpaceConfigEventType.MEMBER_BANNED.value,
+    SpaceConfigEventType.MEMBER_UNBANNED.value,
+}
+
 
 class SpaceConfigOutbound:
     """Bus-event → federation broadcaster for space config changes."""
@@ -113,6 +128,10 @@ class SpaceConfigOutbound:
         # so just skip here — emitting SPACE_CONFIG_CHANGED would instead
         # refresh members' stubs and resurrect a row the purge removed.
         if event.event_type == SpaceConfigEventType.DISSOLVED.value:
+            return
+        # Roster / moderation events federate via roster gossip (or are
+        # host-local), never as a config edit — see _ROSTER_EVENT_TYPES.
+        if event.event_type in _ROSTER_EVENT_TYPES:
             return
         # Who is authorised to broadcast this config edit?
         #

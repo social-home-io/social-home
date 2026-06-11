@@ -608,6 +608,13 @@ class Space:
     join_mode: JoinMode
 
     # Optional fields — must come after required ones.
+    #: Dedicated monotonic counter for roster gossip (member join / role / ban
+    #: tombstone), decoupled from ``config_sequence`` (the config-LWW version).
+    #: A roster event advances only this; a real config edit advances only
+    #: ``config_sequence``. Backfilled from ``config_sequence`` once on migration
+    #: 0036 so member_versions stay monotonic. Default 0 keeps it after the
+    #: required fields (dataclass ordering).
+    roster_sequence: int = 0
     description: str | None = None
     emoji: str | None = None
     retention_days: int | None = None  # None → unlimited

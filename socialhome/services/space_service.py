@@ -898,15 +898,19 @@ class SpaceService(SpaceMemberGuardMixin):
         + gossip gracefully and fall back to today's host-only behaviour.
 
         Versioning — ``member_version`` and ``roster_version`` are both sourced
-        from the space's atomic ``config_sequence`` (bumped once here), the
-        simplest monotonic-per-space counter we already maintain. The receiver's
-        version-guarded CRDT merge (``apply_member_event``) uses
+        from the space's dedicated atomic ``roster_sequence`` (bumped once
+        here), DECOUPLED from ``config_sequence``. A roster mutation advances
+        only the roster counter; a real config edit advances only the config
+        counter. This stops a ``set_role`` / ``ban`` from bumping the
+        config-LWW version, which used to leave a member household's stub
+        ``config_sequence`` lagging the host's so a delegated admin's offline
+        config edit collided with the owner at the SAME sequence. The
+        receiver's version-guarded CRDT merge (``apply_member_event``) uses
         ``member_version`` to converge regardless of delivery order; a
-        replayed/stale event is dropped. Sharing the counter is intentional: a
-        ``set_role`` / ``ban`` path that also edits config double-bumps the
-        sequence, but that is benign — gossip only needs a value that strictly
-        increases per accepted event, and the ``<=`` drop guard simply tolerates
-        the (still monotonic) values it consumes.
+        replayed/stale event is dropped. ``roster_sequence`` is backfilled from
+        ``config_sequence`` once on migration 0036 so it stays strictly above
+        every prior ``member_version`` (which was sourced from the old shared
+        counter).
 
         Delivery — fan-out via :meth:`FederationService.broadcast_to_space_members`
         which targets ``space_instances`` (member households only — the
@@ -946,9 +950,9 @@ class SpaceService(SpaceMemberGuardMixin):
                 )
             return
         try:
-            version = await self._spaces.increment_config_sequence(space.id)
+            version = await self._spaces.increment_roster_sequence(space.id)
         except Exception:
-            log.exception("roster-gossip: config_sequence bump failed for %s", space.id)
+            log.exception("roster-gossip: roster_sequence bump failed for %s", space.id)
             return
         event_type = (
             FederationEventType.SPACE_MEMBER_LEFT
@@ -1681,18 +1685,23 @@ class SpaceService(SpaceMemberGuardMixin):
         if target.role == SpaceRole.OWNER:
             raise SpacePermissionError("cannot demote the owner")
         await self._spaces.set_role(space_id, user_id, role)
-        sequence = await self._spaces.increment_config_sequence(space_id)
         evt = (
             SpaceConfigEventType.ADMIN_GRANTED
             if role == SpaceRole.ADMIN
             else SpaceConfigEventType.ADMIN_REVOKED
         )
+        # A role change is a ROSTER mutation, not a config edit — it must NOT
+        # advance config_sequence (that lagged member stubs and collided
+        # offline-of-owner config edits). The roster effect federates via
+        # _emit_member_roster_gossip below (roster_sequence). The local bus
+        # event still fires for realtime/UI, carrying the CURRENT config
+        # sequence unchanged.
         await self._bus.publish(
             SpaceConfigChanged(
                 space_id=space_id,
                 event_type=evt.value,
                 payload={"user_id": user_id, "role": role},
-                sequence=sequence,
+                sequence=space.config_sequence,
             )
         )
         # v_23 — peer-replicate the role change (a JOINED gossip doubles as the
@@ -2063,12 +2072,15 @@ class SpaceService(SpaceMemberGuardMixin):
         if target.role == role:
             return
         await self._remote_members.set_role(space_id, instance_id, user_id, role)
-        sequence = await self._spaces.increment_config_sequence(space_id)
         evt = (
             SpaceConfigEventType.ADMIN_GRANTED
             if role == SpaceRole.ADMIN
             else SpaceConfigEventType.ADMIN_REVOKED
         )
+        # A role change is a ROSTER mutation, not a config edit — it must NOT
+        # advance config_sequence. The roster effect federates via
+        # _emit_member_roster_gossip below (roster_sequence); the local bus
+        # event carries the CURRENT config sequence unchanged.
         await self._bus.publish(
             SpaceConfigChanged(
                 space_id=space_id,
@@ -2078,7 +2090,7 @@ class SpaceService(SpaceMemberGuardMixin):
                     "instance_id": instance_id,
                     "role": role,
                 },
-                sequence=sequence,
+                sequence=space.config_sequence,
             )
         )
         await self._federation.broadcast_to_space_members(
@@ -2326,13 +2338,16 @@ class SpaceService(SpaceMemberGuardMixin):
             banned_by=actor.user_id,
             reason=reason,
         )
-        sequence = await self._spaces.increment_config_sequence(space_id)
+        # A ban is a ROSTER mutation, not a config edit — it must NOT advance
+        # config_sequence. The removal federates via the LEFT gossip below
+        # (roster_sequence); the local bus event carries the CURRENT config
+        # sequence unchanged.
         await self._bus.publish(
             SpaceConfigChanged(
                 space_id=space_id,
                 event_type=SpaceConfigEventType.MEMBER_BANNED.value,
                 payload={"user_id": user_id, "reason": reason},
-                sequence=sequence,
+                sequence=space.config_sequence,
             )
         )
         # v_23 — a ban is a removal: peer-replicate a LEFT gossip so every
@@ -2369,13 +2384,18 @@ class SpaceService(SpaceMemberGuardMixin):
         ):
             return
         await self._spaces.unban_member(space_id, user_id)
-        sequence = await self._spaces.increment_config_sequence(space_id)
+        # Unban clears a host-local ban flag only (the ban list never lived on
+        # member stubs, and unban re-adds no membership). It is a ROSTER /
+        # moderation event, not a config edit — it must NOT advance
+        # config_sequence, and it isn't federated as config (see
+        # SpaceConfigOutbound._ROSTER_EVENT_TYPES). The local bus event still
+        # fires for realtime/UI, carrying the CURRENT config sequence.
         await self._bus.publish(
             SpaceConfigChanged(
                 space_id=space_id,
                 event_type=SpaceConfigEventType.MEMBER_UNBANNED.value,
                 payload={"user_id": user_id},
-                sequence=sequence,
+                sequence=space.config_sequence,
             )
         )
 
@@ -4013,10 +4033,15 @@ async def build_space_snapshot_for_federation(
                 }
             )
     meta["roster"] = roster
-    # v_23 — the space's monotonic config_sequence doubles as the
-    # roster_version so a receiver can detect a stale snapshot vs a
-    # later gossip event.
-    meta["roster_version"] = space.config_sequence
+    # The space's dedicated monotonic roster_sequence, shipped for
+    # forward-compat / parity with config_sequence. NB: no receiver currently
+    # reads roster_version for staleness detection — the per-roster-entry
+    # member_version (above) is what the CRDT merge keys on, and the stub's
+    # roster_sequence is round-tripped via the base meta's "roster_sequence"
+    # key (see _space_metadata_for_federation). Decoupled from config_sequence
+    # (migration 0036); backfilled from it so it stays strictly above every
+    # prior member_version.
+    meta["roster_version"] = space.roster_sequence
     # §D1b cover federation (#116) — ship the actual WebP bytes
     # alongside ``cover_hash``. Without them, the joiner's stub
     # renders the gradient fallback even when the host has a
@@ -4082,6 +4107,14 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "owner_username": space.owner_username,
         "identity_public_key": space.identity_public_key,
         "config_sequence": space.config_sequence,
+        # The dedicated monotonic roster counter (decoupled from
+        # config_sequence on migration 0036). Round-tripped into receiver
+        # stubs so a delegated admin's offline-of-owner roster gossip emits
+        # versions anchored at the host's value — strictly above every other
+        # household's stored member_version — instead of restarting at 1 and
+        # being dropped by the version-guarded CRDT merge (C1 regression).
+        # Missing on an older sender → stub fails soft to config_sequence.
+        "roster_sequence": space.roster_sequence,
         "space_type": space.space_type.value,
         "join_mode": space.join_mode.value,
         # Canonical full wire form (all SpaceFeatures fields) so no toggle is
@@ -4322,6 +4355,9 @@ def stub_space_from_metadata(
         owner_username=str(meta.get("owner_username") or ""),
         identity_public_key=str(meta.get("identity_public_key") or ""),
         config_sequence=int(meta.get("config_sequence") or 0),
+        # Anchor the stub's roster counter to the host's, failing soft to
+        # config_sequence on an older sender (see _coerce_roster_sequence).
+        roster_sequence=_coerce_roster_sequence(meta),
         features=features,
         space_type=_coerce_space_type(meta.get("space_type") or "private"),
         join_mode=_coerce_join_mode(meta.get("join_mode") or "invite_only"),
@@ -4336,6 +4372,22 @@ def stub_space_from_metadata(
         min_age=_coerce_min_age(meta.get("min_age")),
         target_audience=str(meta.get("target_audience") or "all"),
     )
+
+
+def _coerce_roster_sequence(meta: dict) -> int:
+    """Anchor a stub's roster counter from a federation meta payload.
+
+    Reads ``roster_sequence`` when the sender ships it; fails soft to
+    ``config_sequence`` when absent (an older sender / pre-fix snapshot).
+    config_sequence was the pre-commit gossip source, so it stays ≥ every
+    historical member_version — keeping the stub monotonically anchored so a
+    delegated admin's offline-of-owner roster gossip emits versions strictly
+    above every other household's stored member_version (C1 regression).
+    """
+    raw = meta.get("roster_sequence")
+    if raw is None:
+        raw = meta.get("config_sequence") or 0
+    return int(raw)
 
 
 def _coerce_min_age(value: object) -> int:

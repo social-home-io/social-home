@@ -77,6 +77,7 @@ class AbstractSpaceRepo(Protocol):
     ) -> None: ...
     async def purge(self, space_id: str) -> None: ...
     async def increment_config_sequence(self, space_id: str) -> int: ...
+    async def increment_roster_sequence(self, space_id: str) -> int: ...
     async def get_config_author(self, space_id: str) -> str | None: ...
     async def set_config_author(self, space_id: str, instance_id: str) -> None: ...
     async def update_age_gate(
@@ -301,7 +302,7 @@ class SqliteSpaceRepo:
             INSERT INTO spaces(
                 id, name, description, emoji,
                 owner_instance_id, owner_username, identity_public_key,
-                config_sequence, space_type, join_mode, join_code,
+                config_sequence, roster_sequence, space_type, join_mode, join_code,
                 retention_days, retention_exempt_json,
                 feature_calendar, feature_todo, feature_location, location_mode,
                 feature_stickies, feature_pages, feature_gallery, feature_bazaar,
@@ -317,10 +318,10 @@ class SqliteSpaceRepo:
                 dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
                 min_age, target_audience
             ) VALUES(
-                -- 51 placeholders, one per column listed above.
+                -- 52 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
-                ?, ?, ?, ?,                   -- config_sequence, space_type, join_mode, join_code
+                ?, ?, ?, ?, ?,                -- config_sequence, roster_sequence, space_type, join_mode, join_code
                 ?, ?,                         -- retention_days, retention_exempt_json
                 ?, ?, ?, ?,                   -- feature_calendar, feature_todo, feature_location, location_mode
                 ?, ?, ?, ?,                   -- feature_stickies, feature_pages, feature_gallery, feature_bazaar
@@ -341,6 +342,7 @@ class SqliteSpaceRepo:
                 description=excluded.description,
                 emoji=excluded.emoji,
                 config_sequence=excluded.config_sequence,
+                roster_sequence=excluded.roster_sequence,
                 space_type=excluded.space_type,
                 join_mode=excluded.join_mode,
                 join_code=excluded.join_code,
@@ -396,6 +398,7 @@ class SqliteSpaceRepo:
                 space.owner_username,
                 space.identity_public_key,
                 space.config_sequence,
+                space.roster_sequence,
                 space.space_type.value,
                 space.join_mode.value,
                 space.join_code,
@@ -746,6 +749,30 @@ class SqliteSpaceRepo:
                 raise KeyError(f"space {space_id!r} not found")
             row = conn.execute(
                 "SELECT config_sequence FROM spaces WHERE id=?",
+                (space_id,),
+            ).fetchone()
+            return int(row[0])
+
+        return await self._db.transact(_run)
+
+    async def increment_roster_sequence(self, space_id: str) -> int:
+        """Atomically bump ``spaces.roster_sequence`` and return the new value.
+
+        Mirrors :meth:`increment_config_sequence` but on the dedicated roster
+        counter, so roster gossip versions advance independently of config-LWW
+        versions. Same ``BEGIN IMMEDIATE`` UPDATE+SELECT so concurrent callers
+        always see strictly increasing values.
+        """
+
+        def _run(conn):
+            cur = conn.execute(
+                "UPDATE spaces SET roster_sequence = roster_sequence + 1 WHERE id=?",
+                (space_id,),
+            )
+            if cur.rowcount == 0:
+                raise KeyError(f"space {space_id!r} not found")
+            row = conn.execute(
+                "SELECT roster_sequence FROM spaces WHERE id=?",
                 (space_id,),
             ).fetchone()
             return int(row[0])
@@ -1515,6 +1542,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         owner_username=row["owner_username"],
         identity_public_key=row["identity_public_key"],
         config_sequence=int(row.get("config_sequence") or 0),
+        roster_sequence=int(row.get("roster_sequence") or 0),
         features=features,
         space_type=SpaceType(row.get("space_type", "private")),
         join_mode=JoinMode(row.get("join_mode", "invite_only")),
