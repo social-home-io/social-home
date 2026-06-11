@@ -70,11 +70,9 @@ export function initCpWsListeners(): CpEventOff {
   }))
 
   offs.push(ws.on('cp.age_gate_changed', (evt) => {
-    const d = evt.data as {
-      space_id: string; min_age: number; target_audience: string
-    }
+    const d = evt.data as { space_id: string; min_age: number }
     showToast(
-      `Age gate for ${d.space_id}: ${d.min_age}+ / ${d.target_audience}`,
+      `Age gate for ${d.space_id}: ${d.min_age}+`,
       'info',
     )
   }))
