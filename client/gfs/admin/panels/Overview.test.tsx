@@ -11,6 +11,7 @@ import { AppealsPanel } from './Appeals'
 import { PolicyPanel } from './Policy'
 import { BrandingPanel } from './Branding'
 import { AuditPanel } from './Audit'
+import { ClusterPanel } from './Cluster'
 
 function stubFetch(impl: (url: string, opts?: RequestInit) => Promise<unknown>) {
   global.fetch = vi.fn(async (input, init) => {
@@ -165,5 +166,56 @@ describe('AuditPanel', () => {
     stubFetch(async () => [])
     const { findByText } = render(<AuditPanel />)
     expect(await findByText(/No audit entries yet\./)).toBeTruthy()
+  })
+})
+
+
+describe('ClusterPanel', () => {
+  const clusterBody = {
+    node_id: 'node-a',
+    status: 'online',
+    nodes: [
+      {
+        node_id: 'node-a', url: 'https://a.gfs.test', status: 'online',
+        last_seen: '2026-06-11T18:00:00+00:00', connected_clients: 11,
+        active_sync_sessions: 3, is_self: true,
+      },
+      {
+        node_id: 'node-b', url: 'https://b.gfs.test', status: 'offline',
+        last_seen: null, connected_clients: 0,
+        active_sync_sessions: 0, is_self: false,
+      },
+    ],
+  }
+
+  it('renders a row per node with counts, self marker and status pills', async () => {
+    stubFetch(async () => clusterBody)
+    const { container, findByText } = render(<ClusterPanel />)
+    await findByText('node-b')
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(2)
+    expect(container.textContent).toContain('11')
+    expect(container.textContent).toContain('3')
+    expect(container.textContent).toContain('(this node)')
+    expect(container.querySelector('.pill.active')).toBeTruthy()
+    expect(container.querySelector('.pill.banned')).toBeTruthy()
+  })
+
+  it('shows no Ping/Remove on the self row but does on a peer row', async () => {
+    stubFetch(async () => clusterBody)
+    const { container, findByText } = render(<ClusterPanel />)
+    await findByText('node-b')
+    const rows = container.querySelectorAll('tbody tr')
+    const selfRow = Array.from(rows).find((r) => r.textContent?.includes('(this node)'))!
+    const peerRow = Array.from(rows).find((r) => r.textContent?.includes('node-b'))!
+    expect(selfRow.querySelectorAll('button')).toHaveLength(0)
+    expect(peerRow.textContent).toContain('Ping')
+    expect(peerRow.textContent).toContain('Remove')
+  })
+
+  it('renders the add-peer input', async () => {
+    stubFetch(async () => clusterBody)
+    const { container, findByText } = render(<ClusterPanel />)
+    await findByText('node-b')
+    expect(container.querySelector('input[type=text]')).toBeTruthy()
   })
 })

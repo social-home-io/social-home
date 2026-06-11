@@ -56,6 +56,7 @@ header .right {
 /* Nav tabs — pill-shaped, hearth highlight on the active tab. */
 nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   background: var(--sh-bg);
   padding: 8px 22px;
