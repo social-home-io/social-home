@@ -4033,10 +4033,14 @@ async def build_space_snapshot_for_federation(
                 }
             )
     meta["roster"] = roster
-    # The space's dedicated monotonic roster_sequence is the roster_version so
-    # a receiver can detect a stale snapshot vs a later gossip event. Decoupled
-    # from config_sequence (migration 0036); backfilled from it so it stays
-    # strictly above every prior member_version.
+    # The space's dedicated monotonic roster_sequence, shipped for
+    # forward-compat / parity with config_sequence. NB: no receiver currently
+    # reads roster_version for staleness detection — the per-roster-entry
+    # member_version (above) is what the CRDT merge keys on, and the stub's
+    # roster_sequence is round-tripped via the base meta's "roster_sequence"
+    # key (see _space_metadata_for_federation). Decoupled from config_sequence
+    # (migration 0036); backfilled from it so it stays strictly above every
+    # prior member_version.
     meta["roster_version"] = space.roster_sequence
     # §D1b cover federation (#116) — ship the actual WebP bytes
     # alongside ``cover_hash``. Without them, the joiner's stub
@@ -4103,6 +4107,14 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "owner_username": space.owner_username,
         "identity_public_key": space.identity_public_key,
         "config_sequence": space.config_sequence,
+        # The dedicated monotonic roster counter (decoupled from
+        # config_sequence on migration 0036). Round-tripped into receiver
+        # stubs so a delegated admin's offline-of-owner roster gossip emits
+        # versions anchored at the host's value — strictly above every other
+        # household's stored member_version — instead of restarting at 1 and
+        # being dropped by the version-guarded CRDT merge (C1 regression).
+        # Missing on an older sender → stub fails soft to config_sequence.
+        "roster_sequence": space.roster_sequence,
         "space_type": space.space_type.value,
         "join_mode": space.join_mode.value,
         # Canonical full wire form (all SpaceFeatures fields) so no toggle is
@@ -4343,6 +4355,9 @@ def stub_space_from_metadata(
         owner_username=str(meta.get("owner_username") or ""),
         identity_public_key=str(meta.get("identity_public_key") or ""),
         config_sequence=int(meta.get("config_sequence") or 0),
+        # Anchor the stub's roster counter to the host's, failing soft to
+        # config_sequence on an older sender (see _coerce_roster_sequence).
+        roster_sequence=_coerce_roster_sequence(meta),
         features=features,
         space_type=_coerce_space_type(meta.get("space_type") or "private"),
         join_mode=_coerce_join_mode(meta.get("join_mode") or "invite_only"),
@@ -4357,6 +4372,22 @@ def stub_space_from_metadata(
         min_age=_coerce_min_age(meta.get("min_age")),
         target_audience=str(meta.get("target_audience") or "all"),
     )
+
+
+def _coerce_roster_sequence(meta: dict) -> int:
+    """Anchor a stub's roster counter from a federation meta payload.
+
+    Reads ``roster_sequence`` when the sender ships it; fails soft to
+    ``config_sequence`` when absent (an older sender / pre-fix snapshot).
+    config_sequence was the pre-commit gossip source, so it stays ≥ every
+    historical member_version — keeping the stub monotonically anchored so a
+    delegated admin's offline-of-owner roster gossip emits versions strictly
+    above every other household's stored member_version (C1 regression).
+    """
+    raw = meta.get("roster_sequence")
+    if raw is None:
+        raw = meta.get("config_sequence") or 0
+    return int(raw)
 
 
 def _coerce_min_age(value: object) -> int:

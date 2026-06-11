@@ -18,6 +18,9 @@ from socialhome.domain.space import (
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.repositories.cp_repo import SqliteCpRepo
 from socialhome.repositories.space_post_repo import SqliteSpacePostRepo
+from socialhome.repositories.space_remote_member_repo import (
+    SqliteSpaceRemoteMemberRepo,
+)
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.child_protection_service import ChildProtectionService
@@ -2758,6 +2761,158 @@ def test_federation_features_pair_roundtrips_every_wire_field():
         )
     # And the whole object round-trips.
     assert stub.features == features
+
+
+# ─── C1 regression: roster_sequence round-trips into stubs ───────────────
+#
+# Commit 469f9d9 moved roster gossip's member_version/roster_version off
+# config_sequence onto a dedicated roster_sequence — but never federated
+# roster_sequence into receiver stubs. stub_space_from_metadata defaulted it
+# to 0, so a delegated admin's stub anchored at 0; the next
+# increment_roster_sequence emitted member_version=1, BELOW every other
+# household's stored member_version (anchored high from the migration
+# backfill), and the version-guarded CRDT merge DROPPED it — offline-of-owner
+# moderation silently never converged. These guard the round-trip.
+
+
+def test_stub_anchors_roster_sequence_from_host_meta():
+    """A snapshot whose host roster_sequence is high seats a stub anchored
+    to that same value (not reset to 0), and re-applying a config edit
+    through the same path keeps it anchored."""
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    space = Space(
+        id="sp-anchor",
+        name="Fam",
+        owner_instance_id="host-inst",
+        owner_username="anna",
+        identity_public_key="pk",
+        config_sequence=4,
+        roster_sequence=7,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+
+    meta = _space_metadata_for_federation(space)
+    # The base meta must carry roster_sequence for the round-trip.
+    assert meta["roster_sequence"] == 7
+
+    stub = stub_space_from_metadata(
+        space.id, host_instance_id=space.owner_instance_id, meta=meta
+    )
+    assert stub.roster_sequence == 7
+
+    # A later config edit re-seats the stub through the SAME path (the
+    # _on_space_config_changed flow); the stub must stay anchored at 7.
+    refreshed = stub_space_from_metadata(
+        space.id, host_instance_id=space.owner_instance_id, meta=meta
+    )
+    assert refreshed.roster_sequence == 7
+
+
+def test_stub_roster_sequence_fails_soft_to_config_sequence():
+    """An older sender / pre-fix snapshot omits roster_sequence; the stub
+    falls soft to config_sequence so it stays monotonically anchored above
+    every historical member_version (config_sequence was the pre-commit
+    gossip source)."""
+    from socialhome.services.space_service import stub_space_from_metadata
+
+    meta = {
+        "name": "Old",
+        "owner_username": "anna",
+        "identity_public_key": "pk",
+        "config_sequence": 5,
+        # NB: no "roster_sequence" key — pre-fix sender.
+        "space_type": "private",
+        "join_mode": "invite_only",
+    }
+    stub = stub_space_from_metadata("sp-old", host_instance_id="host-inst", meta=meta)
+    assert stub.roster_sequence == 5
+
+
+async def test_anchored_stub_gossip_version_beats_other_households(stack, tmp_dir):
+    """The real fix: a delegated-admin stub anchored at the host's
+    roster_sequence emits a gossip version that EXCEEDS another household's
+    stored member_version, so the version-guarded CRDT merge APPLIES it.
+
+    Without the round-trip the stub anchors at 0, its bump emits version 1,
+    and apply_member_event drops it as stale (member_version < current).
+    """
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    # Host's roster has advanced to 7 (e.g. via the migration backfill from
+    # config_sequence + a few roster ops).
+    host_space = Space(
+        id="sp-conv",
+        name="Fam",
+        owner_instance_id="host-inst",
+        owner_username="anna",
+        identity_public_key="pk",
+        config_sequence=4,
+        roster_sequence=7,
+        features=SpaceFeatures(),
+        space_type=SpaceType.PRIVATE,
+        join_mode=JoinMode.INVITE_ONLY,
+    )
+    meta = _space_metadata_for_federation(host_space)
+
+    # Delegated-admin household seats the stub from that snapshot, then
+    # persists it so increment_roster_sequence has a row to bump.
+    stub = stub_space_from_metadata(
+        host_space.id, host_instance_id=host_space.owner_instance_id, meta=meta
+    )
+    await stack.space_repo.save(stub)
+    emitted_version = await stack.space_repo.increment_roster_sequence(stub.id)
+    assert emitted_version == 8  # 7 + 1, strictly above the host's anchor
+
+    # A DIFFERENT household holds a member of this space at member_version=7
+    # (the host's last-emitted version). The delegated admin's version-8 event
+    # must APPLY (not drop), converging the offline-of-owner role change.
+    other_db = AsyncDatabase(tmp_dir / "other.db", batch_timeout_ms=10)
+    await other_db.startup()
+    # The other household also seats the space stub locally (space_remote_members
+    # FKs spaces.id), seeded from the same host snapshot.
+    other_space_repo = SqliteSpaceRepo(other_db, key_manager=stack.km)
+    await other_space_repo.save(
+        stub_space_from_metadata(
+            host_space.id, host_instance_id=host_space.owner_instance_id, meta=meta
+        )
+    )
+    remote_repo = SqliteSpaceRemoteMemberRepo(other_db)
+    seeded = await remote_repo.apply_member_event(
+        space_id=stub.id,
+        user_id="u-bob",
+        instance_id="bob-inst",
+        display_name="Bob",
+        user_pk="bob-pk",
+        role="member",
+        member_version=7,
+        tombstoned=False,
+    )
+    assert seeded is True
+
+    applied = await remote_repo.apply_member_event(
+        space_id=stub.id,
+        user_id="u-bob",
+        instance_id="bob-inst",
+        display_name="Bob",
+        user_pk="bob-pk",
+        role="admin",  # the delegated admin's offline-of-owner role change
+        member_version=emitted_version,
+        tombstoned=False,
+    )
+    assert applied is True, (
+        "delegated-admin gossip version must beat the other household's "
+        "stored member_version so the CRDT merge converges"
+    )
+    await other_db.shutdown()
 
 
 # ─── §CP.F1: age gate on EVERY seating path ──────────────────────────────
