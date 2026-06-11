@@ -27,7 +27,7 @@ export const VISIBILITY_OPTIONS: RadioCardOption[] = [
   },
   {
     value: 'global',
-    icon: '✦',
+    icon: '🌍',
     title: 'Global',
     subtitle: 'Published worldwide via your global server.',
   },
