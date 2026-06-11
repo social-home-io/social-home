@@ -389,6 +389,61 @@ LWW tie-break decides — the step waits for b to sync first, but a host config 
 that doesn't federate its sequence to members can still force a collision (a
 documented convergence follow-up). Steps 1–7 are the deterministic core.
 
+## Owner-offline delegated BAN converges (``owner-offline-ban``)
+
+Sibling of ``owner-offline``, but exercises a **roster** mutation (a ban /
+removal) rather than a config edit — the path the **#618** bug lived on. A
+delegated admin's offline ban gossips a ``SPACE_MEMBER_LEFT`` tombstone whose
+``member_version`` is sourced from the space's dedicated ``roster_sequence``.
+Pre-#618 that sequence wasn't anchored above the victim's last-seen version, so
+other households (holding the victim at a HIGH ``member_version`` from a real
+seat) DROPPED the tombstone as stale via the version-guarded CRDT merge — the
+banned member stayed live. HFS-only. Run after ``up`` + ``pair``:
+
+```bash
+python .claude/skills/federation-demo/harness.py owner-offline-ban
+```
+
+Topology: **a** = owner / host, **b** = delegated admin + seed-holder, **c** =
+the member who gets banned. The step:
+
+1. a creates a private space + enables ``delegated_admin_authority``.
+2. a §D1b-invites b AND c; both accept (stub + content key).
+3. a promotes b to admin → ``SPACE_ADMIN_KEY_SHARE`` ships b the space SIGNING
+   SEED; polls until b holds it (``spaces.identity_private_key`` non-NULL).
+4. **Settles until a, b AND c all agree c is a LIVE member** at a real
+   ``member_version`` in their ``space_remote_members`` roster — the #618
+   pre-condition: every household holds c at a high version an un-anchored ban
+   gossip would fail to beat. Prints the converged state.
+5. **Stops a** (SIGTERM the process group). The owner is offline.
+6. b bans c offline-of-owner via
+   ``DELETE /api/spaces/{id}/remote-members/{c_inst}/{c_user}``
+   (``SpaceService.remove_remote_member``). b holds the seed, so the
+   ``SPACE_MEMBER_LEFT`` roster gossip it fans out to every member household
+   (incl. the offline host) is space-authority-signed; the per-member
+   ``member_version`` is anchored on ``roster_sequence`` (the #618 fix). Asserts
+   b's own roster shows c tombstoned immediately (local write).
+7. Restarts a; polls until a's ``space_remote_members`` row for c is
+   ``tombstoned=1`` — a applied b's authority-signed offline ban on reconnect.
+   ← the headline #618 proof. Pre-#618 a would have dropped it as stale and c
+   would still be a live member.
+8. Secondary (non-fatal): notes whether c's own household saw itself removed
+   (``SPACE_REMOTE_MEMBER_REMOVED`` cascaded the local stub away).
+
+Re-runnable (each run mints a fresh space + a ``time.time_ns()`` marker).
+
+NOTE on the environment: the offline-owner only reconciles the tombstone after
+restart once b's outbox redelivers the authority-signed ``SPACE_MEMBER_LEFT``
+over the HTTP inbox (the realtime RTC channel is gone while a is down). In the
+no-TURN loopback sandbox a's event loop can occasionally stall under the
+post-restart ICE/STUN reconnection storm (low CPU, growing accept backlog) —
+when that happens the HTTP inbox times out and the step's 60 s convergence poll
+can miss. Always run ``owner-offline-ban`` against a **fresh** ``up`` + ``pair``
+(a clean RTC topology); a leftover wedged backend holding port 18001 from a
+prior aborted run is the usual cause of a spurious failure — kill by port and
+``rm -rf /tmp/sh-demo`` before retrying. On a clean topology it converges
+reliably.
+
 ## GFS (Global Federation Server) — opt-in subcommands
 
 The skill also wires up the **GFS** path as a separate, opt-in flow

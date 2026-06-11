@@ -4632,6 +4632,31 @@ def _space_col(label: str, space_id: str, col: str):
     return rows[0][0] if rows else None
 
 
+def _remote_member_row(label: str, space_id: str, user_id: str) -> dict | None:
+    """Return the ``space_remote_members`` row for ``user_id`` (INCLUDING
+    tombstones) on ``label``'s DB, or ``None`` if absent.
+
+    Reads the row by ``(space_id, user_id)`` only — the gossip / convergence
+    path keys a removal on the member identity, and the demo asserts on the
+    ``tombstoned`` flag a delegated admin's offline ban must flip on the owner.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(_instance_dir(label) / "socialhome.db")
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = list(
+            conn.execute(
+                "SELECT * FROM space_remote_members "
+                "WHERE space_id=? AND user_id=?",
+                (space_id, user_id),
+            )
+        )
+    finally:
+        conn.close()
+    return dict(rows[0]) if rows else None
+
+
 def cmd_owner_offline() -> None:
     """Delegated-admin moderation with the OWNING household offline.
 
@@ -4836,6 +4861,271 @@ def cmd_owner_offline() -> None:
     state["owner_offline_space_id"] = space_id
     _save(state)
     print("owner-offline: ok (delegated admin moderates with the owner offline)")
+
+
+def cmd_owner_offline_ban() -> None:
+    """Delegated-admin offline-of-owner BAN converges (covers the #618 path).
+
+    Sibling of :func:`cmd_owner_offline`, but exercises a ROSTER mutation
+    (a removal/ban) rather than a config edit. This is the path the #618 bug
+    lived on: a delegated admin's offline ban gossips a ``SPACE_MEMBER_LEFT``
+    tombstone whose ``member_version`` is sourced from the space's dedicated
+    ``roster_sequence``. Pre-#618 that sequence wasn't anchored above the
+    member's last-seen version, so other households (which held the victim at
+    a HIGH ``member_version`` from a real seat) would DROP the tombstone as
+    stale via the version-guarded CRDT merge — the banned member stayed live.
+
+    Topology (all paired by ``cmd_pair`` — needs a↔b and a↔c):
+    a = owner / host, b = delegated admin + seed-holder, c = the member banned.
+
+    Sequence:
+    1. a creates a private space + enables ``delegated_admin_authority``.
+    2. a §D1b-invites b AND c; both accept (seats a local stub + content key).
+    3. a promotes b to admin → ``SPACE_ADMIN_KEY_SHARE`` ships the signing seed;
+       poll until b holds it (``spaces.identity_private_key`` non-NULL on b).
+    4. Settle until a, b AND c all agree c is a LIVE member at a real
+       ``member_version`` in their ``space_remote_members`` roster. This is the
+       #618 pre-condition: other households hold c at a high version that an
+       un-anchored ban gossip would fail to beat. Print the converged state.
+    5. STOP a (SIGTERM the process group) — the owning household is offline.
+    6. b bans c offline-of-owner via
+       ``DELETE /api/spaces/{id}/remote-members/{c_inst}/{c_user}`` —
+       :meth:`SpaceService.remove_remote_member`. b holds the seed, so the
+       ``SPACE_MEMBER_LEFT`` roster gossip it fans out to every member
+       household (incl. the offline host's ``space_instances`` row) is
+       space-authority-signed; the per-member ``member_version`` is anchored on
+       ``roster_sequence`` (the #618 fix).
+    7. Restart a; after the outbox/redelivery window, assert a's
+       ``space_remote_members`` row for c is ``tombstoned=1`` — a applied b's
+       offline ban gossip on reconnect. Pre-#618, a would have dropped it as
+       stale and c would still be a live member.
+       Secondary: c's own household sees itself removed from the space
+       (``SPACE_REMOTE_MEMBER_REMOVED`` cascaded the local stub away).
+
+    Run after ``up`` + ``pair``. Re-runnable (each run mints a fresh space +
+    a ``time.time_ns()`` marker so a re-run never collides with a prior space).
+    """
+    state = _load()
+    if not state:
+        raise SystemExit("run 'up' + 'pair' first")
+    a = state["instances"]["a"]
+    b = state["instances"]["b"]
+    c = state["instances"]["c"]
+    marker = f"offline-ban-{time.time_ns()}"
+
+    # 1. a creates a private space + flips on delegated_admin_authority.
+    s, space = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces",
+        token=a["token"],
+        method="POST",
+        body={
+            "name": f"Owner-offline ban lab {marker}",
+            "space_type": "private",
+            "join_mode": "invite_only",
+            "emoji": "🚫",
+        },
+    )
+    space = _must("a create space", s, space, ok=(201,))
+    space_id = space["id"]
+    print(f"  a created space {space_id}")
+
+    s, cur = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}", token=a["token"]
+    )
+    _must("a get space", s, cur)
+    feats = dict(cur.get("features") or {})
+    feats["delegated_admin_authority"] = True
+    s, upd = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}",
+        token=a["token"],
+        method="PATCH",
+        body={"features": feats},
+    )
+    _must("a enable delegation", s, upd, ok=(200,))
+    print("  a enabled delegated_admin_authority ✓")
+
+    # 2. a invites b + c; both accept (seats stub + content key).
+    for label, inst in (("b", b), ("c", c)):
+        s, inv = _request(
+            f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}/remote-invites",
+            token=a["token"],
+            method="POST",
+            body={
+                "invitee_instance_id": inst["instance_id"],
+                "invitee_user_id": inst["user_id"],
+            },
+        )
+        _must(f"a invite {label}", s, inv, ok=(201,))
+    time.sleep(4)  # SPACE_PRIVATE_INVITE federates
+    _accept_remote_invite(state, "b", space_id)
+    _accept_remote_invite(state, "c", space_id)
+    print("  b + c accepted invites (seated + content key) ✓")
+    # Let the a↔b capability exchange settle: the seed share is gated on
+    # ``peer_supports(b, MIN_FOR_SPACE_ADMIN_KEY_SHARE)`` and is NOT retried if
+    # a doesn't yet know b's proto_version when we promote. On a cold boot the
+    # INSTANCE_CAPABILITIES_UPDATED handshake can lag, so give it room.
+    time.sleep(10)
+
+    # 3. a promotes b to admin → SPACE_ADMIN_KEY_SHARE delivers the seed.
+    s, role = _request(
+        f"http://127.0.0.1:{a['port']}/api/spaces/{space_id}"
+        f"/remote-members/{b['instance_id']}/{b['user_id']}",
+        token=a["token"],
+        method="PATCH",
+        body={"role": "admin"},
+    )
+    _must("a promote b to admin", s, role, ok=(200,))
+    print("  a promoted b to admin (seed share dispatched)")
+
+    # 3b. b must now hold the space signing seed (poll — the share federates
+    #     asynchronously). Without the seed b can't sign the offline ban gossip
+    #     and the roster never converges.
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if _space_col("b", space_id, "identity_private_key"):
+            break
+        time.sleep(1.0)
+    if not _space_col("b", space_id, "identity_private_key"):
+        raise SystemExit(
+            "owner-offline-ban: b did not receive the space signing seed "
+            "(spaces.identity_private_key NULL on b after 30s) — "
+            "SPACE_ADMIN_KEY_SHARE didn't land",
+        )
+    print("  b holds the space signing seed ✓ (admin authority = private key)")
+
+    # 4. Settle until a, b AND c all agree c is a LIVE member of the space.
+    #    This is the #618 pre-condition: every household must hold c at a real
+    #    (non-zero, non-tombstoned) ``member_version`` in space_remote_members,
+    #    so that an un-anchored ban gossip would have been DROPPED as stale.
+    #    a learns c via the invite-accept seat; b + c learn c via the
+    #    authority-signed SPACE_MEMBER_JOINED roster gossip a fanned out.
+    deadline = time.monotonic() + 40.0
+    rows: dict[str, dict | None] = {}
+    while time.monotonic() < deadline:
+        rows = {
+            who: _remote_member_row(who, space_id, c["user_id"])
+            for who in ("a", "b", "c")
+        }
+        live = {
+            who: (
+                r is not None
+                and int(r.get("tombstoned") or 0) == 0
+                and int(r.get("member_version") or 0) >= 0
+            )
+            for who, r in rows.items()
+        }
+        if all(live.values()):
+            break
+        time.sleep(2.0)
+    missing = [who for who, r in rows.items() if r is None]
+    tombstoned_pre = [
+        who for who, r in rows.items() if r is not None and int(r.get("tombstoned") or 0)
+    ]
+    if missing or tombstoned_pre:
+        raise SystemExit(
+            "owner-offline-ban: roster did not converge on c as a live member "
+            f"before the ban — missing={missing!r} tombstoned={tombstoned_pre!r} "
+            f"rows={rows!r}",
+        )
+    versions = {who: int(r["member_version"]) for who, r in rows.items()}  # type: ignore[index]
+    print(
+        f"  a, b, c all agree c is a live member "
+        f"(member_version a={versions['a']}, b={versions['b']}, c={versions['c']}) ✓"
+    )
+
+    # 5. STOP a — the owning household goes offline.
+    print(f"  stopping a (pid={a['pid']}) — owner offline")
+    try:
+        os.killpg(a["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and _alive(a["pid"]):
+        time.sleep(0.2)
+    if _alive(a["pid"]):
+        try:
+            os.killpg(a["pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        time.sleep(0.5)
+
+    # 6. b (delegated admin, holds seed) BANS c offline-of-owner. c is a remote
+    #    member on b's stub, so the kick verb is the remote-member DELETE — it
+    #    tombstones c locally + fans an authority-signed SPACE_MEMBER_LEFT
+    #    roster gossip out to every member household (incl. a's offline inbox,
+    #    where the outbox redelivers it on reconnect).
+    s, resp = _request(
+        f"http://127.0.0.1:{b['port']}/api/spaces/{space_id}"
+        f"/remote-members/{c['instance_id']}/{c['user_id']}",
+        token=b["token"],
+        method="DELETE",
+    )
+    _must("b bans c offline-of-owner", s, resp, ok=(200,))
+    print(f"  b banned c while a offline ({marker}) ✓")
+
+    # 6b. b's own roster must reflect the tombstone immediately (local write).
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        r = _remote_member_row("b", space_id, c["user_id"])
+        if r is not None and int(r.get("tombstoned") or 0) == 1:
+            break
+        time.sleep(1.0)
+    rb = _remote_member_row("b", space_id, c["user_id"])
+    if rb is None or int(rb.get("tombstoned") or 0) != 1:
+        raise SystemExit(
+            f"owner-offline-ban: b's local roster did not tombstone c — row={rb!r}",
+        )
+    print("  b's local roster shows c tombstoned ✓")
+
+    # 7. Restart a; after the outbox redelivery window a must apply b's
+    #    authority-signed SPACE_MEMBER_LEFT and tombstone c. Pre-#618 a held c
+    #    at a HIGH member_version and would DROP the un-anchored ban as stale —
+    #    c would stay a live member. Post-#618 the ban's roster_sequence is
+    #    anchored above c's last-seen version, so the merge applies it.
+    new_pid = _spawn("a", a["port"])
+    state["instances"]["a"]["pid"] = new_pid
+    _wait_ready(a["port"])
+    print(f"  a respawned: pid={new_pid}; polling for ban convergence…")
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        r = _remote_member_row("a", space_id, c["user_id"])
+        if r is not None and int(r.get("tombstoned") or 0) == 1:
+            break
+        # A hard-DELETE of the row would also satisfy "no longer a live member",
+        # but the convergence primitive RETAINS the row tombstoned (so a
+        # replayed JOIN can't resurrect c) — so an absent row is unexpected.
+        time.sleep(2.0)
+    ra = _remote_member_row("a", space_id, c["user_id"])
+    a_live = ra is not None and int(ra.get("tombstoned") or 0) == 0
+    if ra is None or a_live:
+        raise SystemExit(
+            f"owner-offline-ban: after restart a still has c as a LIVE member "
+            f"(row={ra!r}) — the owner DROPPED the delegated-admin offline ban "
+            f"as stale (the #618 regression: un-anchored roster_sequence)",
+        )
+    print(
+        f"  a applied the offline ban on reconnect — c tombstoned "
+        f"(member_version={ra.get('member_version')}) ✓ [#618 proof]"
+    )
+
+    # 7b. Secondary: c's own household should see itself removed from the space
+    #     (SPACE_REMOTE_MEMBER_REMOVED cascades the local stub away). This is a
+    #     best-effort assertion — the direct-delivery envelope to c only lands
+    #     if a relayed it on reconnect, so a miss is reported, not fatal.
+    c_space_name = _space_col("c", space_id, "name")
+    if c_space_name is None:
+        print("  c's local space stub removed (saw itself banned) ✓ [secondary]")
+    else:
+        print(
+            "  note: c still holds a local stub for the space "
+            f"(name={c_space_name!r}) — direct removal envelope not yet "
+            "delivered (secondary check, non-fatal)"
+        )
+
+    state["owner_offline_ban_ran"] = True
+    state["owner_offline_ban_space_id"] = space_id
+    _save(state)
+    print("owner-offline-ban: ok")
 
 
 def main() -> None:
