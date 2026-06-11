@@ -24,7 +24,11 @@ from socialhome.repositories.space_remote_member_repo import (
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.child_protection_service import ChildProtectionService
-from socialhome.services.space_service import SpaceService
+from socialhome.services.space_service import (
+    SPACE_CATEGORIES,
+    SpaceService,
+    normalize_category,
+)
 from socialhome.services.user_service import UserService
 
 
@@ -4751,3 +4755,69 @@ async def test_remote_admin_invite_missing_params_noop(stack):
     )
     assert outcome is RemoteAdminOutcome.EXECUTED
     fed.send_with_mesh_fallback.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Discovery-category taxonomy (§23.50)
+# ---------------------------------------------------------------------------
+
+
+def test_space_categories_has_ten_values():
+    assert SPACE_CATEGORIES == frozenset(
+        {
+            "general",
+            "hobby_crafts",
+            "sports_outdoors",
+            "gaming",
+            "music_arts",
+            "food_drink",
+            "tech",
+            "local",
+            "family_parenting",
+            "learning",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, "general"),
+        ("", "general"),
+        ("nonsense", "general"),
+        ("all", "general"),
+        ("gaming", "gaming"),
+    ],
+)
+def test_normalize_category(value, expected):
+    assert normalize_category(value) == expected
+
+
+async def test_create_space_accepts_known_category(stack):
+    """A public space stores a valid discovery category."""
+    await stack.provision_user("a")
+    space = await stack.space_svc.create_space(
+        owner_username="a",
+        name="Sporty",
+        space_type="public",
+        join_mode=JoinMode.OPEN,
+        lat=52.52,
+        lon=13.405,
+        category="sports_outdoors",
+    )
+    assert space.category == "sports_outdoors"
+
+
+async def test_create_space_rejects_unknown_category(stack):
+    """An unknown category at create time is a ValueError."""
+    await stack.provision_user("a")
+    with pytest.raises(ValueError):
+        await stack.space_svc.create_space(
+            owner_username="a",
+            name="Bad",
+            space_type="public",
+            join_mode=JoinMode.OPEN,
+            lat=1.0,
+            lon=1.0,
+            category="banana",
+        )

@@ -155,6 +155,30 @@ class UnsupportedSeedSuite(ValueError):
 #: (spec §13). Enforced at ``create_space`` time for PUBLIC spaces.
 MAX_PUBLIC_SPACES = 5
 
+#: Discovery categories (§23.50). A space's ``category`` is one of these;
+#: anything else (legacy ``target_audience`` values, a remote peer's invented
+#: category, ``None``) normalizes to ``"general"`` for display.
+SPACE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "general",
+        "hobby_crafts",
+        "sports_outdoors",
+        "gaming",
+        "music_arts",
+        "food_drink",
+        "tech",
+        "local",
+        "family_parenting",
+        "learning",
+    }
+)
+
+
+def normalize_category(value: str | None) -> str:
+    """Map any stored/received category to a known value (default general)."""
+    return value if value in SPACE_CATEGORIES else "general"
+
+
 #: Post content caps — matches FeedService values.
 MAX_POST_LENGTH = 10_000
 MAX_COMMENT_LENGTH = 2_000
@@ -492,6 +516,7 @@ class SpaceService(SpaceMemberGuardMixin):
         lat: float | None = None,
         lon: float | None = None,
         radius_km: float | None = None,
+        category: str | None = None,
     ) -> Space:
         """Create a new space and seat the creator as owner."""
         owner = await self._users.get(owner_username)
@@ -502,6 +527,9 @@ class SpaceService(SpaceMemberGuardMixin):
 
         stype = _coerce_space_type(space_type)
         jmode = _coerce_join_mode(join_mode)
+
+        if category is not None and category not in SPACE_CATEGORIES:
+            raise ValueError(f"unknown category {category!r}")
 
         if stype is SpaceType.PUBLIC:
             count = len(await self._spaces.list_by_type(SpaceType.PUBLIC))
@@ -537,6 +565,7 @@ class SpaceService(SpaceMemberGuardMixin):
             lat=_round4(lat),
             lon=_round4(lon),
             radius_km=radius_km,
+            category=category,
         )
         await self._spaces.save(space)
         # Persist the space's Ed25519 PRIVATE seed (KEK-wrapped at rest) so
