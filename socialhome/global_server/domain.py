@@ -53,7 +53,8 @@ class GlobalSpace:
     #: URI so the public page renders it on the GFS origin. None → emoji.
     icon_url: str | None = None
     min_age: int = 0
-    target_audience: str = "all"
+    #: Discovery category (§23.50) — normalizes to ``"general"`` if unknown.
+    category: str = "general"
     accent_color: str = "#6366f1"
     primary_color: str = "#6366f1"
     status: str = "pending"  # 'pending' | 'active' | 'banned'

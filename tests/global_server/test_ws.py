@@ -156,7 +156,7 @@ async def test_ws_push_via_fanout_reaches_client(ws_client):
             "cover_url": "",
             "icon_url": "",
             "min_age": 0,
-            "target_audience": "all",
+            "category": "general",
             "accent_color": "#D2542A",
             "primary_color": "#D2542A",
             "identity_public_key": "",

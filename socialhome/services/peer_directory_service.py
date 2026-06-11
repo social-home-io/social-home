@@ -20,7 +20,7 @@ from ..domain.events import (
     SpaceConfigChanged,
 )
 from ..domain.federation import FederationEventType, PairingStatus
-from ..domain.space import SpaceType
+from ..domain.space import SpaceType, normalize_category
 from ..infrastructure.event_bus import EventBus
 
 if TYPE_CHECKING:
@@ -78,6 +78,7 @@ class PeerDirectoryService:
                     "emoji": s.emoji,
                     "member_count": len(members),
                     "join_mode": s.join_mode.value,
+                    "category": normalize_category(s.category),
                 }
             )
         return out

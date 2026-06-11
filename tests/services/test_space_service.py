@@ -2576,19 +2576,21 @@ async def test_min_age_federates_via_space_meta_and_persists(stack):
         stub_space_from_metadata,
     )
 
+    import dataclasses
+
     await stack.provision_user("anna", is_admin=True)
     space = await stack.space_svc.create_space(owner_username="anna", name="S")
-    await stack.space_repo.update_age_gate(
-        space.id,
-        min_age=18,
-        target_audience="adult",
-    )
+    await stack.space_repo.update_age_gate(space.id, min_age=18)
+    # Seed a discovery category too (federates alongside min_age).
+    fetched = await stack.space_repo.get(space.id)
+    await stack.space_repo.save(dataclasses.replace(fetched, category="gaming"))
     refreshed = await stack.space_repo.get(space.id)
     assert refreshed.min_age == 18  # _row_to_space reads the column
+    assert refreshed.category == "gaming"
 
     meta = _space_metadata_for_federation(refreshed)
     assert meta["min_age"] == 18
-    assert meta["target_audience"] == "adult"
+    assert meta["category"] == "gaming"
 
     stub = stub_space_from_metadata(
         "remote-sp",
@@ -2596,13 +2598,13 @@ async def test_min_age_federates_via_space_meta_and_persists(stack):
         meta=meta,
     )
     assert stub.min_age == 18
-    assert stub.target_audience == "adult"
+    assert stub.category == "gaming"
     # Persist the stub and confirm save()/get() round-trips min_age (the
     # gate reads it from the DB, so it must survive the upsert).
     await stack.space_repo.save(stub)
     seated = await stack.space_repo.get("remote-sp")
     assert seated.min_age == 18
-    assert seated.target_audience == "adult"
+    assert seated.category == "gaming"
 
 
 async def test_min_age_missing_from_meta_defaults_to_zero(stack):
@@ -2616,7 +2618,7 @@ async def test_min_age_missing_from_meta_defaults_to_zero(stack):
         meta={"name": "Legacy"},
     )
     assert stub.min_age == 0
-    assert stub.target_audience == "all"
+    assert stub.category == "general"
 
 
 async def test_config_hlc_federates_via_space_meta_and_persists(stack):

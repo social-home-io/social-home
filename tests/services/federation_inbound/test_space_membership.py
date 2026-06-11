@@ -72,8 +72,8 @@ class _FakeSpaceRepo:
     async def unban_member(self, space_id, user_id):
         self.unbans.append((space_id, user_id))
 
-    async def update_age_gate(self, space_id, *, min_age=None, target_audience=None):
-        self.age_gates.append((space_id, min_age, target_audience))
+    async def update_age_gate(self, space_id, *, min_age=None):
+        self.age_gates.append((space_id, min_age))
 
     async def get(self, space_id):
         return self.spaces.get(space_id)
@@ -448,7 +448,7 @@ async def test_age_gate_updates_min_age_only(repo, handlers):
             space_id="sp-1",
         )
     )
-    assert repo.age_gates == [("sp-1", 13, None)]
+    assert repo.age_gates == [("sp-1", 13)]
 
 
 async def test_age_gate_target_audience_only_is_noop(repo, handlers):
@@ -476,7 +476,7 @@ async def test_age_gate_ignores_legacy_target_audience(repo, handlers):
             space_id="sp-1",
         )
     )
-    assert repo.age_gates == [("sp-1", 16, None)]
+    assert repo.age_gates == [("sp-1", 16)]
 
 
 async def test_age_gate_empty_payload_is_noop(repo, handlers):

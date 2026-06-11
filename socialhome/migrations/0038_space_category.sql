@@ -14,18 +14,16 @@
 -- 3. Minimality — a nullable ``ADD COLUMN`` is the smallest possible change:
 --    no rebuild, no FK risk, no backfill (NULL = unset → displays "general").
 --    ``public_space_cache`` is a local cache that repopulates from GFS
---    polling, so it is recreated (not rebuilt) with a ``category`` column;
---    its ``target_audience`` column is retained (the upsert path still uses
---    it), only the over-restrictive ``target_audience`` CHECK is dropped.
+--    polling, so it is recreated (not rebuilt) with a ``category`` column and
+--    WITHOUT the legacy ``target_audience`` column — ``category`` fully
+--    replaces it (no reader survives task 6).
 
 ALTER TABLE spaces ADD COLUMN category TEXT;
 
--- Recreate the public-space cache to add a ``category`` column and drop the
--- legacy ``target_audience`` CHECK (it ingests remote values that may not
--- match our taxonomy — a restrictive CHECK would reject otherwise-valid
--- remote listings). ``target_audience`` itself is RETAINED (the
--- ``public_space_repo`` upsert/read path still threads it) — only its CHECK
--- is dropped. Safe to recreate: the cache repopulates from GFS polling.
+-- Recreate the public-space cache with a ``category`` column and drop the
+-- legacy ``target_audience`` column entirely (``category`` replaces it as the
+-- §23.50 discovery taxonomy — no reader remains). Safe to recreate: the cache
+-- repopulates from GFS polling.
 DROP TABLE IF EXISTS public_space_cache;
 CREATE TABLE IF NOT EXISTS public_space_cache (
     space_id        TEXT PRIMARY KEY,
@@ -41,12 +39,8 @@ CREATE TABLE IF NOT EXISTS public_space_cache (
     -- cannot quietly land.
     min_age         INTEGER NOT NULL DEFAULT 0
                     CHECK(min_age IN (0, 13, 16, 18)),
-    -- Retained from 0001, but the original CHECK(target_audience IN
-    -- ('all','family','teen','adult')) is intentionally dropped here.
-    target_audience TEXT NOT NULL DEFAULT 'all',
-    -- Discovery category (free-form here; the taxonomy + normalization live
-    -- in ``services.space_service``). No CHECK: this cache ingests remote
-    -- values that may not match our taxonomy.
+    -- Discovery category (§23.50). No CHECK: this cache ingests remote values
+    -- that may not match our taxonomy (normalized to "general" on read).
     category        TEXT,
     cached_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -30,6 +30,7 @@ import aiohttp
 
 from ..crypto import b64url_encode, sign_ed25519
 from ..domain.federation import GfsConnection, GfsSpacePublication
+from ..domain.space import normalize_category
 from ..federation.keywrap_seal import KEM_SUITE_X25519
 from ..repositories.gfs_connection_repo import AbstractGfsConnectionRepo
 
@@ -388,7 +389,7 @@ class GfsConnectionService:
             "cover_url": cover_uri,
             "icon_url": icon_uri,
             "min_age": 0,
-            "target_audience": "all",
+            "category": normalize_category(space.category),
             "accent_color": accent,
             "primary_color": primary,
             # Phase 5a: ship the space's Ed25519 authority verify key so the GFS

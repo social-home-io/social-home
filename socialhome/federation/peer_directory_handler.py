@@ -11,6 +11,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ..domain.federation import FederationEventType
+from ..domain.space import normalize_category
 from ..repositories.peer_space_directory_repo import (
     AbstractPeerSpaceDirectoryRepo,
     PeerSpaceDirectoryEntry,
@@ -62,7 +63,7 @@ class PeerDirectoryHandler:
                         member_count=int(item.get("member_count") or 0),
                         join_mode=str(item.get("join_mode") or "request"),
                         min_age=int(item.get("min_age") or 0),
-                        target_audience=str(item.get("target_audience") or "all"),
+                        category=normalize_category(item.get("category")),
                         updated_at=item.get("updated_at"),
                     )
                 )

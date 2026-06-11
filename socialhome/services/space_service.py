@@ -91,6 +91,7 @@ from ..domain.post import (
 from ..domain.presence import truncate_coord
 from ..domain.space import (
     PUBLIC_SPACE_TIERS,
+    SPACE_CATEGORIES,
     JoinMode,
     ModerationAlreadyDecidedError,
     ModerationStatus,
@@ -104,6 +105,7 @@ from ..domain.space import (
     SpacePermissionError,
     SpaceRole,
     SpaceType,
+    normalize_category,
 )
 from ..infrastructure.event_bus import EventBus
 from ..repositories.base import row_to_dict
@@ -155,29 +157,10 @@ class UnsupportedSeedSuite(ValueError):
 #: (spec §13). Enforced at ``create_space`` time for PUBLIC spaces.
 MAX_PUBLIC_SPACES = 5
 
-#: Discovery categories (§23.50). A space's ``category`` is one of these;
-#: anything else (legacy ``target_audience`` values, a remote peer's invented
-#: category, ``None``) normalizes to ``"general"`` for display.
-SPACE_CATEGORIES: frozenset[str] = frozenset(
-    {
-        "general",
-        "hobby_crafts",
-        "sports_outdoors",
-        "gaming",
-        "music_arts",
-        "food_drink",
-        "tech",
-        "local",
-        "family_parenting",
-        "learning",
-    }
-)
-
-
-def normalize_category(value: str | None) -> str:
-    """Map any stored/received category to a known value (default general)."""
-    return value if value in SPACE_CATEGORIES else "general"
-
+#: ``SPACE_CATEGORIES`` + ``normalize_category`` (§23.50) live in the pure
+#: ``domain.space`` module so the GFS server can import them without pulling in
+#: this service; they are imported above and re-exported for the existing
+#: ``services.space_service`` call sites (e.g. ``routes/spaces.py``).
 
 #: Post content caps — matches FeedService values.
 MAX_POST_LENGTH = 10_000
@@ -4181,7 +4164,8 @@ def _space_metadata_for_federation(space: Space) -> dict:
         # refused locally). Missing on an older sender → stub defaults to
         # min_age=0 (no restriction), so this is additive + fail-soft.
         "min_age": space.min_age,
-        "target_audience": space.target_audience,
+        # §23.50 discovery hint — optional, fail-soft (missing → "general").
+        "category": normalize_category(space.category),
         "cover_hash": space.cover_hash,
         "icon_hash": space.icon_hash,
         "about_markdown": space.about_markdown,
@@ -4418,7 +4402,7 @@ def stub_space_from_metadata(
         # household enforces it locally. Fail-soft: older sender omits it
         # → min_age 0 (no restriction).
         min_age=_coerce_min_age(meta.get("min_age")),
-        target_audience=str(meta.get("target_audience") or "all"),
+        category=normalize_category(meta.get("category")),
     )
 
 

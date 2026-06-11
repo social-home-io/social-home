@@ -20,4 +20,5 @@ class PublicSpaceListing:
     member_count: int = 0
     cached_at: str | None = None
     min_age: int = 0
-    target_audience: str = "all"
+    #: Discovery category (§23.50) — normalizes to ``"general"`` if unknown.
+    category: str = "general"

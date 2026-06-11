@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 
+from ..domain.space import normalize_category
 from ..repositories.gfs_connection_repo import AbstractGfsConnectionRepo
 from ..repositories.public_space_repo import (
     AbstractPublicSpaceRepo,
@@ -237,7 +238,7 @@ class PublicSpaceDiscoveryService:
                         radius_km=item.get("radius_km"),
                         member_count=int(item.get("member_count", 0) or 0),
                         min_age=int(item.get("min_age", 0) or 0),
-                        target_audience=str(item.get("target_audience", "all")),
+                        category=normalize_category(item.get("category")),
                     )
                 )
             except KeyError, TypeError, ValueError:

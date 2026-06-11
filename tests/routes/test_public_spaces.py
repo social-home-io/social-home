@@ -223,7 +223,9 @@ async def test_join_request_unpaired_host_403(client, monkeypatch):
 # ─── §CP.F1 — minor discovery filter ────────────────────────────────────
 
 
-async def _seed_with_age(client, *, space_id: str, min_age: int, target: str = "all"):
+async def _seed_with_age(
+    client, *, space_id: str, min_age: int, category: str = "general"
+):
     repo = SqlitePublicSpaceRepo(client._db)
     await repo.upsert(
         PublicSpaceListing(
@@ -231,7 +233,7 @@ async def _seed_with_age(client, *, space_id: str, min_age: int, target: str = "
             instance_id="remote-1",
             name=f"Space {space_id}",
             min_age=min_age,
-            target_audience=target,
+            category=category,
         )
     )
 
@@ -280,4 +282,4 @@ async def test_adult_sees_all_listings(client):
     # Payload exposes min_age so UI can show the age badge.
     adult = next(s for s in body if s["space_id"] == "sp-adult")
     assert adult["min_age"] == 18
-    assert adult["target_audience"] == "all"
+    assert adult["category"] == "general"

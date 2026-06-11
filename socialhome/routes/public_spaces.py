@@ -10,6 +10,7 @@ from aiohttp import web
 
 from .. import app_keys as K
 from ..domain.federation import PairingStatus
+from ..domain.space import normalize_category
 from .base import BaseView
 
 
@@ -76,7 +77,7 @@ class PublicSpaceCollectionView(BaseView):
                     "radius_km": lst.radius_km,
                     "member_count": lst.member_count,
                     "min_age": lst.min_age,
-                    "target_audience": lst.target_audience,
+                    "category": normalize_category(lst.category),
                 }
                 for lst in listings
             ]

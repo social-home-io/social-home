@@ -26,6 +26,7 @@ from ..authority_sig import (
     verify_authority_event,
 )
 from ..crypto import b64url_decode, verify_ed25519
+from ..domain.space import normalize_category
 from .domain import (
     ClientInstance,
     GfsSubscriber,
@@ -525,7 +526,7 @@ class GfsFederationService:
                 about_markdown=existing.about_markdown,
                 cover_url=existing.cover_url,
                 min_age=existing.min_age,
-                target_audience=existing.target_audience,
+                category=existing.category,
                 accent_color=existing.accent_color,
                 status="banned",
                 subscriber_count=existing.subscriber_count,
@@ -546,7 +547,7 @@ class GfsFederationService:
         cover_url: str | None = None,
         icon_url: str | None = None,
         min_age: int = 0,
-        target_audience: str = "all",
+        category: str = "general",
         accent_color: str = "#D2542A",
         primary_color: str = "#D2542A",
         identity_public_key: str = "",
@@ -582,7 +583,7 @@ class GfsFederationService:
                 "cover_url": cover_url or "",
                 "icon_url": icon_url or "",
                 "min_age": min_age,
-                "target_audience": target_audience,
+                "category": category,
                 "accent_color": accent_color,
                 "primary_color": primary_color,
                 "identity_public_key": identity_public_key or "",
@@ -650,7 +651,7 @@ class GfsFederationService:
             cover_url=cover_url,
             icon_url=icon_url,
             min_age=min_age,
-            target_audience=target_audience,
+            category=normalize_category(category),
             accent_color=accent_color,
             primary_color=primary_color,
             status=next_status,

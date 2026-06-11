@@ -230,7 +230,7 @@ class SqliteGfsFederationRepo:
             """
             INSERT INTO global_spaces(
                 space_id, owning_instance, name, description, about_markdown,
-                cover_url, icon_url, min_age, target_audience, accent_color,
+                cover_url, icon_url, min_age, category, accent_color,
                 primary_color, status, subscriber_count, posts_per_week,
                 published_at, identity_public_key
             ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -242,7 +242,7 @@ class SqliteGfsFederationRepo:
                 cover_url = excluded.cover_url,
                 icon_url = excluded.icon_url,
                 min_age = excluded.min_age,
-                target_audience = excluded.target_audience,
+                category = excluded.category,
                 accent_color = excluded.accent_color,
                 primary_color = excluded.primary_color,
                 status = excluded.status,
@@ -259,7 +259,7 @@ class SqliteGfsFederationRepo:
                 space.cover_url,
                 space.icon_url,
                 space.min_age,
-                space.target_audience,
+                space.category,
                 space.accent_color,
                 space.primary_color,
                 space.status,
@@ -1064,7 +1064,7 @@ def _row_to_space(row: dict | None) -> GlobalSpace | None:
         cover_url=row.get("cover_url"),
         icon_url=row.get("icon_url"),
         min_age=int(row.get("min_age") or 0),
-        target_audience=row.get("target_audience", "all"),
+        category=row.get("category", "general"),
         accent_color=row.get("accent_color", "#6366f1"),
         primary_color=row.get("primary_color") or "#6366f1",
         status=row.get("status", "pending"),
