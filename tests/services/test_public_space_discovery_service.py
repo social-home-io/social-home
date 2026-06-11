@@ -211,6 +211,56 @@ async def test_poll_once_caches_listings(env):
     assert out[0].space_id == "sp-X"
 
 
+async def test_poll_once_caches_category(env):
+    """A GFS directory item's ``category`` round-trips into the cache."""
+    _, repo, gfs_repo = env
+    await gfs_repo.save(_gfs_conn("gfs-1"))
+    body = {
+        "spaces": [
+            {
+                "space_id": "sp-cat",
+                "instance_id": "inst-X",
+                "name": "Cat",
+                "category": "gaming",
+            },
+        ]
+    }
+    svc = PublicSpaceDiscoveryService(
+        repo,
+        gfs_connection_repo=gfs_repo,
+        http_client=_StubSession(body=body),
+    )
+    assert await svc.poll_once() == 1
+    out = await repo.list_active()
+    assert len(out) == 1
+    assert out[0].category == "gaming"
+
+
+async def test_poll_once_normalizes_unknown_category(env):
+    """An unknown category normalizes to ``general`` on cache."""
+    _, repo, gfs_repo = env
+    await gfs_repo.save(_gfs_conn("gfs-1"))
+    body = {
+        "spaces": [
+            {
+                "space_id": "sp-weird",
+                "instance_id": "inst-X",
+                "name": "Weird",
+                "category": "weird",
+            },
+        ]
+    }
+    svc = PublicSpaceDiscoveryService(
+        repo,
+        gfs_connection_repo=gfs_repo,
+        http_client=_StubSession(body=body),
+    )
+    assert await svc.poll_once() == 1
+    out = await repo.list_active()
+    assert len(out) == 1
+    assert out[0].category == "general"
+
+
 async def test_poll_once_skips_blocked_instances(env):
     _, repo, gfs_repo = env
     await gfs_repo.save(_gfs_conn("gfs-1"))

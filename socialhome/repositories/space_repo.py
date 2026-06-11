@@ -86,7 +86,6 @@ class AbstractSpaceRepo(Protocol):
         space_id: str,
         *,
         min_age: int | None = None,
-        target_audience: str | None = None,
     ) -> None: ...
 
     # ── Members ────────────────────────────────────────────────────────
@@ -318,9 +317,9 @@ class SqliteSpaceRepo:
                 allow_post_event, allow_post_location, allow_post_highlight_share,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
                 dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
-                min_age, target_audience
+                min_age, category
             ) VALUES(
-                -- 53 placeholders, one per column listed above.
+                -- 55 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?,                      -- config_sequence, roster_sequence, config_hlc
@@ -338,7 +337,7 @@ class SqliteSpaceRepo:
                 ?, ?, ?,                      -- allow_post_event, allow_post_location, allow_post_highlight_share
                 ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
                 ?, ?, ?, ?, ?, ?,             -- dissolved, archived, archived_reason, about_markdown, cover_hash, tz
-                ?, ?                          -- min_age, target_audience
+                ?, ?                          -- min_age, category
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -391,7 +390,7 @@ class SqliteSpaceRepo:
                 cover_hash=excluded.cover_hash,
                 tz=excluded.tz,
                 min_age=excluded.min_age,
-                target_audience=excluded.target_audience
+                category=excluded.category
             """,
             (
                 space.id,
@@ -448,7 +447,7 @@ class SqliteSpaceRepo:
                 space.cover_hash,
                 space.tz,
                 int(space.min_age or 0),
-                space.target_audience or "all",
+                space.category,
             ),
         )
         return space
@@ -710,31 +709,18 @@ class SqliteSpaceRepo:
         space_id: str,
         *,
         min_age: int | None = None,
-        target_audience: str | None = None,
     ) -> None:
-        """§CP.F1: set ``min_age`` and/or ``target_audience``.
+        """§CP.F1: set the space's ``min_age`` child-protection gate.
 
-        Both fields are nullable — ``None`` means "don't change this
-        field"; callers pass the fields they received in the federation
-        payload.
+        ``None`` means "don't change it" — callers pass the value they
+        received in the federation payload.
         """
-        if min_age is None and target_audience is None:
+        if min_age is None:
             return
-        if min_age is not None and target_audience is not None:
-            await self._db.enqueue(
-                "UPDATE spaces SET min_age=?, target_audience=? WHERE id=?",
-                (min_age, target_audience, space_id),
-            )
-        elif min_age is not None:
-            await self._db.enqueue(
-                "UPDATE spaces SET min_age=? WHERE id=?",
-                (min_age, space_id),
-            )
-        else:
-            await self._db.enqueue(
-                "UPDATE spaces SET target_audience=? WHERE id=?",
-                (target_audience, space_id),
-            )
+        await self._db.enqueue(
+            "UPDATE spaces SET min_age=? WHERE id=?",
+            (min_age, space_id),
+        )
 
     async def increment_config_sequence(self, space_id: str) -> int:
         """Atomically bump ``spaces.config_sequence`` AND advance the config
@@ -1580,7 +1566,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         icon_hash=row.get("icon_hash"),
         tz=row.get("tz") or "UTC",
         min_age=int(row.get("min_age") or 0),
-        target_audience=row.get("target_audience") or "all",
+        category=row.get("category"),
     )
 
 

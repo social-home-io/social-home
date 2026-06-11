@@ -11,6 +11,7 @@ from aiohttp import web
 
 from .. import app_keys as K
 from ..domain.federation import PairingStatus
+from ..domain.space import normalize_category
 from .base import BaseView
 
 
@@ -62,7 +63,7 @@ class PeerSpaceCollectionView(BaseView):
                     "member_count": e.member_count,
                     "join_mode": e.join_mode,
                     "min_age": e.min_age,
-                    "target_audience": e.target_audience,
+                    "category": normalize_category(e.category),
                 }
                 for e in entries
                 # A peer must be CONFIRMED — don't show orphan cache rows

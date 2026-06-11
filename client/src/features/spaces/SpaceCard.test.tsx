@@ -8,7 +8,7 @@ const baseEntry: DirectoryEntry = {
   host_display_name: 'Nabu Casa', host_is_paired: true,
   name: 'Chess Club', description: 'Weekly chess', emoji: '♟',
   member_count: 7, scope: 'global', join_mode: 'request',
-  min_age: 0, target_audience: 'all',
+  min_age: 0,
 }
 
 describe('SpaceCard', () => {
@@ -59,6 +59,49 @@ describe('SpaceCard', () => {
       />,
     )
     expect(getByText('13+')).toBeTruthy()
+  })
+
+  it('shows a category chip when category is set and not general', () => {
+    const { getByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, category: 'gaming' }}
+        onAction={() => {}}
+      />,
+    )
+    expect(getByText('Gaming')).toBeTruthy()
+  })
+
+  it('hides the category chip for the general category', () => {
+    const { queryByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, category: 'general' }}
+        onAction={() => {}}
+      />,
+    )
+    expect(queryByText('General')).toBeNull()
+  })
+
+  it('hides the category chip when category is unset', () => {
+    const { queryByText } = render(
+      <SpaceCard entry={baseEntry} onAction={() => {}} />,
+    )
+    expect(queryByText('General')).toBeNull()
+  })
+
+  it('renders no category chip for an unknown / legacy category value', () => {
+    // 'gaming2' isn't a recognized SPACE_CATEGORIES value: categoryLabel
+    // would fall back to 'General', so the gate must suppress the chip
+    // entirely rather than render a misleading "General" label.
+    const { container, queryByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, category: 'gaming2', min_age: 13 }}
+        onAction={() => {}}
+      />,
+    )
+    expect(queryByText('General')).toBeNull()
+    // Only the min_age chip should remain — no extra category chip.
+    expect(container.querySelectorAll('.sh-age-chip')).toHaveLength(1)
+    expect(queryByText('13+')).toBeTruthy()
   })
 
   // ── Subscribe / unsubscribe ─────────────────────────────────────────

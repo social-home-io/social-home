@@ -285,7 +285,7 @@ async def _register_and_publish(gfs_client, *, instance_id, space_id, client_ip)
         "cover_url": "",
         "icon_url": "",
         "min_age": 0,
-        "target_audience": "all",
+        "category": "general",
         "accent_color": "#D2542A",
         "primary_color": "#D2542A",
     }

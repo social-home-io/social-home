@@ -73,7 +73,7 @@ FEDERATED_ROUNDTRIP: frozenset[str] = frozenset(
         "icon_hash",
         "tz",
         "min_age",
-        "target_audience",
+        "category",
     }
 )
 
@@ -220,7 +220,7 @@ def _fully_non_default_space() -> Space:
         icon_hash="iconh456",
         tz="Europe/Berlin",
         min_age=18,
-        target_audience="adult",
+        category="gaming",
     )
 
 
@@ -324,7 +324,7 @@ def test_older_sender_meta_fails_soft() -> None:
 
     Covers the documented fail-soft defaults: ``config_hlc`` → "0-0",
     ``roster_sequence`` → ``config_sequence`` (its pre-fix anchor),
-    ``min_age`` → 0, ``target_audience`` → "all", and the feature toggles
+    ``min_age`` → 0, ``category`` → "general", and the feature toggles
     fall back to the SpaceFeatures defaults.
     """
     older_meta = {
@@ -335,7 +335,7 @@ def test_older_sender_meta_fails_soft() -> None:
         "config_sequence": 9,
         "space_type": "private",
         "join_mode": "invite_only",
-        # No config_hlc, roster_sequence, features, min_age, target_audience,
+        # No config_hlc, roster_sequence, features, min_age, category,
         # archived, tz, cover_hash, icon_hash, about_markdown.
     }
     stub = stub_space_from_metadata(
@@ -345,7 +345,7 @@ def test_older_sender_meta_fails_soft() -> None:
     assert stub.config_hlc == "0-0"
     assert stub.roster_sequence == older_meta["config_sequence"]
     assert stub.min_age == 0
-    assert stub.target_audience == "all"
+    assert stub.category == "general"
     assert stub.tz == "UTC"
     assert stub.archived is False
     assert stub.features == SpaceFeatures()

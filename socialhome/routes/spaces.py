@@ -13,6 +13,7 @@ import math
 
 from ..app_keys import (
     alias_resolver_key,
+    child_protection_service_key,
     event_bus_key,
     federation_repo_key,
     media_signer_key,
@@ -36,6 +37,7 @@ from ..app_keys import (
 from ..domain.events import SpaceMemberLocationOptedIn
 from ..domain.post import LocationData, PostType
 from ..domain.space import (
+    PUBLIC_SPACE_TIERS,
     SpaceFeatures,
     SpacePermissionError,
     SpaceZone,
@@ -46,7 +48,7 @@ from ..domain.federation import PairingStatus
 from ..domain.media_constraints import PROFILE_PICTURE_MAX_UPLOAD_BYTES
 from ..media_signer import sign_media_urls_in, strip_signature_query
 from ..security import error_response, sanitise_for_api
-from ..services.space_service import _UNSET_MEMBER_PROFILE
+from ..services.space_service import _UNSET_MEMBER_PROFILE, normalize_category
 from .base import BaseView
 from .media_status import READY, media_filename, video_poster_path
 
@@ -166,7 +168,18 @@ class SpaceCollectionView(BaseView):
             lat=body.get("lat"),
             lon=body.get("lon"),
             radius_km=body.get("radius_km"),
+            category=body.get("category"),
         )
+        # Discoverable tiers (public / global) may carry an age gate set at
+        # creation time; the gate lives in ChildProtectionService, not on the
+        # space row. Private spaces gate on invite, so a min_age is ignored.
+        min_age = body.get("min_age")
+        if min_age is not None and space.space_type in PUBLIC_SPACE_TIERS:
+            await self.svc(child_protection_service_key).update_space_age_gate(
+                space.id,
+                min_age=int(min_age),
+                actor_user_id=ctx.user_id,
+            )
         return web.json_response(
             sanitise_for_api(
                 {
@@ -204,6 +217,7 @@ class SpaceDetailView(BaseView):
                 "emoji": space.emoji,
                 "space_type": space.space_type.value,
                 "join_mode": space.join_mode.value,
+                "category": normalize_category(space.category),
                 "features": space.features.to_wire_dict(),
                 "retention_days": space.retention_days,
                 "retention_exempt_types": list(space.retention_exempt_types),
@@ -265,6 +279,7 @@ class SpaceDetailView(BaseView):
                 else _UNSET_MEMBER_PROFILE
             ),
             bot_enabled=body.get("bot_enabled"),
+            category=body.get("category"),
         )
         return web.json_response(
             {

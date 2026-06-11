@@ -6,7 +6,7 @@
  *     GFS federation + danger zone).
  *   - About: markdown editor + cover-image uploader.
  *   - Theme: :mod:`SpaceThemeStudio` rewrite with live preview.
- *   - Age & safety: :mod:`SpaceAgeGating` — min-age gate + audience label
+ *   - Age & safety: :mod:`SpaceAgeGating` — min-age gate + category
  *     that blocks under-age minors from joining (§CP.F1).
  *
  * Only owners/admins may view; a non-member gets a 403 from the

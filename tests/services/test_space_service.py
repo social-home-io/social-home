@@ -24,7 +24,11 @@ from socialhome.repositories.space_remote_member_repo import (
 from socialhome.repositories.space_repo import SqliteSpaceRepo
 from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.child_protection_service import ChildProtectionService
-from socialhome.services.space_service import SpaceService
+from socialhome.services.space_service import (
+    SPACE_CATEGORIES,
+    SpaceService,
+    normalize_category,
+)
 from socialhome.services.user_service import UserService
 
 
@@ -1420,16 +1424,16 @@ async def test_delegated_admin_remove_tombstones_before_rotate(stack):
     )
 
 
-async def test_public_space_requires_coordinates(stack):
-    """Creating a public space without lat/lon raises ValueError."""
+async def test_public_space_without_location_is_allowed(stack):
+    """A public space may be created without a map location (lat/lon)."""
     await stack.provision_user("a")
-    with pytest.raises(ValueError, match="lat"):
-        await stack.space_svc.create_space(
-            owner_username="a",
-            name="Pub",
-            space_type=SpaceType.PUBLIC,
-            join_mode=JoinMode.OPEN,
-        )
+    space = await stack.space_svc.create_space(
+        owner_username="a",
+        name="No-pin public",
+        space_type=SpaceType.PUBLIC,
+    )
+    assert space.space_type.value == "public"
+    assert space.lat is None and space.lon is None
 
 
 async def test_public_space_with_coordinates(stack):
@@ -2572,19 +2576,21 @@ async def test_min_age_federates_via_space_meta_and_persists(stack):
         stub_space_from_metadata,
     )
 
+    import dataclasses
+
     await stack.provision_user("anna", is_admin=True)
     space = await stack.space_svc.create_space(owner_username="anna", name="S")
-    await stack.space_repo.update_age_gate(
-        space.id,
-        min_age=18,
-        target_audience="adult",
-    )
+    await stack.space_repo.update_age_gate(space.id, min_age=18)
+    # Seed a discovery category too (federates alongside min_age).
+    fetched = await stack.space_repo.get(space.id)
+    await stack.space_repo.save(dataclasses.replace(fetched, category="gaming"))
     refreshed = await stack.space_repo.get(space.id)
     assert refreshed.min_age == 18  # _row_to_space reads the column
+    assert refreshed.category == "gaming"
 
     meta = _space_metadata_for_federation(refreshed)
     assert meta["min_age"] == 18
-    assert meta["target_audience"] == "adult"
+    assert meta["category"] == "gaming"
 
     stub = stub_space_from_metadata(
         "remote-sp",
@@ -2592,13 +2598,13 @@ async def test_min_age_federates_via_space_meta_and_persists(stack):
         meta=meta,
     )
     assert stub.min_age == 18
-    assert stub.target_audience == "adult"
+    assert stub.category == "gaming"
     # Persist the stub and confirm save()/get() round-trips min_age (the
     # gate reads it from the DB, so it must survive the upsert).
     await stack.space_repo.save(stub)
     seated = await stack.space_repo.get("remote-sp")
     assert seated.min_age == 18
-    assert seated.target_audience == "adult"
+    assert seated.category == "gaming"
 
 
 async def test_min_age_missing_from_meta_defaults_to_zero(stack):
@@ -2612,7 +2618,7 @@ async def test_min_age_missing_from_meta_defaults_to_zero(stack):
         meta={"name": "Legacy"},
     )
     assert stub.min_age == 0
-    assert stub.target_audience == "all"
+    assert stub.category == "general"
 
 
 async def test_config_hlc_federates_via_space_meta_and_persists(stack):
@@ -3001,7 +3007,6 @@ async def test_age_gate_blocks_minor_on_approve_join_request(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=18,
-        target_audience="adult",
         actor_user_id=anna.user_id,
     )
     req_id = await stack.space_svc.request_join(space.id, user_id=kid.user_id)
@@ -3023,7 +3028,6 @@ async def test_age_gate_blocks_minor_on_accept_invite_token(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=18,
-        target_audience="adult",
         actor_user_id=anna.user_id,
     )
     tok = await stack.space_svc.create_invite_token(
@@ -3046,7 +3050,6 @@ async def test_age_gate_blocks_minor_on_accept_local_invite(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=18,
-        target_audience="adult",
         actor_user_id=anna.user_id,
     )
     # Invite while 'kid' is NOT yet protected, so invite_local_user's own
@@ -3085,7 +3088,6 @@ async def test_age_gate_allows_older_minor_through_seating_paths(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=13,
-        target_audience="teen",
         actor_user_id=anna.user_id,
     )
     req_id = await stack.space_svc.request_join(space.id, user_id=teen.user_id)
@@ -4751,3 +4753,90 @@ async def test_remote_admin_invite_missing_params_noop(stack):
     )
     assert outcome is RemoteAdminOutcome.EXECUTED
     fed.send_with_mesh_fallback.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Discovery-category taxonomy (§23.50)
+# ---------------------------------------------------------------------------
+
+
+def test_space_categories_has_ten_values():
+    assert SPACE_CATEGORIES == frozenset(
+        {
+            "general",
+            "hobby_crafts",
+            "sports_outdoors",
+            "gaming",
+            "music_arts",
+            "food_drink",
+            "tech",
+            "local",
+            "family_parenting",
+            "learning",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, "general"),
+        ("", "general"),
+        ("nonsense", "general"),
+        ("all", "general"),
+        ("gaming", "gaming"),
+    ],
+)
+def test_normalize_category(value, expected):
+    assert normalize_category(value) == expected
+
+
+async def test_create_space_accepts_known_category(stack):
+    """A public space stores a valid discovery category."""
+    await stack.provision_user("a")
+    space = await stack.space_svc.create_space(
+        owner_username="a",
+        name="Sporty",
+        space_type="public",
+        join_mode=JoinMode.OPEN,
+        lat=52.52,
+        lon=13.405,
+        category="sports_outdoors",
+    )
+    assert space.category == "sports_outdoors"
+
+
+async def test_create_space_rejects_unknown_category(stack):
+    """An unknown category at create time is a ValueError."""
+    await stack.provision_user("a")
+    with pytest.raises(ValueError):
+        await stack.space_svc.create_space(
+            owner_username="a",
+            name="Bad",
+            space_type="public",
+            join_mode=JoinMode.OPEN,
+            lat=1.0,
+            lon=1.0,
+            category="banana",
+        )
+
+
+async def test_update_space_sets_category(stack):
+    """``update_config(category=...)`` persists a valid discovery category."""
+    await stack.provision_user("a")
+    s = await stack.space_svc.create_space(
+        owner_username="a", name="S", space_type="public"
+    )
+    await stack.space_svc.update_config(s.id, actor_username="a", category="tech")
+    got = await stack.space_svc._require_space(s.id)
+    assert got.category == "tech"
+
+
+async def test_update_space_rejects_unknown_category(stack):
+    """An unknown category on update is a ValueError."""
+    await stack.provision_user("a")
+    s = await stack.space_svc.create_space(
+        owner_username="a", name="S", space_type="public"
+    )
+    with pytest.raises(ValueError):
+        await stack.space_svc.update_config(s.id, actor_username="a", category="banana")

@@ -408,7 +408,7 @@ async def test_wire_helpers_roundtrip_client_space_report():
         about_markdown="M",
         cover_url="U",
         min_age=13,
-        target_audience="teen",
+        category="gaming",
         accent_color="#abcdef",
         status="active",
         subscriber_count=3,

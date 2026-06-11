@@ -788,13 +788,15 @@ For a member household to enforce the host's gate locally it must know
 pattern as `allowed_post_types` — an older sender omitting the field →
 `min_age` 0 → no restriction):
 
-- **Join time:** `min_age` + `target_audience` ride in the `space_meta`
-  snapshot (`_space_metadata_for_federation`) carried by the §D1b invite, so
-  a joiner's stub knows the gate before it seats anyone.
+- **Join time:** `min_age` rides in the `space_meta` snapshot
+  (`_space_metadata_for_federation`) carried by the §D1b invite, so a joiner's
+  stub knows the gate before it seats anyone. The discovery `category` field
+  also rides in `space_meta`.
 - **Ongoing changes:** when the host changes the gate, `SPACE_AGE_GATE_UPDATED`
-  broadcasts the new `{min_age, target_audience}` to member households, which
-  update their stub (`space_membership._on_age_gate`). The host is the only
-  authority that broadcasts it; a member stub never does.
+  broadcasts the new `{min_age}` to member households, which update their stub
+  (`space_membership._on_age_gate`). The receiver applies `min_age` and ignores
+  any legacy `target_audience` from older peers. The host is the only authority
+  that broadcasts it; a member stub never does.
 
 ## Mesh routing (SPACE_ROUTED)
 

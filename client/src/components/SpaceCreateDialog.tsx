@@ -3,12 +3,17 @@
  */
 import { signal } from '@preact/signals'
 import { api } from '@/api'
+import { addBase } from '@/baseUrl'
 import { loadSpaces } from '@/store/spaces'
 import { Modal } from './Modal'
 import { Button } from './Button'
 import { EmojiField } from './EmojiField'
 import { RadioCardGroup } from './RadioCardGroup'
-import { VISIBILITY_OPTIONS, joinOptionsForVisibility } from './spaceModeOptions'
+import {
+  VISIBILITY_OPTIONS,
+  SPACE_CATEGORIES,
+  joinOptionsForVisibility,
+} from './spaceModeOptions'
 import { showToast } from './Toast'
 import { t } from '@/i18n/i18n'
 
@@ -18,12 +23,22 @@ const description = signal('')
 const emoji = signal('')
 const spaceType = signal('private')
 const joinMode = signal('invite_only')
-// Public spaces are pinned on the public map, so they need a location.
+// Public spaces can be pinned on the public map, so they may carry a location.
 // Held as strings for the inputs; parsed + (server-side) truncated to 4dp.
+// Location is optional — a public space without coords simply isn't pinned.
 const lat = signal('')
 const lon = signal('')
 const locating = signal(false)
 const submitting = signal(false)
+// Discovery metadata, sent only for public/global spaces (§23.50).
+const minAge = signal(0)
+const category = signal('general')
+// Whether the household has at least one active global server connection —
+// gates the Global visibility tier. Loaded on open from /api/gfs/connections.
+const hasActiveGfs = signal(false)
+
+// Minimum-age options for the discovery audience gate. 0 = no restriction.
+const MIN_AGE_OPTIONS = [0, 13, 16, 18]
 
 export function openSpaceCreate() {
   open.value = true
@@ -35,12 +50,18 @@ export function openSpaceCreate() {
   lat.value = ''
   lon.value = ''
   locating.value = false
+  minAge.value = 0
+  category.value = 'general'
+  hasActiveGfs.value = false
+  // The Global tier is only offered when an active GFS connection exists.
+  void api.get<{ status: string }[]>('/api/gfs/connections')
+    .then((c) => { hasActiveGfs.value = c.some((g) => g.status === 'active') })
+    .catch(() => { hasActiveGfs.value = false })
 }
 
 const isPublic = () => spaceType.value === 'public'
-// Public needs both coordinates before the backend will accept it.
-const locationReady = () =>
-  !isPublic() || (lat.value.trim() !== '' && lon.value.trim() !== '')
+const isDiscoverable = () =>
+  spaceType.value === 'public' || spaceType.value === 'global'
 
 function useMyLocation() {
   if (!navigator.geolocation) {
@@ -65,18 +86,21 @@ function useMyLocation() {
 
 export function SpaceCreateDialog() {
   const handleSubmit = async () => {
-    if (!name.value.trim() || !locationReady() || submitting.value) return
+    if (!name.value.trim() || submitting.value) return
     submitting.value = true
     try {
+      const discoverable = isDiscoverable()
       await api.post('/api/spaces', {
         name: name.value,
         description: description.value || undefined,
         emoji: emoji.value || undefined,
         space_type: spaceType.value,
         join_mode: joinMode.value,
-        ...(isPublic()
+        ...(isPublic() && lat.value.trim() && lon.value.trim()
           ? { lat: Number(lat.value), lon: Number(lon.value) }
           : {}),
+        ...(discoverable ? { category: category.value } : {}),
+        ...(discoverable && minAge.value ? { min_age: minAge.value } : {}),
       })
       // Refresh the cached spaces list so the new row appears on the
       // list page without a hard reload.
@@ -89,6 +113,18 @@ export function SpaceCreateDialog() {
       submitting.value = false
     }
   }
+
+  // The Global tier is disabled (with an explanatory subtitle) until an
+  // active global server connection exists.
+  const visibilityOptions = hasActiveGfs.value
+    ? VISIBILITY_OPTIONS
+    : VISIBILITY_OPTIONS.map((o) =>
+      o.value === 'global'
+        ? { ...o, disabled: true, subtitle: 'Connect a global server to publish worldwide.' }
+        : o,
+    )
+
+  const noLocation = isPublic() && !lat.value.trim() && !lon.value.trim()
 
   return (
     <Modal open={open.value} onClose={() => open.value = false} title="Create a space">
@@ -109,7 +145,7 @@ export function SpaceCreateDialog() {
           legend="Visibility"
           name="space-create-visibility"
           value={spaceType.value}
-          options={VISIBILITY_OPTIONS}
+          options={visibilityOptions}
           onChange={(v) => {
             spaceType.value = v
             // A private space is invite-only by definition — there's no
@@ -117,6 +153,11 @@ export function SpaceCreateDialog() {
             if (v === 'private') joinMode.value = 'invite_only'
           }}
         />
+        {!hasActiveGfs.value && (
+          <p class="sh-muted" style={{ marginTop: 'calc(-1 * var(--sh-space-sm))' }}>
+            Want a Global space? <a href={addBase('/connections')}>Connect a global server</a> first.
+          </p>
+        )}
         <RadioCardGroup
           legend="How people join"
           name="space-create-join-mode"
@@ -124,11 +165,44 @@ export function SpaceCreateDialog() {
           options={joinOptionsForVisibility(spaceType.value)}
           onChange={(v) => joinMode.value = v}
         />
+        {isDiscoverable() && (
+          <fieldset class="sh-form-fieldset sh-space-create-discovery">
+            <legend>🧭 Discovery</legend>
+            <div class="sh-row" style={{ gap: 'var(--sh-space-sm)' }}>
+              <label>
+                Category
+                <select
+                  name="space-create-category"
+                  value={category.value}
+                  onChange={(e) => category.value = (e.target as HTMLSelectElement).value}
+                >
+                  {SPACE_CATEGORIES.map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Minimum age
+                <select
+                  name="space-create-min-age"
+                  value={String(minAge.value)}
+                  onChange={(e) => minAge.value = Number((e.target as HTMLSelectElement).value)}
+                >
+                  {MIN_AGE_OPTIONS.map((a) => (
+                    <option key={a} value={String(a)}>
+                      {a === 0 ? 'No restriction' : `${a}+`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </fieldset>
+        )}
         {isPublic() && (
           <fieldset class="sh-form-fieldset sh-space-create-location">
             <legend>📍 Map location</legend>
             <p class="sh-muted" style={{ marginTop: 0 }}>
-              Public spaces are pinned on the map so people nearby can find
+              Public spaces can be pinned on the map so people nearby can find
               them. Coordinates are rounded to ~11 m.
             </p>
             <Button
@@ -160,12 +234,17 @@ export function SpaceCreateDialog() {
                 />
               </label>
             </div>
+            {noLocation && (
+              <p class="sh-muted" style={{ marginBottom: 0 }}>
+                Optional — add a location so people nearby can find you on the map.
+              </p>
+            )}
           </fieldset>
         )}
         <div class="sh-form-actions">
           <Button variant="secondary" onClick={() => open.value = false}>{t('common.cancel')}</Button>
           <Button onClick={handleSubmit} loading={submitting.value}
-            disabled={!name.value.trim() || !locationReady()}>
+            disabled={!name.value.trim()}>
             Create
           </Button>
         </div>

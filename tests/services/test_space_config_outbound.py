@@ -355,7 +355,7 @@ async def test_age_gate_change_broadcasts_to_members(fed, space_repo):
     ).wire()
 
     await bus.publish(
-        CpSpaceAgeGateChanged(space_id="sp-1", min_age=18, target_audience="adult"),
+        CpSpaceAgeGateChanged(space_id="sp-1", min_age=18),
     )
 
     fed.broadcast_to_space_members.assert_awaited_once()
@@ -365,7 +365,6 @@ async def test_age_gate_change_broadcasts_to_members(fed, space_repo):
     assert call.args[2] == {
         "space_id": "sp-1",
         "min_age": 18,
-        "target_audience": "adult",
     }
 
 
@@ -385,6 +384,6 @@ async def test_age_gate_change_on_non_host_is_not_broadcast(fed):
     ).wire()
 
     await bus.publish(
-        CpSpaceAgeGateChanged(space_id="sp-1", min_age=13, target_audience="teen"),
+        CpSpaceAgeGateChanged(space_id="sp-1", min_age=13),
     )
     fed.broadcast_to_space_members.assert_not_awaited()

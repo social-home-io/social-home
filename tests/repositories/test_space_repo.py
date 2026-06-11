@@ -327,6 +327,22 @@ async def test_fresh_space_has_no_archived_reason(env):
     assert fetched.archived_reason is None
 
 
+async def test_category_round_trips_through_save_and_get(env):
+    """A space saved with a category surfaces it on get."""
+    await env.repo.save(replace(_space("sp-cat"), category="gaming"))
+    fetched = await env.repo.get("sp-cat")
+    assert fetched is not None
+    assert fetched.category == "gaming"
+
+
+async def test_category_defaults_to_none_when_unset(env):
+    """A space saved without a category reads back as None."""
+    await env.repo.save(_space("sp-nocat"))
+    fetched = await env.repo.get("sp-nocat")
+    assert fetched is not None
+    assert fetched.category is None
+
+
 async def test_list_by_type(env):
     """list_by_type returns non-dissolved spaces matching the given type."""
     await env.repo.save(_space("sp-priv1", space_type=SpaceType.PRIVATE))

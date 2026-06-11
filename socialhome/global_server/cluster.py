@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import aiohttp
 
 from ..crypto import b64url_decode, b64url_encode, sign_ed25519, verify_ed25519
+from ..domain.space import normalize_category
 from .domain import ClientInstance, ClusterNode, GfsFraudReport, GlobalSpace
 
 if TYPE_CHECKING:
@@ -969,7 +970,7 @@ def _space_to_wire(s: GlobalSpace) -> dict:
         "about_markdown": s.about_markdown,
         "cover_url": s.cover_url,
         "min_age": s.min_age,
-        "target_audience": s.target_audience,
+        "category": normalize_category(s.category),
         "accent_color": s.accent_color,
         "status": s.status,
         "subscriber_count": s.subscriber_count,
@@ -987,7 +988,7 @@ def _wire_to_space(d: dict) -> GlobalSpace:
         about_markdown=d.get("about_markdown"),
         cover_url=d.get("cover_url"),
         min_age=int(d.get("min_age") or 0),
-        target_audience=str(d.get("target_audience") or "all"),
+        category=normalize_category(d.get("category")),
         accent_color=str(d.get("accent_color") or "#6366f1"),
         status=str(d.get("status") or "pending"),
         subscriber_count=int(d.get("subscriber_count") or 0),

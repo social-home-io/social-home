@@ -44,7 +44,6 @@ log = logging.getLogger(__name__)
 
 
 _VALID_MIN_AGES: frozenset[int] = frozenset({0, 13, 16, 18})
-_VALID_AUDIENCES: frozenset[str] = frozenset({"all", "family", "teen", "adult"})
 
 
 # ─── Errors ──────────────────────────────────────────────────────────────
@@ -580,31 +579,18 @@ class ChildProtectionService:
         space_id: str,
         *,
         min_age: int,
-        target_audience: str,
         actor_user_id: str,
     ) -> None:
-        """Set a space's ``min_age`` + ``target_audience``. Admin-only."""
+        """Set a space's ``min_age``. Admin-only."""
         await self._require_admin(actor_user_id)
         if min_age not in _VALID_MIN_AGES:
             raise ValueError(f"min_age must be one of {sorted(_VALID_MIN_AGES)}")
-        if target_audience not in _VALID_AUDIENCES:
-            raise ValueError(
-                f"target_audience must be one of {sorted(_VALID_AUDIENCES)}"
-            )
         # Confirm the space exists so we don't silently swallow typos.
         if not await self._repo.space_exists(space_id):
             raise KeyError(f"space {space_id!r} not found")
-        await self._repo.update_space_age_gate(
-            space_id=space_id,
-            min_age=min_age,
-            target_audience=target_audience,
-        )
+        await self._repo.update_space_age_gate(space_id=space_id, min_age=min_age)
         await self._bus.publish(
-            CpSpaceAgeGateChanged(
-                space_id=space_id,
-                min_age=min_age,
-                target_audience=target_audience,
-            )
+            CpSpaceAgeGateChanged(space_id=space_id, min_age=min_age)
         )
 
     async def get_space_age_gate(self, space_id: str) -> dict:

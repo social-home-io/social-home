@@ -26,6 +26,34 @@ if TYPE_CHECKING:
     from .post import PostType
 
 
+# ─── Discovery categories (§23.50) ────────────────────────────────────────
+
+#: Discovery categories (§23.50). A space's ``category`` is one of these;
+#: anything else (legacy ``target_audience`` values, a remote peer's invented
+#: category, ``None``) normalizes to ``"general"`` for display. Lives in the
+#: pure domain layer so both the HFS services and the GFS ``global_server``
+#: can import it without the GFS pulling in ``services.space_service``.
+SPACE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "general",
+        "hobby_crafts",
+        "sports_outdoors",
+        "gaming",
+        "music_arts",
+        "food_drink",
+        "tech",
+        "local",
+        "family_parenting",
+        "learning",
+    }
+)
+
+
+def normalize_category(value: str | None) -> str:
+    """Map any stored/received category to a known value (default general)."""
+    return value if value in SPACE_CATEGORIES else "general"
+
+
 # ─── Space membership roles (§4.2.3) ──────────────────────────────────────
 
 
@@ -662,10 +690,12 @@ class Space:
     # §CP.F1 child-protection age gate. Federated in space_meta so a member
     # household enforces the host's gate locally on its own join paths (a
     # protected minor below ``min_age`` can't be seated). 0 → no restriction;
-    # CHECK-constrained to {0,13,16,18} at the schema level. ``target_audience``
-    # is a discovery hint ("all"/"family"/"teen"/"adult"), not an access gate.
+    # CHECK-constrained to {0,13,16,18} at the schema level.
     min_age: int = 0
-    target_audience: str = "all"
+    #: Discovery category (§23.50) — one of ``SPACE_CATEGORIES`` (above).
+    #: ``None`` = unset; normalizes to ``"general"`` on display. Shown only
+    #: for public/global tiers. Replaces the legacy ``target_audience`` hint.
+    category: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

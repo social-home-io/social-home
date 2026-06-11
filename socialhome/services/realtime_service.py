@@ -1371,7 +1371,6 @@ class RealtimeService:
                 "type": "cp.age_gate_changed",
                 "space_id": event.space_id,
                 "min_age": event.min_age,
-                "target_audience": event.target_audience,
             }
         )
 

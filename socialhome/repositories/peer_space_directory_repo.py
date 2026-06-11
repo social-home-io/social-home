@@ -29,7 +29,8 @@ class PeerSpaceDirectoryEntry:
     member_count: int = 0
     join_mode: str = "request"
     min_age: int = 0
-    target_audience: str = "all"
+    #: Discovery category (§23.50) — normalizes to ``"general"`` if unknown.
+    category: str = "general"
     updated_at: str | None = None
     cached_at: str | None = None
 
@@ -80,7 +81,7 @@ class SqlitePeerSpaceDirectoryRepo:
                 int(e.member_count or 0),
                 e.join_mode or "request",
                 int(e.min_age or 0),
-                e.target_audience or "all",
+                e.category or "general",
                 e.updated_at,
                 cached,
             )
@@ -97,7 +98,7 @@ class SqlitePeerSpaceDirectoryRepo:
                     """
                     INSERT INTO peer_space_directory(
                         instance_id, space_id, name, description, emoji,
-                        member_count, join_mode, min_age, target_audience,
+                        member_count, join_mode, min_age, category,
                         updated_at, cached_at
                     ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -155,7 +156,7 @@ def _row(row: dict) -> PeerSpaceDirectoryEntry:
         member_count=int(row.get("member_count") or 0),
         join_mode=row.get("join_mode") or "request",
         min_age=int(row.get("min_age") or 0),
-        target_audience=row.get("target_audience") or "all",
+        category=row.get("category") or "general",
         updated_at=row.get("updated_at"),
         cached_at=row.get("cached_at"),
     )

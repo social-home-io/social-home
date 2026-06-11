@@ -91,6 +91,7 @@ from ..domain.post import (
 from ..domain.presence import truncate_coord
 from ..domain.space import (
     PUBLIC_SPACE_TIERS,
+    SPACE_CATEGORIES,
     JoinMode,
     ModerationAlreadyDecidedError,
     ModerationStatus,
@@ -104,6 +105,7 @@ from ..domain.space import (
     SpacePermissionError,
     SpaceRole,
     SpaceType,
+    normalize_category,
 )
 from ..infrastructure.event_bus import EventBus
 from ..repositories.base import row_to_dict
@@ -154,6 +156,11 @@ class UnsupportedSeedSuite(ValueError):
 #: Upper bound on simultaneously-advertised public spaces per instance
 #: (spec §13). Enforced at ``create_space`` time for PUBLIC spaces.
 MAX_PUBLIC_SPACES = 5
+
+#: ``SPACE_CATEGORIES`` + ``normalize_category`` (§23.50) live in the pure
+#: ``domain.space`` module so the GFS server can import them without pulling in
+#: this service; they are imported above and re-exported for the existing
+#: ``services.space_service`` call sites (e.g. ``routes/spaces.py``).
 
 #: Post content caps — matches FeedService values.
 MAX_POST_LENGTH = 10_000
@@ -492,6 +499,7 @@ class SpaceService(SpaceMemberGuardMixin):
         lat: float | None = None,
         lon: float | None = None,
         radius_km: float | None = None,
+        category: str | None = None,
     ) -> Space:
         """Create a new space and seat the creator as owner."""
         owner = await self._users.get(owner_username)
@@ -503,6 +511,9 @@ class SpaceService(SpaceMemberGuardMixin):
         stype = _coerce_space_type(space_type)
         jmode = _coerce_join_mode(join_mode)
 
+        if category is not None and category not in SPACE_CATEGORIES:
+            raise ValueError(f"unknown category {category!r}")
+
         if stype is SpaceType.PUBLIC:
             count = len(await self._spaces.list_by_type(SpaceType.PUBLIC))
             if count >= MAX_PUBLIC_SPACES:
@@ -510,8 +521,6 @@ class SpaceService(SpaceMemberGuardMixin):
                     f"instance already advertises {count} public spaces "
                     f"(max {MAX_PUBLIC_SPACES})"
                 )
-            if lat is None or lon is None:
-                raise ValueError("public space requires lat + lon")
         else:
             # Non-public spaces never carry location metadata.
             lat = lon = radius_km = None
@@ -537,6 +546,7 @@ class SpaceService(SpaceMemberGuardMixin):
             lat=_round4(lat),
             lon=_round4(lon),
             radius_km=radius_km,
+            category=category,
         )
         await self._spaces.save(space)
         # Persist the space's Ed25519 PRIVATE seed (KEK-wrapped at rest) so
@@ -1111,6 +1121,7 @@ class SpaceService(SpaceMemberGuardMixin):
         retention_exempt_types: tuple[str, ...] | list[str] | None = None,
         about_markdown: str | None | object = _UNSET_MEMBER_PROFILE,
         bot_enabled: bool | None = None,
+        category: str | None = None,
     ) -> Space:
         """Owner or admin may update space metadata. Atomically bumps
         ``config_sequence`` and publishes :class:`SpaceConfigChanged`.
@@ -1121,6 +1132,9 @@ class SpaceService(SpaceMemberGuardMixin):
         """
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+
+        if category is not None and category not in SPACE_CATEGORIES:
+            raise ValueError(f"unknown category {category!r}")
 
         # SECURITY: toggling delegated_admin_authority is OWNER-only — it is
         # the owner's policy switch that authorises (and triggers distribution
@@ -1180,6 +1194,8 @@ class SpaceService(SpaceMemberGuardMixin):
                 fwd["about_markdown"] = about_markdown
             if bot_enabled is not None:
                 fwd["bot_enabled"] = bool(bot_enabled)
+            if category is not None:
+                fwd["category"] = category
             if await self._forward_admin_action_if_remote(
                 space, actor_username, "update_config", fwd
             ):
@@ -1280,6 +1296,9 @@ class SpaceService(SpaceMemberGuardMixin):
         if bot_enabled is not None:
             new_fields["bot_enabled"] = bool(bot_enabled)
             payload["bot_enabled"] = bool(bot_enabled)
+        if category is not None:
+            new_fields["category"] = category
+            payload["category"] = category
 
         if not new_fields:
             return space
@@ -1841,6 +1860,7 @@ class SpaceService(SpaceMemberGuardMixin):
             "retention_exempt_types",
             "about_markdown",
             "bot_enabled",
+            "category",
         }
     )
 
@@ -4144,7 +4164,8 @@ def _space_metadata_for_federation(space: Space) -> dict:
         # refused locally). Missing on an older sender → stub defaults to
         # min_age=0 (no restriction), so this is additive + fail-soft.
         "min_age": space.min_age,
-        "target_audience": space.target_audience,
+        # §23.50 discovery hint — optional, fail-soft (missing → "general").
+        "category": normalize_category(space.category),
         "cover_hash": space.cover_hash,
         "icon_hash": space.icon_hash,
         "about_markdown": space.about_markdown,
@@ -4381,7 +4402,7 @@ def stub_space_from_metadata(
         # household enforces it locally. Fail-soft: older sender omits it
         # → min_age 0 (no restriction).
         min_age=_coerce_min_age(meta.get("min_age")),
-        target_audience=str(meta.get("target_audience") or "all"),
+        category=normalize_category(meta.get("category")),
     )
 
 

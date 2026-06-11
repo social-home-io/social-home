@@ -121,7 +121,7 @@ async def _publish_known_space(client, space_id: str) -> None:
         "cover_url": "",
         "icon_url": "",
         "min_age": 0,
-        "target_audience": "all",
+        "category": "general",
         "accent_color": "#D2542A",
         "primary_color": "#D2542A",
     }
@@ -665,7 +665,7 @@ async def test_fan_out_delivers_to_real_subscriber_inbox(
                 "cover_url": "",
                 "icon_url": "",
                 "min_age": 0,
-                "target_audience": "all",
+                "category": "general",
                 "accent_color": "#D2542A",
                 "primary_color": "#D2542A",
             }

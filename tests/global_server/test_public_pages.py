@@ -125,7 +125,7 @@ async def test_landing_search_filters(client):
     assert "Garden Club" not in text
 
 
-async def test_landing_audience_filter(client):
+async def test_landing_category_filter(client):
     app = client._app
     fed_repo = app[gfs_fed_repo_key]
     await fed_repo.upsert_instance(
@@ -139,31 +139,143 @@ async def test_landing_audience_filter(client):
     )
     await fed_repo.upsert_space(
         GlobalSpace(
-            space_id="family-sp",
+            space_id="gaming-sp",
             owning_instance="o.home",
-            name="Family",
+            name="Gaming Guild",
             status="active",
-            min_age=0,
+            category="gaming",
         )
     )
     await fed_repo.upsert_space(
         GlobalSpace(
-            space_id="adult-sp",
+            space_id="tech-sp",
             owning_instance="o.home",
-            name="Adult Only",
+            name="Tech Talk",
             status="active",
-            min_age=18,
+            category="tech",
         )
     )
-    # Family filter hides the adult space.
-    resp = await client.get("/?audience=family")
+    # ?category=gaming keeps only the gaming space.
+    resp = await client.get("/?category=gaming")
     text = await resp.text()
-    assert "Family" in text
-    assert "Adult Only" not in text
-    # Adult filter hides the family space.
-    resp = await client.get("/?audience=adult")
+    assert "Gaming Guild" in text
+    assert "Tech Talk" not in text
+
+
+async def test_landing_shows_category_label(client):
+    app = client._app
+    fed_repo = app[gfs_fed_repo_key]
+    await fed_repo.upsert_instance(
+        ClientInstance(
+            instance_id="o.home",
+            display_name="O",
+            public_key="aa" * 32,
+            inbox_url="http://o/wh",
+            status="active",
+        )
+    )
+    await fed_repo.upsert_space(
+        GlobalSpace(
+            space_id="outdoors-sp",
+            owning_instance="o.home",
+            name="Trail Crew",
+            status="active",
+            category="sports_outdoors",
+        )
+    )
+    resp = await client.get("/")
     text = await resp.text()
-    assert "Adult Only" in text
+    assert "Sports &amp; outdoors" in text or "Sports & outdoors" in text
+
+
+async def test_landing_no_filter_shows_all_active(client):
+    app = client._app
+    fed_repo = app[gfs_fed_repo_key]
+    await fed_repo.upsert_instance(
+        ClientInstance(
+            instance_id="o.home",
+            display_name="O",
+            public_key="aa" * 32,
+            inbox_url="http://o/wh",
+            status="active",
+        )
+    )
+    await fed_repo.upsert_space(
+        GlobalSpace(
+            space_id="gaming-sp",
+            owning_instance="o.home",
+            name="Gaming Guild",
+            status="active",
+            category="gaming",
+        )
+    )
+    await fed_repo.upsert_space(
+        GlobalSpace(
+            space_id="tech-sp",
+            owning_instance="o.home",
+            name="Tech Talk",
+            status="active",
+            category="tech",
+        )
+    )
+    resp = await client.get("/")
+    text = await resp.text()
+    assert "Gaming Guild" in text
+    assert "Tech Talk" in text
+
+
+async def test_landing_renders_category_tabs(client):
+    """The filter row renders an All tab + a per-category tab, and the
+    ``.filters`` row uses ``flex-wrap`` so 10 tabs wrap on narrow screens."""
+    resp = await client.get("/")
+    text = await resp.text()
+    assert 'href="/?category=gaming"' in text
+    # Assert a tab *label* that isn't also a plausible space name — the
+    # HTML-escaped "Hobby & crafts" only appears as a filter tab.
+    assert "Hobby &amp; crafts" in text
+    assert "flex-wrap" in text
+
+
+async def test_landing_unknown_category_shows_all_with_all_tab_active(client):
+    """An unknown ``?category=`` value falls back to All: 200, every active
+    space shown, and the All tab carries ``active`` (not a category tab)."""
+    app = client._app
+    fed_repo = app[gfs_fed_repo_key]
+    await fed_repo.upsert_instance(
+        ClientInstance(
+            instance_id="o.home",
+            display_name="O",
+            public_key="aa" * 32,
+            inbox_url="http://o/wh",
+            status="active",
+        )
+    )
+    await fed_repo.upsert_space(
+        GlobalSpace(
+            space_id="sp-game",
+            owning_instance="o.home",
+            name="Gaming Guild",
+            status="active",
+            category="gaming",
+        )
+    )
+    await fed_repo.upsert_space(
+        GlobalSpace(
+            space_id="sp-tech",
+            owning_instance="o.home",
+            name="Tech Talk",
+            status="active",
+            category="tech",
+        )
+    )
+    resp = await client.get("/?category=bogus")
+    assert resp.status == 200
+    text = await resp.text()
+    # All spaces remain visible regardless of the bogus filter value.
+    assert "Gaming Guild" in text
+    assert "Tech Talk" in text
+    # The All tab is active; no category tab matched the unknown value.
+    assert '<a href="/" class="active">All</a>' in text
 
 
 async def test_landing_listing_rate_limit(client):

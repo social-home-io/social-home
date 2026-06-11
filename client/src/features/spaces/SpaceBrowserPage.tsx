@@ -90,7 +90,7 @@ async function loadAll() {
         scope:              s.space_type as 'household' | 'public',
         join_mode:          s.join_mode,
         min_age:            0,
-        target_audience:    'all',
+        category:           s.category,
         already_member:     realMemberIds.has(s.id),
         already_subscribed: subIds.has(s.id),
         request_pending:    pendingIds.has(s.id),

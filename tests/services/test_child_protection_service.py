@@ -264,12 +264,21 @@ async def test_set_age_gate_admin_succeeds(env):
     await svc.update_space_age_gate(
         "sp-adult",
         min_age=18,
-        target_audience="adult",
         actor_user_id="admin-id",
     )
     gate = await svc.get_space_age_gate("sp-adult")
     assert gate["min_age"] == 18
-    assert gate["target_audience"] == "adult"
+
+
+async def test_update_age_gate_min_age_only(env):
+    svc, _ = env
+    await svc.update_space_age_gate(
+        "sp-adult",
+        min_age=16,
+        actor_user_id="admin-id",
+    )
+    gate = await svc.get_space_age_gate("sp-adult")
+    assert gate["min_age"] == 16
 
 
 async def test_set_age_gate_invalid_min_age(env):
@@ -278,18 +287,6 @@ async def test_set_age_gate_invalid_min_age(env):
         await svc.update_space_age_gate(
             "sp-adult",
             min_age=21,
-            target_audience="adult",
-            actor_user_id="admin-id",
-        )
-
-
-async def test_set_age_gate_invalid_audience(env):
-    svc, _ = env
-    with pytest.raises(ValueError):
-        await svc.update_space_age_gate(
-            "sp-adult",
-            min_age=13,
-            target_audience="cats",
             actor_user_id="admin-id",
         )
 
@@ -300,7 +297,6 @@ async def test_set_age_gate_unknown_space(env):
         await svc.update_space_age_gate(
             "sp-missing",
             min_age=13,
-            target_audience="teen",
             actor_user_id="admin-id",
         )
 
@@ -311,7 +307,6 @@ async def test_set_age_gate_non_admin_403(env):
         await svc.update_space_age_gate(
             "sp-adult",
             min_age=13,
-            target_audience="teen",
             actor_user_id="mom-id",
         )
 
@@ -319,7 +314,7 @@ async def test_set_age_gate_non_admin_403(env):
 async def test_get_age_gate_unknown_space_returns_defaults(env):
     svc, _ = env
     gate = await svc.get_space_age_gate("sp-missing")
-    assert gate == {"min_age": 0, "target_audience": "all"}
+    assert gate == {"min_age": 0}
 
 
 # ─── §CP.F1 enforcement ─────────────────────────────────────────────────
@@ -330,7 +325,6 @@ async def test_check_age_gate_no_op_for_unprotected_user(env):
     await svc.update_space_age_gate(
         "sp-adult",
         min_age=18,
-        target_audience="adult",
         actor_user_id="admin-id",
     )
     # Should not raise — admin isn't a protected minor.
@@ -347,7 +341,6 @@ async def test_check_age_gate_blocks_underage_minor(env):
     await svc.update_space_age_gate(
         "sp-adult",
         min_age=18,
-        target_audience="adult",
         actor_user_id="admin-id",
     )
     with pytest.raises(SpacePermissionError, match="18"):
@@ -364,7 +357,6 @@ async def test_check_age_gate_allows_minor_above_min_age(env):
     await svc.update_space_age_gate(
         "sp-adult",
         min_age=13,
-        target_audience="teen",
         actor_user_id="admin-id",
     )
     # 15 ≥ 13 → no raise.

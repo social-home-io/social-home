@@ -72,8 +72,8 @@ class _FakeSpaceRepo:
     async def unban_member(self, space_id, user_id):
         self.unbans.append((space_id, user_id))
 
-    async def update_age_gate(self, space_id, *, min_age=None, target_audience=None):
-        self.age_gates.append((space_id, min_age, target_audience))
+    async def update_age_gate(self, space_id, *, min_age=None):
+        self.age_gates.append((space_id, min_age))
 
     async def get(self, space_id):
         return self.spaces.get(space_id)
@@ -448,10 +448,12 @@ async def test_age_gate_updates_min_age_only(repo, handlers):
             space_id="sp-1",
         )
     )
-    assert repo.age_gates == [("sp-1", 13, None)]
+    assert repo.age_gates == [("sp-1", 13)]
 
 
-async def test_age_gate_updates_target_audience_only(repo, handlers):
+async def test_age_gate_target_audience_only_is_noop(repo, handlers):
+    """The age gate is ``min_age``-only now — a payload carrying only the
+    legacy ``target_audience`` field (e.g. from an older peer) is ignored."""
     repo.spaces["sp-1"] = _host_space(owner_instance_id="peer-a")
     await handlers._on_age_gate(
         _event(
@@ -460,7 +462,21 @@ async def test_age_gate_updates_target_audience_only(repo, handlers):
             space_id="sp-1",
         )
     )
-    assert repo.age_gates == [("sp-1", None, "family")]
+    assert repo.age_gates == []
+
+
+async def test_age_gate_ignores_legacy_target_audience(repo, handlers):
+    """An older peer ships both fields; we apply min_age and ignore the
+    legacy target_audience (it never reaches the repo)."""
+    repo.spaces["sp-1"] = _host_space(owner_instance_id="peer-a")
+    await handlers._on_age_gate(
+        _event(
+            FederationEventType.SPACE_AGE_GATE_UPDATED,
+            {"min_age": 16, "target_audience": "teen"},
+            space_id="sp-1",
+        )
+    )
+    assert repo.age_gates == [("sp-1", 16)]
 
 
 async def test_age_gate_empty_payload_is_noop(repo, handlers):
