@@ -1430,7 +1430,7 @@ async def test_public_space_without_location_is_allowed(stack):
     space = await stack.space_svc.create_space(
         owner_username="a",
         name="No-pin public",
-        space_type="public",
+        space_type=SpaceType.PUBLIC,
     )
     assert space.space_type.value == "public"
     assert space.lat is None and space.lon is None
