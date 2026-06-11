@@ -25,7 +25,34 @@ export const VISIBILITY_OPTIONS: RadioCardOption[] = [
     title: 'Public',
     subtitle: 'Listed on the public map for anyone to discover.',
   },
+  {
+    value: 'global',
+    icon: '✦',
+    title: 'Global',
+    subtitle: 'Published worldwide via your global server.',
+  },
 ]
+
+/** Discovery categories (§23.50) — shown for public/global spaces. Values
+ *  mirror the backend ``SPACE_CATEGORIES`` (socialhome/domain/space.py) and the
+ *  GFS label map (global_server/public.py). */
+export const SPACE_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'general',          label: 'General' },
+  { value: 'hobby_crafts',     label: 'Hobby & crafts' },
+  { value: 'sports_outdoors',  label: 'Sports & outdoors' },
+  { value: 'gaming',           label: 'Gaming' },
+  { value: 'music_arts',       label: 'Music & arts' },
+  { value: 'food_drink',       label: 'Food & drink' },
+  { value: 'tech',             label: 'Tech' },
+  { value: 'local',            label: 'Local / neighborhood' },
+  { value: 'family_parenting', label: 'Family & parenting' },
+  { value: 'learning',         label: 'Learning' },
+]
+
+/** Map any value (unknown/legacy/empty/null) to a display label; default General. */
+export function categoryLabel(value: string | null | undefined): string {
+  return SPACE_CATEGORIES.find(c => c.value === value)?.label ?? 'General'
+}
 
 export const JOIN_MODE_OPTIONS: RadioCardOption[] = [
   {
