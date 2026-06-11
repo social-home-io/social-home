@@ -2207,3 +2207,150 @@ async def test_config_lww_hlc_deterministic_convergence(db, bus, inbound):
     order2 = await _converge("z", "a")
     # Higher HLC ("2000-0", authored by the LOWER-id admin-a) wins both ways.
     assert order1 == order2 == ("ByA", "2000-0")
+
+
+async def test_config_lww_hlc_high_then_low_drops_late_lower(db, bus, inbound):
+    """Reversed-order determinism: at the SAME config_sequence, when the
+    HIGH-hlc edit arrives FIRST and the LOW-hlc edit arrives SECOND, the late
+    lower edit is DROPPED — convergence to the HIGH-hlc winner is identical to
+    the low-then-high order (the existing convergence test)."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-hlc-htl",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    # HIGH hlc arrives FIRST (authored by the lower-id admin-a).
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-htl",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByA-high",
+            author="admin-a",
+            config_hlc="2000-0",
+            seed=kp.private_key,
+        )
+    )
+    # LOW hlc arrives SECOND (higher-id admin-z) → must be dropped despite the
+    # author ordering that decided pre-0037.
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-htl",
+            from_instance="admin-z",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByZ-low",
+            author="admin-z",
+            config_hlc="1000-0",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name, config_hlc, config_author_instance FROM spaces WHERE id=?",
+        ("sp-hlc-htl",),
+    )
+    assert row["name"] == "ByA-high"  # late lower edit dropped
+    assert row["config_hlc"] == "2000-0"
+    assert row["config_author_instance"] == "admin-a"
+
+
+async def test_config_hlc_far_future_dropped_clock_abuse_guard(db, bus, inbound):
+    """SECURITY: a seed-holder can SIGN a far-future config_hlc to win every
+    equal-sequence race forever. The §24.11 envelope-timestamp check bounds
+    only the ENVELOPE timestamp, not the signed config_hlc field. The drift
+    guard drops an edit whose signed config_hlc outruns the event's OWN signed
+    envelope timestamp by more than HLC_MAX_DRIFT_MS — even though its
+    (seq, hlc, author) would otherwise win."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.infrastructure.hlc import HLC_MAX_DRIFT_MS
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-hlc-future",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    # An honest edit lands first (within-bound HLC near real now).
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-future",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="Honest",
+            author="admin-a",
+            config_hlc=f"{now_ms}-0",
+            seed=kp.private_key,
+        )
+    )
+    # The attacker signs a far-future config_hlc at a HIGHER sequence — its
+    # (seq, hlc, author) would dominate every honest equal/lower edit forever.
+    far_future = now_ms + HLC_MAX_DRIFT_MS + 10**6
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-future",
+            from_instance="admin-z",
+            owner_instance="owner-i",
+            sequence=7,
+            name="ClockAbuse",
+            author="admin-z",
+            config_hlc=f"{far_future}-0",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name, config_hlc, config_sequence FROM spaces WHERE id=?",
+        ("sp-hlc-future",),
+    )
+    # Far-future edit DROPPED — the honest edit's state is unchanged.
+    assert row["name"] == "Honest"
+    assert row["config_hlc"] == f"{now_ms}-0"
+    assert row["config_sequence"] == 6
+
+
+async def test_config_hlc_within_drift_bound_applies(db, bus, inbound):
+    """Control for the clock-abuse guard: a config_hlc within the drift bound
+    (physical_ms <= envelope_ms + HLC_MAX_DRIFT_MS) at a winning sequence still
+    applies normally."""
+    from socialhome.crypto import generate_space_keypair
+    from socialhome.infrastructure.hlc import HLC_MAX_DRIFT_MS
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-hlc-bound",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    # Within the bound: a few seconds of skew, well under HLC_MAX_DRIFT_MS.
+    within = now_ms + (HLC_MAX_DRIFT_MS // 2)
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-bound",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="WithinBound",
+            author="admin-a",
+            config_hlc=f"{within}-0",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name, config_hlc, config_sequence FROM spaces WHERE id=?",
+        ("sp-hlc-bound",),
+    )
+    assert row["name"] == "WithinBound"
+    assert row["config_hlc"] == f"{within}-0"
+    assert row["config_sequence"] == 6

@@ -65,7 +65,7 @@ from ..domain.highlight import (
 )
 from ..domain.user import RemoteUser, UserStatus
 from ..infrastructure.event_bus import EventBus
-from ..infrastructure.hlc import HLC
+from ..infrastructure.hlc import HLC, HLC_MAX_DRIFT_MS
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
@@ -1573,6 +1573,26 @@ class FederationInboundService:
                 or ""
             )
             incoming_hlc = HLC.parse(meta.get("config_hlc"))
+            # A signed config_hlc can't be trusted to be near real time on its
+            # own — a seed-holder could stamp a far-future HLC to win every
+            # config race forever. Bound it against the event's OWN
+            # §24.11-checked envelope timestamp (already within ±300s of real
+            # now), NOT local `now` — the envelope ts is identical on every
+            # receiver, so this drop decision stays DETERMINISTIC (a local-now
+            # clamp would diverge receivers). HLC_MAX_DRIFT_MS mirrors the skew
+            # bound. A legacy edit with config_hlc absent (HLC(0,0),
+            # physical_ms=0) trivially passes, preserving back-compat.
+            envelope_ms = int(parse_iso8601_lenient(event.timestamp).timestamp() * 1000)
+            if incoming_hlc.physical_ms > envelope_ms + HLC_MAX_DRIFT_MS:
+                log.warning(
+                    "SPACE_CONFIG_CHANGED for %s: config_hlc physical=%d outruns "
+                    "envelope ts=%d by > %dms — dropping (clock-abuse guard)",
+                    space_id,
+                    incoming_hlc.physical_ms,
+                    envelope_ms,
+                    HLC_MAX_DRIFT_MS,
+                )
+                return
             existing_hlc = HLC.parse(existing.config_hlc)
             if (incoming_seq, incoming_hlc, incoming_author) <= (
                 existing.config_sequence,
