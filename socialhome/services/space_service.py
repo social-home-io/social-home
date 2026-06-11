@@ -1138,6 +1138,7 @@ class SpaceService(SpaceMemberGuardMixin):
         retention_exempt_types: tuple[str, ...] | list[str] | None = None,
         about_markdown: str | None | object = _UNSET_MEMBER_PROFILE,
         bot_enabled: bool | None = None,
+        category: str | None = None,
     ) -> Space:
         """Owner or admin may update space metadata. Atomically bumps
         ``config_sequence`` and publishes :class:`SpaceConfigChanged`.
@@ -1148,6 +1149,9 @@ class SpaceService(SpaceMemberGuardMixin):
         """
         space = await self._require_space(space_id)
         await self._require_admin_or_owner(space, actor_username)
+
+        if category is not None and category not in SPACE_CATEGORIES:
+            raise ValueError(f"unknown category {category!r}")
 
         # SECURITY: toggling delegated_admin_authority is OWNER-only — it is
         # the owner's policy switch that authorises (and triggers distribution
@@ -1207,6 +1211,8 @@ class SpaceService(SpaceMemberGuardMixin):
                 fwd["about_markdown"] = about_markdown
             if bot_enabled is not None:
                 fwd["bot_enabled"] = bool(bot_enabled)
+            if category is not None:
+                fwd["category"] = category
             if await self._forward_admin_action_if_remote(
                 space, actor_username, "update_config", fwd
             ):
@@ -1307,6 +1313,9 @@ class SpaceService(SpaceMemberGuardMixin):
         if bot_enabled is not None:
             new_fields["bot_enabled"] = bool(bot_enabled)
             payload["bot_enabled"] = bool(bot_enabled)
+        if category is not None:
+            new_fields["category"] = category
+            payload["category"] = category
 
         if not new_fields:
             return space
@@ -1868,6 +1877,7 @@ class SpaceService(SpaceMemberGuardMixin):
             "retention_exempt_types",
             "about_markdown",
             "bot_enabled",
+            "category",
         }
     )
 

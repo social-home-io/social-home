@@ -124,6 +124,66 @@ async def test_get_space(client):
     assert body["name"] == "GetMe"
 
 
+async def test_create_public_space_without_location(client):
+    """A public space can be created without a location pin (201)."""
+    resp = await client.post(
+        "/api/spaces",
+        json={"name": "No pin", "space_type": "public"},
+        headers=_auth(client._admin_token),
+    )
+    assert resp.status == 201
+
+
+async def test_create_space_with_category_and_min_age(client):
+    """POST accepts ``category`` + ``min_age`` for a discoverable tier.
+
+    GET /api/spaces/{id} does not expose ``min_age``, so the age gate is
+    verified via the child-protection age-gate endpoint.
+    """
+    resp = await client.post(
+        "/api/spaces",
+        json={
+            "name": "Gamers",
+            "space_type": "global",
+            "category": "gaming",
+            "min_age": 13,
+        },
+        headers=_auth(client._admin_token),
+    )
+    assert resp.status == 201
+    sid = (await resp.json())["id"]
+    detail = await (
+        await client.get(f"/api/spaces/{sid}", headers=_auth(client._admin_token))
+    ).json()
+    assert detail["category"] == "gaming"
+    gate = await (
+        await client.get(
+            f"/api/cp/spaces/{sid}/age-gate", headers=_auth(client._admin_token)
+        )
+    ).json()
+    assert gate["min_age"] == 13
+
+
+async def test_patch_space_category(client):
+    """PATCH /api/spaces/{id} accepts ``category`` and GET reflects it."""
+    r = await client.post(
+        "/api/spaces",
+        json={"name": "Tunes", "space_type": "public"},
+        headers=_auth(client._admin_token),
+    )
+    sid = (await r.json())["id"]
+    resp = await client.patch(
+        f"/api/spaces/{sid}",
+        json={"category": "music_arts"},
+        headers=_auth(client._admin_token),
+    )
+    assert resp.status == 200
+    detail = await (
+        await client.get(f"/api/spaces/{sid}", headers=_auth(client._admin_token))
+    ).json()
+    assert detail["category"] == "music_arts"
+
+
 async def test_update_space(client):
     """PATCH /api/spaces/{id} updates the space name."""
     r = await client.post(

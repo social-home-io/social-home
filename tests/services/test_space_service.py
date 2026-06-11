@@ -4817,3 +4817,24 @@ async def test_create_space_rejects_unknown_category(stack):
             lon=1.0,
             category="banana",
         )
+
+
+async def test_update_space_sets_category(stack):
+    """``update_config(category=...)`` persists a valid discovery category."""
+    await stack.provision_user("a")
+    s = await stack.space_svc.create_space(
+        owner_username="a", name="S", space_type="public"
+    )
+    await stack.space_svc.update_config(s.id, actor_username="a", category="tech")
+    got = await stack.space_svc._require_space(s.id)
+    assert got.category == "tech"
+
+
+async def test_update_space_rejects_unknown_category(stack):
+    """An unknown category on update is a ValueError."""
+    await stack.provision_user("a")
+    s = await stack.space_svc.create_space(
+        owner_username="a", name="S", space_type="public"
+    )
+    with pytest.raises(ValueError):
+        await stack.space_svc.update_config(s.id, actor_username="a", category="banana")
