@@ -36,7 +36,6 @@ function entry(over: Partial<DirectoryEntry>): DirectoryEntry {
     scope:              'public',
     join_mode:          'open',
     min_age:            0,
-    target_audience:    'all',
     already_member:     false,
     already_subscribed: false,
     ...over,

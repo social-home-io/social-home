@@ -60,10 +60,6 @@ describe('SpaceAgeGating', () => {
         { min_age: 18 },
       )
     })
-    const ageCall = apiPatch.mock.calls.find(
-      (c) => c[0] === `/api/cp/spaces/${SPACE_ID}/age-gate`,
-    )
-    expect(ageCall?.[1]).not.toHaveProperty('target_audience')
   })
 
   it('renders a Category select and saves it via the space PATCH', async () => {

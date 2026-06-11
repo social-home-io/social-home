@@ -8,7 +8,7 @@ const baseEntry: DirectoryEntry = {
   host_display_name: 'Nabu Casa', host_is_paired: true,
   name: 'Chess Club', description: 'Weekly chess', emoji: '♟',
   member_count: 7, scope: 'global', join_mode: 'request',
-  min_age: 0, target_audience: 'all',
+  min_age: 0,
 }
 
 describe('SpaceCard', () => {
@@ -59,6 +59,33 @@ describe('SpaceCard', () => {
       />,
     )
     expect(getByText('13+')).toBeTruthy()
+  })
+
+  it('shows a category chip when category is set and not general', () => {
+    const { getByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, category: 'gaming' }}
+        onAction={() => {}}
+      />,
+    )
+    expect(getByText('Gaming')).toBeTruthy()
+  })
+
+  it('hides the category chip for the general category', () => {
+    const { queryByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, category: 'general' }}
+        onAction={() => {}}
+      />,
+    )
+    expect(queryByText('General')).toBeNull()
+  })
+
+  it('hides the category chip when category is unset', () => {
+    const { queryByText } = render(
+      <SpaceCard entry={baseEntry} onAction={() => {}} />,
+    )
+    expect(queryByText('General')).toBeNull()
   })
 
   // ── Subscribe / unsubscribe ─────────────────────────────────────────

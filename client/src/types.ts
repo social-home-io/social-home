@@ -279,6 +279,8 @@ export interface Space {
   emoji: string | null
   space_type: 'private' | 'household' | 'public' | 'global'
   join_mode: 'invite_only' | 'open' | 'request'
+  /** Discovery category (e.g. ``'gaming'``); ``'general'``/absent = none. */
+  category?: string
   features: SpaceFeatures
   retention_days: number | null
   /** When true, HA automations may post into this space via the
@@ -578,7 +580,9 @@ export interface DirectoryEntry {
   scope: 'household' | 'public' | 'global'
   join_mode: 'invite_only' | 'open' | 'request'
   min_age: number
-  target_audience: string
+  /** Discovery category (e.g. ``'gaming'``). ``'general'``/absent =
+   *  unspecified — the card surfaces no category chip in that case. */
+  category?: string
   /** Present only on `scope === 'household'` rows built from your own
    *  space list — lets the card surface "Open" when already a member. */
   already_member?: boolean

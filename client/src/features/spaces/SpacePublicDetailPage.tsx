@@ -58,7 +58,7 @@ async function loadAsLocal(spaceId: string): Promise<DirectoryEntry | null> {
       scope:              space.space_type as 'household' | 'public',
       join_mode:          space.join_mode,
       min_age:            0,
-      target_audience:    'all',
+      category:           space.category,
       already_member:     false,
       already_subscribed: false,
     }

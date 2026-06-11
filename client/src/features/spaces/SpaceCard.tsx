@@ -20,6 +20,7 @@
  * / comment / react). Private household spaces do not show Subscribe.
  */
 import { Button } from '@/components/Button'
+import { categoryLabel } from '@/components/spaceModeOptions'
 import type { DirectoryEntry } from '@/types'
 
 export type SpaceCardAction =
@@ -181,6 +182,11 @@ export function SpaceCard({
         {entry.min_age > 0 && (
           <span class="sh-age-chip" title={`Minimum age ${entry.min_age}`}>
             {entry.min_age}+
+          </span>
+        )}
+        {entry.category && entry.category !== 'general' && (
+          <span class="sh-age-chip" title={categoryLabel(entry.category)}>
+            {categoryLabel(entry.category)}
           </span>
         )}
       </div>
