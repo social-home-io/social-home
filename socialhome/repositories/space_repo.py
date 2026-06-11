@@ -320,7 +320,7 @@ class SqliteSpaceRepo:
                 dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
                 min_age, target_audience, category
             ) VALUES(
-                -- 54 placeholders, one per column listed above.
+                -- 56 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?,                      -- config_sequence, roster_sequence, config_hlc
