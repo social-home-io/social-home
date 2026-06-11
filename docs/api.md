@@ -780,7 +780,7 @@ sync. The GFS holds no PeerConnection.
 | GET | `/admin/api/appeals` | Appeal queue. |
 | PATCH | `/admin/api/appeals/{id}/decide` | Decide. |
 | GET | `/admin/api/audit` | Audit log. |
-| GET | `/admin/api/cluster` | Cluster status. |
+| GET | `/admin/api/cluster` | Cluster status — enriched `nodes` list (self + peers) with per-node status, live connected-client count, and active sync sessions. |
 | GET | `/admin/api/cluster/peers[/{node_id}]` | Peer list / detail. |
 | POST | `/admin/api/cluster/peers/{node_id}/ping` | Healthcheck a peer. |
 
