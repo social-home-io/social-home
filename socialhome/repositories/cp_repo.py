@@ -11,7 +11,7 @@ Tables touched:
 * ``cp_guardians`` — guardian ↔ minor mapping.
 * ``cp_minor_blocks`` — per-minor user block list (§CP.F2).
 * ``space_members`` — read for the F2 auto-removal helper.
-* ``spaces`` — ``min_age`` + ``target_audience`` columns (§CP.F1).
+* ``spaces`` — the ``min_age`` column (§CP.F1).
 * ``guardian_audit_log`` — append-only audit trail.
 * ``remote_instances`` — read for the §CP.F3 DM gate.
 """
@@ -142,7 +142,6 @@ class AbstractCpRepo(Protocol):
         *,
         space_id: str,
         min_age: int,
-        target_audience: str,
     ) -> None: ...
     async def get_space_age_gate(self, space_id: str) -> dict: ...
     async def get_user_protection(self, user_id: str) -> dict | None: ...
@@ -408,29 +407,19 @@ class SqliteCpRepo:
         )
         return row is not None
 
-    async def update_space_age_gate(
-        self,
-        *,
-        space_id: str,
-        min_age: int,
-        target_audience: str,
-    ) -> None:
+    async def update_space_age_gate(self, *, space_id: str, min_age: int) -> None:
         await self._db.enqueue(
-            "UPDATE spaces SET min_age=?, target_audience=? WHERE id=?",
-            (min_age, target_audience, space_id),
+            "UPDATE spaces SET min_age=? WHERE id=?", (min_age, space_id)
         )
 
     async def get_space_age_gate(self, space_id: str) -> dict:
         row = await self._db.fetchone(
-            "SELECT min_age, target_audience FROM spaces WHERE id=?",
+            "SELECT min_age FROM spaces WHERE id=?",
             (space_id,),
         )
         if row is None:
-            return {"min_age": 0, "target_audience": "all"}
-        return {
-            "min_age": int(row["min_age"] or 0),
-            "target_audience": row["target_audience"] or "all",
-        }
+            return {"min_age": 0}
+        return {"min_age": int(row["min_age"] or 0)}
 
     async def get_user_protection(self, user_id: str) -> dict | None:
         row = await self._db.fetchone(

@@ -241,16 +241,11 @@ class CPAgeGateView(BaseView):
     async def patch(self) -> web.Response:
         ctx = self.user
         body = await self.body()
-        if body.get("min_age") is None or not body.get("target_audience"):
-            return error_response(
-                422,
-                "UNPROCESSABLE",
-                "min_age and target_audience are required",
-            )
+        if body.get("min_age") is None:
+            return error_response(422, "UNPROCESSABLE", "min_age is required")
         await self.svc(K.child_protection_service_key).update_space_age_gate(
             self.match("space_id"),
             min_age=int(body["min_age"]),
-            target_audience=str(body["target_audience"]),
             actor_user_id=ctx.user_id,
         )
         return web.Response(status=204)

@@ -100,7 +100,6 @@ class SpaceConfigOutbound:
                 {
                     "space_id": space.id,
                     "min_age": event.min_age,
-                    "target_audience": event.target_audience,
                 },
             )
         except Exception:

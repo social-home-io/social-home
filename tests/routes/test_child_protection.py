@@ -215,14 +215,14 @@ async def test_get_age_gate_default_for_unknown_space(client):
     )
     assert r.status == 200
     body = await r.json()
-    assert body == {"min_age": 0, "target_audience": "all"}
+    assert body == {"min_age": 0}
 
 
 async def test_set_age_gate_admin_204(client):
     await _seed_space(client)
     r = await client.patch(
         "/api/cp/spaces/sp-1/age-gate",
-        json={"min_age": 13, "target_audience": "teen"},
+        json={"min_age": 13},
         headers=_auth(client._tok),
     )
     assert r.status == 204
@@ -234,11 +234,11 @@ async def test_set_age_gate_admin_204(client):
     assert body["min_age"] == 13
 
 
-async def test_set_age_gate_missing_fields_422(client):
+async def test_set_age_gate_missing_min_age_422(client):
     await _seed_space(client)
     r = await client.patch(
         "/api/cp/spaces/sp-1/age-gate",
-        json={"min_age": 13},
+        json={},
         headers=_auth(client._tok),
     )
     assert r.status == 422
@@ -257,7 +257,7 @@ async def test_set_age_gate_bad_json_400(client):
 async def test_set_age_gate_unknown_space_404(client):
     r = await client.patch(
         "/api/cp/spaces/sp-missing/age-gate",
-        json={"min_age": 13, "target_audience": "teen"},
+        json={"min_age": 13},
         headers=_auth(client._tok),
     )
     assert r.status == 404
@@ -267,7 +267,7 @@ async def test_set_age_gate_invalid_value_422(client):
     await _seed_space(client)
     r = await client.patch(
         "/api/cp/spaces/sp-1/age-gate",
-        json={"min_age": 21, "target_audience": "teen"},
+        json={"min_age": 21},
         headers=_auth(client._tok),
     )
     assert r.status == 422

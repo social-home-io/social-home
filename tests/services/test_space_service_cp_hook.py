@@ -79,7 +79,6 @@ async def test_add_member_blocks_underage_minor(env):
     await cp_svc.update_space_age_gate(
         "sp-adult",
         min_age=18,
-        target_audience="adult",
         actor_user_id="admin-id",
     )
     with pytest.raises(SpacePermissionError, match="18"):
@@ -100,7 +99,6 @@ async def test_add_member_allows_minor_above_min_age(env):
     await cp_svc.update_space_age_gate(
         "sp-adult",
         min_age=13,
-        target_audience="teen",
         actor_user_id="admin-id",
     )
     member = await space_svc.add_member(
@@ -116,7 +114,6 @@ async def test_add_member_allows_unprotected_user(env):
     await cp_svc.update_space_age_gate(
         "sp-adult",
         min_age=18,
-        target_audience="adult",
         actor_user_id="admin-id",
     )
     # lila has no CP enabled → no age gate enforcement.
@@ -139,7 +136,6 @@ async def test_add_member_no_cp_attached_works_unchanged(env):
     await cp_svc.update_space_age_gate(
         "sp-adult",
         min_age=18,
-        target_audience="adult",
         actor_user_id="admin-id",
     )
     # Detached CP → no enforcement.

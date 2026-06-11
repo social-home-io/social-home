@@ -3005,7 +3005,6 @@ async def test_age_gate_blocks_minor_on_approve_join_request(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=18,
-        target_audience="adult",
         actor_user_id=anna.user_id,
     )
     req_id = await stack.space_svc.request_join(space.id, user_id=kid.user_id)
@@ -3027,7 +3026,6 @@ async def test_age_gate_blocks_minor_on_accept_invite_token(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=18,
-        target_audience="adult",
         actor_user_id=anna.user_id,
     )
     tok = await stack.space_svc.create_invite_token(
@@ -3050,7 +3048,6 @@ async def test_age_gate_blocks_minor_on_accept_local_invite(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=18,
-        target_audience="adult",
         actor_user_id=anna.user_id,
     )
     # Invite while 'kid' is NOT yet protected, so invite_local_user's own
@@ -3089,7 +3086,6 @@ async def test_age_gate_allows_older_minor_through_seating_paths(stack):
     await cp.update_space_age_gate(
         space.id,
         min_age=13,
-        target_audience="teen",
         actor_user_id=anna.user_id,
     )
     req_id = await stack.space_svc.request_join(space.id, user_id=teen.user_id)

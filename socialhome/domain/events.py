@@ -1606,7 +1606,6 @@ class CpBlockRemoved(DomainEvent):
 class CpSpaceAgeGateChanged(DomainEvent):
     space_id: str
     min_age: int
-    target_audience: str
     occurred_at: datetime = field(default_factory=_now)
 
 

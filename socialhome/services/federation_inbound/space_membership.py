@@ -239,7 +239,11 @@ class SpaceMembershipInboundHandlers:
         await self._space_repo.unban_member(space_id, user_id)
 
     async def _on_age_gate(self, event: "FederationEvent") -> None:
-        """§CP.F1 — the host set/changed the min_age or target_audience."""
+        """§CP.F1 — the host set/changed the space's min_age.
+
+        Older peers may still ship ``target_audience`` in the payload; we
+        ignore it (the age gate is ``min_age``-only now).
+        """
         space_id = event.space_id or str(event.payload.get("space_id") or "")
         if not space_id:
             return
@@ -260,33 +264,28 @@ class SpaceMembershipInboundHandlers:
             return
         p = event.payload
         min_age = p.get("min_age")
-        target_audience = p.get("target_audience")
-        if min_age is None and target_audience is None:
+        if min_age is None:
             return
         # Reject a min_age outside the allowed set before it hits the
         # schema CHECK (a non-conforming peer would otherwise abort the
-        # update). target_audience is a free-form hint, so it's not
-        # constrained here.
-        coerced_min_age: int | None = None
-        if min_age is not None:
-            try:
-                coerced_min_age = int(min_age)
-            except TypeError, ValueError:
-                coerced_min_age = None
-            if coerced_min_age not in _VALID_MIN_AGES:
-                log.warning(
-                    "SPACE_AGE_GATE_UPDATED for %s: ignoring invalid min_age %r",
-                    space_id,
-                    min_age,
-                )
-                coerced_min_age = None
-        if coerced_min_age is None and not target_audience:
+        # update).
+        try:
+            coerced_min_age = int(min_age)
+        except TypeError, ValueError:
+            log.warning(
+                "SPACE_AGE_GATE_UPDATED for %s: non-int min_age %r",
+                space_id,
+                min_age,
+            )
             return
-        await self._space_repo.update_age_gate(
-            space_id,
-            min_age=coerced_min_age,
-            target_audience=str(target_audience) if target_audience else None,
-        )
+        if coerced_min_age not in _VALID_MIN_AGES:
+            log.warning(
+                "SPACE_AGE_GATE_UPDATED for %s: ignoring invalid min_age %r",
+                space_id,
+                min_age,
+            )
+            return
+        await self._space_repo.update_age_gate(space_id, min_age=coerced_min_age)
 
     async def _on_catch_up(self, event: "FederationEvent") -> None:
         """§13 ``SPACE_CONFIG_CATCH_UP`` — a peer announces the sequence
