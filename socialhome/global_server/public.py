@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import qrcode  # type: ignore[import-untyped]
 from aiohttp import web
 
+from ..domain.space import SPACE_CATEGORIES
 from . import app_keys as K
 from .markdown_lite import render_markdown
 
@@ -176,15 +177,29 @@ def _render_qr_png_data_uri_sync(payload: str) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _audience_filter(value: str | None) -> tuple[str, int | None]:
-    """Map ``?audience=…`` to a SQL-friendly (label, max_min_age)."""
-    if value == "family":
-        return "Family", 0
-    if value == "teen":
-        return "Teen", 13
-    if value == "adult":
-        return "Adult", None  # only min_age >= 18 — handled separately
-    return "All", None
+#: Discovery categories (§23.50) as ``(value, label)`` pairs. The values
+#: mirror ``socialhome.domain.space.SPACE_CATEGORIES``; this ordered list
+#: drives both the filter tabs and the per-space label on the SSR pages.
+#: Kept local to the GFS layer (which must not import the HFS
+#: ``services.space_service``) — a label tweak is a one-liner here.
+CATEGORY_LABELS: list[tuple[str, str]] = [
+    ("general", "General"),
+    ("hobby_crafts", "Hobby & crafts"),
+    ("sports_outdoors", "Sports & outdoors"),
+    ("gaming", "Gaming"),
+    ("music_arts", "Music & arts"),
+    ("food_drink", "Food & drink"),
+    ("tech", "Tech"),
+    ("local", "Local / neighborhood"),
+    ("family_parenting", "Family & parenting"),
+    ("learning", "Learning"),
+]
+_CATEGORY_LABEL_MAP: dict[str, str] = dict(CATEGORY_LABELS)
+
+
+def _category_label(value: str | None) -> str:
+    """Human label for a stored category value (default ``General``)."""
+    return _CATEGORY_LABEL_MAP.get(value or "", "General")
 
 
 def _render_landing(
@@ -197,23 +212,32 @@ def _render_landing(
     pair_qr_data_uri: str,
     spaces: list[dict],
     search: str,
-    audience: str,
+    category: str,
     base_url: str,
 ) -> str:
     rows = []
     for sp in spaces:
         accent = _escape(sp.get("accent_color") or "#ce5d3e")
+        cat_label = _escape(_category_label(sp.get("category")))
         rows.append(f"""
           <li class="card" style="border-left:6px solid {accent}">
             <a href="/spaces/{_escape(sp["space_id"])}">
               <strong>{_escape(sp.get("name") or "—")}</strong>
             </a>
             <div class="muted">{sp.get("subscriber_count", 0)} members
-              · {sp.get("posts_per_week", 0):.1f} posts/week</div>
+              · {sp.get("posts_per_week", 0):.1f} posts/week
+              · {cat_label}</div>
             <p>{_escape((sp.get("description") or "")[:120])}</p>
           </li>
         """)
     rows_html = "\n".join(rows) or ('<li class="muted">No active spaces yet.</li>')
+    cat_tabs = [f'<a href="/" class="{"active" if not category else ""}">All</a>']
+    for value, label in CATEGORY_LABELS:
+        active = "active" if category == value else ""
+        cat_tabs.append(
+            f'<a href="/?category={value}" class="{active}">{_escape(label)}</a>'
+        )
+    cat_tabs_html = "\n        ".join(cat_tabs)
     header_html = (
         f'<img src="{_escape(header_image_url)}" alt="" class="hero-image" />'
         if header_image_url
@@ -422,13 +446,7 @@ def _render_landing(
                placeholder="Search spaces…" value="{_escape(search)}" />
       </form>
       <div class="filters">
-        <a href="/" class="{"active" if not audience else ""}">All</a>
-        <a href="/?audience=family"
-           class="{"active" if audience == "family" else ""}">Family</a>
-        <a href="/?audience=teen"
-           class="{"active" if audience == "teen" else ""}">Teen (13+)</a>
-        <a href="/?audience=adult"
-           class="{"active" if audience == "adult" else ""}">Adult (18+)</a>
+        {cat_tabs_html}
       </div>
       <ul>
         {rows_html}
@@ -578,7 +596,8 @@ def _render_space_page(
     <div class="accent-bar"></div>
     <a href="/" class="secondary">← {_escape(server_name)}</a>
     <h1>{_escape(space.get("name") or "—")}</h1>
-    <p class="muted">{space.get("subscriber_count", 0)} members</p>
+    <p class="muted">{space.get("subscriber_count", 0)} members
+      · {_escape(_category_label(space.get("category")))}</p>
 
     <section class="cta-section">
       <a class="cta" href="{_escape(deep_link)}">Open in Social Home</a>
@@ -727,7 +746,7 @@ async def handle_landing(request: web.Request) -> web.Response:
     qr_data = await _render_qr_png_data_uri(pair_code)
 
     search = (request.query.get("search") or "").strip()
-    audience = (request.query.get("audience") or "").strip()
+    category = (request.query.get("category") or "").strip()
     active_spaces = await fed_repo.list_spaces(status="active")
     items: list[dict] = []
     for sp in active_spaces:
@@ -735,11 +754,7 @@ async def handle_landing(request: web.Request) -> web.Response:
             haystack = f"{sp.name} {sp.description or ''}".lower()
             if search.lower() not in haystack:
                 continue
-        if audience == "family" and sp.min_age != 0:
-            continue
-        if audience == "teen" and sp.min_age > 13:
-            continue
-        if audience == "adult" and sp.min_age < 18:
+        if category in SPACE_CATEGORIES and sp.category != category:
             continue
         items.append(
             {
@@ -749,6 +764,7 @@ async def handle_landing(request: web.Request) -> web.Response:
                 "accent_color": sp.accent_color,
                 "subscriber_count": sp.subscriber_count,
                 "posts_per_week": sp.posts_per_week,
+                "category": sp.category,
             }
         )
 
@@ -764,7 +780,7 @@ async def handle_landing(request: web.Request) -> web.Response:
         pair_qr_data_uri=qr_data,
         spaces=items,
         search=search,
-        audience=audience,
+        category=category,
         base_url=cfg.base_url,
     )
     return web.Response(text=html, content_type="text/html")
@@ -792,6 +808,7 @@ async def handle_space_page(request: web.Request) -> web.Response:
         "accent_color": space.accent_color,
         "primary_color": space.primary_color,
         "subscriber_count": space.subscriber_count,
+        "category": space.category,
     }
     html = _render_space_page(
         space=space_dict,
