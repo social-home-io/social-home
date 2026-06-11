@@ -827,6 +827,17 @@ a:focus:not(:focus-visible) { outline: none; }
   align-items: center;
   flex-wrap: wrap;
 }
+/* Age & safety panel: on narrow viewports the row wraps, and without this
+ * the Save button ends up beside the Category select (reading as if it
+ * belongs to Category). Force it onto its own full-width row below both
+ * selects. Scoped under .sh-age-gating so the shared .sh-form-row layout
+ * (used by many other forms) is untouched; desktop stays inline. */
+@media (max-width: 480px) {
+  .sh-age-gating .sh-form-row > button {
+    flex: 1 0 100%;
+    width: 100%;
+  }
+}
 .sh-form-actions {
   display: flex;
   gap: var(--sh-space-sm);

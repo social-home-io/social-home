@@ -86,7 +86,7 @@ export function SpaceAgeGating({ spaceId }: { spaceId: string }) {
 
   return (
     <div class="sh-age-gating sh-card">
-      <h4>Age &amp; category</h4>
+      <h4>Age &amp; safety</h4>
       <p class="sh-muted">
         Children with child protection enabled are blocked from joining this
         space when their age is below the minimum you set here. The category is
