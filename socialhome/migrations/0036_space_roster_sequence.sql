@@ -1,0 +1,44 @@
+-- Dedicated monotonic counter for roster gossip (config-sequence-decouple).
+--
+-- ``config_sequence`` is the per-space version that drives config Last-Writer-
+-- Wins (``(config_sequence, config_author_instance)`` lexicographic). Until now
+-- roster / role / moderation gossip ALSO bumped ``config_sequence`` while
+-- federating only its ROSTER effect (a SPACE_MEMBER_JOINED/LEFT). That left a
+-- member household's stub ``config_sequence`` lagging the host's after every
+-- role change, so a delegated admin's offline config edit could collide with
+-- the owner at the SAME sequence — non-deterministic LWW for everyone in the
+-- space. Split the two: ``config_sequence`` advances ONLY on real config edits;
+-- roster gossip gets its own ``roster_sequence``.
+--
+-- Backfill = config_sequence for continuity: existing member_versions were
+-- sourced from config_sequence, so a fresh roster_sequence starting at 0 would
+-- emit roster events with versions BELOW existing rows -> dropped as stale by
+-- the version-guarded CRDT merge. Seeding from config_sequence keeps the next
+-- roster event strictly above every prior member_version.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. Everything reading/writing the per-space monotonic
+--       counter goes through ``repositories/space_repo.py``
+--       (``increment_config_sequence``, ``save`` upsert, ``_row_to_space``). The
+--       roster gossip producer is ``services/space_service.py::
+--       _emit_member_roster_gossip`` (today bumping ``config_sequence``); the
+--       config-edit producers are ``set_cover``/``set_icon``/``update_config``/
+--       ``dissolve_space``/``_apply_archive``/``transfer_ownership``. The CRDT
+--       per-member counter ``space_remote_members.member_version`` (migration
+--       0031) is sourced from this gossip value. No existing column separates
+--       "roster version" from "config version" — they are conflated on the one
+--       ``config_sequence`` column, which is exactly the bug.
+--   (2) Alternative rejected. (a) Derive a roster version at read time as
+--       ``MAX(member_version)`` over ``space_remote_members`` — not atomic
+--       across concurrent gossip (two simultaneous joins would read the same
+--       MAX and emit colliding versions), and undefined for a host with only
+--       local members. (b) Keep sharing ``config_sequence`` — that is the
+--       collision this fixes. So a dedicated additive counter on ``spaces``,
+--       alongside the ``config_sequence`` it decouples from, is the correct
+--       minimal home.
+--   (3) Smallest change. One additive ``INTEGER NOT NULL DEFAULT 0`` column
+--       plus a one-time backfill from ``config_sequence`` (additive, no
+--       destructive change, no index, no table rewrite). The backfill is the
+--       minimum needed to keep monotonicity against existing member_versions.
+ALTER TABLE spaces ADD COLUMN roster_sequence INTEGER NOT NULL DEFAULT 0;
+UPDATE spaces SET roster_sequence = config_sequence;

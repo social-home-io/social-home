@@ -127,6 +127,58 @@ async def test_dissolved_is_skipped_here(fed, space_repo):
     fed.broadcast_to_space_members.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "event_type",
+    ["admin_granted", "admin_revoked", "member_banned", "member_unbanned"],
+)
+async def test_roster_events_are_not_federated_as_config(fed, space_repo, event_type):
+    """Role / ban / unban events ride the LOCAL bus (realtime/UI) but federate
+    via roster gossip (or are host-local), NOT as SPACE_CONFIG_CHANGED. They no
+    longer advance config_sequence, so re-broadcasting them as config would at
+    best be a no-op and at worst perturb a receiver's config_author at an equal
+    sequence."""
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=space_repo,
+    ).wire()
+    await bus.publish(
+        SpaceConfigChanged(
+            space_id="sp-1",
+            event_type=event_type,
+            payload={"user_id": "u1"},
+            sequence=5,
+        ),
+    )
+    fed.broadcast_to_space_members.assert_not_awaited()
+
+
+@pytest.mark.parametrize("event_type", ["rename", "feature_changed"])
+async def test_real_config_edits_are_still_federated(fed, space_repo, event_type):
+    """A genuine config edit (rename / feature toggle) still federates as
+    SPACE_CONFIG_CHANGED — only roster/moderation events are skipped."""
+    bus = EventBus()
+    SpaceConfigOutbound(
+        bus=bus,
+        federation_service=fed,
+        space_repo=space_repo,
+    ).wire()
+    await bus.publish(
+        SpaceConfigChanged(
+            space_id="sp-1",
+            event_type=event_type,
+            payload={},
+            sequence=5,
+        ),
+    )
+    fed.broadcast_to_space_members.assert_awaited_once()
+    assert (
+        fed.broadcast_to_space_members.await_args.args[1]
+        == FederationEventType.SPACE_CONFIG_CHANGED
+    )
+
+
 async def test_config_changed_skipped_when_not_owner(fed):
     """Only the owner host broadcasts — a remote-stub holder must
     not re-broadcast somebody else's space config."""

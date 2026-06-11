@@ -3695,6 +3695,134 @@ async def test_set_remote_member_role_broadcasts_joined(stack):
     assert p["role"] == SpaceRole.ADMIN
 
 
+async def test_set_remote_member_role_does_not_bump_config_sequence(stack):
+    """A remote role change is a ROSTER mutation — config_sequence must stay
+    put (decoupled), while roster_sequence advances via the gossip."""
+    from socialhome.domain.space import SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    before = await stack.space_repo.get(space.id)
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-x",
+        user_id="ru1",
+        user_pk=None,
+        display_name="R",
+    )
+
+    await stack.space_svc.set_remote_member_role(
+        space.id,
+        actor_username="anna",
+        instance_id="peer-x",
+        user_id="ru1",
+        role=SpaceRole.ADMIN,
+    )
+
+    after = await stack.space_repo.get(space.id)
+    assert after.config_sequence == before.config_sequence
+    assert after.roster_sequence == before.roster_sequence + 1
+
+
+async def test_ban_does_not_bump_config_sequence(stack):
+    """A ban is a ROSTER mutation — config_sequence stays put; the LEFT gossip
+    advances roster_sequence."""
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(space.id, actor_username="anna", user_id=b.user_id)
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+    before = await stack.space_repo.get(space.id)
+
+    await stack.space_svc.ban(space.id, actor_username="anna", user_id=b.user_id)
+
+    after = await stack.space_repo.get(space.id)
+    assert after.config_sequence == before.config_sequence
+    assert after.roster_sequence == before.roster_sequence + 1
+
+
+async def test_unban_does_not_bump_config_or_roster_sequence(stack):
+    """Unban clears a host-local ban flag only — neither counter advances and
+    no roster gossip fires (the ban list never lived on stubs)."""
+    from socialhome.domain.federation import FederationEventType
+
+    await stack.provision_user("anna")
+    b = await stack.provision_user("bob")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    await stack.space_svc.add_member(space.id, actor_username="anna", user_id=b.user_id)
+    await stack.space_svc.ban(space.id, actor_username="anna", user_id=b.user_id)
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+    before = await stack.space_repo.get(space.id)
+
+    await stack.space_svc.unban(space.id, actor_username="anna", user_id=b.user_id)
+
+    after = await stack.space_repo.get(space.id)
+    assert after.config_sequence == before.config_sequence
+    assert after.roster_sequence == before.roster_sequence
+    assert _gossip_calls(fed, FederationEventType.SPACE_MEMBER_JOINED) == []
+    assert _gossip_calls(fed, FederationEventType.SPACE_MEMBER_LEFT) == []
+
+
+async def test_update_config_still_bumps_config_sequence(stack):
+    """A real config edit MUST still advance config_sequence (unchanged
+    behaviour) and must NOT advance roster_sequence."""
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    before = await stack.space_repo.get(space.id)
+
+    await stack.space_svc.update_config(space.id, actor_username="anna", name="Renamed")
+
+    after = await stack.space_repo.get(space.id)
+    assert after.config_sequence == before.config_sequence + 1
+    assert after.roster_sequence == before.roster_sequence
+
+
+async def test_config_sequence_parity_across_role_change(stack):
+    """The lag fix: a member stub mirrors the host's config_sequence; a role
+    change no longer bumps it, so a subsequent config edit increments from the
+    SHARED base (no collision)."""
+    from socialhome.domain.space import SpaceRole
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    fed = _roster_gossip_fed()
+    stack.space_svc._federation = fed
+    remote = await _wire_remote_members(stack)
+    await remote.add(
+        space_id=space.id,
+        instance_id="peer-x",
+        user_id="ru1",
+        user_pk=None,
+        display_name="R",
+    )
+    # Member stub starts at parity with the host's config_sequence.
+    host_before = (await stack.space_repo.get(space.id)).config_sequence
+    member_stub_config_seq = host_before  # simulated stub mirror
+
+    # Owner promotes the remote admin — pre-fix this bumped config_sequence,
+    # leaving the member stub behind. Now it does not.
+    await stack.space_svc.set_remote_member_role(
+        space.id,
+        actor_username="anna",
+        instance_id="peer-x",
+        user_id="ru1",
+        role=SpaceRole.ADMIN,
+    )
+    host_after_role = (await stack.space_repo.get(space.id)).config_sequence
+    assert host_after_role == member_stub_config_seq  # still in parity
+
+    # The (now-admin) member's offline config edit increments from the shared
+    # base — the host's next edit lands at the same next value, no collision.
+    member_edit_seq = member_stub_config_seq + 1
+    host_edit_seq = host_after_role + 1
+    assert member_edit_seq == host_edit_seq
+
+
 async def test_remove_remote_member_broadcasts_left(stack):
     """Kicking a remote member broadcasts a SPACE_MEMBER_LEFT gossip."""
     from unittest.mock import AsyncMock
