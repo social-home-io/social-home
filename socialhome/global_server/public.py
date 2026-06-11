@@ -747,6 +747,9 @@ async def handle_landing(request: web.Request) -> web.Response:
 
     search = (request.query.get("search") or "").strip()
     category = (request.query.get("category") or "").strip()
+    # Normalize unknown categories to "" so garbage input lights up the
+    # "All" tab and shows every space (consistent with the filter below).
+    category = category if category in SPACE_CATEGORIES else ""
     active_spaces = await fed_repo.list_spaces(status="active")
     items: list[dict] = []
     for sp in active_spaces:
