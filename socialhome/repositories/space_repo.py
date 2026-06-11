@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
+from ..infrastructure.hlc import HLC
 from ..domain.space import (
     JoinMode,
     ModerationStatus,
@@ -302,7 +303,8 @@ class SqliteSpaceRepo:
             INSERT INTO spaces(
                 id, name, description, emoji,
                 owner_instance_id, owner_username, identity_public_key,
-                config_sequence, roster_sequence, space_type, join_mode, join_code,
+                config_sequence, roster_sequence, config_hlc,
+                space_type, join_mode, join_code,
                 retention_days, retention_exempt_json,
                 feature_calendar, feature_todo, feature_location, location_mode,
                 feature_stickies, feature_pages, feature_gallery, feature_bazaar,
@@ -318,10 +320,11 @@ class SqliteSpaceRepo:
                 dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
                 min_age, target_audience
             ) VALUES(
-                -- 52 placeholders, one per column listed above.
+                -- 53 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
-                ?, ?, ?, ?, ?,                -- config_sequence, roster_sequence, space_type, join_mode, join_code
+                ?, ?, ?,                      -- config_sequence, roster_sequence, config_hlc
+                ?, ?, ?,                      -- space_type, join_mode, join_code
                 ?, ?,                         -- retention_days, retention_exempt_json
                 ?, ?, ?, ?,                   -- feature_calendar, feature_todo, feature_location, location_mode
                 ?, ?, ?, ?,                   -- feature_stickies, feature_pages, feature_gallery, feature_bazaar
@@ -343,6 +346,7 @@ class SqliteSpaceRepo:
                 emoji=excluded.emoji,
                 config_sequence=excluded.config_sequence,
                 roster_sequence=excluded.roster_sequence,
+                config_hlc=excluded.config_hlc,
                 space_type=excluded.space_type,
                 join_mode=excluded.join_mode,
                 join_code=excluded.join_code,
@@ -399,6 +403,7 @@ class SqliteSpaceRepo:
                 space.identity_public_key,
                 space.config_sequence,
                 space.roster_sequence,
+                space.config_hlc,
                 space.space_type.value,
                 space.join_mode.value,
                 space.join_code,
@@ -732,26 +737,38 @@ class SqliteSpaceRepo:
             )
 
     async def increment_config_sequence(self, space_id: str) -> int:
-        """Atomically bump ``spaces.config_sequence`` and return the new value.
+        """Atomically bump ``spaces.config_sequence`` AND advance the config
+        HLC, returning the new sequence.
 
-        ``AsyncDatabase.transact`` runs the UPDATE + SELECT inside a single
+        After the 0036 roster decouple this is the SOLE per-edit bumper of the
+        config-LWW state, so it also ticks ``config_hlc`` in the same
+        transaction: the HLC is read, ``tick(now_ms)``-ed off the current value
+        (monotonic per node) and written back beside the incremented sequence.
+        The advanced HLC rides on the row → picked up by the federation
+        snapshot (``_space_metadata_for_federation``); callers consume only the
+        returned int, so the 8 config-edit call sites are unchanged.
+
+        ``AsyncDatabase.transact`` runs the read + UPDATE inside a single
         ``BEGIN IMMEDIATE`` transaction so concurrent callers always see
-        strictly increasing sequence numbers, even on SQLite builds that
-        predate the ``RETURNING`` clause.
+        strictly increasing sequence numbers AND a strictly increasing HLC,
+        even on SQLite builds that predate the ``RETURNING`` clause.
         """
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
         def _run(conn):
-            cur = conn.execute(
-                "UPDATE spaces SET config_sequence = config_sequence + 1 WHERE id=?",
-                (space_id,),
-            )
-            if cur.rowcount == 0:
-                raise KeyError(f"space {space_id!r} not found")
             row = conn.execute(
-                "SELECT config_sequence FROM spaces WHERE id=?",
+                "SELECT config_sequence, config_hlc FROM spaces WHERE id=?",
                 (space_id,),
             ).fetchone()
-            return int(row[0])
+            if row is None:
+                raise KeyError(f"space {space_id!r} not found")
+            new_hlc = HLC.parse(row[1]).tick(now_ms)
+            conn.execute(
+                "UPDATE spaces SET config_sequence = config_sequence + 1, "
+                "config_hlc = ? WHERE id=?",
+                (str(new_hlc), space_id),
+            )
+            return int(row[0]) + 1
 
         return await self._db.transact(_run)
 
@@ -1543,6 +1560,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         identity_public_key=row["identity_public_key"],
         config_sequence=int(row.get("config_sequence") or 0),
         roster_sequence=int(row.get("roster_sequence") or 0),
+        config_hlc=str(row.get("config_hlc") or "0-0"),
         features=features,
         space_type=SpaceType(row.get("space_type", "private")),
         join_mode=JoinMode(row.get("join_mode", "invite_only")),

@@ -4107,6 +4107,13 @@ def _space_metadata_for_federation(space: Space) -> dict:
         "owner_username": space.owner_username,
         "identity_public_key": space.identity_public_key,
         "config_sequence": space.config_sequence,
+        # Hybrid Logical Clock for the config-LWW tie-break (migration 0037).
+        # Round-tripped into receiver stubs so two seed-holders' genuinely
+        # concurrent same-sequence edits resolve to the LATER one (greater HLC)
+        # on every household, deterministically. Missing on an older sender →
+        # stub fails soft to "0-0", which ties under the LWW and falls back to
+        # the author tie-break (behaviour-identical to pre-0037).
+        "config_hlc": space.config_hlc,
         # The dedicated monotonic roster counter (decoupled from
         # config_sequence on migration 0036). Round-tripped into receiver
         # stubs so a delegated admin's offline-of-owner roster gossip emits
@@ -4355,6 +4362,10 @@ def stub_space_from_metadata(
         owner_username=str(meta.get("owner_username") or ""),
         identity_public_key=str(meta.get("identity_public_key") or ""),
         config_sequence=int(meta.get("config_sequence") or 0),
+        # Adopt the winning edit's HLC (migration 0037) so a subsequent LOCAL
+        # edit ticks causally after it. Fail-soft to "0-0" for an older sender,
+        # which ties under the LWW and falls back to the author tie-break.
+        config_hlc=str(meta.get("config_hlc") or "0-0"),
         # Anchor the stub's roster counter to the host's, failing soft to
         # config_sequence on an older sender (see _coerce_roster_sequence).
         roster_sequence=_coerce_roster_sequence(meta),

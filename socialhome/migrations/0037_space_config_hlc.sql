@@ -1,0 +1,40 @@
+-- Hybrid Logical Clock for deterministic config Last-Writer-Wins (owner-offline
+-- spaces epic).
+--
+-- After the C1 decouple (migration 0036) only GENUINE concurrent config edits
+-- by two seed-holding delegated admins collide at the SAME ``config_sequence``.
+-- For those rare ties the LWW used an arbitrary author-id ordering
+-- (``(config_sequence, config_author_instance)``). That is deterministic but
+-- not INTUITIVE — a lower-id admin's LATER edit loses to a higher-id admin's
+-- EARLIER one. This column records a Hybrid Logical Clock
+-- (``"<physical_ms>-<counter>"``, see ``infrastructure/hlc.py``) advanced once
+-- per local config edit, so the LWW key becomes
+-- ``(config_sequence, config_hlc, config_author_instance)``: at an equal
+-- sequence the LATER edit wins (HLC is monotonic per node and drift-bounded
+-- across nodes), and a legacy zero-HLC ("0-0") row / older sender ties under
+-- the HLC and falls back to the existing author tie-break — behaviour-identical
+-- until the first HLC-stamped edit.
+--
+-- Migration audit (mandatory 3 points):
+--   (1) Audited paths. Everything reading/writing the per-space config-LWW
+--       state goes through ``repositories/space_repo.py``
+--       (``increment_config_sequence`` — the SOLE bumper after the 0036
+--       decouple; ``save`` upsert; ``_row_to_space``). The inbound apply is
+--       ``services/federation_inbound_service.py::_on_space_config_changed``;
+--       the outbound snapshot is ``services/space_service.py::
+--       _space_metadata_for_federation`` round-tripped via
+--       ``stub_space_from_metadata``. No existing per-edit timestamp exists to
+--       reuse: ``config_sequence`` is the version, ``config_author_instance``
+--       (migration 0032) is the author tie-break — neither is a clock.
+--   (2) Alternative rejected. A wall-clock ``edited_at`` column — non-monotonic
+--       (NTP step / DST) within a household and forgeable / unsynchronised
+--       ACROSS households, so it can't give every receiver the same total
+--       order. The Hybrid Logical Clock is the federation-safe form: monotonic
+--       per node, causally consistent on merge, drift-clamped to the §24.11
+--       skew bound. Reusing ``config_author_instance`` alone is exactly the
+--       unintuitive arbitrary ordering this improves on.
+--   (3) Smallest change. One additive ``TEXT NOT NULL DEFAULT '0-0'`` column.
+--       No backfill (every existing row starts at the HLC zero "0-0", which
+--       ties under the LWW so behaviour is unchanged until the first
+--       HLC-stamped edit). No index, no table rewrite, no destructive change.
+ALTER TABLE spaces ADD COLUMN config_hlc TEXT NOT NULL DEFAULT '0-0';

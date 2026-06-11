@@ -615,6 +615,13 @@ class Space:
     #: 0036 so member_versions stay monotonic. Default 0 keeps it after the
     #: required fields (dataclass ordering).
     roster_sequence: int = 0
+    #: Hybrid Logical Clock (``"<physical_ms>-<counter>"``) advanced once per
+    #: local config edit (migration 0037). The config-LWW tie-break key is
+    #: ``(config_sequence, config_hlc, config_author_instance)`` — at an equal
+    #: sequence the later edit (greater HLC) wins, falling back to the author
+    #: tie-break when the HLC ties (a legacy "0-0" row / older sender). See
+    #: ``infrastructure/hlc.py`` + ``federation_inbound_service`` config LWW.
+    config_hlc: str = "0-0"
     description: str | None = None
     emoji: str | None = None
     retention_days: int | None = None  # None → unlimited

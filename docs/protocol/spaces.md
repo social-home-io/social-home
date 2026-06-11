@@ -39,8 +39,17 @@ signature is dropped (fail-closed); a non-owner edit with no signature is
 dropped (legacy behaviour); an owner edit with no signature still applies via
 the legacy `from_instance == owner` path. Concurrent same-`config_sequence`
 edits from two admins converge by a deterministic
-`(config_sequence, config_author_instance)` last-writer-wins tie-break
-(recorded in `spaces.config_author_instance`). Toggling
+`(config_sequence, config_hlc, config_author_instance)` last-writer-wins
+tie-break: at an equal sequence the LATER concurrent edit wins by Hybrid
+Logical Clock (`spaces.config_hlc`, a physical-ms + logical counter that is
+monotonic per node and causally consistent across nodes), with
+`config_author_instance` as the final deterministic tiebreak. A legacy /
+older sender ships `HLC(0,0)` so the HLC ties and the order reduces exactly
+to the old `(config_sequence, author)` key (back-compat). An inbound edge
+whose `config_hlc` physical time outruns the event's own §24.11-checked
+envelope timestamp by more than the 300 s drift bound is dropped
+(clock-abuse guard, keyed off the signed envelope ts so the drop is
+deterministic across receivers). Toggling
 `delegated_admin_authority` itself stays **owner-only**. See "Authority
 signing" below.
 
@@ -410,7 +419,12 @@ Payload:
 `{space_id, user_id, instance_id, display_name, user_pk, role,
 member_version, roster_version, authority_sig, authority_sig_suite}`.
 `member_version` (monotonic per `(space_id, user_id)`) and `roster_version`
-are both sourced from the space's atomic `config_sequence`. The receiver's
+are both sourced from the space's dedicated atomic `roster_sequence`
+(migration 0036), decoupled from `config_sequence` so a role / ban / roster
+mutation no longer bumps the config-LWW version (and a delegated admin's
+offline config edit can't lag behind the owner at an equal sequence).
+`roster_sequence` is backfilled from `config_sequence` once for continuity.
+The receiver's
 version-guarded CRDT merge (`apply_member_event`) converges regardless of
 delivery order: a strictly-greater version wins, removal wins an
 equal-version tie, and a stale/replayed event is dropped (a removed member is
@@ -431,7 +445,7 @@ sequenceDiagram
     participant A as HFS A (member)
     participant W as HFS W (member)
     H->>H: roster mutation<br/>(add / remove / role / ban)
-    H->>H: sign payload with space Ed25519 seed<br/>(member_version = config_sequence)
+    H->>H: sign payload with space Ed25519 seed<br/>(member_version = roster_sequence)
     H->>A: SPACE_MEMBER_JOINED / _LEFT<br/>(authority_sig over the bare payload)
     H->>W: SPACE_MEMBER_JOINED / _LEFT
     Note over A,W: verify authority_sig against<br/>spaces.identity_public_key (NOT from_instance)
@@ -575,11 +589,24 @@ signature against `spaces.identity_public_key`, **not** by checking
 the owner gate); a non-owner edit with no signature is dropped; an
 owner edit with no signature still applies via the legacy path
 (back-compat). The signed `space_meta` carries `config_author_instance`
-(the editing household); two admins editing concurrently from the same
-base `config_sequence` converge deterministically by a
-`(config_sequence, config_author_instance)` lexicographic
-last-writer-wins tie-break, recorded on each receiver in
-`spaces.config_author_instance` (migration 0032). Toggling
+(the editing household) and `config_hlc` (the space's Hybrid Logical
+Clock); two admins editing concurrently from the same base
+`config_sequence` converge deterministically by a
+`(config_sequence, config_hlc, config_author_instance)` lexicographic
+last-writer-wins tie-break. At an equal `config_sequence` the LATER edit
+wins by HLC — a `"<physical_ms>-<counter>"` clock (`infrastructure/hlc.py`)
+advanced once per local config edit by `increment_config_sequence`,
+monotonic per node and causally consistent across nodes, so every receiver
+derives the same total order — with `config_author_instance` (recorded in
+`spaces.config_author_instance`, migration 0032) as the final tiebreak. A
+legacy `"0-0"` HLC / older sender ties under the HLC and falls back to the
+old `(config_sequence, author)` order, behaviour-identical to pre-0037
+(`spaces.config_hlc`, migration 0037). A **clock-abuse guard** drops any
+inbound edit whose `config_hlc` physical time outruns the event's own
+§24.11-checked envelope timestamp by more than the 300 s drift bound
+(`HLC_MAX_DRIFT_MS`) — keyed off the signed envelope ts, not local now, so
+the drop is deterministic across receivers and a seed-holder can't stamp a
+far-future HLC to win every config race. Toggling
 `delegated_admin_authority` itself stays **owner-only** (it is the
 owner's policy switch that distributes the seed). Gated on
 `FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS`; a sub-v_24
