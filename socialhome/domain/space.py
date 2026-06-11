@@ -666,6 +666,10 @@ class Space:
     # is a discovery hint ("all"/"family"/"teen"/"adult"), not an access gate.
     min_age: int = 0
     target_audience: str = "all"
+    #: Discovery category (§23.50) — one of ``SPACE_CATEGORIES`` (see
+    #: ``services.space_service``). ``None`` = unset; normalizes to
+    #: ``"general"`` on display. Shown only for public/global tiers.
+    category: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

@@ -318,9 +318,9 @@ class SqliteSpaceRepo:
                 allow_post_event, allow_post_location, allow_post_highlight_share,
                 lat, lon, radius_km, bot_enabled, allow_here_mention,
                 dissolved, archived, archived_reason, about_markdown, cover_hash, tz,
-                min_age, target_audience
+                min_age, target_audience, category
             ) VALUES(
-                -- 53 placeholders, one per column listed above.
+                -- 54 placeholders, one per column listed above.
                 ?, ?, ?, ?,                   -- id, name, description, emoji
                 ?, ?, ?,                      -- owner_instance_id, owner_username, identity_public_key
                 ?, ?, ?,                      -- config_sequence, roster_sequence, config_hlc
@@ -338,7 +338,7 @@ class SqliteSpaceRepo:
                 ?, ?, ?,                      -- allow_post_event, allow_post_location, allow_post_highlight_share
                 ?, ?, ?, ?, ?,                -- lat, lon, radius_km, bot_enabled, allow_here_mention
                 ?, ?, ?, ?, ?, ?,             -- dissolved, archived, archived_reason, about_markdown, cover_hash, tz
-                ?, ?                          -- min_age, target_audience
+                ?, ?, ?                       -- min_age, target_audience, category
             )
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
@@ -391,7 +391,8 @@ class SqliteSpaceRepo:
                 cover_hash=excluded.cover_hash,
                 tz=excluded.tz,
                 min_age=excluded.min_age,
-                target_audience=excluded.target_audience
+                target_audience=excluded.target_audience,
+                category=excluded.category
             """,
             (
                 space.id,
@@ -449,6 +450,7 @@ class SqliteSpaceRepo:
                 space.tz,
                 int(space.min_age or 0),
                 space.target_audience or "all",
+                space.category,
             ),
         )
         return space
@@ -1581,6 +1583,7 @@ def _row_to_space(row: dict | None) -> Space | None:
         tz=row.get("tz") or "UTC",
         min_age=int(row.get("min_age") or 0),
         target_audience=row.get("target_audience") or "all",
+        category=row.get("category"),
     )
 
 
