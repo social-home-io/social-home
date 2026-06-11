@@ -174,7 +174,7 @@ class SpaceCollectionView(BaseView):
         # creation time; the gate lives in ChildProtectionService, not on the
         # space row. Private spaces gate on invite, so a min_age is ignored.
         min_age = body.get("min_age")
-        if min_age and space.space_type in PUBLIC_SPACE_TIERS:
+        if min_age is not None and space.space_type in PUBLIC_SPACE_TIERS:
             await self.svc(child_protection_service_key).update_space_age_gate(
                 space.id,
                 min_age=int(min_age),
