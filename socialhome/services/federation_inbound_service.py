@@ -65,6 +65,7 @@ from ..domain.highlight import (
 )
 from ..domain.user import RemoteUser, UserStatus
 from ..infrastructure.event_bus import EventBus
+from ..infrastructure.hlc import HLC
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import compute_picture_hash
 from ..services.user_service import PROFILE_PICTURE_MAX_DIMENSION
@@ -1533,12 +1534,19 @@ class FederationInboundService:
         # ``incoming_seq > existing`` guard would then let whichever arrived
         # LAST win per receiver — non-deterministic divergence.
         #
-        # So order on the lexicographic pair ``(config_sequence, author)`` and
-        # apply iff it is STRICTLY GREATER than what we last applied (equal →
-        # no-op). The author is read out of the AUTHORITY-SIGNED meta
-        # (``config_author_instance``), so it can't be forged independently of
-        # the signature; the owner legacy path (no signed author) falls back to
-        # ``from_instance``. ``None`` author / missing seq sort lowest, matching
+        # So order on the lexicographic TRIPLE
+        # ``(config_sequence, config_hlc, author)`` and apply iff it is STRICTLY
+        # GREATER than what we last applied (equal → no-op). The Hybrid Logical
+        # Clock (migration 0037, ``HLC`` is ``order=True``) breaks an
+        # equal-sequence tie by "later edit wins" — intuitive, monotonic per
+        # node and drift-bounded across nodes, so every receiver derives the
+        # SAME total order. A legacy zero-HLC row / older sender ships "0-0",
+        # so the HLC component TIES and the existing author tie-break decides
+        # — behaviour-identical to pre-0037 for non-HLC senders. The author is
+        # read out of the AUTHORITY-SIGNED meta (``config_author_instance``),
+        # so it can't be forged independently of the signature; the owner
+        # legacy path (no signed author) falls back to ``from_instance``.
+        # ``None`` author / missing seq / unparseable HLC sort lowest, matching
         # the prior fail-soft default for older senders.
         incoming_seq = _coerce_sequence(meta, event.payload)
         # The tie-break author MUST be authenticated. On the authority-signed
@@ -1564,17 +1572,23 @@ class FederationInboundService:
                 or existing.owner_instance_id
                 or ""
             )
-            if (incoming_seq, incoming_author) <= (
+            incoming_hlc = HLC.parse(meta.get("config_hlc"))
+            existing_hlc = HLC.parse(existing.config_hlc)
+            if (incoming_seq, incoming_hlc, incoming_author) <= (
                 existing.config_sequence,
+                existing_hlc,
                 existing_author,
             ):
                 log.debug(
-                    "SPACE_CONFIG_CHANGED for %s: (seq=%d, author=%s) <= "
-                    "(seq=%d, author=%s) — dropping (out-of-order or replay)",
+                    "SPACE_CONFIG_CHANGED for %s: (seq=%d, hlc=%s, author=%s) <= "
+                    "(seq=%d, hlc=%s, author=%s) — dropping (out-of-order or "
+                    "replay)",
                     space_id,
                     incoming_seq,
+                    incoming_hlc,
                     incoming_author,
                     existing.config_sequence,
+                    existing_hlc,
                     existing_author,
                 )
                 return

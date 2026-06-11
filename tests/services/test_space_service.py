@@ -1098,6 +1098,12 @@ async def test_delegated_admin_local_edit_converges_with_member(stack, tmp_dir):
     # divergence window exists regardless of the random stack.iid.
     edited = await stack.space_repo.get(sid)
     await stack.space_repo.save(_replace(edited, owner_instance_id=owner_id))
+    # The local edit ticked a real config HLC (migration 0037). Stamp BOTH
+    # federated edits with the SAME HLC equal to it so the config-LWW falls
+    # back to the AUTHOR tie-break this test exercises — a genuinely-concurrent
+    # pair sharing a clock at the same sequence, exactly the case the author
+    # ordering must resolve deterministically.
+    shared_hlc = edited.config_hlc
 
     # 2) A concurrent peer edit at the SAME seq=4 from a DIFFERENT author.
     def _signed_peer_event(space_id):
@@ -1107,6 +1113,7 @@ async def test_delegated_admin_local_edit_converges_with_member(stack, tmp_dir):
             "owner_username": "remoteowner",
             "identity_public_key": "ignored-by-stub",
             "config_sequence": 4,
+            "config_hlc": shared_hlc,
             "config_author_instance": peer_author,
             "space_type": "private",
             "join_mode": "invite_only",
@@ -1183,6 +1190,7 @@ async def test_delegated_admin_local_edit_converges_with_member(stack, tmp_dir):
             "owner_username": "remoteowner",
             "identity_public_key": "ignored-by-stub",
             "config_sequence": 4,
+            "config_hlc": shared_hlc,
             "config_author_instance": stack.iid,
             "space_type": "private",
             "join_mode": "invite_only",
@@ -2605,6 +2613,49 @@ async def test_min_age_missing_from_meta_defaults_to_zero(stack):
     )
     assert stub.min_age == 0
     assert stub.target_audience == "all"
+
+
+async def test_config_hlc_federates_via_space_meta_and_persists(stack):
+    """Migration 0037 — the config HLC rides the federation metadata, the stub
+    reads it, and a save()/get() round-trip persists it (so a receiver adopts
+    the winning edit's clock for a later causally-ordered local edit)."""
+    from socialhome.services.space_service import (
+        _space_metadata_for_federation,
+        stub_space_from_metadata,
+    )
+
+    await stack.provision_user("anna", is_admin=True)
+    space = await stack.space_svc.create_space(owner_username="anna", name="S")
+    # A real config edit advances the HLC off "0-0".
+    await stack.space_svc.update_config(space.id, actor_username="anna", name="S2")
+    refreshed = await stack.space_repo.get(space.id)
+    assert refreshed.config_hlc != "0-0"
+
+    meta = _space_metadata_for_federation(refreshed)
+    assert meta["config_hlc"] == refreshed.config_hlc
+
+    stub = stub_space_from_metadata(
+        "remote-hlc",
+        host_instance_id="remote-host",
+        meta=meta,
+    )
+    assert stub.config_hlc == refreshed.config_hlc
+    await stack.space_repo.save(stub)
+    seated = await stack.space_repo.get("remote-hlc")
+    assert seated.config_hlc == refreshed.config_hlc
+
+
+async def test_stub_config_hlc_defaults_zero_when_meta_omits_it(stack):
+    """Fail-soft: an older sender omits config_hlc → the stub defaults to the
+    HLC zero "0-0" (ties under the LWW, falls back to the author tie-break)."""
+    from socialhome.services.space_service import stub_space_from_metadata
+
+    stub = stub_space_from_metadata(
+        "sp-no-hlc",
+        host_instance_id="h",
+        meta={"name": "Legacy"},
+    )
+    assert stub.config_hlc == "0-0"
 
 
 async def test_icon_hash_federates_via_space_meta(stack):

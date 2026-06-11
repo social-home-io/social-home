@@ -1743,12 +1743,14 @@ def _signed_cfg_event(
     name,
     seed,
     author=None,
+    config_hlc=None,
     tamper=False,
     bad_sig=False,
 ):
     """Build a SPACE_CONFIG_CHANGED whose ``space_meta`` is authority-signed
     with the space seed. ``author`` records the config_author_instance carried
-    in the (signed) meta; defaults to ``from_instance``."""
+    in the (signed) meta; defaults to ``from_instance``. ``config_hlc`` (when
+    given) stamps the migration-0037 LWW tie-break clock into the signed meta."""
     from socialhome.services.space_crypto_service import (
         sign_authority_event,
         strip_authority_sig_fields,
@@ -1774,6 +1776,8 @@ def _signed_cfg_event(
             "gallery": True,
         },
     }
+    if config_hlc is not None:
+        meta["config_hlc"] = config_hlc
     signed = sign_authority_event(
         event_type="space_config_changed",
         space_id=space_id,
@@ -2018,3 +2022,188 @@ async def test_config_lww_lower_author_at_equal_seq_dropped(db, bus, inbound):
     )
     row = await db.fetchone("SELECT name FROM spaces WHERE id=?", ("sp-lww2",))
     assert row["name"] == "ByZ"
+
+
+async def test_config_lww_higher_hlc_wins_at_equal_sequence(db, bus, inbound):
+    """Migration 0037 — at the SAME config_sequence the edit with the HIGHER
+    config_hlc wins (later edit), REGARDLESS of author ordering: a LOWER-id
+    author with a higher HLC beats a higher-id author with a lower HLC."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-hlc",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    # First edit: higher-id author, LOWER hlc.
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc",
+            from_instance="admin-z",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByZ-early",
+            author="admin-z",
+            config_hlc="1000-0",
+            seed=kp.private_key,
+        )
+    )
+    # Second edit: LOWER-id author but a strictly HIGHER hlc → later edit wins
+    # despite the author ordering that decided pre-0037.
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByA-late",
+            author="admin-a",
+            config_hlc="2000-0",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT name, config_hlc, config_author_instance FROM spaces WHERE id=?",
+        ("sp-hlc",),
+    )
+    assert row["name"] == "ByA-late"
+    assert row["config_hlc"] == "2000-0"
+    assert row["config_author_instance"] == "admin-a"
+
+
+async def test_config_lww_equal_hlc_falls_back_to_author(db, bus, inbound):
+    """With EQUAL config_sequence and EQUAL config_hlc the author tie-break
+    decides (unchanged): the higher-id author wins."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-hlc-eq",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-eq",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByA",
+            author="admin-a",
+            config_hlc="1000-0",
+            seed=kp.private_key,
+        )
+    )
+    # Same seq + same HLC, higher author → wins on the author tie-break.
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-hlc-eq",
+            from_instance="admin-z",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByZ",
+            author="admin-z",
+            config_hlc="1000-0",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone("SELECT name FROM spaces WHERE id=?", ("sp-hlc-eq",))
+    assert row["name"] == "ByZ"
+
+
+async def test_config_lww_legacy_zero_hlc_falls_back_to_author(db, bus, inbound):
+    """Backward-compat: a legacy incoming with NO config_hlc (→ HLC(0,0)) vs an
+    existing zero-HLC row falls back to author-only ordering — behaviour-
+    identical to pre-0037. Lower author at equal seq is dropped; higher wins."""
+    from socialhome.crypto import generate_space_keypair
+
+    kp = generate_space_keypair()
+    await _seed_signed_space(
+        db,
+        space_id="sp-legacy-hlc",
+        owner_instance="owner-i",
+        space_pub_hex=kp.public_key.hex(),
+        seq=5,
+    )
+    # No config_hlc on either edit → both HLC(0,0); author decides.
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-legacy-hlc",
+            from_instance="admin-z",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByZ",
+            author="admin-z",
+            seed=kp.private_key,
+        )
+    )
+    await inbound._on_space_config_changed(
+        _signed_cfg_event(
+            space_id="sp-legacy-hlc",
+            from_instance="admin-a",
+            owner_instance="owner-i",
+            sequence=6,
+            name="ByA",
+            author="admin-a",
+            seed=kp.private_key,
+        )
+    )
+    row = await db.fetchone("SELECT name FROM spaces WHERE id=?", ("sp-legacy-hlc",))
+    assert row["name"] == "ByZ"  # higher author wins, HLC tie — unchanged
+
+
+async def test_config_lww_hlc_deterministic_convergence(db, bus, inbound):
+    """Two receivers given the same two concurrent edits (same seq, DIFFERENT
+    HLCs) converge to the SAME winner regardless of arrival order — the higher
+    HLC wins on both, even though the higher-HLC author sorts LOWER."""
+    from socialhome.crypto import generate_space_keypair
+
+    async def _converge(first, second):
+        kp = generate_space_keypair()
+        sid = f"sp-conv-{first}-{second}"
+        await _seed_signed_space(
+            db,
+            space_id=sid,
+            owner_instance="owner-i",
+            space_pub_hex=kp.public_key.hex(),
+            seq=5,
+        )
+        # admin-a (lower id) carries the HIGHER hlc; admin-z the lower.
+        edits = {
+            "a": dict(
+                from_instance="admin-a",
+                author="admin-a",
+                name="ByA",
+                config_hlc="2000-0",
+            ),
+            "z": dict(
+                from_instance="admin-z",
+                author="admin-z",
+                name="ByZ",
+                config_hlc="1000-0",
+            ),
+        }
+        for which in (first, second):
+            await inbound._on_space_config_changed(
+                _signed_cfg_event(
+                    space_id=sid,
+                    owner_instance="owner-i",
+                    sequence=6,
+                    seed=kp.private_key,
+                    **edits[which],
+                )
+            )
+        row = await db.fetchone(
+            "SELECT name, config_hlc FROM spaces WHERE id=?", (sid,)
+        )
+        return row["name"], row["config_hlc"]
+
+    order1 = await _converge("a", "z")
+    order2 = await _converge("z", "a")
+    # Higher HLC ("2000-0", authored by the LOWER-id admin-a) wins both ways.
+    assert order1 == order2 == ("ByA", "2000-0")

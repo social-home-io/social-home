@@ -373,6 +373,38 @@ async def test_increment_config_sequence_concurrent(env):
     assert sorted(results) == [1, 2, 3]
 
 
+async def test_fresh_space_has_zero_config_hlc(env):
+    """A space saved without a config edit defaults to the HLC zero "0-0"."""
+    await env.repo.save(_space("sp-hlc0"))
+    space = await env.repo.get("sp-hlc0")
+    assert space is not None
+    assert space.config_hlc == "0-0"
+
+
+async def test_config_hlc_round_trips_through_save_and_get(env):
+    """config_hlc persists through the spaces upsert + row read."""
+    sp = replace(_space("sp-hlc-rt"), config_hlc="1234567890-3")
+    await env.repo.save(sp)
+    loaded = await env.repo.get("sp-hlc-rt")
+    assert loaded is not None
+    assert loaded.config_hlc == "1234567890-3"
+
+
+async def test_increment_config_sequence_advances_hlc(env):
+    """increment_config_sequence advances config_hlc to a STRICTLY greater HLC
+    on every call (the config-LWW later-edit-wins tie-break key)."""
+    from socialhome.infrastructure.hlc import HLC
+
+    await env.repo.save(_space("sp-hlc-adv"))
+    base = HLC.parse((await env.repo.get("sp-hlc-adv")).config_hlc)
+    seen = [base]
+    for _ in range(3):
+        await env.repo.increment_config_sequence("sp-hlc-adv")
+        cur = HLC.parse((await env.repo.get("sp-hlc-adv")).config_hlc)
+        assert cur > seen[-1]
+        seen.append(cur)
+
+
 async def test_increment_roster_sequence_atomic(env):
     """increment_roster_sequence returns a strictly increasing sequence."""
     await env.repo.save(_space("sp-rseq"))
