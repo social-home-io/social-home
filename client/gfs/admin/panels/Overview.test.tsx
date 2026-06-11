@@ -218,4 +218,25 @@ describe('ClusterPanel', () => {
     await findByText('node-b')
     expect(container.querySelector('input[type=text]')).toBeTruthy()
   })
+
+  it('surfaces an error when a peer action (Remove) fails', async () => {
+    // GET resolves the table; the DELETE rejects with a 500 so the
+    // panel must show the error rather than silently no-op.
+    global.fetch = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as Request).url
+      const method = (init?.method || 'GET').toUpperCase()
+      if (method === 'DELETE' && url.includes('cluster/peers')) {
+        return new Response(JSON.stringify({ detail: 'boom' }), { status: 500 })
+      }
+      return new Response(JSON.stringify(clusterBody), { status: 200 })
+    }) as typeof fetch
+    const { container, findByText } = render(<ClusterPanel />)
+    await findByText('node-b')
+    const peerRow = Array.from(container.querySelectorAll('tbody tr'))
+      .find((r) => r.textContent?.includes('node-b'))!
+    const removeBtn = Array.from(peerRow.querySelectorAll('button'))
+      .find((b) => b.textContent?.includes('Remove'))!
+    removeBtn.click()
+    expect(await findByText('boom')).toBeTruthy()
+  })
 })

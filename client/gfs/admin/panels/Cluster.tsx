@@ -62,13 +62,23 @@ export function ClusterPanel() {
   }
 
   const removePeer = async (nodeId: string) => {
-    await api('DELETE', `/admin/api/cluster/peers/${encodeURIComponent(nodeId)}`)
-    await reload()
+    try {
+      await api('DELETE', `/admin/api/cluster/peers/${encodeURIComponent(nodeId)}`)
+      setErr(null)
+      await reload()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
   }
 
   const pingPeer = async (nodeId: string) => {
-    await api('POST', `/admin/api/cluster/peers/${encodeURIComponent(nodeId)}/ping`)
-    await reload()
+    try {
+      await api('POST', `/admin/api/cluster/peers/${encodeURIComponent(nodeId)}/ping`)
+      setErr(null)
+      await reload()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
   }
 
   if (err && !data) return <p class="error">{err}</p>

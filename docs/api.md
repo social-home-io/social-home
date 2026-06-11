@@ -782,6 +782,8 @@ sync. The GFS holds no PeerConnection.
 | GET | `/admin/api/audit` | Audit log. |
 | GET | `/admin/api/cluster` | Cluster status — enriched `nodes` list (self + peers) with per-node status, live connected-client count, and active sync sessions. |
 | GET | `/admin/api/cluster/peers[/{node_id}]` | Peer list / detail. |
+| POST | `/admin/api/cluster/peers` | Add a peer by URL. |
+| DELETE | `/admin/api/cluster/peers/{node_id}` | Remove a peer. |
 | POST | `/admin/api/cluster/peers/{node_id}/ping` | Healthcheck a peer. |
 
 ## GFS — Public SSR pages
