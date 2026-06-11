@@ -88,6 +88,22 @@ describe('SpaceCard', () => {
     expect(queryByText('General')).toBeNull()
   })
 
+  it('renders no category chip for an unknown / legacy category value', () => {
+    // 'gaming2' isn't a recognized SPACE_CATEGORIES value: categoryLabel
+    // would fall back to 'General', so the gate must suppress the chip
+    // entirely rather than render a misleading "General" label.
+    const { container, queryByText } = render(
+      <SpaceCard
+        entry={{ ...baseEntry, category: 'gaming2', min_age: 13 }}
+        onAction={() => {}}
+      />,
+    )
+    expect(queryByText('General')).toBeNull()
+    // Only the min_age chip should remain — no extra category chip.
+    expect(container.querySelectorAll('.sh-age-chip')).toHaveLength(1)
+    expect(queryByText('13+')).toBeTruthy()
+  })
+
   // ── Subscribe / unsubscribe ─────────────────────────────────────────
 
   it('renders a Subscribe button for LOCAL public / global non-members', () => {
