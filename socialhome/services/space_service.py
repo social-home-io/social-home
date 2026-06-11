@@ -538,8 +538,6 @@ class SpaceService(SpaceMemberGuardMixin):
                     f"instance already advertises {count} public spaces "
                     f"(max {MAX_PUBLIC_SPACES})"
                 )
-            if lat is None or lon is None:
-                raise ValueError("public space requires lat + lon")
         else:
             # Non-public spaces never carry location metadata.
             lat = lon = radius_km = None

@@ -1424,16 +1424,16 @@ async def test_delegated_admin_remove_tombstones_before_rotate(stack):
     )
 
 
-async def test_public_space_requires_coordinates(stack):
-    """Creating a public space without lat/lon raises ValueError."""
+async def test_public_space_without_location_is_allowed(stack):
+    """A public space may be created without a map location (lat/lon)."""
     await stack.provision_user("a")
-    with pytest.raises(ValueError, match="lat"):
-        await stack.space_svc.create_space(
-            owner_username="a",
-            name="Pub",
-            space_type=SpaceType.PUBLIC,
-            join_mode=JoinMode.OPEN,
-        )
+    space = await stack.space_svc.create_space(
+        owner_username="a",
+        name="No-pin public",
+        space_type="public",
+    )
+    assert space.space_type.value == "public"
+    assert space.lat is None and space.lon is None
 
 
 async def test_public_space_with_coordinates(stack):
