@@ -851,3 +851,26 @@ async def test_public_spaces_excludes_pending_and_banned(client):
     spaces = (await resp.json())["spaces"]
     ids = {s["space_id"] for s in spaces}
     assert ids == {"active-one"}
+
+
+# ── Cluster tab ──────────────────────────────────────────────────────────
+
+
+async def test_admin_cluster_returns_enriched_nodes(client):
+    resp = await client.get("/admin/api/cluster")
+    assert resp.status == 200
+    body = await resp.json()
+    assert "nodes" in body
+    assert isinstance(body["nodes"], list)
+    # Even single-node, this node is always present (synthesized self).
+    assert any(n["is_self"] for n in body["nodes"])
+    for n in body["nodes"]:
+        assert "connected_clients" in n
+        assert "active_sync_sessions" in n
+
+
+async def test_admin_cluster_requires_auth(tmp_dir):
+    app = create_gfs_app(_config(tmp_dir))
+    async with TestClient(TestServer(app)) as tc:
+        resp = await tc.get("/admin/api/cluster")
+        assert resp.status == 401
