@@ -311,6 +311,111 @@ describe('ConnectionsPage', () => {
       expect(queryByText('gfs.status_pending')).toBeNull()
       expect(queryByText('gfs.status_suspended')).toBeNull()
     })
+
+    it('shows "Connected" for an active GFS with a live socket', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([makeGfs({ status: 'active', connected: true, last_error: null })])
+        return Promise.resolve([])
+      })
+
+      const { findByText, container } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_connected')).toBeTruthy()
+      // Green/active dot, not unreachable.
+      await waitFor(() => {
+        expect(container.querySelector('.sh-status-dot--active')).not.toBeNull()
+      })
+    })
+
+    it('shows "re-pair needed" for an active GFS whose WS is rejected (unknown-instance)', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([
+            makeGfs({ status: 'active', connected: false, last_error: 'unknown-instance' }),
+          ])
+        return Promise.resolve([])
+      })
+
+      const { findByText, queryByText, container } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_repair_needed')).toBeTruthy()
+      // Must NOT read as connected, and the dot is the unreachable one.
+      expect(queryByText('gfs.status_connected')).toBeNull()
+      await waitFor(() => {
+        expect(container.querySelector('.sh-status-dot--unreachable')).not.toBeNull()
+      })
+    })
+
+    it('shows "re-pair needed" for a bad-signature WS close', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([
+            makeGfs({ status: 'active', connected: false, last_error: 'bad-signature' }),
+          ])
+        return Promise.resolve([])
+      })
+
+      const { findByText } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_repair_needed')).toBeTruthy()
+    })
+
+    it('shows "clock out of sync" for a ts-skew WS close', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([
+            makeGfs({ status: 'active', connected: false, last_error: 'ts-skew' }),
+          ])
+        return Promise.resolve([])
+      })
+
+      const { findByText } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_clock_skew')).toBeTruthy()
+    })
+
+    it('shows "Reconnecting…" for an active GFS down with a transient/unknown reason', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([
+            makeGfs({ status: 'active', connected: false, last_error: 'hello-timeout' }),
+          ])
+        return Promise.resolve([])
+      })
+
+      const { findByText, queryByText } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_reconnecting')).toBeTruthy()
+      expect(queryByText('gfs.status_connected')).toBeNull()
+    })
+
+    it('shows "Reconnecting…" when an active GFS is down with no recorded reason', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([
+            makeGfs({ status: 'active', connected: false, last_error: null }),
+          ])
+        return Promise.resolve([])
+      })
+
+      const { findByText } = render(<ConnectionsPage />)
+      expect(await findByText('gfs.status_reconnecting')).toBeTruthy()
+    })
+
+    it('does not render a raw GFS-controlled last_error string verbatim', async () => {
+      apiMock.get.mockImplementation((url: string) => {
+        if (url === '/api/gfs/connections')
+          return Promise.resolve([
+            makeGfs({
+              status: 'active',
+              connected: false,
+              last_error: '<img src=x onerror=alert(1)>',
+            }),
+          ])
+        return Promise.resolve([])
+      })
+
+      const { findByText, queryByText } = render(<ConnectionsPage />)
+      // Unknown reason → mapped to the muted reconnecting label, never the raw string.
+      expect(await findByText('gfs.status_reconnecting')).toBeTruthy()
+      expect(queryByText('<img src=x onerror=alert(1)>')).toBeNull()
+    })
   })
 
   describe('federation compatibility on the households surface', () => {

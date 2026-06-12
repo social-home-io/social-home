@@ -397,3 +397,69 @@ async def test_supervisor_stop_closes_all_clients(http_session):
         await supervisor.stop()
         assert sorted(stops) == ["http://gfs1.test", "http://gfs2.test"]
         assert supervisor.client_count() == 0
+
+
+async def test_connection_health_unknown_gfs_is_disconnected(http_session):
+    """A pairing with no live client reads as disconnected, no error."""
+    supervisor = GfsWebSocketSupervisor(
+        repo=_FakeRepo(),
+        instance_id="sh-1",
+        signing_key=b"\x00" * 32,
+        session_factory=lambda: http_session,
+        on_relay=AsyncMock(),
+        reconcile_interval_seconds=10.0,
+    )
+    assert supervisor.connection_health("absent") == {
+        "connected": False,
+        "last_error": None,
+    }
+
+
+async def test_connection_health_reflects_live_client(http_session):
+    """``connection_health`` reads the client's live ``connected`` /
+    ``last_auth_error`` props — not the stored pairing status."""
+
+    class _HealthClient:
+        def __init__(self, *, gfs_url, **_kwargs):
+            self.gfs_url = gfs_url
+            self.connected = False
+            self.last_auth_error = "unknown-instance"
+
+        def is_alive(self) -> bool:
+            return True
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            return None
+
+    repo = _FakeRepo([_make_conn("g1", "http://gfs1.test")])
+    with patch(
+        "socialhome.infrastructure.gfs_ws_supervisor.GfsWebSocketClient",
+        _HealthClient,
+    ):
+        supervisor = GfsWebSocketSupervisor(
+            repo=repo,
+            instance_id="sh-1",
+            signing_key=b"\x00" * 32,
+            session_factory=lambda: http_session,
+            on_relay=AsyncMock(),
+            reconcile_interval_seconds=10.0,
+        )
+        await supervisor.start()
+        try:
+            assert supervisor.connection_health("g1") == {
+                "connected": False,
+                "last_error": "unknown-instance",
+            }
+            # Flip to a healthy socket → connected, error cleared.
+            client = supervisor._clients["g1"]
+            client.connected = True
+            client.last_auth_error = None
+            assert supervisor.connection_health("g1") == {
+                "connected": True,
+                "last_error": None,
+            }
+        finally:
+            await supervisor.stop()

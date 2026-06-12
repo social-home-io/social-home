@@ -163,6 +163,21 @@ class GfsWebSocketSupervisor:
     def is_running(self, gfs_id: str) -> bool:
         return gfs_id in self._clients
 
+    def connection_health(self, gfs_id: str) -> dict:
+        """Live WS liveness for one pairing, for the connections UI.
+
+        Distinct from the stored ``gfs_connections.status`` (the pairing
+        state): this reflects whether a WebSocket is actually open right
+        now and, if not, the last auth/close reason the GFS gave. A
+        ``status='active'`` pairing whose socket is rejected/down reads
+        as ``connected=False`` here so the SPA can stop showing it as
+        "connected".
+        """
+        client = self._clients.get(gfs_id)
+        if client is None:
+            return {"connected": False, "last_error": None}
+        return {"connected": client.connected, "last_error": client.last_auth_error}
+
     # ─── Reconciliation ───────────────────────────────────────────────────
 
     async def _loop(self) -> None:

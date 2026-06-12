@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from socialhome.app_keys import gfs_connection_service_key
+from socialhome.app_keys import gfs_connection_service_key, gfs_ws_supervisor_key
 from socialhome.auth import sha256_token_hash
 from socialhome.domain.federation import GfsConnection
 from socialhome.repositories.gfs_connection_repo import SqliteGfsConnectionRepo
@@ -113,6 +113,56 @@ async def test_list_returns_connections_of_every_status(client):
     assert {c["status"] for c in body} == {"active", "suspended", "pending"}
     # public_key should be stripped from the response.
     assert all("public_key" not in c for c in body)
+
+
+class _StubSupervisor:
+    """Reports a fixed liveness per gfs_id for the connection_health probe."""
+
+    def __init__(self, health: dict[str, dict]):
+        self._health = health
+
+    def connection_health(self, gfs_id: str) -> dict:
+        return self._health.get(gfs_id, {"connected": False, "last_error": None})
+
+
+def _stub_supervisor(client, health: dict[str, dict]) -> None:
+    client.app[gfs_ws_supervisor_key] = _StubSupervisor(health)
+
+
+async def test_list_enriches_each_connection_with_live_health(client):
+    # A stored ``status='active'`` pairing whose WS is actually down must
+    # NOT read as connected — the row carries the supervisor's live signal.
+    await _seed_gfs(client, "gfs-up")
+    await _seed_gfs(client, "gfs-down")
+    _stub_supervisor(
+        client,
+        {
+            "gfs-up": {"connected": True, "last_error": None},
+            "gfs-down": {
+                "connected": False,
+                "last_error": "unknown-instance",
+            },
+        },
+    )
+    r = await client.get("/api/gfs/connections", headers=_auth(client._tok))
+    assert r.status == 200
+    body = {c["id"]: c for c in await r.json()}
+    assert body["gfs-up"]["connected"] is True
+    assert body["gfs-up"]["last_error"] is None
+    assert body["gfs-down"]["connected"] is False
+    assert body["gfs-down"]["last_error"] == "unknown-instance"
+
+
+async def test_list_defaults_health_when_supervisor_unwired(client):
+    # Defensive: with no supervisor in the app the row still carries the
+    # liveness fields, defaulting to disconnected / no error.
+    await _seed_gfs(client, "gfs-1")
+    client.app.pop(gfs_ws_supervisor_key, None)
+    r = await client.get("/api/gfs/connections", headers=_auth(client._tok))
+    assert r.status == 200
+    [row] = await r.json()
+    assert row["connected"] is False
+    assert row["last_error"] is None
 
 
 # ─── POST /api/gfs/connections (pair) ────────────────────────────────
