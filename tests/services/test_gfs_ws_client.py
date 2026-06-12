@@ -64,6 +64,62 @@ def test_to_ws_url_strips_trailing_slash():
     assert _to_ws_url("https://gfs.example.com/") == "wss://gfs.example.com/gfs/ws"
 
 
+# ── is_alive ─────────────────────────────────────────────────────────────────
+
+
+def _make_idle_client() -> GfsWebSocketClient:
+    """A client whose loop never connects (no server) — used to probe the
+    task lifecycle without a network round-trip."""
+
+    async def _noop(_frame: dict) -> None:
+        return None
+
+    return GfsWebSocketClient(
+        gfs_url="http://gfs.invalid",
+        instance_id="sh-1",
+        signing_key=b"\x00" * 32,
+        session_factory=aiohttp.ClientSession,
+        on_relay=_noop,
+    )
+
+
+async def test_is_alive_false_before_start():
+    """No loop task spawned yet → not alive."""
+    client = _make_idle_client()
+    assert client.is_alive() is False
+
+
+async def test_is_alive_true_while_loop_running():
+    client = _make_idle_client()
+    await client.start()
+    try:
+        # The connect-and-listen loop task is running (it'll keep retrying the
+        # unreachable URL with backoff), so the supervisor sees it as alive.
+        assert client.is_alive() is True
+    finally:
+        await client.stop()
+
+
+async def test_is_alive_false_after_stop():
+    client = _make_idle_client()
+    await client.start()
+    await client.stop()
+    assert client.is_alive() is False
+
+
+async def test_is_alive_false_when_loop_task_done():
+    """If the loop task finishes/dies, the client reports not alive even though
+    ``stop()`` was never called — this is the liveness the supervisor checks."""
+    client = _make_idle_client()
+
+    async def _instant() -> None:
+        return None
+
+    client._task = asyncio.create_task(_instant())
+    await client._task
+    assert client.is_alive() is False
+
+
 # ── In-process fake GFS WebSocket server ──────────────────────────────────────
 
 

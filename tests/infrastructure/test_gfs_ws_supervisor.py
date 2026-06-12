@@ -74,6 +74,9 @@ async def test_supervisor_starts_clients_for_active_pairings(http_session):
             self.gfs_url = gfs_url
             started.append(gfs_url)
 
+        def is_alive(self) -> bool:
+            return True
+
         async def start(self):
             return None
 
@@ -120,6 +123,9 @@ async def test_supervisor_binds_on_connected_per_connection(http_session):
             self.gfs_url = gfs_url
             captured[gfs_url] = on_connected
 
+        def is_alive(self) -> bool:
+            return True
+
         async def start(self):
             return None
 
@@ -162,6 +168,9 @@ async def test_supervisor_picks_up_new_pairing_on_reconcile(http_session):
         def __init__(self, *, gfs_url, **_kwargs):
             self.gfs_url = gfs_url
             started.append(gfs_url)
+
+        def is_alive(self) -> bool:
+            return True
 
         async def start(self):
             return None
@@ -211,6 +220,9 @@ async def test_supervisor_stops_clients_for_removed_pairings(http_session):
         def __init__(self, *, gfs_url, **_kwargs):
             self.gfs_url = gfs_url
 
+        def is_alive(self) -> bool:
+            return True
+
         async def start(self):
             return None
 
@@ -245,6 +257,111 @@ async def test_supervisor_stops_clients_for_removed_pairings(http_session):
             await supervisor.stop()
 
 
+async def test_supervisor_restarts_dead_client_on_reconcile(http_session):
+    """A client whose loop task died (``is_alive()`` False) is restarted on
+    the next reconcile even though its pairing is still active — the
+    supervisor must not treat "present in ``self._clients``" as "running"."""
+    repo = _FakeRepo([_make_conn("g1", "http://gfs1.test")])
+    instances: list["_StubClient"] = []
+    stops: list[str] = []
+
+    class _StubClient:
+        def __init__(self, *, gfs_url, **_kwargs):
+            self.gfs_url = gfs_url
+            self._alive = True
+            instances.append(self)
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            stops.append(self.gfs_url)
+
+    with patch(
+        "socialhome.infrastructure.gfs_ws_supervisor.GfsWebSocketClient",
+        _StubClient,
+    ):
+        supervisor = GfsWebSocketSupervisor(
+            repo=repo,
+            instance_id="sh-1",
+            signing_key=b"\x00" * 32,
+            session_factory=lambda: http_session,
+            on_relay=AsyncMock(),
+            reconcile_interval_seconds=10.0,  # only the manual reconciles run
+        )
+        await supervisor.start()
+        try:
+            assert supervisor.client_count() == 1
+            assert len(instances) == 1
+            first = instances[0]
+
+            # Simulate the loop task dying — pairing stays active.
+            first._alive = False
+
+            # A reconcile with the SAME pairing must replace the dead client.
+            await supervisor._reconcile_once()
+
+            assert len(instances) == 2, (
+                "a fresh client should have replaced the dead one"
+            )
+            assert instances[1] is not first
+            assert "http://gfs1.test" in stops, (
+                "the dead client should have been stopped"
+            )
+            assert supervisor.client_count() == 1
+            assert supervisor.is_running("g1")
+        finally:
+            await supervisor.stop()
+
+
+async def test_supervisor_does_not_restart_healthy_client(http_session):
+    """A live client (``is_alive()`` True) is never needlessly torn down on a
+    reconcile — only dead clients are replaced."""
+    repo = _FakeRepo([_make_conn("g1", "http://gfs1.test")])
+    instances: list["_StubClient"] = []
+    stops: list[str] = []
+
+    class _StubClient:
+        def __init__(self, *, gfs_url, **_kwargs):
+            self.gfs_url = gfs_url
+            instances.append(self)
+
+        def is_alive(self) -> bool:
+            return True
+
+        async def start(self):
+            return None
+
+        async def stop(self):
+            stops.append(self.gfs_url)
+
+    with patch(
+        "socialhome.infrastructure.gfs_ws_supervisor.GfsWebSocketClient",
+        _StubClient,
+    ):
+        supervisor = GfsWebSocketSupervisor(
+            repo=repo,
+            instance_id="sh-1",
+            signing_key=b"\x00" * 32,
+            session_factory=lambda: http_session,
+            on_relay=AsyncMock(),
+            reconcile_interval_seconds=10.0,
+        )
+        await supervisor.start()
+        try:
+            assert len(instances) == 1
+            await supervisor._reconcile_once()
+            await supervisor._reconcile_once()
+            assert len(instances) == 1, "healthy client must not be replaced"
+            assert stops == [], "healthy client must not be stopped"
+            assert supervisor.client_count() == 1
+        finally:
+            await supervisor.stop()
+
+
 async def test_supervisor_stop_closes_all_clients(http_session):
     repo = _FakeRepo(
         [_make_conn("g1", "http://gfs1.test"), _make_conn("g2", "http://gfs2.test")]
@@ -254,6 +371,9 @@ async def test_supervisor_stop_closes_all_clients(http_session):
     class _StubClient:
         def __init__(self, *, gfs_url, **_kwargs):
             self.gfs_url = gfs_url
+
+        def is_alive(self) -> bool:
+            return True
 
         async def start(self):
             return None

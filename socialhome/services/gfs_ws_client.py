@@ -228,6 +228,17 @@ class GfsWebSocketClient:
         """``True`` while a WebSocket is currently open."""
         return self._connected_event.is_set()
 
+    def is_alive(self) -> bool:
+        """``True`` while the connect-and-listen loop task is running.
+
+        Distinct from :attr:`connected` — ``connected`` means a WebSocket is
+        currently open, whereas ``is_alive`` means the background loop task
+        itself is still running (it may be between reconnect attempts with no
+        socket open). The supervisor uses this to detect a loop that died
+        (uncaught error / cancellation) and restart the client.
+        """
+        return self._task is not None and not self._task.done()
+
     # ─── Internals ────────────────────────────────────────────────────────
 
     async def _loop(self) -> None:
