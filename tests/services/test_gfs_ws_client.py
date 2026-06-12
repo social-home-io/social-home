@@ -894,6 +894,48 @@ async def test_client_sets_last_auth_error_on_4401(fake_gfs, http_session):
         await client.stop()
 
 
+async def test_client_sanitizes_malicious_close_reason(fake_gfs, http_session):
+    """The GFS-controlled close reason flows into ``last_auth_error`` (logged
+    + rendered in the SPA). A malicious/compromised GFS could embed newlines /
+    control chars (log-injection) or an overlong string. The client MUST strip
+    control chars and cap the length before storing it."""
+    seed, _pub = _gen_keypair()
+    fake_gfs.always_close = True
+    fake_gfs.close_code = 4401
+    # Newline + control chars + overlong. The WS close reason is ≤123 bytes;
+    # stay under that so the close frame itself is valid.
+    fake_gfs.close_message = ("evil\nINFO:forged log line" + "x" * 90).encode()
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-evil",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        reconnect_delays=(0.05, 0.1),
+    )
+    await client.start()
+    try:
+        for _ in range(200):
+            if client.last_auth_error is not None:
+                break
+            await asyncio.sleep(0.02)
+        reason = client.last_auth_error
+        assert reason is not None
+        # No control characters (incl. newlines) survived.
+        assert "\n" not in reason
+        assert all(ch.isprintable() for ch in reason)
+        # Capped length.
+        assert len(reason) <= 80
+        # Leading visible text is preserved.
+        assert reason.startswith("evil")
+    finally:
+        await client.stop()
+
+
 async def test_client_backs_off_on_repeated_auth_rejection(fake_gfs, http_session):
     """An always-rejecting GFS must NOT be hammered ~1/min-delay — the loop
     takes the auth-failure path (so ``attempt`` keeps growing and the backoff

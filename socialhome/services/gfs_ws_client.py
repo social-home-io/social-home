@@ -46,6 +46,21 @@ RECONNECT_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 30.0)
 _AUTH_CLOSE_CODES: frozenset[int] = frozenset({4401, 4408, 4400})
 
 
+def _sanitize_close_reason(reason: str | None) -> str | None:
+    """Sanitize a GFS-controlled WebSocket close reason before use.
+
+    The reason flows into logs (``last_auth_error``) and is later rendered in
+    the SPA, so a malicious/compromised GFS could embed newlines or control
+    characters (log-injection — forged log lines) or an overlong string. Strip
+    non-printable chars (incl. newlines) and cap the length.
+    """
+    if not reason:
+        return None
+    cleaned = "".join(ch for ch in reason if ch.isprintable())
+    cleaned = cleaned.strip()
+    return cleaned[:80] or None
+
+
 def _to_ws_url(http_url: str) -> str:
     """Convert ``http(s)://host`` to the matching ``ws(s)://host/gfs/ws``."""
     base = http_url.rstrip("/")
@@ -310,7 +325,9 @@ class GfsWebSocketClient:
                         code = ws.close_code
                         if code in _AUTH_CLOSE_CODES:
                             extra = getattr(msg, "extra", None)
-                            reason = extra if isinstance(extra, str) else None
+                            reason = _sanitize_close_reason(
+                                extra if isinstance(extra, str) else None
+                            )
                             raise _GfsWsAuthFailure(code, reason)
                         # Clean / normal close → let the caller reset backoff
                         # and reconnect promptly.
